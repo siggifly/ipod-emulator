@@ -29,3 +29,6 @@ _out/
 # Per-agent / scratch build dirs
 .t/
 .target-*/
+
+# Release archives, staged by .github/workflows/release.yml or by hand when Actions cannot run.
+dist/
