@@ -16,6 +16,13 @@ members = [
     "tools/ipod-gui",    # the window: a drawn iPod over the emulator
 ]
 
+# ONE version for the four crates, so a release cannot ship a window reporting 0.2.0 beside a
+# `trace` still calling itself 0.1.0. The window's `--check-update` compares its own
+# `CARGO_PKG_VERSION` against the latest release tag, so this number and the tag are the same
+# statement made twice; bumping here is the whole of bumping.
+[workspace.package]
+version = "0.2.0"
+
 # One shared target directory. Each crate previously built its own, so a full build wrote four
 # copies of the same dependency graph. This also means `CARGO_TARGET_DIR` in the environment still
 # wins, which is what every agent and recipe in this project relies on.
@@ -25,3 +32,4 @@ members = [
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+

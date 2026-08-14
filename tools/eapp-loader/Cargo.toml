@@ -1,6 +1,6 @@
 [package]
 name = "eapp-loader"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Load an iPod eApp binary, resolve its framework imports to traps, and trace the calls"
 

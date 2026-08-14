@@ -251,7 +251,7 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
     // gitignored `resources/` tree the recipes use. The last one is `retail-boot.sh`'s default
     // verbatim, because a GUI that quietly booted the *prototype* NOR would produce a different
     // machine from every number in research/ with nothing saying so.
-    let root = repo_root();
+    let root = settings::repo_root();
     let res = root.join("resources");
     let flash = get("--flash=")
         .map(PathBuf::from)
@@ -330,23 +330,6 @@ fn missing_images(cfg: &emu::Config) -> Option<String> {
     Some(out)
 }
 
-/// The repository root, found from the executable rather than the working directory so the
-/// binary can be launched from anywhere.
-fn repo_root() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        // Walk up looking for the directory that holds `tools/ipod-boot`. Shared target
-        // directories mean the executable can be a long way from the source.
-        let mut p = exe.as_path();
-        while let Some(dir) = p.parent() {
-            if dir.join("tools/ipod-boot").is_dir() {
-                return dir.to_path_buf();
-            }
-            p = dir;
-        }
-    }
-    let here = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    here.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()).unwrap_or(here)
-}
 
 /// A short hash over everything that decides what the snapshot *is*. Not cryptographic — this is a
 /// cache key, and its only job is to change whenever the machine would.
@@ -488,7 +471,7 @@ impl App {
             egui::ColorImage::from_rgb([FB_W, FB_H], &vec![0u8; FB_W * FB_H * 3]),
             egui::TextureOptions::NEAREST,
         );
-        let shot_dir = repo_root().join("_out");
+        let shot_dir = settings::repo_root().join("_out");
         let mut setup = Setup::new(&cfg);
         if !ipsw.is_empty() {
             setup.ipsw = ipsw;
@@ -550,6 +533,24 @@ impl App {
         let link = Link::new();
         spawn_worker(self.cfg.clone(), Arc::clone(&link));
         self.link = Some(link);
+    }
+
+    /// Back to the setup screen from a running machine, to point it at different images.
+    ///
+    /// The worker owns the machine, and there is no way to hand a running RetailOS a different
+    /// drive — the firmware read its partition table at boot and has been writing to it since. So
+    /// this ends the worker rather than pretending. Nothing is lost that was not already
+    /// reproducible: the snapshot is keyed on the pair of paths, so the one taken against these
+    /// images stays valid for them, and a different pair gets its own.
+    fn change_images(&mut self) {
+        if let Some(l) = &self.link {
+            l.quit.store(true, Ordering::Relaxed);
+        }
+        self.link = None;
+        // The files may have been replaced on disk since the last look, and the verdicts are what
+        // the screen is for.
+        self.setup.revalidate();
+        self.setup.revalidate_ipsw();
     }
 
     fn say(&mut self, s: impl Into<String>) {
@@ -874,6 +875,26 @@ impl App {
         let s = out.stats;
         let pct = s.executed_here as f64 / s.wall_secs.max(1e-6) / HARDWARE_MIPS * 100.0;
         egui::Panel::bottom("footer").show(ui, |ui| {
+            // A cold boot spends most of its time on a white screen, because that is what the
+            // hardware shows too — the Apple logo is drawn early and then RetailOS does several
+            // minutes of simulated work before it draws anything else. Without this, user mode
+            // gives no evidence the machine is doing anything at all, and a blank window that is
+            // busy is indistinguishable from a blank window that has hung. The same bar has been
+            // in the debug panel all along; there was no reason it was only there.
+            if let Phase::Booting { target } = &out.phase {
+                let f = (s.executed as f32 / (*target).max(1) as f32).min(1.0);
+                let left = (1.0 - f) as f64 * s.wall_secs / f.max(0.001) as f64;
+                ui.add_space(3.0);
+                ui.add(
+                    egui::ProgressBar::new(f)
+                        .desired_height(6.0)
+                        .text(egui::RichText::new(format!(
+                            "cold boot — {:.0} %, about {left:.0} s left",
+                            f * 100.0
+                        ))
+                        .size(11.0)),
+                );
+            }
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 let badge = if s.executed_here == 0 {
@@ -888,6 +909,21 @@ impl App {
                          speed the real device would. The emulator's own microsecond clock is a \
                          different number again — debug mode shows both.",
                     );
+                ui.separator();
+                // The only route back to the setup screen. Without it the images chosen on first
+                // run are the images for ever, because a saved pair means the next launch opens
+                // straight into the iPod and never shows that screen again.
+                if ui
+                    .button("images…")
+                    .on_hover_text(
+                        "Change the NOR dump or the drive, or build a drive from a different \
+                         .ipsw. Ends this machine — a running RetailOS cannot be handed a \
+                         different drive — and returns to the setup screen.",
+                    )
+                    .clicked()
+                {
+                    self.change_images();
+                }
                 ui.separator();
                 let mut debug = self.settings.mode == Mode::Debug;
                 if ui.checkbox(&mut debug, "debug").changed() {

@@ -192,22 +192,6 @@ impl Recipe {
 
 // ---------------------------------------------------------------- where things are
 
-/// The repository root, found from the executable rather than the working directory, so the
-/// program can be launched from anywhere. Same walk `ipod-gui` does, for the same reason: a shared
-/// `CARGO_TARGET_DIR` puts the binary a long way from the source.
-fn repo_root() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        let mut p = exe.as_path();
-        while let Some(dir) = p.parent() {
-            if dir.join("tools/ipod-boot").is_dir() {
-                return dir.to_path_buf();
-            }
-            p = dir;
-        }
-    }
-    let here = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    here.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()).unwrap_or(here)
-}
 
 fn env_path(key: &str) -> Option<PathBuf> {
     std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from)
@@ -395,7 +379,7 @@ fn run(recipe: Recipe, user: &[String], dry: bool) -> Result<i32, String> {
 }
 
 fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
-    let root = repo_root();
+    let root = eapp_loader::settings::repo_root();
     let res = root.join("resources");
     let trace = env_path("TRACE").unwrap_or_else(default_trace);
     let saved = eapp_loader::settings::Settings::load();

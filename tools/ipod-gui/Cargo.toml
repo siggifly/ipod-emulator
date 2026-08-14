@@ -1,6 +1,6 @@
 [package]
 name = "ipod-gui"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "An interactive iPod 5G: the emulator's framebuffer on a drawn device whose wheel, buttons and hold switch reach the machine"
 

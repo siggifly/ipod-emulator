@@ -114,26 +114,13 @@ fn parse(t: &str) -> Option<u32> {
         .or_else(|| t.parse().ok())
 }
 
-/// The RetailOS image under the gitignored `resources/` tree, found by walking up from the
-/// executable to the directory that holds `tools/ipod-boot` — the same walk `ipod-gui` and
-/// `ipod-boot` do, and for the same reason: a shared `CARGO_TARGET_DIR` puts the binary a long way
-/// from the source, and the working directory is not a reliable anchor.
+/// The RetailOS image under the gitignored `resources/` tree, relative to the repository root.
+///
+/// The root is found by [`eapp_loader::settings::repo_root`] — the same two walks `ipod-gui` and
+/// `ipod-boot` use, and for the same reason: a shared `CARGO_TARGET_DIR` puts the binary a long
+/// way from the source.
 fn default_image() -> std::path::PathBuf {
-    const REL: &str = "resources/derived/fw/OSOS_correct.bin";
-    if let Ok(exe) = std::env::current_exe() {
-        let mut p = exe.as_path();
-        while let Some(dir) = p.parent() {
-            if dir.join("tools/ipod-boot").is_dir() {
-                return dir.join(REL);
-            }
-            p = dir;
-        }
-    }
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.join(REL))
-        .unwrap_or_else(|| std::path::PathBuf::from(REL))
+    eapp_loader::settings::repo_root().join("resources/derived/fw/OSOS_correct.bin")
 }
 
 fn main() {

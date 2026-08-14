@@ -236,3 +236,47 @@ mod tests {
         assert!(d.ends_with(APP), "{}", d.display());
     }
 }
+
+/// This repository's root, or the working directory when there is no repository — which is what a
+/// released binary is always in.
+///
+/// Two walks, and deliberately no compile-time path. The obvious third fallback is
+/// `env!("CARGO_MANIFEST_DIR")`, and it was one here: it is the absolute path of the machine that
+/// did the build, so it is baked into every published binary (naming a stranger's home directory)
+/// and it is wrong on every machine but that one. `--remap-path-prefix` cannot reach it, because it
+/// is a cargo variable rather than a path `rustc` embeds.
+///
+/// - **Up from the executable**, which is right for `target/release/ipod-boot` in a checkout.
+/// - **Up from the working directory**, which is what catches a shared `CARGO_TARGET_DIR` — the
+///   binary is then nowhere near the source, and this is the case the compile-time path used to
+///   cover.
+/// - Otherwise the working directory, so the paths built from it are somewhere the user can see,
+///   and the "no NOR dump at …" message names a plausible place rather than a build machine.
+pub fn repo_root() -> PathBuf {
+    /// The directory that holds the recipes — present in a checkout, absent in a release archive.
+    const MARKER: &str = "tools/ipod-boot";
+
+    if let Ok(exe) = std::env::current_exe() {
+        let mut p = exe.as_path();
+        while let Some(dir) = p.parent() {
+            if dir.join(MARKER).is_dir() {
+                return dir.to_path_buf();
+            }
+            p = dir;
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut p = cwd.as_path();
+        loop {
+            if p.join(MARKER).is_dir() {
+                return p.to_path_buf();
+            }
+            match p.parent() {
+                Some(up) => p = up,
+                None => break,
+            }
+        }
+        return cwd;
+    }
+    PathBuf::from(".")
+}

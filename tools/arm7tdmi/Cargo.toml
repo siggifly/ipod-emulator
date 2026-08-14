@@ -1,6 +1,6 @@
 [package]
 name = "arm7tdmi"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "ARMv4T (ARM7TDMI) interpreter core — ARM + Thumb, no JIT, no_std-friendly"
 

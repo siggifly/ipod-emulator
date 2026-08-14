@@ -5,9 +5,11 @@ scratch. It formats its own filesystem, reads the click wheel, draws its own men
 
 ![cold boot through to a game](docs/media/ipod-01-boot-to-brick.gif)
 
-The iPod Video 5.5G shipped on 12 September 2006. Twenty years next month, its firmware runs on a
-machine that does not exist. It is also the model I owned — my first Apple product, at twelve. That
-this is the one that ended up emulated was not deliberate, and I liked it more than I expected to.
+The iPod Video 5.5G shipped on 12 September 2006. Twenty years next month, its firmware still boots
+— with no iPod anywhere near it. The PortalPlayer it addresses is arithmetic, the drive it formats
+is a file, the wheel it reads is a mouse, and none of that is something the firmware can tell. It is
+also the model I owned — my first Apple product, at twelve. That this is the one that ended up
+emulated was not deliberate, and I liked it more than I expected to.
 
 Not a reimplementation of the interface. Apple's own code the whole way: the bootloader brings up
 SDRAM, talks to the PCF50605 power chip over I²C, uploads firmware to the video co-processor, reads
@@ -107,6 +109,10 @@ asserting it.
 | `S` | write a PNG and a PPM into `_out/` |
 | `D` | user ⇄ debug |
 
+**`images…`** in the footer goes back to the setup screen, to point it at a different NOR dump,
+drive or `.ipsw`. It ends the running machine — a booted RetailOS read its partition table at boot
+and has been writing to that drive since, so there is no honest way to hand it another one.
+
 **Power off** and **power cycle — cold boot** are real: the machine is dropped and re-entered at the
 reset vector, not restored and pretended. `hold MENU+SELECT` and `hold PLAY` deliver the buttons, and
 the panel says plainly that nothing in RetailOS has been measured to act on either — on a real 5G
@@ -135,8 +141,12 @@ It restores a snapshot of the booted machine in about 3 seconds, or cold boots i
 - **Hold does not reach RetailOS after boot.** The line is right and is read four times, all before instruction 49 689 152; what is missing is a GPIO interrupt, which this emulator does not model
 - **The boot takes ~300 seconds of simulated time** where hardware takes five or ten. Something waits far longer than it should
 
-`research/12-bypass-ledger.md` is the full list of what is faked, with a written condition for
-retiring each one. Nothing is faked without a row in it.
+Three lists, kept apart on purpose. **`KNOWN-BUGS.md`** is what is *wrong*. The section above is
+what is *absent*. **`research/12-bypass-ledger.md`** is what is *faked*, with a written condition
+for retiring each one — and nothing is faked without a row in it. Merging them is how a project
+starts describing its gaps as choices.
+
+**`CHANGELOG.md`** is what changed between releases.
 
 ## Roadmap
 
