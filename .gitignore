@@ -25,3 +25,7 @@ _out/
 # Per-agent cargo target dirs and audit scratch — regenerable, never review-relevant.
 .target-*/
 .audit/
+
+# Per-agent / scratch build dirs
+.t/
+.target-*/
