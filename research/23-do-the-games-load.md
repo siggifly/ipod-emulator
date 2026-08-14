@@ -244,7 +244,7 @@ then Apple's DRM check rejects the binary and RetailOS draws its own error dialo
 Nothing about the *emulation* failed here. The disk's purchased titles are the copies this project
 has documented since research/08: they are bound to hardware this machine is not.
 
-> ✅ **Followed up 2026-08-14 — research/08*(moved to the `ipod-games` repository)* §"What the DRM binds to, measured".**
+> ✅ **Followed up 2026-08-14 — research/08 *(not published)* §"What the DRM binds to, measured".**
 > The gap between frames 18 and 20 is one function, `FUN_00131874` at `0x00131874`, entered exactly
 > once at instruction 2 041 669 893. Inside it the manifest's PKCS#7 signature **verifies**, every
 > file in the manifest **verifies**, the executable and its `.sinf` are **read**, and then the
@@ -403,7 +403,7 @@ timing is the machine's timing" has to mean to be worth saying.
 - **Three built-ins are untested.** `Parachute`, `Music Quiz` and `Solitaire` are in the image
   (their names and their per-language instruction strings are in OSOS) and further down the same
   alphabetical list. Only `Brick` has been launched.
-- ~~**The DRM refusal is now a target with an address.**~~ ✅ **Done** — research/08*(moved to the `ipod-games` repository)*
+- ~~**The DRM refusal is now a target with an address.**~~ ✅ **Done** — research/08 *(not published)*
   §"What the DRM binds to, measured". The check is `FUN_00131874`; it fails at the content-key
   unwrap, with the DRM context null because the keybag yielded no keys.
 - **There is no audio anywhere in this project.** The Wolfson codec is not modelled, so a game's

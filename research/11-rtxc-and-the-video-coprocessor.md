@@ -672,7 +672,7 @@ individual images that are the boot loader, diagnostic, disk image, and disk sca
 **Flash contents can now be recovered from Apple's own updaters, for any generation, with no
 hardware.** The NOR dump the operator found removed the hardware dependency for the 5.5G; this
 removes it for every model whose updater we can obtain — which is the C-series generation ladder in
-[research/10*(moved to the `opod` repository)*.
+[research/10 *(not published)*.
 
 ## 13. Method: the rule these instruments now follow
 

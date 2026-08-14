@@ -2,7 +2,7 @@
 
 **Every shortcut currently in the boot path, what it fakes, and what retiring it requires.**
 
-Per the doctrine in research/10*(moved to the `opod` repository)*: *borrow freely to learn, never to depend.*
+Per the doctrine in research/10 *(not published)*: *borrow freely to learn, never to depend.*
 The purpose of this file is that no bypass can quietly become permanent. **A bypass with no
 retirement condition written down is a bug we have agreed not to see.**
 
@@ -566,7 +566,7 @@ Worth stating, so the list above is not read as "everything is fake":
   updater erases 248 sectors, programs 507 904 words, and leaves the image byte-identical to the
   pristine dump.
 - **Rockbox booting** — a test, not a dependency, and permanent.
-- **The identity arms of research/08*(moved to the `ipod-games` repository)* §5 and §5b** — three NOR images whose `SysCfg`
+- **The identity arms of research/08 *(not published)* §5 and §5b** — three NOR images whose `SysCfg`
   identity fields (`SrNm` at `0x401c`, the `FwId` GUID at `0x4034`) are edited to say the machine is
   a different iPod. They are not bypasses because **nothing is patched out and no comparison is
   faked**: the firmware runs its own check against a different input, which is what a different
@@ -693,7 +693,7 @@ Roughly by what each unblocks, not by how wrong it is:
 1b. **`--clock` has become load-bearing for reach, and that is a problem.** RetailOS's boot is
    paced by simulated time, and this interpreter is ~~~1000×~~ **~3.4×** slower than the hardware
    (21.0 M instr/sec measured 2026-08-13 against ~72 MIPS; the 1000× figure was wrong by 300× and
-   sat here unchallenged — see research/13*(moved to the `opod` repository)* §9), so every
+   sat here unchallenged — see research/13 *(not published)* §9), so every
    milestone past ~5 simulated seconds currently costs either an enormous budget or `--clock=5`.
    The knob is listed under "fidelity knobs" below with the warning that timing-sensitive code can
    notice it; ~~every result obtained with it (the partition-table read, the extra tasks, the

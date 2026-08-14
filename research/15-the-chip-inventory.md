@@ -52,14 +52,14 @@ to it.
 
 A trap worth naming, because we walked past it. The iPod reports a **FireWire GUID**
 (`0x000A2700195D4E9C`, OUI `000A27` = Apple) and a **`FireWireVersion` of 1.62**, and that GUID *is*
-the USB serial number — see research/07*(moved to the `ipod-usb` repository)* § "The FireWire GUID *is* the USB
+the USB serial number — see research/07 *(not published)* § "The FireWire GUID *is* the USB
 serial number." None of that implies a FireWire port. Apple kept the GUID as the device's stable
 64-bit identity after the bus it was named for was gone.
 
 Nor is iTunes' `sbp2` string evidence: it lives in iTunes' own Windows binary
 (`DeviceManagement\PnpDiskUtil.cpp`), where `sbp2` is how Windows names FireWire storage in a device
 instance ID. That is iTunes being able to talk to *older* FireWire iPods, not a statement about this
-one. It is quoted in research/07*(moved to the `ipod-usb` repository)* and was briefly misread here as flash
+one. It is quoted in research/07 *(not published)* and was briefly misread here as flash
 content before the surrounding context was checked.
 
 ---

@@ -445,7 +445,7 @@ feeds iTunes in the INQUIRY vendor bytes — ends the boot loop:
 switches on the high halfword `0x000B` = 11.
 
 **The two halves of this project met here.** The Gestalt ID was reverse-engineered months of work
-away, in research/07*(moved to the `ipod-usb` repository)*, to make iTunes accept a virtual iPod. It turns out
+away, in research/07 *(not published)*, to make iTunes accept a virtual iPod. It turns out
 to be the same number RetailOS needs to boot.
 
 ### And then: the idle loop

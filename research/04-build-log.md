@@ -197,7 +197,7 @@ sitting in the middle of ARM code, holding the constants the loader compares aga
 **This is better than what we went looking for.** The built-in games turned out not to be separate
 eApps — but RetailOS's *own eApp loader* is the authoritative definition of the format.
 
-✅ **Disassembled 2026-08-11 — `research/02-eapp-loader.md`*(moved to the `ipod-games` repository)*.**
+✅ **Disassembled 2026-08-11 — `research/02-eapp-loader.md` *(not published)*.**
 Validation function at `0x101224C4`. Headlines:
 
 - The header layout is **confirmed from Apple's code**, with two corrections: the version field is a
@@ -716,7 +716,7 @@ The naive approach — ML-upscale the framebuffer at runtime — is the *worse* 
 it would be fast on Apple Silicon, but it fights temporal artifacts and has to run every frame.
 
 **The better approach is offline: upscale the assets once.** The formats are fully documented (see
-research/01*(moved to the `ipod-games` repository)*)
+research/01 *(not published)*)
 — `.tga` spritesheets, `.ipd`, `.anm`, `.raw.lcd5`. Upscale the spritesheets with an ML model, have
 the loader substitute them, pay zero runtime cost. This is the texture-pack model, and it produces
 cleaner results than any per-frame filter.
@@ -913,7 +913,7 @@ What is **not** established is the index→implementation mapping. Recovering it
 layout — most likely by parsing a record whose small count makes the geometry unambiguous
 (`InputEvents` has 2, `Settings` 3, `Filesytem` 4) rather than starting from the 179-entry case.
 
-See `research/02-eapp-loader.md`*(moved to the `ipod-games` repository)*.
+See `research/02-eapp-loader.md` *(not published)*.
 
 ---
 
@@ -1101,7 +1101,7 @@ Pac-Man/audio/*.wav         sound effects
 
 So the next stage is **implementing `AsyncFileIO` (17 functions) against the game's own directory** —
 open, read, seek, close. Every format those files use is already documented in
-`research/01`*(moved to the `ipod-games` repository)*.
+`research/01` *(not published)*.
 
 That single subsystem is what stands between four rendering titles and most of the twenty.
 
@@ -1164,7 +1164,7 @@ before the game takes control.
 | # | Question | Status |
 |---|---|---|
 | 1 | **What system interface does a game binary use?** Shim or full RetailOS? | ✅ **Shim. A bounded `eapp` import table exists** — see [The eApp ABI](#the-eapp-abi). Reproduction pending |
-| 2 | What is inside a `.ipg`? | ✅ **Closed — `research/01-ipg-format.md`*(moved to the `ipod-games` repository)***. Full container spec, `.sinf` atom list, asset formats, on-device layout, 5G GUID table |
+| 2 | What is inside a `.ipg`? | ✅ **Closed — `research/01-ipg-format.md` *(not published)***. Full container spec, `.sinf` atom list, asset formats, on-device layout, 5G GUID table |
 | 3 | What exactly does FairPlay bind? | ✅ **Three layers** — per-copy AES, per-account keys, per-device `IC-Info.sidb`. See [The encryption](#the-encryption-in-three-layers-added-2026-08-11) |
 | 4 | ~~Does Siggi own an iPod 5G?~~ | ✅ **Obtainable in a few weeks (operator, 2026-08-11).** No longer blocking — the 20 plaintext titles carry all pre-hardware work |
 | 5 | Is clicky the right substrate? | ✅ **No.** Targets 4G grayscale, which cannot run these games at all. Reference only |
