@@ -17,6 +17,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # Keep the machine that built a binary out of the binary. `rustc` embeds absolute source paths in
+  # panic messages and debug info; without this a published binary names the runner's checkout and
+  # its home directory. Set here rather than in a config file so `$HOME` and `$GITHUB_WORKSPACE`
+  # expand — hardcoding a path would print in a public repository the thing it is meant to hide.
+  RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=. --remap-path-prefix=/home/runner=~ --remap-path-prefix=/Users/runner=~
 
 jobs:
   build:

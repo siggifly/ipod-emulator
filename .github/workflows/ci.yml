@@ -18,6 +18,8 @@ env:
   # A failure that only reproduces in release is a failure this project has had: the interpreter's
   # hot paths are written for `opt-level = 3` and the test suites are all measured there.
   CARGO_INCREMENTAL: 0
+  # Same remap as the release build, so CI compiles what a release compiles.
+  RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=. --remap-path-prefix=/home/runner=~ --remap-path-prefix=/Users/runner=~
 
 jobs:
   test:
