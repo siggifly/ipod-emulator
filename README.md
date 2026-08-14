@@ -41,7 +41,7 @@ Without them the emulator starts, tells you what is missing, and does nothing el
 ## Running it
 
 **Open it and it asks.** From a [release](https://github.com/siggifly/ipod-emulator/releases),
-unpack it and double-click **`iPod 5G.app`** on macOS, or run `ipod-gui` anywhere. With nothing set
+unpack it and double-click **`iPod 5G.app`** on macOS, or run `ipod-emulator` anywhere. With nothing set
 up it opens on a setup screen: a picker for each of the two files, and under each one a verdict
 saying what the file you chose *actually is* — a 2 MiB dump when the 5G ROM is 1 MiB gets told so,
 rather than failing later. Point the second slot at an `.ipsw` and it builds the drive for you.
@@ -50,7 +50,7 @@ It remembers both, so you do this once.
 
 ```sh
 cargo build --release          # or use a release build
-./target/release/ipod-gui      # a window; D toggles debug mode
+./target/release/ipod-emulator   # a window; D toggles debug mode
 ```
 
 Or straight from the repository, with no clone — the packages have to be named, because the
@@ -73,7 +73,7 @@ need no arguments:
 `--print` also says where each path came from — environment, setup screen, or repository default —
 because a recipe with an input you cannot see in its command line is one you cannot check.
 `FLASH=` and `DISK=` override, and `ipod-boot make-disk your.ipsw disk.img` builds a drive without
-the window. `ipod-gui --check-images --flash=… --disk=…` reports on a pair with no window at all.
+the window. `ipod-emulator --check-images --flash=… --disk=…` reports on a pair with no window at all.
 
 `tools/ipod-boot/README.md` covers the command-line recipes, and `tools/ipod-film/` records the
 panel to a PNG sequence or an mp4.

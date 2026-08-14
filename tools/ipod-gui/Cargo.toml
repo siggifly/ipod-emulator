@@ -4,6 +4,14 @@ version.workspace = true
 edition = "2021"
 description = "An interactive iPod 5G: the emulator's framebuffer on a drawn device whose wheel, buttons and hold switch reach the machine"
 
+# The binary is `ipod-emulator`, not `ipod-gui`. macOS shows the EXECUTABLE's name in the
+# application switcher and the process list — not the crate's, and not `CFBundleName` — so a bare
+# binary called `ipod-gui` appears in Cmd-Tab under that name. The crate keeps its own name because
+# it is the window crate among four.
+[[bin]]
+name = "ipod-emulator"
+path = "src/main.rs"
+
 # A sibling crate rather than another `[[bin]]` in eapp-loader, deliberately. egui pulls in winit,
 # glow and a hundred transitive crates; putting it behind a feature in eapp-loader would still make
 # `cargo build` there resolve them, and every baseline in research/ is measured with `cargo test

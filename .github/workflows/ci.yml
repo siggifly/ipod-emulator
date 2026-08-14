@@ -100,7 +100,7 @@ jobs:
       - name: the update check does not fail the program
         shell: bash
         run: |
-          BIN=target/release/ipod-gui
+          BIN=target/release/ipod-emulator
           if [ "${{ runner.os }}" = "Windows" ]; then BIN="$BIN.exe"; fi
           "$BIN" --check-update
           "$BIN" --help > /dev/null
@@ -110,7 +110,7 @@ jobs:
       - name: a missing image is reported rather than crashed on
         shell: bash
         run: |
-          BIN=target/release/ipod-gui
+          BIN=target/release/ipod-emulator
           if [ "${{ runner.os }}" = "Windows" ]; then BIN="$BIN.exe"; fi
           out=$("$BIN" --check-images --flash=no-such.bin --disk=no-such.img || true)
           echo "$out"

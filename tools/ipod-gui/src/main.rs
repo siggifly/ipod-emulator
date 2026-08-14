@@ -157,14 +157,14 @@ fn main() -> eframe::Result {
 
     // The icon, as raw RGBA rather than a PNG, because decoding one would mean a decoder: this
     // crate's only dependency is `eframe` and `eapp_loader::png` encodes but does not read.
-    // 64x64x4 = 16384 bytes, generated from `docs/media/icon-1024.png`.
+    // 512x512x4 = 1 MiB, generated from `docs/media/icon-1024.png`.
     //
-    // **This does nothing on macOS.** winit is explicit that the window icon is unsupported there
-    // (and on Wayland), because the icon a Mac shows in the Dock and in ⌘-Tab comes from the app
-    // bundle, not from the process. `iPod 5G.app` carries it; a bare `ipod-gui` cannot. Set here
-    // for Windows and X11, where it is the taskbar and title-bar icon and does work.
-    const ICON_RGBA: &[u8] = include_bytes!("../../../docs/media/icon-64.rgba");
-    let icon = egui::IconData { rgba: ICON_RGBA.to_vec(), width: 64, height: 64 };
+    // 512 and not 64: winit documents the macOS window icon as unsupported, and it is — but eframe
+    // sets the application icon there anyway, so Cmd-Tab does show this. Cmd-Tab draws at 256
+    // physical pixels on a Retina display, and a 64-pixel source upscaled four times is what
+    // "low-res icon" looks like. Measured, after shipping exactly that mistake.
+    const ICON_RGBA: &[u8] = include_bytes!("../../../docs/media/icon-512.rgba");
+    let icon = egui::IconData { rgba: ICON_RGBA.to_vec(), width: 512, height: 512 };
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -930,19 +930,6 @@ impl App {
                     self.settings.save();
                 }
                 ui.separator();
-                // The keys, on hover rather than on screen. The drawn iPod is operable with the
-                // mouse — wheel, buttons and switch all take clicks — so the keyboard is an
-                // accelerator, and a permanent list of accelerators is the opposite of what user
-                // mode is for.
-                ui.label(egui::RichText::new("keys").size(11.0).weak()).on_hover_text(
-                    "arrows  scroll the wheel\n\
-                     Enter / Space  select\n\
-                     M P , .  menu · play · previous · next\n\
-                     H  hold switch\n\
-                     S  save a PNG and a PPM into _out/\n\
-                     D  switch modes",
-                );
-                ui.separator();
                 // The only route back to the setup screen. Without it the images chosen on first
                 // run are the images for ever, because a saved pair means the next launch opens
                 // straight into the iPod and never shows that screen again.
@@ -1048,6 +1035,40 @@ impl App {
 
     // ------------------------------------------------------------ drawing the device
 
+
+    /// The key list, drawn into the empty column left of the device.
+    ///
+    /// `left_edge` is where the case starts, in points. Everything from the panel's left edge to
+    /// there is space nothing else wants.
+    fn keys_in_margin(&self, p: &egui::Painter, area: Rect, left_edge: f32) {
+        const KEYS: &[(&str, &str)] = &[
+            ("arrows", "scroll the wheel"),
+            ("enter / space", "select"),
+            ("M P , .", "menu · play · prev · next"),
+            ("H", "hold switch"),
+            ("S", "save a PNG into _out/"),
+            ("D", "user / debug"),
+        ];
+        // Wide enough for the longest line, with a gap before the case, or it is not drawn.
+        let margin = left_edge - area.left();
+        if margin < 190.0 {
+            return;
+        }
+        let x = area.left() + 22.0;
+        let line = 17.0;
+        let mut y = area.center().y - (KEYS.len() as f32 * line) / 2.0;
+        let font = egui::FontId::proportional(11.0);
+        // Deliberately low contrast. It is a reference, not a thing to read every time — the wheel,
+        // the buttons and the switch all take clicks, so nobody has to use these at all.
+        let dim = Color32::from_gray(96);
+        let dimmer = Color32::from_gray(72);
+        for (k, what) in KEYS {
+            p.text(Pos2::new(x, y), egui::Align2::LEFT_TOP, k, font.clone(), dim);
+            p.text(Pos2::new(x + 92.0, y), egui::Align2::LEFT_TOP, what, font.clone(), dimmer);
+            y += line;
+        }
+    }
+
     fn device(&mut self, ui: &mut egui::Ui, area: Rect, out: &emu::Out) {
         let ppp = ui.ctx().pixels_per_point();
         // Everything is derived from ONE integer: the number of physical pixels per emulator pixel.
@@ -1080,6 +1101,16 @@ impl App {
 
         let p = ui.painter_at(area);
         let (body, wheel_fill, ring_text, glass) = self.palette();
+
+        // The keys, printed in the margin the device does not use.
+        //
+        // Not a tooltip and not a popover: this window covers nothing with anything. A drawn iPod
+        // in a rectangular window leaves two columns of empty space either side of it, and a list
+        // that lives there is always readable, never in the way, and costs no interaction to find.
+        // It is skipped when the margin is too narrow to hold it rather than being allowed to
+        // collide with the case — at which point the window is small enough that the keys are the
+        // least of it.
+        self.keys_in_margin(&p, area, ox / ppp);
 
         // The hold switch, drawn BEFORE the body so the body's rounded corner covers the part of it
         // that is inside the case — which is what makes it read as seated in a slot rather than

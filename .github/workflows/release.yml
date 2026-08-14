@@ -85,12 +85,12 @@ jobs:
           DIR="ipod5g-${{ matrix.name }}"
           mkdir -p "dist/$DIR"
           BIN="target/${{ matrix.target }}/release"
-          for b in trace ipod-boot dis tcb eapp-inspect disasm ipod-gui ; do
+          for b in trace ipod-boot dis tcb eapp-inspect disasm ipod-emulator ; do
             cp "$BIN/$b$EXE" "dist/$DIR/"
           done
           # A double-clickable app on macOS. No certificate involved — see tools/ipod-gui/make-app.sh.
           if [ "${{ runner.os }}" = "macOS" ]; then
-            sh tools/ipod-gui/make-app.sh "$BIN/ipod-gui" "dist/$DIR" docs/media/ipod-03-main-menu.png
+            sh tools/ipod-gui/make-app.sh "$BIN/ipod-emulator" "dist/$DIR"
           fi
           cp README.md "dist/$DIR/README.md"
           cp tools/ipod-gui/README.md "dist/$DIR/README-ipod-gui.md"
@@ -107,10 +107,10 @@ jobs:
             2. Either an iPod software-update bundle (an .ipsw), from which `ipod-boot make-disk`
                builds a fresh drive image, or a drive image you already have.
 
-          Run `ipod-gui` with no arguments and it will ask for them, check what you picked, and
+          Run `ipod-emulator` with no arguments and it will ask for them, check what you picked, and
           tell you whether it will work before it tries to boot.
 
-          `ipod-gui --check-images --flash=... --disk=...` does the same check with no window.
+          `ipod-emulator --check-images --flash=... --disk=...` does the same check with no window.
 
           macOS: double-click `iPod 5G.app`. The command-line tools are beside it.
 
@@ -172,7 +172,7 @@ jobs:
           "More info" -> "Run anyway". Anything you build yourself is not quarantined.
 
           The emulator needs a NOR dump and either an .ipsw or a drive image, none of which ship
-          here. `ipod-gui` with no arguments asks for them and validates what you pick.
+          here. `ipod-emulator` with no arguments asks for them and validates what you pick.
           EOF
           )
           gh release create "$TAG" artifacts/* \

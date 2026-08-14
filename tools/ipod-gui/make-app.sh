@@ -21,12 +21,19 @@ set -eu
 
 BIN=${1:?usage: make-app.sh <ipod-gui binary> <output dir> [icon.png]}
 OUT=${2:?usage: make-app.sh <ipod-gui binary> <output dir> [icon.png]}
-ICON=${3:-$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)/docs/media/icon-1024.png}
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+ICON=${3:-$ROOT/docs/media/icon-1024.png}
+
+# Read the version rather than repeat it. It was written out here as a literal and was still 0.1.0
+# when the workspace had moved on — a bundle claiming a version its binary does not have is the
+# exact drift `[workspace.package]` exists to stop, reintroduced by a second copy.
+VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT/Cargo.toml" | head -1)
+[ -n "$VERSION" ] || VERSION=0.0.0
 
 APP="$OUT/iPod 5G.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/ipod-gui"
+cp "$BIN" "$APP/Contents/MacOS/iPod 5G"
 
 # An .icns from a single PNG. `sips` and `iconutil` both ship with macOS, so this needs nothing
 # installed. Skipped without complaint when no PNG is given — an app with no icon still runs.
@@ -48,10 +55,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <dict>
   <key>CFBundleName</key>                 <string>iPod 5G</string>
   <key>CFBundleDisplayName</key>          <string>iPod 5G</string>
-  <key>CFBundleExecutable</key>           <string>ipod-gui</string>
+  <key>CFBundleExecutable</key>           <string>iPod 5G</string>
   <key>CFBundleIdentifier</key>           <string>net.siggifly.ipod5g</string>
-  <key>CFBundleVersion</key>              <string>0.1.0</string>
-  <key>CFBundleShortVersionString</key>   <string>0.1.0</string>
+  <key>CFBundleVersion</key>              <string>__VERSION__</string>
+  <key>CFBundleShortVersionString</key>   <string>__VERSION__</string>
   <key>CFBundlePackageType</key>          <string>APPL</string>
   <key>CFBundleIconFile</key>             <string>icon</string>
   <key>LSMinimumSystemVersion</key>       <string>11.0</string>
@@ -60,6 +67,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+sed -i '' "s/__VERSION__/$VERSION/g" "$APP/Contents/Info.plist"
 
 # Editing the bundle invalidates whatever signature the binary arrived with, and an unsigned binary
 # does not run at all on Apple Silicon. Ad-hoc, so this needs no identity.
