@@ -1,0 +1,115 @@
+# Build and test the iPod 5G emulator on Linux, macOS and Windows.
+#
+# This file is the difference between "cross-platform" and "cross-platform until somebody tries".
+# The core was portable in principle before it existed — `arm7tdmi` has no dependencies, `eapp-loader`
+# uses only `std` — and it still had a hard Linux build break sitting in it (eframe with
+# `default-features = false` and neither `x11` nor `wayland`, which winit answers with a
+# `compile_error!`). Nothing but a Linux runner was ever going to find that.
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # A failure that only reproduces in release is a failure this project has had: the interpreter's
+  # hot paths are written for `opt-level = 3` and the test suites are all measured there.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Every platform reports, always. A Windows failure must not hide a Linux one.
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+          - name: macos-arm64
+            os: macos-latest
+          - name: windows-x86_64
+            os: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # eframe on Linux links against the X11 and OpenGL headers. Wayland and xkbcommon are opened
+      # at runtime by `dlopen`, but the dev packages are installed anyway so a future change to
+      # either backend does not turn into a mystery.
+      - name: Linux display and GL headers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libxkbcommon-dev libwayland-dev pkg-config
+
+      - name: Rust version
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      # One workspace, one lockfile, one shared `target/` — so this is the only path worth caching,
+      # and the key follows the root lockfile.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ matrix.name }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ matrix.name }}-cargo-
+
+      # The interpreter, the machine and the loader, the .ipg / eApp / .sinf reader, and the
+      # window's own unit tests — the arithmetic of the wheel, the PNG chunk CRCs, the settings
+      # file, the image validator. Nothing opens a display, so this passes on a headless runner.
+      - name: test the workspace
+        run: cargo test --release --workspace
+
+      # The binaries have to LINK, not merely compile as libraries, and their argument parsing has
+      # to survive contact with a shell that is not bash.
+      - name: build every binary
+        run: cargo build --release --workspace --bins
+
+      # `--print` composes the recipe's argv without touching a disk, so it runs on a machine with
+      # no `resources/` — which every CI runner is, and which is the whole point of checking it.
+      - name: the recipes compose the same argv they do on macOS
+        shell: bash
+        run: |
+          BIN=target/release/ipod-boot
+          if [ "${{ runner.os }}" = "Windows" ]; then BIN="$BIN.exe"; fi
+          "$BIN" --help
+          for r in retail cold warm flsh rockbox flash-update from-idle; do
+            echo "--- $r"
+            "$BIN" "$r" --print --clock=5
+          done
+
+      # The update check must be silent and must exit 0 whether or not the network answers. A CI
+      # runner has one; the offline path is covered by a unit test against an RFC 2606 `.invalid`
+      # host, which is deterministic either way.
+      - name: the update check does not fail the program
+        shell: bash
+        run: |
+          BIN=target/release/ipod-gui
+          if [ "${{ runner.os }}" = "Windows" ]; then BIN="$BIN.exe"; fi
+          "$BIN" --check-update
+          "$BIN" --help > /dev/null
+
+      # A fresh clone has no images, and what it does about that is a supported path, not an edge
+      # case: it must say which file is missing and where to read about it, and exit non-zero.
+      - name: a missing image is reported rather than crashed on
+        shell: bash
+        run: |
+          BIN=target/release/ipod-gui
+          if [ "${{ runner.os }}" = "Windows" ]; then BIN="$BIN.exe"; fi
+          out=$("$BIN" --check-images --flash=no-such.bin --disk=no-such.img || true)
+          echo "$out"
+          echo "$out" | grep -q "UNREADABLE" || { echo "expected an UNREADABLE verdict"; exit 1; }

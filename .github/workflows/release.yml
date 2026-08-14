@@ -1,0 +1,162 @@
+# Binaries for a tagged release.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# NOT SIGNED, AND NOT NOTARIZED, deliberately. A locally built binary is not quarantined and runs
+# with no ceremony; a downloaded one gets Gatekeeper's "unidentified developer" prompt on macOS and
+# SmartScreen's on Windows, and the README says so plainly so that nobody files it as a bug. Buying
+# a certificate to make a reverse-engineering tool look official is the wrong trade for this
+# project, and the source is right there to build.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+          # Cross-compiled from the arm runner: Apple's SDK is universal, and nothing here has a
+          # C dependency to find a cross toolchain for.
+          - name: macos-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux display and GL headers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libxkbcommon-dev libwayland-dev pkg-config
+
+      - name: toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+          rustc --version
+
+      - name: build
+        run: cargo build --release --target ${{ matrix.target }} --workspace --bins
+
+      # `trace` and `ipod-boot` must end up in the SAME directory: `ipod-boot` defaults `TRACE` to
+      # the binary beside itself, which is what makes a release archive work with no configuration.
+      - name: stage the archive
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          EXE=""
+          if [ "${{ runner.os }}" = "Windows" ]; then EXE=".exe"; fi
+          DIR="ipod5g-${{ matrix.name }}"
+          mkdir -p "dist/$DIR"
+          BIN="target/${{ matrix.target }}/release"
+          for b in trace ipod-boot dis tcb eapp-inspect disasm ipod-gui ; do
+            cp "$BIN/$b$EXE" "dist/$DIR/"
+          done
+          cp README.md "dist/$DIR/README.md"
+          cp tools/ipod-gui/README.md "dist/$DIR/README-ipod-gui.md"
+          cp tools/ipod-boot/README.md "dist/$DIR/README-recipes.md"
+          # The README references these relatively; without them it renders with broken images.
+          mkdir -p "dist/$DIR/docs"
+          cp -r docs/media "dist/$DIR/docs/media"
+          # A release archive that does not say what it cannot do is a support request in waiting.
+          cat > "dist/$DIR/FIRST-RUN.txt" <<'EOF'
+          This emulator needs two things it does not ship, because they are Apple's:
+
+            1. A 1 MB (1 048 576 byte) dump of your iPod's NOR flash. Conventionally named
+               `internal_rom_000000-0FFFFF.bin`, after the offset range it covers.
+            2. Either an iPod software-update bundle (an .ipsw), from which `ipod-boot make-disk`
+               builds a fresh drive image, or a drive image you already have.
+
+          Run `ipod-gui` with no arguments and it will ask for them, check what you picked, and
+          tell you whether it will work before it tries to boot.
+
+          `ipod-gui --check-images --flash=... --disk=...` does the same check with no window.
+
+          These binaries are NOT code-signed or notarized. On macOS, Gatekeeper will refuse the
+          first launch of a downloaded binary: right-click the file and choose Open, or run
+          `xattr -d com.apple.quarantine <file>`. On Windows, SmartScreen shows "More info" ->
+          "Run anyway". Built locally from source, neither happens.
+          EOF
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "$DIR.zip" "$DIR" > /dev/null
+          else
+            tar czf "$DIR.tar.gz" "$DIR"
+          fi
+          ls -la
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipod5g-${{ matrix.name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    # `workflow_dispatch` exists so the four builds can be exercised without minting a tag; there is
+    # no release to attach them to in that case, and `gh release create` on a branch name would be
+    # a confusing failure at the end of a run that otherwise worked.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # `gh` is preinstalled on the runner, so no third-party action is in the path between a tag
+      # and a published binary.
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          ls -la artifacts
+          NOTES=$(cat <<'EOF'
+          Binaries for macOS (arm64 and x86_64), Linux (x86_64) and Windows (x86_64).
+
+          **These are not signed or notarized.** macOS Gatekeeper will refuse the first launch of a
+          downloaded binary — right-click, Open, or `xattr -d com.apple.quarantine <file>`. Windows
+          SmartScreen shows "More info" -> "Run anyway". A binary you build yourself is not
+          quarantined and neither happens.
+
+          The emulator needs a NOR dump and either an .ipsw or a drive image, none of which ship
+          here. `ipod-gui` with no arguments asks for them and validates what you pick.
+          EOF
+          )
+          gh release create "$TAG" artifacts/* \
+            --title "iPod 5G emulator $TAG" \
+            --notes "$NOTES" \
+            --verify-tag

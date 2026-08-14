@@ -330,7 +330,7 @@ fn missing_images(cfg: &emu::Config) -> Option<String> {
     Some(out)
 }
 
-/// `ideas/03-clickwheel-games`, found from the executable rather than the working directory so the
+/// The repository root, found from the executable rather than the working directory so the
 /// binary can be launched from anywhere.
 fn repo_root() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {

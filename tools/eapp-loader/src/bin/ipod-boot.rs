@@ -172,7 +172,7 @@ impl Recipe {
 
 // ---------------------------------------------------------------- where things are
 
-/// `ideas/03-clickwheel-games`, found from the executable rather than the working directory, so the
+/// The repository root, found from the executable rather than the working directory, so the
 /// program can be launched from anywhere. Same walk `ipod-gui` does, for the same reason: a shared
 /// `CARGO_TARGET_DIR` puts the binary a long way from the source.
 fn repo_root() -> PathBuf {

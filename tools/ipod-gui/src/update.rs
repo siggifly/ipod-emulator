@@ -37,7 +37,7 @@ use std::time::Duration;
 /// A constant rather than a lookup: there is exactly one, and an emulator that took its update URL
 /// from a file would be an emulator you could point at anything. `IPOD_GUI_UPDATE_REPO` overrides
 /// it for a fork, which is a different thing from configuring it at rest.
-pub const REPO: &str = "siggifly/clickwheel-games";
+pub const REPO: &str = "siggifly/ipod-emulator";
 
 /// This build's version — `ipod-gui`'s `Cargo.toml`, at compile time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
