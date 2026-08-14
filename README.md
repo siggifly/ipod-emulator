@@ -34,22 +34,37 @@ bundle, not in its filename — `make-disk` reads it out of the manifest (`Firmw
 25) and prints it, because a mismatch does not fail loudly: RetailOS boots, does not recognise the
 drive as its own, and asks to be restored from iTunes, after roughly 70 ATA commands instead of 600.
 
-`ipod-gui --check-images --flash=… --disk=…` reports on both files before any boot is attempted.
-
 Without them the emulator starts, tells you what is missing, and does nothing else.
 
 ## Running it
 
-From a [release](https://github.com/siggifly/ipod-emulator/releases): unpack it, and on macOS
-double-click **`iPod 5G.app`**. The command-line tools sit beside it.
+**Open it and it asks.** From a [release](https://github.com/siggifly/ipod-emulator/releases),
+unpack it and double-click **`iPod 5G.app`** on macOS, or run `ipod-gui` anywhere. With nothing set
+up it opens on a setup screen: a picker for each of the two files, and under each one a verdict
+saying what the file you chose *actually is* — a 2 MiB dump when the 5G ROM is 1 MiB gets told so,
+rather than failing later. Point the second slot at an `.ipsw` and it builds the drive for you.
 
-Or from source, which works on macOS, Linux and Windows:
+It remembers both, so you do this once.
 
 ```sh
-cargo build --release
-./target/release/ipod-boot make-disk your.ipsw disk.img
-./target/release/ipod-gui              # a window; D toggles debug mode
+cargo build --release          # or use a release build
+./target/release/ipod-gui      # a window; D toggles debug mode
 ```
+
+### From a terminal
+
+The recipes use whatever the setup screen was pointed at, so once you have done the above they
+need no arguments:
+
+```sh
+./target/release/ipod-boot retail            # the recipe every number in research/ is measured on
+./target/release/ipod-boot retail --print    # compose the argv, run nothing
+```
+
+`--print` also says where each path came from — environment, setup screen, or repository default —
+because a recipe with an input you cannot see in its command line is one you cannot check.
+`FLASH=` and `DISK=` override, and `ipod-boot make-disk your.ipsw disk.img` builds a drive without
+the window. `ipod-gui --check-images --flash=… --disk=…` reports on a pair with no window at all.
 
 `tools/ipod-boot/README.md` covers the command-line recipes, and `tools/ipod-film/` records the
 panel to a PNG sequence or an mp4.

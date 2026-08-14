@@ -9,7 +9,7 @@
 //! - **Nothing is modified.** This program never writes to its own installation.
 //! - **It is off unless asked for.** Not a silent call on launch. A reverse-engineering tool that
 //!   phones home the moment it opens is a bad first impression for no benefit, and this audience
-//!   notices. [`Settings::check_updates_on_start`](crate::settings::Settings) defaults to false;
+//!   notices. [`Settings::check_updates_on_start`](eapp_loader::settings::Settings) defaults to false;
 //!   the menu item works whatever it says.
 //! - **It fails silently and completely.** Offline, DNS down, GitHub unreachable, rate-limited,
 //!   proxied, a response in a shape nobody expected — every one of those returns [`None`] and the

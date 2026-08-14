@@ -46,9 +46,9 @@
 //! scale in use is printed under the device in debug mode so it can be checked rather than trusted.
 
 mod emu;
-mod inspect;
+use eapp_loader::inspect;
 mod png;
-mod settings;
+use eapp_loader::settings;
 mod update;
 mod wheel;
 
@@ -64,7 +64,7 @@ use egui::{Align2, Color32, CornerRadius, FontId, Pos2, Rect, Stroke, StrokeKind
 
 use emu::{Link, Phase, FB_BACK, FB_FRONT, FB_H, FB_W};
 use inspect::Verdict;
-use settings::{Mode, Settings};
+use eapp_loader::settings::{Mode, Settings};
 use wheel::{Button, Hit, WheelRing};
 
 // ---------------------------------------------------------------- the device's proportions

@@ -44,11 +44,19 @@ the partition table and the firmware partition.
 
 ## Inputs
 
+**You do not have to set any of these.** `ipod-gui`'s setup screen asks for the NOR dump and the
+drive, checks them, and remembers them, and `ipod-boot` reads what it remembered — so setting up
+once in the window is enough for every recipe here. `ipod-boot setup` asks the same two questions
+on stdin for a machine with no window. `ipod-boot <recipe> --print` says where each path came from,
+so a remembered one is never invisible.
+
+The variables below override that, and are what the `.sh` recipes use directly.
+
 | Variable | Default | Notes |
 |---|---|---|
 | `TRACE` | `~/dev/.cargo-target/release/trace` | build with `cargo build --release --bin trace` |
-| `FLASH` | `resources/internal_rom_000000-0FFFFF/…bin` | 1 MB NOR dump — **required**, and the thing that makes cold boot possible |
-| `DISK` | `resources/derived/disk/ipod8g.img` | a disk image with a firmware partition. **Cold boot's only source for the OS image** |
+| `FLASH` | the setup screen's, else `resources/internal_rom_000000-0FFFFF/…bin` | 1 MB NOR dump — **required**, and the thing that makes cold boot possible |
+| `DISK` | the setup screen's, else `resources/derived/disk/ipod8g.img` | a disk image with a firmware partition. **Cold boot's only source for the OS image** |
 | `OSOS` | `resources/derived/fw/OSOS_correct.bin` | `warm-boot.sh` only. A cold boot is not handed it — see below |
 | `BUDGET` | `150000000` | instructions. The retail boot decision completes and fails by ~150M; 600M was four times more work than the question needed |
 

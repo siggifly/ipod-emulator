@@ -24,6 +24,8 @@ pub mod png;
 /// Building a drive image from an IPSW, so nobody has to be handed 8 GB of somebody else's iPod.
 /// A zip reader, an inflate, and an MBR + FAT32 writer — none of which touches the machine.
 pub mod ipsw;
+pub mod inspect;
+pub mod settings;
 
 pub const EAPP_MAGIC: &[u8; 4] = b"eapp";
 /// Corrected 2026-08-11 against RetailOS 1.3's own loader — see `eapp-inspect` for the evidence.
