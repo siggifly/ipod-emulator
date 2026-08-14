@@ -6,8 +6,8 @@ scratch. It formats its own filesystem, reads the click wheel, draws its own men
 ![cold boot through to a game](docs/media/ipod-01-boot-to-brick.gif)
 
 The iPod Video 5.5G shipped on 12 September 2006. Twenty years next month, its firmware runs on a
-machine that does not exist. It was also the first Apple product I ever owned, which I did not plan
-and enjoyed more than I expected.
+machine that does not exist. It is also the model I owned — my first Apple product, at twelve. That
+this is the one that ended up emulated was not deliberate, and I liked it more than I expected to.
 
 Not a reimplementation of the interface. Apple's own code the whole way: the bootloader brings up
 SDRAM, talks to the PCF50605 power chip over I²C, uploads firmware to the video co-processor, reads
@@ -46,6 +46,38 @@ cargo build --release
 `tools/ipod-boot/README.md` covers the command-line recipes, and `tools/ipod-film/` records the
 panel to a PNG sequence or an mp4.
 
+## The window
+
+A drawn iPod whose screen is the live framebuffer and whose wheel, buttons and hold switch drive the
+machine. Vector geometry rather than a photograph, because the wheel needs angular hit testing across
+96 detents and that wants real geometry. The panel is blitted at integer scale with nearest-neighbour
+sampling, so what you see is what the co-processor holds and not an interpolation of it.
+
+| user mode | debug mode |
+|---|---|
+| ![](docs/media/ipod-11-gui-user.png) | ![](docs/media/ipod-10-gui-debug.png) |
+
+**`D` toggles between them.** User mode is the iPod and nothing else. Debug adds instruction counts,
+both clocks, the wheel's state, the surface addresses, and a *does the input reach RetailOS?* panel
+carrying arrival counts at the real addresses — so the window proves its own claim rather than
+asserting it.
+
+| | |
+|---|---|
+| arrows | scroll the wheel |
+| Enter / Space | select |
+| `M` `P` `,` `.` | menu · play · previous · next |
+| `H` | hold switch |
+| `S` | write a PNG and a PPM into `_out/` |
+| `D` | user ⇄ debug |
+
+**Power off** and **power cycle — cold boot** are real: the machine is dropped and re-entered at the
+reset vector, not restored and pretended. `hold MENU+SELECT` and `hold PLAY` deliver the buttons, and
+the panel says plainly that nothing in RetailOS has been measured to act on either — on a real 5G
+that pair is caught by the wheel controller or the PMU, and neither is modelled here.
+
+It restores a snapshot of the booted machine in about 3 seconds, or cold boots in 75.
+
 ## What works
 
 - The boot chain, cold from address 0, including Apple's flash updater
@@ -58,7 +90,9 @@ panel to a PNG sequence or an mp4.
 ## What does not
 
 - **No audio.** The Wolfson codec is unmodelled
-- **~30 % of real time.** About 21 M instructions/sec against an 80 MHz ARM7TDMI
+- **~30 % of real time headless, ~19 % with the window.** About 21 M instructions/sec against an
+  80 MHz ARM7TDMI, and around 14 M once a frame is being drawn. The window reports the figure it is
+  actually achieving, in both modes
 - **No USB inside the emulator**
 - **Purchased titles do not launch.** Apple's DRM refuses them; the identity it binds to is understood, the keystore is not
 - **Four values in the co-processor transport are chosen rather than measured**, and there is no timing model at all, so a bug that only appears when a reply is late is invisible
