@@ -5,7 +5,7 @@ scratch. It formats its own filesystem, reads the click wheel, draws its own men
 
 ![cold boot through to a game](docs/media/ipod-01-boot-to-brick.gif)
 
-The iPod Video 5.5G shipped in June 2006. Twenty years and two months later its firmware runs on a
+The iPod Video 5.5G shipped on 12 September 2006. Twenty years next month, its firmware runs on a
 machine that does not exist. It was also the first Apple product I ever owned, which I did not plan
 and enjoyed more than I expected.
 
