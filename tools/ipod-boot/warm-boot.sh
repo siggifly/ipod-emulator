@@ -21,12 +21,11 @@ RES="$ROOT/resources"
 : "${FLASH:=$RES/internal_rom_000000-0FFFFF/internal_rom_000000-0FFFFF.bin}"
 : "${DISK:=$RES/derived/disk/ipod8g.img}"
 : "${OSOS:=$RES/derived/fw/OSOS_correct.bin}"
-: "${GAME:=$RES/Cracked Click Wheel Games/Cracked Games/Tetris/Executables/Tetris_1_1_2563292.bin}"
 : "${BUDGET:=600000000}"
 
 # `--osos-at=0x04000000` is the base that makes RetailOS's scatter-load source pointers land inside
 # the image; research/09 found it by trying bases rather than by guessing one.
-exec "$TRACE" "$GAME" "$BUDGET" \
+exec "$TRACE" "$BUDGET" \
   --osos="$OSOS" --boot-osos --osos-at=0x04000000 --sysinfo \
   --flash="$FLASH" --disk="$DISK" \
   --bcm --pmu "$@"

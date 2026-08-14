@@ -1,6 +1,10 @@
 //! Load a real eApp and trace the framework calls it makes.
 //!
-//!   trace <game.bin> [instruction_budget]
+//!   trace [app.bin] [instruction_budget]
+//!
+//! Both positionals are optional. A boot (`--boot-osos`) never executes an eApp — RetailOS is
+//! entered from the reset vector — so the recipes pass none, and a bare integer in first position
+//! is the budget. A path is never a bare integer, so the two cannot be confused.
 
 use std::env;
 use std::fs;
@@ -15,7 +19,7 @@ const RAM_SIZE: usize = 0x0080_0000; // 8 MB — the 5G has 32/64 MB, this is am
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!("usage: trace <game.bin> [budget]");
+        eprintln!("usage: trace [app.bin] [budget] [flags…]");
         std::process::exit(2);
     }
     // `--bcm-film` is wired into the `--boot-osos` run loop and nowhere else, because that is the
@@ -27,9 +31,15 @@ fn main() {
         eprintln!("--bcm-film only records the --boot-osos path; there is no panel on the others.");
         std::process::exit(2);
     }
+    // The eApp image, if one was named. A leading positional that parses as an integer is the
+    // budget, not a path, so `trace 4000000000 --boot-osos …` needs no file that a boot never reads.
+    let image_path: Option<&String> = args
+        .first()
+        .filter(|a| !a.starts_with("--") && a.parse::<usize>().is_err());
+
     const DEFAULT_BUDGET: usize = 2_000_000;
     let budget: usize = args
-        .get(1)
+        .get(usize::from(image_path.is_some()))
         .filter(|s| !s.starts_with("--"))
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_BUDGET);
@@ -67,31 +77,37 @@ fn main() {
         })
         .collect();
 
-    let image = fs::read(&args[0]).unwrap_or_else(|e| {
-        eprintln!("{}: {e}", args[0]);
-        std::process::exit(1);
-    });
-
-    let app = match EApp::parse(image) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("not loadable: {e:?}");
-            std::process::exit(1);
+    let app = match image_path {
+        Some(path) => {
+            let image = fs::read(path).unwrap_or_else(|e| {
+                eprintln!("{path}: {e}");
+                std::process::exit(1);
+            });
+            match EApp::parse(image) {
+                Ok(a) => a,
+                Err(e) => {
+                    eprintln!("not loadable: {e:?}");
+                    std::process::exit(1);
+                }
+            }
         }
+        None => EApp::none(),
     };
 
-    println!("load base   {:#010x}", app.load_base);
-    println!("entry       {:#010x}", app.entry);
-    println!("frameworks  {}", app.frameworks.len());
-    for fw in &app.frameworks {
-        println!(
-            "  {:<14} {:>3} imports   hash {}",
-            fw.name,
-            fw.thunks.len(),
-            fw.hash.iter().map(|b| format!("{b:02x}")).collect::<String>()
-        );
+    if app.is_loaded() {
+        println!("load base   {:#010x}", app.load_base);
+        println!("entry       {:#010x}", app.entry);
+        println!("frameworks  {}", app.frameworks.len());
+        for fw in &app.frameworks {
+            println!(
+                "  {:<14} {:>3} imports   hash {}",
+                fw.name,
+                fw.thunks.len(),
+                fw.hash.iter().map(|b| format!("{b:02x}")).collect::<String>()
+            );
+        }
+        println!("total imports {}", app.import_count());
     }
-    println!("total imports {}", app.import_count());
 
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
     // Identified from its own call pattern: sizes in, pointer immediately dereferenced.

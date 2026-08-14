@@ -202,11 +202,11 @@ mod tests {
         assert_eq!(Settings::parse(&s.render()), s);
     }
 
-    /// A path with a space in it — `Cracked Click Wheel Games` is a real directory in this project
-    /// — must survive the format, which is why the value is the rest of the line and not a token.
+    /// A path with a space in it must survive the format, which is why the value is the rest of
+    /// the line and not a token. Spaces in a chosen path are ordinary, not exotic.
     #[test]
     fn a_path_with_spaces_survives() {
-        let p = PathBuf::from("/res/Cracked Click Wheel Games/x.img");
+        let p = PathBuf::from("/some where/My iPod Backups/x.img");
         let s = Settings { disk: Some(p.clone()), ..Default::default() };
         assert_eq!(Settings::parse(&s.render()).disk, Some(p));
     }

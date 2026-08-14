@@ -31,7 +31,6 @@ RES="$ROOT/resources"
 : "${FLASH:=$RES/reference/ipod-bootrom-archive/A1238/internal_rom_000000-0FFFFF.bin}"
 : "${SRCDISK:=$RES/derived/disk/ipod8g.img}"
 : "${FW:=$RES/derived/fw/Firmware-20.6.3}"
-: "${GAME:=$RES/Cracked Click Wheel Games/Cracked Games/Tetris/Executables/Tetris_1_1_2563292.bin}"
 : "${BUDGET:=600000000}"
 : "${WORK:=${TMPDIR:-/tmp}/ipod-flash-update}"
 
@@ -69,7 +68,7 @@ fi
 # PCF50605, not the absence of a fill.
 for boot in 1 2; do
   echo "===== boot $boot ====="
-  "$TRACE" "$GAME" "$BUDGET" \
+  "$TRACE" "$BUDGET" \
     --boot-osos --cold-boot \
     --flash="$FLASH" --disk="$DISK" --disk-writable \
     --bcm --pmu --nor "$@"

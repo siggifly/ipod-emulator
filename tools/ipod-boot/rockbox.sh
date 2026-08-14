@@ -16,12 +16,11 @@ RB="$RES/reference/rockbox/bin"
 : "${IMG:=rb-main.raw}"
 : "${FLASH:=$RES/internal_rom_000000-0FFFFF/internal_rom_000000-0FFFFF.bin}"
 : "${DISK:=$RES/derived/disk/ipod8g.img}"
-: "${GAME:=$RES/Cracked Click Wheel Games/Cracked Games/Tetris/Executables/Tetris_1_1_2563292.bin}"
 : "${BUDGET:=200000000}"
 
 # Rockbox's own contract, per tools/scramble.c + bootloader/ipod.c: the image is linked for
 # address 0, loaded to DRAM_START (0x10000000) and entered there; it remaps SDRAM to 0 itself.
-exec "$TRACE" "$GAME" "$BUDGET" \
+exec "$TRACE" "$BUDGET" \
   --osos="$RB/$IMG" --boot-osos \
   --flash="$FLASH" --disk="$DISK" --sysinfo \
   --bcm --pmu "$@"

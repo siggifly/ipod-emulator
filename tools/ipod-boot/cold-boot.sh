@@ -19,7 +19,6 @@ RES="$ROOT/resources"
 : "${TRACE:=$HOME/dev/.cargo-target/release/trace}"
 : "${FLASH:=$RES/internal_rom_000000-0FFFFF/internal_rom_000000-0FFFFF.bin}"
 : "${DISK:=$RES/derived/disk/ipod8g.img}"
-: "${GAME:=$RES/Cracked Click Wheel Games/Cracked Games/Tetris/Executables/Tetris_1_1_2563292.bin}"
 : "${BUDGET:=150000000}"
 
 # The two `--rdval` guesses that used to live here — 0x70000030 bit 27 and 0x7000003c bit 31 —
@@ -39,7 +38,7 @@ RES="$ROOT/resources"
 # matched. With the model it reads SST `0xbf`/`0x273f` and selects row 3 — `SST39WF800A`, the
 # spelling iPodLinux and the EE Times 5.5G BOM both carry. See research/12 #12 and its
 # §"The flash part". (This comment said row 4 / `0x2781` until 2026-08-14, from before that switch.)
-exec "$TRACE" "$GAME" "$BUDGET" \
+exec "$TRACE" "$BUDGET" \
   --boot-osos --cold-boot \
   --flash="$FLASH" --disk="$DISK" \
   --bcm --pmu --nor "$@"

@@ -202,7 +202,31 @@ pub enum LoadError {
     NoLoadBase,
 }
 
+/// Where a title is linked to load, and where the region lives when there is no title.
+pub const EAPP_LOAD_BASE: u32 = 0x1800_0000;
+
 impl EApp {
+    /// No eApp at all.
+    ///
+    /// A boot never executes one: RetailOS is entered from the reset vector and never looks at
+    /// `EAPP_LOAD_BASE`. The region is still created, so a stray access there is mapped exactly as
+    /// it is with a title loaded — it just reads as zeros. Every recipe that boots uses this, which
+    /// is why booting needs nothing but a NOR dump and a drive image.
+    pub fn none() -> Self {
+        EApp {
+            load_base: EAPP_LOAD_BASE,
+            entry: 0,
+            vectors: Vec::new(),
+            image: Vec::new(),
+            frameworks: Vec::new(),
+        }
+    }
+
+    /// Whether anything was loaded — false for [`EApp::none`].
+    pub fn is_loaded(&self) -> bool {
+        !self.image.is_empty()
+    }
+
     /// Parse an eApp image. `load_base` is derived from the header pointer rather than assumed,
     /// so a title linked somewhere other than `0x1800_0000` still loads.
     pub fn parse(image: Vec<u8>) -> Result<Self, LoadError> {

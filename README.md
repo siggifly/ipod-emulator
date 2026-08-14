@@ -24,14 +24,17 @@ partition, formats and populates its own FAT32 volume, spins the drive down, and
 
 Two files, from an iPod you own. **Neither is distributed here and neither ever will be.**
 
-| | |
-|---|---|
-| **NOR flash dump** | exactly 1 048 576 bytes. Conventionally named `internal_rom_000000-0FFFFF.bin` after the offset range it covers |
-| **IPSW** | Apple's own firmware bundle. `ipod-boot make-disk` builds a fresh drive from it |
+| | What to look for | |
+|---|---|---|
+| **NOR flash dump** | `internal_rom_000000-0FFFFF.bin` | Exactly 1 048 576 bytes. The name is the convention, after the offset range it covers — `000000`–`0FFFFF` is the whole megabyte. Any name works; the size and the reset vector are what get checked |
+| **IPSW** | `*.ipsw` — Apple's own bundle, about 14 MB | The filename varies and does not tell you which iPod it is for. `ipod-boot make-disk your.ipsw disk.img` builds a fresh drive from it |
 
-The updater family of the IPSW must match the iPod your NOR dump came from. `make-disk` prints the
-family and says so, because a mismatch does not fail loudly — RetailOS boots, does not recognise the
-drive as its own, and asks to be restored from iTunes.
+**The IPSW's updater family must match the iPod your NOR dump came from.** The family is inside the
+bundle, not in its filename — `make-disk` reads it out of the manifest (`Firmware-25.1.2` → family
+25) and prints it, because a mismatch does not fail loudly: RetailOS boots, does not recognise the
+drive as its own, and asks to be restored from iTunes, after roughly 70 ATA commands instead of 600.
+
+`ipod-gui --check-images --flash=… --disk=…` reports on both files before any boot is attempted.
 
 Without them the emulator starts, tells you what is missing, and does nothing else.
 

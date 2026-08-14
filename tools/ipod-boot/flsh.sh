@@ -19,7 +19,6 @@ RES="$ROOT/resources"
 : "${IMG:=diag}"
 : "${FLASH:=$RES/internal_rom_000000-0FFFFF/internal_rom_000000-0FFFFF.bin}"
 : "${DISK:=$RES/derived/disk/ipod8g.img}"
-: "${GAME:=$RES/Cracked Click Wheel Games/Cracked Games/Tetris/Executables/Tetris_1_1_2563292.bin}"
 : "${BUDGET:=200000000}"
 
 # The two `--rdval` guesses that used to live here are gone, for the same reason they left
@@ -40,7 +39,7 @@ RES="$ROOT/resources"
 # 0x1000c6a0 polling an unmapped halfword at 0xb0020000 (51 185 488 reads in a 200 M budget), and
 # `disk` goes Lost after 127 952 instructions. That is why the A/B above is inert — the flags could
 # not have mattered — and it is an open defect, not a property of the flags.
-exec "$TRACE" "$GAME" "$BUDGET" \
+exec "$TRACE" "$BUDGET" \
   --osos="$RES/derived/fw/flsh/$IMG.bin" --boot-osos \
   --flash="$FLASH" --disk="$DISK" --sysinfo \
   --bcm --pmu --nor "$@"

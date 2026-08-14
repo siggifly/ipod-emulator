@@ -119,7 +119,6 @@ Environment, all optional and all the same as the shell recipes in tools/ipod-bo
   WORKDISK  keep the writable clone across runs instead of a per-run temporary
   OSOS      warm only — the RetailOS image
   IMG       flsh / rockbox — which image
-  GAME      the eApp handed to `trace`; a boot never executes it
   SNAP_AT   from-idle — where the snapshot is taken       (default 1600000000)
   CACHE     from-idle — where snapshots live              (default <tempdir>/ipod-from-idle)
 
@@ -324,10 +323,6 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
     // The eApp every `trace` invocation is handed. A boot never executes it — RetailOS is entered
     // from the reset vector and never looks at 0x18000000 — but `trace`'s first positional is the
     // image, so the recipes all name the same one.
-    let game = env_path("GAME").unwrap_or_else(|| {
-        res.join("Cracked Click Wheel Games/Cracked Games/Tetris/Executables/Tetris_1_1_2563292.bin")
-    });
-
     // The prototype NOR (archive.org, "SA JULY 12 2007 ipod video prototype firmware dump"), which
     // is `cold-boot.sh`'s default and, deliberately, nothing else's.
     let proto_flash =
@@ -336,19 +331,18 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         || res.join("reference/ipod-bootrom-archive/A1238/internal_rom_000000-0FFFFF.bin");
 
     match recipe {
-        // trace GAME BUDGET --boot-osos --cold-boot --flash= --disk= --bcm --pmu --nor "$@"
+        // trace BUDGET --boot-osos --cold-boot --flash= --disk= --bcm --pmu --nor "$@"
         Recipe::Cold => {
             let flash = env_path("FLASH").unwrap_or_else(proto_flash);
             let disk = env_path("DISK").unwrap_or_else(|| res.join("derived/disk/ipod8g.img"));
             let budget = env_u64("BUDGET", 150_000_000);
             if !dry {
-                require(&game, "game image (GAME=)")?;
                 require(&flash, "NOR dump (FLASH=)")?;
                 require(&disk, "disk image (DISK=)")?;
             }
             Ok(Plan {
                 trace,
-                runs: vec![cold_argv(&game, budget, &flash, &disk, &[], user)],
+                runs: vec![cold_argv(budget, &flash, &disk, &[], user)],
                 cleanup: None,
             })
         }
@@ -368,7 +362,6 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
                 }
             };
             if !dry {
-                require(&game, "game image (GAME=)")?;
                 require(&flash, "NOR dump (FLASH=)")?;
                 require(&src, "disk image (DISK=)")?;
                 clone_file(&src, &work)?;
@@ -376,7 +369,6 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             Ok(Plan {
                 trace,
                 runs: vec![cold_argv(
-                    &game,
                     budget,
                     &flash,
                     &work,
@@ -387,7 +379,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             })
         }
 
-        // trace GAME BUDGET --osos= --boot-osos --osos-at=0x04000000 --sysinfo --flash= --disk=
+        // trace BUDGET --osos= --boot-osos --osos-at=0x04000000 --sysinfo --flash= --disk=
         //       --bcm --pmu "$@"
         Recipe::Warm => {
             let flash = env_path("FLASH").unwrap_or_else(proto_flash);
@@ -395,12 +387,11 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             let osos = env_path("OSOS").unwrap_or_else(|| res.join("derived/fw/OSOS_correct.bin"));
             let budget = env_u64("BUDGET", 600_000_000);
             if !dry {
-                require(&game, "game image (GAME=)")?;
                 require(&flash, "NOR dump (FLASH=)")?;
                 require(&disk, "disk image (DISK=)")?;
                 require(&osos, "RetailOS image (OSOS=)")?;
             }
-            let mut a = head(&game, budget);
+            let mut a = head(budget);
             a.push(opt("--osos=", &osos));
             a.push("--boot-osos".into());
             a.push("--osos-at=0x04000000".into());
@@ -413,7 +404,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             Ok(Plan { trace, runs: vec![a], cleanup: None })
         }
 
-        // trace GAME BUDGET --osos=.../flsh/$IMG.bin --boot-osos --flash= --disk= --sysinfo
+        // trace BUDGET --osos=.../flsh/$IMG.bin --boot-osos --flash= --disk= --sysinfo
         //       --bcm --pmu --nor "$@"
         Recipe::Flsh => {
             let img = std::env::var("IMG").unwrap_or_else(|_| "diag".into());
@@ -422,12 +413,11 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             let osos = res.join(format!("derived/fw/flsh/{img}.bin"));
             let budget = env_u64("BUDGET", 200_000_000);
             if !dry {
-                require(&game, "game image (GAME=)")?;
                 require(&flash, "NOR dump (FLASH=)")?;
                 require(&disk, "disk image (DISK=)")?;
                 require(&osos, "flash image (IMG=)")?;
             }
-            let mut a = head(&game, budget);
+            let mut a = head(budget);
             a.push(opt("--osos=", &osos));
             a.push("--boot-osos".into());
             a.push(opt("--flash=", &flash));
@@ -440,7 +430,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             Ok(Plan { trace, runs: vec![a], cleanup: None })
         }
 
-        // trace GAME BUDGET --osos=$RB/$IMG --boot-osos --flash= --disk= --sysinfo --bcm --pmu "$@"
+        // trace BUDGET --osos=$RB/$IMG --boot-osos --flash= --disk= --sysinfo --bcm --pmu "$@"
         Recipe::Rockbox => {
             let img = std::env::var("IMG").unwrap_or_else(|_| "rb-main.raw".into());
             let flash = env_path("FLASH").unwrap_or_else(proto_flash);
@@ -448,12 +438,11 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             let osos = res.join("reference/rockbox/bin").join(&img);
             let budget = env_u64("BUDGET", 200_000_000);
             if !dry {
-                require(&game, "game image (GAME=)")?;
                 require(&flash, "NOR dump (FLASH=)")?;
                 require(&disk, "disk image (DISK=)")?;
                 require(&osos, "Rockbox image (IMG=)")?;
             }
-            let mut a = head(&game, budget);
+            let mut a = head(budget);
             a.push(opt("--osos=", &osos));
             a.push("--boot-osos".into());
             a.push(opt("--flash=", &flash));
@@ -476,7 +465,6 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             let budget = env_u64("BUDGET", 600_000_000);
             let disk = work.join("disk.img");
             if !dry {
-                require(&game, "game image (GAME=)")?;
                 require(&flash, "NOR dump (FLASH=)")?;
                 require(&srcdisk, "disk image (SRCDISK=)")?;
                 require(&fw, "firmware bundle (FW=)")?;
@@ -490,7 +478,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             // after `--disk=`, where `retail-boot.sh` — which reaches `trace` through
             // `cold-boot.sh`'s `"$@"` — puts it after `--nor`. Same flags, different order, and
             // the drift test caught the difference the first time this was written the tidy way.
-            let mut argv = head(&game, budget);
+            let mut argv = head(budget);
             argv.push("--boot-osos".into());
             argv.push("--cold-boot".into());
             argv.push(opt("--flash=", &flash));
@@ -534,12 +522,10 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
                 std::fs::create_dir_all(&cache).map_err(|e| format!("{}: {e}", cache.display()))?;
                 eprintln!("building snapshot at {snap_at} for trace {key} (one-off, ~80 s) …");
                 let _ = std::fs::remove_file(&disk);
-                require(&game, "game image (GAME=)")?;
                 require(&flash, "NOR dump (FLASH=)")?;
                 require(&src, "disk image (DISK=)")?;
                 clone_file(&src, &disk)?;
                 let build = cold_argv(
-                    &game,
                     snap_at + 1_000_000,
                     &flash,
                     &disk,
@@ -568,7 +554,6 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             Ok(Plan {
                 trace,
                 runs: vec![cold_argv(
-                    &game,
                     budget,
                     &flash,
                     &disk,
@@ -633,9 +618,12 @@ fn make_disk(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// The positional head every recipe shares: the eApp, then the budget.
-fn head(game: &Path, budget: u64) -> Vec<String> {
-    vec![game.to_string_lossy().into_owned(), budget.to_string()]
+/// The positional head every recipe shares: the budget, and nothing else.
+///
+/// No eApp. A boot is entered from the reset vector and never looks at `EAPP_LOAD_BASE`, so there
+/// is nothing for a title to do here — which is why booting needs only a NOR dump and a drive.
+fn head(budget: u64) -> Vec<String> {
+    vec![budget.to_string()]
 }
 
 fn opt(flag: &str, p: &Path) -> String {
@@ -646,14 +634,13 @@ fn opt(flag: &str, p: &Path) -> String {
 /// through. `extra` is what the calling recipe inserts ahead of the caller's own flags, exactly
 /// where `"$@"` puts it when one script `exec`s another.
 fn cold_argv(
-    game: &Path,
     budget: u64,
     flash: &Path,
     disk: &Path,
     extra: &[String],
     user: &[String],
 ) -> Vec<String> {
-    let mut a = head(game, budget);
+    let mut a = head(budget);
     a.push("--boot-osos".into());
     a.push("--cold-boot".into());
     a.push(opt("--flash=", flash));
@@ -682,9 +669,9 @@ fn write_firmware_partition(disk: &Path, fw: &Path) -> Result<(), String> {
     f.flush().map_err(|e| format!("{}: {e}", disk.display()))
 }
 
-/// Render an argv the way a shell would need it written, for `--print`. Paths in this project have
-/// spaces in them (`Cracked Click Wheel Games`), and an unquoted `--print` line that cannot be
-/// pasted back is a documentation bug waiting to be reported as a code one.
+/// Render an argv the way a shell would need it written, for `--print`. A chosen path can have
+/// spaces in it, and an unquoted `--print` line that cannot be pasted back is a documentation bug
+/// waiting to be reported as a code one.
 fn shell_quote(trace: &Path, args: &[String]) -> String {
     let mut out = quote_one(&trace.to_string_lossy());
     for a in args {
@@ -947,9 +934,9 @@ mod tests {
     fn print_quotes_paths_with_spaces() {
         let q = shell_quote(
             Path::new("/x/trace"),
-            &["/res/Cracked Click Wheel Games/t.bin".to_string(), "--clock=5".to_string()],
+            &["/res/My Firmware Dumps/t.bin".to_string(), "--clock=5".to_string()],
         );
-        assert_eq!(q, "/x/trace '/res/Cracked Click Wheel Games/t.bin' --clock=5");
+        assert_eq!(q, "/x/trace '/res/My Firmware Dumps/t.bin' --clock=5");
     }
 
     #[test]

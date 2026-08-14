@@ -88,7 +88,6 @@ scope tightly.
 |---|---|---|
 | [**clicky**](https://github.com/daniel5151/clicky) | Rust clickwheel-iPod emulator, QEMU-style device model | ⚠️ **Weaker than it looks — corrected 2026-08-11.** Targets **iPod 4G grayscale, a model that cannot run clickwheel games at all** (5G+ only). **Corrected again 2026-08-12 by the operator, who follows its development: clicky does not boot RetailOS at all.** It boots **Rockbox**; iPodLinux does not yet boot; its author's order is Rockbox → iPodLinux → diagnostics → RetailOS. Its *code and documentation* are useful; its *status claims* are not. daniel5151's last commit was **2022-11**; all 2024–26 work is one contributor (`jeanthom`) doing PP5020 peripherals. **No issue mentions games.** Useful as reference, not as substrate |
 | [**Xlinka/iPodReverseEngineering**](https://github.com/Xlinka/iPodReverseEngineering) | 2020 Ghidra writeup on the game DRM | **The single most important source for the crypto.** AES-128-CBC; key+IV recovered from RAM at launch; DRM check NOP'd at `00136B84` in 1.3 5.5-Enhanced. 5G/5.5G only — Classic and nano were never patched |
-| [archive.org `ipodgames`](https://archive.org/details/ipodgames) | "Cracked Clickwheel Games and Cracked iPod Video 1.2.1 Firmware" | **20 of 54 titles with decrypted `.bin`s, plus a firmware image.** Verified plaintext (entropy 4.07 b/B, valid ARM prologues, readable strings). This is what unblocks all pre-hardware work |
 | [iPodLinux wiki `IPodGames`](https://web.archive.org/web/20220814041437/http://www.ipodlinux.org/IPodGames/) | 2006–07 `.ipg` format documentation | Frozen April 2007, domain dead — **Wayback only.** Documents the full archive layout. States the API goal explicitly and never achieved it: *"This is the API we hope to figure out"* |
 | [**Clickwheel Games Preservation Project**](https://github.com/Olsro/ipodclickwheelgamespreservationproject) | Olsro's 54-game archive + a Windows 10 LTSC VM acting as an offline authorisation centre | Mature and working — **on real hardware only.** Explicitly does not emulate. The authoritative source on the DRM mechanics |
 | [**freemyipod**](https://freemyipod.org/wiki/Main_Page) / [wInd3x](https://github.com/freemyipod/wInd3x) | Bootrom exploits, patched RetailOS | ⚠️ **Targets Nano 3G–7G and Classic 6G/7G — Samsung S5L silicon.** The 5G Video is PortalPlayer PP5021C. Much less transferable than it first looks |
@@ -126,15 +125,19 @@ block us: the 2007 crackers never derived it either — they ran the game on a m
 **read the unwrapped key out of RAM**. Recovery, not derivation, is the path. See
 [Extraction](#extraction-how-the-34-get-unlocked).
 
-### The two populations
+### What this project does about the DRM
 
-| | Count | State | What's needed |
-|---|---|---|---|
-| **Cracked** | **20** | Plaintext `.bin` publicly archived | Nothing. ABI work can start today |
-| **Uncracked** | **34** | AES-encrypted (Sonic, Phase, Asphalt 4, Crystal Defenders, Song Summoner, Peggle, Spore Origins…) | One authorised 5G + key recovery |
+**Nothing.** Purchased titles do not launch here, and this emulator neither ships, bundles, nor
+depends on a decrypted copy of any title. The authorisation mechanics above are recorded because
+they explain what the firmware is doing — `research/12` still owes a row for every point where this
+emulator diverges from the hardware, and the DRM is one of them.
 
-The goal is 54, so the 34 must be solved — but they are solved **once**, and only the 20 gate the
-software work. Sequence accordingly.
+The games that do run are the ones **built into RetailOS itself** — Brick and its siblings, which
+are part of Apple's firmware and arrive with the `osos` image rather than as separate purchases.
+
+Olsro's [Clickwheel Games Preservation Project](https://github.com/Olsro/ipodclickwheelgamespreservationproject)
+is the authority on the titles and their authorisation, and it works on real hardware. If you want
+to play a title you bought, that is the project to use.
 
 ---
 
