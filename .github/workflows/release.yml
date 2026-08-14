@@ -40,6 +40,11 @@ jobs:
           - name: windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
+          # v0.1.0's Windows archive was cross-compiled from Linux with mingw rather than built
+          # here, and it ran: `x86_64-pc-windows-gnu`, with `-L native=` pointing at winpthreads
+          # because rustc links `-l:libpthread.a` and does not know where a distribution keeps it.
+          # Kept as a note, not a job — a native msvc build is the better artifact when a runner
+          # is available, and wine is what verified the cross-built one.
 
     steps:
       - uses: actions/checkout@v4
