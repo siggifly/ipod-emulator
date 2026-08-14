@@ -5,6 +5,10 @@ scratch. It formats its own filesystem, reads the click wheel, draws its own men
 
 ![cold boot through to a game](docs/media/ipod-01-boot-to-brick.gif)
 
+The iPod Video 5.5G shipped in June 2006. Twenty years and two months later its firmware runs on a
+machine that does not exist. It was also the first Apple product I ever owned, which I did not plan
+and enjoyed more than I expected.
+
 Not a reimplementation of the interface. Apple's own code the whole way: the bootloader brings up
 SDRAM, talks to the PCF50605 power chip over I²C, uploads firmware to the video co-processor, reads
 the partition table, DMAs 7.5 MB of RetailOS into memory, checksums it and jumps. RetailOS then
@@ -132,7 +136,7 @@ Two projects that had nothing to do with iPods and everything to do with attempt
   the parts that wore out, rather than hunting for the originals.
 - **[Tahoe 26.5's kernel running natively on a Galaxy A55](https://www.reddit.com/r/hackintosh/comments/1virmsv/tahoe_265_kernel_running_on_a_galaxy_a55_natively/)**
   — someone taking a modern macOS kernel and getting it to run on a phone it was never meant to
-  touch. I saw it a couple of days before starting this, and it is most of the reason I did: the
+  touch. It was posted three days before I started this, and it is most of the reason I did: the
   thing between you and a project like that is mostly whether you decide to begin.
 
 ### If you want to give something back
