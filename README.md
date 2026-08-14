@@ -82,11 +82,52 @@ and why it was wrong is deliberately preserved rather than tidied away. Retracti
 place. `research/12` is the bypass ledger, `research/21` documents the co-processor's runtime, and
 `research/22` describes how RetailOS draws.
 
-Most of the register semantics came from [Rockbox](https://git.rockbox.org/); start there if you want
-this hardware. [iPodLinux](http://www.ipodlinux.org/), [freemyipod](https://freemyipod.org/),
-[daniel5151/clicky](https://github.com/daniel5151/clicky) and
-[devos50/qemu-ios](https://github.com/devos50/qemu-ios) all fed this. `dreamlayers` identified
-`vmcs.bin` and the `.vll` files as ELF DLLs on the Rockbox forums in 2009, sixteen years before this.
+## Credit
+
+None of this would exist without other people's work, and some of it would have taken months longer.
+In rough order of how much this project owes them:
+
+- **[Rockbox](https://git.rockbox.org/)** — the largest debt by a distance. `pp5020.h` and the iPod
+  target code are where most of the register semantics came from: the PP502x memory map, the click
+  wheel frame format, the co-processor's addresses, the PCF50605 register map. If you want to
+  understand this hardware, read Rockbox first. It was also the oracle — a known-good OS to boot
+  when something broke and you needed to know whether it was you.
+- **[iPodLinux](http://www.ipodlinux.org/)** — the older layer beneath Rockbox, and still the only
+  source for things like the MMAP window encoding and the `sysinfo_t` layout.
+- **`dreamlayers`**, on the Rockbox forums in **2009**, who identified `vmcs.bin` and the `.vll`
+  files as ELF DLLs loaded into the Broadcom chip, with the extraction recipe. This project worked
+  that out independently in 2026 and then found the post. Sixteen years early.
+- **[Olsro's Clickwheel Games Preservation Project](https://github.com/Olsro/ipodclickwheelgamespreservationproject)**
+  — the reason this project exists at all, and the authority on the games and their authorisation.
+- **[daniel5151/clicky](https://github.com/daniel5151/clicky)** — a 4G/PP5020 emulator that
+  independently needed the same two undocumented register bits, found by a different method on a
+  different SoC revision. That agreement arrived at a point where I was not sure of myself.
+- **[freemyipod](https://freemyipod.org/)** and **q3k's [wInd3x](https://github.com/freemyipod/wInd3x)
+  writeup** — different silicon, but the *oracle test* described there is a method this project
+  stole outright and used repeatedly.
+- **[devos50/qemu-ios](https://github.com/devos50/qemu-ios)**,
+  **[giek2000/ipod-classic-firmware-research](https://github.com/giek2000/ipod-classic-firmware-research)**,
+  **[Xlinka/iPodReverseEngineering](https://github.com/Xlinka/iPodReverseEngineering)**,
+  **[dstaley/ipod-sysinfo](https://github.com/dstaley/ipod-sysinfo)**.
+- **[raspberrypi/userland](https://github.com/raspberrypi/userland)** — DispmanX, two chip
+  generations later, which is what made the display tractable.
+- **Broadcom**, for leaving the BCM2722 product brief public, and **Alphamosaic**, whose patents
+  disclose the VideoCore architecture.
+- **EE Times** and the Wedbush Morgan teardown, for the only published bill of materials for this
+  board. **The Internet Archive**, for the NOR dumps. **theapplewiki**.
+- **[Ghidra](https://ghidra-sre.org/)**, and **[GhidraMCP](https://github.com/bethington/ghidra-mcp)**
+  for putting it a query away instead of a window away.
+
+### If you want to give something back
+
+**Give it to them, not to me.** Rockbox in particular has been maintained for over twenty years by
+people who documented this hardware so that anyone could use it, and every one of them did it before
+there was an LLM to do the typing. Olsro's preservation project is the reason the games can be played
+at all.
+
+If you still want to throw something at this one: it goes on parts for **oPod**, the open player this
+is meant to run on when the hardware runs out, and on the tokens that write it. There is no
+obligation and the work continues either way. *(link, if you decide to add one)*
 
 ## Part of a wider effort
 
