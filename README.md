@@ -180,9 +180,10 @@ people who documented this hardware so that anyone could use it, and every one o
 there was an LLM to do the typing. Olsro's preservation project is the reason the games can be played
 at all.
 
-If you still want to throw something at this one: it goes on parts for **oPod**, the open player this
-is meant to run on when the hardware runs out, and on the tokens that write it. There is no
-obligation and the work continues either way. *(link, if you decide to add one)*
+If you still want to throw something at this one: **[ko-fi.com/siggifly](https://ko-fi.com/siggifly)**.
+It goes on parts for **oPod**, the open player this is meant to run on when the hardware runs out,
+on coffee, and on the tokens that write the code. There is no obligation and the work continues
+either way.
 
 ## Part of a wider effort
 

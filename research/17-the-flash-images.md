@@ -62,7 +62,7 @@ The dump's own Internet Archive metadata settles the provenance question:
 
 ```
 title:    SA JULY 12 2007 ipod video prototype firmware dump
-uploader: austin@eliteobsolete.com
+uploader: Elite Obsolete Electronics (email redacted)
 date:     2007-07-12
 ```
 
