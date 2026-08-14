@@ -158,7 +158,8 @@ what is *absent*. **`research/12-bypass-ledger.md`** is what is *faked*, with a 
 for retiring each one — and nothing is faked without a row in it. Merging them is how a project
 starts describing its gaps as choices.
 
-**`CHANGELOG.md`** is what changed between releases.
+**`CHANGELOG.md`** is what changed between releases, and **`RELEASING.md`** is how one is cut —
+including the one edit that sets the version, and the check that proves nothing else holds a copy.
 
 ## Roadmap
 
