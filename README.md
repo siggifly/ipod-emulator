@@ -75,6 +75,11 @@ retiring each one. Nothing is faked without a row in it.
    clickwheel line, including the Classic — Samsung S5L8702, encrypted firmware, a different chip
    family and closer to a second project than a port
 
+## How it was built
+
+Four days, day by day, in `docs/HOW-IT-WAS-BUILT.md` — taken from the commit log rather than memory,
+because memory was wrong about several of them.
+
 ## The research
 
 `research/` is the larger half of this project: 20-odd documents, and the record of what was believed
