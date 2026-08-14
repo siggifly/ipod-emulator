@@ -78,6 +78,10 @@ jobs:
           for b in trace ipod-boot dis tcb eapp-inspect disasm ipod-gui ; do
             cp "$BIN/$b$EXE" "dist/$DIR/"
           done
+          # A double-clickable app on macOS. No certificate involved — see tools/ipod-gui/make-app.sh.
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            sh tools/ipod-gui/make-app.sh "$BIN/ipod-gui" "dist/$DIR" docs/media/ipod-03-main-menu.png
+          fi
           cp README.md "dist/$DIR/README.md"
           cp tools/ipod-gui/README.md "dist/$DIR/README-ipod-gui.md"
           cp tools/ipod-boot/README.md "dist/$DIR/README-recipes.md"
@@ -98,10 +102,15 @@ jobs:
 
           `ipod-gui --check-images --flash=... --disk=...` does the same check with no window.
 
-          These binaries are NOT code-signed or notarized. On macOS, Gatekeeper will refuse the
-          first launch of a downloaded binary: right-click the file and choose Open, or run
-          `xattr -d com.apple.quarantine <file>`. On Windows, SmartScreen shows "More info" ->
-          "Run anyway". Built locally from source, neither happens.
+          macOS: double-click `iPod 5G.app`. The command-line tools are beside it.
+
+          NOTHING HERE IS SIGNED WITH A CERTIFICATE OR NOTARIZED, deliberately. macOS refuses the
+          first launch of anything downloaded and unsigned. On macOS 15 and later the old
+          right-click -> Open shortcut no longer works: open it, let it be blocked, then go to
+          System Settings -> Privacy & Security, where a button offers to open it anyway. Once.
+          `xattr -dr com.apple.quarantine "iPod 5G.app"` does the same thing from a terminal.
+          On Windows, SmartScreen shows "More info" -> "Run anyway". Built from source, neither
+          happens, because nothing built locally is quarantined.
           EOF
           cd dist
           if [ "${{ runner.os }}" = "Windows" ]; then
@@ -147,10 +156,10 @@ jobs:
           NOTES=$(cat <<'EOF'
           Binaries for macOS (arm64 and x86_64), Linux (x86_64) and Windows (x86_64).
 
-          **These are not signed or notarized.** macOS Gatekeeper will refuse the first launch of a
-          downloaded binary — right-click, Open, or `xattr -d com.apple.quarantine <file>`. Windows
-          SmartScreen shows "More info" -> "Run anyway". A binary you build yourself is not
-          quarantined and neither happens.
+          **Not signed with a certificate, and not notarized.** macOS refuses the first launch of
+          anything downloaded and unsigned; on macOS 15 and later, open it, let it be blocked, then
+          allow it once in System Settings -> Privacy & Security. Windows SmartScreen shows
+          "More info" -> "Run anyway". Anything you build yourself is not quarantined.
 
           The emulator needs a NOR dump and either an .ipsw or a drive image, none of which ship
           here. `ipod-gui` with no arguments asks for them and validates what you pick.

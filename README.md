@@ -40,6 +40,11 @@ Without them the emulator starts, tells you what is missing, and does nothing el
 
 ## Running it
 
+From a [release](https://github.com/siggifly/ipod-emulator/releases): unpack it, and on macOS
+double-click **`iPod 5G.app`**. The command-line tools sit beside it.
+
+Or from source, which works on macOS, Linux and Windows:
+
 ```sh
 cargo build --release
 ./target/release/ipod-boot make-disk your.ipsw disk.img
@@ -48,6 +53,19 @@ cargo build --release
 
 `tools/ipod-boot/README.md` covers the command-line recipes, and `tools/ipod-film/` records the
 panel to a PNG sequence or an mp4.
+
+### Nothing here is signed with a certificate
+
+Deliberately. Buying one to make a reverse-engineering tool look official is the wrong trade for
+this project, and the source is right there to build.
+
+The consequence is that the operating system refuses the first launch of anything you download.
+**On macOS 15 and later the old right-click → Open shortcut no longer works**: open it, let it be
+blocked, then go to **System Settings → Privacy & Security**, where a button offers to open it
+anyway. Once. `xattr -dr com.apple.quarantine "iPod 5G.app"` does the same from a terminal. On
+Windows, SmartScreen shows **More info → Run anyway**.
+
+Anything you build yourself is not quarantined and none of this happens.
 
 ## The window
 
