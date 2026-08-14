@@ -53,6 +53,13 @@ cargo build --release          # or use a release build
 ./target/release/ipod-gui      # a window; D toggles debug mode
 ```
 
+Or straight from the repository, with no clone — the packages have to be named, because the
+workspace root is a virtual manifest and `cargo install` will not guess:
+
+```sh
+cargo install --git https://github.com/siggifly/ipod-emulator ipod-gui eapp-loader eapp-inspect
+```
+
 ### From a terminal
 
 The recipes use whatever the setup screen was pointed at, so once you have done the above they
@@ -150,12 +157,17 @@ starts describing its gaps as choices.
 
 ## Roadmap
 
-1. Audio
-2. A JIT. The interpreter decodes every instruction every time; a JIT would be worth 10–50× here
-3. The GPIO interrupt, so hold reaches the OS
-4. The simulated-time gap in the boot
+1. **The simulated-time gap in the boot** — ~300 seconds of simulated time where hardware takes
+   five or ten. That is the long white screen, and it is a bug rather than slowness: the
+   interpreter's ~30 % of real-time accounts for a factor of three, not thirty
+2. Audio
+3. A JIT. The interpreter decodes every instruction every time; a JIT would be worth 10–50× here
+4. The GPIO interrupt, so hold reaches the OS
 5. Retiring the last four assumptions in the co-processor transport
-6. **Every non-iOS iPod.** This models the 5.5G (PortalPlayer PP5021C). The end goal is the whole
+6. **A Homebrew tap**, so `brew install` works. A formula rather than a cask, deliberately: it
+   builds on your machine, and a binary built locally is never quarantined — so the Gatekeeper
+   dance above stops applying to anyone who installs it that way
+7. **Every non-iOS iPod.** This models the 5.5G (PortalPlayer PP5021C). The end goal is the whole
    clickwheel line, including the Classic — Samsung S5L8702, encrypted firmware, a different chip
    family and closer to a second project than a port
 
