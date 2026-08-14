@@ -12,6 +12,44 @@ had downloaded it — and that is exactly the mistake this rule exists to preven
 running the first build, their copy would have reported itself current while being four commits
 behind. Anything published from here gets a new number.
 
+## 0.3.0
+
+### The app is called what it is
+
+macOS shows the **executable's** name in the application switcher and the process list — not the
+crate's, and not `CFBundleName` — so Cmd-Tab said `ipod-gui`. The binary is **`ipod-emulator`**
+now, and the copy inside `iPod 5G.app` is named `iPod 5G`, which is what the bundle claimed all
+along while the switcher read the file instead.
+
+### A real icon
+
+The drawn iPod with Brick on its screen, at **81 % of its canvas** — which is what Apple's own
+icons measure, rather than what looked right. Notes and Reminders both occupy 104x104 of a 128px
+icon; this one now does too, to the pixel. It is built from the full-resolution window with
+nothing upscaled, and the window's own icon went from 64px to 512px because Cmd-Tab draws at 256
+physical pixels and a 64px source upscaled four times looks exactly like what it is.
+
+### The window says what it is doing, and says it once
+
+The cold-boot bar was a 6-point hairline with its label clipped inside it — a progress indicator
+that reported nothing during the one minute anybody wants to be told something. The bar keeps its
+place and loses its text; the text is in the footer's left, at a size you can read. Debug mode no
+longer draws a second bar for the same boot.
+
+The keyboard list moved out of a tooltip and into the empty column beside the device. Nothing in
+this window covers anything.
+
+The **black/white** switch moved out of the debug panel, where it sat between two instruments. Which
+of the two colours the 5G shipped in is a fact about your iPod, not about the machine — it belongs
+in user mode, and it is remembered now, which it was not.
+
+### Also
+
+- `RELEASING.md`, and the check that would have caught the next one of these.
+- The bundle's version was a literal that still said `0.1.0` while the workspace had moved on. It
+  reads `Cargo.toml`.
+- Four `Cargo.lock` files that predate the workspace, deleted. A workspace has one, at its root.
+
 ## 0.2.0
 
 ### You can change the images without quitting

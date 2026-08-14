@@ -893,21 +893,22 @@ impl App {
             // in the debug panel all along; there was no reason it was only there.
             if let Phase::Booting { target } = &out.phase {
                 let f = (s.executed as f32 / (*target).max(1) as f32).min(1.0);
-                let left = (1.0 - f) as f64 * s.wall_secs / f.max(0.001) as f64;
+                // A bar with no text in it. At 6 points there is no room for a label inside,
+                // and shrinking the label to fit is how it became unreadable — so the words go
+                // in the row below, at the left, where the rest of the footer's text already is.
+                ui.add_space(4.0);
+                ui.add(egui::ProgressBar::new(f).desired_height(6.0).corner_radius(3));
                 ui.add_space(3.0);
-                ui.add(
-                    egui::ProgressBar::new(f)
-                        .desired_height(6.0)
-                        .text(egui::RichText::new(format!(
-                            "cold boot — {:.0} %, about {left:.0} s left",
-                            f * 100.0
-                        ))
-                        .size(11.0)),
-                );
             }
             ui.add_space(2.0);
             ui.horizontal(|ui| {
-                let badge = if s.executed_here == 0 {
+                // During a cold boot the useful number is how much of it is left, not how fast
+                // it is going, so that is what the leftmost slot says while it lasts.
+                let badge = if let Phase::Booting { target } = &out.phase {
+                    let f = (s.executed as f32 / (*target).max(1) as f32).min(1.0);
+                    let left = (1.0 - f) as f64 * s.wall_secs / f.max(0.001) as f64;
+                    format!("cold boot — {:.0} %, about {left:.0} s left", f * 100.0)
+                } else if s.executed_here == 0 {
                     "≈30 % of real-time — emulated".to_string()
                 } else {
                     format!("{pct:.0} % of real-time — emulated")
@@ -1450,14 +1451,10 @@ impl App {
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.add_space(6.0);
             match &out.phase {
-                Phase::Booting { target } => {
-                    let f = (s.executed as f32 / (*target).max(1) as f32).min(1.0);
+                // No bar here. The footer carries one in both modes, and two progress bars for
+                // one boot is the window disagreeing with itself about how far along it is.
+                Phase::Booting { .. } => {
                     ui.label(egui::RichText::new("cold boot").strong());
-                    ui.add(egui::ProgressBar::new(f).text(format!(
-                        "{:.0} % — {:.0} s left",
-                        f * 100.0,
-                        (1.0 - f) as f64 * s.wall_secs / f.max(0.001) as f64
-                    )));
                     ui.small(
                         "Booting from the reset vector. The first boot of a session also writes a \
                          snapshot at the idle point, so launching again restores in a few seconds; \
