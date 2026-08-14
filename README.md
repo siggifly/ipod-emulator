@@ -118,6 +118,18 @@ In rough order of how much this project owes them:
 - **[Ghidra](https://ghidra-sre.org/)**, and **[GhidraMCP](https://github.com/bethington/ghidra-mcp)**
   for putting it a query away instead of a window away.
 
+### What got me started
+
+Two projects that had nothing to do with iPods and everything to do with attempting this:
+
+- **The Raspberry Pi classic Mac emulators** — the small builds where a Pi hides inside a case and
+  boots System 7 like it never left. The idea that you can keep a dead machine usable by rebuilding
+  the parts that wore out, rather than hunting for the originals.
+- **[Tahoe 26.5's kernel running natively on a Galaxy A55](https://www.reddit.com/r/hackintosh/comments/1virmsv/tahoe_265_kernel_running_on_a_galaxy_a55_natively/)**
+  — someone taking a modern macOS kernel and getting it to run on a phone it was never meant to
+  touch. I saw that a while before starting this and it stuck: the thing between you and a project
+  like that is mostly whether you decide to begin.
+
 ### If you want to give something back
 
 **Give it to them, not to me.** Rockbox in particular has been maintained for over twenty years by
