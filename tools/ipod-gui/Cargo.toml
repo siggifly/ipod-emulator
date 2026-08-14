@@ -1,0 +1,32 @@
+[package]
+name = "ipod-gui"
+version = "0.1.0"
+edition = "2021"
+description = "An interactive iPod 5G: the emulator's framebuffer on a drawn device whose wheel, buttons and hold switch reach the machine"
+
+# A sibling crate rather than another `[[bin]]` in eapp-loader, deliberately. egui pulls in winit,
+# glow and a hundred transitive crates; putting it behind a feature in eapp-loader would still make
+# `cargo build` there resolve them, and every baseline in research/ is measured with `cargo test
+# --release` in that crate. Keeping the window out of the emulator's manifest keeps that fast and
+# keeps `trace` buildable on a machine with no display stack at all.
+#
+# `x11` and `wayland` are not optional extras — without at least one of them this crate **does not
+# compile on Linux at all**. They are in eframe's default set, which `default-features = false`
+# turns off, and winit's `platform_impl/linux/mod.rs` answers a unix build with neither by
+# `compile_error!("Please select a feature to build for unix: `x11`, `wayland`")`. Both are enabled
+# so a released binary runs under either display server. They cost nothing on macOS and Windows,
+# where a different backend is selected and these features gate nothing.
+#
+# Everything else eframe's defaults would bring is still off: `wgpu` (glow is the renderer here),
+# `accesskit`, `persistence` (this crate writes its own four-key settings file — see settings.rs),
+# `web_screen_reader`, `links`.
+[dependencies]
+eapp-loader = { path = "../eapp-loader" }
+arm7tdmi = { path = "../arm7tdmi" }
+eframe = { version = "0.36", default-features = false, features = [
+    "glow",
+    "default_fonts",
+    "x11",
+    "wayland",
+] }
+

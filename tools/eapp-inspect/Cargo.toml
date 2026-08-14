@@ -1,0 +1,8 @@
+[package]
+name = "eapp-inspect"
+version = "0.1.0"
+edition = "2021"
+description = "Parse iPod clickwheel-game eApp binaries and dump their framework import tables"
+
+[dependencies]
+

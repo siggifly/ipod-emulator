@@ -1,0 +1,27 @@
+# Nothing under resources/ is ever committed.
+#
+# It holds Apple's firmware and ROM dumps, the shipping game binaries, multi-gigabyte disk images,
+# and cloned reference sources (Rockbox, ipodloader2, wInd3x, ghidra-mcp). Copyrighted material and
+# large binaries both, either of which is reason enough on its own.
+#
+# tools/ipod-boot/README.md documents the layout under resources/derived/ and which of those files
+# cannot be regenerated.
+#
+# The repository root also ignores this path. Keeping a copy here means the rule travels with the
+# project rather than depending on where it sits.
+#
+# Both forms deliberately. A trailing slash matches a directory ONLY — an agent working in a git
+# worktree symlinks `resources` in to run the recipes, and a symlink is not a directory, so it
+# appeared as untracked and was one `git add -A` from being committed. The material behind it is
+# copyrighted reference data plus real people's names and Apple IDs; it must never enter history.
+resources
+resources/
+
+.DS_Store
+
+# Emulator run output — framebuffer dumps, profiles. Regenerable; never review-relevant.
+_out/
+
+# Per-agent cargo target dirs and audit scratch — regenerable, never review-relevant.
+.target-*/
+.audit/

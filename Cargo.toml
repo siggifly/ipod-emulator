@@ -1,0 +1,27 @@
+# Workspace root, so a fresh clone can `cargo build --release` and get everything.
+#
+# Until 2026-08-14 the four crates were standalone: building the project meant knowing which
+# directories held a `Cargo.toml` and visiting each one. That is fine when you wrote it and a wall
+# when you did not, and it is the first thing a stranger hits after `git clone`.
+#
+# `ipod-boot` and `ipod-film` are not listed because they are not crates — they are shell recipes
+# plus, for `ipod-boot`, a binary that lives inside `eapp-loader`. `ghidra` is shell wrappers around
+# a third-party server. `fat-read.py` and `rsrc-extract.py` are standalone scripts.
+[workspace]
+resolver = "2"
+members = [
+    "tools/arm7tdmi",    # the ARMv4T interpreter core — no dependencies, no unsafe
+    "tools/eapp-loader", # the machine: peripherals, the boot path, `trace` and `ipod-boot`
+    "tools/eapp-inspect",# static inspection of eApp binaries
+    "tools/ipod-gui",    # the window: a drawn iPod over the emulator
+]
+
+# One shared target directory. Each crate previously built its own, so a full build wrote four
+# copies of the same dependency graph. This also means `CARGO_TARGET_DIR` in the environment still
+# wins, which is what every agent and recipe in this project relies on.
+[profile.release]
+# The interpreter is the hot loop and nothing else comes close, so optimise for it. `lto = "thin"`
+# is measurably better than `false` here and materially cheaper to build than `"fat"`.
+opt-level = 3
+lto = "thin"
+codegen-units = 1
