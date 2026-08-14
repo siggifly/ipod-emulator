@@ -127,8 +127,8 @@ Two projects that had nothing to do with iPods and everything to do with attempt
   the parts that wore out, rather than hunting for the originals.
 - **[Tahoe 26.5's kernel running natively on a Galaxy A55](https://www.reddit.com/r/hackintosh/comments/1virmsv/tahoe_265_kernel_running_on_a_galaxy_a55_natively/)**
   — someone taking a modern macOS kernel and getting it to run on a phone it was never meant to
-  touch. I saw that a while before starting this and it stuck: the thing between you and a project
-  like that is mostly whether you decide to begin.
+  touch. I saw it a couple of days before starting this, and it is most of the reason I did: the
+  thing between you and a project like that is mostly whether you decide to begin.
 
 ### If you want to give something back
 
