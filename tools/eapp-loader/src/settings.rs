@@ -53,6 +53,9 @@ pub struct Settings {
     /// picks them, which is the state a fresh clone is in.
     pub flash: Option<PathBuf>,
     pub disk: Option<PathBuf>,
+    /// Which of the two colours the 5G shipped in. Not an instrument — it is which iPod you had,
+    /// so it lives in user mode and is remembered like the rest of the setup.
+    pub black_device: bool,
     /// **Off unless asked for.** An emulator that phones home on launch is a bad first impression
     /// for no benefit, and this audience notices. The menu item works either way — this only
     /// decides whether the check happens on its own.
@@ -83,6 +86,7 @@ impl Settings {
                 // Empty is "not set", which is what an editor that blanked a line means.
                 "flash" if !v.is_empty() => s.flash = Some(PathBuf::from(v)),
                 "disk" if !v.is_empty() => s.disk = Some(PathBuf::from(v)),
+                "black_device" => s.black_device = v == "true",
                 "check_updates_on_start" => s.check_updates_on_start = v == "true",
                 _ => {}
             }
@@ -97,12 +101,14 @@ impl Settings {
         format!(
             "# ipod-gui settings. Hand-editable; unknown keys are ignored.\n\
              mode = {}\n\
+             black_device = {}\n\
              flash = {}\n\
              disk = {}\n\
              # An HTTPS GET of the GitHub releases API and a version comparison, on launch.\n\
              # Off by default on purpose. The menu item works whatever this says.\n\
              check_updates_on_start = {}\n",
             self.mode.as_str(),
+            self.black_device,
             p(&self.flash),
             p(&self.disk),
             self.check_updates_on_start,
@@ -195,6 +201,7 @@ mod tests {
     fn settings_round_trip_through_the_file_format() {
         let s = Settings {
             mode: Mode::Debug,
+            black_device: true,
             flash: Some(PathBuf::from("/a/b/rom.bin")),
             disk: Some(PathBuf::from("/a/b/disk.img")),
             check_updates_on_start: true,

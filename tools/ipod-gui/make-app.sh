@@ -3,6 +3,10 @@
 #
 #   make-app.sh <path-to-ipod-gui> <output-dir> [icon.png]
 #
+# The icon defaults to `docs/media/icon-1024.png` — the drawn iPod with Brick on its screen. It is
+# the device this emulates, running the game it can run, and it survives being 32 pixels wide, which
+# a screenshot of a menu does not.
+#
 # WHY. A bare Unix executable double-clicked in Finder opens a Terminal window and runs the program
 # inside it; the window appears with no menu bar, no Dock name, and no icon. A .app is the same
 # executable in a directory with an `Info.plist`, and it costs nothing: no certificate, no developer
@@ -17,7 +21,7 @@ set -eu
 
 BIN=${1:?usage: make-app.sh <ipod-gui binary> <output dir> [icon.png]}
 OUT=${2:?usage: make-app.sh <ipod-gui binary> <output dir> [icon.png]}
-ICON=${3:-}
+ICON=${3:-$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)/docs/media/icon-1024.png}
 
 APP="$OUT/iPod 5G.app"
 rm -rf "$APP"

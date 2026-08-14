@@ -155,10 +155,22 @@ fn main() -> eframe::Result {
         return Ok(());
     }
 
+    // The icon, as raw RGBA rather than a PNG, because decoding one would mean a decoder: this
+    // crate's only dependency is `eframe` and `eapp_loader::png` encodes but does not read.
+    // 64x64x4 = 16384 bytes, generated from `docs/media/icon-1024.png`.
+    //
+    // **This does nothing on macOS.** winit is explicit that the window icon is unsupported there
+    // (and on Wayland), because the icon a Mac shows in the Dock and in ⌘-Tab comes from the app
+    // bundle, not from the process. `iPod 5G.app` carries it; a bare `ipod-gui` cannot. Set here
+    // for Windows and X11, where it is the taskbar and title-bar icon and does work.
+    const ICON_RGBA: &[u8] = include_bytes!("../../../docs/media/icon-64.rgba");
+    let icon = egui::IconData { rgba: ICON_RGBA.to_vec(), width: 64, height: 64 };
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([980.0, 800.0])
             .with_min_inner_size([620.0, 520.0])
+            .with_icon(icon)
             .with_title("iPod 5G — RetailOS"),
         ..Default::default()
     };
@@ -371,7 +383,6 @@ struct App {
     /// A keyboard scroll asserts touch; this is when it lapses if no further key arrives.
     kbd_touch_until: Option<Instant>,
     touching: bool,
-    dark_device: bool,
     show_back_buffer: bool,
     /// The last few things the UI did, so a person can see their input was accepted.
     log: VecDeque<String>,
@@ -494,7 +505,6 @@ impl App {
             down: Vec::new(),
             kbd_touch_until: None,
             touching: false,
-            dark_device: false,
             show_back_buffer: false,
             log: VecDeque::new(),
             shot_dir,
@@ -910,6 +920,29 @@ impl App {
                          different number again — debug mode shows both.",
                     );
                 ui.separator();
+                // Which of the two colours the 5G shipped in. Not a debug control: it is which
+                // iPod you had, so it belongs where someone in user mode can reach it.
+                let mut black = self.settings.black_device;
+                if ui.checkbox(&mut black, "black").on_hover_text(
+                    "The 5G shipped in white and black. This is the case, not the screen.",
+                ).changed() {
+                    self.settings.black_device = black;
+                    self.settings.save();
+                }
+                ui.separator();
+                // The keys, on hover rather than on screen. The drawn iPod is operable with the
+                // mouse — wheel, buttons and switch all take clicks — so the keyboard is an
+                // accelerator, and a permanent list of accelerators is the opposite of what user
+                // mode is for.
+                ui.label(egui::RichText::new("keys").size(11.0).weak()).on_hover_text(
+                    "arrows  scroll the wheel\n\
+                     Enter / Space  select\n\
+                     M P , .  menu · play · previous · next\n\
+                     H  hold switch\n\
+                     S  save a PNG and a PPM into _out/\n\
+                     D  switch modes",
+                );
+                ui.separator();
                 // The only route back to the setup screen. Without it the images chosen on first
                 // run are the images for ever, because a saved pair means the next launch opens
                 // straight into the iPod and never shows that screen again.
@@ -1146,7 +1179,7 @@ impl App {
 
     /// White or black, and nothing in between — the two the 5G shipped as.
     fn palette(&self) -> (Color32, Color32, Color32, Color32) {
-        if self.dark_device {
+        if self.settings.black_device {
             (
                 Color32::from_rgb(0x24, 0x25, 0x27),
                 Color32::from_rgb(0x33, 0x34, 0x36),
@@ -1556,7 +1589,6 @@ impl App {
                         l.out.lock().unwrap().fb_addr = a;
                     }
                 }
-                ui.checkbox(&mut self.dark_device, "black");
             });
             if let Some(p) = &self.last_shot {
                 ui.small(p.as_str());

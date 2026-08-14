@@ -3,7 +3,7 @@
 **Apple's retail iPod 5.5G firmware boots here, from the reset vector, on an emulator written from
 scratch. It formats its own filesystem, reads the click wheel, draws its own menus, and runs a game.**
 
-![cold boot through to a game](docs/media/ipod-01-boot-to-brick.gif)
+![cold boot through to a game](docs/media/ipod-12-device-boot.gif)
 
 The iPod Video 5.5G shipped on 12 September 2006. Twenty years next month, its firmware still boots
 — with no iPod anywhere near it. The PortalPlayer it addresses is arithmetic, the drive it formats
@@ -115,6 +115,11 @@ asserting it.
 | `H` | hold switch |
 | `S` | write a PNG and a PPM into `_out/` |
 | `D` | user ⇄ debug |
+
+The footer carries the four things that are about the device rather than the machine: the
+real-time figure, **black** (the 5G shipped in white and black — it is remembered), **keys** (the
+keyboard list, on hover, because the drawn iPod takes clicks and the keys are an accelerator), and
+**images…**.
 
 **`images…`** in the footer goes back to the setup screen, to point it at a different NOR dump,
 drive or `.ipsw`. It ends the running machine — a booted RetailOS read its partition table at boot
