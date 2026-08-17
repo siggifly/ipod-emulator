@@ -1374,6 +1374,8 @@ impl App {
         );
 
         self.nav(ui, Some(Step::Firmware), None, true, "Start");
+        ui.add_space(18.0);
+        self.updates(ui);
     }
 
     /// Back / forward, in a consistent place, with the forward action disabled until this step is
@@ -2101,18 +2103,14 @@ impl App {
             self.power_controls(ui, &out.phase);
             ui.separator();
 
-            // ---- speed, both ratios, because they are different numbers
+            // ---- speed
             //
-            // The interpreter does ~21 M instructions a second against a PP5021C's ~72 MIPS, so the
-            // machine does about 30 % of the *work* per second the real one does. The emulator's
-            // own microsecond clock is a separate quantity and does not follow from that: it is
-            // `executed / instr_per_usec + slept_usec`, so `--clock=5` pushes it forward 15x faster
-            // per instruction than real silicon while the idle task's halts push it forward again
-            // by whole timer intervals at no instruction cost. Measured on a restored idle machine
-            // it comes out near 1.2x wall — which is neither of the two numbers anyone would
-            // predict, and exactly why both are shown rather than one derived from the other.
+            // One ratio now, where there were two. The second existed because `--clock=5` pushed
+            // the machine's own microsecond clock forward 15x faster per instruction than silicon
+            // would, so "how fast is this running" had two unrelated answers and both had to be on
+            // screen. The clock is the real part's 75 since 2026-08-17, so the simulated second is
+            // a simulated second again and the ratio is just the inverse of this line.
             let ips = s.executed_here as f64 / s.wall_secs.max(1e-6);
-            let sim_ratio = s.sim_usec_here as f64 / (s.wall_secs.max(1e-6) * 1e6);
             // The headline is the one number that changes what anyone does next: how fast this
             // machine is running compared to the part. Everything behind it is for when that
             // number is surprising, which is rare, so it folds away.
@@ -2124,10 +2122,8 @@ impl App {
             ui.collapsing("clocks", |ui| {
                 grid(ui, "speed", |ui| {
                     row(ui, "instructions", &fmt_u64(s.executed));
-                    row(ui, "this session", &fmt_u64(s.executed_here));
                     row(ui, "wall clock", &format!("{:.1} s", s.wall_secs));
                     row(ui, "simulated clock", &format!("{:.1} s", s.sim_usec as f64 / 1e6));
-                    row(ui, "sim vs wall", &format!("{sim_ratio:.2}x"));
                 });
             });
             ui.separator();
@@ -2193,7 +2189,6 @@ impl App {
                     row(ui, &format!("the other, {other_addr:#010x}"), &format!("{} / {}", out.fb_other_nonzero, FB_W * FB_H));
                     row(ui, "bcm frames (session)", &fmt_u64(s.bcm_frames));
                     row(ui, "bcm commands (session)", &s.bcm_commands.to_string());
-                    row(ui, "panel scale", &format!("{}x nearest", self.scale));
                 });
             });
             // The one case where a still screen is the window's fault and not the machine's.
@@ -2225,10 +2220,10 @@ impl App {
             if let Some(p) = &self.last_shot {
                 ui.small(p.as_str());
             }
-            ui.separator();
-            self.updates(ui);
-            ui.separator();
-            for l in &self.log {
+            // The update check moved to the setup screen. It is a fact about the application, not
+            // about the machine on screen, and the panel is for the machine.
+            if let Some(l) = self.log.back() {
+                ui.separator();
                 ui.small(l.as_str());
             }
         });
