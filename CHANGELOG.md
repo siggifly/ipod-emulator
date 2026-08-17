@@ -12,6 +12,62 @@ had downloaded it — and that is exactly the mistake this rule exists to preven
 running the first build, their copy would have reported itself current while being four commits
 behind. Anything published from here gets a new number.
 
+## 0.4.0
+
+Four bugs reported by users, all reproduced, all ours. Plus a setup screen that
+somebody can actually use.
+
+### It will not eat your disk any more
+
+The cache was keyed on both image paths and **nothing had ever deleted one**. Every pair of files
+you tried left an 8 GB working disk and a ~1.6 GB snapshot behind, silently, in a directory the
+program never named, on whatever volume it resolved to. Somebody lost 50 GB trying four firmware
+versions. One pair is kept now, the rest are deleted on every start, the setup screen states the
+total with a button to clear it, and step 3 tells you what starting will cost before it costs it.
+
+### One folder, and it prefers to stay where you put it
+
+Settings went to one directory and gigabytes to another — on Windows, `AppData\Roaming` *and*
+`AppData\Local`. There is one directory now, and for an archive you unpacked it is **`data/` beside
+the executable**, which is what a program shipped as a zip should do. The platform directory is used
+only where beside-the-executable is not writable, which is what a macOS bundle gets. Settings from
+the previous version are carried forward, and the old directories are named in the UI so you can
+delete them.
+
+### The setup screen is readable, and it is a wizard
+
+It was dark grey text on a black background — nothing called `set_visuals`, so egui followed the
+operating system while the device is drawn on black regardless. It survived because **an author
+cannot reach that screen**: run the binary inside the repository and the default paths resolve, so
+it boots straight past. Only somebody without the files ever sees it.
+
+It now asks one question at a time, verified before the next, with back and forward, real margins,
+and the device drawn at the top. The detail — byte counts, model numbers, where to find a dump — is
+folded away where a stuck user will look and nobody else has to read it.
+
+**Getting the boot ROM off your own iPod with Rockbox is the first recommendation**, with links,
+because it is the route that involves nobody else's copy of anything.
+
+### The mouse wheel turns the wheel
+
+It is the obvious input for this device and every mouse has one. One notch is one detent; a trackpad
+glides.
+
+### The app is called `ipod-emulator`
+
+It answered to four names, and the one users' settings actually lived under was `ipod-gui`. Cmd-Tab
+said `ipod-gui` because macOS shows the executable's name, not `CFBundleName`. The emulator is named
+for the line, not one model, so nothing claims to be an "iPod 5G" any more.
+
+### Also
+
+- **The prototype NOR and its recipe are gone.** It boots a firmware partition the retail ROM
+  correctly rejects, and shipping it sent a user hours down a path that cannot work.
+- **The archive has one program in it**, with the six developer tools in `tools/`.
+- The README says it is alpha, says exactly which NOR and IPSW were tested, and explains that the
+  retail dump is archived under *iPod Classic* in a directory named `A1238` — which is why searching
+  for "iPod Video" finds nothing.
+
 ## 0.3.0
 
 ### The app is called what it is

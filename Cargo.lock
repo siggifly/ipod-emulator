@@ -77,7 +77,7 @@ dependencies = [
 
 [[package]]
 name = "arm7tdmi"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "arrayvec"
@@ -431,11 +431,11 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "eapp-inspect"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "eapp-loader"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arm7tdmi",
  "minifb",
@@ -1033,7 +1033,7 @@ dependencies = [
 
 [[package]]
 name = "ipod-gui"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arm7tdmi",
  "eapp-loader",
