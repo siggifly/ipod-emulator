@@ -24,11 +24,21 @@ snapshot point, so a change to the model mints a new snapshot rather than silent
 hybrid machine — the failure mode `tools/ipod-boot/from-idle.sh` documents at length. The cost of
 that discipline is that editing `emu.rs` buys you one more cold boot; the alternative is worse.
 
-**The snapshot and the 8 GB working disk live in a per-user cache directory**, not in `$TMPDIR`.
-That distinction is Linux's: `/tmp` is `tmpfs` on most distributions, RAM-backed and typically
-capped at half of it, and an 8 GB image there either fails or eats the machine. It is
-`~/Library/Caches/ipod-emulator` on macOS, `$XDG_CACHE_HOME/ipod-emulator` (or `~/.cache/ipod-emulator`) on Linux,
-and `%LOCALAPPDATA%\ipod-emulator` on Windows. Delete it freely; the only cost is one cold boot.
+**One boot leaves three files, and they are a set.** The snapshot is RAM and CPU state; the drive is
+not in it, so the drive as it stood at that instant is frozen beside it, and a run that restores one
+restores both. Pairing restored RAM with a drive that has kept moving is how the emulator used to
+boot to "connect to computer" at random — RetailOS found its cached view of the volume contradicted
+by the platter. The third file is the working drive, remade every launch. `cp -c` clones them, which
+on APFS, btrfs and XFS costs almost nothing; ext4 has no reflink and pays for one extra drive.
+
+**They live in one directory with everything else the program writes** — never `$TMPDIR`, which on
+most Linux distributions is RAM-backed and capped at half of it, where an 8 GB image either fails or
+eats the machine. In order: `IPOD_EMULATOR_DATA` if set, else `data/` beside the executable when
+that can be written, else `~/Library/Application Support/ipod-emulator` on macOS,
+`%APPDATA%\ipod-emulator` on Windows, and `$XDG_CONFIG_HOME/ipod-emulator` (or
+`~/.config/ipod-emulator`) on Linux. Beside-the-executable is declined inside a `.app` bundle, where
+writing breaks the signature, and inside a cargo build tree, which `cargo clean` deletes without
+asking. Delete the directory freely; the only cost is one cold boot.
 
 ## Two modes, and one number that is in both
 

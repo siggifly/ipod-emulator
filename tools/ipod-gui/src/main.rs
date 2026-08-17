@@ -429,14 +429,24 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
     let clock = num("--clock=", 5) as usize;
     let snap_at = num("--snap-at=", 1_600_000_000);
     let cache = cache_paths(&flash, &disk, clock, snap_at);
+    // A hand-given snapshot brings its own frozen drive, sitting beside it under the same stem.
+    // Letting it fall back to the keyed one would pair a snapshot chosen by the user with a drive
+    // chosen by the cache — which is the stale pair again, arrived at from a different direction.
+    let (snapshot, frozen) = match get("--snapshot=").map(PathBuf::from) {
+        Some(s) => {
+            let f = s.with_extension("frozen");
+            (s, f)
+        }
+        None => (cache.snap, cache.frozen),
+    };
 
     Ok(emu::Config {
         flash,
         disk,
         workdisk: get("--workdisk=").map(PathBuf::from).unwrap_or(cache.work),
-        frozen: cache.frozen,
+        frozen,
         clock,
-        snapshot: Some(get("--snapshot=").map(PathBuf::from).unwrap_or(cache.snap)),
+        snapshot: Some(snapshot),
         snap_at,
         cold: args.iter().any(|a| a == "--cold"),
         click_gap: num("--wheel-click-instr=", 20_000).max(1),
@@ -671,9 +681,6 @@ impl Setup {
             && matches!(&self.disk_verdict, Some(v) if v.ok())
     }
 
-    fn both_present(&self) -> bool {
-        self.flash_verdict.is_some() && self.disk_verdict.is_some()
-    }
 }
 
 impl App {

@@ -685,16 +685,24 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                 if m.restore(&b) {
                     restored = true;
                 } else {
-                    // The drive under this machine was cloned from the frozen one, on the strength
-                    // of the snapshot file existing. It is a drive part-way through somebody else's
-                    // boot, and cold-booting from it would be the stale pair again with the halves
-                    // swapped. Put the pristine drive back before running from the reset vector.
+                    // Two things are wrong at once here, and patching either alone leaves the
+                    // other. The drive under this machine was cloned from the frozen one, on the
+                    // strength of the snapshot file existing, so it is part-way through somebody
+                    // else's boot — cold-booting from it is the stale pair with the halves swapped.
+                    // And `restore` can reject a snapshot *after* loading part of the CPU from it,
+                    // so the machine itself is no longer trustworthy either.
+                    //
+                    // So build a new one. `cold` forces the pristine drive through the same path
+                    // that chose the frozen one, which is the point of routing both through
+                    // `may_restore`: there is no second place that has to be kept in step.
                     eprintln!("{}: not a valid snapshot; cold-booting", path.display());
-                    match clone_disk(&cfg.disk, &cfg.workdisk)
-                        .and_then(|()| Ata::open(&cfg.workdisk, true).map_err(|e| format!("disk: {e}")))
-                    {
-                        Ok(d) => m.mem.ata = Some((0xc300_0000, d)),
-                        Err(e) => eprintln!("could not restore the pristine drive: {e}"),
+                    let cold = Config { cold: true, ..cfg.clone() };
+                    match build(&cold, first) {
+                        Ok(fresh) => m = fresh,
+                        Err(e) => {
+                            link.out.lock().unwrap().phase = Phase::Stopped(e);
+                            return Outcome::Quit;
+                        }
                     }
                 }
             }

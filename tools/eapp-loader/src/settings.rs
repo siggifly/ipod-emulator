@@ -170,6 +170,31 @@ pub fn data_dir() -> PathBuf {
     platform_dir().unwrap_or_else(|| std::env::temp_dir().join(APP))
 }
 
+/// Is this executable sitting in a cargo build tree?
+///
+/// Data must not go beside it if so. A build tree is disposable by definition — `cargo clean`
+/// deletes it without asking — and on this workspace one target directory is shared by every crate,
+/// so it is also the last place that should quietly gain 8 GB. Measured, not imagined: running the
+/// binary from `.cargo-target/release` put 6.4 GB in `.cargo-target/release/data`.
+///
+/// The test is a `debug`/`release` leaf under a `target`-ish ancestor at any depth, because
+/// cross-compiling inserts the triple: `target/x86_64-pc-windows-gnu/release/`. A *released* build
+/// unpacked into a directory the user happens to have called `release` does not match, since
+/// nothing above it is a target directory — and that case is the whole point of beside-the-
+/// executable, so it has to keep working.
+fn in_build_tree(exe: &std::path::Path) -> bool {
+    let Some(parent) = exe.parent() else { return false };
+    let leaf = parent.file_name().and_then(|n| n.to_str());
+    if !matches!(leaf, Some("debug" | "release")) {
+        return false;
+    }
+    parent
+        .ancestors()
+        .skip(1)
+        .filter_map(|a| a.file_name().and_then(|n| n.to_str()))
+        .any(|n| n == "target" || n.ends_with("-target"))
+}
+
 /// `data/` next to the running binary, if it is a directory we may write to.
 ///
 /// Probed rather than assumed: a bundle's `Contents/MacOS`, `/usr/local/bin` and a read-only mount
@@ -179,6 +204,9 @@ fn beside_executable() -> Option<PathBuf> {
     // Inside a macOS bundle this would put user data in `Contents/MacOS/data`, which is both wrong
     // and signature-breaking. Recognise it and decline.
     if exe.components().any(|c| c.as_os_str().to_string_lossy().ends_with(".app")) {
+        return None;
+    }
+    if in_build_tree(&exe) {
         return None;
     }
     let dir = exe.parent()?.join("data");
@@ -268,6 +296,37 @@ fn home() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    /// A build tree is refused; a real install beside the executable is not.
+    ///
+    /// The second half matters as much as the first. Declining too eagerly would send a user who
+    /// unpacked the release tarball into `~/Downloads/ipod-emulator/` off to Application Support
+    /// instead, which is the split that produced two data folders and a bug report.
+    #[test]
+    fn data_never_lands_in_a_build_tree() {
+        use std::path::Path;
+        for p in [
+            "/Users/x/dev/target/release/ipod-emulator",
+            "/Users/x/dev/target/debug/ipod-emulator",
+            // The shared workspace target, which is what this was found in.
+            "/Users/x/dev/.cargo-target/release/ipod-emulator",
+            // Cross-compiling inserts the triple, so the ancestor walk has to go deeper than one.
+            "/Users/x/dev/target/x86_64-pc-windows-gnu/release/ipod-emulator.exe",
+            "/Users/x/dev/.cargo-target/aarch64-apple-darwin/debug/ipod-emulator",
+        ] {
+            assert!(in_build_tree(Path::new(p)), "must refuse: {p}");
+        }
+        for p in [
+            // An unpacked release. The directory is called `release`, but nothing above it is a
+            // target directory, and putting data here is the entire feature.
+            "/Users/x/Downloads/ipod-emulator-0.4.0-release/ipod-emulator",
+            "/Users/x/Downloads/ipod-emulator/ipod-emulator",
+            "/Applications/ipod-emulator.app/Contents/MacOS/ipod-emulator",
+            "/usr/local/bin/ipod-emulator",
+        ] {
+            assert!(!in_build_tree(Path::new(p)), "must allow: {p}");
+        }
+    }
+
     use super::*;
 
     #[test]
