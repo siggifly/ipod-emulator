@@ -96,6 +96,29 @@ Three things that cost time there, all of which will cost it again:
 - **An environment that rebuilds `PATH` drops a toolchain that is not part of it.** Repairing that
   with an outer-shell `PATH=` expansion replaces the entries it was meant to preserve.
 
+### The build can lie about having happened
+
+**Check the timestamps.** 0.4.0's first Linux build reported `Finished in 13s` and produced **0.3.0
+binaries**. Nothing had been rebuilt.
+
+The cause: the rustup toolchain on the Linux box ships `gcc-ld/ld.lld` as a shim that nixpkgs
+patched to call `ld-wrapper.sh` *inside rustup's own nix store path*. That path was garbage-
+collected, so the linker was pointing at a file that no longer existed — and cargo, unable to link,
+served cached artifacts and reported success. `cargo test` failed loudly; `cargo build` did not.
+
+Two defences, both now in the build script:
+
+- **Linux builds use nix's own `cargo`/`rustc`**, which have no such shim. rustup is needed only for
+  the Windows target, because nix's rustc does not carry the `windows-gnu` std.
+- **`nixpkgs#rustup` stays in the nix shell** for the Windows build, which keeps the store path the
+  shim references alive. Realising it again recreates the identical path, since it is the same
+  derivation.
+- **The script prints the binaries' mtimes at the end.** They must be today's. This is the check
+  that caught it and it is the reason the step exists.
+
+Delete `target/` when in doubt. A stale artifact is indistinguishable from a fresh one at a glance,
+and that is the whole problem.
+
 ### Before publishing
 
 Run the binaries. Not "they linked" — run them.
@@ -111,6 +134,7 @@ Run the binaries. Not "they linked" — run them.
 - [ ] Windows: run it. `wine` on the Linux box is enough to prove the recipes compose and the
       image validator answers. A binary that has only been linked is a binary nobody has run.
 - [ ] `strings <binary> | grep -c /Users/` and `/home/` — both zero.
+- [ ] **Every binary is dated today.** See above; this is not paranoia, it has happened.
 
 ### After
 
