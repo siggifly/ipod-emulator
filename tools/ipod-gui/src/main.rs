@@ -309,6 +309,8 @@ ipod-emulator — an interactive iPod over the eapp-loader emulator
   --selftest              no window: push a scripted gesture through the GUI's own input path
                           and print what reached RetailOS
   --selftest-control      the matched control: the same run with no input at all
+  --trace-calls-from=N    record every `bl` taken after N instructions. For flattened code the
+                          calls are the shape the obfuscation cannot hide.
   --trace-pc=LO:HI        record every address executed in this range. For code that is
                           control-flow flattened, watching beats reading.
   --control=PATH          open a control socket: wheel / press / shot / peek / state.
@@ -458,6 +460,7 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         cold: args.iter().any(|a| a == "--cold"),
         control: get("--control=").map(PathBuf::from),
         // `--trace-pc=LO:HI`, hex, for watching a flattened function execute.
+        trace_calls_from: get("--trace-calls-from=").and_then(|s| s.parse().ok()),
         trace_pc: get("--trace-pc=").and_then(|s| {
             let (a, b) = s.split_once(':')?;
             Some((

@@ -167,6 +167,8 @@ pub struct Config {
     pub control: Option<PathBuf>,
     /// Record execution inside this address range, for code that resists being read.
     pub trace_pc: Option<(u32, u32)>,
+    /// Record call edges from this instruction count onward.
+    pub trace_calls_from: Option<u64>,
     /// Addresses to watch, reported whenever one changes.
     ///
     /// Built for a single question: `06-game-drm.md` establishes that `[0x14937194]` is the DRM
@@ -483,6 +485,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     m.mem.pmu = Some(Pcf50605::new());
 
     m.mem.trace_pc = cfg.trace_pc;
+    m.mem.trace_calls_from = cfg.trace_calls_from;
     m.instr_per_usec = cfg.clock.max(1);
 
     // The five addresses whose arrival counts are the measurement this GUI exists to make.
@@ -1517,6 +1520,18 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant) {
     // Printed unconditionally when a range was asked for, including when it is empty. "Nothing was
     // recorded" and "nothing was asked" must not look the same, because an instrument that stays
     // silent when it found nothing is indistinguishable from one that is not running.
+    if m.mem.trace_calls_from.is_some() {
+        let n = m.mem.call_trace.len();
+        println!("  calls: {n} recorded");
+        // Distinct edges in first-seen order. The repetition is a loop; the first time each edge is
+        // taken is the shape of the subsystem.
+        let mut seen = std::collections::BTreeSet::new();
+        for (from, to, at) in m.mem.call_trace.iter() {
+            if seen.insert((*from, *to)) && seen.len() <= 300 && *to != 0x18 {
+                println!("    {from:#010x} -> {to:#010x}  at {at}");
+            }
+        }
+    }
     if let Some((lo, hi)) = m.mem.trace_pc {
         let n = m.mem.pc_trace.len();
         let distinct = m.mem.pc_trace.iter().map(|(pc, _)| *pc).collect::<std::collections::BTreeSet<_>>().len();

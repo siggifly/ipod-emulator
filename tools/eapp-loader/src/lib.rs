@@ -604,6 +604,14 @@ pub struct Memory {
     /// hot loop of an interpreter.
     pub trace_pc: Option<(u32, u32)>,
     pub pc_trace: Vec<(u32, u64)>,
+    /// Record `bl` edges from this instruction count onward.
+    ///
+    /// A PC trace of a flattened function is mostly its dispatcher going round; the *calls* are the
+    /// shape worth having, because they are what the obfuscation does not hide -- a call still has
+    /// to name its target. Gated on an instruction count so the window can be aimed at the moment
+    /// the subsystem runs rather than recording a whole boot.
+    pub trace_calls_from: Option<u64>,
+    pub call_trace: Vec<(u32, u32, u64)>,
     /// `(addr, pc) -> (reads, first icount)`, **uncapped**. The report's per-reader breakdown; the
     /// log above is the ordered sample it sits under.
     pub read_sites: BTreeMap<(u32, u32), (u64, u64)>,
@@ -2223,6 +2231,8 @@ impl Machine {
             read_log: Capped::new(2_000_000),
             trace_pc: None,
             pc_trace: Vec::new(),
+            trace_calls_from: None,
+            call_trace: Vec::new(),
             read_sites: BTreeMap::new(),
             store_pc_log: Capped::new(2_000_000),
             store_split: 0,
@@ -3212,6 +3222,7 @@ impl Machine {
         // Regions, aliases and device mappings are all configured before a run; clearing here means
         // a cached resolution can never outlive the layout it was computed against.
         self.mem.invalidate_fast();
+        let mut prev_pc = self.cpu.regs[15];
         for _ in 0..budget {
             // Before the fetch, so a taken IRQ lands on the vector rather than one instruction
             // past it. Rate-limited because it costs several memory accesses.
@@ -3239,6 +3250,28 @@ impl Machine {
             // Two bounds keep this from being a liability. The range test is one compare against a
             // `None` in the overwhelming case, and the log is capped -- an instrument that fills
             // memory during a long boot would be worse than no instrument.
+            // **A call is identified by the link register, not by reading the instruction.**
+            //
+            // The first version peeked the word at the previous PC and tested the `bl` encoding.
+            // That is wrong here: RetailOS executes through the low alias at 0x00000000, and
+            // `peek32` resolves low addresses against NOR rather than SDRAM -- so it was decoding
+            // the boot ROM's bytes as if they were the instruction that had just run, and reporting
+            // the coincidences as calls. The genuine edges were missing and the noise was not.
+            //
+            // `bl` writes the return address into r14. So: a discontinuity whose new r14 points one
+            // instruction past where we just were is a call, whatever alias it executed through and
+            // whatever the memory map says.
+            if let Some(from) = self.mem.trace_calls_from {
+                if self.executed as u64 >= from
+                    && pc != prev_pc.wrapping_add(4)
+                    && self.cpu.regs[14] == prev_pc.wrapping_add(4)
+                    && self.mem.call_trace.len() < PC_TRACE_CAP
+                {
+                    self.mem.call_trace.push((prev_pc, pc, self.executed as u64));
+                }
+            }
+            prev_pc = pc;
+
             if let Some((lo, hi)) = self.mem.trace_pc {
                 if pc >= lo && pc <= hi && self.mem.pc_trace.len() < PC_TRACE_CAP {
                     self.mem.pc_trace.push((pc, self.executed as u64));
