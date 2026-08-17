@@ -1644,6 +1644,26 @@ impl Memory {
         }
     }
 
+    /// Move a GPIO port-A input pin, and raise the port's interrupt if the firmware asked for it.
+    ///
+    /// The level test is *match*, not edge: `INT_LEV` says which state a pin has to be in for the
+    /// enabled bit to assert, so a switch that moves to the armed level interrupts and one that
+    /// moves away from it does not. That is what `ipodloader2`'s `outb(~state, ..._INT_LEV)` is
+    /// doing — arming for the opposite of what it just read, so the next movement fires.
+    pub fn set_gpioa_input(&mut self, v: u32) {
+        let old = self.read32(GPIOA_INPUT_VAL);
+        if old == v {
+            return;
+        }
+        self.write32(GPIOA_INPUT_VAL, v);
+        let fire = (old ^ v) & self.read32(GPIOA_INT_EN) & !(v ^ self.read32(GPIOA_INT_LEV));
+        if fire != 0 {
+            let stat = self.read32(GPIOA_INT_STAT) | fire;
+            self.write32(GPIOA_INT_STAT, stat);
+            self.int_pending_hi |= 1 << GPIO_IRQ_HI;
+        }
+    }
+
     /// Arm the drive's completion for `IDE_COMPLETION_USEC` from now, rather than raising it here.
     ///
     /// The delay is load-bearing, not cosmetic. This model finishes a transfer inside the store to
@@ -1731,6 +1751,17 @@ impl Memory {
         // the bit the driver reads back. Apple's bootloader polls the latch with IRQs masked, so
         // it never needed this; RetailOS's handler writes the same bits with the line live, and
         // without it a held line would survive the very ack that was meant to clear it.
+        // Writing a bit to GPIOA_INT_CLR retires that pin's interrupt, and the shared port line
+        // drops only when no pin is left asserting. Ports A..D are one interrupt, so a handler
+        // clearing hold must not silence a wheel edge that arrived while it ran.
+        if addr & !3 == GPIOA_INT_CLR {
+            let shift = (addr & 3) * 8;
+            let stat = self.read32(GPIOA_INT_STAT) & !((val as u32) << shift);
+            self.write32(GPIOA_INT_STAT, stat);
+            if stat == 0 {
+                self.int_pending_hi &= !(1 << GPIO_IRQ_HI);
+            }
+        }
         if let Some((base, _)) = &self.ata {
             if addr.wrapping_sub(*base) == 0x28 && val & 0x30 != 0 && !self.ide_cfg_ack_off {
                 self.int_pending &= !(1 << IDE_IRQ);
@@ -4512,6 +4543,22 @@ pub fn wheel_step_name(ev: WheelEvent) -> String {
     }
 }
 
+/// The GPIO port-A interrupt block, from `ipodloader2/ipodhw.h` and Rockbox's `pp5020.h`, which
+/// agree address for address.
+///
+/// A port pin raises when it is **enabled** and its level **matches `INT_LEV`**; the handler clears
+/// it by writing the bit to `INT_CLR`. Ports A..D share one line, `GPIO0_IRQ = 32 + 0`.
+///
+/// Modelling this is what makes the hold switch exist. RetailOS reads `GPIOA_INPUT_VAL` **four
+/// times in a 1.7 G boot**, from one PC, first at 111 551 914 — that is initialisation, not a poll,
+/// and `HoldSwitchTask` learns about every later movement from this interrupt. Without it the
+/// emulator moved the pin and told nobody, so the switch was sampled once at boot and never again.
+pub const GPIOA_INT_STAT: u32 = 0x6000_d040;
+pub const GPIOA_INT_EN: u32 = 0x6000_d050;
+pub const GPIOA_INT_LEV: u32 = 0x6000_d060;
+pub const GPIOA_INT_CLR: u32 = 0x6000_d070;
+pub const GPIO_IRQ_HI: u32 = 0;
+
 /// `GPIOA_INPUT_VAL`, and the hold switch's bit in it: active low, so **clear means engaged**.
 /// `map_hardware` seeds it set (hold off) for a bare iPod; a scripted hold has to clear it, or the
 /// switch is modelled in the frame and not in the line `button_hold()` reads.
@@ -4574,7 +4621,7 @@ impl Memory {
         if let Some(on) = hold_moved {
             let v = self.read32(GPIOA_INPUT_VAL);
             let v = if on { v & !GPIOA_HOLD } else { v | GPIOA_HOLD };
-            self.write32(GPIOA_INPUT_VAL, v);
+            self.set_gpioa_input(v);
         }
     }
 }

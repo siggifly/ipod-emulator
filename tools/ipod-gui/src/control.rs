@@ -12,6 +12,7 @@
 //! wheel N [MS]       scroll N detents, MS apart; negative is anticlockwise
 //! press NAME         select | menu | play | left/prev | right/next
 //! hold NAME MS       hold a button, for the combos that need one
+//! holdsw on|off     the HOLD SWITCH, which is not a button and not `hold`
 //! shot PATH          write the current framebuffer as a PNG
 //! peek ADDR          read one word, hex in and hex out; unmapped says so
 //! ata FROM TO        whether the drive was ever asked for these sectors
@@ -104,6 +105,17 @@ fn command(line: &str, link: &Arc<Link>) -> String {
             }
             Err(_) => "error: wheel wants a number of detents".into(),
         },
+        // The switch, not a button. `hold` was already taken by "hold a button down for N ms",
+        // which is a different physical act on a different piece of plastic.
+        "holdsw" => {
+            let on = match arg {
+                "on" | "1" | "engage" => true,
+                "off" | "0" | "release" => false,
+                _ => return "error: holdsw wants on or off".into(),
+            };
+            link.push(WheelEvent::Hold(on));
+            format!("ok holdsw {}", if on { "on" } else { "off" })
+        }
         "press" | "hold" => {
             let Some(mask) = wheel_button(arg) else {
                 return format!("error: unknown button {arg:?} (select menu play left right)");

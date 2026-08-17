@@ -173,6 +173,13 @@ pub struct Config {
     pub cop_awake: bool,
     /// Stop reporting the IDE0_CFG interrupt latch in bit 3 (ledger #9).
     pub ide_irq_latch_off: bool,
+    /// Addresses to count reads of, with the PC that made each one.
+    ///
+    /// `input_regs` cannot answer this: it counts reads *before the first write*, so any register
+    /// this model seeds at startup -- GPIOA's hold line among them -- reports zero reads forever
+    /// after. "Does the firmware ever look at this?" is a different question from "do we invent it",
+    /// and only one of them had an instrument.
+    pub read_count: Vec<u32>,
     /// `BASE:SIZE` — enumerate the addresses the firmware reads before it has ever written them.
     ///
     /// These are hardware *inputs*: values firmware expects silicon to supply and we answer with
@@ -466,6 +473,12 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     m.mem.cop_awake = cfg.cop_awake;
     m.mem.ide_irq_latch_off = cfg.ide_irq_latch_off;
     m.mem.input_probe = cfg.input_regs;
+    if !cfg.read_count.is_empty() {
+        m.mem.read_addrs = cfg.read_count.clone();
+        m.mem.read_addrs.sort_unstable();
+        m.mem.read_addrs.dedup();
+        m.mem.set_store_addr_bounds();
+    }
     eapp_loader::map_hardware(&mut m, true);
     // Hardware revision probe: boot reads 0x70000000, takes bits 16..23 and compares to 0x36.
     {
@@ -1576,6 +1589,14 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
                 m.mem.regions.iter().map(|r| r.name).collect::<Vec<_>>()
             ),
         }
+    }
+    if !m.mem.read_sites.is_empty() {
+        println!("  reads of the watched addresses:");
+        for ((addr, pc), (n, first)) in m.mem.read_sites.iter() {
+            println!("    [{addr:#010x}] read by pc {pc:#010x}  x{n}  first @{first}");
+        }
+    } else if !m.mem.read_addrs.is_empty() {
+        println!("  reads of the watched addresses: NONE -- the firmware never looked");
     }
     if !m.mem.input_regs.is_empty() {
         let mut rows: Vec<_> = m.mem.input_regs.iter().filter(|(_, v)| v.0 > 0).collect();
