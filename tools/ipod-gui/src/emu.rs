@@ -160,6 +160,13 @@ pub struct Config {
     /// that deliberately to a *cold* machine is the only way to ask whether it is what matters,
     /// short of putting the chip in the snapshot and changing every restored run to find out.
     pub ablate_pmu: bool,
+    /// Addresses to watch, reported whenever one changes.
+    ///
+    /// Built for a single question: `06-game-drm.md` establishes that `[0x14937194]` is the DRM
+    /// context pointer `FUN_000103d4` fills in, that it stayed `0x00000000` in every arm measured
+    /// so far, and that every later content-key unwrap therefore ran against a null. Whether a
+    /// keybag minted against the identity this machine actually presents changes that is one word.
+    pub watch: Vec<u32>,
 }
 
 /// The scripted measurements this front end can make with no window and no hand.
@@ -776,6 +783,8 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
     let mut entered = restored;
     let mut test = SelfTest { shots: cfg.shots.clone(), ..SelfTest::default() };
     let mut probe = Probing::new(cfg);
+    // `None` means "not yet sampled", which is distinct from an unmapped address.
+    let mut watched: Vec<Option<u32>> = vec![None; cfg.watch.len()];
 
     loop {
         if link.quit.load(Ordering::Relaxed) {
@@ -832,6 +841,24 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
             link.quit.store(true, Ordering::Relaxed);
             break;
         }
+        // Sampled once per slice, and only reported on change: a value printed every slice would
+        // be 40 lines a second saying nothing, and the thing worth seeing is the transition.
+        if !cfg.watch.is_empty() {
+            for (i, &addr) in cfg.watch.iter().enumerate() {
+                let now = m.mem.peek32(addr);
+                if watched[i] != now {
+                    match now {
+                        Some(v) => eprintln!(
+                            "watch {addr:#010x} = {v:#010x}  (was {})  at {executed} instructions",
+                            watched[i].map(|w| format!("{w:#010x}")).unwrap_or_else(|| "unmapped".into())
+                        ),
+                        None => eprintln!("watch {addr:#010x} became unmapped at {executed} instructions"),
+                    }
+                    watched[i] = now;
+                }
+            }
+        }
+
         if probe.tick(&mut m, link, cfg) {
             link.quit.store(true, Ordering::Relaxed);
             break;

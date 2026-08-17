@@ -308,6 +308,8 @@ ipod-emulator — an interactive iPod over the eapp-loader emulator
   --selftest              no window: push a scripted gesture through the GUI's own input path
                           and print what reached RetailOS
   --selftest-control      the matched control: the same run with no input at all
+  --watch=ADDR[,ADDR]     report a word whenever it changes. `--watch=14937194` is the DRM
+                          context pointer; it has been 0 in every arm measured so far.
   --probe=WHICH           no window: act at --probe-at and watch the panel for 800 M instructions.
                           menu | menu-control | combo | combo-control
   --probe-at=N            instruction anchor the probe acts at (default 1500000000)
@@ -449,6 +451,15 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         snapshot: Some(snapshot),
         snap_at,
         cold: args.iter().any(|a| a == "--cold"),
+        // Comma-separated hex, with or without 0x, because both spellings turn up in the research
+        // notes these addresses are copied out of.
+        watch: get("--watch=")
+            .map(|s| {
+                s.split(',')
+                    .filter_map(|v| u32::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok())
+                    .collect()
+            })
+            .unwrap_or_default(),
         click_gap: num("--wheel-click-instr=", 20_000).max(1),
         headless: get("--headless=").and_then(|v| v.replace('_', "").parse().ok()),
         selftest: args.iter().any(|a| a == "--selftest" || a == "--selftest-control"),

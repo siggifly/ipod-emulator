@@ -830,6 +830,33 @@ impl Memory {
         self.regions.iter().find(|r| r.name == name)
     }
 
+    /// Read a word out of backing memory **without touching anything**.
+    ///
+    /// Deliberately not `read32`: that one resolves through the fast-region cache, feeds the access
+    /// counters and consults the device windows, so using it to observe a value would change the
+    /// numbers every access report has ever produced — and would answer from a device rather than
+    /// from memory. This walks the regions directly and answers only from plain backing storage.
+    ///
+    /// `None` when the address is not in a region, which includes every MMIO window. An observer
+    /// that cannot see a value must say so rather than return zero, because zero is a meaningful
+    /// value at the address this exists to watch.
+    ///
+    /// SDRAM has an uncached alias 0x40000000 above its cached view, and the firmware uses both —
+    /// `0x14937194` and `0x10937194` are the same word. Both spellings resolve here.
+    pub fn peek32(&self, addr: u32) -> Option<u32> {
+        let a = addr & !3;
+        for candidate in [a, a ^ 0x0400_0000] {
+            for r in &self.regions {
+                let Some(off) = candidate.checked_sub(r.base) else { continue };
+                let off = off as usize;
+                if off + 4 <= r.data.len() {
+                    return Some(u32::from_le_bytes(r.data[off..off + 4].try_into().ok()?));
+                }
+            }
+        }
+        None
+    }
+
     /// Whether every address in the 4 KiB page at `page` is answered by plain backing memory —
     /// no device window, no override, no instrumentation that needs the raw address.
     ///
