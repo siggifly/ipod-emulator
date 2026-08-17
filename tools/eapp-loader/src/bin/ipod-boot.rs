@@ -70,6 +70,46 @@ fn main() {
         }
     }
 
+    // Also not a recipe: it reads the NOR rather than booting it, and prints the identity of the
+    // iPod the dump came from. That identity is what `ipod-usb` has to present to iTunes, because
+    // authorisation keys minted against any other one are keys this machine cannot use.
+    if name == "syscfg" {
+        let Some(path) = rest.first() else {
+            eprintln!("usage: ipod-boot syscfg NOR.bin");
+            std::process::exit(2);
+        };
+        let nor = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("ipod-boot syscfg: {path}: {e}");
+                std::process::exit(1);
+            }
+        };
+        let Some(c) = eapp_loader::inspect::syscfg(&nor) else {
+            eprintln!(
+                "ipod-boot syscfg: {path} has no SysCfg block at 0x4000.\n\
+                 A 5G/5.5G NOR dump is 1 MiB and starts with the boot ROM; a file that is neither \
+                 will land here."
+            );
+            std::process::exit(1);
+        };
+        println!("{path}");
+        println!("  serial  {}", c.serial.as_deref().unwrap_or("(absent)"));
+        match c.guid_hex() {
+            Some(g) => println!("  GUID    {g}"),
+            None => println!("  GUID    (absent)"),
+        }
+        println!("  records {}", c.tags.join(", "));
+        if !c.guid_looks_apple() {
+            // Said rather than assumed correct: the OUI is the one field whose right answer is
+            // known in advance, so it is the only check available that this parsed at all.
+            println!();
+            println!("  warning: the GUID does not carry Apple's FireWire OUI (00:0A:27).");
+            println!("           Either this is not an iPod NOR, or it did not parse.");
+        }
+        return;
+    }
+
     // `make-disk` is not a recipe — it builds the thing a recipe needs, and it is the front door
     // for anyone who does not already have an 8 GB image of an iPod.
     if name == "make-disk" {

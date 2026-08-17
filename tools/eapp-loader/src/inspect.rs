@@ -612,3 +612,161 @@ mod tests {
         assert!(matches!(disk(&p), Verdict::Bad(_)));
     }
 }
+
+// ---------------------------------------------------------------- the NOR's own identity
+
+/// Where `SysCfg` sits in a 5G/5.5G NOR dump, and its signature stored backwards.
+///
+/// Every tag in this block is a four-character code written little-endian, so a byte dump reads
+/// them reversed: `SCfg` appears as `gfCS`, `SrNm` as `mNrS`, `FwId` as `dIwF`.
+const SYSCFG_AT: usize = 0x4000;
+const SYSCFG_MAGIC: &[u8; 4] = b"gfCS";
+const SYSCFG_HEADER: usize = 0x18;
+const SYSCFG_RECORD: usize = 0x14;
+
+/// The identity the iPod this NOR came from presents to the world.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SysCfg {
+    /// `SrNm` — the serial printed on the back of the case.
+    pub serial: Option<String>,
+    /// `FwId` — the FireWire GUID, which **is** the USB serial number a host sees.
+    ///
+    /// Stored as two little-endian `u32`s, low word first, so the canonical 16-hex-digit form is
+    /// the high word followed by the low one. The top of the high word is Apple's FireWire OUI,
+    /// `00:0A:27`, which is the cheapest check that this was parsed correctly at all.
+    pub guid: Option<u64>,
+    /// Every tag found, in order, for a dump that does not look like the others.
+    pub tags: Vec<String>,
+}
+
+impl SysCfg {
+    /// `000A270014EFE726` — the form iTunes, `SysInfo` and a USB descriptor all use.
+    pub fn guid_hex(&self) -> Option<String> {
+        self.guid.map(|g| format!("{g:016X}"))
+    }
+
+    /// Whether the GUID carries Apple's FireWire OUI. False means the parse is wrong, or the dump
+    /// is not what it claims to be — either way it is not an identity to go presenting.
+    pub fn guid_looks_apple(&self) -> bool {
+        self.guid.is_some_and(|g| (g >> 40) == 0x00_0A_27)
+    }
+}
+
+/// Read `SysCfg` out of a NOR dump.
+///
+/// This is what makes the flash identity usable outside the emulator: the authorisation work in
+/// `ipod-usb` needs the GUID of the iPod whose NOR is being booted, because keys minted against
+/// any other identity are keys this machine cannot present.
+pub fn syscfg(nor: &[u8]) -> Option<SysCfg> {
+    let block = nor.get(SYSCFG_AT..)?;
+    if block.get(..4)? != SYSCFG_MAGIC {
+        return None;
+    }
+    let count = u32::from_le_bytes(block.get(0x14..0x18)?.try_into().ok()?) as usize;
+
+    let mut out = SysCfg { serial: None, guid: None, tags: Vec::new() };
+    let mut at = SYSCFG_HEADER;
+    // Bounded by the declared count and by the buffer, because a truncated dump is a normal thing
+    // to be handed and must not be read past.
+    for _ in 0..count.min(64) {
+        let Some(rec) = block.get(at..at + SYSCFG_RECORD) else { break };
+        let tag: String = rec[..4].iter().rev().map(|&b| b as char).collect();
+        let payload = &rec[4..];
+        match tag.as_str() {
+            "SrNm" => {
+                let s: String = payload
+                    .iter()
+                    .take_while(|&&b| b != 0)
+                    .map(|&b| b as char)
+                    .filter(|c| c.is_ascii_graphic())
+                    .collect();
+                if !s.is_empty() {
+                    out.serial = Some(s);
+                }
+            }
+            "FwId" => {
+                let lo = u32::from_le_bytes(payload.get(4..8)?.try_into().ok()?) as u64;
+                let hi = u32::from_le_bytes(payload.get(8..12)?.try_into().ok()?) as u64;
+                out.guid = Some((hi << 32) | lo);
+            }
+            _ => {}
+        }
+        out.tags.push(tag);
+        at += SYSCFG_RECORD;
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod syscfg_tests {
+    use super::*;
+
+    /// Build a `SysCfg` block with the byte layout a real 5.5G NOR has, dumped at 0x4000:
+    /// `gfCS`, five header words, a record count, then 20-byte records of a backwards tag and a
+    /// 16-byte payload. The identities here are invented — the shape is what is under test.
+    fn nor(records: &[(&str, [u8; 16])]) -> Vec<u8> {
+        let mut v = vec![0u8; SYSCFG_AT + SYSCFG_HEADER + records.len() * SYSCFG_RECORD + 16];
+        let b = SYSCFG_AT;
+        v[b..b + 4].copy_from_slice(SYSCFG_MAGIC);
+        v[b + 0x14..b + 0x18].copy_from_slice(&(records.len() as u32).to_le_bytes());
+        for (i, (tag, payload)) in records.iter().enumerate() {
+            let at = b + SYSCFG_HEADER + i * SYSCFG_RECORD;
+            let t: Vec<u8> = tag.bytes().rev().collect();
+            v[at..at + 4].copy_from_slice(&t);
+            v[at + 4..at + 20].copy_from_slice(payload);
+        }
+        v
+    }
+
+    fn fwid(lo: u32, hi: u32) -> [u8; 16] {
+        let mut p = [0u8; 16];
+        p[4..8].copy_from_slice(&lo.to_le_bytes());
+        p[8..12].copy_from_slice(&hi.to_le_bytes());
+        p
+    }
+
+    fn srnm(s: &str) -> [u8; 16] {
+        let mut p = [0u8; 16];
+        p[..s.len()].copy_from_slice(s.as_bytes());
+        p
+    }
+
+    /// The GUID is two little-endian words, high one second — so it reads backwards twice over,
+    /// and getting either wrong yields a plausible-looking number that is not the device's.
+    #[test]
+    fn the_guid_is_the_high_word_then_the_low_one() {
+        let v = nor(&[("SrNm", srnm("AB123CD4EFG")), ("FwId", fwid(0x1234_5678, 0x000A_2700))]);
+        let c = syscfg(&v).expect("a well-formed block must parse");
+        assert_eq!(c.serial.as_deref(), Some("AB123CD4EFG"));
+        assert_eq!(c.guid_hex().as_deref(), Some("000A270012345678"));
+        assert!(c.guid_looks_apple(), "00:0A:27 is Apple's FireWire OUI");
+        assert_eq!(c.tags, ["SrNm", "FwId"]);
+    }
+
+    /// The OUI check is the cheapest proof the parse is right, so it has to be able to fail.
+    #[test]
+    fn a_guid_without_apples_oui_is_flagged() {
+        let v = nor(&[("FwId", fwid(0x1111_2222, 0xDEAD_BEEF))]);
+        assert!(!syscfg(&v).unwrap().guid_looks_apple());
+    }
+
+    /// A NOR that is not one, and a dump cut short: both are ordinary things to be handed.
+    #[test]
+    fn rubbish_and_truncation_are_declined_not_panicked_on() {
+        assert!(syscfg(&[0u8; 0x5000]).is_none(), "no magic, no SysCfg");
+        assert!(syscfg(&[]).is_none());
+        let mut v = nor(&[("SrNm", srnm("AB123CD4EFG")), ("FwId", fwid(1, 2))]);
+        v.truncate(SYSCFG_AT + SYSCFG_HEADER + 8);
+        let c = syscfg(&v).expect("the header is intact, so the block is still readable");
+        assert_eq!(c.guid, None, "a record cut in half must not be invented");
+    }
+
+    /// A count larger than the block does not walk off the end.
+    #[test]
+    fn a_lying_record_count_is_bounded() {
+        let mut v = nor(&[("FwId", fwid(1, 0x000A_2700))]);
+        v[SYSCFG_AT + 0x14..SYSCFG_AT + 0x18].copy_from_slice(&9999u32.to_le_bytes());
+        let c = syscfg(&v).expect("must not panic");
+        assert!(c.tags.len() < 64);
+    }
+}
