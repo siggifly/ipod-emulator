@@ -2738,14 +2738,18 @@ mod tests {
         std::fs::write(dir.join("settings.txt"), b"mode = user\n").unwrap();
 
         let (stale, paths) = reclaimable(&keep);
-        assert_eq!(stale, 600, "six stale files of 100 bytes");
-        assert_eq!(paths.len(), 6, "and six of them");
+        assert_eq!(paths.len(), 6, "six stale files");
+        // Not asserted in bytes. The size is now what the FILESYSTEM gave up, and a 100-byte file
+        // occupies a whole block -- so the only honest assertions here are that something was
+        // found and that it is at least as large as the bytes written. Asserting 600 would be
+        // asserting that the measurement is the wrong one.
+        assert!(stale >= 600, "the stale set must account for at least the bytes written");
         // Measuring must not delete: this is the assertion that would have caught the old
         // behaviour if the old behaviour had ever been questioned.
         assert!(dir.join("idle-OLD1.img").exists(), "reclaimable() deleted something");
 
         let freed = reclaim(&paths);
-        assert_eq!(freed, 600, "six stale files of 100 bytes");
+        assert_eq!(freed, stale, "reclaim must free exactly what was offered");
         assert!(keep.snap.exists() && keep.work.exists(), "the set in use must survive");
         assert!(keep.frozen.exists(), "the frozen drive belongs to the set and must survive");
         assert!(dir.join("settings.txt").exists(), "a non-cache file must not be touched");
