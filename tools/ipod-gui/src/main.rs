@@ -2655,6 +2655,11 @@ mod tests {
     /// The set is three files since the frozen drive landed, and the third is the one worth
     /// watching: a prune that dropped it would leave a snapshot that cannot be restored, which
     /// fails as a slow cold boot rather than as an error.
+    ///
+    /// Since reclamation became consensual this is two assertions in one: that `reclaimable` finds
+    /// exactly the stale set and touches nothing, and that `reclaim` then removes exactly what was
+    /// offered. Measuring and deleting being separate calls is the whole point -- the figure has to
+    /// be shown to somebody before anything goes.
     #[test]
     fn pruning_keeps_only_the_set_in_use() {
         let dir = std::env::temp_dir().join(format!("ipod-prune-{}", std::process::id()));
@@ -2680,8 +2685,14 @@ mod tests {
         // A file that is not ours must survive.
         std::fs::write(dir.join("settings.txt"), b"mode = user\n").unwrap();
 
-        let freed = prune_cache(&keep);
+        let (stale, paths) = reclaimable(&keep);
+        assert_eq!(stale, 600, "six stale files of 100 bytes");
+        assert_eq!(paths.len(), 6, "and six of them");
+        // Measuring must not delete: this is the assertion that would have caught the old
+        // behaviour if the old behaviour had ever been questioned.
+        assert!(dir.join("idle-OLD1.img").exists(), "reclaimable() deleted something");
 
+        let freed = reclaim(&paths);
         assert_eq!(freed, 600, "six stale files of 100 bytes");
         assert!(keep.snap.exists() && keep.work.exists(), "the set in use must survive");
         assert!(keep.frozen.exists(), "the frozen drive belongs to the set and must survive");
