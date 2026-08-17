@@ -407,6 +407,11 @@ pub struct Memory {
     /// window before the next `service_interrupts`; turning the ack off is how that ordering is
     /// distinguished from a genuinely undelivered interrupt.
     pub ide_cfg_ack_off: bool,
+    /// Ablation switch for the IDE0_CFG **latch** itself (ledger #9), set by `--no-ide-irq-latch`.
+    /// Bit 3 stops being reported and nothing else changes, so what the firmware does without it is
+    /// the measurement of what it was buying. The bit had been ORed in unconditionally, with no
+    /// arm B, since before there was a ledger.
+    pub ide_irq_latch_off: bool,
     /// When the drive's next completion is due, as a value of `usec`. See `arm_ide_irq`.
     pub ide_irq_due: Option<u32>,
     /// The core wrote CPU_CTRL's sleep bit and is waiting for an interrupt. Consumed by
@@ -1201,7 +1206,15 @@ impl Memory {
         v[idx] += 1;
     }
 
-    fn count(&mut self, addr: u32, write: bool) {
+    /// `wval` is the byte **being written**, and is meaningless on a read.
+    ///
+    /// It has to be passed in because `count` runs ahead of both the device models and the region
+    /// copy, so peeking the address here answers with the value that is about to be replaced. On
+    /// plain storage that is merely off by one write; on MMIO it is a fabrication, because the
+    /// device consumes the store and the backing bytes stay zero forever. That is what
+    /// `--watch-writes=0xc3000028:4` reported as "3 824 logged, 0 distinct pc" — every entry read
+    /// back as zero and the report drops zeros as memset noise.
+    fn count(&mut self, addr: u32, write: bool, wval: u8) {
         if !write
             && !self.internal
             && addr >= self.read_addr_lo
@@ -1222,7 +1235,7 @@ impl Memory {
         if write {
             if let Some((base, len)) = self.watch_range {
                 if !self.internal && addr.wrapping_sub(base) < len {
-                    let (pc, v, n) = (self.pc, self.peek(addr), self.icount);
+                    let (pc, v, n) = (self.pc, wval, self.icount);
                     let e = self.watch_range_words.entry(addr & !3).or_insert(WatchWord {
                         first_at: n,
                         ..Default::default()
@@ -1394,7 +1407,7 @@ impl Bus for Memory {
                 || self.input_probe.is_some()
             {
                 for i in 0..4 {
-                    self.count(a.wrapping_add(i), false);
+                    self.count(a.wrapping_add(i), false, 0);
                 }
             }
             let d = &self.regions[idx].data[off..off + 4];
@@ -1442,7 +1455,7 @@ impl Bus for Memory {
                 || self.input_probe.is_some()
             {
                 for i in 0..4 {
-                    self.count(a.wrapping_add(i), true);
+                    self.count(a.wrapping_add(i), true, val.to_le_bytes()[i as usize]);
                 }
             }
             self.regions[idx].data[off..off + 4].copy_from_slice(&val.to_le_bytes());
@@ -1472,7 +1485,7 @@ impl Bus for Memory {
         // `sample()`, not the census: once the log saturates the push is dropped and the last kept
         // row belongs to a different read, so amending it would overwrite a real measurement.
         let logged = self.read_log.sample().len();
-        self.count(addr, false);
+        self.count(addr, false, 0);
         let v = self.read8_inner(addr);
         if self.read_log.sample().len() > logged {
             if let Some(e) = self.read_log.last_mut() {
@@ -1543,7 +1556,12 @@ impl Memory {
         if let Some((base, dev)) = &mut self.ata {
             let off = addr.wrapping_sub(*base);
             if off < 0x410 {
-                let v = dev.read(off);
+                let mut v = dev.read(off);
+                // Ledger #9's arm B. `Ata::read` reports the pending latch in IDE0_CFG bit 3; this
+                // takes it back out again, at the one place every read of the controller passes.
+                if off == 0x28 && self.ide_irq_latch_off {
+                    v &= !0x08;
+                }
                 // Reading the primary status register acknowledges the drive's interrupt — that is
                 // ATA's own convention, not ours. The alternate status at +0x3f8 deliberately does
                 // not, which is the whole reason it exists.
@@ -1665,7 +1683,7 @@ impl Memory {
 
     fn write8_inner(&mut self, addr: u32, val: u8) {
         self.note_store_pc(addr, val as u32);
-        self.count(addr, true);
+        self.count(addr, true, val);
         if let Some(b) = &mut self.bcm {
             let off = addr.wrapping_sub(b.base);
             if off < 0x8_0000 {
@@ -2308,6 +2326,7 @@ impl Machine {
             usec_timer: None,
             usec: 0,
             ide_cfg_ack_off: false,
+            ide_irq_latch_off: false,
             ide_irq_due: None,
             cpu_sleep: false,
             slept_usec: 0,

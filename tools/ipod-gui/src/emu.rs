@@ -169,6 +169,8 @@ pub struct Config {
     pub trace_pc: Option<(u32, u32)>,
     /// Stop forcing the second core to report itself asleep (ledger #7).
     pub cop_awake: bool,
+    /// Stop reporting the IDE0_CFG interrupt latch in bit 3 (ledger #9).
+    pub ide_irq_latch_off: bool,
     /// `BASE:LEN` — log writes into this range with the PC that made them.
     ///
     /// The step that turns "these are RSA operands" into "and this is where they came from": a
@@ -453,6 +455,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
 
     // Set before the peripheral map, which is where the COP_STATUS override is seeded.
     m.mem.cop_awake = cfg.cop_awake;
+    m.mem.ide_irq_latch_off = cfg.ide_irq_latch_off;
     eapp_loader::map_hardware(&mut m, true);
     // Hardware revision probe: boot reads 0x70000000, takes bits 16..23 and compares to 0x36.
     {
@@ -1569,16 +1572,27 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
         let log = m.mem.watch_range_log.sample();
         if !log.is_empty() {
             println!("  writes into the watched range: {} logged", log.len());
-            // Zeroing is a memset and tells us nothing about provenance; the writers that put
-            // *content* there are the ones that name a source.
-            let mut pcs: std::collections::BTreeMap<u32, (usize, u32)> = Default::default();
-            for (pc, _addr, val, _w) in log.iter().filter(|(_, _, v, _)| *v != 0) {
-                let e = pcs.entry(*pc).or_insert((0, *val));
+            // Every writer, zeros included. Zeroing a buffer is memset noise and says nothing about
+            // provenance, which is what this instrument was built for -- but zero written into a
+            // *register* is an instruction, and dropping it is how a control-register census comes
+            // back empty.
+            let mut pcs: std::collections::BTreeMap<u32, (usize, u32, usize)> = Default::default();
+            for (pc, _addr, val, _w) in log.iter() {
+                let e = pcs.entry(*pc).or_insert((0, *val, 0));
                 e.0 += 1;
+                if *val != 0 {
+                    e.1 = *val;
+                    e.2 += 1;
+                }
             }
-            println!("    non-zero writers ({} distinct pc):", pcs.len());
-            for (pc, (n, sample)) in pcs.iter().take(12) {
-                println!("      pc {pc:#010x}  x{n}  e.g. {sample:#010x}");
+            println!("    writers ({} distinct pc):", pcs.len());
+            for (pc, (n, sample, nonzero)) in pcs.iter().take(12) {
+                let what = if *nonzero == 0 {
+                    "all zero".to_string()
+                } else {
+                    format!("e.g. {sample:#04x}, {nonzero} non-zero")
+                };
+                println!("      pc {pc:#010x}  x{n}  {what}");
             }
         }
     }

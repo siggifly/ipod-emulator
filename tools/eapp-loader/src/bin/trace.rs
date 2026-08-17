@@ -224,6 +224,7 @@ fn main() {
         m.mem.read_addrs.extend(body.split_whitespace().filter_map(parse_addr));
     }
     m.mem.ide_cfg_ack_off = args.iter().any(|a| a == "--no-cfg-ack");
+    m.mem.ide_irq_latch_off = args.iter().any(|a| a == "--no-ide-irq-latch");
     // --pp-dma-irq=N : which interrupt line the 0x60008000 DMA controller's completion drives.
     m.mem.pp_dma_irq = args.iter().find_map(|a| a.strip_prefix("--pp-dma-irq=")).and_then(|v| v.parse().ok());
     // Implies --novelty: the idle test is "no bucket was new", and only novelty tracking knows.

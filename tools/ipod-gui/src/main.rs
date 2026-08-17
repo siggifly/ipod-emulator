@@ -312,6 +312,8 @@ ipod-emulator — an interactive iPod over the eapp-loader emulator
   --cop-awake             stop forcing COP_STATUS to say the second core is asleep (ledger #7).
                           Does NOT emulate the core -- it stops lying about it, so the
                           dependency can be measured for the first time.
+  --no-ide-irq-latch      stop reporting the ATA controller's interrupt in IDE0_CFG bit 3
+                          (ledger #9). The arm that says what the latch is worth.
   --watch-writes=BASE:LEN log every write into a range with the PC that made it. A buffer's
                           first writer names where its contents came from.
   --regs-at=ADDR:N        dump the register file the first N times ADDR executes. At a bignum
@@ -473,6 +475,7 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         cold: args.iter().any(|a| a == "--cold"),
         control: get("--control=").map(PathBuf::from),
         cop_awake: args.iter().any(|a| a == "--cop-awake"),
+        ide_irq_latch_off: args.iter().any(|a| a == "--no-ide-irq-latch"),
         // `--trace-pc=LO:HI`, hex, for watching a flattened function execute.
         watch_writes: get("--watch-writes=").and_then(|s| {
             let (b, n) = s.split_once(':')?;
