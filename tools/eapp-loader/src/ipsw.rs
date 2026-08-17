@@ -900,3 +900,121 @@ mod tests {
         let _ = std::fs::remove_file(p);
     }
 }
+
+/// What a drive image's firmware partition says about itself, read without booting anything.
+///
+/// The point of this is a screen. RetailOS answers several unrelated faults with one picture — the
+/// plug-into-a-computer glyph — and a user restarting the emulator cannot tell which they hit. The
+/// emulator can read the same partition RetailOS reads and say so plainly.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FirmwareState {
+    /// Every tag in the `!ATA` directory, in order: normally `osos`, `rsrc`, sometimes `aupd`.
+    pub tags: Vec<String>,
+    /// An `aupd` image is present and **not** marked applied, so the next boot runs the flash
+    /// updater instead of the OS. On hardware that is the first of two boots; here it is a dead
+    /// end, because nothing power-cycles the machine and runs the second one.
+    pub aupd_armed: bool,
+    /// There is an operating system to boot at all.
+    pub has_os: bool,
+}
+
+/// Read the firmware partition of a drive image and report what is in it.
+///
+/// Cheap by construction — it reads the first 17 KB of the partition, not the 8 GB drive.
+pub fn firmware_state(disk: &Path) -> Result<FirmwareState, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(disk).map_err(|e| format!("{}: {e}", disk.display()))?;
+    let mut fw = vec![0u8; DIRECTORY_AT + 0x200];
+    f.seek(SeekFrom::Start(u64::from(FIRMWARE_LBA) * 512))
+        .and_then(|_| f.read_exact(&mut fw))
+        .map_err(|e| format!("{}: firmware partition unreadable: {e}", disk.display()))?;
+
+    let dir = images(&fw);
+    Ok(FirmwareState {
+        // `dev == 1` is Apple's "already applied" mark — the same field `mark_aupd_applied` sets,
+        // read here rather than written.
+        aupd_armed: dir.iter().any(|e| e.tag == "aupd" && e.dev != 1),
+        has_os: dir.iter().any(|e| e.tag == "osos"),
+        tags: dir.into_iter().map(|e| e.tag).collect(),
+    })
+}
+
+#[cfg(test)]
+mod firmware_state_tests {
+    use super::*;
+
+    /// Write a drive image whose firmware partition carries `entries` as its `!ATA` directory.
+    ///
+    /// The byte layout is copied from a real 5.5G drive, dumped at absolute offset 0xC000
+    /// (`FIRMWARE_LBA` 63 × 512 + `DIRECTORY_AT`): `!ATA`, then the four tag characters stored
+    /// backwards, then `dev` as a little-endian u32.
+    fn drive(entries: &[(&str, u32)]) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "ipod-fw-{}-{}.img",
+            std::process::id(),
+            entries.iter().map(|(t, d)| format!("{t}{d}")).collect::<String>()
+        ));
+        let mut img = vec![0u8; FIRMWARE_LBA as usize * 512 + DIRECTORY_AT + 0x200];
+        let base = FIRMWARE_LBA as usize * 512 + DIRECTORY_AT;
+        for (i, (tag, dev)) in entries.iter().enumerate() {
+            let at = base + i * 40;
+            img[at..at + 4].copy_from_slice(b"!ATA");
+            let t: Vec<u8> = tag.bytes().rev().collect();
+            img[at + 4..at + 8].copy_from_slice(&t);
+            img[at + 8..at + 12].copy_from_slice(&dev.to_le_bytes());
+        }
+        std::fs::write(&p, &img).unwrap();
+        p
+    }
+
+    /// The ordinary drive: an OS, no updater. This is what a real one dumps as.
+    #[test]
+    fn a_normal_drive_has_an_os_and_no_armed_updater() {
+        let p = drive(&[("osos", 0), ("rsrc", 0)]);
+        let s = firmware_state(&p).unwrap();
+        assert_eq!(s.tags, ["osos", "rsrc"], "tags are stored backwards and must be read back");
+        assert!(s.has_os);
+        assert!(!s.aupd_armed);
+        let _ = std::fs::remove_file(p);
+    }
+
+    /// An armed updater — the boot that never reaches RetailOS, because nothing here power-cycles
+    /// the machine to run the second one.
+    #[test]
+    fn an_unapplied_aupd_reads_as_armed() {
+        let p = drive(&[("osos", 0), ("rsrc", 0), ("aupd", 0)]);
+        assert!(firmware_state(&p).unwrap().aupd_armed);
+        let _ = std::fs::remove_file(p);
+    }
+
+    /// `dev == 1` is Apple's applied mark, and `make-disk` sets it by default. Reading it as armed
+    /// would report the fault on every ordinary drive, which is worse than reporting nothing.
+    #[test]
+    fn an_applied_aupd_is_not_armed() {
+        let p = drive(&[("osos", 0), ("rsrc", 0), ("aupd", 1)]);
+        let s = firmware_state(&p).unwrap();
+        assert!(!s.aupd_armed);
+        assert!(s.tags.contains(&"aupd".to_string()), "still present, just not armed");
+        let _ = std::fs::remove_file(p);
+    }
+
+    /// A drive with nothing bootable on it, which is the honest reading of a file that is not an
+    /// iPod drive at all.
+    #[test]
+    fn a_drive_with_no_os_says_so() {
+        let p = drive(&[]);
+        let s = firmware_state(&p).unwrap();
+        assert!(!s.has_os);
+        assert!(s.tags.is_empty());
+        let _ = std::fs::remove_file(p);
+    }
+
+    /// Too small to hold a firmware partition: an error, not a silent "no OS".
+    #[test]
+    fn a_truncated_image_is_an_error() {
+        let p = std::env::temp_dir().join(format!("ipod-fw-short-{}.img", std::process::id()));
+        std::fs::write(&p, b"not a drive").unwrap();
+        assert!(firmware_state(&p).is_err());
+        let _ = std::fs::remove_file(p);
+    }
+}

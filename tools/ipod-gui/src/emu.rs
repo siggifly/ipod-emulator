@@ -68,12 +68,36 @@ pub const WATCHED: [(u32, &str); 5] = [
 /// `Clone` because the setup screen builds the machine *after* the window is up: the config is
 /// edited in the UI thread and a copy is moved into the emulator thread, rather than the whole
 /// program deciding its paths before `main` knows whether the files exist.
-#[derive(Clone)]
+///
+/// `Default` exists for tests that exercise one decision and should not have to spell out the
+/// other eighteen fields to do it.
+#[derive(Clone, Default)]
 pub struct Config {
     pub flash: PathBuf,
     /// The pristine image. Never written — a per-run clone is.
     pub disk: PathBuf,
+    /// The writable clone the machine actually runs against. Re-made every launch.
     pub workdisk: PathBuf,
+    /// The drive as it stood at the instant the snapshot was taken, and the reason a restore is
+    /// coherent.
+    ///
+    /// A snapshot is RAM and CPU state; the drive is not in it. Pairing restored RAM with a drive
+    /// that has kept moving is what produced the intermittent "connect to computer" screen: the
+    /// working disk was created once and then reused for ever (`clone_disk` returned early if the
+    /// destination existed, despite the comment calling it per-run), so a restore put RAM from the
+    /// first boot against a volume RetailOS had rewritten a dozen times since. Its cached view of
+    /// the FAT and the music database disagreed with the platter, it concluded the disk did not
+    /// verify, and it said so the only way it can.
+    ///
+    /// Freezing the drive alongside the snapshot makes the pair coherent by construction.
+    ///
+    /// **What it costs, measured, not assumed.** `cp -c` on APFS is a copy-on-write clone: cloning
+    /// the 8 GiB reference drive moved the volume's free space by 12 KB, against the 3.1 GB a real
+    /// copy would have taken. btrfs and XFS reflink the same way through `--reflink=auto`. On ext4,
+    /// which has no reflink, that flag falls back to a full copy and the cache holds one extra
+    /// drive — bounded, because the prune keeps exactly one set, and worth it: the alternative is
+    /// an emulator that intermittently boots to a screen nobody can explain.
+    pub frozen: PathBuf,
     /// Interpreter instructions per simulated microsecond. 5 is what every recipe uses; 75 is real.
     pub clock: usize,
     /// Where the idle snapshot lives. Restored if present, written after the cold boot if not.
@@ -339,7 +363,25 @@ fn placeholder_app() -> EApp {
     }
 }
 
-pub fn build(cfg: &Config) -> Result<Machine, String> {
+impl Config {
+    /// Whether this launch may restore — asked in exactly one place because two places would
+    /// eventually disagree, and disagreeing is the bug.
+    ///
+    /// A snapshot **and** the drive it was taken against must both be present. Either alone is an
+    /// incomplete pair, and using half of one is what produced the intermittent "connect to
+    /// computer" screen; see [`Config::frozen`]. A snapshot written before the frozen drive existed
+    /// is therefore ignored once, cold-booted past, and replaced by a complete set.
+    ///
+    /// `first` is false for a power cycle inside a running session, which never restores.
+    pub fn may_restore(&self, first: bool) -> bool {
+        !self.cold
+            && first
+            && self.frozen.exists()
+            && self.snapshot.as_ref().is_some_and(|p| p.exists())
+    }
+}
+
+pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     let app = placeholder_app();
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
 
@@ -385,7 +427,11 @@ pub fn build(cfg: &Config) -> Result<Machine, String> {
     // The drive must accept writes: RetailOS bootstraps its own volume during boot and blocks on a
     // WRITE DMA that a read-only drive aborts. Cloned per run so the reference image is never
     // touched — `cp -c` on APFS is a copy-on-write clone, so this costs milliseconds for 8 GB.
-    clone_disk(&cfg.disk, &cfg.workdisk)?;
+    //
+    // *Which* image it is cloned from is the whole of the coherence fix — see `Config::frozen`. A
+    // run that is about to restore takes the drive that snapshot was taken against; a run that is
+    // about to cold-boot takes the pristine one. Either way the clone is remade, never reused.
+    clone_disk(if cfg.may_restore(first) { &cfg.frozen } else { &cfg.disk }, &cfg.workdisk)?;
     let d = Ata::open(&cfg.workdisk, true).map_err(|e| format!("disk: {e}"))?;
     m.mem.ata = Some((0xc300_0000, d));
 
@@ -429,10 +475,18 @@ pub fn build(cfg: &Config) -> Result<Machine, String> {
 ///
 /// Both subprocesses are skipped outright on Windows: spawning something that cannot exist to
 /// discover it does not exist is two failed `CreateProcess` calls per launch.
+/// Copy `from` over `to`, replacing whatever was there.
+///
+/// **The destination is removed first, deliberately.** This used to return early when the
+/// destination existed, which quietly turned the per-run clone into a permanent one and is the
+/// whole cause of the stale-pair failure documented on `Config::frozen`. Reusing a drive is only
+/// ever correct when the RAM that goes with it is reused too, and that decision belongs to the
+/// caller, which knows whether it is restoring.
 fn clone_disk(from: &Path, to: &Path) -> Result<(), String> {
-    if to.exists() {
+    if from == to {
         return Ok(());
     }
+    let _ = std::fs::remove_file(to);
     if let Some(dir) = to.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -608,7 +662,7 @@ fn wait_for_power(link: &Arc<Link>) -> bool {
 
 /// One power cycle: build the machine, run it, and stop when the window closes or power is cut.
 fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
-    let mut m = match build(cfg) {
+    let mut m = match build(cfg, first) {
         Ok(m) => m,
         Err(e) => {
             link.out.lock().unwrap().phase = Phase::Stopped(e);
@@ -621,15 +675,27 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         inbox.events.clear();
     }
 
-    // Restore, if a snapshot is there and a cold boot was not demanded.
+    // Restore, if the complete pair is there and a cold boot was not demanded. This asks the same
+    // question `build` asked when it chose which drive to clone, through the same method, because
+    // the two answering differently is precisely the failure being fixed.
     let mut restored = false;
-    if !cfg.cold && first {
+    if cfg.may_restore(first) {
         if let Some(path) = &cfg.snapshot {
             if let Ok(b) = std::fs::read(path) {
                 if m.restore(&b) {
                     restored = true;
                 } else {
+                    // The drive under this machine was cloned from the frozen one, on the strength
+                    // of the snapshot file existing. It is a drive part-way through somebody else's
+                    // boot, and cold-booting from it would be the stale pair again with the halves
+                    // swapped. Put the pristine drive back before running from the reset vector.
                     eprintln!("{}: not a valid snapshot; cold-booting", path.display());
+                    match clone_disk(&cfg.disk, &cfg.workdisk)
+                        .and_then(|()| Ata::open(&cfg.workdisk, true).map_err(|e| format!("disk: {e}")))
+                    {
+                        Ok(d) => m.mem.ata = Some((0xc300_0000, d)),
+                        Err(e) => eprintln!("could not restore the pristine drive: {e}"),
+                    }
                 }
             }
         }
@@ -775,6 +841,19 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                 match std::fs::write(path, &img) {
                     Ok(()) => eprintln!("snapshot -> {} ({} bytes)", path.display(), img.len()),
                     Err(e) => eprintln!("snapshot {}: {e}", path.display()),
+                }
+                // And the drive as it stands at this instant, which is the half of the machine the
+                // snapshot does not carry. Safe to copy while the machine holds the file open:
+                // `Ata` seeks and `write_all`s each sector straight through, keeping no dirty
+                // buffer of its own, so what is on disk now is exactly what this RAM believes.
+                match clone_disk(&cfg.workdisk, &cfg.frozen) {
+                    Ok(()) => eprintln!("frozen drive -> {}", cfg.frozen.display()),
+                    // Not fatal, and deliberately not silent: the snapshot is still written, but
+                    // without its drive it must not be restored, so the next launch cold-boots.
+                    Err(e) => {
+                        eprintln!("frozen drive {}: {e} — this snapshot will not be restored", cfg.frozen.display());
+                        let _ = std::fs::remove_file(path);
+                    }
                 }
             }
             link.out.lock().unwrap().phase = Phase::Running;
@@ -1326,4 +1405,87 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant) {
         );
     }
     println!("  {:.1} s wall, {:.2} M instructions/s", secs, m.executed as f64 / secs / 1e6);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A snapshot without its frozen drive is **not** restorable.
+    ///
+    /// This is the migration case, and it is the one that would have re-introduced the bug
+    /// inverted: every user upgrading into this change has a snapshot on disk and no frozen drive
+    /// beside it. Restoring that RAM onto a freshly cloned pristine drive is the same mismatch with
+    /// the halves swapped, so the incomplete pair has to be refused and cold-booted past.
+    #[test]
+    fn a_snapshot_without_its_drive_is_refused() {
+        let dir = std::env::temp_dir().join(format!("ipod-pair-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let snap = dir.join("a.snap");
+        let frozen = dir.join("a.frozen");
+        std::fs::write(&snap, b"snapshot").unwrap();
+
+        let mut cfg = Config {
+            flash: dir.join("f.bin"),
+            disk: dir.join("d.img"),
+            workdisk: dir.join("w.img"),
+            frozen: frozen.clone(),
+            clock: 5,
+            snapshot: Some(snap.clone()),
+            snap_at: 1,
+            cold: false,
+            ..Default::default()
+        };
+
+        assert!(!cfg.may_restore(true), "a snapshot with no frozen drive is half a pair");
+        std::fs::write(&frozen, b"drive").unwrap();
+        assert!(cfg.may_restore(true), "both halves present");
+        assert!(!cfg.may_restore(false), "a power cycle inside a session never restores");
+        cfg.cold = true;
+        assert!(!cfg.may_restore(true), "--cold overrides a complete pair");
+        cfg.cold = false;
+        std::fs::remove_file(&snap).unwrap();
+        assert!(!cfg.may_restore(true), "a frozen drive with no snapshot is the other half");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The working drive is **replaced** on every launch, never reused.
+    ///
+    /// This is a regression test with a specific bug behind it. `clone_disk` used to open with
+    /// `if to.exists() { return Ok(()) }`, which made the "per-run clone" a one-time clone: the
+    /// machine wrote to the same drive for ever while its snapshot stayed frozen at the first
+    /// boot. Restoring then paired old RAM with a drive that had moved on, RetailOS found its
+    /// cached view of the volume contradicted, and it showed "connect to computer" — sometimes, on
+    /// restart, with nothing in the UI to say why.
+    ///
+    /// The failure it guards is silent by nature, so the assertion is on the bytes: after a clone,
+    /// the destination must be the source, not what the destination used to be.
+    #[test]
+    fn the_working_drive_is_replaced_not_reused() {
+        let dir = std::env::temp_dir().join(format!("ipod-clone-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let pristine = dir.join("pristine.img");
+        let work = dir.join("work.img");
+        std::fs::write(&pristine, b"PRISTINE").unwrap();
+
+        clone_disk(&pristine, &work).unwrap();
+        assert_eq!(std::fs::read(&work).unwrap(), b"PRISTINE");
+
+        // RetailOS writes to the drive during a boot. The next launch must not inherit it.
+        std::fs::write(&work, b"MUTATED!").unwrap();
+        clone_disk(&pristine, &work).unwrap();
+        assert_eq!(
+            std::fs::read(&work).unwrap(),
+            b"PRISTINE",
+            "a reused working drive is the stale-pair bug returning"
+        );
+
+        // Cloning a path onto itself is the one case that must not delete anything: it is what
+        // `--workdisk=` pointed straight at the frozen drive would do.
+        clone_disk(&work, &work).unwrap();
+        assert_eq!(std::fs::read(&work).unwrap(), b"PRISTINE", "self-clone must not empty the drive");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

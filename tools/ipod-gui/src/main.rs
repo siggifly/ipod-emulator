@@ -47,6 +47,7 @@
 
 mod emu;
 use eapp_loader::inspect;
+use eapp_loader::ipsw;
 mod png;
 use eapp_loader::settings;
 mod update;
@@ -331,21 +332,40 @@ Keys: arrows scroll the wheel · Enter/Space select · M menu · P play · , / .
 /// Keyed on the emulator's own source, the boot configuration and the snapshot point, for the
 /// reason `from-idle.sh` spells out at length: a snapshot restored under a different build is a
 /// hybrid machine, and it is the most convincing silent failure this project has available.
-fn cache_paths(flash: &Path, disk: &Path, clock: usize, snap_at: u64) -> (PathBuf, PathBuf) {
+///
+/// Three files, and the third is load-bearing: `.frozen` is the drive as it stood when `.snap` was
+/// taken, and `.img` is the throwaway the machine actually writes to. See `emu::Config::frozen` for
+/// why a snapshot without its drive is not restorable.
+fn cache_paths(flash: &Path, disk: &Path, clock: usize, snap_at: u64) -> Cache {
     let key = cache_key(flash, disk, clock, snap_at);
     let cache = settings::data_dir();
     let _ = std::fs::create_dir_all(&cache);
-    (cache.join(format!("idle-{key}.snap")), cache.join(format!("idle-{key}.img")))
+    Cache {
+        snap: cache.join(format!("idle-{key}.snap")),
+        frozen: cache.join(format!("idle-{key}.frozen")),
+        work: cache.join(format!("idle-{key}.img")),
+    }
 }
 
-/// Delete every cached working disk and snapshot that is not the pair currently in use.
+/// The three cached files belonging to one boot configuration.
+struct Cache {
+    snap: PathBuf,
+    frozen: PathBuf,
+    work: PathBuf,
+}
+
+/// Delete every cached drive and snapshot that does not belong to the configuration now loaded.
 ///
 /// **This is why the cache is keyed and not accumulated.** A working disk is 8 GB sparse and a
 /// snapshot is about 1.6 GB, and the key includes both image paths — so trying four firmware
 /// versions used to leave four of each, silently, in a directory the user never opened, on whatever
 /// volume the program happened to resolve. Somebody lost 50 GB that way and was right to be angry
-/// about it. One pair is kept: the one belonging to the images now loaded.
-fn prune_cache(keep_snap: &Path, keep_work: &Path) -> u64 {
+/// about it. One set is kept: the one belonging to the images now loaded.
+///
+/// The frozen drive added a third file per key without materially changing the bill — it is made
+/// with `cp -c`, so on APFS it shares its blocks with the working drive and only costs what the two
+/// have written differently.
+fn prune_cache(keep: &Cache) -> u64 {
     let dir = settings::data_dir();
     let Ok(rd) = std::fs::read_dir(&dir) else { return 0 };
     let mut freed = 0;
@@ -356,7 +376,7 @@ fn prune_cache(keep_snap: &Path, keep_work: &Path) -> u64 {
         if !name.starts_with("idle-") {
             continue;
         }
-        if p == keep_snap || p == keep_work {
+        if p == keep.snap || p == keep.frozen || p == keep.work {
             continue;
         }
         let n = e.metadata().map(|m| m.len()).unwrap_or(0);
@@ -408,14 +428,15 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
 
     let clock = num("--clock=", 5) as usize;
     let snap_at = num("--snap-at=", 1_600_000_000);
-    let (snapshot, workdisk) = cache_paths(&flash, &disk, clock, snap_at);
+    let cache = cache_paths(&flash, &disk, clock, snap_at);
 
     Ok(emu::Config {
         flash,
         disk,
-        workdisk: get("--workdisk=").map(PathBuf::from).unwrap_or(workdisk),
+        workdisk: get("--workdisk=").map(PathBuf::from).unwrap_or(cache.work),
+        frozen: cache.frozen,
         clock,
-        snapshot: Some(get("--snapshot=").map(PathBuf::from).unwrap_or(snapshot)),
+        snapshot: Some(get("--snapshot=").map(PathBuf::from).unwrap_or(cache.snap)),
         snap_at,
         cold: args.iter().any(|a| a == "--cold"),
         click_gap: num("--wheel-click-instr=", 20_000).max(1),
@@ -533,6 +554,12 @@ struct App {
     update_asked: bool,
     /// Leftover scroll that has not yet added up to a detent. See [`SCROLL_UNITS_PER_DETENT`].
     wheel_units: f32,
+    /// A fault the emulator found in the drive before booting it, drawn under the case.
+    ///
+    /// RetailOS answers several unrelated faults with one picture — the plug-into-a-computer glyph
+    /// — so a user who lands on it cannot tell which they hit, and neither could we. Anything we
+    /// can determine ourselves is better said in our own words, next to the screen showing it.
+    notice: Option<String>,
 }
 
 struct Drag {
@@ -692,6 +719,7 @@ impl App {
             scale: 1,
             hold_slot: Rect::NOTHING,
             dev_area: Rect::NOTHING,
+            notice: None,
             update_slot,
             update_line: None,
             update_asked: false,
@@ -713,15 +741,17 @@ impl App {
         self.cfg.disk = PathBuf::from(self.setup.disk.trim());
         // The cache key includes both paths, so a different pair of images gets a different
         // snapshot rather than restoring one taken on the other machine.
-        let (snap, work) = cache_paths(&self.cfg.flash, &self.cfg.disk, self.cfg.clock, self.cfg.snap_at);
+        let cache = cache_paths(&self.cfg.flash, &self.cfg.disk, self.cfg.clock, self.cfg.snap_at);
         // Everything cached for a DIFFERENT pair of images goes now. Without this, each pair the
         // user tried left an 8 GB working disk and a 1.6 GB snapshot behind for ever.
-        let freed = prune_cache(&snap, &work);
+        let freed = prune_cache(&cache);
         if freed > 0 {
             self.say(format!("reclaimed {} from images no longer in use", human(freed)));
         }
-        self.cfg.snapshot = Some(snap);
-        self.cfg.workdisk = work;
+        self.cfg.snapshot = Some(cache.snap);
+        self.cfg.workdisk = cache.work;
+        self.cfg.frozen = cache.frozen;
+        self.notice = self.inspect_drive();
 
         // Remember what worked, so the next launch opens straight into the iPod.
         self.settings.flash = Some(self.cfg.flash.clone());
@@ -753,6 +783,41 @@ impl App {
         // the screen is for.
         self.setup.revalidate();
         self.setup.revalidate_ipsw();
+    }
+
+    /// Read the drive before booting it, and say what is wrong in our words rather than leaving
+    /// RetailOS to say it in a picture.
+    ///
+    /// **Only faults this can actually determine are reported.** Two of the three known causes of
+    /// the plug-into-a-computer screen are readable straight out of the firmware partition; the
+    /// third — a `SysCfg FwId` family that disagrees with the drive's firmware — is not, because
+    /// nothing here parses the NOR's `SysCfg` yet. Reporting a guess would be worse than reporting
+    /// nothing, so an absent notice means "nothing found", never "nothing wrong".
+    ///
+    /// Everything read goes to the log whether or not it is a fault, because the question this
+    /// answers most often is "what is on the drive I just pointed it at".
+    fn inspect_drive(&mut self) -> Option<String> {
+        let state = match ipsw::firmware_state(&self.cfg.disk) {
+            Ok(s) => s,
+            Err(e) => {
+                self.say(format!("drive: {e}"));
+                return Some("This file does not look like an iPod drive.".into());
+            }
+        };
+        self.say(format!(
+            "drive: firmware images [{}]{}",
+            state.tags.join(", "),
+            if state.aupd_armed { ", updater armed" } else { "" }
+        ));
+        if !state.has_os {
+            return Some("There is no operating system on this drive.".into());
+        }
+        if state.aupd_armed {
+            // Real hardware runs the updater, reboots itself, and runs the OS on the second boot.
+            // Nothing here power-cycles the machine, so this drive stops at the updater.
+            return Some("The flash updater is armed, so this drive boots the updater instead of the OS.".into());
+        }
+        None
     }
 
     fn say(&mut self, s: impl Into<String>) {
@@ -1561,6 +1626,29 @@ impl App {
         // least of it.
         self.keys_in_margin(&p, area, ox / ppp);
 
+        // A detected fault, in the gap below the case. Same rule as the keys: it sits in space
+        // nothing else wants, so it never covers the screen it is describing. Amber rather than
+        // red — none of this stops the emulator running, it explains what is on the screen.
+        if let Some(n) = &self.notice {
+            let below = (oy + dev_h) / ppp;
+            if area.bottom() - below > 34.0 {
+                p.text(
+                    Pos2::new(area.center().x, below + 12.0),
+                    egui::Align2::CENTER_TOP,
+                    n,
+                    egui::FontId::proportional(12.0),
+                    Color32::from_rgb(214, 158, 74),
+                );
+                p.text(
+                    Pos2::new(area.center().x, below + 12.0 + 15.0),
+                    egui::Align2::CENTER_TOP,
+                    "press D for the log",
+                    egui::FontId::proportional(11.0),
+                    Color32::from_gray(96),
+                );
+            }
+        }
+
         // The hold switch, drawn BEFORE the body so the body's rounded corner covers the part of it
         // that is inside the case — which is what makes it read as seated in a slot rather than
         // stuck on top of one.
@@ -2366,47 +2454,62 @@ mod tests {
     /// or eats half the machine.
     #[test]
     fn the_working_disk_does_not_go_in_the_temp_directory_on_linux() {
-        let (snap, work) = cache_paths(Path::new("/a.bin"), Path::new("/x.img"), 5, 1);
+        let c = cache_paths(Path::new("/a.bin"), Path::new("/x.img"), 5, 1);
         if cfg!(target_os = "linux") {
-            assert!(!snap.starts_with("/tmp"), "{}", snap.display());
-            assert!(!work.starts_with("/tmp"), "{}", work.display());
+            for p in [&c.snap, &c.frozen, &c.work] {
+                assert!(!p.starts_with("/tmp"), "{}", p.display());
+            }
         }
-        assert_ne!(snap, work);
+        // Three distinct files. The working drive and the frozen one sharing a path would be the
+        // stale pair again, with the machine overwriting the very drive its snapshot needs.
+        assert_ne!(c.snap, c.work);
+        assert_ne!(c.frozen, c.work);
+        assert_ne!(c.snap, c.frozen);
     }
 
     /// The message a fresh clone gets has to name both files and say where to look. This is the
     /// single biggest usability cliff in the project, and it is one string.
-    /// The prune keeps exactly one pair and deletes the rest.
+    /// The prune keeps exactly one set and deletes the rest.
     ///
     /// Written after shipping the opposite: the cache accumulated an 8 GB working disk per image
     /// pair and nothing ever removed one. This test fails if that behaviour ever returns.
+    ///
+    /// The set is three files since the frozen drive landed, and the third is the one worth
+    /// watching: a prune that dropped it would leave a snapshot that cannot be restored, which
+    /// fails as a slow cold boot rather than as an error.
     #[test]
-    fn pruning_keeps_only_the_pair_in_use() {
+    fn pruning_keeps_only_the_set_in_use() {
         let dir = std::env::temp_dir().join(format!("ipod-prune-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         // SAFETY: the variable is restored below and the test does not spawn threads.
         let before = std::env::var_os("IPOD_EMULATOR_DATA");
         unsafe { std::env::set_var("IPOD_EMULATOR_DATA", &dir) };
 
-        let keep_snap = dir.join("idle-KEEP.snap");
-        let keep_work = dir.join("idle-KEEP.img");
-        for (p, n) in [(&keep_snap, 10usize), (&keep_work, 10)] {
-            std::fs::write(p, vec![0u8; n]).unwrap();
+        let keep = Cache {
+            snap: dir.join("idle-KEEP.snap"),
+            frozen: dir.join("idle-KEEP.frozen"),
+            work: dir.join("idle-KEEP.img"),
+        };
+        for p in [&keep.snap, &keep.frozen, &keep.work] {
+            std::fs::write(p, vec![0u8; 10]).unwrap();
         }
-        // Two previous pairs, as four firmware attempts would leave.
+        // Two previous sets, as four firmware attempts would leave.
         for k in ["OLD1", "OLD2"] {
             std::fs::write(dir.join(format!("idle-{k}.snap")), vec![0u8; 100]).unwrap();
+            std::fs::write(dir.join(format!("idle-{k}.frozen")), vec![0u8; 100]).unwrap();
             std::fs::write(dir.join(format!("idle-{k}.img")), vec![0u8; 100]).unwrap();
         }
         // A file that is not ours must survive.
         std::fs::write(dir.join("settings.txt"), b"mode = user\n").unwrap();
 
-        let freed = prune_cache(&keep_snap, &keep_work);
+        let freed = prune_cache(&keep);
 
-        assert_eq!(freed, 400, "four stale files of 100 bytes");
-        assert!(keep_snap.exists() && keep_work.exists(), "the pair in use must survive");
+        assert_eq!(freed, 600, "six stale files of 100 bytes");
+        assert!(keep.snap.exists() && keep.work.exists(), "the set in use must survive");
+        assert!(keep.frozen.exists(), "the frozen drive belongs to the set and must survive");
         assert!(dir.join("settings.txt").exists(), "a non-cache file must not be touched");
         assert!(!dir.join("idle-OLD1.img").exists(), "a stale working disk must be gone");
+        assert!(!dir.join("idle-OLD2.frozen").exists(), "a stale frozen drive must be gone");
         assert!(!dir.join("idle-OLD2.snap").exists(), "a stale snapshot must be gone");
 
         match before {
