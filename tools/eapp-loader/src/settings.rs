@@ -13,7 +13,7 @@
 //! **and an 8 GB working disk image**, so on a Linux box the old default either filled `/tmp` or
 //! ate half the machine's memory. It is a cache directory now, on all three platforms.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The two ways the window can be looked at.
 ///
@@ -66,7 +66,7 @@ impl Settings {
     /// Read the settings file, tolerating everything: a missing file, a missing directory, a
     /// truncated write, a key from a future version. A settings file is not a place to fail.
     pub fn load() -> Settings {
-        match config_dir().map(|d| d.join(FILE)).and_then(|p| std::fs::read_to_string(p).ok()) {
+        match std::fs::read_to_string(data_dir().join(FILE)).ok() {
             Some(text) => Settings::parse(&text),
             None => Settings::default(),
         }
@@ -118,7 +118,7 @@ impl Settings {
     /// Best-effort. A window that could not write its preferences is a window that opens in user
     /// mode next time, not a window that refuses to run.
     pub fn save(&self) {
-        let Some(dir) = config_dir() else { return };
+        let dir = data_dir();
         if std::fs::create_dir_all(&dir).is_err() {
             return;
         }
@@ -128,18 +128,69 @@ impl Settings {
     /// Where the settings live, for the UI to print. A preference nobody can find is a preference
     /// nobody can reset.
     pub fn path() -> Option<PathBuf> {
-        config_dir().map(|d| d.join(FILE))
+        Some(data_dir().join(FILE))
     }
 }
 
 const FILE: &str = "settings.txt";
 
-/// Per-platform config directory, resolved from the environment rather than from a crate.
+const APP: &str = "ipod-emulator";
+/// What the directory was called before 2026-08-17. Read once, to move a user's settings forward
+/// rather than silently starting them over.
+const APP_WAS: &str = "ipod-gui";
+
+fn env_dir(key: &str) -> Option<PathBuf> {
+    std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
+/// **One directory for everything this program writes**, and where it is depends on how the program
+/// was delivered.
 ///
-/// - Windows: `%APPDATA%\ipod-gui`
-/// - macOS: `~/Library/Application Support/ipod-gui`
-/// - everything else: `$XDG_CONFIG_HOME/ipod-gui`, else `~/.config/ipod-gui`
-pub fn config_dir() -> Option<PathBuf> {
+/// It used to be two — settings in the config directory, an 8 GB working disk and a 1.6 GB snapshot
+/// in the cache directory — which on Windows meant `AppData\Roaming` *and* `AppData\Local`. A
+/// reverse-engineering tool shipped as a zip is expected to stay where you put it, and that
+/// expectation is right: somebody trying four firmware versions filled a drive they were not
+/// watching, on a volume the program was not installed on.
+///
+/// - **Beside the executable**, in `data/`, when that directory can be written. This is the case for
+///   a zip a user unpacked, which is how Windows and Linux get it, and it means deleting the folder
+///   deletes everything.
+/// - **The platform's application-support directory** otherwise — which is what a macOS `.app`
+///   dragged to `/Applications` gets, because writing inside a bundle breaks its signature and the
+///   volume may be read-only.
+///
+/// `IPOD_EMULATOR_DATA` overrides both, and is what the setup screen's "change" button sets.
+pub fn data_dir() -> PathBuf {
+    if let Some(d) = env_dir("IPOD_EMULATOR_DATA") {
+        return d;
+    }
+    if let Some(beside) = beside_executable() {
+        return beside;
+    }
+    platform_dir().unwrap_or_else(|| std::env::temp_dir().join(APP))
+}
+
+/// `data/` next to the running binary, if it is a directory we may write to.
+///
+/// Probed rather than assumed: a bundle's `Contents/MacOS`, `/usr/local/bin` and a read-only mount
+/// all look like ordinary paths until the write fails.
+fn beside_executable() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    // Inside a macOS bundle this would put user data in `Contents/MacOS/data`, which is both wrong
+    // and signature-breaking. Recognise it and decline.
+    if exe.components().any(|c| c.as_os_str().to_string_lossy().ends_with(".app")) {
+        return None;
+    }
+    let dir = exe.parent()?.join("data");
+    std::fs::create_dir_all(&dir).ok()?;
+    // create_dir_all succeeds on a directory that already exists and is read-only, so prove it.
+    let probe = dir.join(".writable");
+    std::fs::write(&probe, b"").ok()?;
+    let _ = std::fs::remove_file(&probe);
+    Some(dir)
+}
+
+fn platform_dir() -> Option<PathBuf> {
     if cfg!(windows) {
         return env_dir("APPDATA").map(|d| d.join(APP));
     }
@@ -151,32 +202,64 @@ pub fn config_dir() -> Option<PathBuf> {
         .map(|d| d.join(APP))
 }
 
-/// Per-platform cache directory: the snapshot, and the 8 GB working disk beside it.
-///
-/// - Windows: `%LOCALAPPDATA%\ipod-gui`
-/// - macOS: `~/Library/Caches/ipod-gui`
-/// - everything else: `$XDG_CACHE_HOME/ipod-gui`, else `~/.cache/ipod-gui`
-///
-/// Falls back to the temp directory when there is no home to hang it off — a CI runner, a daemon,
-/// a container with no `HOME`. Regenerable either way: the whole directory can be deleted and the
-/// only cost is one 75-second cold boot.
-pub fn cache_dir() -> PathBuf {
-    let d = if cfg!(windows) {
-        env_dir("LOCALAPPDATA").map(|d| d.join(APP))
+/// The two directories the old build used, so their contents can be carried forward once.
+fn legacy_dirs() -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    if cfg!(windows) {
+        v.extend(env_dir("APPDATA").map(|d| d.join(APP_WAS)));
+        v.extend(env_dir("LOCALAPPDATA").map(|d| d.join(APP_WAS)));
     } else if cfg!(target_os = "macos") {
-        home().map(|h| h.join("Library/Caches").join(APP))
+        if let Some(h) = home() {
+            v.push(h.join("Library/Application Support").join(APP_WAS));
+            v.push(h.join("Library/Caches").join(APP_WAS));
+        }
     } else {
-        env_dir("XDG_CACHE_HOME")
-            .or_else(|| home().map(|h| h.join(".cache")))
-            .map(|d| d.join(APP))
-    };
-    d.unwrap_or_else(|| std::env::temp_dir().join(APP))
+        v.extend(env_dir("XDG_CONFIG_HOME").or_else(|| home().map(|h| h.join(".config"))).map(|d| d.join(APP_WAS)));
+        v.extend(env_dir("XDG_CACHE_HOME").or_else(|| home().map(|h| h.join(".cache"))).map(|d| d.join(APP_WAS)));
+    }
+    v
 }
 
-const APP: &str = "ipod-gui";
+/// Move a previous installation's settings file into the new directory, once.
+///
+/// Only the settings file. The old snapshots and working disks are gigabytes and keyed on paths
+/// that may no longer exist; they are reported to the user for deletion rather than copied.
+pub fn migrate_legacy() {
+    let dir = data_dir();
+    if dir.join(FILE).exists() {
+        return;
+    }
+    for old in legacy_dirs() {
+        let f = old.join(FILE);
+        if f.is_file() {
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::copy(&f, dir.join(FILE));
+            return;
+        }
+    }
+}
 
-fn env_dir(key: &str) -> Option<PathBuf> {
-    std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from)
+/// Old directories that still exist and still hold bytes, for the setup screen to offer to delete.
+/// Returns each with its total size.
+pub fn legacy_leftovers() -> Vec<(PathBuf, u64)> {
+    legacy_dirs()
+        .into_iter()
+        .filter(|d| d.is_dir())
+        .map(|d| {
+            let n = dir_size(&d);
+            (d, n)
+        })
+        .filter(|(_, n)| *n > 0)
+        .collect()
+}
+
+/// Total bytes in a directory, one level deep — which is all these ever are.
+pub fn dir_size(d: &Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(d) else { return 0 };
+    rd.flatten()
+        .filter_map(|e| e.metadata().ok())
+        .map(|m| if m.is_dir() { 0 } else { m.len() })
+        .sum()
 }
 
 fn home() -> Option<PathBuf> {
@@ -237,10 +320,23 @@ mod tests {
     }
 
     #[test]
-    fn the_cache_directory_is_absolute_and_named() {
-        let d = cache_dir();
+    fn the_data_directory_is_absolute() {
+        let d = data_dir();
         assert!(d.is_absolute(), "{}", d.display());
-        assert!(d.ends_with(APP), "{}", d.display());
+    }
+
+    /// `IPOD_EMULATOR_DATA` is what the setup screen's "change" button sets, so it has to win over
+    /// both the beside-the-executable default and the platform directory.
+    #[test]
+    fn the_override_wins() {
+        // SAFETY: single-threaded test, and the value is restored before it returns.
+        let before = std::env::var_os("IPOD_EMULATOR_DATA");
+        unsafe { std::env::set_var("IPOD_EMULATOR_DATA", "/tmp/ipod-emulator-test-dir") };
+        assert_eq!(data_dir(), PathBuf::from("/tmp/ipod-emulator-test-dir"));
+        match before {
+            Some(v) => unsafe { std::env::set_var("IPOD_EMULATOR_DATA", v) },
+            None => unsafe { std::env::remove_var("IPOD_EMULATOR_DATA") },
+        }
     }
 }
 

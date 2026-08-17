@@ -2,13 +2,13 @@
 //! buttons and hold switch reach the machine.
 //!
 //! ```text
-//! ipod-gui [--user | --debug] [--cold] [--clock=N] [--snapshot=FILE] [--snap-at=N]
+//! ipod-emulator [--user | --debug] [--cold] [--clock=N] [--snapshot=FILE] [--snap-at=N]
 //!          [--flash=FILE] [--disk=FILE] [--workdisk=FILE] [--wheel-click-instr=N]
 //!          [--headless=N | --selftest | --selftest-control]
 //!          [--check-images] [--check-update]
 //! ```
 //!
-//! See `tools/ipod-gui/README.md` for what it is for, what it measures, and the two speed ratios it
+//! See `tools/ipod-emulator/README.md` for what it is for, what it measures, and the two speed ratios it
 //! reports — which are different numbers and get confused if only one of them is shown.
 //!
 //! # Two modes, one toggle, and one number that appears in both
@@ -94,7 +94,7 @@ const SWITCH_X: f32 = CASE_W - 17.0;
 /// that has to be visible in every mode.
 ///
 /// ~21.5 M instructions/second headless and ~19 M with the window drawing, against ~72 MIPS. Both
-/// measured; see `tools/ipod-gui/README.md` §"The two speed ratios".
+/// measured; see `tools/ipod-emulator/README.md` §"The two speed ratios".
 const HARDWARE_MIPS: f64 = 72e6;
 
 fn main() -> eframe::Result {
@@ -115,6 +115,8 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
+
+    settings::migrate_legacy();
 
     let mut settings = Settings::load();
     let cfg = match config(&args, &settings) {
@@ -171,7 +173,7 @@ fn main() -> eframe::Result {
             .with_inner_size([980.0, 800.0])
             .with_min_inner_size([620.0, 520.0])
             .with_icon(icon)
-            .with_title("iPod 5G — RetailOS"),
+            .with_title("ipod-emulator"),
         ..Default::default()
     };
     // `--ipsw=` only ever pre-fills the setup screen's slot; building a drive is a button, not a
@@ -182,10 +184,59 @@ fn main() -> eframe::Result {
         .unwrap_or_default()
         .to_string();
     eframe::run_native(
-        "ipod-gui",
+        "ipod-emulator",
         options,
         Box::new(move |cc| Ok(Box::new(App::new(cc, cfg, settings, ipsw)))),
     )
+}
+
+/// Set the window's colours and text sizes explicitly, instead of inheriting them.
+///
+/// **This shipped broken and it is worth saying why.** Nothing here called `set_visuals`, so egui
+/// used its default, which follows the operating system — and the device is drawn on a black
+/// background regardless. On the wrong system that is dark grey text on black: the setup screen's
+/// heading was barely legible and its body text was not legible at all. A user reported it as "5px,
+/// dark-grey text on a black background: nothing is readable", and he was right.
+///
+/// It survived because a developer never sees that screen. Run the binary from inside the
+/// repository and `repo_root()` resolves the default image paths, `both_good()` passes, and it
+/// boots straight past setup. The screen is only reachable from a machine that does not have the
+/// files — which is every user and no author.
+///
+/// So: one theme, chosen here, dark to match the device's surround, with text light enough to read
+/// against it and large enough to read at all.
+fn theme(ctx: &egui::Context) {
+    // Force it. egui keeps a style per theme and `set_visuals` only touches the CURRENT one, so
+    // leaving the preference on System means the window's readability depends on a setting in the
+    // user's operating system. That is precisely how this shipped unreadable.
+    ctx.set_theme(egui::ThemePreference::Dark);
+    let mut v = egui::Visuals::dark();
+    v.override_text_color = Some(Color32::from_gray(0xE6));
+    v.panel_fill = Color32::from_gray(0x12);
+    v.window_fill = Color32::from_gray(0x12);
+    v.extreme_bg_color = Color32::from_gray(0x08);
+    // Controls need to be visible as controls, not guessed at.
+    v.widgets.inactive.bg_fill = Color32::from_gray(0x2A);
+    v.widgets.inactive.weak_bg_fill = Color32::from_gray(0x2A);
+    v.widgets.hovered.bg_fill = Color32::from_gray(0x3A);
+    v.widgets.active.bg_fill = Color32::from_gray(0x45);
+    v.widgets.noninteractive.fg_stroke.color = Color32::from_gray(0xC8);
+    v.widgets.inactive.fg_stroke.color = Color32::from_gray(0xE6);
+    ctx.set_visuals(v);
+
+    // egui's defaults are sized for a dense tool panel. This screen is prose somebody reads once,
+    // on a machine where nothing works yet, so it gets ordinary reading sizes.
+    use egui::{FontFamily::Proportional, FontId, TextStyle::*};
+    ctx.all_styles_mut(|st| {
+        st.text_styles = [
+            (Heading, FontId::new(22.0, Proportional)),
+            (Body, FontId::new(14.5, Proportional)),
+            (Button, FontId::new(14.0, Proportional)),
+            (Small, FontId::new(12.5, Proportional)),
+            (Monospace, FontId::new(13.0, egui::FontFamily::Monospace)),
+        ]
+        .into();
+    });
 }
 
 fn spawn_worker(cfg: emu::Config, link: Arc<Link>) -> std::thread::JoinHandle<()> {
@@ -201,7 +252,7 @@ fn spawn_worker(cfg: emu::Config, link: Arc<Link>) -> std::thread::JoinHandle<()
 fn print_help() {
     println!(
         "\
-ipod-gui — an interactive iPod 5G over the eapp-loader emulator
+ipod-emulator — an interactive iPod over the eapp-loader emulator
 
   --user | --debug        which mode to open in, this run only. The default is whatever you
                           last switched to in the window; a fresh install is user mode
@@ -248,9 +299,54 @@ Keys: arrows scroll the wheel · Enter/Space select · M menu · P play · , / .
 /// hybrid machine, and it is the most convincing silent failure this project has available.
 fn cache_paths(flash: &Path, disk: &Path, clock: usize, snap_at: u64) -> (PathBuf, PathBuf) {
     let key = cache_key(flash, disk, clock, snap_at);
-    let cache = settings::cache_dir();
+    let cache = settings::data_dir();
     let _ = std::fs::create_dir_all(&cache);
     (cache.join(format!("idle-{key}.snap")), cache.join(format!("idle-{key}.img")))
+}
+
+/// Delete every cached working disk and snapshot that is not the pair currently in use.
+///
+/// **This is why the cache is keyed and not accumulated.** A working disk is 8 GB sparse and a
+/// snapshot is about 1.6 GB, and the key includes both image paths — so trying four firmware
+/// versions used to leave four of each, silently, in a directory the user never opened, on whatever
+/// volume the program happened to resolve. Somebody lost 50 GB that way and was right to be angry
+/// about it. One pair is kept: the one belonging to the images now loaded.
+fn prune_cache(keep_snap: &Path, keep_work: &Path) -> u64 {
+    let dir = settings::data_dir();
+    let Ok(rd) = std::fs::read_dir(&dir) else { return 0 };
+    let mut freed = 0;
+    for e in rd.flatten() {
+        let p = e.path();
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("idle-") {
+            continue;
+        }
+        if p == keep_snap || p == keep_work {
+            continue;
+        }
+        let n = e.metadata().map(|m| m.len()).unwrap_or(0);
+        if std::fs::remove_file(&p).is_ok() {
+            freed += n;
+        }
+    }
+    freed
+}
+
+/// What the cache currently holds, for the setup screen to state rather than hide.
+fn cache_size() -> u64 {
+    settings::dir_size(&settings::data_dir())
+}
+
+/// `12.4 GB`, `840 MB`, `0 bytes` — sized for a sentence, not a table.
+fn human(n: u64) -> String {
+    const K: u64 = 1000;
+    match n {
+        0 => "nothing".into(),
+        n if n < K * K => format!("{:.0} kB", n as f64 / K as f64),
+        n if n < K * K * K => format!("{:.0} MB", n as f64 / (K * K) as f64),
+        n => format!("{:.1} GB", n as f64 / (K * K * K) as f64),
+    }
 }
 
 fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
@@ -426,11 +522,24 @@ struct Setup {
     force: bool,
 }
 
+/// The path as a string, or empty if nothing is there.
+fn existing(p: &Path) -> String {
+    if p.is_file() {
+        p.to_string_lossy().into_owned()
+    } else {
+        String::new()
+    }
+}
+
 impl Setup {
     fn new(cfg: &emu::Config) -> Setup {
         let mut s = Setup {
-            flash: cfg.flash.to_string_lossy().into_owned(),
-            disk: cfg.disk.to_string_lossy().into_owned(),
+            // Only prefill a path that is actually there. The defaults are this repository's
+            // layout, so a released binary would open on two paths that do not exist and an error
+            // under each — telling a first-time user their files are wrong before they have chosen
+            // any. Empty and asking is better than full and wrong.
+            flash: existing(&cfg.flash),
+            disk: existing(&cfg.disk),
             ipsw: String::new(),
             flash_verdict: None,
             disk_verdict: None,
@@ -477,6 +586,7 @@ impl App {
         settings: Settings,
         ipsw: String,
     ) -> Self {
+        theme(&cc.egui_ctx);
         let tex = cc.egui_ctx.load_texture(
             "panel",
             egui::ColorImage::from_rgb([FB_W, FB_H], &vec![0u8; FB_W * FB_H * 3]),
@@ -532,6 +642,12 @@ impl App {
         // The cache key includes both paths, so a different pair of images gets a different
         // snapshot rather than restoring one taken on the other machine.
         let (snap, work) = cache_paths(&self.cfg.flash, &self.cfg.disk, self.cfg.clock, self.cfg.snap_at);
+        // Everything cached for a DIFFERENT pair of images goes now. Without this, each pair the
+        // user tried left an 8 GB working disk and a 1.6 GB snapshot behind for ever.
+        let freed = prune_cache(&snap, &work);
+        if freed > 0 {
+            self.say(format!("reclaimed {} from images no longer in use", human(freed)));
+        }
         self.cfg.snapshot = Some(snap);
         self.cfg.workdisk = work;
 
@@ -742,8 +858,16 @@ impl App {
                 ui,
                 "1 — NOR flash dump",
                 "A 1 MB (1 048 576 byte) dump of the iPod's boot ROM, conventionally named \
-                 `internal_rom_000000-0FFFFF.bin` after the offset range it covers. \
-                 Read out of an iPod you own; not distributed with this project.",
+                 `internal_rom_000000-0FFFFF.bin` after the offset range it covers. Read out of an \
+                 iPod you own with Rockbox; not distributed with this project.\n\
+                 \n\
+                 If you are looking for one: the retail iPod Video dump is archived under the wrong \
+                 product. It sits in BootROM collections filed as iPod CLASSIC, in a directory \
+                 named A1238 — which is the Classic 6G's model number, not the Video's (A1136). \
+                 Searching for \"iPod Video\", \"5.5G\" or \"A1136\" finds nothing; searching for the \
+                 Classic finds it. The right one reads HwVr 0x000b0005, Mod# MA146, and has a \
+                 non-blank HwId. A prototype dump also circulates (HwVr 0x000b0011, Mod# M8976, \
+                 blank HwId) and it will NOT boot a pristine firmware partition.",
                 &mut self.setup.flash,
                 self.setup.flash_verdict.as_ref(),
                 &["bin"],
@@ -815,12 +939,33 @@ impl App {
                 "Nothing here is uploaded, and nothing is downloaded. The paths are remembered in \
                  a settings file so this screen appears once.",
             );
-            if let Some(p) = Settings::path() {
-                ui.small(format!("Settings: {}", p.display()));
+            // Everything this program writes, where it writes it, and how much — stated, with a
+            // way to delete it. It used to write to two directories and say the size of neither,
+            // which is how somebody lost 50 GB to an 8 GB working disk per firmware they tried.
+            ui.small(format!("Everything this program writes lives in {}", settings::data_dir().display()));
+            ui.horizontal(|ui| {
+                let n = cache_size();
+                ui.small(format!("Currently {}.", human(n)));
+                if n > 0 && ui.button("delete cached disks").on_hover_text(
+                    "Removes the working disks and snapshots. Your settings and your own files are \
+                     untouched; the next boot is a cold one and takes about 75 seconds.",
+                ).clicked() {
+                    let freed = prune_cache(Path::new(""), Path::new(""));
+                    self.say(format!("deleted {}", human(freed)));
+                }
+            });
+            for (old, n) in settings::legacy_leftovers() {
+                ui.small(
+                    egui::RichText::new(format!(
+                        "An older version left {} in {} — safe to delete by hand.",
+                        human(n),
+                        old.display()
+                    ))
+                    .color(Color32::from_rgb(0xE0, 0xA0, 0x40)),
+                );
             }
-            ui.small(format!("Cache (snapshot + working disk): {}", settings::cache_dir().display()));
             ui.small(
-                "`ipod-gui --check-images` does the same two checks with no window, if you would \
+                "`ipod-emulator --check-images` does the same two checks with no window, if you would \
                  rather test a pair of files from a terminal.",
             );
         });
@@ -835,9 +980,14 @@ impl App {
         let changed = slot(
             ui,
             "iPod software update (.ipsw)",
-            "A zip holding `Firmware-<version>` and `manifest.plist`. `Firmware-20.6.3` inside \
-             `iPod_20.1.3.ipsw` is 13 895 680 bytes, which is 27 140 sectors, which is exactly the \
-             size of an iPod's firmware partition. Not distributed with this project.",
+            "A zip holding `Firmware-<version>` and `manifest.plist`. For the iPod Video the file \
+             is `iPod_20.1.3.ipsw`: `Firmware-20.6.3` inside it is 13 895 680 bytes, which is \
+             27 140 sectors, which is exactly the size of an iPod's firmware partition.\n\
+             \n\
+             The 20 in the filename is the updater family, and it must match the iPod your NOR dump \
+             came from — `iPod_24.*` and `iPod_26.*` are other devices and will not boot here. \
+             Apple no longer serves these files, so there is no official source to try; they are \
+             archived. Not distributed with this project.",
             &mut self.setup.ipsw,
             self.setup.ipsw_verdict.as_ref(),
             &["ipsw", "zip"],
@@ -849,7 +999,7 @@ impl App {
         if usable && ui.button("Build a drive image from it").clicked() {
             // Beside the snapshot, because it is the same kind of thing: derived, regenerable, and
             // nobody's idea of a document.
-            let out = settings::cache_dir().join("ipod-from-ipsw.img");
+            let out = settings::data_dir().join("ipod-from-ipsw.img");
             self.setup.built = Some(inspect::build_from_ipsw(
                 Path::new(self.setup.ipsw.trim()),
                 &out,
@@ -1991,6 +2141,53 @@ mod tests {
 
     /// The message a fresh clone gets has to name both files and say where to look. This is the
     /// single biggest usability cliff in the project, and it is one string.
+    /// The prune keeps exactly one pair and deletes the rest.
+    ///
+    /// Written after shipping the opposite: the cache accumulated an 8 GB working disk per image
+    /// pair and nothing ever removed one. This test fails if that behaviour ever returns.
+    #[test]
+    fn pruning_keeps_only_the_pair_in_use() {
+        let dir = std::env::temp_dir().join(format!("ipod-prune-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        // SAFETY: the variable is restored below and the test does not spawn threads.
+        let before = std::env::var_os("IPOD_EMULATOR_DATA");
+        unsafe { std::env::set_var("IPOD_EMULATOR_DATA", &dir) };
+
+        let keep_snap = dir.join("idle-KEEP.snap");
+        let keep_work = dir.join("idle-KEEP.img");
+        for (p, n) in [(&keep_snap, 10usize), (&keep_work, 10)] {
+            std::fs::write(p, vec![0u8; n]).unwrap();
+        }
+        // Two previous pairs, as four firmware attempts would leave.
+        for k in ["OLD1", "OLD2"] {
+            std::fs::write(dir.join(format!("idle-{k}.snap")), vec![0u8; 100]).unwrap();
+            std::fs::write(dir.join(format!("idle-{k}.img")), vec![0u8; 100]).unwrap();
+        }
+        // A file that is not ours must survive.
+        std::fs::write(dir.join("settings.txt"), b"mode = user\n").unwrap();
+
+        let freed = prune_cache(&keep_snap, &keep_work);
+
+        assert_eq!(freed, 400, "four stale files of 100 bytes");
+        assert!(keep_snap.exists() && keep_work.exists(), "the pair in use must survive");
+        assert!(dir.join("settings.txt").exists(), "a non-cache file must not be touched");
+        assert!(!dir.join("idle-OLD1.img").exists(), "a stale working disk must be gone");
+        assert!(!dir.join("idle-OLD2.snap").exists(), "a stale snapshot must be gone");
+
+        match before {
+            Some(v) => unsafe { std::env::set_var("IPOD_EMULATOR_DATA", v) },
+            None => unsafe { std::env::remove_var("IPOD_EMULATOR_DATA") },
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sizes_read_as_sentences() {
+        assert_eq!(human(0), "nothing");
+        assert_eq!(human(8_000_000_000), "8.0 GB");
+        assert_eq!(human(1_600_000_000), "1.6 GB");
+    }
+
     #[test]
     fn a_missing_image_produces_an_actionable_message() {
         let cfg = config(&["--flash=/nope/a.bin".into(), "--disk=/nope/b.img".into()], &Settings::default())

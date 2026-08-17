@@ -35,15 +35,15 @@ use std::time::Duration;
 /// The repository the releases live in.
 ///
 /// A constant rather than a lookup: there is exactly one, and an emulator that took its update URL
-/// from a file would be an emulator you could point at anything. `IPOD_GUI_UPDATE_REPO` overrides
+/// from a file would be an emulator you could point at anything. `IPOD_EMULATOR_UPDATE_REPO` overrides
 /// it for a fork, which is a different thing from configuring it at rest.
 pub const REPO: &str = "siggifly/ipod-emulator";
 
-/// This build's version — `ipod-gui`'s `Cargo.toml`, at compile time.
+/// This build's version — `ipod-emulator`'s `Cargo.toml`, at compile time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn repo() -> String {
-    std::env::var("IPOD_GUI_UPDATE_REPO").unwrap_or_else(|_| REPO.to_string())
+    std::env::var("IPOD_EMULATOR_UPDATE_REPO").unwrap_or_else(|_| REPO.to_string())
 }
 
 /// What a check found. `Current` and `Newer` are both successes; there is no error variant,
@@ -92,7 +92,7 @@ fn fetch(url: &str) -> Option<String> {
             "-H",
             "Accept: application/vnd.github+json",
             "-A",
-            &format!("ipod-gui/{VERSION}"),
+            &format!("ipod-emulator/{VERSION}"),
             url,
         ])
         .stderr(Stdio::null())
@@ -283,7 +283,7 @@ mod tests {
     fn an_unreachable_host_returns_none_rather_than_failing() {
         // `.invalid` is reserved by RFC 2606 and guaranteed never to resolve, so this test is
         // deterministic on a machine WITH a network as well as on one without.
-        assert_eq!(fetch("https://ipod-gui-update-check.invalid/x"), None);
+        assert_eq!(fetch("https://ipod-emulator-update-check.invalid/x"), None);
     }
 
     #[test]

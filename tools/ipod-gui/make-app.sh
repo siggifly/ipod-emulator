@@ -1,11 +1,12 @@
 #!/bin/sh
-# Wrap `ipod-gui` in a macOS .app bundle.
+# Wrap `ipod-emulator` in a macOS .app bundle.
 #
-#   make-app.sh <path-to-ipod-gui> <output-dir> [icon.png]
+#   make-app.sh <path-to-ipod-emulator> <output-dir> [icon.png]
 #
-# The icon defaults to `docs/media/icon-1024.png` — the drawn iPod with Brick on its screen. It is
-# the device this emulates, running the game it can run, and it survives being 32 pixels wide, which
-# a screenshot of a menu does not.
+# The icon defaults to `docs/media/icon-1024.png` — a drawn iPod with Brick on its screen. It is an
+# emblem rather than a catalogue: this emulator is named for the line, not for one model, and the
+# name is `ipod-emulator` everywhere for that reason. macOS shows the EXECUTABLE's name in the
+# switcher, so the copy inside the bundle carries it too.
 #
 # WHY. A bare Unix executable double-clicked in Finder opens a Terminal window and runs the program
 # inside it; the window appears with no menu bar, no Dock name, and no icon. A .app is the same
@@ -19,8 +20,8 @@
 # it had. Ad-hoc is not notarisation and does not pretend to be.
 set -eu
 
-BIN=${1:?usage: make-app.sh <ipod-gui binary> <output dir> [icon.png]}
-OUT=${2:?usage: make-app.sh <ipod-gui binary> <output dir> [icon.png]}
+BIN=${1:?usage: make-app.sh <ipod-emulator binary> <output dir> [icon.png]}
+OUT=${2:?usage: make-app.sh <ipod-emulator binary> <output dir> [icon.png]}
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 ICON=${3:-$ROOT/docs/media/icon-1024.png}
 
@@ -30,10 +31,10 @@ ICON=${3:-$ROOT/docs/media/icon-1024.png}
 VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT/Cargo.toml" | head -1)
 [ -n "$VERSION" ] || VERSION=0.0.0
 
-APP="$OUT/iPod 5G.app"
+APP="$OUT/ipod-emulator.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/iPod 5G"
+cp "$BIN" "$APP/Contents/MacOS/ipod-emulator"
 
 # An .icns from a single PNG. `sips` and `iconutil` both ship with macOS, so this needs nothing
 # installed. Skipped without complaint when no PNG is given — an app with no icon still runs.
@@ -53,10 +54,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key>                 <string>iPod 5G</string>
-  <key>CFBundleDisplayName</key>          <string>iPod 5G</string>
-  <key>CFBundleExecutable</key>           <string>iPod 5G</string>
-  <key>CFBundleIdentifier</key>           <string>net.siggifly.ipod5g</string>
+  <key>CFBundleName</key>                 <string>ipod-emulator</string>
+  <key>CFBundleDisplayName</key>          <string>ipod-emulator</string>
+  <key>CFBundleExecutable</key>           <string>ipod-emulator</string>
+  <key>CFBundleIdentifier</key>           <string>net.siggifly.ipod-emulator</string>
   <key>CFBundleVersion</key>              <string>__VERSION__</string>
   <key>CFBundleShortVersionString</key>   <string>__VERSION__</string>
   <key>CFBundlePackageType</key>          <string>APPL</string>

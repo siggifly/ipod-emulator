@@ -1,4 +1,4 @@
-# `ipod-gui` — the emulator, in a window you can turn
+# `ipod-emulator` — the emulator, in a window you can turn
 
 A drawn iPod 5G whose screen is the live framebuffer and whose click wheel, five buttons and hold
 switch actually drive the machine. It is a **front end over the existing model**, not a second
@@ -6,8 +6,8 @@ model: the same `eapp-loader` crate the `trace` recipes use, the same peripheral
 devices, built by the same calls in the same order.
 
 ```
-cargo build --release --manifest-path tools/ipod-gui/Cargo.toml
-$CARGO_TARGET_DIR/release/ipod-gui
+cargo build --release --manifest-path tools/ipod-emulator/Cargo.toml
+$CARGO_TARGET_DIR/release/ipod-emulator
 ```
 
 **Launched with nothing configured it opens a setup screen** rather than exiting with an error, and
@@ -27,15 +27,15 @@ that discipline is that editing `emu.rs` buys you one more cold boot; the altern
 **The snapshot and the 8 GB working disk live in a per-user cache directory**, not in `$TMPDIR`.
 That distinction is Linux's: `/tmp` is `tmpfs` on most distributions, RAM-backed and typically
 capped at half of it, and an 8 GB image there either fails or eats the machine. It is
-`~/Library/Caches/ipod-gui` on macOS, `$XDG_CACHE_HOME/ipod-gui` (or `~/.cache/ipod-gui`) on Linux,
-and `%LOCALAPPDATA%\ipod-gui` on Windows. Delete it freely; the only cost is one cold boot.
+`~/Library/Caches/ipod-emulator` on macOS, `$XDG_CACHE_HOME/ipod-emulator` (or `~/.cache/ipod-emulator`) on Linux,
+and `%LOCALAPPDATA%\ipod-emulator` on Windows. Delete it freely; the only cost is one cold boot.
 
 ## Two modes, and one number that is in both
 
 **User mode is the default and is what a fresh install opens in: the iPod and nothing else.** No
 counters, no addresses, no instrument panel. **Debug mode** is everything this document describes.
 `D` toggles, so does the checkbox in the footer, and the choice is remembered in a four-key settings
-file (`~/Library/Application Support/ipod-gui/settings.txt` and the equivalents).
+file (`~/Library/Application Support/ipod-emulator/settings.txt` and the equivalents).
 
 The one thing that appears in **both** is the speed ratio: user mode carries a badge reading
 `29 % of real-time — emulated`, debug mode the full readout below. Hiding it would teach somebody
@@ -62,13 +62,13 @@ dialog crate's async runtime and D-Bus stack stay out of a program whose whole d
 is "eframe and nothing else". If the dialog is unavailable the other two still work, which is what
 makes that acceptable.
 
-`ipod-gui --check-images [--flash=… --disk=…]` runs the same two checks with no window and exits
+`ipod-emulator --check-images [--flash=… --disk=…]` runs the same two checks with no window and exits
 non-zero if either fails. The validation is structure, never signatures: a table of known-good
 hashes would reject a legitimately different dump for being unfamiliar.
 
 ## The update check
 
-`ipod-gui --check-update`, or the button in debug mode. One HTTPS GET of the GitHub releases API and
+`ipod-emulator --check-update`, or the button in debug mode. One HTTPS GET of the GitHub releases API and
 a version comparison; if there is something newer, a line with a link, which you follow yourself.
 
 **Off on launch unless you tick the box.** Nothing is downloaded, nothing is installed, nothing is
@@ -183,7 +183,7 @@ is the matched control: identical run, identical sampling instants, no input at 
 One touch, 36 clicks clockwise, one release, one Select press and release:
 
 ```
-$ ipod-gui --selftest                       $ ipod-gui --selftest-control
+$ ipod-emulator --selftest                       $ ipod-emulator --selftest-control
 [driving the wheel]                         [CONTROL — no input]
 reporting enabled at 1603499952             reporting enabled at 1603499952
 position 36, 40 frames posted, 0 dropped    position 0, 0 frames posted, 0 dropped
@@ -218,7 +218,7 @@ so the two `+8 M` files are the whole experiment in two pictures.
 ## `--probe`: the same measurement with an anchor both arms share
 
 ```
-ipod-gui --probe=menu|menu-control|combo|combo-control [--probe-at=N] [--samples=A,B,C]
+ipod-emulator --probe=menu|menu-control|combo|combo-control [--probe-at=N] [--samples=A,B,C]
          [--charger] [--cold] [--clock-v3] [--ablate=pmu]
 ```
 
@@ -255,7 +255,7 @@ Three things are settled by that pair, and the control is what settles them:
 the same machine as the recipe" is a comparison and not a claim:
 
 ```
-$ ipod-gui --cold --headless=2000000000       $ BUDGET=4000000000 tools/ipod-boot/retail-boot.sh \
+$ ipod-emulator --cold --headless=2000000000       $ BUDGET=4000000000 tools/ipod-boot/retail-boot.sh \
 headless: Idle after 1812313976 instructions      --clock=5 --stop-when-idle=400000000 \
   ata commands: 706                               --clickwheel --bcm-registry \
   unmapped: 0 reads, 0 writes across 0 pages      --bcm-dump=0xE0000:140:F0:out.ppm
