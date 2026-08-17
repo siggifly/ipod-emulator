@@ -13,6 +13,7 @@
 //! press NAME         select | menu | play | left/prev | right/next
 //! hold NAME MS       hold a button, for the combos that need one
 //! holdsw on|off     the HOLD SWITCH, which is not a button and not `hold`
+//! snapshot          re-take the idle snapshot here, so this is where launches resume
 //! shot PATH          write the current framebuffer as a PNG
 //! peek ADDR          read one word, hex in and hex out; unmapped says so
 //! ata FROM TO        whether the drive was ever asked for these sectors
@@ -107,6 +108,13 @@ fn command(line: &str, link: &Arc<Link>) -> String {
         },
         // The switch, not a button. `hold` was already taken by "hold a button down for N ms",
         // which is a different physical act on a different piece of plastic.
+        // Park the machine: whatever is on screen now becomes what the next launch resumes to.
+        // Both halves are written, RAM and the drive beside it, because a snapshot without its
+        // drive is the stale pair that used to produce "connect to computer" on every third start.
+        "snapshot" => {
+            link.resnap.store(true, std::sync::atomic::Ordering::Relaxed);
+            "ok snapshot requested — written at the next slice".into()
+        }
         "holdsw" => {
             let on = match arg {
                 "on" | "1" | "engage" => true,
@@ -120,7 +128,11 @@ fn command(line: &str, link: &Arc<Link>) -> String {
             let Some(mask) = wheel_button(arg) else {
                 return format!("error: unknown button {arg:?} (select menu play left right)");
             };
-            let ms: u64 = if verb == "hold" { arg2.parse().unwrap_or(400) } else { 0 };
+            // A zero-length press is not a thing a finger can do, and RetailOS agreed: `press
+            // select` on the Language screen did nothing at all, while `hold select 400` opened
+            // the main menu. The button has to be down long enough for the firmware's own scan to
+            // see it, so the default press is a short press rather than an instantaneous one.
+            let ms: u64 = if verb == "hold" { arg2.parse().unwrap_or(400) } else { 120 };
             link.push(WheelEvent::Button(mask, true));
             if ms > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(ms));

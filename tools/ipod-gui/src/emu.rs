@@ -354,6 +354,14 @@ pub struct Link {
     pub inbox: Mutex<Inbox>,
     pub out: Mutex<Out>,
     pub quit: AtomicBool,
+    /// Re-take the idle snapshot from wherever the machine currently is.
+    ///
+    /// The restore point was fixed at `--snap-at` instructions into a cold boot, which on this
+    /// machine lands *before* first-run setup — so every launch resumed a first-run iPod and asked
+    /// for a language, a state no synced iPod is ever in. The snapshot is a pair (RAM plus the
+    /// drive beside it), so re-taking it has to write both, which is why this is a request to the
+    /// run loop rather than something the socket thread can do itself.
+    pub resnap: AtomicBool,
     /// Addresses the control socket has asked about, and what they held when the run loop next
     /// looked.
     ///
@@ -394,6 +402,7 @@ impl Link {
                 stats: Stats::default(),
             }),
             quit: AtomicBool::new(false),
+            resnap: AtomicBool::new(false),
         })
     }
 
@@ -1023,7 +1032,8 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
 
         // The cold boot's finish line. Written once, then the machine keeps running — the snapshot
         // is a side effect of getting here, not a reason to stop.
-        if want_snapshot && executed >= cfg.snap_at {
+        let asked = link.resnap.swap(false, Ordering::Relaxed);
+        if (want_snapshot && executed >= cfg.snap_at) || asked {
             want_snapshot = false;
             if let Some(path) = &cfg.snapshot {
                 let img = m.snapshot();
@@ -1565,6 +1575,23 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
     // line was written as `d.command_count` against a field that no longer exists — which is how it
     // was found that this crate had not been compiled since the `Capped<T>` merge.
     println!("  ata commands: {}", m.mem.ata.as_ref().map(|(_, d)| d.commands.seen()).unwrap_or(0));
+    if let Some((_, d)) = &m.mem.ata {
+        let names = |c: u8| match c {
+            0x20 => "READ SECTORS", 0x24 => "READ SECTORS EXT", 0x25 => "READ DMA EXT",
+            0xc8 => "READ DMA", 0x30 => "WRITE SECTORS", 0x34 => "WRITE SECTORS EXT",
+            0x35 => "WRITE DMA EXT", 0xca => "WRITE DMA", 0xe7 => "FLUSH CACHE",
+            0xea => "FLUSH CACHE EXT", 0xec => "IDENTIFY", 0xef => "SET FEATURES",
+            0xe0 => "STANDBY IMMEDIATE", 0xe1 => "IDLE IMMEDIATE", _ => "",
+        };
+        let census: Vec<String> = d
+            .cmd_census
+            .iter()
+            .map(|(c, n)| format!("{c:#04x} {} x{n}", names(*c)))
+            .collect();
+        if !census.is_empty() {
+            println!("    by opcode: {}", census.join(" · "));
+        }
+    }
     let (reads, writes) = {
         let mut mm = 0u64;
         let mut mw = 0u64;

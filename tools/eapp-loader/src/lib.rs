@@ -5217,6 +5217,8 @@ pub struct Ata {
     /// This was the first instrument taught to announce its own saturation, and its report line is
     /// the wording every other one now copies.
     pub commands: Capped<(u8, u8, u8, u64)>,
+    /// Every opcode issued, with its count. See the note on `commands` for why this is separate.
+    pub cmd_census: BTreeMap<u8, u64>,
     /// Bitmask of the multiword / ultra DMA mode SET FEATURES last selected, for IDENTIFY words
     /// 63 and 88 to report back.
     mwdma_selected: u8,
@@ -5419,6 +5421,7 @@ impl Ata {
             remaining: 0,
             next_lba: 0,
             commands: Capped::new(256),
+            cmd_census: BTreeMap::new(),
             mwdma_selected: 0,
             udma_selected: 0,
             cfg: [0; 0x100],
@@ -5590,6 +5593,11 @@ impl Ata {
         {
             self.commands.push((cmd, self.features, self.nsector, self.lba()));
         }
+        // Uncapped, because the sample above is capped at 256 and a capped log is how this project
+        // once published "LBA 22169 is never read" about a sector read at command #342. Whether the
+        // firmware ever WRITES is exactly the kind of question a truncated sample answers wrongly
+        // and confidently.
+        *self.cmd_census.entry(cmd).or_default() += 1;
         self.error = 0;
         match cmd {
             0xec => {
