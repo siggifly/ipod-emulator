@@ -286,8 +286,32 @@ pub fn dir_size(d: &Path) -> u64 {
     let Ok(rd) = std::fs::read_dir(d) else { return 0 };
     rd.flatten()
         .filter_map(|e| e.metadata().ok())
-        .map(|m| if m.is_dir() { 0 } else { m.len() })
+        .map(|m| if m.is_dir() { 0 } else { on_disk_size(&m) })
         .sum()
+}
+
+/// What a file actually costs, rather than how long it claims to be.
+///
+/// The drive images here are **sparse** and, on APFS, **clones**: `clone_disk` copies with `cp -c`,
+/// so every block the emulator has not written is shared with the source rather than duplicated.
+/// `len()` reports the logical 8 GB regardless, and summing that told the operator the cache had
+/// reached 32 GB. It had not. Deleting one whole set — two 3.1 GB drive files and a snapshot, 6.4 GB
+/// by that reckoning — returned **153 MB** of real disk, which is the snapshot and almost nothing
+/// else.
+///
+/// A number that is wrong by a factor of forty, in the direction of alarm, about the user's own
+/// disk, is not a cosmetic defect. `st_blocks` is in 512-byte units by POSIX definition, whatever
+/// the filesystem's own block size is.
+pub fn on_disk_size(m: &std::fs::Metadata) -> u64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        m.blocks() * 512
+    }
+    #[cfg(not(unix))]
+    {
+        m.len()
+    }
 }
 
 fn home() -> Option<PathBuf> {

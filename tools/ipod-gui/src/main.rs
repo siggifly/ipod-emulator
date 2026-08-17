@@ -425,7 +425,9 @@ fn reclaimable(keep: &Cache) -> (u64, Vec<PathBuf>) {
         if p == keep.snap || p == keep.frozen || p == keep.work {
             continue;
         }
-        total += e.metadata().map(|m| m.len()).unwrap_or(0);
+        // Real blocks, not the logical length: these are sparse clones, and their length is a
+        // number about the emulated drive rather than about this disk.
+        total += e.metadata().map(|m| settings::on_disk_size(&m)).unwrap_or(0);
         paths.push(p);
     }
     (total, paths)
@@ -435,12 +437,55 @@ fn reclaimable(keep: &Cache) -> (u64, Vec<PathBuf>) {
 fn reclaim(paths: &[PathBuf]) -> u64 {
     let mut freed = 0;
     for p in paths {
-        let n = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        let n = std::fs::metadata(p).map(|m| settings::on_disk_size(&m)).unwrap_or(0);
         if std::fs::remove_file(p).is_ok() {
             freed += n;
         }
     }
     freed
+}
+
+impl App {
+    /// The cache, stated and reclaimable, from wherever the user happens to be.
+    ///
+    /// This lived on the last step of the setup wizard, which is unreachable once a machine is
+    /// running and unreachable *before* it if an earlier step is not satisfied. So the operator
+    /// watched the folder grow to 19 GB with the only control behind a door they could not open —
+    /// which is worse than the automatic deletion it replaced, because at least that one worked.
+    fn cache_controls(&mut self, ui: &mut egui::Ui) {
+        let (stale, paths) = (self.stale_cache.0, self.stale_cache.1.clone());
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(format!("cache {}", human(cache_size())))
+                    .small()
+                    .color(Color32::from_gray(0x9A)),
+            );
+            if stale > 0 {
+                if ui
+                    .button(format!("reclaim {}", human(stale)))
+                    .on_hover_text(
+                        "Snapshots and working drives from earlier builds of this emulator, or \
+                         from other image pairs. Each set is two copies of the drive plus a \
+                         snapshot; a new one is minted whenever the emulator's own model changes, \
+                         because a snapshot must never restore a machine the model no longer \
+                         describes. Deleting them costs those images a cold boot, and nothing \
+                         else.",
+                    )
+                    .clicked()
+                {
+                    let freed = reclaim(&paths);
+                    self.stale_cache = (0, Vec::new());
+                    self.say(format!("reclaimed {}", human(freed)));
+                }
+            } else {
+                ui.label(
+                    egui::RichText::new("nothing to reclaim")
+                        .small()
+                        .color(Color32::from_gray(0x78)),
+                );
+            }
+        });
+    }
 }
 
 /// What the cache currently holds, for the setup screen to state rather than hide.
@@ -1419,29 +1464,8 @@ impl App {
                 .small()
                 .color(Color32::from_gray(0x78)),
         );
-        if self.stale_cache.0 > 0 {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if ui
-                    .button(format!("reclaim {}", human(self.stale_cache.0)))
-                    .on_hover_text(
-                        "Snapshots and working drives from earlier builds or other image pairs. \
-                         Deleting them costs the next launch a cold boot for those images, and \
-                         nothing else.",
-                    )
-                    .clicked()
-                {
-                    let freed = reclaim(&self.stale_cache.1);
-                    self.stale_cache = (0, Vec::new());
-                    self.say(format!("reclaimed {}", human(freed)));
-                }
-                ui.label(
-                    egui::RichText::new("from earlier builds or other images")
-                        .small()
-                        .color(Color32::from_gray(0x78)),
-                );
-            });
-        }
+        ui.add_space(4.0);
+        self.cache_controls(ui);
         ui.add_space(6.0);
         ui.label(
             egui::RichText::new("The first boot takes about 75 seconds. It is a real cold boot.")
@@ -2255,8 +2279,8 @@ impl App {
 
             let other_addr = if out.fb_addr == FB_FRONT { FB_BACK } else { FB_FRONT };
             ui.label(format!(
-                "backlight {} / 32",
-                out.backlight
+                "backlight {} / 32  ({} up, {} down)",
+                out.backlight, out.backlight_steps.0, out.backlight_steps.1
             ));
             ui.label(format!(
                 "panel {:#010x} — {} / {} lit",
@@ -2279,6 +2303,7 @@ impl App {
                 );
             }
 
+            self.cache_controls(ui);
             ui.horizontal(|ui| {
                 if ui.button("screenshot (S)").clicked() {
                     let (fb, addr) = match &self.link {

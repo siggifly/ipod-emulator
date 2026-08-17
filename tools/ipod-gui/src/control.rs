@@ -237,8 +237,15 @@ fn command(line: &str, link: &Arc<Link>) -> String {
         "state" => {
             let out = link.out.lock().unwrap();
             format!(
-                "ok phase={:?} executed={} fb={:#010x} nonblack={} seq={}",
-                out.phase, out.stats.executed, out.fb_addr, out.fb_nonzero, out.fb_seq
+                "ok phase={:?} executed={} fb={:#010x} nonblack={} seq={} backlight={}/32 up={} down={}",
+                out.phase,
+                out.stats.executed,
+                out.fb_addr,
+                out.fb_nonzero,
+                out.fb_seq,
+                out.backlight,
+                out.backlight_steps.0,
+                out.backlight_steps.1
             )
         }
         other => format!("error: unknown command {other:?}"),

@@ -272,6 +272,9 @@ pub struct Out {
     /// The panel's dimmer, 1..32, counted off the firmware's own pulses. Nothing reads this back
     /// from hardware, so it exists only where it is counted.
     pub backlight: u8,
+    /// Steps up and down the dimmer has taken. A level that is not moving and a pin that is not
+    /// pulsing are different diagnoses, and the level alone cannot tell them apart.
+    pub backlight_steps: (u64, u64),
     /// Page addresses the machine has touched that nothing answers for.
     ///
     /// Carried out here rather than asked for, because the question it settles -- *is the DRM
@@ -400,6 +403,7 @@ impl Link {
                 pc_trace: Vec::new(),
                 fb_seq: 0,
                 backlight: 16,
+                backlight_steps: (0, 0),
                 fb_other_nonzero: 0,
                 fb_other_moved: false,
                 fb_shown_moved: false,
@@ -1131,6 +1135,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         // that only redraws when the pixels move would show the old brightness until something else
         // happened to repaint.
         out.backlight = m.mem.backlight.level;
+        out.backlight_steps = (m.mem.backlight.steps_up, m.mem.backlight.steps_down);
         // The boot is over at the snapshot point whether or not a snapshot was written there — a
         // session reached by powering back on writes none, and gating the phase on the write would
         // have it report "running" through 75 seconds of black screen.
