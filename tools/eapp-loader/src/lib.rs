@@ -467,6 +467,8 @@ pub struct Memory {
     /// checks, so the driver takes its *error* path five times per poll and the emulator was
     /// reporting a broken transceiver rather than an idle one.
     pub clickwheel: Option<ClickWheel>,
+    /// The panel's brightness, counted off the pulses the firmware sends. See [`Backlight`].
+    pub backlight: Backlight,
     /// The NOR flash as a device rather than a read-only region, when modelled.
     pub nor: Option<Nor>,
     /// `(base, size)` of a range to account for at 256-byte granularity, and the counts.
@@ -938,6 +940,13 @@ impl Memory {
             || self.read_overrides.iter().any(|&(at, _)| hits(at, 4))
             || self.read_or_masks.iter().any(|&(at, _)| hits(at, 4))
             || self.int_ack_on_read.iter().any(|&(at, _)| hits(at, 4))
+            // The GPIO block. `write8_inner` counts the backlight dimmer's pulses on GPIOB and
+            // retires port-A interrupts on a write of INT_CLR, and neither hook is reached if this
+            // page is served from plain memory. Both were written and both did nothing until this
+            // line existed -- which is the third time in one day that a mechanism present in the
+            // source turned out never to be consulted, and the reason this list is the first place
+            // to look when a device model has no effect.
+            || hits(0x6000_d000, 0x200)
             // The DMA channel blocks, for the read-to-clear latch in `read8_inner`. Two pages
             // total, and the firmware touches them a few dozen times in a whole boot, so taking
             // them off the fast path costs nothing measurable.
@@ -1754,6 +1763,15 @@ impl Memory {
         // Writing a bit to GPIOA_INT_CLR retires that pin's interrupt, and the shared port line
         // drops only when no pin is left asserting. Ports A..D are one interrupt, so a handler
         // clearing hold must not silence a wheel edge that arrived while it ran.
+        // The backlight dimmer counts pulses on this pin; nothing reads the level back, so if the
+        // emulator does not count them with the firmware, the level exists nowhere at all.
+        if addr & !3 == GPIOB_OUTPUT_VAL {
+            let shift = (addr & 3) * 8;
+            let word = (self.read32(GPIOB_OUTPUT_VAL) & !(0xffu32 << shift))
+                | ((val as u32) << shift);
+            let usec = self.usec;
+            self.backlight.port_written(word, usec);
+        }
         if addr & !3 == GPIOA_INT_CLR {
             let shift = (addr & 3) * 8;
             let stat = self.read32(GPIOA_INT_STAT) & !((val as u32) << shift);
@@ -2352,6 +2370,7 @@ impl Machine {
             aliases: Vec::new(),
             read_toggle: Vec::new(),
             toggle_state: Vec::new(),
+            backlight: Backlight::default(),
             read_overrides: Vec::new(),
             read_or_masks: Vec::new(),
             usec_timer: None,
@@ -4539,6 +4558,78 @@ pub fn wheel_step_name(ev: WheelEvent) -> String {
                 _ => "?",
             };
             format!("{}={name}", if down { "down" } else { "up" })
+        }
+    }
+}
+
+/// `GPIOB_OUTPUT_VAL`, and the backlight dimmer's pin in it.
+///
+/// The brightness on this machine is **pulse-counted**, not a level in a register. Rockbox's
+/// `backlight-nano_video.c` documents the protocol: drive the pin low, wait, drive it high, and the
+/// dimmer moves one step — **short low (~10 us) steps up, long low (~200 us) steps down** — over a
+/// range of 1..32. Nothing ever reads the level back; the counter lives in the panel's own
+/// circuit, and the firmware tracks its own idea of where it is.
+///
+/// Rockbox pulses **GPIOD** bit 7 and uses GPIOB bit 3 only to enable the circuit. On this machine
+/// it is measurably **GPIOB bit 4**: `0x6000d024` takes 42 byte-writes in the first 300 M where
+/// GPIOD takes 2 and GPIOL takes 2, both of those pairs being initialisation. Apple's bootloader
+/// writes 0x00 and 0x10 alternately from `0x4000e66c` and `0x4000e6d0`, and RetailOS pulses the
+/// same pin once more.
+///
+/// Those write counts are **byte**-granular, and the stores are words — so the bootloader's
+/// "sixteen writes from each of two PCs" is four pulses, not sixteen. It was briefly read as
+/// sixteen, which agreed beautifully with the midpoint Rockbox's driver assumes and meant nothing.
+/// The model's own count is the check: a boot ends at 19 with four steps up and one down, which is
+/// the same five pulses seen from the other side.
+pub const GPIOB_OUTPUT_VAL: u32 = 0x6000_d024;
+pub const GPIOB_BACKLIGHT: u32 = 0x10;
+
+/// A pulse low for less than this many microseconds steps the dimmer UP; longer steps it down.
+/// Rockbox's two delays are 10 and 200, so anything in the middle separates them.
+pub const BACKLIGHT_STEP_USEC: u32 = 100;
+
+/// The panel's dimmer, as the pulses on [`GPIOB_OUTPUT_VAL`] leave it.
+#[derive(Clone, Debug)]
+pub struct Backlight {
+    /// 1..32. Starts at 16, which is where Rockbox's driver says the circuit wakes up, and is the
+    /// only value in this model that is assumed rather than derived.
+    pub level: u8,
+    /// `usec` at which the pin went low, while it is low.
+    low_since: Option<u32>,
+    pub steps_up: u64,
+    pub steps_down: u64,
+}
+
+impl Default for Backlight {
+    fn default() -> Self {
+        Self { level: 16, low_since: None, steps_up: 0, steps_down: 0 }
+    }
+}
+
+impl Backlight {
+    /// One write of the port. Returns true if the level moved.
+    pub fn port_written(&mut self, val: u32, usec: u32) -> bool {
+        let high = val & GPIOB_BACKLIGHT != 0;
+        match (self.low_since, high) {
+            // Falling edge: start timing.
+            (None, false) => {
+                self.low_since = Some(usec);
+                false
+            }
+            // Rising edge: the width of the low decides the direction.
+            (Some(at), true) => {
+                self.low_since = None;
+                let width = usec.wrapping_sub(at);
+                if width < BACKLIGHT_STEP_USEC {
+                    self.steps_up += 1;
+                    self.level = (self.level + 1).min(32);
+                } else {
+                    self.steps_down += 1;
+                    self.level = self.level.saturating_sub(1).max(1);
+                }
+                true
+            }
+            _ => false,
         }
     }
 }

@@ -653,6 +653,9 @@ struct App {
     settings: Settings,
     tex: egui::TextureHandle,
     seen_seq: u64,
+    /// The dimmer level the texture on screen was built at, so a brightness change repaints even
+    /// when no pixel moved.
+    seen_backlight: u8,
     /// Where the drag started and the position it last reported, so a move is a *delta* in clicks.
     drag: Option<Drag>,
     hold: bool,
@@ -834,6 +837,7 @@ impl App {
             settings,
             tex,
             seen_seq: 0,
+            seen_backlight: 16,
             drag: None,
             hold: false,
             down: Vec::new(),
@@ -1142,12 +1146,31 @@ impl eframe::App for App {
         ctx.request_repaint_after(Duration::from_millis(16));
 
         let out = self.link.as_ref().unwrap().out.lock().unwrap().clone();
-        if out.fb_seq != self.seen_seq {
+        if out.fb_seq != self.seen_seq || out.backlight != self.seen_backlight {
             self.seen_seq = out.fb_seq;
-            self.tex.set(
-                egui::ColorImage::from_rgb([FB_W, FB_H], &out.fb),
-                egui::TextureOptions::NEAREST,
-            );
+            self.seen_backlight = out.backlight;
+            // The dimmer is a property of the LAMP, not of the pixels: the LCD holds the same
+            // bytes at every brightness and the backlight decides how much of it you see. So the
+            // scaling happens here, on the way to the screen, and never touches `out.fb` -- which
+            // is what `shot` writes and what every measurement in research/ counts.
+            //
+            // The 1..32 level is measured. The curve from it to a screen is not: a panel at its
+            // minimum is dim, not off, so level 1 lands at 12 % rather than at 3 %. That is a
+            // rendering choice and is the only invented number here.
+            let lit = if out.backlight >= 32 {
+                None
+            } else {
+                Some(0.12 + 0.88 * (out.backlight.max(1) - 1) as f32 / 31.0)
+            };
+            let img = match lit {
+                None => egui::ColorImage::from_rgb([FB_W, FB_H], &out.fb),
+                Some(f) => {
+                    let dimmed: Vec<u8> =
+                        out.fb.iter().map(|v| (*v as f32 * f).round() as u8).collect();
+                    egui::ColorImage::from_rgb([FB_W, FB_H], &dimmed)
+                }
+            };
+            self.tex.set(img, egui::TextureOptions::NEAREST);
         }
 
         self.keyboard(&ctx);
@@ -2231,6 +2254,10 @@ impl App {
             ui.separator();
 
             let other_addr = if out.fb_addr == FB_FRONT { FB_BACK } else { FB_FRONT };
+            ui.label(format!(
+                "backlight {} / 32",
+                out.backlight
+            ));
             ui.label(format!(
                 "panel {:#010x} — {} / {} lit",
                 out.fb_addr,

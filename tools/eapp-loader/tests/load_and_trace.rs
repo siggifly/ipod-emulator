@@ -1301,3 +1301,51 @@ fn a_read_or_mask_is_observed_through_the_ordinary_read_path() {
     assert_eq!(m.mem.read32(0x6000_6038), 0, "the mask leaked into the word below");
     assert_eq!(m.mem.read32(0x6000_6040), 0, "the mask leaked into the word above");
 }
+
+// ---------------------------------------------------------------- the backlight dimmer
+
+/// The dimmer counts pulses, and the WIDTH of the low decides the direction.
+///
+/// Nothing reads the level back from hardware — the counter lives in the panel's circuit and the
+/// firmware tracks its own idea of where it is. So if this classifier is wrong, nothing anywhere
+/// disagrees with it; the screen is just the wrong brightness and stays that way. That is the whole
+/// reason it is tested against the two delays Rockbox's driver actually uses, 10 us and 200 us,
+/// rather than against a round number of its own.
+#[test]
+fn the_dimmer_counts_short_pulses_up_and_long_pulses_down() {
+    use eapp_loader::{Backlight, GPIOB_BACKLIGHT};
+    let mut b = Backlight::default();
+    assert_eq!(b.level, 16, "the circuit is assumed to wake at the driver's midpoint");
+
+    // One short pulse: low at t, high 10 us later.
+    let mut t = 1_000u32;
+    let mut pulse = |b: &mut Backlight, low_for: u32, t: &mut u32| {
+        b.port_written(0, *t);
+        *t += low_for;
+        b.port_written(GPIOB_BACKLIGHT, *t);
+        *t += 10;
+    };
+    pulse(&mut b, 10, &mut t);
+    assert_eq!(b.level, 17, "a 10 us low is a step up");
+    pulse(&mut b, 200, &mut t);
+    assert_eq!(b.level, 16, "a 200 us low is a step down");
+
+    // The range is 1..32 and neither end wraps — a wrap would take the panel from brightest to
+    // black on one step, which is the sort of thing that looks like a rendering bug for a week.
+    for _ in 0..40 {
+        pulse(&mut b, 10, &mut t);
+    }
+    assert_eq!(b.level, 32, "the top of the range holds");
+    for _ in 0..40 {
+        pulse(&mut b, 200, &mut t);
+    }
+    assert_eq!(b.level, 1, "the bottom of the range holds, and is not zero");
+
+    // Writes that do not move the pin are not edges. The firmware writes the whole port, so every
+    // unrelated pin on it lands here too.
+    let before = b.level;
+    b.port_written(GPIOB_BACKLIGHT, t);
+    b.port_written(GPIOB_BACKLIGHT | 0x21, t + 5);
+    assert_eq!(b.level, before, "a write with the pin already high is not a pulse");
+    assert_eq!(b.steps_up + b.steps_down, 82, "and it was not counted as one");
+}

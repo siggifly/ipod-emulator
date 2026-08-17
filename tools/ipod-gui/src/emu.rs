@@ -269,6 +269,9 @@ pub struct Out {
     pub fb_addr: u32,
     /// Bumped whenever `fb` changed, so the UI can skip a texture upload.
     pub fb_seq: u64,
+    /// The panel's dimmer, 1..32, counted off the firmware's own pulses. Nothing reads this back
+    /// from hardware, so it exists only where it is counted.
+    pub backlight: u8,
     /// Page addresses the machine has touched that nothing answers for.
     ///
     /// Carried out here rather than asked for, because the question it settles -- *is the DRM
@@ -396,6 +399,7 @@ impl Link {
                 unmapped_pages: Vec::new(),
                 pc_trace: Vec::new(),
                 fb_seq: 0,
+                backlight: 16,
                 fb_other_nonzero: 0,
                 fb_other_moved: false,
                 fb_shown_moved: false,
@@ -1123,6 +1127,10 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
             out.fb_shown_moved = shown_moved;
             out.fb_seq = fb_seq;
         }
+        // Outside the `refresh` gate: the level moves without a single pixel changing, and a panel
+        // that only redraws when the pixels move would show the old brightness until something else
+        // happened to repaint.
+        out.backlight = m.mem.backlight.level;
         // The boot is over at the snapshot point whether or not a snapshot was written there — a
         // session reached by powering back on writes none, and gating the phase on the write would
         // have it report "running" through 75 seconds of black screen.
@@ -1574,6 +1582,10 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
     // is a cap wearing a census's clothes. That conflation is research/12's whole subject, and this
     // line was written as `d.command_count` against a field that no longer exists — which is how it
     // was found that this crate had not been compiled since the `Capped<T>` merge.
+    println!(
+        "  backlight: {} / 32 ({} up, {} down)",
+        m.mem.backlight.level, m.mem.backlight.steps_up, m.mem.backlight.steps_down
+    );
     println!("  ata commands: {}", m.mem.ata.as_ref().map(|(_, d)| d.commands.seen()).unwrap_or(0));
     if let Some((_, d)) = &m.mem.ata {
         let names = |c: u8| match c {
