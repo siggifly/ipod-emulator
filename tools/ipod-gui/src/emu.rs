@@ -865,7 +865,11 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                 drop(req);
                 let mut ans = link.peek_ans.lock().unwrap();
                 for a in batch {
-                    let v = m.mem.peek32(a);
+                    let v = if a == crate::control::UNMAPPED_SENTINEL {
+                        Some(m.mem.unmapped.len() as u32)
+                    } else {
+                        m.mem.peek32(a)
+                    };
                     ans.push((a, v));
                 }
             }

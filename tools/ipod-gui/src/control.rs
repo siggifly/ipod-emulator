@@ -29,6 +29,10 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::Arc;
 
+/// Not an address. Asking for a count through the same request channel keeps the run loop
+/// with one place that answers questions, rather than two that can drift apart.
+pub const UNMAPPED_SENTINEL: u32 = 0xFFFF_FFFF;
+
 /// Start listening. Returns immediately; each connection is served on its own thread.
 pub fn serve(path: &Path, link: Arc<Link>) -> Result<(), String> {
     // A socket left by a previous run would make `bind` fail with EADDRINUSE, and the previous run
@@ -147,6 +151,30 @@ fn command(line: &str, link: &Arc<Link>) -> String {
             }
             Err(_) => "error: peek wants a hex address".into(),
         },
+        // The operator's hypothesis, made answerable: if RetailOS reaches for a crypto block or any
+        // other peripheral this model does not implement, those accesses land in unmapped space and
+        // are counted. A DRM that fails because the hardware doing it is absent looks exactly like a
+        // DRM that fails because the keys are wrong, and this is what tells them apart.
+        "unmapped" => {
+            link.peek_req.lock().unwrap().push(UNMAPPED_SENTINEL);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            loop {
+                {
+                    let mut ans = link.peek_ans.lock().unwrap();
+                    if let Some(i) = ans.iter().position(|(a, _)| *a == UNMAPPED_SENTINEL) {
+                        let (_, v) = ans.remove(i);
+                        return match v {
+                            Some(n) => format!("ok unmapped pages={n}"),
+                            None => "ok unmapped pages=0".into(),
+                        };
+                    }
+                }
+                if std::time::Instant::now() > deadline {
+                    return "error: timed out".into();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
         "state" => {
             let out = link.out.lock().unwrap();
             format!(
