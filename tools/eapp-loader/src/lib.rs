@@ -612,6 +612,22 @@ pub struct Memory {
     /// the subsystem runs rather than recording a whole boot.
     pub trace_calls_from: Option<u64>,
     pub call_trace: Vec<(u32, u32, u64)>,
+    /// Execution counts per 64-byte bucket of the low 8 MB, when profiling.
+    ///
+    /// A *call* histogram answers "who calls whom", which is the wrong question for obfuscated
+    /// mixed-arithmetic code: it computes inline and loops without calling, so its work does not
+    /// appear as edges at all. Counting where instructions actually retire does answer it.
+    ///
+    /// 64 bytes is sixteen instructions -- fine enough to name a loop body, coarse enough that the
+    /// table is 128 K entries and stays in cache.
+    pub pc_hist: Option<Vec<u64>>,
+    /// Report the register file the first `n` times this address executes.
+    ///
+    /// The profiler names *where* the time goes; this names *what it is working on*. At the head of
+    /// a bignum loop the registers are the operands -- the limb pointers, the multiplier, the
+    /// length -- and those pointers are what makes the data traceable back to whatever produced it.
+    pub regs_at: Option<(u32, usize)>,
+    pub regs_seen: Vec<(u64, [u32; 16])>,
     /// `(addr, pc) -> (reads, first icount)`, **uncapped**. The report's per-reader breakdown; the
     /// log above is the ordered sample it sits under.
     pub read_sites: BTreeMap<(u32, u32), (u64, u64)>,
@@ -2233,6 +2249,9 @@ impl Machine {
             pc_trace: Vec::new(),
             trace_calls_from: None,
             call_trace: Vec::new(),
+            pc_hist: None,
+            regs_at: None,
+            regs_seen: Vec::new(),
             read_sites: BTreeMap::new(),
             store_pc_log: Capped::new(2_000_000),
             store_split: 0,
@@ -3271,6 +3290,22 @@ impl Machine {
                 }
             }
             prev_pc = pc;
+
+            if let Some((addr, n)) = self.mem.regs_at {
+                if pc == addr && self.mem.regs_seen.len() < n {
+                    let mut r = [0u32; 16];
+                    r.copy_from_slice(&self.cpu.regs);
+                    let at = self.executed as u64;
+                    self.mem.regs_seen.push((at, r));
+                }
+            }
+
+            if let Some(h) = self.mem.pc_hist.as_mut() {
+                let b = (pc >> 6) as usize;
+                if b < h.len() {
+                    h[b] += 1;
+                }
+            }
 
             if let Some((lo, hi)) = self.mem.trace_pc {
                 if pc >= lo && pc <= hi && self.mem.pc_trace.len() < PC_TRACE_CAP {

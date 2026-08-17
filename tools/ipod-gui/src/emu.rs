@@ -167,6 +167,24 @@ pub struct Config {
     pub control: Option<PathBuf>,
     /// Record execution inside this address range, for code that resists being read.
     pub trace_pc: Option<(u32, u32)>,
+    /// `BASE:LEN` — log writes into this range with the PC that made them.
+    ///
+    /// The step that turns "these are RSA operands" into "and this is where they came from": a
+    /// buffer's first writer names its source, and the source is the whole question — NOR bytes we
+    /// hold, or a value this model invented.
+    pub watch_writes: Option<(u32, u32)>,
+    /// `ADDR:N` — dump the register file the first N times ADDR executes.
+    pub regs_at: Option<(u32, usize)>,
+    /// Count executed instructions per 64-byte bucket and report the hottest.
+    pub profile: bool,
+    /// Disable the headless idle heuristic.
+    pub no_idle_stop: bool,
+    /// Write a named memory region out when the run ends, as `NAME:FILE`.
+    ///
+    /// Exists so `tcb` can be pointed at a real boot. That tool reads the whole RTXC scheduler out
+    /// of an SDRAM image -- every task's state, its saved resume PC, and therefore which kernel
+    /// primitive it is waiting in -- which is the question a call that never returns raises.
+    pub save_region: Option<(String, PathBuf)>,
     /// Record call edges from this instruction count onward.
     pub trace_calls_from: Option<u64>,
     /// Addresses to watch, reported whenever one changes.
@@ -486,6 +504,12 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
 
     m.mem.trace_pc = cfg.trace_pc;
     m.mem.trace_calls_from = cfg.trace_calls_from;
+    // 8 MB of low address space at 64 bytes a bucket.
+    m.mem.regs_at = cfg.regs_at;
+    m.mem.watch_range = cfg.watch_writes;
+    if cfg.profile {
+        m.mem.pc_hist = Some(vec![0u64; (8 << 20) >> 6]);
+    }
     m.instr_per_usec = cfg.clock.max(1);
 
     // The five addresses whose arrival counts are the measurement this GUI exists to make.
@@ -498,8 +522,12 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // --stop-when-idle=400000000` line for line. That flag needs the novelty bitset armed, and the
     // bitset costs 512 KB and a probe per instruction — which is exactly the sort of thing that
     // should not be paid for by a window nobody is measuring. So it is on only here.
+    // …and overridable, because "idle" here means "executed no *new* code in the window", which a
+    // long-running computation through already-seen code satisfies perfectly. A headless run
+    // investigating exactly that will stop early and report an instruction count that is the
+    // heuristic's, not the budget's -- which reads as "still running at N" when N never happened.
     if cfg.headless.is_some() {
-        m.stop_when_idle = Some(400_000_000);
+        m.stop_when_idle = if cfg.no_idle_stop { None } else { Some(400_000_000) };
         m.novelty = Some(Default::default());
         m.arm_novelty();
     }
@@ -873,7 +901,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         }
         if let Some(limit) = cfg.headless {
             if executed >= limit || stop != Stop::BudgetExhausted {
-                report_headless(&m, stop, started);
+                report_headless(&m, stop, started, cfg.save_region.as_ref());
                 link.quit.store(true, Ordering::Relaxed);
                 break;
             }
@@ -1499,7 +1527,7 @@ impl Probing {
 
 /// The self-check. Prints the three numbers `retail-boot.sh` prints, so "the GUI runs the same
 /// machine as the recipe" is a comparison rather than a claim.
-fn report_headless(m: &Machine, stop: Stop, started: Instant) {
+fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(String, PathBuf)>) {
     let secs = started.elapsed().as_secs_f64();
     println!("headless: {stop:?} after {} instructions", m.executed);
     // `commands.seen()`, never `commands.sample().len()`: the log is a `Capped<T>` and its length
@@ -1520,16 +1548,82 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant) {
     // Printed unconditionally when a range was asked for, including when it is empty. "Nothing was
     // recorded" and "nothing was asked" must not look the same, because an instrument that stays
     // silent when it found nothing is indistinguishable from one that is not running.
+    if let Some((name, path)) = save {
+        match m.mem.region_named(name) {
+            Some(r) => match std::fs::write(path, &r.data) {
+                Ok(()) => println!("  saved region {name}: {} bytes -> {}", r.data.len(), path.display()),
+                Err(e) => println!("  saved region {name}: {e}"),
+            },
+            None => println!(
+                "  no region {name:?}; have {:?}",
+                m.mem.regions.iter().map(|r| r.name).collect::<Vec<_>>()
+            ),
+        }
+    }
+    {
+        // (addr, value, pc, width) per the Capped's element type.
+        let log = m.mem.watch_range_log.sample();
+        if !log.is_empty() {
+            println!("  writes into the watched range: {} logged", log.len());
+            // Zeroing is a memset and tells us nothing about provenance; the writers that put
+            // *content* there are the ones that name a source.
+            let mut pcs: std::collections::BTreeMap<u32, (usize, u32)> = Default::default();
+            for (pc, _addr, val, _w) in log.iter().filter(|(_, _, v, _)| *v != 0) {
+                let e = pcs.entry(*pc).or_insert((0, *val));
+                e.0 += 1;
+            }
+            println!("    non-zero writers ({} distinct pc):", pcs.len());
+            for (pc, (n, sample)) in pcs.iter().take(12) {
+                println!("      pc {pc:#010x}  x{n}  e.g. {sample:#010x}");
+            }
+        }
+    }
+    if !m.mem.regs_seen.is_empty() {
+        println!("  registers at {:#010x}:", m.mem.regs_at.map(|(a, _)| a).unwrap_or(0));
+        for (at, r) in m.mem.regs_seen.iter() {
+            println!("    at {at}:");
+            for row in 0..4 {
+                let cells: Vec<String> = (0..4).map(|c| {
+                    let i = row * 4 + c;
+                    format!("r{i:<2}={:#010x}", r[i])
+                }).collect();
+                println!("      {}", cells.join("  "));
+            }
+        }
+    }
+    if let Some(h) = &m.mem.pc_hist {
+        let total: u64 = h.iter().sum();
+        println!("  profile: {total} instructions counted");
+        let mut idx: Vec<usize> = (0..h.len()).filter(|i| h[*i] > 0).collect();
+        idx.sort_by_key(|i| std::cmp::Reverse(h[*i]));
+        for i in idx.iter().take(16) {
+            let pc = (*i as u32) << 6;
+            let pct = h[*i] as f64 * 100.0 / total.max(1) as f64;
+            println!("    {pc:#010x}  {:>12}  {pct:5.2}%", h[*i]);
+        }
+    }
     if m.mem.trace_calls_from.is_some() {
         let n = m.mem.call_trace.len();
-        println!("  calls: {n} recorded");
-        // Distinct edges in first-seen order. The repetition is a loop; the first time each edge is
-        // taken is the shape of the subsystem.
-        let mut seen = std::collections::BTreeSet::new();
-        for (from, to, at) in m.mem.call_trace.iter() {
-            if seen.insert((*from, *to)) && seen.len() <= 300 && *to != 0x18 {
-                println!("    {from:#010x} -> {to:#010x}  at {at}");
-            }
+        let mut count: std::collections::BTreeMap<(u32, u32), usize> = Default::default();
+        let mut first: std::collections::BTreeMap<(u32, u32), u64> = Default::default();
+        for (f, to, at) in m.mem.call_trace.iter() {
+            *count.entry((*f, *to)).or_default() += 1;
+            first.entry((*f, *to)).or_insert(*at);
+        }
+        println!("  calls: {n} recorded, {} distinct edges", count.len());
+        let mut by_count: Vec<_> = count.iter().collect();
+        by_count.sort_by(|a, b| b.1.cmp(a.1));
+        println!("    busiest:");
+        for ((f, to), c) in by_count.iter().take(12) {
+            println!("      {f:#010x} -> {to:#010x}  x{c}");
+        }
+        // An edge taken once per account is the one worth finding, and twelve accounts is the
+        // number this drive carries. Widened either side so an off-by-a-few still shows.
+        println!("    taken 8..20 times (candidates for once-per-account):");
+        let mut per: Vec<_> = count.iter().filter(|(_, c)| (8..=20).contains(*c)).collect();
+        per.sort_by_key(|((f, _), _)| *f);
+        for ((f, to), c) in per.iter().take(24) {
+            println!("      {f:#010x} -> {to:#010x}  x{c}  first at {}", first[&(*f, *to)]);
         }
     }
     if let Some((lo, hi)) = m.mem.trace_pc {

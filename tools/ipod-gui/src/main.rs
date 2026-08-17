@@ -309,6 +309,16 @@ ipod-emulator — an interactive iPod over the eapp-loader emulator
   --selftest              no window: push a scripted gesture through the GUI's own input path
                           and print what reached RetailOS
   --selftest-control      the matched control: the same run with no input at all
+  --watch-writes=BASE:LEN log every write into a range with the PC that made it. A buffer's
+                          first writer names where its contents came from.
+  --regs-at=ADDR:N        dump the register file the first N times ADDR executes. At a bignum
+                          loop head the registers are the operands.
+  --profile               count executed instructions per 64-byte bucket and print the
+                          hottest. Finds a loop that a call graph cannot see.
+  --no-idle-stop          do not stop a headless run when no NEW code has executed. A long
+                          computation through known code looks idle to that heuristic.
+  --save-region=NAME:FILE write a memory region out at the end of a headless run, so
+                          `tcb` can read the RTXC scheduler off a real boot.
   --trace-calls-from=N    record every `bl` taken after N instructions. For flattened code the
                           calls are the shape the obfuscation cannot hide.
   --trace-pc=LO:HI        record every address executed in this range. For code that is
@@ -460,6 +470,23 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         cold: args.iter().any(|a| a == "--cold"),
         control: get("--control=").map(PathBuf::from),
         // `--trace-pc=LO:HI`, hex, for watching a flattened function execute.
+        watch_writes: get("--watch-writes=").and_then(|s| {
+            let (b, n) = s.split_once(':')?;
+            Some((
+                u32::from_str_radix(b.trim_start_matches("0x"), 16).ok()?,
+                u32::from_str_radix(n.trim_start_matches("0x"), 16).ok()?,
+            ))
+        }),
+        regs_at: get("--regs-at=").and_then(|s| {
+            let (a, n) = s.split_once(':').unwrap_or((s.as_str(), "1"));
+            Some((u32::from_str_radix(a.trim_start_matches("0x"), 16).ok()?, n.parse().ok()?))
+        }),
+        profile: args.iter().any(|a| a == "--profile"),
+        no_idle_stop: args.iter().any(|a| a == "--no-idle-stop"),
+        save_region: get("--save-region=").and_then(|s| {
+            let (n, f) = s.split_once(':')?;
+            Some((n.to_string(), PathBuf::from(f)))
+        }),
         trace_calls_from: get("--trace-calls-from=").and_then(|s| s.parse().ok()),
         trace_pc: get("--trace-pc=").and_then(|s| {
             let (a, b) = s.split_once(':')?;
