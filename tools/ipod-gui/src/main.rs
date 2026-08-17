@@ -494,6 +494,8 @@ struct App {
     update_slot: Arc<Mutex<Option<Option<update::Found>>>>,
     update_line: Option<String>,
     update_asked: bool,
+    /// Leftover scroll that has not yet added up to a detent. See [`SCROLL_UNITS_PER_DETENT`].
+    wheel_units: f32,
 }
 
 struct Drag {
@@ -521,6 +523,15 @@ struct Setup {
     /// Set when the user has been told the files do not validate and has chosen to boot anyway.
     force: bool,
 }
+
+/// egui units of scroll per click-wheel detent.
+///
+/// egui reports one mouse-wheel line as `line_scroll_speed`, which it defaults to **40.0** on
+/// native — so one notch of a physical wheel is one detent here. A trackpad sends a continuous
+/// stream of much smaller values, which accumulate into the same thing, so the wheel glides under
+/// a finger and steps under a notch. Taken from egui's default rather than tuned by feel, so it
+/// stays right if that default changes and wrong visibly if it does not.
+const SCROLL_UNITS_PER_DETENT: f32 = 40.0;
 
 /// The path as a string, or empty if nothing is there.
 fn existing(p: &Path) -> String {
@@ -624,6 +635,7 @@ impl App {
             update_slot,
             update_line: None,
             update_asked: false,
+            wheel_units: 0.0,
         };
         // Nothing to set up: the images are there and they parse. Skip straight to the iPod.
         if app.setup.both_good() {
@@ -1113,6 +1125,7 @@ impl App {
         use egui::Key;
         let (mut scroll, mut pressed, mut released, mut toggle_hold, mut shot, mut toggle_mode) =
             (0i32, Vec::new(), Vec::new(), false, false, false);
+        let mut wheel_units = self.wheel_units;
         ctx.input(|i| {
             // Held rather than pressed, so holding an arrow scrolls. One click per repaint is about
             // 60 clicks a second, which is a brisk but human thumb.
@@ -1140,7 +1153,27 @@ impl App {
             toggle_hold = i.key_pressed(Key::H);
             shot = i.key_pressed(Key::S);
             toggle_mode = i.key_pressed(Key::D);
+
+            // The mouse wheel drives the click wheel. It is the obvious input for this device and
+            // every mouse has one; a user asked why it did not work and the answer was that nobody
+            // had wired it.
+            //
+            // A physical notch reports about 50 units in egui, and a trackpad reports a continuous
+            // stream of small ones. Accumulating and dividing gives one detent per notch and a
+            // proportional glide from a trackpad, rather than either flying or doing nothing.
+            let dy = i.smooth_scroll_delta.y;
+            if dy != 0.0 {
+                wheel_units += dy;
+            }
         });
+
+        // Down the page scrolls the same way down the menu does.
+        let detents = (wheel_units / SCROLL_UNITS_PER_DETENT) as i32;
+        if detents != 0 {
+            wheel_units -= detents as f32 * SCROLL_UNITS_PER_DETENT;
+            scroll -= detents;
+        }
+        self.wheel_units = wheel_units;
 
         if scroll != 0 {
             self.touch();

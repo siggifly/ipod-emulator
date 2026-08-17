@@ -3,13 +3,11 @@
 # Cold boot on the RETAIL hardware configuration — Apple's shipping 5G bootloader and a firmware
 # partition it accepts. This is the configuration the project is actually emulating.
 #
-# `cold-boot.sh` runs a *prototype's* NOR instead (archive.org, "SA JULY 12 2007 ipod video
-# prototype firmware dump": serial U1234567890, blank HwId, Mod# M8976, the unpublished
-# HwVr 0x000b0011). That was never a decision — it was the first dump we had, and the retail one
-# sat in the repo mislabelled `A1238` (the iPod *classic* 6G's model number, though the bytes are
-# plainly PP502x) until 2026-08-13.
-#
-# The difference is not cosmetic. Measured at 600 M instructions, --clock=5, same day:
+# There was once a second recipe, `cold-boot.sh`, running a *prototype's* NOR — the first dump this
+# project had, before the retail one turned up in the repository mislabelled `A1238` (the iPod
+# *classic* 6G's model number, though the bytes are plainly PP502x). It is gone: it booted a
+# firmware partition this one correctly rejects, and shipping it sent at least one person hours
+# down a path that cannot work. The measured difference, at 600 M instructions and --clock=5:
 #
 #                              prototype        retail
 #   arrivals at address 0      314 (157 resets) 2 — the cold reset and the handoff
@@ -31,6 +29,10 @@ ROOT=$(cd "$HERE/../.." && pwd)
 RES="$ROOT/resources"
 
 # Mislabelled upstream; the bytes are a retail 5G. SrNm <SERIAL-ROM>, Mod# MA146, HwVr 0x000b0005.
+# `trace` beside this script's build, not one machine's target directory. The old default was
+# `$HOME/dev/.cargo-target/release/trace`, which is a path only its author had.
+: "${TRACE:=$(cd "$HERE/../.." && pwd)/target/release/trace}"
+: "${BUDGET:=150000000}"
 : "${FLASH:=$RES/reference/ipod-bootrom-archive/A1238/internal_rom_000000-0FFFFF.bin}"
 # The image whose firmware partition this bootloader accepts — the pristine 13 895 680-byte
 # Firmware-20.6.3 written over a partition it fits exactly. The retail ROM validates what the
@@ -85,4 +87,7 @@ fi
 DISK="$WORK"
 export DISK
 
-"$HERE/cold-boot.sh" --disk-writable "$@"
+exec "$TRACE" "$BUDGET" \
+  --boot-osos --cold-boot \
+  --flash="$FLASH" --disk="$DISK" \
+  --bcm --pmu --nor --disk-writable "$@"

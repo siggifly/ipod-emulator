@@ -104,7 +104,6 @@ ipod-boot — Apple's firmware, booted under the emulator
 
   ipod-boot retail        [flags…]   Apple's shipping 5G bootloader + the image it accepts.
                                      Every current number in research/ is measured on this one.
-  ipod-boot cold          [flags…]   the PROTOTYPE NOR. Numbers measured on it do not transfer.
   ipod-boot warm          [flags…]   RetailOS entered directly at 0x10000000, handoff faked
   ipod-boot flsh          [flags…]   one of the NOR's own images: IMG=diag|disk|scan|logo|vmcs
   ipod-boot rockbox       [flags…]   Rockbox as a source-available oracle
@@ -151,7 +150,6 @@ The shell recipes in tools/ipod-boot/ remain the reference. This program compose
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Recipe {
     Retail,
-    Cold,
     Warm,
     Flsh,
     Rockbox,
@@ -163,7 +161,6 @@ impl Recipe {
     fn parse(s: &str) -> Option<Recipe> {
         Some(match s {
             "retail" | "retail-boot" => Recipe::Retail,
-            "cold" | "cold-boot" => Recipe::Cold,
             "warm" | "warm-boot" => Recipe::Warm,
             "flsh" => Recipe::Flsh,
             "rockbox" => Recipe::Rockbox,
@@ -180,7 +177,6 @@ impl Recipe {
     fn script(self) -> &'static str {
         match self {
             Recipe::Retail => "retail-boot.sh",
-            Recipe::Cold => "cold-boot.sh",
             Recipe::Warm => "warm-boot.sh",
             Recipe::Flsh => "flsh.sh",
             Recipe::Rockbox => "rockbox.sh",
@@ -387,30 +383,10 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
     // The eApp every `trace` invocation is handed. A boot never executes it — RetailOS is entered
     // from the reset vector and never looks at 0x18000000 — but `trace`'s first positional is the
     // image, so the recipes all name the same one.
-    // The prototype NOR (archive.org, "SA JULY 12 2007 ipod video prototype firmware dump"), which
-    // is `cold-boot.sh`'s default and, deliberately, nothing else's.
-    let proto_flash =
-        || res.join("internal_rom_000000-0FFFFF/internal_rom_000000-0FFFFF.bin");
     let retail_flash =
         || res.join("reference/ipod-bootrom-archive/A1238/internal_rom_000000-0FFFFF.bin");
 
     match recipe {
-        // trace BUDGET --boot-osos --cold-boot --flash= --disk= --bcm --pmu --nor "$@"
-        Recipe::Cold => {
-            let (flash, flash_from) = resolve("FLASH", saved.flash.clone(), proto_flash());
-            let (disk, disk_from) = resolve("DISK", saved.disk.clone(), res.join("derived/disk/ipod8g.img"));
-            let budget = env_u64("BUDGET", 150_000_000);
-            if !dry {
-                require(&flash, "NOR dump (FLASH=)")?;
-                require(&disk, "disk image (DISK=)")?;
-            }
-            Ok(Plan {
-                trace,
-                sources: vec![("NOR dump", flash.clone(), flash_from), ("drive", disk.clone(), disk_from)],
-                runs: vec![cold_argv(budget, &flash, &disk, &[], user)],
-                cleanup: None,
-            })
-        }
 
         // retail-boot.sh: the retail defaults, a writable per-run clone, then cold-boot.sh
         // --disk-writable "$@" — so --disk-writable lands ahead of the caller's own flags.
@@ -448,7 +424,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         // trace BUDGET --osos= --boot-osos --osos-at=0x04000000 --sysinfo --flash= --disk=
         //       --bcm --pmu "$@"
         Recipe::Warm => {
-            let (flash, flash_from) = resolve("FLASH", saved.flash.clone(), proto_flash());
+            let (flash, flash_from) = resolve("FLASH", saved.flash.clone(), retail_flash());
             let (disk, disk_from) = resolve("DISK", saved.disk.clone(), res.join("derived/disk/ipod8g.img"));
             let osos = env_path("OSOS").unwrap_or_else(|| res.join("derived/fw/OSOS_correct.bin"));
             let budget = env_u64("BUDGET", 600_000_000);
@@ -474,7 +450,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         //       --bcm --pmu --nor "$@"
         Recipe::Flsh => {
             let img = std::env::var("IMG").unwrap_or_else(|_| "diag".into());
-            let (flash, flash_from) = resolve("FLASH", saved.flash.clone(), proto_flash());
+            let (flash, flash_from) = resolve("FLASH", saved.flash.clone(), retail_flash());
             let (disk, disk_from) = resolve("DISK", saved.disk.clone(), res.join("derived/disk/ipod8g.img"));
             let osos = res.join(format!("derived/fw/flsh/{img}.bin"));
             let budget = env_u64("BUDGET", 200_000_000);
@@ -499,7 +475,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         // trace BUDGET --osos=$RB/$IMG --boot-osos --flash= --disk= --sysinfo --bcm --pmu "$@"
         Recipe::Rockbox => {
             let img = std::env::var("IMG").unwrap_or_else(|_| "rb-main.raw".into());
-            let (flash, flash_from) = resolve("FLASH", saved.flash.clone(), proto_flash());
+            let (flash, flash_from) = resolve("FLASH", saved.flash.clone(), retail_flash());
             let (disk, disk_from) = resolve("DISK", saved.disk.clone(), res.join("derived/disk/ipod8g.img"));
             let osos = res.join("reference/rockbox/bin").join(&img);
             let budget = env_u64("BUDGET", 200_000_000);
@@ -976,8 +952,12 @@ mod tests {
             .parent()
             .unwrap()
             .join("ipod-boot");
+        // Retail is in this list now. It used to be covered only by a test that defined it as
+        // "cold-boot.sh's flags plus --disk-writable", and when the cold recipe was deleted that
+        // test went with it — which would have left the recipe every number in research/ is
+        // measured on with no drift coverage at all.
         for recipe in [
-            Recipe::Cold,
+            Recipe::Retail,
             Recipe::Warm,
             Recipe::Flsh,
             Recipe::Rockbox,
@@ -998,27 +978,6 @@ mod tests {
         }
     }
 
-    /// `retail-boot.sh` reaches `trace` through `cold-boot.sh`, inserting `--disk-writable` where
-    /// the `exec` puts it. Checked against `cold-boot.sh`'s flags plus that one, because the
-    /// script itself has no `trace` line to read.
-    #[test]
-    fn retail_is_cold_plus_disk_writable() {
-        let scripts = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("ipod-boot");
-        let cold = script_flags(&std::fs::read_to_string(scripts.join("cold-boot.sh")).unwrap());
-        let retail = flags_of(&plan(Recipe::Retail, &[], true).unwrap().runs[0]);
-        let mut want = cold;
-        want.push("--disk-writable".into());
-        assert_eq!(retail, want);
-
-        let text = std::fs::read_to_string(scripts.join("retail-boot.sh")).unwrap();
-        assert!(
-            text.contains("--disk-writable"),
-            "retail-boot.sh stopped passing --disk-writable; this test's premise is gone"
-        );
-    }
 
     /// Extract the flags from a script's `trace` invocation: everything from the line that runs
     /// `$TRACE` to the end of its backslash continuations.
@@ -1068,7 +1027,7 @@ mod tests {
     #[test]
     fn user_flags_are_appended_last() {
         let user = vec!["--clock=5".to_string(), "--profile".to_string()];
-        let p = plan(Recipe::Cold, &user, true).unwrap();
+        let p = plan(Recipe::Warm, &user, true).unwrap();
         let n = p.runs[0].len();
         assert_eq!(&p.runs[0][n - 2..], &user[..]);
     }
@@ -1106,7 +1065,6 @@ mod tests {
     fn every_recipe_name_round_trips() {
         for (name, want) in [
             ("retail", Recipe::Retail),
-            ("cold", Recipe::Cold),
             ("warm", Recipe::Warm),
             ("flsh", Recipe::Flsh),
             ("rockbox", Recipe::Rockbox),
