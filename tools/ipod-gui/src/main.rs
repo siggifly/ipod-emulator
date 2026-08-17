@@ -399,10 +399,22 @@ struct Cache {
 /// The frozen drive added a third file per key without materially changing the bill — it is made
 /// with `cp -c`, so on APFS it shares its blocks with the working drive and only costs what the two
 /// have written differently.
-fn prune_cache(keep: &Cache) -> u64 {
+/// What is in the cache that this launch will not use, and how much it comes to.
+///
+/// **This only looks.** It used to delete, at startup, with no prompt and no way to decline — and
+/// the cache key includes a hash of the emulator's own source, so *any* change to the model mints a
+/// new key and orphans the previous 8 GB frozen drive and its snapshot. That made "reclaimed 17.3
+/// GB from images no longer in use" a message on almost every launch during development, and each
+/// one threw away a 75-second cold boot somebody had waited for, plus whatever state they had
+/// parked with `snapshot`.
+///
+/// Disk is the user's, and 17 GB is not a rounding error. The size is stated and the button is
+/// theirs to press.
+fn reclaimable(keep: &Cache) -> (u64, Vec<PathBuf>) {
     let dir = settings::data_dir();
-    let Ok(rd) = std::fs::read_dir(&dir) else { return 0 };
-    let mut freed = 0;
+    let Ok(rd) = std::fs::read_dir(&dir) else { return (0, Vec::new()) };
+    let mut total = 0;
+    let mut paths = Vec::new();
     for e in rd.flatten() {
         let p = e.path();
         let name = e.file_name();
@@ -413,8 +425,18 @@ fn prune_cache(keep: &Cache) -> u64 {
         if p == keep.snap || p == keep.frozen || p == keep.work {
             continue;
         }
-        let n = e.metadata().map(|m| m.len()).unwrap_or(0);
-        if std::fs::remove_file(&p).is_ok() {
+        total += e.metadata().map(|m| m.len()).unwrap_or(0);
+        paths.push(p);
+    }
+    (total, paths)
+}
+
+/// Delete what `reclaimable` found, once somebody has asked for it.
+fn reclaim(paths: &[PathBuf]) -> u64 {
+    let mut freed = 0;
+    for p in paths {
+        let n = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        if std::fs::remove_file(p).is_ok() {
             freed += n;
         }
     }
@@ -659,6 +681,9 @@ struct App {
     update_asked: bool,
     /// Leftover scroll that has not yet added up to a detent. See [`SCROLL_UNITS_PER_DETENT`].
     wheel_units: f32,
+    /// Cache files this launch will not use: their total size, and where they are. Measured at
+    /// `start`, deleted only when the button below is pressed.
+    stale_cache: (u64, Vec<PathBuf>),
     /// A fault the emulator found in the drive before booting it, drawn under the case.
     ///
     /// RetailOS answers several unrelated faults with one picture — the plug-into-a-computer glyph
@@ -826,6 +851,7 @@ impl App {
             update_line: None,
             update_asked: false,
             wheel_units: 0.0,
+            stale_cache: (0, Vec::new()),
         };
         // Nothing to set up: the images are there and they parse. Skip straight to the iPod.
         if app.setup.both_good() {
@@ -844,11 +870,15 @@ impl App {
         // The cache key includes both paths, so a different pair of images gets a different
         // snapshot rather than restoring one taken on the other machine.
         let cache = cache_paths(&self.cfg.flash, &self.cfg.disk, self.cfg.clock, self.cfg.snap_at);
-        // Everything cached for a DIFFERENT pair of images goes now. Without this, each pair the
-        // user tried left an 8 GB working disk and a 1.6 GB snapshot behind for ever.
-        let freed = prune_cache(&cache);
-        if freed > 0 {
-            self.say(format!("reclaimed {} from images no longer in use", human(freed)));
+        // Measured, not deleted. Anything cached for a different pair of images -- or for an
+        // older build of this emulator, which is the common case -- is reported and left alone.
+        let (stale, paths) = reclaimable(&cache);
+        self.stale_cache = (stale, paths);
+        if stale > 0 {
+            self.say(format!(
+                "{} in the cache is from earlier builds or other images — reclaim it in Setup",
+                human(stale)
+            ));
         }
         self.cfg.snapshot = Some(cache.snap);
         self.cfg.workdisk = cache.work;
@@ -1366,6 +1396,29 @@ impl App {
                 .small()
                 .color(Color32::from_gray(0x78)),
         );
+        if self.stale_cache.0 > 0 {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .button(format!("reclaim {}", human(self.stale_cache.0)))
+                    .on_hover_text(
+                        "Snapshots and working drives from earlier builds or other image pairs. \
+                         Deleting them costs the next launch a cold boot for those images, and \
+                         nothing else.",
+                    )
+                    .clicked()
+                {
+                    let freed = reclaim(&self.stale_cache.1);
+                    self.stale_cache = (0, Vec::new());
+                    self.say(format!("reclaimed {}", human(freed)));
+                }
+                ui.label(
+                    egui::RichText::new("from earlier builds or other images")
+                        .small()
+                        .color(Color32::from_gray(0x78)),
+                );
+            });
+        }
         ui.add_space(6.0);
         ui.label(
             egui::RichText::new("The first boot takes about 75 seconds. It is a real cold boot.")

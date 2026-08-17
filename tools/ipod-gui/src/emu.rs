@@ -1656,6 +1656,23 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
                     e.2 += 1;
                 }
             }
+            // Per WORD as well as per PC. A range census grouped only by writer answers "who"
+            // and not "where", and for a block of adjacent device registers -- a GPIO port's four
+            // OUTPUT_VALs, say -- "where" is the entire question. Chasing which pin the backlight
+            // hangs off took three runs for want of this line.
+            if m.mem.watch_range_words.len() > 1 {
+                println!("    by word:");
+                for (addr, w) in m.mem.watch_range_words.iter() {
+                    let who: Vec<String> =
+                        w.pcs.iter().map(|(pc, n)| format!("{pc:#010x} x{n}")).collect();
+                    println!(
+                        "      {addr:#010x}  {} byte-writes, first @{}  [{}]",
+                        w.writes,
+                        w.first_at,
+                        who.join(" ")
+                    );
+                }
+            }
             println!("    writers ({} distinct pc):", pcs.len());
             for (pc, (n, sample, nonzero)) in pcs.iter().take(12) {
                 let what = if *nonzero == 0 {
