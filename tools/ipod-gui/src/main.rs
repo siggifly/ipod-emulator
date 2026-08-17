@@ -309,6 +309,8 @@ ipod-emulator — an interactive iPod over the eapp-loader emulator
   --selftest              no window: push a scripted gesture through the GUI's own input path
                           and print what reached RetailOS
   --selftest-control      the matched control: the same run with no input at all
+  --trace-pc=LO:HI        record every address executed in this range. For code that is
+                          control-flow flattened, watching beats reading.
   --control=PATH          open a control socket: wheel / press / shot / peek / state.
                           Lets something other than a person drive the machine.
   --watch=ADDR[,ADDR]     report a word whenever it changes. `--watch=14937194` is the DRM
@@ -455,6 +457,14 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         snap_at,
         cold: args.iter().any(|a| a == "--cold"),
         control: get("--control=").map(PathBuf::from),
+        // `--trace-pc=LO:HI`, hex, for watching a flattened function execute.
+        trace_pc: get("--trace-pc=").and_then(|s| {
+            let (a, b) = s.split_once(':')?;
+            Some((
+                u32::from_str_radix(a.trim_start_matches("0x"), 16).ok()?,
+                u32::from_str_radix(b.trim_start_matches("0x"), 16).ok()?,
+            ))
+        }),
         // Comma-separated hex, with or without 0x, because both spellings turn up in the research
         // notes these addresses are copied out of.
         watch: get("--watch=")

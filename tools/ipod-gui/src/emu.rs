@@ -165,6 +165,8 @@ pub struct Config {
     /// Absent by default. A socket that appears without being asked for is an interface nobody
     /// audited, on a program that reads a NOR dump and a drive image.
     pub control: Option<PathBuf>,
+    /// Record execution inside this address range, for code that resists being read.
+    pub trace_pc: Option<(u32, u32)>,
     /// Addresses to watch, reported whenever one changes.
     ///
     /// Built for a single question: `06-game-drm.md` establishes that `[0x14937194]` is the DRM
@@ -233,6 +235,8 @@ pub struct Out {
     /// failing because hardware is missing?* -- wants the addresses, not a count, and a count that
     /// moved with no way to see what moved it would be a worse instrument than none.
     pub unmapped_pages: Vec<u32>,
+    /// The most recent PC trace handed over by the run loop.
+    pub pc_trace: Vec<(u32, u64)>,
     /// The surface the window is **not** showing, and whether its content has moved since this
     /// session began.
     ///
@@ -342,6 +346,7 @@ impl Link {
                 fb_nonzero: 0,
                 fb_addr: FB_FRONT,
                 unmapped_pages: Vec::new(),
+                pc_trace: Vec::new(),
                 fb_seq: 0,
                 fb_other_nonzero: 0,
                 fb_other_moved: false,
@@ -477,6 +482,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     m.mem.i2c_base = Some(0x7000_c000);
     m.mem.pmu = Some(Pcf50605::new());
 
+    m.mem.trace_pc = cfg.trace_pc;
     m.instr_per_usec = cfg.clock.max(1);
 
     // The five addresses whose arrival counts are the measurement this GUI exists to make.
@@ -917,6 +923,12 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                 for a in batch {
                     let v = if a == crate::control::UNMAPPED_SENTINEL {
                         Some(m.mem.unmapped.len() as u32)
+                    } else if a == crate::control::TRACE_SENTINEL {
+                        // Hand the trace over and clear it, so a second dump shows what happened
+                        // since the first rather than repeating it.
+                        let mut out = link.out.lock().unwrap();
+                        out.pc_trace = std::mem::take(&mut m.mem.pc_trace);
+                        Some(out.pc_trace.len() as u32)
                     } else {
                         m.mem.peek32(a)
                     };

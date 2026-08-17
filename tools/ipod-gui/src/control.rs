@@ -33,6 +33,7 @@ use std::sync::Arc;
 /// Not an address. Asking for a count through the same request channel keeps the run loop
 /// with one place that answers questions, rather than two that can drift apart.
 pub const UNMAPPED_SENTINEL: u32 = 0xFFFF_FFFF;
+pub const TRACE_SENTINEL: u32 = 0xFFFF_FFFE;
 
 /// Start listening. Returns immediately; each connection is served on its own thread.
 pub fn serve(path: &Path, link: Arc<Link>) -> Result<(), String> {
@@ -185,6 +186,29 @@ fn command(line: &str, link: &Arc<Link>) -> String {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
+        }
+        // Hand over the execution trace, newest run first, and clear it.
+        "trace" => {
+            link.peek_req.lock().unwrap().push(TRACE_SENTINEL);
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let _ = link.peek_ans.lock().unwrap().pop();
+            let out = link.out.lock().unwrap();
+            if out.pc_trace.is_empty() {
+                return "ok trace empty".into();
+            }
+            // The sequence of distinct addresses matters, not the repetition: a flattened function
+            // revisits its dispatcher constantly and a raw list would be mostly that.
+            let mut seq: Vec<String> = Vec::new();
+            let mut last = None;
+            for (pc, _) in out.pc_trace.iter() {
+                if Some(*pc) != last {
+                    if seq.len() < 400 {
+                        seq.push(format!("{pc:x}"));
+                    }
+                    last = Some(*pc);
+                }
+            }
+            format!("ok trace {} entries, {} transitions: {}", out.pc_trace.len(), seq.len(), seq.join(" "))
         }
         "state" => {
             let out = link.out.lock().unwrap();

@@ -598,6 +598,12 @@ pub struct Memory {
     /// `(pc, addr, value, icount)` per watched read. Capped, and the cap is the one that turned a
     /// control read 9 588 012 times into a clean zero — see [`Capped`].
     pub read_log: Capped<(u32, u32, u8, u64)>,
+    /// An address range to record execution within, and what was recorded.
+    ///
+    /// `None` costs one compare per instruction, which is what makes it acceptable to leave in the
+    /// hot loop of an interpreter.
+    pub trace_pc: Option<(u32, u32)>,
+    pub pc_trace: Vec<(u32, u64)>,
     /// `(addr, pc) -> (reads, first icount)`, **uncapped**. The report's per-reader breakdown; the
     /// log above is the ordered sample it sits under.
     pub read_sites: BTreeMap<(u32, u32), (u64, u64)>,
@@ -789,6 +795,11 @@ pub fn peek_regions(regions: &[Region], addr: u32) -> Option<u32> {
     }
     None
 }
+
+/// How many executed addresses a PC trace keeps. Two hundred thousand is several full passes
+/// through a 593-instruction flattened function -- enough to see the state sequence and where it
+/// stops -- while costing a few megabytes rather than growing without bound over a long boot.
+pub const PC_TRACE_CAP: usize = 200_000;
 
 /// Resolution-cache granularity, and the number of slots in the direct-mapped cache. 65536 slots
 /// covers 256 MB of distinct pages — comfortably more than the 64 MB of SDRAM plus IRAM, NOR and
@@ -2210,6 +2221,8 @@ impl Machine {
             read_addr_lo: u32::MAX,
             read_addr_hi: 0,
             read_log: Capped::new(2_000_000),
+            trace_pc: None,
+            pc_trace: Vec::new(),
             read_sites: BTreeMap::new(),
             store_pc_log: Capped::new(2_000_000),
             store_split: 0,
@@ -3212,6 +3225,24 @@ impl Machine {
 
             if pc == self.exit_addr {
                 return Stop::Returned;
+            }
+
+            // A trace of *which code ran*, for functions that resist being read.
+            //
+            // FUN_000103d4 -- the one that turns the key files into a DRM context -- is control-flow
+            // flattened: a 64-way computed dispatch whose blocks all branch back to a dispatcher, with
+            // mixed-arithmetic obfuscation inside them. There is no top-to-bottom path to follow, so
+            // reading it statically is expensive and uncertain. Watching it execute is neither: the
+            // machine is ours to the instruction, and a state machine that resists reading does not
+            // resist being observed.
+            //
+            // Two bounds keep this from being a liability. The range test is one compare against a
+            // `None` in the overwhelming case, and the log is capped -- an instrument that fills
+            // memory during a long boot would be worse than no instrument.
+            if let Some((lo, hi)) = self.mem.trace_pc {
+                if pc >= lo && pc <= hi && self.mem.pc_trace.len() < PC_TRACE_CAP {
+                    self.mem.pc_trace.push((pc, self.executed as u64));
+                }
             }
 
             if !self.breakpoints.is_empty() && self.breakpoints.contains(&pc) {
