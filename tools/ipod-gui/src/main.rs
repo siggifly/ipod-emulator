@@ -2143,9 +2143,13 @@ impl App {
                 row(ui, "queued / dropped", &format!("{} / {}", s.queued, s.input_dropped));
             });
             if s.hold {
+                // This used to say RetailOS did not act on it, which was true and is not any more:
+                // the port-A interrupt is modelled, RetailOS's own GPIOA_INT_EN = 0xe0 arms bit 5
+                // for this switch, and the padlock appears in its title bar. A warning that
+                // outlives the defect it describes teaches the reader to distrust the panel.
                 ui.colored_label(
-                    Color32::from_rgb(0xc8, 0x8a, 0x20),
-                    "Hold is engaged in the model, and RetailOS does not act on it.",
+                    Color32::from_rgb(0x6a, 0x9a, 0x60),
+                    "Hold is engaged, and RetailOS has been told: GPIOA bit 5 low, port interrupt raised.",
                 );
             }
             if !s.reporting {
