@@ -1199,26 +1199,63 @@ fn dropping_the_sleep_accumulator_moves_the_clock_backwards() {
     );
 }
 
-/// A version-3 snapshot must be refused rather than read with a zero in the new field.
+/// A snapshot from an older format must be refused rather than read with zeros in the new fields.
 ///
 /// The cached snapshots this project keeps are keyed on a hash of the emulator's own source, so in
-/// normal use a format change mints a new file. This is the belt: a v3 image reaching `restore` by
-/// any other route would restore the exact machine the fix exists to abolish, and it would do it
-/// silently.
+/// normal use a format change mints a new file. This is the belt: an older image reaching `restore`
+/// by any other route would restore the exact machine each fix exists to abolish, and it would do
+/// it silently.
+///
+/// v4 -> v5 added the click wheel. A v4 image read as v5 would come back with `reporting` false,
+/// which is the state where the wheel is dead and says nothing about it.
 #[test]
-fn a_version_3_snapshot_is_refused() {
+fn an_older_snapshot_is_refused() {
     let m = sleeping_machine();
     let mut img = m.snapshot();
-    assert_eq!(&img[..8], b"IPODSNP4", "the format moved past v4; update this test");
+    assert_eq!(&img[..8], b"IPODSNP5", "the format moved past v5; update this test");
 
-    img[..8].copy_from_slice(b"IPODSNP3");
-    let mut into = sleeping_machine();
-    assert!(!into.restore(&img), "a v3 snapshot was accepted");
+    for old in [b"IPODSNP3", b"IPODSNP4"] {
+        img[..8].copy_from_slice(old);
+        let mut into = sleeping_machine();
+        assert!(
+            !into.restore(&img),
+            "a {} snapshot was accepted",
+            std::str::from_utf8(old).unwrap()
+        );
+    }
 
     // Positive control: the same bytes with the current magic still restore, so what is refused is
     // the version and not the image.
-    img[..8].copy_from_slice(b"IPODSNP4");
+    img[..8].copy_from_slice(b"IPODSNP5");
+    let mut into = sleeping_machine();
     assert!(into.restore(&img), "the harness cannot restore a valid snapshot at all");
+}
+
+/// The wheel's `reporting` flag must survive a snapshot round trip.
+///
+/// It starts false, the firmware sets it once with opcode 0x052a early in a boot, and before v5 the
+/// snapshot did not carry it -- so every restored session came back with autonomous reporting off
+/// and suppressed every frame the wheel posted. Scrolling produced a byte-identical panel, no
+/// error, and no counter moving anywhere a person would look.
+#[test]
+fn a_restored_wheel_is_still_reporting() {
+    let mut m = sleeping_machine();
+    m.mem.clickwheel = Some(eapp_loader::ClickWheel::new(0x7000_c000));
+    {
+        let w = m.mem.clickwheel.as_mut().unwrap();
+        w.reporting = true;
+        w.position = 42;
+        w.touched = true;
+    }
+    let img = m.snapshot();
+
+    let mut into = sleeping_machine();
+    into.mem.clickwheel = Some(eapp_loader::ClickWheel::new(0x7000_c000));
+    assert!(into.restore(&img), "the snapshot did not restore");
+    let w = into.mem.clickwheel.as_ref().expect("wheel");
+    assert!(w.reporting, "reporting was lost -- the wheel comes back dead");
+    assert_eq!(w.position, 42, "the wheel came back at a different position");
+    assert!(w.touched, "the finger was lost");
 }
 
 // ---------------------------------------------------------------- the OR-masked registers

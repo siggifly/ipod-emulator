@@ -6456,7 +6456,7 @@ impl Machine {
         let w32 = |o: &mut Vec<u8>, v: u32| o.extend_from_slice(&v.to_le_bytes());
         let w64 = |o: &mut Vec<u8>, v: u64| o.extend_from_slice(&v.to_le_bytes());
 
-        o.extend_from_slice(b"IPODSNP4");
+        o.extend_from_slice(b"IPODSNP5");
         let cpu = self.cpu.save();
         w32(&mut o, cpu.len() as u32);
         for x in &cpu {
@@ -6522,6 +6522,41 @@ impl Machine {
             }
             None => w32(&mut o, 0),
         }
+        // The click wheel. Omitting it was not free: `reporting` starts off, the firmware turns it
+        // on once with opcode 0x052a early in the boot, and a restored machine came back with it
+        // off -- so every autonomous frame was suppressed and the wheel was dead in every session
+        // that resumed rather than cold-booted. Scrolling produced a byte-identical panel and no
+        // error, which is the quietest way a machine can be broken.
+        //
+        // The counters and logs are deliberately NOT saved: they are instrumentation, and the run
+        // loop already reports "this session" separately from the total. The script is not saved
+        // either, for the reason in this block's own doc comment -- a replayed script fires every
+        // step at once against a machine already past their anchors.
+        match &self.mem.clickwheel {
+            Some(w) => {
+                w32(&mut o, 1);
+                w32(&mut o, w.base);
+                w32(&mut o, w.hold as u32);
+                w32(&mut o, w.touched as u32);
+                w32(&mut o, w.position as u32);
+                w32(&mut o, w.buttons as u32);
+                w32(&mut o, w.ctrl);
+                w32(&mut o, w.status);
+                w32(&mut o, w.tx);
+                w32(&mut o, w.rx);
+                w32(&mut o, w.reporting as u32);
+                w32(&mut o, w.irq_enabled as u32);
+                match w.reply {
+                    Some((frame, due)) => {
+                        w32(&mut o, 1);
+                        w32(&mut o, frame);
+                        w32(&mut o, due);
+                    }
+                    None => w32(&mut o, 0),
+                }
+            }
+            None => w32(&mut o, 0),
+        }
         o
     }
 
@@ -6530,7 +6565,7 @@ impl Machine {
     /// Regions are replaced wholesale rather than merged: a partial restore would leave the machine
     /// in a state that never existed, which is worse than refusing.
     pub fn restore(&mut self, b: &[u8]) -> bool {
-        if b.len() < 8 || &b[..8] != b"IPODSNP4" {
+        if b.len() < 8 || &b[..8] != b"IPODSNP5" {
             return false;
         }
         let mut p = 8usize;
@@ -6608,6 +6643,28 @@ impl Machine {
                 if !d.load(&st) {
                     return false;
                 }
+            }
+        }
+        if r32(&mut p) == 1 {
+            let base = r32(&mut p);
+            let (hold, touched) = (r32(&mut p) != 0, r32(&mut p) != 0);
+            let (position, buttons) = (r32(&mut p) as u8, r32(&mut p) as u8);
+            let (ctrl, status, tx, rx) = (r32(&mut p), r32(&mut p), r32(&mut p), r32(&mut p));
+            let (reporting, irq_enabled) = (r32(&mut p) != 0, r32(&mut p) != 0);
+            let reply = if r32(&mut p) == 1 { Some((r32(&mut p), r32(&mut p))) } else { None };
+            if let Some(w) = &mut self.mem.clickwheel {
+                w.base = base;
+                w.hold = hold;
+                w.touched = touched;
+                w.position = position;
+                w.buttons = buttons;
+                w.ctrl = ctrl;
+                w.status = status;
+                w.tx = tx;
+                w.rx = rx;
+                w.reporting = reporting;
+                w.irq_enabled = irq_enabled;
+                w.reply = reply;
             }
         }
         true
