@@ -318,6 +318,9 @@ ipod-emulator — an interactive iPod over the eapp-loader emulator
                           dependency can be measured for the first time.
   --no-ide-irq-latch      stop reporting the ATA controller's interrupt in IDE0_CFG bit 3
                           (ledger #9). The arm that says what the latch is worth.
+  --input-regs=BASE:SIZE  enumerate the addresses read before they were ever written -- the
+                          hardware inputs we answer with whatever the region holds. The honest
+                          list of where this emulator invents.
   --watch-writes=BASE:LEN log every write into a range with the PC that made it. A buffer's
                           first writer names where its contents came from.
   --regs-at=ADDR:N        dump the register file the first N times ADDR executes. At a bignum
@@ -487,6 +490,13 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         control: get("--control=").map(PathBuf::from),
         cop_awake: args.iter().any(|a| a == "--cop-awake"),
         ide_irq_latch_off: args.iter().any(|a| a == "--no-ide-irq-latch"),
+        input_regs: get("--input-regs=").and_then(|s| {
+            let (b, n) = s.split_once(':')?;
+            Some((
+                u32::from_str_radix(b.trim_start_matches("0x"), 16).ok()?,
+                u32::from_str_radix(n.trim_start_matches("0x"), 16).ok()?,
+            ))
+        }),
         // `--trace-pc=LO:HI`, hex, for watching a flattened function execute.
         watch_writes: get("--watch-writes=").and_then(|s| {
             let (b, n) = s.split_once(':')?;

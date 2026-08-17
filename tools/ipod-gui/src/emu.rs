@@ -173,6 +173,13 @@ pub struct Config {
     pub cop_awake: bool,
     /// Stop reporting the IDE0_CFG interrupt latch in bit 3 (ledger #9).
     pub ide_irq_latch_off: bool,
+    /// `BASE:SIZE` — enumerate the addresses the firmware reads before it has ever written them.
+    ///
+    /// These are hardware *inputs*: values firmware expects silicon to supply and we answer with
+    /// whatever the region holds, which is almost always zero. `trace.rs` has had this since the
+    /// `fast_region` bug; the binary that boots the retail path never did, so the one machine whose
+    /// DRM actually runs could not be asked the question.
+    pub input_regs: Option<(u32, u32)>,
     /// `BASE:LEN` — log writes into this range with the PC that made them.
     ///
     /// The step that turns "these are RSA operands" into "and this is where they came from": a
@@ -458,6 +465,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // Set before the peripheral map, which is where the COP_STATUS override is seeded.
     m.mem.cop_awake = cfg.cop_awake;
     m.mem.ide_irq_latch_off = cfg.ide_irq_latch_off;
+    m.mem.input_probe = cfg.input_regs;
     eapp_loader::map_hardware(&mut m, true);
     // Hardware revision probe: boot reads 0x70000000, takes bits 16..23 and compares to 0x36.
     {
@@ -1567,6 +1575,19 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
                 "  no region {name:?}; have {:?}",
                 m.mem.regions.iter().map(|r| r.name).collect::<Vec<_>>()
             ),
+        }
+    }
+    if !m.mem.input_regs.is_empty() {
+        let mut rows: Vec<_> = m.mem.input_regs.iter().filter(|(_, v)| v.0 > 0).collect();
+        rows.sort_by_key(|(_, v)| std::cmp::Reverse(v.0));
+        println!(
+            "  input registers: {} of {} were read before they were ever written",
+            rows.len(),
+            m.mem.input_regs.len()
+        );
+        println!("    values the firmware expects hardware to supply, and we invent:");
+        for (a, (r, w, pc)) in rows.iter().take(24) {
+            println!("      {a:#010x}  {r:>10} reads before write, {w:>8} writes after, first pc {pc:#010x}");
         }
     }
     {
