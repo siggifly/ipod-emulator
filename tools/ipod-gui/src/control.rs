@@ -9,7 +9,7 @@
 //! that, because the whole point is to be drivable from a shell.
 //!
 //! ```text
-//! wheel N            scroll N detents; negative is anticlockwise
+//! wheel N [MS]       scroll N detents, MS apart; negative is anticlockwise
 //! press NAME         select | menu | play | left/prev | right/next
 //! hold NAME MS       hold a button, for the combos that need one
 //! shot PATH          write the current framebuffer as a PNG
@@ -78,14 +78,23 @@ fn command(line: &str, link: &Arc<Link>) -> String {
     match verb {
         "wheel" => match arg.parse::<i32>() {
             Ok(n) => {
-                // A real finger touches the wheel, moves, and lifts. Posting bare steps leaves the
-                // driver believing a finger is still down, and the next press behaves oddly.
+                // **Timed to match what the window does**, because the firmware's wheel driver is
+                // sampling and anything faster is invisible to it. The GUI emits one click per
+                // repaint -- about 60 a second -- and then holds the finger on for 300 ms after the
+                // last one before releasing, synthesising the lift a keyboard scroll never gives.
+                //
+                // A first attempt queued Touch/Step/Step/Release back to back. Every button still
+                // worked and the menu never moved, which reads like the steps being dropped; they
+                // were delivered, and were simply faster than the thing meant to observe them.
+                let gap = arg2.parse::<u64>().unwrap_or(16);
                 link.push(WheelEvent::Touch);
                 for _ in 0..n.abs() {
                     link.push(WheelEvent::Step(if n > 0 { 1 } else { -1 }));
+                    std::thread::sleep(std::time::Duration::from_millis(gap));
                 }
+                std::thread::sleep(std::time::Duration::from_millis(300));
                 link.push(WheelEvent::Release);
-                format!("ok wheel {n}")
+                format!("ok wheel {n} ({gap}ms apart, 300ms hold)")
             }
             Err(_) => "error: wheel wants a number of detents".into(),
         },
