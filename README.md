@@ -5,6 +5,14 @@ scratch. It formats its own filesystem, reads the click wheel, draws its own men
 
 ![cold boot through to a game](docs/media/ipod-12-device-boot.gif)
 
+> ### This is alpha software
+>
+> It boots, it draws, it plays Brick — and it is four days old with one pair of images behind it.
+> Expect rough edges, expect to read a paragraph to get started, and expect things that work here
+> to fail on files we have never seen. **[Please open an issue](https://github.com/siggifly/ipod-emulator/issues)**
+> if something breaks or could be better; the reports so far have found real bugs and every one of
+> them has been fixed.
+
 The iPod Video 5.5G shipped on 12 September 2006. Twenty years next month, its firmware still boots
 — with no iPod anywhere near it. The PortalPlayer it addresses is arithmetic, the drive it formats
 is a file, the wheel it reads is a mouse, and none of that is something the firmware can tell. It is
@@ -15,7 +23,9 @@ Not a reimplementation of the interface. Apple's own code the whole way: the boo
 SDRAM, talks to the PCF50605 power chip over I²C, uploads firmware to the video co-processor, reads
 the partition table, DMAs 7.5 MB of RetailOS into memory, checksums it and jumps. RetailOS then
 remaps memory, starts its RTXC kernel and 61 tasks, mounts a FAT12 volume out of the firmware
-partition, formats and populates its own FAT32 volume, spins the drive down, and draws.
+partition — its own boot sector claims `FAT16` and is wrong, which truncates every file to its
+first cluster if you believe it — formats and populates its own FAT32 volume, spins the drive
+down, and draws.
 
 | | |
 |---|---|
@@ -38,11 +48,34 @@ drive as its own, and asks to be restored from iTunes, after roughly 70 ATA comm
 
 Without them the emulator starts, tells you what is missing, and does nothing else.
 
+### What has actually been tested
+
+Everything in `research/` was measured on exactly one pair of files. That is part of what "alpha"
+means here, and it is worth stating rather than implying any pair works:
+
+| | |
+|---|---|
+| **NOR** | the retail iPod Video dump — 1 048 576 bytes, `HwVr 0x000b0005`, `Mod# MA146`, non-blank `HwId` |
+| **IPSW** | `iPod_20.1.3.ipsw` — `Firmware-20.6.3` inside it is 13 895 680 bytes, exactly 27 140 sectors, exactly the size of the firmware partition |
+
+**Finding the NOR is harder than it should be, because it is archived under the wrong product.**
+BootROM collections file the iPod Video dump as *iPod Classic*, in a directory named `A1238` — which
+is the Classic 6G's model number. The Video is `A1136`. So searching for "iPod Video", "5.5G" or
+"A1136" turns up nothing and searching for the Classic finds it. This cost someone hours before we
+noticed, and we had the same file mislabelled in our own tree.
+
+A **prototype** dump also circulates (`HwVr 0x000b0011`, `Mod# M8976`, blank `HwId`). It will **not**
+boot a pristine firmware partition. It was this project's first dump, and the recipe that paired it
+with a hand-modified drive has been removed rather than explained.
+
+**Apple no longer serves these IPSWs**, so there is no official source to try.
+
 ## Running it
 
 **Open it and it asks.** From a [release](https://github.com/siggifly/ipod-emulator/releases),
-unpack it and double-click **`iPod 5G.app`** on macOS, or run `ipod-emulator` anywhere. With nothing set
-up it opens on a setup screen: a picker for each of the two files, and under each one a verdict
+unpack it and double-click **`ipod-emulator.app`** on macOS, or run `ipod-emulator` anywhere. With
+nothing set up it opens on a setup screen: a picker for each of the two files, and under each a
+verdict
 saying what the file you chose *actually is* — a 2 MiB dump when the 5G ROM is 1 MiB gets told so,
 rather than failing later. Point the second slot at an `.ipsw` and it builds the drive for you.
 
@@ -59,6 +92,8 @@ workspace root is a virtual manifest and `cargo install` will not guess:
 ```sh
 cargo install --git https://github.com/siggifly/ipod-emulator ipod-gui eapp-loader eapp-inspect
 ```
+
+`ipod-gui` is the crate; the binary it installs is `ipod-emulator`.
 
 ### From a terminal
 
@@ -86,7 +121,7 @@ this project, and the source is right there to build.
 The consequence is that the operating system refuses the first launch of anything you download.
 **On macOS 15 and later the old right-click → Open shortcut no longer works**: open it, let it be
 blocked, then go to **System Settings → Privacy & Security**, where a button offers to open it
-anyway. Once. `xattr -dr com.apple.quarantine "iPod 5G.app"` does the same from a terminal. On
+anyway. Once. `xattr -dr com.apple.quarantine "ipod-emulator.app"` does the same from a terminal. On
 Windows, SmartScreen shows **More info → Run anyway**.
 
 Anything you build yourself is not quarantined and none of this happens.
@@ -220,8 +255,11 @@ In rough order of how much this project owes them:
   generations later, which is what made the display tractable.
 - **Broadcom**, for leaving the BCM2722 product brief public, and **Alphamosaic**, whose patents
   disclose the VideoCore architecture.
-- **EE Times** and the Wedbush Morgan teardown, for the only published bill of materials for this
-  board. **The Internet Archive**, for the NOR dumps. **theapplewiki**.
+- **EE Times**, whose report on the Wedbush Morgan teardown is the only published bill of materials
+  for this board — it is where the part numbers came from.
+- **[theapplewiki](https://theapplewiki.com/)**, for the model-to-hardware tables: which model
+  number is which generation, and what silicon is inside it. Sorting the 5.5G from the Classic in
+  the first place started there.
 - **[Ghidra](https://ghidra-sre.org/)**, and **[GhidraMCP](https://github.com/bethington/ghidra-mcp)**
   for putting it a query away instead of a window away.
 
