@@ -58,7 +58,14 @@ means here, and it is worth stating rather than implying any pair works:
 | **NOR** | the retail iPod Video dump — 1 048 576 bytes, `HwVr 0x000b0005`, `Mod# MA146`, non-blank `HwId` |
 | **IPSW** | `iPod_20.1.3.ipsw` — `Firmware-20.6.3` inside it is 13 895 680 bytes, exactly 27 140 sectors, exactly the size of the firmware partition |
 
-**Finding the NOR is harder than it should be, because it is archived under the wrong product.**
+**The best way to get the NOR dump is to read it off your own iPod.** [Rockbox](https://www.rockbox.org/wiki/RockboxUtility)
+can do it in about five minutes and can be uninstalled straight afterwards: install it with Rockbox
+Utility (only *bootloader* and *rockbox* need ticking), then on the iPod go to **System → Debug (Keep
+Out!) → Dump ROM contents** and copy the `internal_rom_…` file off when you plug it in. The
+[flash guide](https://www.rockbox.org/wiki/IpodFlash.html) has the detail. This is the route that
+involves nobody else's copy of anything, and the only one guaranteed to match the iPod you have.
+
+**Failing that, it is archived — under the wrong product.**
 BootROM collections file the iPod Video dump as *iPod Classic*, in a directory named `A1238` — which
 is the Classic 6G's model number. The Video is `A1136`. So searching for "iPod Video", "5.5G" or
 "A1136" turns up nothing and searching for the Classic finds it. This cost someone hours before we
@@ -154,9 +161,9 @@ asserting it.
 The footer carries the four things that are about the device rather than the machine: the
 real-time figure, **black** (the 5G shipped in white and black — it is remembered), **keys** (the
 keyboard list, on hover, because the drawn iPod takes clicks and the keys are an accelerator), and
-**images…**.
+**setup…**.
 
-**`images…`** in the footer goes back to the setup screen, to point it at a different NOR dump,
+**`setup…`** in the footer goes back to the setup screen, to point it at a different NOR dump,
 drive or `.ipsw`. It ends the running machine — a booted RetailOS read its partition table at boot
 and has been writing to that drive since, so there is no honest way to hand it another one.
 

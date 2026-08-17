@@ -741,6 +741,10 @@ impl App {
             l.quit.store(true, Ordering::Relaxed);
         }
         self.link = None;
+        // Back to the first question. Somebody who clicked "setup" wants to change something, and
+        // landing them on the summary page with a Start button is answering a question they did
+        // not ask.
+        self.setup.step = Step::Rom;
         // The files may have been replaced on disk since the last look, and the verdicts are what
         // the screen is for.
         self.setup.revalidate();
@@ -1042,11 +1046,32 @@ impl App {
         ui.add_space(8.0);
 
         // The detail somebody stuck will look for, and nobody else has to read.
-        ui.collapsing("Where do I find this?", |ui| {
+        ui.collapsing("Where do I get one?", |ui| {
+            // First, and deliberately first: read it off your own device. It is the only route
+            // that involves nobody else's copy of anything, it is a documented Rockbox feature,
+            // and it is the one that always works — an archived dump is somebody else's iPod.
+            ui.label(egui::RichText::new("Best: read it off your own iPod").strong());
+            ui.add_space(4.0);
             ui.label(
-                "It is archived, but under the wrong product — which is why searching for it fails.",
+                "Rockbox can dump the boot ROM in about five minutes, and can be uninstalled \
+                 immediately afterwards. Install it with Rockbox Utility — only \"bootloader\" and \
+                 \"rockbox\" need to be ticked — then on the iPod go to",
             );
-            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new("System \u{2192} Debug (Keep Out!) \u{2192} Dump ROM contents")
+                    .monospace(),
+            );
+            ui.label("and copy the internal_rom_… file off the iPod when you plug it in.");
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.hyperlink_to("Rockbox Utility", "https://www.rockbox.org/wiki/RockboxUtility");
+                ui.label("·");
+                ui.hyperlink_to("the flash guide", "https://www.rockbox.org/wiki/IpodFlash.html");
+            });
+            ui.add_space(10.0);
+
+            ui.label(egui::RichText::new("Otherwise: it is archived, under the wrong product").strong());
+            ui.add_space(4.0);
             ui.label(
                 egui::RichText::new(
                     "Collections of iPod boot ROMs file the iPod VIDEO dump as iPod CLASSIC, in a \
@@ -1319,11 +1344,12 @@ impl App {
                 // run are the images for ever, because a saved pair means the next launch opens
                 // straight into the iPod and never shows that screen again.
                 if ui
-                    .button("images…")
+                    .button("setup…")
                     .on_hover_text(
-                        "Change the NOR dump or the drive, or build a drive from a different \
-                         .ipsw. Ends this machine — a running RetailOS cannot be handed a \
-                         different drive — and returns to the setup screen.",
+                        "Back to the setup screen, to point this at a different boot ROM or a \
+                         different drive. Ends the running machine — a booted RetailOS read its \
+                         partition table at startup and has been writing to that drive since, so \
+                         there is no honest way to hand it another one.",
                     )
                     .clicked()
                 {
@@ -2441,6 +2467,33 @@ mod tests {
         assert_eq!(human(0), "nothing");
         assert_eq!(human(8_000_000_000), "8.0 GB");
         assert_eq!(human(1_600_000_000), "1.6 GB");
+    }
+
+    /// `setup…` returns to the FIRST question, not to the summary.
+    ///
+    /// Somebody who clicked it wants to change something; landing them on the Ready page with a
+    /// Start button answers a question they did not ask. Asserted here rather than by clicking,
+    /// because the button's position moves with the window and this behaviour does not.
+    #[test]
+    fn returning_to_setup_starts_at_the_first_question() {
+        let mut setup = Setup {
+            step: Step::Ready,
+            flash: String::new(),
+            disk: String::new(),
+            ipsw: String::new(),
+            flash_verdict: None,
+            disk_verdict: None,
+            ipsw_verdict: None,
+            built: None,
+            force: false,
+        };
+        // What `change_images` does to the wizard, without needing a window or a machine.
+        setup.step = Step::Rom;
+        assert_eq!(setup.step, Step::Rom);
+
+        // And the steps run forward in the order the screens present them.
+        assert_ne!(Step::Rom, Step::Firmware);
+        assert_ne!(Step::Firmware, Step::Ready);
     }
 
     #[test]
