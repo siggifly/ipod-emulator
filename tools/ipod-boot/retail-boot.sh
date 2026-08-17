@@ -20,7 +20,7 @@
 # and only the retail path ever reads `rsrc`: LBA 14864 (the FAT boot sector), 14870 (the FAT),
 # then RenderServer.bin, vmcs.bin and the codec libraries, before `0xe0` STANDBY IMMEDIATE spins
 # the drive down. The prototype's 157 self-resets are `BX` to address zero through a null `this`
-# — see research/20 Addendum 5.
+# — see research/10 Addendum 5.
 #
 # Kept as a separate recipe rather than flipped into cold-boot.sh so that every number already
 # recorded in research/ stays attributable to the configuration it was measured on.
@@ -45,7 +45,7 @@ export FLASH
 # stops mid-startup: RetailOS bootstraps its own volume — FSInfo, both FATs, Contacts/Calendars/
 # Notes, iPod_Control/Device/Accessories — and blocks on RTXC semaphore 0xd1 waiting for a 1-sector
 # WRITE DMA to LBA 32894 (the first sector of FAT #1) that a read-only drive aborts. It is not a
-# deadlock; it retries on a 3.9 s timeout, forever. See research/20 Addendum 15.
+# deadlock; it retries on a 3.9 s timeout, forever. See research/10 Addendum 15.
 #
 # Cloned per run rather than written in place, for two different reasons that both matter:
 # `$RES/derived/disk/` is reference material and a recipe must never mutate it, and a disk that

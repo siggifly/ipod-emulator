@@ -445,7 +445,7 @@ feeds iTunes in the INQUIRY vendor bytes — ends the boot loop:
 switches on the high halfword `0x000B` = 11.
 
 **The two halves of this project met here.** The Gestalt ID was reverse-engineered months of work
-away, in research/07 *(not published)*, to make iTunes accept a virtual iPod. It turns out
+away, in the USB research *(not published)*, to make iTunes accept a virtual iPod. It turns out
 to be the same number RetailOS needs to boot.
 
 ### And then: the idle loop
@@ -572,7 +572,7 @@ lcd      0x30000000             (never touched)
 *Those numbers are the warm path as it stood when this section was written, and the `lcd` line is no
 longer true of any current run: on `retail-boot.sh` the same region records **130 040 reads,
 423 450 writes**, because the co-processor's `vmcs` firmware now arrives through it
-([research/20](20-the-resource-image.md) Addendum 9). Kept as-is because the point here is what
+([research/10](10-the-resource-image.md) Addendum 9). Kept as-is because the point here is what
 `device_report()` does, not what these particular registers do.*
 
 **`--pagelog=BASE:SIZE`** then resolves a region to a register block at 256-byte granularity, because
@@ -779,7 +779,7 @@ trace <game.bin> --osos=fw/OSOS_correct.bin --boot-osos --osos-at=0x04000000 --s
 
 This command line is now `tools/ipod-boot/warm-boot.sh`. It was moved there when bypass #5 needed
 re-validating and it turned out the warm path had no recipe to re-run — see
-[research/11](11-rtxc-and-the-video-coprocessor.md) §56.
+[research/03](03-rtxc-and-the-video-coprocessor.md) §56.
 
 `--map=0x14000000:0x1000000` is no longer needed — that window is a real alias now, and SDRAM is one
 contiguous 64 MB region at `0x10000000` with its remapped view at `0`, replacing a patchwork of
@@ -854,7 +854,7 @@ vector table, not executable at `0x10000000`. And the relationship between the t
 The `osos` region written into `resources/derived/disk/ipod8g.img` was for a time the correct image
 with its **first sector removed** — `backup[i] == OSOS_correct[i + 512]`. That is the opposite
 direction to the extraction error, and it is the one that produced the phantom boot loop diagnosed
-and retracted in [research/11](11-rtxc-and-the-video-coprocessor.md) §40.
+and retracted in [research/03](03-rtxc-and-the-video-coprocessor.md) §40.
 
 So: `OSOS.bin` had 512 bytes too many at the front, the disk had 512 bytes too few, and only
 `OSOS_correct.bin` — and the disk region as it stands today, which hashes identically to it — is
@@ -875,7 +875,7 @@ Running 'osos' 0 from 0x10000000
 
 **`ipodloader2` is not in the boot path and never has been on this recipe.** It is used only as a
 *documentation source* — its MMAP encoding and register names — and the copy under
-`resources/reference/` is there to be read, not run. [research/12](12-bypass-ledger.md) #13 lists
+`resources/reference/` is there to be read, not run. [research/04](04-bypass-ledger.md) #13 lists
 its `loader.bin` as a bypass "*(if used)*"; it is not used, and running Apple's own ROM is both the
 higher-fidelity choice and the one already in place.
 

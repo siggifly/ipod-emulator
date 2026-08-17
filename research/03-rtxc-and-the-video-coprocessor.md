@@ -89,7 +89,7 @@ kernel is alive; the application-level task creation never happens.
 That raises the value of the dispatcher hook again: `KS_deftask` / `KS_execute` calls are exactly
 what we would expect to see and do not.
 
-> **WRONG — retracted 2026-08-14 by the research/20 Addendum 14 audit.** This was contradicted by
+> **WRONG — retracted 2026-08-14 by the research/10 Addendum 14 audit.** This was contradicted by
 > §41 of this same file ("eighteen named tasks each start once") within days and never annotated,
 > and §13 below promotes it as *"the one negative result in this project that has survived
 > scrutiny."* It has not survived. On the retail path, `--enterlog=0x0011c808` — RTXC's task-creation
@@ -102,7 +102,7 @@ what we would expect to see and do not.
 > pointers. It was that the control exercised **literal pointers in a data pool**, and a TCB does not
 > hold a name pointer at all: the names live in the *creation descriptor*, which is consumed and
 > discarded. The scanner was looking for a field that does not exist, and a control made of a field
-> that does cannot detect that. Same rule as research/20 Addendum 8 §8: *a control only proves what
+> that does cannot detect that. Same rule as research/10 Addendum 8 §8: *a control only proves what
 > it exercises*.
 
 ---
@@ -209,8 +209,8 @@ through hardware bring-up. Each stall was a status bit, and each was answered wi
 
 | Address | What | Value |
 |---|---|---|
-| `0x70000030` | **undocumented** — absent from every published map; sits between `DEV_INIT2` and `DEV_TIMING1`, polled for bit 27. ~~*Since identified*~~: the external memory bus control register — bit 30 is the NOR write gate, bit 27 the controller's ready flag; **modelled, flag retired** ([research/12](12-bypass-ledger.md) #1) | `0x08000000` |
-| `0x7000003c` | `XMB_RAM_CFG` — SDRAM controller, polled for bit 31. ~~*Since identified*~~: bit 24 is the configuration command and bit 31 its completion; **modelled, flag retired** ([research/12](12-bypass-ledger.md) #2) | `0x80000000` |
+| `0x70000030` | **undocumented** — absent from every published map; sits between `DEV_INIT2` and `DEV_TIMING1`, polled for bit 27. ~~*Since identified*~~: the external memory bus control register — bit 30 is the NOR write gate, bit 27 the controller's ready flag; **modelled, flag retired** ([research/04](04-bypass-ledger.md) #1) | `0x08000000` |
+| `0x7000003c` | `XMB_RAM_CFG` — SDRAM controller, polled for bit 31. ~~*Since identified*~~: bit 24 is the configuration command and bit 31 its completion; **modelled, flag retired** ([research/04](04-bypass-ledger.md) #2) | `0x80000000` |
 | `0x30030000`, `0x30070000` | `BCM_CONTROL` / `BCM_ALT_CONTROL` — the documented handshake: `0x80` clear, `0x40` set, `0x02` write-ready, `0x10` read-ready | `0x52` |
 | `0x30020000`, `0x30060000` | `BCM_RD_ADDR` / `BCM_ALT_RD_ADDR` — bit 0 read-ready | `0x1` |
 
@@ -524,7 +524,7 @@ with 71 685 non-zero pixels of 76 800. `--bcm-dump=0xE0000:140:F0:out.ppm` reads
 > read past for weeks — it is `16 + 76 800`, and the sixteen are an eight-word rectangle header the
 > command interface consumes. The picture in it is still a 320×240 frame, because a full-screen
 > update stages one; a partial update stages only its own rectangle behind that header. See
-> [research/24](24-the-apple-logo.md).*
+> [research/14](14-the-apple-logo.md).*
 
 It renders legible text in four languages:
 
@@ -672,7 +672,7 @@ individual images that are the boot loader, diagnostic, disk image, and disk sca
 **Flash contents can now be recovered from Apple's own updaters, for any generation, with no
 hardware.** The NOR dump the operator found removed the hardware dependency for the 5.5G; this
 removes it for every model whose updater we can obtain — which is the C-series generation ladder in
-[research/10 *(not published)*.
+the open-player research *(not published)*.
 
 ## 13. Method: the rule these instruments now follow
 
@@ -687,7 +687,7 @@ task is ever created" — is the one that had a positive control.~~
 
 > **That last sentence is retracted 2026-08-14, and it is the most instructive thing in this
 > section.** "No named task is ever created" is wrong — 27 named creations in a 600 M retail boot,
-> 62 TCBs (§1's retraction, research/20 Addendum 14 §9). It was singled out here *because* it had a
+> 62 TCBs (§1's retraction, research/10 Addendum 14 §9). It was singled out here *because* it had a
 > positive control, and the control is exactly what made it feel safe. The control found three
 > literal pointers in a data pool; the thing being looked for was a name pointer in a TCB, which does
 > not exist — RTXC consumes the name in the creation descriptor and never stores it. **A positive
@@ -721,7 +721,7 @@ and classify the stall.
 ## 15. Past the halt: the handoff uses READ DMA
 
 Removing the `aupd` directory entry — a bypass, logged as #12 in
-[the ledger](12-bypass-ledger.md) — got the ROM past its halt and revealed the next stage:
+[the ledger](04-bypass-ledger.md) — got the ROM past its halt and revealed the next stage:
 
 ```
 cmd 0x20  nsector 0x04  lba 0        MBR              (PIO)
@@ -1903,7 +1903,7 @@ for**, so DATA(1..3) legitimately differ and the two can never agree. The contro
 passing.
 
 That is the same mistake the snapshot tooling nearly cost us (see
-[research/12](12-bypass-ledger.md) § snapshot/restore), written down again because recognising it
+[research/04](04-bypass-ledger.md) § snapshot/restore), written down again because recognising it
 took an hour the second time too.
 
 ## 38. ✅ ADCS2 bit 7 is conversion-ready — and the PMU was **not** the boot loop
@@ -1947,7 +1947,7 @@ A **446×** reduction in bus traffic: the spin is gone, not hidden.
 | all-ones bypass | 255 |
 | modelled PCF50605 | **253** |
 
-**The PMU was not causing the boot loop.** [research/12](12-bypass-ledger.md) ranked #3 first on the
+**The PMU was not causing the boot loop.** [research/04](04-bypass-ledger.md) ranked #3 first on the
 reasoning that a device answering plausibly-but-falsely lets a constructor succeed against hardware
 that never replied. That reasoning was sound and the answer is still no — 253 against 255 is the
 same machine.
@@ -1995,7 +1995,7 @@ without asking which component actually produced it. One run answers that, and i
 | #3 PMU | **cleared** | replaced with a real chip; 253 restarts vs 255 (§38) |
 | #6 BCM | **cleared** | attribution: RetailOS never touches it |
 
-[research/12](12-bypass-ledger.md) named these two on the reasoning that a device answering
+[research/04](04-bypass-ledger.md) named these two on the reasoning that a device answering
 plausibly-but-falsely lets a constructor succeed against hardware that never replied. The reasoning
 was sound and **both answers are no**. The object nobody constructed is not a bypass artefact.
 
@@ -2233,7 +2233,7 @@ may not be; "RetailOS never touches the BCM" may simply mean the display comes u
 "zero disk transfers" is already falsified.
 
 `--clock=5` is a **fidelity knob, not a fix** — it is already in
-[research/12](12-bypass-ledger.md) with the warning that timing-sensitive code can notice it. It
+[research/04](04-bypass-ledger.md) with the warning that timing-sensitive code can notice it. It
 buys reach for exploration. Any milestone found with it has to be confirmed at `--clock=75` with a
 budget large enough to hold it, and until it is, it is a lead rather than a result.
 
@@ -2515,7 +2515,7 @@ never initialised", is **wrong**; see the correction under the bullets.
 
 > **Corrected 2026-08-13.** The `--watch` bullet is the same false negative §52 carries a banner for,
 > and it is the same word: `0x13e26f8c` *is* `object + 0x20`. `--watch` reports value **changes**, so
-> three writes of zero to an already-zero word were invisible. [research/20](20-the-resource-image.md)
+> three writes of zero to an already-zero word were invisible. [research/10](10-the-resource-image.md)
 > §2 settled it with `--storeaddr` — **95 456 stores** across the 790 objects of this shape, every
 > object written, this one written three times (`0x0017f188` allocation zeroing, `0x00210684` the
 > initialiser, `0x00211778` the delegate setter). The object is **initialised and then handed a null
@@ -2567,7 +2567,7 @@ constructed, branches through a zero vtable slot to its own reset vector, and st
 `0x13e26f8c` is never written, so **what should have written it**, and why did that not run?~~
 **Corrected 2026-08-13:** it *is* written — three times, all zero, the last by the delegate setter
 at `0x00211778`. The question that actually follows is what the setter was *handed*, and
-[research/20](20-the-resource-image.md) answers it: a null that arrives pre-formed from a failed font
+[research/10](10-the-resource-image.md) answers it: a null that arrives pre-formed from a failed font
 lookup. "What should have written it" was a question about a write that was already happening.
 
 ## 48. A false breakthrough on the GPIO, caught by the follow-up run
@@ -2621,7 +2621,7 @@ the fault is indifferent to it.
 target, not the hardware around it.~~
 
 **Corrected 2026-08-13 — there is no missing write.** `+0x20` is written three times on this object
-and on all 790 of its shape ([research/20](20-the-resource-image.md) §2, `--storeaddr`, 95 456
+and on all 790 of its shape ([research/10](10-the-resource-image.md) §2, `--storeaddr`, 95 456
 stores). The `--watch` zero that made it look unwritten is a value-**change** report, and three
 stores of zero into a zero word are not a change. What survives is only the last clause: the caller
 invokes the delegate unconditionally, and the delegate it invokes is null. The GPIO negative in this
@@ -2679,7 +2679,7 @@ list, and the list walk is indifferent to what the callback was for.
 is the *correct* behaviour for a device with nothing plugged into it. RetailOS's handling of "no USB
 present" looks right; the fault is elsewhere.
 
-> **Re-checked on the retail path 2026-08-14 (research/20 Addendum 14 §9). The register half
+> **Re-checked on the retail path 2026-08-14 (research/10 Addendum 14 §9). The register half
 > survives; the task half does not, and the combination is more interesting than either.**
 > `0xc5000000` is still covered by no region, and the only unmapped page in a 600 M retail baseline
 > is `0xea000078` — so **zero USB register accesses** holds on the configuration this project now
@@ -2688,7 +2688,7 @@ present" looks right; the fault is elsewhere.
 > `--enterlog=0x0011c808`. A USB driver task that runs for a whole boot and touches not one USB
 > register is a different statement from "nothing asks for USB" — it is a driver waiting on
 > something it never gets, and the `0x6000d13c` GPIO presence lines we answer as permanently zero
-> (research/19) are the obvious candidate. Not chased here; recorded so it is not re-derived.
+> (research/09) are the obvious candidate. Not chased here; recorded so it is not re-derived.
 
 ## 51. Stepping over the wall: the unbound delegate is central, and there is a second bad pointer
 
@@ -2743,7 +2743,7 @@ answer is not in the constructor at `0x00211a70`, which writes `+0x1c` and `+0x3
 > *changes*, and a write of zero to a word already zero changes nothing. `+0x20` is written three
 > times, the last by the delegate setter at `0x00211778`. The object is not "barely constructed" —
 > it is one of **791 identically constructed** objects, and the delegate bound into it is null
-> because a **font lookup missed**. See [research/20](20-the-resource-image.md).
+> because a **font lookup missed**. See [research/10](10-the-resource-image.md).
 
 Chasing "what binds the delegate" produced four negatives in a row, and together they say something
 stronger than any of them alone.
@@ -2807,7 +2807,7 @@ supposed to do next** — a heap-allocation watch rather than another read of th
 ## 53. It is an array element, not an allocation — stride 0x74
 
 > **Superseded 2026-08-13.** The stride is real but the framing it supported is not: the objects are
-> enumerated directly in [research/20](20-the-resource-image.md) §1 by watching the constructor's own
+> enumerated directly in [research/10](10-the-resource-image.md) §1 by watching the constructor's own
 > store, and the failing one is unremarkable among 791. Nothing downstream depended on the stride.
 
 `--retwatch=0x13e26f6c` asks which instruction *produces* that pointer, and the answer changes the
@@ -2870,7 +2870,7 @@ picks up.
 
 The strategic reframe in §53's aftermath was: *shipping firmware does not contain an unconditional
 call through an unbound delegate, so something upstream is telling RetailOS a lie about this
-machine.* The most obvious candidate was the identity we hand it — [research/12](12-bypass-ledger.md)
+machine.* The most obvious candidate was the identity we hand it — [research/04](04-bypass-ledger.md)
 #5, the Gestalt ID, still 🟡 and never validated. It turns out not to be a lie, and finding that out
 decoded the whole identity path.
 
@@ -2998,7 +2998,7 @@ the same way: by checking whether the bootloader still completed.
 
 ### Where that leaves #5
 
-[research/12](12-bypass-ledger.md) #5 has been 🟡 — *"confirming the offset against a real
+[research/04](04-bypass-ledger.md) #5 has been 🟡 — *"confirming the offset against a real
 bootloader's handoff"* — since it was written. It is now **confirmed**: the offset is right, the
 field is `HwVr`, the mechanism is a key/value lookup in the flash `SCfg` block, and the authoritative
 value is `0x000b0011`. The warm-boot constant `0x000B0005` is **wrong** and should become
@@ -3011,13 +3011,13 @@ is its own measurement. Recorded as a known-correct value waiting for one.
 ## 56. Both small bypasses retired — #5 by measurement, #14 by reading what the flag actually did
 
 §55 left #5 as "a known-correct value waiting for a measurement", and
-[research/12](12-bypass-ledger.md) left #14 as "wrong on principle, measured not to be a live bug".
+[research/04](04-bypass-ledger.md) left #14 as "wrong on principle, measured not to be a live bug".
 Both are now closed. Neither turned out the way the ledger expected.
 
 ### The warm path had no recipe, which is why it had never been re-validated
 
 `cold-boot.sh` existed; the warm path lived as a command line pasted into
-[research/09](09-retailos-boot.md). A bypass whose reproduction is prose cannot be re-measured, so
+[research/02](02-retailos-boot.md). A bypass whose reproduction is prose cannot be re-measured, so
 the first change was `tools/ipod-boot/warm-boot.sh` — the same defaults, overrides and instrument
 flags as the cold recipe, entering RetailOS at `0x10000000` with `--sysinfo`.
 
@@ -3116,4 +3116,4 @@ correction. Whoever picks up the missing-font thread (§ledger item 1) should re
 > jump to the reset vector" was the correct reading; §40 retracted it for the wrong reason (the
 > one-sector shift was real, but it was not what produced *this* symptom, which survives the repair).
 > The whole mechanism, the trigger, and the ablation that removes all 156 self-resets are in
-> [research/20 Addendum 5](20-the-resource-image.md#addendum-5-neither-it-is-bx-to-zero-and-the-headline-of-this-file-was-right-all-along).
+> [research/10 Addendum 5](10-the-resource-image.md#addendum-5-neither-it-is-bx-to-zero-and-the-headline-of-this-file-was-right-all-along).

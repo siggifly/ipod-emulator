@@ -54,7 +54,7 @@ is the same class of problem as synthesising BCM replies.
 
 `scan` is the more promising of the three — a disk scanner has no obvious reason to need a host —
 and it is untested. `disk` is USB mass storage, which this emulator does not model at all
-([research/11](11-rtxc-and-the-video-coprocessor.md) §50), so it is the least promising.
+([research/03](03-rtxc-and-the-video-coprocessor.md) §50), so it is the least promising.
 
 ## The flash is a prototype's, and its bootloader knows it
 
@@ -67,7 +67,7 @@ date:     2007-07-12
 ```
 
 Elite Obsolete Electronics — the same source as the board table in
-[research/15](15-the-chip-inventory.md). So the placeholder serial `U1234567890`, the blank `HwId`
+[research/05](05-the-chip-inventory.md). So the placeholder serial `U1234567890`, the blank `HwId`
 and the unpublished `HwVr = 0x000b0011` are all explained: **this is a prototype's flash.**
 
 The obvious experiment is to patch `HwVr` to a published retail value and see whether RetailOS
@@ -132,7 +132,7 @@ Device Flash Version: FFFFFFFF     Update Flash Version: 0
 
 299 frame updates of a white progress screen.
 
-**This explains [research/12](12-bypass-ledger.md) #12.** That bypass removes the `aupd` directory
+**This explains [research/04](04-bypass-ledger.md) #12.** That bypass removes the `aupd` directory
 entry, and its stated reason was only *"the ROM halts after reading it"*. The real reason is now
 visible: **with `aupd` present and the partition consistent, the bootloader runs the updater instead
 of the OS.** The bypass is not a workaround for a halt, it is a workaround for a firmware update.
@@ -327,9 +327,9 @@ with no help from us.
 Two things this settles at once:
 
 - **The 157 self-resets are prototype-only.** They are `BX` to address zero through a null `this`
-  (research/20 Addendum 5), and the null comes from a font registry that has nothing in it because
+  (research/10 Addendum 5), and the null comes from a font registry that has nothing in it because
   `rsrc` was never mounted. On the retail path the volume *is* mounted, and the reset does not
-  happen. The chain in research/20 §§1–8 is correct and was diagnosing a downstream symptom of the
+  happen. The chain in research/10 §§1–8 is correct and was diagnosing a downstream symptom of the
   wrong bootloader.
 - **`0xea000078` was never a real address.** It is RetailOS's own reset-vector word, `b 0x1f0`,
   being read as a vtable base. It appears in exactly the runs that take the null dispatch, which is

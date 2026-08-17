@@ -65,7 +65,7 @@ rather than assumed.
 
 ## What this confirmed about the identity path
 
-Independently of [research/11](11-rtxc-and-the-video-coprocessor.md) §54, Rockbox names the field:
+Independently of [research/03](03-rtxc-and-the-video-coprocessor.md) §54, Rockbox names the field:
 
 ```c
 /* firmware/export/hwcompat.h */
@@ -97,7 +97,7 @@ Generation is `hw_rev >> 16`, confirmed against `ipodloader2`'s `hw_ver` and Roc
 sections — `disk`, `diag`, `scan`, `logo`, `vmcs` — **all checksums valid**, with `vmcs` being
 101 728 bytes at ROM offset `0x6ec98`.
 
-[research/12](12-bypass-ledger.md) #6's retirement condition has always read *"executing the `vmcs`
+[research/04](04-bypass-ledger.md) #6's retirement condition has always read *"executing the `vmcs`
 firmware"*, and it has always looked like the largest job in the file. **The blob is in the flash we
 already have, at a known offset, with a valid checksum, and Rockbox contains readable source for how
 it is uploaded.** That is a materially different proposition from writing a VideoCore II emulator
@@ -153,7 +153,7 @@ file), and the authoritative constants in hand (`crt0-pp.S`).
 
 The equivalent question in RetailOS consumed a night and produced "an unbound delegate at
 `record+0x20` that nothing writes", ~~which is still unresolved~~ **which was wrong in its premise —
-`+0x20` is written, on all 790 objects of its shape ([research/20](20-the-resource-image.md) §2), and
+`+0x20` is written, on all 790 objects of its shape ([research/10](10-the-resource-image.md) §2), and
 the delegate is null because a font lookup missed.** Same class of bug; the difference is
 entirely that one target has source and symbols.
 
@@ -165,7 +165,7 @@ needs.
 > **This note aged into the thing it warned about.** The instrument built in answer to it,
 > `--watch-range`, carried a *different* blind spot — word-sized writes into a mapped region — and
 > went on to produce two more false absences of its own before anyone re-ran the standing claims
-> through it (research/19, retracted 2026-08-13; mechanism in research/20 Addendum 8). Writing the
+> through it (research/09, retracted 2026-08-13; mechanism in research/10 Addendum 8). Writing the
 > warning down was not enough, twice. The rule that would have caught it is in `NEXT.md`: a new
 > instrument's first job is to re-run the conclusions the old one produced, as a deliberate pass.
 
@@ -246,7 +246,7 @@ time **with the semantics documented in source** rather than inferred from a spi
 #define DEV_EN           (*(volatile unsigned long *)(0x6000600c))
 ```
 
-`0x7000003c` is [research/12](12-bypass-ledger.md) **#2's register**, now sourced rather than
+`0x7000003c` is [research/04](04-bypass-ledger.md) **#2's register**, now sourced rather than
 guessed. `0x70000030` — **#1** — is still absent from the header, so that one remains genuinely
 undocumented.
 
@@ -295,7 +295,7 @@ read/write** · LCD init · **BCM2722 command protocol and framebuffer** · font
 
 ### And what it says about bypass #6
 
-[research/12](12-bypass-ledger.md) #6's retirement condition reads *"executing the `vmcs` firmware"*,
+[research/04](04-bypass-ledger.md) #6's retirement condition reads *"executing the `vmcs` firmware"*,
 and it has always been described as the largest job in the file. **Rockbox drives this display to a
 complete themed UI without `vmcs` ever being executed.** The synthesised replies are evidently
 sufficient for real rendering, so #6 is a smaller job than it has been billed as — and the display

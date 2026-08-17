@@ -28,7 +28,7 @@ RES="$ROOT/resources"
 # by either image, against a positive control in the same run that logged 2 000 000 reads of
 # 0xb0020000. All four variants — as-is, as-is plus the COP/PLL pair that `--rdval` suppresses,
 # flags removed, flags removed plus `--nor` — produce identical output apart from the banner lines.
-# See research/12 §"Retiring the flags in flsh.sh and flash-update.sh".
+# See research/04 §"Retiring the flags in flsh.sh and flash-update.sh".
 #
 # `--nor` makes the flash a JEDEC part rather than a byte array, matching cold-boot.sh. It is
 # currently unexercised here — both images report `nor: 0 sector erases, 0 words programmed`,

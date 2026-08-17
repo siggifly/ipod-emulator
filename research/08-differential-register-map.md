@@ -27,11 +27,11 @@ touched set look eight wide. Rockbox never touches one.
 **Both DMA controllers are modelled as of 2026-08-13** — this one *and* the undocumented second
 instance at `0x60008000`/`0x60009000`, which is what uploads `vmcs.bin` to the co-processor. The
 "unnamed four channels at stride `0x20`" flagged below are that second controller. See
-[research/20](20-the-resource-image.md) Addendum 9.
+[research/10](10-the-resource-image.md) Addendum 9.
 
 That looked like the answer. An unmodelled DMA engine silently does nothing, so whatever it was
 meant to fill **stays zero** — which is precisely the shape of
-[research/11](11-rtxc-and-the-video-coprocessor.md) §52's "a field nobody ever wrote".
+[research/03](03-rtxc-and-the-video-coprocessor.md) §52's "a field nobody ever wrote".
 
 `--writelog` over the block settles it, and the answer is no:
 
@@ -58,7 +58,7 @@ knowing because RetailOS may emit diagnostics there that we are currently discar
 
 ## And it confirms one long-standing bypass
 
-`0x70000030` — [research/12](12-bypass-ledger.md) **#1**, the register "absent from every published
+`0x70000030` — [research/04](04-bypass-ledger.md) **#1**, the register "absent from every published
 map", where we feed a made-up bit 27 — is in the RetailOS-only set. Rockbox never reads it, and
 `pp5020.h` does not name it. So there is **no working OS and no published source that validates our
 guess**, which is exactly why it has stayed amber. Now that is measured rather than assumed.

@@ -154,7 +154,7 @@ It restores a snapshot of the booted machine in about 3 seconds, or cold boots i
 - **The boot takes ~300 seconds of simulated time** where hardware takes five or ten. Something waits far longer than it should
 
 Three lists, kept apart on purpose. **`KNOWN-BUGS.md`** is what is *wrong*. The section above is
-what is *absent*. **`research/12-bypass-ledger.md`** is what is *faked*, with a written condition
+what is *absent*. **`research/04-bypass-ledger.md`** is what is *faked*, with a written condition
 for retiring each one — and nothing is faked without a row in it. Merging them is how a project
 starts describing its gaps as choices.
 
@@ -186,8 +186,8 @@ because memory was wrong about several of them.
 
 `research/` is the larger half of this project: 20-odd documents, and the record of what was believed
 and why it was wrong is deliberately preserved rather than tidied away. Retractions are made in
-place. `research/12` is the bypass ledger, `research/21` documents the co-processor's runtime, and
-`research/22` describes how RetailOS draws.
+place. `research/04` is the bypass ledger, `research/11` documents the co-processor's runtime, and
+`research/12` describes how RetailOS draws.
 
 ## Credit
 

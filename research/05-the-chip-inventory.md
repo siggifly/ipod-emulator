@@ -52,14 +52,14 @@ to it.
 
 A trap worth naming, because we walked past it. The iPod reports a **FireWire GUID**
 (`0x000A2700195D4E9C`, OUI `000A27` = Apple) and a **`FireWireVersion` of 1.62**, and that GUID *is*
-the USB serial number — see research/07 *(not published)* § "The FireWire GUID *is* the USB
+the USB serial number — see the USB research *(not published)* § "The FireWire GUID *is* the USB
 serial number." None of that implies a FireWire port. Apple kept the GUID as the device's stable
 64-bit identity after the bus it was named for was gone.
 
 Nor is iTunes' `sbp2` string evidence: it lives in iTunes' own Windows binary
 (`DeviceManagement\PnpDiskUtil.cpp`), where `sbp2` is how Windows names FireWire storage in a device
 instance ID. That is iTunes being able to talk to *older* FireWire iPods, not a statement about this
-one. It is quoted in research/07 *(not published)* and was briefly misread here as flash
+one. It is quoted in the USB research *(not published)* and was briefly misread here as flash
 content before the surrounding context was checked.
 
 ---
@@ -90,7 +90,7 @@ Built and trustworthy:
 
 - **ARM7TDMI core** — fuzz-verified against a reference implementation.
 - **Memory model** — SDRAM sizing, the uncached alias, and the **MMAP unit** (8 windows, encoding
-  decoded from Rockbox — see [research/11](11-rtxc-and-the-video-coprocessor.md) §33).
+  decoded from Rockbox — see [research/03](03-rtxc-and-the-video-coprocessor.md) §33).
 - **Timers + interrupt controller** — the firmware programs its own ~1 kHz tick and we deliver it.
 - **ATA** — `IDENTIFY`, `SET FEATURES`, PIO reads, and **bus-master DMA**, which is what loads the
   7.5 MB image.
@@ -285,7 +285,7 @@ a second frame shape (`0x8000023A`) that is the **reply to a command** rather th
 report. Both Apple stages ship the same routine byte-for-byte (`0x4000E540` in the ROM,
 `0x00283EA0` in RetailOS). The full register table, the interrupt line (IRQ 40, high bank bit 8), and
 the measured effect of modelling it are in
-[research/20 Addendum 16](20-the-resource-image.md#addendum-16-the-click-wheel-modelled-and-the-only-thing-reading-it-is-apples-bootloader).
+[research/10 Addendum 16](10-the-resource-image.md#addendum-16-the-click-wheel-modelled-and-the-only-thing-reading-it-is-apples-bootloader).
 
 **The third command is a write, and it is settled.** `0x8001052A` is opcode `0x052A` — *set
 reporting* — with a payload byte at bits 23..16; `0x8000052A` is the same command turning it off.
@@ -293,7 +293,7 @@ The hardware sends **no reply**: all five senders in the two Apple stages return
 without reading `0x7000C140`, the boot ROM's copy writes TX, spins 10 000 iterations and returns,
 and no instruction in either image compares anything against the opcode. So the frame vocabulary is
 three shapes and only one of them is a question. See
-[research/20 Addendum 21](20-the-resource-image.md#addendum-21-0x8001052a-is-a-write-and-the-answer-is-silence--the-wheel-reaches-the-event-queue).
+[research/10 Addendum 21](10-the-resource-image.md#addendum-21-0x8001052a-is-a-write-and-the-answer-is-silence--the-wheel-reaches-the-event-queue).
 
 ### TV-out is behind the BCM too
 

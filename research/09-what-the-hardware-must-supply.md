@@ -1,6 +1,6 @@
 # What the hardware must supply
 
-"112 registers only RetailOS touches" ([research/18](18-differential-register-map.md)) is a list of
+"112 registers only RetailOS touches" ([research/08](08-differential-register-map.md)) is a list of
 *coverage*, not of error. Most of those 112 are ordinary read/write cells the firmware programs and
 reads back; a plain memory region models them perfectly. Chasing all 112 would be work without a
 criterion.
@@ -14,7 +14,7 @@ inventing an answer, and the list is short.
 
 > **Re-measured 2026-08-13 against the fixed instrument. The table below is superseded — the
 > conclusion under it survives.** `--input-regs` was one of the two instruments silenced by the
-> `count()` hoist bug (research/20 Addendum 8 §8), and the worse-affected of the two: `input_probe`
+> `count()` hoist bug (research/10 Addendum 8 §8), and the worse-affected of the two: `input_probe`
 > was missing from the hoist in **`read32` as well as `write32`**, so it saw only *byte* accesses
 > into mapped regions. Controlled by rebuilding the pre-fix binary and running it on the identical
 > machine with identical flags: the old instrument reported **57** read-before-write rows across the
@@ -25,7 +25,7 @@ inventing an answer, and the list is short.
 > boot now settles at @123.4 M rather than running to a 400 M budget.
 
 > **Re-measured again 2026-08-14 against the corrected stop window, and the count moves by one.**
-> The table below was taken with `--stop-when-idle=40000000`, which research/20 Addendum 11 has since
+> The table below was taken with `--stop-when-idle=40000000`, which research/10 Addendum 11 has since
 > shown ends every retail run at ~@123 M while the machine is still executing at full rate. Same
 > build, same machine, same flags, the *only* variable the stop condition:
 >
@@ -35,7 +35,7 @@ inventing an answer, and the list is short.
 > | never written at all | 28 | **29** |
 >
 > The counts in every row are also 5–12× higher, because the run is 5× longer. Both are updated
-> below. **The one new address is `0x60006038`** — see the row, and research/20 Addendum 14 §7.
+> below. **The one new address is `0x60006038`** — see the row, and research/10 Addendum 14 §7.
 
 Current retail run — `retail-boot.sh --clock=5 --stop-when-idle=400000000`, budget 600 M, ending on
 `BudgetExhausted` at @599 999 952 — **73 addresses** are read before the firmware ever writes them, of
@@ -49,9 +49,9 @@ which **29** are never written by the firmware at all. Those 29, grouped:
 | `0x60004100` | `CPU_HI_INT_STAT` | 1 898 632 | ✅ yes, same |
 | `0x60005004` | `TIMER1_VAL` | 947 904 | ✅ yes |
 | `0x7000c01c` | I²C `STATUS` | 11 094 | ✅ yes |
-| **`0x6000d13c`** | **`GPIOL_INPUT_VAL`** | **3 560** | 🟡 **seeded `0x08` 2026-08-14** — no charger, no USB charger; was ❌ "we answer 0", which on an active-low line asserted *charger present*. RetailOS reads bit 3 of this word 130 times a boot and drew the "Charged" screen because of it ([research/20](20-the-resource-image.md) Addendum 30) |
+| **`0x6000d13c`** | **`GPIOL_INPUT_VAL`** | **3 560** | 🟡 **seeded `0x08` 2026-08-14** — no charger, no USB charger; was ❌ "we answer 0", which on an active-low line asserted *charger present*. RetailOS reads bit 3 of this word 130 times a boot and drew the "Charged" screen because of it ([research/10](10-the-resource-image.md) Addendum 30) |
 | `0x70000000` | `PP_VER1` | 260 | ❌ **we answer 0** |
-| `0x7000c140` | **the click wheel** — `0x7000C100`/`0x7000C140` per the reverse-engineered PP502x map ([research/15](15-the-chip-inventory.md) §2) | 60 | ✅ **modelled 2026-08-14** (`--clickwheel`) — was ❌ "we answer 0". All 60 byte-reads are 15 word-reads by Apple's bootloader at `0x4000e59c`: three calls to its query routine, each failing all five retries against a zero. With the device modelled it is 3 word-reads, one per call, each answering `0x8000023a` — and Apple's button-decode block at `0x4000e5c0` runs for the first time. See [research/20 Addendum 16](20-the-resource-image.md#addendum-16-the-click-wheel-modelled-and-the-only-thing-reading-it-is-apples-bootloader) |
+| `0x7000c140` | **the click wheel** — `0x7000C100`/`0x7000C140` per the reverse-engineered PP502x map ([research/05](05-the-chip-inventory.md) §2) | 60 | ✅ **modelled 2026-08-14** (`--clickwheel`) — was ❌ "we answer 0". All 60 byte-reads are 15 word-reads by Apple's bootloader at `0x4000e59c`: three calls to its query routine, each failing all five retries against a zero. With the device modelled it is 3 word-reads, one per call, each answering `0x8000023a` — and Apple's button-decode block at `0x4000e5c0` runs for the first time. See [research/10 Addendum 16](10-the-resource-image.md#addendum-16-the-click-wheel-modelled-and-the-only-thing-reading-it-is-apples-bootloader) |
 | `0x60009004` | second DMA controller, ch0 `STATUS` | 48 | ✅ yes, since Addendum 9 |
 | `0x6000603c` | `PLL_STATUS` | 24 | 🟡 bypass #8, "always locked" |
 | `0x60004020` | `CPU_INT_EN_STAT` | 12 | ✅ yes |
@@ -77,7 +77,7 @@ addresses: ~~the GPIO input ports `GPIOL` (`0x6000d13c`, the load-bearing one at
 2026-08-14 window correction — the undocumented `0x60006038`, which the firmware reads twice and
 XORs. `0x7000c140` — **the click wheel**, which the original pass missed entirely and which was, for
 a project named after it, the most interesting addition on the list — **leaves the list on
-2026-08-14**: it is a modelled device now, not an invented answer (research/20 Addendum 16). Note
+2026-08-14**: it is a modelled device now, not an invented answer (research/10 Addendum 16). Note
 what that entry was actually reporting while it sat here: not "a register nobody answers" but "a
 register we answer with a value that fails Apple's own validity test", which is a different and
 worse thing — the firmware was taking its **error** path, five retries deep, on every call.
@@ -97,7 +97,7 @@ otherwise (see the bisect below).~~
 finding**: leaving it zero said "charger present", RetailOS believed it, and drew the charging screen
 for as long as the emulator has been able to draw anything. It is seeded `0x08` since 2026-08-14, and
 the reason it could not be before was a defect in our PMU rather than a fact about the battery check
-— [research/20](20-the-resource-image.md) Addendum 30, and the box in §"GPIOL, and what it exposed"
+— [research/10](10-the-resource-image.md) Addendum 30, and the box in §"GPIOL, and what it exposed"
 below.
 
 `PP_VER1`/`PP_VER2` are worse in kind: a part-number register answered as 0 tells the firmware it is
@@ -107,7 +107,7 @@ running on a SoC that does not exist.
 
 It is derived rather than guessed, it is bounded, and each entry has a falsifiable next step: supply
 a plausible value and measure whether behaviour changes — the same experiment already run on
-`0x6000d13c` ([research/11](11-rtxc-and-the-video-coprocessor.md) §48), which is how we learned that
+`0x6000d13c` ([research/03](03-rtxc-and-the-video-coprocessor.md) §48), which is how we learned that
 forcing it high hangs the *bootloader*. That result now reads differently: it was not evidence that
 the line is irrelevant, it was evidence that **all-ones is the wrong value** for a port whose bits
 mean different things.
@@ -170,7 +170,7 @@ longer claims the hold switch is engaged and the battery is mid-charge.
 >
 > The bit that this section says "makes Apple's bootloader refuse to boot" is also the bit RetailOS
 > reads 130 times a boot to decide whether to draw the charging screen or its menu. Full account,
-> with the A/B and the pictures: [research/20](20-the-resource-image.md) Addendum 30.
+> with the A/B and the pictures: [research/10](10-the-resource-image.md) Addendum 30.
 
 `GPIOL` bit `0x08` says *no charger*. That single bit makes Apple's bootloader refuse to boot — and
 the reason is not the bit:
@@ -265,7 +265,7 @@ swept to `0x000` and `0x3ff` change nothing. No datasheet was needed; a working 
 ## The tool the reverse engineering actually needed
 
 Static call-graph analysis has dead-ended on this binary **four separate times** — §46 (three dead
-ends in a row), §52, and again in [research/18](18-differential-register-map.md). Always the same
+ends in a row), §52, and again in [research/08](08-differential-register-map.md). Always the same
 cause: RetailOS dispatches virtually, so `BL` targets are only part of the graph and the interesting
 edges are invisible to a scan.
 
@@ -293,13 +293,13 @@ dev 0x11  1827 transfers      (PMU read)
 dev 0x34   432 transfers      <- address 0x1a
 ```
 
-I²C `0x1a` is the **WM8758 audio codec** — [research/15](15-the-chip-inventory.md) lists it as
+I²C `0x1a` is the **WM8758 audio codec** — [research/05](05-the-chip-inventory.md) lists it as
 present and not boot-critical. We model nothing there, so every one of those ~~432~~ transfers is
 answered by the bus fill rather than a chip. It appears on the retail-NOR path and was invisible
 before. Not necessarily related to the blocker; recorded because an unmodelled device that the
 firmware is actively driving is exactly the kind of thing that has cost this project weeks.
 
-> **Count corrected 2026-08-13 (research/20 Addendum 13 §2), and it is 52, not 432.** The 432 came
+> **Count corrected 2026-08-13 (research/10 Addendum 13 §2), and it is 52, not 432.** The 432 came
 > from a different run at a different address encoding. On the baseline recipe the log reads
 > `dev 0x10 1829 · dev 0x11 1823 · dev 0x34 52`, and the useful part is the register numbers rather
 > than the total: `reg 0x54 ×5 · reg 0x6f ×4 · reg 0x06 ×3 · reg 0x6b ×3`. That is a real register
@@ -311,7 +311,7 @@ firmware is actively driving is exactly the kind of thing that has cost this pro
 > not stand.** `--watch-range` could not see word-sized writes into a mapped region — SDRAM is one —
 > so on a heap record it recorded only `strb`-class stores. A pointer field is written with `str`.
 > The instrument was blind to precisely the access class that would have refuted the finding. See
-> research/20 Addendum 8 §8 for the mechanism and the fix, and the control below for what it costs.
+> research/10 Addendum 8 §8 for the mechanism and the fix, and the control below for what it costs.
 >
 > **The control, run on the identical machine with the identical flags.** Rebuilding the pre-fix
 > binary and re-running `--watch-range=0x13e27424:0x74` reproduces this section's shape — a handful
@@ -322,7 +322,7 @@ firmware is actively driving is exactly the kind of thing that has cost this pro
 > `0x0019f7b0`, `0x001ac424`, `0x001ac83c`, `0x001ac3bc`, `0x001ac82c`, `0x0000011c`, `0x00223a64`
 > and `0x002234cc`. Two instruments, two code paths, one answer, and it is not "nobody".
 >
-> This was already established once, independently, and not carried back here: research/20 §2 used
+> This was already established once, independently, and not carried back here: research/10 §2 used
 > `--storeaddr` over the `+0x20` word of **all 790** heap objects of this shape and found **95 456
 > stores — every single object written**. That measurement and this table cannot both be true, and
 > the one with the working instrument wins.
@@ -336,7 +336,7 @@ firmware is actively driving is exactly the kind of thing that has cost this pro
 > build is the first step of any successor to this section.
 
 `--watch-range=BASE:LEN` records every write into a structure with its PC — the thing `--watch`
-could not do, and whose absence produced a false conclusion in [research/16](16-rockbox-as-oracle.md).
+could not do, and whose absence produced a false conclusion in [research/06](06-rockbox-as-oracle.md).
 
 First it caught a mistake of my own. The object address `0x13e26f8c` was derived on the **prototype**
 NOR; on the retail NOR the heap differs and the handle is at **`0x13e27444`**. The fault is otherwise
@@ -401,7 +401,7 @@ function into two.
 Worth stating plainly: a tool reporting "zero callers" is indistinguishable from a true negative,
 and this one was wrong. It was caught only because the answer contradicted a known fact — the
 function writes fields we watched it write. **Instruments need their own controls**, the same
-lesson as §36, §48 and [research/16](16-rockbox-as-oracle.md), now applied to something I built
+lesson as §36, §48 and [research/06](06-rockbox-as-oracle.md), now applied to something I built
 rather than something I measured.
 
 ### Read from the running machine instead
@@ -452,7 +452,7 @@ real data:
 ```
 
 `0x149ee0fc` has **bit 26 set**, and RetailOS's SDRAM MMAP window leaves bit 26 uncompared — the
-don't-care decoded in [research/11](11-rtxc-and-the-video-coprocessor.md) §33 — so it aliases onto
+don't-care decoded in [research/03](03-rtxc-and-the-video-coprocessor.md) §33 — so it aliases onto
 `0x109ee0fc`, inside the 64 MB. `--verify-memory` reports no fast/slow disagreement on this path, so
 the alias is being resolved consistently.
 
@@ -533,7 +533,7 @@ Worth stating because the dump alone is genuinely convincing, and one record hav
 conclusion. ~~The range watch is what distinguishes them, which is the whole reason it exists~~ — and
 the range watch could not distinguish them, which is the part that matters now. It was built to
 resolve the ambiguity "wrote 0" versus "never wrote" that produced a false conclusion in
-[research/16](16-rockbox-as-oracle.md), and it introduced a *second* ambiguity nobody was looking
+[research/06](06-rockbox-as-oracle.md), and it introduced a *second* ambiguity nobody was looking
 for: "wrote a byte" versus "wrote a word". A new instrument built to close one blind spot opened
 another, and the whole of this section is what that cost.
 

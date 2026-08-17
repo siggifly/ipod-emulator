@@ -61,7 +61,7 @@ fi
 # tallies, and a repaired flash **bit-identical** between the two flag sets and byte-identical to
 # the pristine dump. The only differences anywhere are one ATA DMA transfer and 4 BCM halfwords out
 # of 370 606, at the instruction where a budget-exhausted run happens to stop — a real PMU spends
-# different simulated time in the I²C poll than a constant 0xff does. See research/12
+# different simulated time in the I²C poll than a constant 0xff does. See research/04
 # §"Retiring the flags in flsh.sh and flash-update.sh".
 #
 # `--pmu` replaces `--i2c-fill` rather than merely dropping it: #3's retirement condition was a real

@@ -1,9 +1,9 @@
 # Do the games load?
 
 The question this project was started to answer, first asked in `research/01`, never once tested.
-RetailOS reaches its main menu ([research/20](20-the-resource-image.md) Addendum 30), the menu has an
+RetailOS reaches its main menu ([research/10](10-the-resource-image.md) Addendum 30), the menu has an
 **Extras** row, and Extras is where the games are — both the 56 purchased titles on the disk and
-the built-ins RetailOS carries in its own image (research/04 Q13: `Brick`, `Parachute`,
+the built-ins RetailOS carries in its own image (research/01 Q13: `Brick`, `Parachute`,
 `Music Quiz` and `Solitaire` are linked into OSOS, not separate eApps). Nobody had walked down
 there.
 
@@ -244,7 +244,7 @@ then Apple's DRM check rejects the binary and RetailOS draws its own error dialo
 Nothing about the *emulation* failed here. The disk's purchased titles are the copies this project
 has documented since research/08: they are bound to hardware this machine is not.
 
-> ✅ **Followed up 2026-08-14 — research/08 *(not published)* §"What the DRM binds to, measured".**
+> ✅ **Followed up 2026-08-14 — the DRM research *(not published)* §"What the DRM binds to, measured".**
 > The gap between frames 18 and 20 is one function, `FUN_00131874` at `0x00131874`, entered exactly
 > once at instruction 2 041 669 893. Inside it the manifest's PKCS#7 signature **verifies**, every
 > file in the manifest **verifies**, the executable and its `.sinf` are **read**, and then the
@@ -262,7 +262,7 @@ address. Zero is a result and it has to look like one.
 
 ## 5. Launching a built-in: Brick runs
 
-`Brick` is row 5 of the Games list, and it is the right target: research/04 Q13 established that the
+`Brick` is row 5 of the Games list, and it is the right target: research/01 Q13 established that the
 built-ins are **linked into RetailOS** rather than being separate eApps, so launching one tests the
 launcher without also testing the DRM path — and it is the clean thing to show.
 
@@ -321,7 +321,7 @@ giving it input rather than by staring at a static frame — §6.
   0x0024e808  eAppMotor  NEVER REACHED
 ```
 
-A built-in game launched and the eApp task was never entered. That is consistent with research/04
+A built-in game launched and the eApp task was never entered. That is consistent with research/01
 Q13 — the built-ins are linked into RetailOS, not loaded as eApps — and it is now a measurement
 rather than an empty section.
 
@@ -403,7 +403,7 @@ timing is the machine's timing" has to mean to be worth saying.
 - **Three built-ins are untested.** `Parachute`, `Music Quiz` and `Solitaire` are in the image
   (their names and their per-language instruction strings are in OSOS) and further down the same
   alphabetical list. Only `Brick` has been launched.
-- ~~**The DRM refusal is now a target with an address.**~~ ✅ **Done** — research/08 *(not published)*
+- ~~**The DRM refusal is now a target with an address.**~~ ✅ **Done** — the DRM research *(not published)*
   §"What the DRM binds to, measured". The check is `FUN_00131874`; it fails at the content-key
   unwrap, with the DRM context null because the keybag yielded no keys.
 - **There is no audio anywhere in this project.** The Wolfson codec is not modelled, so a game's
@@ -489,7 +489,7 @@ So §5's *"whether it is waiting for the player or stuck is a different question
 waiting, and it was waiting for the centre button.
 
 **The ball does not rest on the paddle.** It sits at **(4, 130)** — the left edge, mid-height — while
-the paddle sits at the bottom left, and research/23 §5's sketch had that right without knowing it
+the paddle sits at the bottom left, and research/13 §5's sketch had that right without knowing it
 mattered.
 
 ### 10.2 The physics is a 45° reflection, and it is exactly predictable

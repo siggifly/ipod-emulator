@@ -226,7 +226,7 @@ ipod-gui — an interactive iPod 5G over the eapp-loader emulator
                           menu | menu-control | combo | combo-control
   --probe-at=N            instruction anchor the probe acts at (default 1500000000)
   --clock-v3              ablation: zero `slept_usec` after a restore, reproducing the snapshot
-                          format from before 2026-08-14. For the A/B in research/20 Addendum 31.
+                          format from before 2026-08-14. For the A/B in research/10 Addendum 31.
   --charger               plug the mains charger in (GPIOL bit 3 low). The default is a bare iPod;
                           with a charger RetailOS returns to its charging screen when idle.
   --samples=A,B,C         where --probe samples the panel, in millions of instructions past the
@@ -1374,7 +1374,7 @@ impl App {
     /// The two halves are deliberately kept apart, and labelled apart. The **buttons** are physical
     /// input: `ClickWheel::buttons` is a five-bit mask, so MENU+SELECT is one frame with two bits
     /// set and the model has always been able to express it. What no measurement supports is that
-    /// anything *acts* on it — research/20 Addendum 31 §5 holds the pair down for 400 M instructions
+    /// anything *acts* on it — research/10 Addendum 31 §5 holds the pair down for 400 M instructions
     /// at the main menu and the machine does not restart, so the combo here delivers the buttons and
     /// says plainly that nothing came of it. The **power controls** below are emulator controls,
     /// named as such: they drop the machine and build a new one. A button labelled MENU+SELECT that
@@ -1439,7 +1439,7 @@ impl App {
             "The real hard reset and the real power-off. These deliver the buttons — both bits in \
              one frame, which the wheel has always been able to report — and nothing in RetailOS \
              has been measured to act on either: held for 400 M instructions at the main menu, the \
-             machine keeps running (research/20 Addendum 31 §5). On a 5G the pair is caught by the \
+             machine keeps running (research/10 Addendum 31 §5). On a 5G the pair is caught by the \
              wheel controller or the PMU, neither of which is modelled here.",
         );
     }
@@ -1566,7 +1566,7 @@ impl App {
             // ---- the measurement
             ui.label(egui::RichText::new("does the input reach RetailOS?").strong());
             ui.small(
-                "Arrivals at the addresses research/20 Addendum 21 §6 measured. Non-zero here is \
+                "Arrivals at the addresses research/10 Addendum 21 §6 measured. Non-zero here is \
                  the same evidence a `--wheel` script produces, made by a hand on a wheel.",
             );
             grid(ui, "enters", |ui| {
@@ -1596,7 +1596,7 @@ impl App {
                      phase with a cold one: given the identical input it draws the identical \
                      picture — same digest, to the pixel — into the other buffer. Nothing here \
                      models which surface the panel scans out, so both are counted and neither is \
-                     guessed at. research/20 Addendum 31 §5.",
+                     guessed at. research/10 Addendum 31 §5.",
                 );
             }
 

@@ -93,13 +93,13 @@ unchanged at every sample.
 *(This section used to say the idle surface was Apple's charging screen at 76 607 px, and that
 scrolling woke the machine into the Language list only for it to "time back out to the charging
 screen" ten seconds later. Both were true of the machine this front end was written on, and both
-stopped being true one commit later: research/20 Addendum 30 found that `GPIOL` bit 3 was being held
+stopped being true one commit later: research/10 Addendum 30 found that `GPIOL` bit 3 was being held
 low by our own region default, so every boot believed it was **plugged into a wall charger**. It is
 seeded correctly now — a bare iPod — and there is no charging screen to time out to.)*
 
 **`--charger` puts the machine back on a wall socket, deliberately**, and then the timeout is real
 and reproducible: from the main menu, with no input at all, RetailOS returns to the Charged screen
-after **163.4 s of simulated inactivity and before 166.1 s** (research/20 Addendum 31 §3, measured by
+after **163.4 s of simulated inactivity and before 166.1 s** (research/10 Addendum 31 §3, measured by
 bracketing the panel digest at 1 M-instruction resolution, with a matched no-input control that never
 leaves the Charged screen). That is authentic behaviour — a 5G on a charger goes back to its charge
 display when left alone — and it is worth knowing about before mistaking it for a fault.
@@ -144,7 +144,7 @@ up to already had the volume RetailOS built before the power was cut. New machin
 `ClickWheel::buttons` is a five-bit mask, so two buttons in one frame has always been expressible and
 these deliver exactly that — the wheel reports the pair held, and RetailOS decodes it. **Nothing acts
 on it.** Held for 400 M instructions at the main menu, with 8 arrivals at Apple's ISR decoder and 6
-button events to prove it was received, the machine does not reset (research/20 Addendum 31 §6). On
+button events to prove it was received, the machine does not reset (research/10 Addendum 31 §6). On
 real hardware the chord is caught below the firmware, by the wheel's PSoC or the PMU, and this
 project models neither: `ClickWheel` is a transceiver that posts frames, with no path from `buttons`
 to anything that could restart a machine. So the chord is labelled as delivering buttons and the
@@ -203,7 +203,7 @@ the panel at 0x000e0000:                    the panel at 0x000e0000:
 Both arms also write each sample to `_out/selftest-{driven,control}-{before,plus8M,plus60M}.png`,
 so the two `+8 M` files are the whole experiment in two pictures.
 
-> ⚠️ **That transcript was taken on the charger-present machine of before research/20 Addendum 30,
+> ⚠️ **That transcript was taken on the charger-present machine of before research/10 Addendum 30,
 > and `--selftest` cannot reproduce it on the current default.** Two reasons, both measured in
 > Addendum 31 §5. (1) A snapshot does not carry the click wheel, so a restored machine starts with
 > the `0x052a` reporting gate shut, and on a *bare* iPod nothing ever re-opens it — **0 `0x052a`
@@ -222,7 +222,7 @@ ipod-gui --probe=menu|menu-control|combo|combo-control [--probe-at=N] [--samples
          [--charger] [--cold] [--clock-v3] [--ablate=pmu]
 ```
 
-No window. Wait for instruction `--probe-at` (default 1 500 000 000 — research/20 Addendum 30's own
+No window. Wait for instruction `--probe-at` (default 1 500 000 000 — research/10 Addendum 30's own
 `--wheel=@1500M:…` anchor, so a cold arm here and that recipe press Select at the same point of the
 same boot), press Select, then sample **both** surfaces at fixed instruction counts afterwards,
 writing a PNG per sample per surface into `_out/` and printing the non-black count, the digest and
@@ -238,7 +238,7 @@ Three things are settled by that pair, and the control is what settles them:
 
 1. **The gesture reaches Apple's ISR decoder at `0x00281350`** — 40 arrivals for 40 posted frames,
    every one of the 40 `DATA` reads finding a frame waiting, 40 IRQ 40 assertions, nothing dropped
-   and nothing suppressed. This is the same evidence a `--wheel` script produces (research/20
+   and nothing suppressed. This is the same evidence a `--wheel` script produces (research/10
    Addendum 21 §6 measured decoder 36 / edge 36 / scroll 32 for a 36-step script), made instead by
    the window's own plumbing.
 2. **Twelve UI events reach RetailOS's event system** — 10 wheel events at `0x000cd6a0` and 2 button
@@ -273,7 +273,7 @@ wheel and the registry off, and it is unchanged by this work (verified `diff`-id
 after the snapshot-format change, down to everything but the per-run temp disk name).
 
 *(This table read `Idle after 1609725109`, 38 521 buckets and a 76 607-pixel framebuffer until
-2026-08-14. Those numbers were measured before research/20 Addendum 30 corrected the charger GPIO,
+2026-08-14. Those numbers were measured before research/10 Addendum 30 corrected the charger GPIO,
 and — as the next section records — could not have been re-measured on the merged tree, because this
 crate did not compile there.)*
 
@@ -301,7 +301,7 @@ apart. `--clock-v3` reproduces the old behaviour deliberately, for A/B work.
 
 **What that fixed, and what it did not.** It did not fix — and was measured not to cause — the
 charging-screen revert (`--clock-v3` versus not, over one shared snapshot file: identical panel
-digests at all seven instants). See research/20 Addendum 31 §4.
+digests at all seven instants). See research/10 Addendum 31 §4.
 
 **A restored machine can be one page flip out of phase, and then the window shows a stale surface.**
 This is the current form of "a restored machine and a cold one answer the same input differently",
@@ -385,7 +385,7 @@ bit 31 of the click-wheel frame. Neither produces any visible effect after boot.
 
 So the line is read, once, during startup, and it demonstrably changes what the machine does. What
 is missing is any way to tell RetailOS the switch **moved**: on the hardware that is a GPIO
-interrupt, `research/18` records that RetailOS programs `GPIOA_INT_LEV` and `GPIOA_INT_CLR` where
+interrupt, `research/08` records that RetailOS programs `GPIOA_INT_LEV` and `GPIOA_INT_CLR` where
 Rockbox never does, `HoldSwitchTask` sits pended on semaphore `0xba` rather than polling, and this
 emulator models no GPIO interrupt block at all — the whole `0x6000d0xx` range is a plain backing
 region. Writing the bit changes a word of RAM and raises nothing.
@@ -428,7 +428,7 @@ the first time either copy was corrected. The move was byte-for-byte and the bas
 run reports that `diff` reports as identical — at the time, `Idle after 1610279157`, 38 266 code
 buckets, 770 ata commands, 4 unmapped reads, and `cargo test --release` in `eapp-loader` 24 passed
 either way. *(That baseline has since moved to `Idle after 1562789429` / 38 220 buckets — not from
-this work but from research/20 Addendum 30's charger-GPIO fix, which landed on a parallel branch.)*
+this work but from research/10 Addendum 30's charger-GPIO fix, which landed on a parallel branch.)*
 
 **`Machine::snapshot` carries `Memory::slept_usec`** (format `IPODSNP4`, older images refused), so a
 restored machine's simulated clock is the one the snapshot was taken with. Three tests cover it —
@@ -436,10 +436,10 @@ including a negative control that reproduces the old format and asserts the cloc
 exactly the amount dropped — and `cargo test --release` in `eapp-loader` goes 30 → 33 (45 once the
 parallel `ipod-film` work is merged in, which brings twelve of its own). The full-boot
 baseline is `diff`-identical across the change, as it must be: a cold boot never restores.
-research/20 Addendum 31 §1–2.
+research/10 Addendum 31 §1–2.
 
 **One compile fix.** `report_headless` here read `Ata::command_count`, a field the `Capped<T>` work
-(research/22) had already replaced with `commands: Capped<…>` — so this crate **did not build** on
+(research/12) had already replaced with `commands: Capped<…>` — so this crate **did not build** on
 the merged tree, from the moment it landed until 2026-08-14. It is `commands.seen()` now, which is
 the census; `commands.sample().len()` would be the cap wearing a census's clothes, which is that
 document's whole subject.

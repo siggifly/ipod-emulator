@@ -151,7 +151,7 @@ budget:
 | profile buckets executed | 1 844 | **5 094** |
 
 Anything found this way is a lead until it is confirmed at `--clock=75`, and the budget needed to
-confirm it grows 15×. See [research/11](../../research/11-rtxc-and-the-video-coprocessor.md) §42.
+confirm it grows 15×. See [research/03](../../research/03-rtxc-and-the-video-coprocessor.md) §42.
 
 ## Useful flags
 
@@ -159,7 +159,7 @@ confirm it grows 15×. See [research/11](../../research/11-rtxc-and-the-video-co
 |---|---|
 | `--bcm` | model the video co-processor's host protocol rather than leaving it as passive memory |
 | `--i2c-fill=0xff` | answer every I²C data read with all-ones. **Crude on purpose** — the PMU's ADC status never reports "conversion ready" otherwise, and this is an experiment, not a device model |
-| `--rdval=ADDR=VALUE` | a word that always reads as VALUE. For status bits of hardware we do not model; **each one is a hypothesis**. The recipe no longer passes any: the two it carried were the external memory bus, now modelled ([research/12](../../research/12-bypass-ledger.md) #1, #2). Note that supplying *any* `--rdval` suppresses the built-in `COP_STATUS`/`PLL_STATUS` pair |
+| `--rdval=ADDR=VALUE` | a word that always reads as VALUE. For status bits of hardware we do not model; **each one is a hypothesis**. The recipe no longer passes any: the two it carried were the external memory bus, now modelled ([research/04](../../research/04-bypass-ledger.md) #1, #2). Note that supplying *any* `--rdval` suppresses the built-in `COP_STATUS`/`PLL_STATUS` pair |
 | `--profile` | sampled PC histogram |
 | `--pagelog=BASE:SIZE[:GRAN]` | account for a range, bucketed by `GRAN` bytes (default 256). 256 answers "which register block", 4 answers "which register" |
 | `--pmu` | model a real PCF50605 instead of `--i2c-fill`. Retires that bypass |

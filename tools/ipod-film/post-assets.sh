@@ -14,7 +14,7 @@
 # deliverable; the frames are reproducible from it.
 #
 # ---------------------------------------------------------------------------------------------
-# Everything numeric in here is calibration and all of it was measured. research/23 §2.2 has the
+# Everything numeric in here is calibration and all of it was measured. research/13 §2.2 has the
 # menu half, §10 has Brick's.
 #
 #   MENUS.  A one-row step is `touch, rotate=+8, release` with quiet either side — a whole gesture.
@@ -36,7 +36,7 @@ ROOT=$(cd "$HERE/../.." && pwd)
 POST="$ROOT/_out/post"
 FILM="$ROOT/_out/film"
 
-# The descent, as named pieces. Identical to research/23 §9 — kept in one place so a change to the
+# The descent, as named pieces. Identical to research/13 §9 — kept in one place so a change to the
 # calibration cannot land in the write-up and miss the script.
 HEAD='@1500M:touch,+2M:press=select,+5M:release'          # Select on the Language list
 ROW=',+60M:touch,+2M:rotate=+8,+5M:release'               # exactly one row down
@@ -106,7 +106,7 @@ do_boot() {
 # 200 k is not a round number picked for tidiness, it is the calibration: the same steps issued
 # 400 k apart move the paddle 29 px per million instructions and 200 k apart move it 150, because
 # the wheel accelerator is rate-sensitive. This function had 400 k in it for one take and the film
-# it produced is a different game — same ball, different paddle, different rally. research/23 §10.3.
+# it produced is a different game — same ball, different paddle, different rally. research/13 §10.3.
 sweep() {
   local t=$1 n=$2 d=$3 i
   W="$W,@$t:rotate=$d"
@@ -120,7 +120,7 @@ do_gameplay() {
   W="$W,@2576620000:touch,+2M:press=select"           # SERVE, and the finger stays down
 
   # Two sweeps, and only two, because the ball tells you where to be and it is not where a naive
-  # alternation would put you. research/23 §10.4 has the trajectory each one is aimed at.
+  # alternation would put you. research/13 §10.4 has the trajectory each one is aimed at.
   sweep 2581600000 10 +8   # after the first return: the ball comes back down on the RIGHT, at x~282
   sweep 2601500000 5  -8   # after the fourth: it breaks out on the left and drops at x~173
 
@@ -168,7 +168,7 @@ panel for 44 M instructions of that, which is 0.6 s: short, because RetailOS's f
 *simulated* time. Brick's animation is driven by the firmware's clock, and at `--clock=5` that clock
 runs 14.4x faster per instruction than a PP5021C's — so at the boot film's rate the whole rally is
 over in under a second. 5 M/s is the rate the game's own timer thinks it is running at. See
-research/23 §10.5.
+research/13 §10.5.
 
 ## Not filmed, deliberately
 

@@ -285,7 +285,7 @@ impl EApp {
 }
 
 /// Framework descriptor layout, verified against real binaries *and* RetailOS's validator
-/// (`research/02-eapp-loader.md`). Offsets are relative to the **name**, which is a fixed
+/// (the eApp loader research). Offsets are relative to the **name**, which is a fixed
 /// 32-byte buffer:
 ///
 /// ```text
@@ -468,11 +468,11 @@ pub struct Memory {
     /// `--writelog=BASE:SIZE` — record where stores in a range actually LAND.
     ///
     /// `--watch` reports value *changes*, so it cannot distinguish "wrote 0 over 0" from "never
-    /// wrote", and leaning on it produced a contradiction in research/16. This records the attempt:
+    /// wrote", and leaning on it produced a contradiction in research/06. This records the attempt:
     /// the PC, the value, and the region that answered — or `DROPPED` if none did.
     /// `--verify-memory` — cross-check the page cache against the slow path on every access.
     ///
-    /// The `fast_region` bug (research/16) returned data from the WRONG region rather than no
+    /// The `fast_region` bug (research/06) returned data from the WRONG region rather than no
     /// region, so it was invisible to unmapped-access reporting, to `--watch`, and to four other
     /// checks. That failure mode is indistinguishable from "a field nobody ever wrote" — which is
     /// precisely what RetailOS's blocker looks like. This makes the whole class loud.
@@ -490,7 +490,7 @@ pub struct Memory {
     /// `--watch-range=BASE:LEN` — every write into a range, with the PC and the value.
     ///
     /// `--watch` records value *changes* to one word, which cannot distinguish "wrote 0 over 0"
-    /// from "never wrote" — that ambiguity produced a whole contradiction in research/16 and was
+    /// from "never wrote" — that ambiguity produced a whole contradiction in research/06 and was
     /// leaned on twice more. This records the write itself, over a whole structure.
     pub watch_range: Option<(u32, u32)>,
     /// An ordered **sample** of those writes. The report is driven by `watch_range_words` below.
@@ -1300,7 +1300,7 @@ impl Bus for Memory {
             // answers "which addresses does the firmware read that nothing ever wrote", and with
             // `input_probe` missing here it counted only byte reads: on the retail boot it saw
             // 44 510 reads of PROCESSOR_ID against the true 128 150, and missed CPU_INT_STAT's
-            // 167 264 outright. research/19's register table was built on that.
+            // 167 264 outright. research/09's register table was built on that.
             if self.accounting
                 || self.page_log.is_some()
                 || !self.read_addrs.is_empty()
@@ -1336,7 +1336,7 @@ impl Bus for Memory {
             // `watch_range` and `input_probe` were missing from this hoist, and `count` is the only
             // thing that feeds them — so `--watch-range` saw *byte* writes (write8_inner calls
             // `count` unconditionally) and no word writes at all, unless some other flag happened to
-            // arm the path. That is not a hypothetical: it is why research/20 Addendum 7 §5
+            // arm the path. That is not a hypothetical: it is why research/10 Addendum 7 §5
             // concluded the transfer engine at 0x60009000 "is never programmed". It is programmed —
             // 208 byte-writes' worth — and the whole-run watch that reported 222 GPIO writes and
             // nothing else had been blind to every one of them.
@@ -1347,7 +1347,7 @@ impl Bus for Memory {
             // records over a whole retail boot, pre-fix against post-fix on the same machine:
             // 212 byte-writes reported against 3 040 actual on one, and on the other 22 against 670,
             // with 23 of its 29 words reported as never written when every one of them was.
-            // research/19's two retractions are that measurement.
+            // research/09's two retractions are that measurement.
             if self.accounting
                 || self.page_log.is_some()
                 || !self.read_addrs.is_empty()
@@ -1959,8 +1959,8 @@ pub struct Machine {
     /// `--callgraph` — every branch edge actually TAKEN, deduplicated with a count.
     ///
     /// RetailOS dispatches virtually, so a static scan of `BL` targets cannot answer "who calls
-    /// this" — that dead end has stopped this investigation four separate times (research/11 §46,
-    /// §52, research/18). At runtime the question is trivial: record `(site, target)` for both
+    /// this" — that dead end has stopped this investigation four separate times (research/03 §46,
+    /// §52, research/08). At runtime the question is trivial: record `(site, target)` for both
     /// direct and indirect branches. Deduplicated, so the map is bounded by distinct edges rather
     /// than by executed instructions.
     pub edges: Option<BTreeMap<(u32, u32), u64>>,
@@ -2015,7 +2015,7 @@ pub struct Machine {
     /// default; retire it when `0x60009000` moves bytes and raises its completion.
     ///
     /// On its own it is **not** sufficient, and that is the measured result rather than a caveat —
-    /// see `force_vc_retire` and research/20 Addendum 8.
+    /// see `force_vc_retire` and research/10 Addendum 8.
     ///
     /// Keyed on the pend itself rather than on a memory value because the wait is reached by a
     /// *tail* branch from the counting acquire at `0x000a0ebc` — there is no call frame to patch,
@@ -3138,7 +3138,7 @@ impl Machine {
         // ISR at `0x00277128` gates its entire hi-bank arm on `tst r4, #0x40000000`, so the wheel
         // decoder at `0x00281350` — which returns semaphore `0x7f`, exactly what `SerialOptoTask`
         // has been pended on since tick 66 — was unreachable no matter how many frames the wheel
-        // posted. See research/20 Addendum 17 §8.
+        // posted. See research/10 Addendum 17 §8.
         let hi_aggregate = if pending_hi & enabled_hi != 0 { 1 << 30 } else { 0 };
         self.mem.write32(CPU_INT_STAT, (pending & enabled) | hi_aggregate);
         self.mem.write32(HI_INT_STAT, pending_hi);
@@ -3767,7 +3767,7 @@ impl Xmb {
 /// **Software never sees the Cypress part.** The wheel hangs off a PSoC that talks to the SoC's
 /// `opto` transceiver, and firmware drives the transceiver. So what is modelled here is that
 /// transceiver and the packet format it hands over; the PSoC is not modelled and does not need to
-/// be ([research/15](../../../research/15-the-chip-inventory.md) §"Click wheel").
+/// be ([research/05](../../../research/05-the-chip-inventory.md) §"Click wheel").
 ///
 /// ```text
 /// +0x100  CTRL     bit 31 transmit start · bits 30..29 receiver/interrupt arm
@@ -4505,7 +4505,7 @@ impl Nor {
     ///
     /// The ROM's accept-table holds **two** SST rows with identical uniform 4 KiB geometry —
     /// `0x273f` and `0x2781` — so either boots. We drove `0x2781` first, named for `SST39VF800A`,
-    /// which our own [`research/15`] calls a downstream typo: iPodLinux and the EE Times 5.5G BOM
+    /// which our own [`research/05`] calls a downstream typo: iPodLinux and the EE Times 5.5G BOM
     /// both name the part **`39WF800A`**, and the Rockbox wiki's `VF` spelling cites iPodLinux as
     /// its source. `daniel5151/clicky` independently picked `0x273f` and labels it `SST39WF800A`.
     /// Two lines of evidence for `WF`, none for `VF`, so this follows them.
@@ -4713,7 +4713,7 @@ impl Nor {
 /// This replaces `--i2c-fill=0xff`, which answered every read with all-ones. That was never a
 /// device — it was a probe for "is the firmware stuck on a bit that never asserts", and it made
 /// every status bit read as set, so any init path that checked a result got a plausible lie. Per
-/// [research/11](../../../research/11-rtxc-and-the-video-coprocessor.md) §36 the bypass cannot be
+/// [research/03](../../../research/03-rtxc-and-the-video-coprocessor.md) §36 the bypass cannot be
 /// removed to test its effect — the bootloader needs *an* answer — so the only way to find out what
 /// it was hiding is to put a real chip behind it.
 ///
@@ -4735,7 +4735,7 @@ pub struct Pcf50605 {
     /// this one has to change over time or a poll loop has nothing to wait for.
     ///
     /// **Counted per read transfer, not per read of `ADCS1`** — and that distinction is the whole
-    /// of research/20 Addendum 30. A conversion does not advance because the host happened to read
+    /// of research/10 Addendum 30. A conversion does not advance because the host happened to read
     /// one particular register of the chip; and the two halves of one result, fetched in a single
     /// I²C transfer, cannot describe different states of the converter. Counting inside
     /// `read_reg(0x30)` did both: it advanced the countdown on the first byte of a two-byte read
@@ -4914,7 +4914,7 @@ impl Pcf50605 {
         let channel = (self.regs[0x2f] >> 1) & 0xf;
         // Rockbox's `powermgmt-ipod-pcf.c` gives the scale: `mV = (adc * 6000) >> 10`, so 0x2c0 is
         // 4125 mV and the 0x200 catch-all is 3000 mV. The catch-all is left as-is deliberately:
-        // raising it did NOT let the bootloader boot with no charger present (research/19), so the
+        // raising it did NOT let the bootloader boot with no charger present (research/09), so the
         // threshold is not simply "a healthy cell" and inventing a higher number would be guessing.
         let value: u16 = match self.adc_values.iter().find(|&&(c, _)| c == channel) {
             Some(&(_, v)) => v,
@@ -4984,7 +4984,7 @@ pub struct Ata {
     /// past the cap reported exactly 256 and the number was quoted as a measurement in research/ and
     /// used as this project's baseline verification. The real figure at 600 M is 671. It also
     /// manufactured a false absence: the truncation audit concluded LBA 22169 is never read, when it
-    /// is read at command #342 — past the cap, invisible to the log. See research/20 Addendum 15 §3.
+    /// is read at command #342 — past the cap, invisible to the log. See research/10 Addendum 15 §3.
     ///
     /// This was the first instrument taught to announce its own saturation, and its report line is
     /// the wording every other one now copies.
@@ -5099,7 +5099,7 @@ pub struct PpDmaCtl {
 /// inference, not a published fact: RetailOS's driver object holds four interrupt masks at
 /// `+0x10..+0x1c` (`1<<24`, `1<<13`, `1<<26`, `1<<27`), and of those the run enables 26 and 27
 /// back to back at @51 762 895 / @51 763 063, immediately before it configures this controller's
-/// two channels. See `research/20` Addendum 8.
+/// two channels. See `research/10` Addendum 8.
 pub const PP_DMA: [PpDmaCtl; 2] = [
     PpDmaCtl { master: 0x6000_8000, chans: 0x6000_9000, n: 2, irq: 27 },
     PpDmaCtl { master: 0x6000_a000, chans: 0x6000_b000, n: 4, irq: 26 },
@@ -5420,7 +5420,7 @@ impl Ata {
                     // Without this the driver is told nothing at all: RetailOS blocked on RTXC
                     // semaphore 0xd1 waiting for this exact command (a 1-sector WRITE DMA to
                     // LBA 32894, the first sector of FAT #1) and only its own 3.9 s timeout ever
-                    // ended the wait, 21 times over. See research/20 Addendum 15.
+                    // ended the wait, 21 times over. See research/10 Addendum 15.
                     self.irq_pending = true;
                 }
             }
@@ -6197,7 +6197,7 @@ impl Bcm {
 /// a backwards jump of 44 minutes of simulated time**, and firmware that measures an interval as
 /// `now - start` in unsigned microseconds does not see a negative number: it sees that pair wrap to
 /// **+1 676 039 845 µs, twenty-eight minutes of elapsed time**, arriving in one instruction. Every
-/// timeout in RetailOS is therefore expired at the moment of restore. See research/20 Addendum 31.
+/// timeout in RetailOS is therefore expired at the moment of restore. See research/10 Addendum 31.
 ///
 /// Saving `slept_usec` makes the recomputation reproduce the saved `usec` exactly, because the
 /// identity above is the same one the run loop maintains. The magic is `IPODSNP4`: a version-3
@@ -6394,7 +6394,7 @@ impl Machine {
 /// compiler literal pool that runs *pointer then name*, so each is reported one record late:
 /// `0x00284ea0` comes out "APPLEBOOT" when it is `t_graphicsManager`, and `0x002844e0` comes out
 /// "t_power" when it is `APPLEBOOT` — which sent a whole session at the wrong task. The true
-/// mapping is read off the creation code at `0x000d3b60` and recorded in research/20 Addendum 7 §2;
+/// mapping is read off the creation code at `0x000d3b60` and recorded in research/10 Addendum 7 §2;
 /// every priority and stack size it gives matches the resulting TCB. Reversing the pattern is not
 /// the fix: in the device registry at `0x0025d63c` the word before each name is the *previous*
 /// entry's pointer, so a reversed scan renames `OptoTask` to `SerialOptoTask`. Distinguishing the
@@ -6582,7 +6582,7 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
         // no charger Apple's bootloader checks the battery and our PMU could not answer that
         // check: the ADC reported a completed conversion whose value was always 0, so the cell
         // read flat and the bootloader halted at `0x400015b4` without touching the disk. That was
-        // a defect in this model's converter, not a missing threshold — research/20 Addendum 30.
+        // a defect in this model's converter, not a missing threshold — research/10 Addendum 30.
         // With it fixed the honest value boots, and it is load-bearing all the way to the screen:
         // RetailOS polls this exact bit (pin `0x63` through `FUN_00282b70`, 130 times a boot) and
         // a zero here made it draw the "Charged" screen instead of its menu.

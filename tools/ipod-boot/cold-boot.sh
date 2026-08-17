@@ -25,7 +25,7 @@ RES="$ROOT/resources"
 # are gone: both are the external memory bus controller, and it is modelled now. Bit 30 of
 # 0x70000030 is the NOR write gate and bit 27 is the controller's ready flag; bit 24 of
 # XMB_RAM_CFG is the SDRAM configuration command and bit 31 its completion. Removing both flags
-# leaves a 600 M-instruction boot byte-identical. See research/12 #1 and #2.
+# leaves a 600 M-instruction boot byte-identical. See research/04 #1 and #2.
 #
 # There is deliberately no `--osos=` here either. Handing a cold boot the image it exists to load
 # was ledger bypass #14; the ROM finds `osos` in the firmware directory, DMAs 7 559 680 bytes into
@@ -36,7 +36,7 @@ RES="$ROOT/resources"
 # the chip before it will touch it, and against bytes that reply is `0x1ffe`/`0xea00` — the reset
 # branch read as two IDs — so its 40 command writes landed unmapped and no row of its device table
 # matched. With the model it reads SST `0xbf`/`0x273f` and selects row 3 — `SST39WF800A`, the
-# spelling iPodLinux and the EE Times 5.5G BOM both carry. See research/12 #12 and its
+# spelling iPodLinux and the EE Times 5.5G BOM both carry. See research/04 #12 and its
 # §"The flash part". (This comment said row 4 / `0x2781` until 2026-08-14, from before that switch.)
 exec "$TRACE" "$BUDGET" \
   --boot-osos --cold-boot \

@@ -311,7 +311,7 @@ fn scan_blocks(buf: &[u8]) -> Vec<Block> {
 /// Parse one framework-import block.
 ///
 /// **Layout verified 2026-08-11** against real game binaries *and* RetailOS's own validation code
-/// (see `research/02-eapp-loader.md`). Offsets relative to the block start:
+/// (see the eApp loader research). Offsets relative to the block start:
 ///
 /// ```text
 /// +0x00  magic 0x29061968

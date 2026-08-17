@@ -1,7 +1,7 @@
 # The VideoCore runtime API
 
 > **This file is the co-processor side of the display.** Its counterpart is
-> [research/22](22-how-retailos-draws.md), which describes the ARM side — paint, show, damage,
+> [research/12](12-how-retailos-draws.md), which describes the ARM side — paint, show, damage,
 > flush, present, and the transport that carries a frame across the bus.
 
 
@@ -10,7 +10,7 @@ The iPod 5G's display and video work does not happen on the ARM. It happens on a
 its own filesystem, its own dynamic linker and its own service registry. RetailOS uploads that
 firmware and then talks to it.
 
-[research/20](20-the-resource-image.md) Addendum 28 established the surface: the `.VLL` codec
+[research/10](10-the-resource-image.md) Addendum 28 established the surface: the `.VLL` codec
 libraries in `rsrc` are ELF shared objects for `EM_VIDEOCORE`, and their undefined symbols name the
 whole runtime API — 183 of them. This file is the **reference document for that API**: what each
 group is, what the display model is, how much of it can be cross-checked against public
@@ -164,7 +164,7 @@ nothing else; the screen needs the display stack, the registry and the host-call
 
 ### The export table — `vmcs.bin` names its own API
 
-**(a)** ⚠️ **This corrects [research/20](20-the-resource-image.md) Addendum 28 §3.** That section
+**(a)** ⚠️ **This corrects [research/10](10-the-resource-image.md) Addendum 28 §3.** That section
 recorded, as a limit, that *"none of these names appear in `vmcs.bin` … confirmed by direct search
 for `gencmd_register`, `dispman_object_create`, `vmcs_queue_message`, `hostreq_rendertext`: **zero
 hits each**"*, and concluded the linkage must be resolved by ordinal or hash.
@@ -609,7 +609,7 @@ before it opens a display.
 
 **(c)** That is the strongest available hint about what RetailOS is doing when it reads a 16-byte
 block at co-processor `0x1f0`, follows a pointer to an 8-entry `u16` table, and matches 16-byte
-descriptors by numeric tag 1 / 2 / 7 ([research/20](20-the-resource-image.md) Addendum 26 §4). A
+descriptors by numeric tag 1 / 2 / 7 ([research/10](10-the-resource-image.md) Addendum 26 §4). A
 directory of numbered channels, discovered before any display call, is structurally what a
 VCHI-shaped connection table looks like. **It is a shape match and nothing more** — no public
 material ties VCHI to VideoCore II, and the tag values are ours, not Broadcom's.
@@ -684,7 +684,7 @@ Two readings, and we cannot currently choose:
    (`vc_image_set_image_data`) rather than by a copy call, and "creating a resource" wraps memory the
    caller already owns.
 
-Reading 1 is the better fit with what [research/20](20-the-resource-image.md) Addendum 26 measured on
+Reading 1 is the better fit with what [research/10](10-the-resource-image.md) Addendum 26 measured on
 the ARM side: RetailOS allocates a *surface* on the co-processor through `FUN_00286ca8`, gets back a
 co-processor-side address, and then uploads dirty scanlines to that address with a bulk block write
 (`FUN_00287be8`) — **not** through any named call. That is exactly "the write path is an RPC and an
@@ -887,7 +887,7 @@ agent's time.
 
 The GENCMD registry is **not** the structure RetailOS fails to read at co-processor offset `0x1f0`.
 
-[research/20](20-the-resource-image.md) Addendum 26 measured RetailOS reading 16 bytes at `0x1f0`,
+[research/10](10-the-resource-image.md) Addendum 26 measured RetailOS reading 16 bytes at `0x1f0`,
 requiring `word[2] == 1` and `word[3]` to be a non-null 4-aligned pointer, then following that
 pointer to an 8-entry `u16` table, then reading a 16-byte descriptor per entry and matching a **tag**
 — 1, 2 or 7. That is a **channel/service directory** for an RPC transport, matched by *numeric tag*.
@@ -945,7 +945,7 @@ queue, which is the natural shape for a host-request channel.
 
 ### 6.2 `hostreq_rendertext` and the 319 font lookups — an open question
 
-[research/20](20-the-resource-image.md) measures that RetailOS performs **337 font-registry lookups,
+[research/10](10-the-resource-image.md) measures that RetailOS performs **337 font-registry lookups,
 319 of them for the key `("Podium Sans", 18, 1)`**, gets a null every time because Podium Sans is
 registered at 14/16/22/28 and not 18, and **never reads a font file** — because in our emulator the
 `rsrc` volume that holds `PodiumSans18.ttf` is never mounted.
@@ -959,7 +959,7 @@ event:**
   and a protocol, not a CPU. So no `hostreq_rendertext` has ever been issued in any run this project
   has made. The 319 lookups are therefore host-originated, from RetailOS's own text layout, and are
   not co-processor callbacks.
-- **Against, second.** [research/20](20-the-resource-image.md) Addendum 15 §8 already killed the font
+- **Against, second.** [research/10](10-the-resource-image.md) Addendum 15 §8 already killed the font
   lead as the cause of the boot wall, on three independent measurements.
 - **For, on real hardware.** If the co-processor renders subtitles or on-screen text during video
   playback, and the fonts live on the host's disk, then `hostreq_rendertext` must reach *some* ARM

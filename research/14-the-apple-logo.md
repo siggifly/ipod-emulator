@@ -14,7 +14,7 @@ in §7.
 
 The boot film has always had a frame it could not explain: 2 922 non-black pixels, held from 10 M
 to 50 M instructions, byte-identical to the ROM→RetailOS handoff dump.
-[research/12](12-bypass-ledger.md) calls it *"the boot ROM's logo"* on a hunch; nothing had opened
+[research/04](04-bypass-ledger.md) calls it *"the boot ROM's logo"* on a hunch; nothing had opened
 it.
 
 Looked at, it is four white diagonal lines across the top fifteen scanlines and black everywhere
@@ -37,7 +37,7 @@ every boot this project has ever run.
 ## 2. Why it was in the wrong place: `0xE0000` is not the panel
 
 `BCMA_CMDPARAM` is Rockbox's name for internal `0xE0000`, and Rockbox's own gloss on it is
-*"Parameters/data for commands"*. This project has read it as the panel since research/11, because
+*"Parameters/data for commands"*. This project has read it as the panel since research/03, because
 for Rockbox the two are the same picture: `lcd_update_rect` writes a bare 320x240 frame there — no
 header, rows placed by the host at `BCMA_CMDPARAM + 640*y + 2*x` — and issues `LCD_UPDATE`
 (command 0). Rockbox never needs to know there is a frame store on the other side of the command.
@@ -186,13 +186,13 @@ CPU can read, because nothing in this boot ever reads `BCMA_CMDPARAM` back — t
 
 ## 8. What this settles elsewhere
 
-**[research/22](22-how-retailos-draws.md) §8 item 4 — "surfaces are allocated from `0xE0000` upward,
+**[research/12](12-how-retailos-draws.md) §8 item 4 — "surfaces are allocated from `0xE0000` upward,
 on Rockbox's authority" — is now constrained rather than free.** `0xE0000` is the co-processor's
 command-parameter buffer, so a real co-processor would not hand it out as a resource, and the
 model's `--bcm-registry` surface allocator handing it out is now a *known* wrong choice rather than
 an unexamined one. It is still what the model does, and the reason it has not been changed is that
 moving it requires modelling what makes a surface visible — `element_add` / `update_submit`, whose
-DispmanX reading research/22 §5 marks *proposed, not derived*. Recorded, not fixed.
+DispmanX reading research/12 §5 marks *proposed, not derived*. Recorded, not fixed.
 
 **The fifth wall of the week that was our own model, and the shape is the one R12 names.** A device
 that stores pixels and executes no operations answers exactly like a device that is not there: the

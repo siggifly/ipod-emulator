@@ -45,7 +45,7 @@ pub struct Frame {
     pub samples: u64,
     /// Non-black pixels, the same count `--bcm-dump` prints. Useful for exactly one thing: telling
     /// a composited frame from the bootloader's. It does **not** distinguish two white UI screens
-    /// — research/20 Addendum 30 §8 has three of them scoring 76 607 / 75 267 / 75 791.
+    /// — research/10 Addendum 30 §8 has three of them scoring 76 607 / 75 267 / 75 791.
     pub nonblack: u32,
     /// FNV-1a over the halfwords. This is what distinguishes screens; the pixel count does not.
     pub digest: u64,

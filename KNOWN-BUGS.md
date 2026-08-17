@@ -7,7 +7,7 @@ apart, because merging them is how a project starts describing its gaps as choic
 |---|---|
 | **This file** | defects. It behaves differently from the hardware and that difference is not intended |
 | `README.md` § *What does not* | features that were never built. No audio, no USB — absent, not broken |
-| `research/12-bypass-ledger.md` | deliberate fakes, each with a written condition for retiring it. Known, chosen, and load-bearing |
+| `research/04-bypass-ledger.md` | deliberate fakes, each with a written condition for retiring it. Known, chosen, and load-bearing |
 
 A bug that turns out to be a bypass belongs in the ledger. A bypass nobody can justify any more
 belongs here.
@@ -43,7 +43,7 @@ OS latched the value once during startup and has no reason to look a second time
 
 ## `MENU`+`SELECT` and `PLAY` are delivered and ignored
 
-Held for 400 M instructions at the main menu, the machine keeps running (`research/20` Addendum 31
+Held for 400 M instructions at the main menu, the machine keeps running (`research/10` Addendum 31
 §5). On a real 5G that pair is caught by the wheel controller or the PMU before the OS is involved,
 and neither is modelled. The window says so on screen rather than pretending the buttons work.
 
@@ -54,7 +54,7 @@ values in it were picked because they worked. There is also **no timing model** 
 all — every reply is instant. A bug that only appears when a reply is late is therefore invisible
 here, and would be a difference from hardware nobody would see until real timing arrived.
 
-Listed in `research/12` with retirement conditions. Repeated here because "it works" and "it is
+Listed in `research/04` with retirement conditions. Repeated here because "it works" and "it is
 right" are not the same claim.
 
 ## Purchased titles do not launch

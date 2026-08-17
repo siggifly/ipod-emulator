@@ -21,7 +21,7 @@ is not a stopping point; a *decided question* is.
 **R2 — Write the finding into `research/` as it lands**, and fix superseded claims in place. Three
 wrong conclusions in this project survived because a correction was deferred to "later".
 
-**R3 — Grep [`research/12-bypass-ledger.md`](research/12-bypass-ledger.md) before opening any
+**R3 — Grep [`research/04-bypass-ledger.md`](research/04-bypass-ledger.md) before opening any
 investigation.** A 🔴 bypass in the subsystem you are about to investigate is not context, it is the
 likely cause; investigating around a known-false model produces findings about the model. This rule
 was promoted from a queue item after it cost most of a session: "which task never gets kicked?" was
@@ -44,7 +44,7 @@ machine has moved too and every difference is confounded.
 **R5 — A control only proves what it exercises. Match it to the measurement in access *width*,
 region type and code path** — not merely in "is this address ever touched". This has failed four
 times: `--watch-range`'s positive control counted *byte* writes to `0x60007000`, which is precisely
-the path that worked; research/11 §1's `--findptr` control proved literal pointers exist while the
+the path that worked; research/03 §1's `--findptr` control proved literal pointers exist while the
 thing sought was a field RTXC never stores; Addendum 12's framebuffer control proved the *readout
 geometry* and was read as proving *authorship*; ledger #7's mailbox control was served by `read8`
 where the address under test is served by `read32`.
@@ -92,7 +92,7 @@ budget with the two windows:
 > were not re-run when the machine moved, which is the exact failure R4 exists to catch, sitting
 > inside the rule that says to vary the window.
 >
-> **Re-measured again the same day** after the PMU ADC fix and the `GPIOL` seed (research/20
+> **Re-measured again the same day** after the PMU ADC fix and the `GPIOL` seed (research/10
 > Addendum 30): `400000000` is now `@1 562 789 429 / 38 220 / 770`. The `40000000` row was not
 > re-run; treat it as illustrating the rule, not as a current number.
 
@@ -119,7 +119,7 @@ attributed to the device, published as *"only a running `vmcs.bin` can populate 
 aimed two sessions at building a co-processor. **Before concluding "the hardware is not there", read
 the same address through a second path and check that the two agree** — `--bcm-peek` beside
 `--stop-at` on the instruction *after* the load, comparing the device's memory against the register
-file. That pairing is now written into the instrument table's `--bcm-peek` row. See research/20
+file. That pairing is now written into the instrument table's `--bcm-peek` row. See research/10
 Addendum 29 §1.
 
 **R13 — A tool unverified on your data type is not a measurement.** `grep -c` over binary input
@@ -179,7 +179,7 @@ the GUI was broken on `main` for an hour because a merge verified only one crate
 
 > **Superseded twice on 2026-08-14, and the second time is worth reading.** The block above used to
 > read `1 610 232 373 / 38 265 / delivered 685 / 21 passed`. Two changes moved it, both in
-> research/20 Addendum 30: the PMU's ADC stopped reporting every completed conversion as **zero**,
+> research/10 Addendum 30: the PMU's ADC stopped reporting every completed conversion as **zero**,
 > and `GPIOL` stopped claiming a charger was plugged in. **The invariants did not move** — 770 ATA
 > commands, 4 unmapped reads, and a framebuffer byte-identical to the `--stop-at=0x10000000:1`
 > handoff dump — and the Rockbox oracle's whole run log is byte-identical across the change. Those
@@ -187,7 +187,7 @@ the GUI was broken on `main` for an hour because a merge verified only one crate
 
 ## 0 — ~~The Apple logo is missing from the boot~~ · **DONE 2026-08-14 — it was never missing, it was never placed**
 
-The 2 922-pixel frame this project has carried since research/11 as "the handoff frame" **is the
+The 2 922-pixel frame this project has carried since research/03 as "the handoff frame" **is the
 Apple logo**, and it was sitting in the co-processor's command-parameter buffer at 62-halfword pitch
 because the model stored the pixels and never executed the operation that places them. One
 autocorrelation over the non-black mask in *address* order says 62 and means *somebody else was
@@ -198,7 +198,7 @@ bootloader stages at `BCMA_CMDPARAM` and cross-checked against the byte-length w
 header. A retail boot issues two of them: `320x240 -> (0,0)-(319,239)` and
 `62x78 -> (129,81)-(190,158)`, which is dead centre. **The logo is on the panel from 8 M to 52 M
 instructions, and the screen it is on is black, not white.** Everything in
-[research/24](research/24-the-apple-logo.md), including the four predictions that measured out to
+[research/14](research/14-the-apple-logo.md), including the four predictions that measured out to
 nothing.
 
 Controls: the baseline is unmoved to the instruction (`Idle @1 562 789 429`, 38 220 buckets,
@@ -209,7 +209,7 @@ reads `BCMA_CMDPARAM` back.
 
 **What it leaves open**, and it is a real one: `0xE0000` is the command-parameter buffer, so
 `--bcm-registry` handing that address out as a *surface* is now a known-wrong choice rather than an
-unexamined one — item 1 below, and research/22 §8 item 4 carries it in those terms.
+unexamined one — item 1 below, and research/12 §8 item 4 carries it in those terms.
 
 ## 0b — ~~Brick launches and draws. Is it playable?~~ · **DONE 2026-08-14 — it is played**
 
@@ -222,7 +222,7 @@ it 29 px per million instructions, `rotate=+8` every 200 k moves it **150**.
 
 The shipped film is **six returns, eight bricks and a score of 8** —
 [`tools/ipod-film/post-assets.sh gameplay`](tools/ipod-film/post-assets.sh), write-up in
-[research/23 §10](research/23-do-the-games-load.md). Four predictions measured out to nothing on the
+[research/13 §10](research/13-do-the-games-load.md). Four predictions measured out to nothing on the
 way and are in §10.4a; the most useful is that **a wheel script is not inert with respect to the
 game's timing** — traffic costs instructions, so a rally script has to be re-read off its own run.
 
@@ -246,7 +246,7 @@ RetailOS draws: with `--bcm-registry` it presents 41 times and lands **76 607 no
 `BCMA_CMDPARAM`) and on the fact that Apple's bootloader fills exactly `0xe0000..0x10581e`. The reply
 format the reader accepts says the co-processor returns *an* address, not *which*.
 
-**Wall A — the display. DOWN 2026-08-14 with pixels, not a counter — research/20 Addendum 29, and
+**Wall A — the display. DOWN 2026-08-14 with pixels, not a counter — research/10 Addendum 29, and
 the screen is the MAIN MENU since Addendum 30.**
 RetailOS's output stage is `FUN_00164f44` (upload the dirty scanlines to a co-processor surface,
 then `FUN_00286b6c` to show them). It had **0 arrivals** while its caller `FUN_001650f8` was asked
@@ -270,8 +270,8 @@ retail-boot.sh --clock=5 --stop-when-idle=400000000 --bcm-registry            ->
 corner. **The click wheel drives it** — the whole path from `0x7000c140` through the ISR, the event
 queue, the widget and the compositor, validated by one picture. Everything below about Wall B being
 "severed at the last hop" is superseded by that: the events reach the widget now that the widget is
-on screen. See research/20 Addendum 30 for the A/B, the ADC bisect (`ADCIN1_SUBTR >= 0x080`), and
-the retraction of research/19's "acceptance condition not identified".
+on screen. See research/10 Addendum 30 for the A/B, the ADC bisect (`ADCIN1_SUBTR >= 0x080`), and
+the retraction of research/09's "acceptance condition not identified".
 
 Two ways to settle it, cheapest first:
 
@@ -279,23 +279,23 @@ Two ways to settle it, cheapest first:
    follows it, the address is arbitrary and the pixels are RetailOS's wherever they land — the claim
    survives and gets weaker in a stated way. If the panel goes blank or the frame lands somewhere
    nothing reads, the address is load-bearing and must be sourced rather than chosen.
-2. **From the co-processor's own image.** `research/21` §1 gives the `rsrc` `vmcs.bin`'s export table
+2. **From the co-processor's own image.** `research/11` §1 gives the `rsrc` `vmcs.bin`'s export table
    at `0x2160C` — 183 `(code_addr, name_ptr)` records — so `dispman_object_create` and the
    `vc_image_*` allocators have real addresses inside a file we hold. What they do with an address
    is readable without executing anything.
 
 **Settled when** the surface address is either derived from `vmcs.bin` or shown by ablation to be
-arbitrary, and `research/22` §8 item 4 can be struck.
+arbitrary, and `research/12` §8 item 4 can be struck.
 
 **The other three assumptions and the missing timing model are in the same section**, and item 2
 below carries the order to attack them in.
 
 ### What is already settled here, and must not be re-derived
 
-The ARM-side pipeline is **described end to end in [research/22](research/22-how-retailos-draws.md)**
+The ARM-side pipeline is **described end to end in [research/12](research/12-how-retailos-draws.md)**
 — paint, show, damage/flush, present, transport, composite — with each stage's arrival count on both
-arms. Read that rather than reconstructing it from research/20's Addenda 20–29, which are the
-chronology and contain three retracted framings (research/22 §9 names them).
+arms. Read that rather than reconstructing it from research/10's Addenda 20–29, which are the
+chronology and contain three retracted framings (research/12 §9 names them).
 
 The two facts most likely to be re-derived by accident:
 
@@ -314,7 +314,7 @@ The two facts most likely to be re-derived by accident:
 on it, so the show walk never descends past it. `FUN_0021a0fc` clears both bits before setting one
 and so cannot produce that state; some other writer OR'd `0x1000` in. **This is real and it is not
 why the screen was blank** (566 paints happen regardless); it is why *that subtree* is not shown.
-Finding the writer is research/20 Addendum 24 §4's open question, unchanged.
+Finding the writer is research/10 Addendum 24 §4's open question, unchanged.
 
 **Who consumes the 19 wheel events.** `0x000ada4c` x4 (buttons) and `0x000cd6a0` x15 (`'Weel'`
 messages) reach the event system in a run where the list widget at `0x001ae214` receives none of
@@ -322,7 +322,7 @@ them. One `--enterlog` on `0x00151a40`'s queue consumer answers it. Unchanged by
 work.
 
 > **A second agent is working RetailOS from the charging screen to the main menu as this is written,
-> and will touch `research/20` and possibly the PMU model. That question is open and nothing here
+> and will touch `research/10` and possibly the PMU model. That question is open and nothing here
 > predicts its result.**
 
 
@@ -347,8 +347,8 @@ Measured, both arms of the standard recipe today:
 commands: a run carrying it is not comparable to anything measured before it.
 
 **What is left of #6**, in the order to attack it —
-[research/12 §#6 today](research/12-bypass-ledger.md) and
-[research/22](research/22-how-retailos-draws.md) §8 carry the same list:
+[research/04 §#6 today](research/04-bypass-ledger.md) and
+[research/12](research/12-how-retailos-draws.md) §8 carry the same list:
 
 1. **Where a surface lives.** Item 1 above. Largest of the four, and the one that would invalidate a
    published pixel count.
@@ -379,8 +379,8 @@ not evidence that we have a co-processor.
 > and the wheel (Wall B). The framing this item was written in — *one* gate explaining both — is
 > disproved by the A/B in Addendum 17 §8. Kept for the measured shape of the idle below.
 
-*(That work landed. The census is research/20 Addendum 17; the display half became item 2 and then
-research/22, and the wheel half is item 3. What survives is the measured shape of the idle below,
+*(That work landed. The census is research/10 Addendum 17; the display half became item 2 and then
+research/12, and the wheel half is item 3. What survives is the measured shape of the idle below,
 which is still the cheapest orientation for a cold session — and the residual question, which is
 still open: **what is the last unnamed wait?** It is no longer a blocker on anything, because the
 display draws through it and the boot idles at the same instruction with and without a
@@ -458,7 +458,7 @@ tail `b` to the sender); its callers are the one-liners `0x000bbdb0` (`mov r0,#1
 — the boot ROM's copy at `0x000c9714` writes TX, starts the transmit, spins 10 000 iterations and
 returns. `--wordref=0x0000052a` over 7.5 MB is **0**, so nothing could parse such a reply; a reply
 would take the decoder's bad-frame arm and drive `SerialOptoTask`'s receiver reset seventy times a
-boot. See [research/20](research/20-the-resource-image.md) **Addendum 20**.
+boot. See [research/10](research/10-the-resource-image.md) **Addendum 20**.
 
 Landed: the model recognises the opcode, records the payload, replies with nothing, and gates
 autonomous frames on it. A/B, both ways, one variable:
@@ -502,7 +502,7 @@ orderly power-off — `0x40006138` → `0x40003984` → `0x4000159c`, `b .` — 
 Undiagnosed.
 
 Two things to carry forward regardless: **`aupd` is encrypted**, not "plainly executable ARM" as
-research/17 used to claim — 7.9998 bits of entropy per byte, not one printable string including the
+research/07 used to claim — 7.9998 bits of entropy per byte, not one printable string including the
 ones it demonstrably prints, and its checksum is over the plaintext. And the chosen NOR part
 (SST `0xbf`/`0x273f`, uniform 4 KiB sectors) is **a choice among the eight the ROM accepts, not a
 measurement** — neither dump records what the hardware carried.
@@ -518,7 +518,7 @@ measurement** — neither dump records what the hardware carried.
   `SST39WF800A`, which is what the run report prints (`nor model: JEDEC 0x00bf/0x273f`) and what
   `lib.rs`'s own test asserts. The ROM accepts eight, and neither dump records the answer. A
   photograph of a board would settle it. *(This bullet said `0x2781` until 2026-08-14 — the row-4
-  `SST39VF800A` we drove before the switch recorded in research/12 §"The flash part". The switch
+  `SST39VF800A` we drove before the switch recorded in research/04 §"The flash part". The switch
   landed in the model and not in the three documents describing it.)*
 - **`--boot-osos`'s `COP_STATUS`/`PLL_STATUS` guard.** `trace.rs` installs those two built-in
   overrides *only when no `--rdval` is given*, so adding or removing any `--rdval` silently toggles
@@ -530,7 +530,7 @@ measurement** — neither dump records what the hardware carried.
 - **WM8758 audio codec at I²C `0x1a`** — ~~432~~ ~~at least 52~~ **exactly 52** transfers on the
   baseline recipe, entirely unmodelled. The registers it touches are recorded, so a model gets a
   verdict on a run we already have: `reg 0x54 ×5 · reg 0x6f ×4 · reg 0x06 ×3 · reg 0x6b ×3`.
-  *(432 was a different run at a different address encoding — corrected 2026-08-13, research/20
+  *(432 was a different run at a different address encoding — corrected 2026-08-13, research/10
   Addendum 13 §2.)*
   **The "at least" is retired 2026-08-14, and the caution that produced it was right to be issued.**
   `i2c_log` capped at 4 096 and the 4 G baseline printed exactly that, so every per-device figure
@@ -553,7 +553,7 @@ in this repo, and every entry below is an item that was worked as *the* blocker.
 
 ### ~~0 — Retire the ledger before investigating around it~~ · **DONE 2026-08-14 — it is a rule now (R3)**
 
-**Nine bypasses are retired** (#1, #2, #3, #5, #10, #11, #12-retail, #14, #15), and `research/12`
+**Nine bypasses are retired** (#1, #2, #3, #5, #10, #11, #12-retail, #14, #15), and `research/04`
 carries a per-row **`Live in`** column — added after an audit found `flsh.sh` and `flash-update.sh`
 still passing three bypasses the file had marked RETIRED, which meant the run that *proved* #12's
 retirement was obtained with three retired bypasses switched on. A ledger that records a retirement
@@ -665,8 +665,8 @@ for a measurement by someone reading in a hurry, which is what R6 was written ab
 | `--storeaddr=ADDR\|FILE` | every store that *lands here*, whatever made it — hundreds of disjoint words at once | — |
 | `--readlog=ADDR\|FILE` | who *consumed* this — the only way to trace a value that arrived by DMA | caps at **2 000 000**, and the ordered log still does. **The header is now the uncapped census and the per-reader table is counted on the read**, so the failure this row was written about — a control read 9 588 012 times returning a clean zero for four fifths of a run — can no longer be read as a measurement. Watching a hot address alongside a quiet one still fills the *sample* with the hot one, so R6's judgement half still applies |
 | `--enterlog=PC` | `r0`–`r3` and `lr` on **arrival**, so tail calls and virtual dispatch are not missed | the log caps at **65 536** entries and the detail print at **400 rows**. The `callers:` histogram at the bottom is **uncapped, and as of 2026-08-14 that is actually true** — it used to be tallied *from* the capped log, so this row's advice was only sound below 65 536 arrivals. It is now counted on arrival. **Read the histogram, not the rows**, and note that the arrivals header carries the census while the rows say when they are a sample |
-| `--watch-range=B:N` | writes to a span, distinguishing "wrote 0" from "never wrote" | `watch_range_log` caps at **4 096**, and the report prints only the **first** PC per word — so on a busy span it is an attribution instrument that cannot attribute. **2026-08-14: this cap, already documented in this row, produced "RetailOS never touches the VideoCore" (research/20 Addendum 25).** The bootloader's own firmware upload fills all 4 096 slots before RetailOS runs an instruction; `writes into the watched range: 4096` is a saturation flag, not a count. Retracted in Addendum 26 by arrival counters on the three functions that carry the `0x3000xxxx` literals. **Was blind to word-sized writes into a mapped region until 2026-08-13** — it only ever saw byte writes, because `read32`/`write32` hoist the `count()` call behind a list of consumers `watch_range` was not on. That produced "the engine at `0x60009000` is never programmed". Fixed; everything that concluded *absence* from it was re-run (Addendum 8b). **Both remaining defects fixed 2026-08-14**: the per-word table is counted on the store rather than tallied from the log, and it names **every** writing PC instead of the first. On the same command that produced the retracted claim it now reports **423 450 byte-writes across 5 words** (was `4096` across 4), with RetailOS's `0x00287ca8` / `0x00287c28` / `0x002879a4` beside the bootloader's `0x4000exxx` — so the instrument refutes its own claim |
-| `--input-regs=B:N` | which addresses the firmware reads that nothing ever wrote — hardware *inputs* | same 2026-08-13 bug and worse: `input_probe` was missing from the `read32` hoist too, so it undercounted reads as well as missing writes. It produced [research/19](research/19-what-the-hardware-must-supply.md)'s register table, which is superseded; the conclusion under that table survived re-measurement |
+| `--watch-range=B:N` | writes to a span, distinguishing "wrote 0" from "never wrote" | `watch_range_log` caps at **4 096**, and the report prints only the **first** PC per word — so on a busy span it is an attribution instrument that cannot attribute. **2026-08-14: this cap, already documented in this row, produced "RetailOS never touches the VideoCore" (research/10 Addendum 25).** The bootloader's own firmware upload fills all 4 096 slots before RetailOS runs an instruction; `writes into the watched range: 4096` is a saturation flag, not a count. Retracted in Addendum 26 by arrival counters on the three functions that carry the `0x3000xxxx` literals. **Was blind to word-sized writes into a mapped region until 2026-08-13** — it only ever saw byte writes, because `read32`/`write32` hoist the `count()` call behind a list of consumers `watch_range` was not on. That produced "the engine at `0x60009000` is never programmed". Fixed; everything that concluded *absence* from it was re-run (Addendum 8b). **Both remaining defects fixed 2026-08-14**: the per-word table is counted on the store rather than tallied from the log, and it names **every** writing PC instead of the first. On the same command that produced the retracted claim it now reports **423 450 byte-writes across 5 words** (was `4096` across 4), with RetailOS's `0x00287ca8` / `0x00287c28` / `0x002879a4` beside the bootloader's `0x4000exxx` — so the instrument refutes its own claim |
+| `--input-regs=B:N` | which addresses the firmware reads that nothing ever wrote — hardware *inputs* | same 2026-08-13 bug and worse: `input_probe` was missing from the `read32` hoist too, so it undercounted reads as well as missing writes. It produced [research/09](research/09-what-the-hardware-must-supply.md)'s register table, which is superseded; the conclusion under that table survived re-measurement |
 | `i2c: N transfers` in the run report | which chips the firmware drives and which of their registers | **was a capped log length**: `i2c_log` stops at 4 096 and the 4 G baseline printed exactly that, so every histogram under it — by device, by register, by CTRL — was a picture of the first 4 096 transfers. `NEXT.md` §5 was about to fit a WM8758 model to a number out of it. **Fixed 2026-08-14**: the census is **4 933**, the tallies are kept on the bus, and the ordered log is labelled as the sample it is. At 600 M the log never fills (3 749), which is why the defect survived so long |
 | `--writelog=…` | stores by region, with a DROPPED tag | `write_log_entries` caps at **8 192**; the per-region totals — including **DROPPED**, which is the whole question — are counted on the store and cannot. The "last 4" rows are the last 4 *kept*, which on a truncated log is not the last 4 that happened, and the report says so |
 | `--stop-when-idle=N` | ends a run once N instructions pass with no NEW code | a **novelty** test, not a halt test. ~~Use 40 000 000~~ — **40 M truncates the boot**: at 40 M this recipe stops at @308 909 460 with 29 279 buckets and 464 ATA commands, against @1 610 256 821 / 38 262 / 770 at 400 M. RetailOS's startup contains a bounded 226 M-instruction scan loop over already-seen code (`0x000ff2ec`) and 40 M stops inside it while the machine runs at full rate — that is how "`bl 0x001ebe9c` never returns" got published. **Use `400000000`.** Read the second line of the stop report: `0 CPU sleeps` in the trailing window means busy, and the tool now says `<- BUSY, not blocked` outright |
@@ -681,12 +681,12 @@ for a measurement by someone reading in a hurry, which is what R6 was written ab
 | `--no-cfg-ack` | ablates the IDE0_CFG acknowledgement, reproducing the historic interrupt storm on demand | — |
 | `--bcm-ppm=FILE` | render the co-processor's framebuffer to a PPM | proves *readout geometry*, never *authorship*. Addendum 12 was retracted for reading it as the latter. Pair it with a dump at `--stop-at=0x10000000:1` — if the two files are identical, RetailOS drew nothing |
 | `--bcm-peek=ADDR[:N]` | print N 32-bit words of the co-processor's internal memory at the end of the run | the answer to "what does the host actually see there" is **not** this — this is what the *memory* holds. The two differed for two sessions: `0x1f8` held `1` while the CPU was handed `0x2f01fc78`. Pair it with `--stop-at` on the instruction after the read and compare against the register file |
-| `--bcm-registry` | publish the service directory RetailOS reads at internal `0x1f0`, and answer the ring RPC behind it | **ledger #6, off by default, in no recipe.** Derived from RetailOS's reader (research/20 Addendum 29 §2–§3), but four things in it are chosen — chiefly that surfaces are allocated from `0xE0000`. With it on the machine draws 41 frames and every other number moves: ATA 770 → 706, DMA 4 → 104 transfers |
+| `--bcm-registry` | publish the service directory RetailOS reads at internal `0x1f0`, and answer the ring RPC behind it | **ledger #6, off by default, in no recipe.** Derived from RetailOS's reader (research/10 Addendum 29 §2–§3), but four things in it are chosen — chiefly that surfaces are allocated from `0xE0000`. With it on the machine draws 41 frames and every other number moves: ATA 770 → 706, DMA 4 → 104 transfers |
 | `co-processor timeline:` in the run report | **what the co-processor was ASKED to do, in order** — every contiguous run of host data writes with its base and length, every command, and every image operation a command became. No flag; capped at 4 096 ops with the usual census header | it is the *traffic*, not the state, and the two answer different questions. The state report (`internal write runs`) said `0x000e0000 … 76 816 halfwords` for weeks, which is true and says nothing about how they arrived; the timeline says `4 852 halfwords in ONE run` and that is what identified the Apple logo as a staged tile nobody had placed. **A picture written at one pitch where the panel wants another shows up here as one long run**; 78 runs of 62 at a 320-halfword stride would have been a host placing its own rows |
 | `--bcm-film-from=N` | start the film's sampling at instruction N | **the machine is unchanged** — the run is still issued in `--every`-sized chunks from instruction 0, so the film's no-perturbation control still holds and only the surface scan is skipped. It exists because reading Brick's ball needs a 100 k cadence and there are 2.4 G instructions of boot in front of the game |
 | `--novelty`, `--profile` | where new code stops appearing, and where the time goes | the profile's symbol labels are the mislabelled ones — see `--symbols` above |
 | snapshot / restore | 17 s to re-reach a 400 M state instead of 70 s | — |
-| `tcb SDRAM.bin` | **the whole scheduler out of a `--save-region=sdram` file, in 40 ms and no run.** Every TCB: name, priority, state, entry, tick, which RTXC primitive it is blocked in and on which semaphore/mailbox/resource — the frame walk of research/20 Addendum 7 §1 as a *census* rather than the one-task sample it had been three times. `--walk` adds the BL-preceded stack walk (and the `mov lr,pc; bx` form, which is how the thread trampoline at `0x000e1b10` calls a body handed to it at runtime, so pooled tasks get named). `--free` shows terminated slots — that is how "`APPLEBOOT` finished" became a field read. `--irq=OBJ` prints the interrupt controller's handler tables; `--findobj=OFF:LO:HI`, repeated, locates an object by several fields at once. Its control is that it reproduces Addendum 7 §2's five mailbox/semaphore numbers without being told them | — |
+| `tcb SDRAM.bin` | **the whole scheduler out of a `--save-region=sdram` file, in 40 ms and no run.** Every TCB: name, priority, state, entry, tick, which RTXC primitive it is blocked in and on which semaphore/mailbox/resource — the frame walk of research/10 Addendum 7 §1 as a *census* rather than the one-task sample it had been three times. `--walk` adds the BL-preceded stack walk (and the `mov lr,pc; bx` form, which is how the thread trampoline at `0x000e1b10` calls a body handed to it at runtime, so pooled tasks get named). `--free` shows terminated slots — that is how "`APPLEBOOT` finished" became a field read. `--irq=OBJ` prints the interrupt controller's handler tables; `--findobj=OFF:LO:HI`, repeated, locates an object by several fields at once. Its control is that it reproduces Addendum 7 §2's five mailbox/semaphore numbers without being told them | — |
 | `dis --iscan=W[:MASK][:FOLLOW]` | every word-aligned instruction matching `W` under `MASK`, disassembled — register-wildcard search (`--iscan=0xe58000a0:0xfff00fff` = `str rN,[rM,#0xa0]`). **It exists because `grep -abo $'\xa0\x00\x84\xe5'` cannot work**: command substitution strips the NUL, the pattern shrinks to three bytes, and it silently reports zero for an instruction that occurs 114 times. Caught only by re-running it for an offset whose answer was already on screen | — |
 
 
@@ -698,7 +698,7 @@ Three recipes, not one: `cold-boot.sh` (ROM out of NOR), `warm-boot.sh` (RetailO
 this existed only as a pasted command line until 2026-08-13, which is why #5 sat unvalidated for
 weeks), and `flash-update.sh` (two boots, `aupd` then `osos`, no file edited between them).
 `--storelog-dump=FILE` writes TSV so one run's addresses feed the next run's `--storeaddr`. That
-chaining is how research/20 got from 791 objects to a named font file in six runs.
+chaining is how research/10 got from 791 objects to a named font file in six runs.
 
 ### The recipes
 

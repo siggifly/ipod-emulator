@@ -57,4 +57,4 @@ The question was why RetailOS never draws. `0x001acca8` is the widget's "show" d
 
 The class vtable is at `0x0066daf4`, so `0x0066db98` is slot `+0xa4` — `setVisible`. *Show* is
 unreachable by any direct call in 7.5 MB; it exists only behind a virtual call. That is a fact no
-amount of `--enterlog` produces, and it took two queries. See `research/20` Addendum 22.
+amount of `--enterlog` produces, and it took two queries. See `research/10` Addendum 22.

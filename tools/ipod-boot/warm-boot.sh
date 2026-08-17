@@ -5,7 +5,7 @@
 # it leaves behind has to be installed by hand — that is bypass #4 (`--sysinfo`) and, inside it,
 # the Gestalt ID at `sysinfo+0x84` that was bypass #5.
 #
-# It existed only as a command line pasted into research/09 until bypass #5 needed re-validating,
+# It existed only as a command line pasted into research/02 until bypass #5 needed re-validating,
 # and a bypass whose recipe lives in prose cannot be re-measured. Same defaults, same overrides and
 # the same instrument flags as cold-boot.sh, so the two are comparable.
 #
@@ -24,7 +24,7 @@ RES="$ROOT/resources"
 : "${BUDGET:=600000000}"
 
 # `--osos-at=0x04000000` is the base that makes RetailOS's scatter-load source pointers land inside
-# the image; research/09 found it by trying bases rather than by guessing one.
+# the image; research/02 found it by trying bases rather than by guessing one.
 exec "$TRACE" "$BUDGET" \
   --osos="$OSOS" --boot-osos --osos-at=0x04000000 --sysinfo \
   --flash="$FLASH" --disk="$DISK" \

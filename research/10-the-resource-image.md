@@ -9,7 +9,7 @@ a 5 MB image in the firmware partition, listed in the same directory the ROM use
 **Nothing has ever read it.**
 
 The same image also holds `vmcs.bin` and the VideoCore codec libraries — so the display bypass
-([#6](12-bypass-ledger.md)) and the boot loop turn out to be the same missing 5 MB.
+([#6](04-bypass-ledger.md)) and the boot loop turn out to be the same missing 5 MB.
 
 ---
 
@@ -21,7 +21,7 @@ Each step below is a measurement, not an inference. The two instruments that mad
 
 ### 1. The failing object is not special
 
-[research/11](11-rtxc-and-the-video-coprocessor.md) §52 framed the blocker as an object "barely
+[research/03](03-rtxc-and-the-video-coprocessor.md) §52 framed the blocker as an object "barely
 constructed at all — one field out of the whole thing", and asked which construction path had gone
 wrong. `--storelog=0x00211a98`, on the one instruction that writes `+0x1c`, enumerates **every
 object that constructor ever built**: 791 of them, and the failing one at `0x13e26f6c` is
@@ -52,8 +52,8 @@ Three writes of zero to a word already zero change nothing, so the instrument wa
 silence was read as absence.
 
 > **This is the third time this exact limitation has produced a wrong conclusion in this project**
-> — [research/16](16-rockbox-as-oracle.md) recorded the first, the stale-heap sibling in
-> [research/19](19-what-the-hardware-must-supply.md) the second. `--watch-range` was built after the
+> — [research/06](06-rockbox-as-oracle.md) recorded the first, the stale-heap sibling in
+> [research/09](09-what-the-hardware-must-supply.md) the second. `--watch-range` was built after the
 > first one and would have caught this. The lesson has been written down twice and applied to the
 > next question both times, not to the standing ones. **A new instrument's first job is to re-run
 > the conclusions the old instrument produced.**
@@ -152,7 +152,7 @@ The firmware partition's directory lists three images, not one:
 |---|---|---|
 | `osos` | `0x00004400` | `0x00735a00` — 7.5 MB, the OS. **Loaded by the ROM.** |
 | **`rsrc`** | `0x0073a000` | `0x00500000` — **5 MB. Never read by anything.** |
-| `aupd` | `0x00c3a200` | `0x00106400` — the flash updater ([#12](12-bypass-ledger.md)) |
+| `aupd` | `0x00c3a200` | `0x00106400` — the flash updater ([#12](04-bypass-ledger.md)) |
 
 `rsrc` opens `eb 3c 90 "MTOOL399"` — it is a **FAT volume**, and it holds exactly the eight fonts the
 image names:
@@ -193,7 +193,7 @@ model, and not USB. Every "RetailOS never does X" from §41–§53 is downstream
 resource volume that the firmware expects to have mounted is not mounted. The null delegate is the
 font registry's designed answer to "you asked for a font I do not have."
 
-**It also gives [#6](12-bypass-ledger.md) a concrete retirement path.** The synthesised BCM replies
+**It also gives [#6](04-bypass-ledger.md) a concrete retirement path.** The synthesised BCM replies
 stand in for a VideoCore we cannot execute because we do not have its firmware. `vmcs.bin` is
 201 376 bytes in `/Resources/VideoCore/Boot/`, beside `render.bin` and six codec libraries. The
 display bypass and the boot loop were never two problems.
@@ -525,7 +525,7 @@ names promise (`H264InitDecoder`, `AACDecode`, `alpha_blt_block`, `aes_decipher`
 Their **undefined** symbols are the more useful half, because they name the runtime the co-processor
 expects: `TCC_Create_Task`, `TCC_Delete_HISR`, `TCC_Relinquish`, `SMC_Obtain_Semaphore`,
 `EVC_Retrieve_Events`, `TCS_Change_Preemption` — that is **Nucleus PLUS**, not RTXC. No contradiction
-with [research/11](11-rtxc-and-the-video-coprocessor.md): RTXC is the ARM side, Nucleus PLUS is the
+with [research/03](03-rtxc-and-the-video-coprocessor.md): RTXC is the ARM side, Nucleus PLUS is the
 VideoCore side. Two processors, two RTOSes, and we had only ever seen one of them.
 
 `vmcs.bin` is the VideoCore host firmware and **carries its own ELF dynamic loader** — its strings
@@ -761,7 +761,7 @@ constant and is fine. The **object** half is the registry's null.
 | null dispatches | — | 53 732 at `0x000fb8d4` alone |
 
 So the null branch is the *whole* cause of the reset loop: suppress it and RetailOS reaches the same
-idle state research/11 §40 described, having spun the drive down on the way. Nothing else resets it.
+idle state research/03 §40 described, having spun the drive down on the way. Nothing else resets it.
 
 ### Whose defect
 
@@ -1381,7 +1381,7 @@ up that §8 above understates:
 
 - **`--watch-range` was not the only casualty. `input_probe` was missing from the hoist in `read32`
   as well as `write32`**, so `--input-regs` — which answers "which addresses does the firmware read
-  that nothing ever wrote", the entire premise of [research/19](19-what-the-hardware-must-supply.md)
+  that nothing ever wrote", the entire premise of [research/09](09-what-the-hardware-must-supply.md)
   — saw only byte accesses in both directions. It was the worse-affected of the two and nobody had
   noticed, because its output is a list of addresses rather than a claim about one.
 - **The blindness is specific to *mapped regions*.** Addresses answered by a device window go through
@@ -1392,8 +1392,8 @@ up that §8 above understates:
 The audit's method, worth reusing: **rebuild the pre-fix binary and run it against the current
 machine with identical flags**, so instrument and machine are separated. Without that, every
 difference is confounded by the second DMA controller having landed in between. Results are recorded
-in place — research/19's delegate table and its stale-heap sibling are retracted, its input-register
-table is superseded and its conclusion survives, research/11 §47/§48/§51/§54 carry corrections, and
+in place — research/09's delegate table and its stale-heap sibling are retracted, its input-register
+table is superseded and its conclusion survives, research/03 §47/§48/§51/§54 carry corrections, and
 Addendum 7 §6's mailbox is re-confirmed with matched controls.
 
 ## Addendum 9: the engine at `0x60009000` is a second DMA controller, and it is modelled
@@ -1980,7 +1980,7 @@ about is exactly the one it then walked into. The table now says so.
 
 > **RETRACTED 2026-08-14 by the Addendum 14 audit. The framebuffer is not RetailOS's, the two frame
 > updates are not RetailOS's, and the section title was wrong.** The control this section carried
-> (research/11 §10's `diag` dump) proves the *readout geometry* and nothing about *authorship* — it
+> (research/03 §10's `diag` dump) proves the *readout geometry* and nothing about *authorship* — it
 > is the third time in this project that a control has been believed past what it exercises. The
 > control it needed costs one command: dump the same framebuffer at the ROM→RetailOS handoff.
 >
@@ -2028,7 +2028,7 @@ internal write runs (largest first):
 
 Two frame updates kicked *by RetailOS*, and a framebuffer-sized write run at exactly the address
 Rockbox documents. Every previous frame this project has produced came from `diag`
-([research/11](11-rtxc-and-the-video-coprocessor.md) §10) — a self-contained flash image, no OS.
+([research/03](03-rtxc-and-the-video-coprocessor.md) §10) — a self-contained flash image, no OS.
 
 ### 2. What is in it
 
@@ -2045,14 +2045,14 @@ solid fill or a scan-out of garbage would look like neither.
 > co-processor was handed a `LCD_UPDATERECT` command and this model executed nothing. Refold the
 > same bytes at 62 and the logo is legible; implement the command and it lands centred at
 > (129,81)-(190,158), scoring **2 916** — the six missing being the header's own non-zero words.
-> [research/24](24-the-apple-logo.md).
+> [research/14](14-the-apple-logo.md).
 
 ### 3. The control — this rules out the explanation that would have made it worthless
 
 Diagonal streaks in a framebuffer read out at the wrong stride are the classic instrument artefact,
 and after four instrument bugs in this project that is the first hypothesis to kill, not the last.
 
-**It is killed by an existing measurement, at no cost.** research/11 §10 dumped `diag`'s framebuffer
+**It is killed by an existing measurement, at no cost.** research/03 §10 dumped `diag`'s framebuffer
 from **the same address, the same 320×240 geometry, and the same `--bcm-dump` code path**, and got
 legible four-language text with 71 685 non-zero pixels. The readout is therefore proven correct at
 this geometry by a positive control that predates the question. What lands here is what the firmware
@@ -2096,7 +2096,7 @@ The `0xeeeeee13` link register and the `0x11111113`/`0x22222213`/`0x33333313` ar
 RTXC's **task-entry pattern**, not a call frame: this is a task being dispatched, not a function
 being invoked. `OptoTask` runs, 2.6 M instructions *before* `MP3ExampleTask` does.
 
-`DEV_OPTO` is the click wheel's enable bit ([research/15](15-the-chip-inventory.md) §"Click wheel").
+`DEV_OPTO` is the click wheel's enable bit ([research/05](05-the-chip-inventory.md) §"Click wheel").
 So RetailOS's click-wheel task is executing against `0x7000c140`, which we answer as **zero** —
 a wheel that is permanently untouched, never held, and at position 0.
 
@@ -2175,15 +2175,15 @@ own site; the rows are here so the count can be checked rather than taken.
 | 12 | no read falls in `0x000e0000..0x0010581e` | Add. 10 §5 | ✅ |
 | 13 | the font registry miss is "**gone** … **zero** on retail" | `NEXT.md` 1 | ❌ **337 lookups, 319 of them Podium Sans 18** |
 | 14 | "LBA 22169 is **absent** from the complete retail LBA set" | `NEXT.md` 1 | ❌ *(was ✅)* — **read, at command #342 of 671**; "all 256 commands" is the log's cap, not a count. See Addendum 15 §7 |
-| 15 | "**28** are never written by the firmware at all" | research/19 | ❌ 29 — `0x60006038` |
-| 16 | every address the original table named is still in the list | research/19 | ✅ none dropped at the wider window |
-| 17 | `0x6000d13c` `GPIOL_INPUT_VAL` — 3 560 reads, **never written** | research/19 | ✅ |
-| 18 | `0x7000c140` the click wheel — 60 reads, **never written** | research/19 | ✅ |
-| 19 | `0x6000d03c` `GPIOD_INPUT_VAL` — **never written** | research/19 | ✅ |
-| 20 | `PP_VER1`/`PP_VER2` — **never written** | research/19 | ✅ |
-| 21 | "**no named task is ever created**" | research/11 §1, §13 | ❌ 27 named creations, 62 TCBs |
-| 22 | "**Zero USB register accesses** in two billion instructions" | research/11 §50 | ✅ only unmapped page is `0xea000078` |
-| 23 | `USBStatusTask`/`USBTaskTimeTask` are "**the only two RTXC tasks that never start**" | research/11 §50 | ❌ `USBDeviceTask` @49 705 952 and `USB MSC` @52 178 917 both have TCBs |
+| 15 | "**28** are never written by the firmware at all" | research/09 | ❌ 29 — `0x60006038` |
+| 16 | every address the original table named is still in the list | research/09 | ✅ none dropped at the wider window |
+| 17 | `0x6000d13c` `GPIOL_INPUT_VAL` — 3 560 reads, **never written** | research/09 | ✅ |
+| 18 | `0x7000c140` the click wheel — 60 reads, **never written** | research/09 | ✅ |
+| 19 | `0x6000d03c` `GPIOD_INPUT_VAL` — **never written** | research/09 | ✅ |
+| 20 | `PP_VER1`/`PP_VER2` — **never written** | research/09 | ✅ |
+| 21 | "**no named task is ever created**" | research/03 §1, §13 | ❌ 27 named creations, 62 TCBs |
+| 22 | "**Zero USB register accesses** in two billion instructions" | research/03 §50 | ✅ only unmapped page is `0xea000078` |
+| 23 | `USBStatusTask`/`USBTaskTimeTask` are "**the only two RTXC tasks that never start**" | research/03 §50 | ❌ `USBDeviceTask` @49 705 952 and `USB MSC` @52 178 917 both have TCBs |
 
 Survivors: rows 3, 7, 9, 10, 12, 14, 16–20 and 22. Wrong: 1, 2, 4, 6, 8, 13, 15, 21, 23. Partial: 5 and 11. **Nine wrong is
 the deliverable**; finding none would have been the surprising result.
@@ -2200,9 +2200,9 @@ string that is not in a PE. Only claims produced by *running the emulator on a b
 and of those, only the ones a stop condition could have cut short. Three further groups were read and
 set aside deliberately:
 
-- **Already retracted in place.** research/11 alone carries eleven, research/07 more than twenty.
+- **Already retracted in place.** research/03 alone carries eleven, research/07 more than twenty.
   They were checked for a retraction block and skipped.
-- **Prototype-path measurements.** research/11 §§41–53 and much of research/09 were measured on
+- **Prototype-path measurements.** research/03 §§41–53 and much of research/02 were measured on
   `cold-boot.sh`'s prototype NOR, which self-resets 157 times and never mounts `rsrc`. Per the rule
   in `retail-boot.sh`'s header — every number stays attributable to the configuration it was measured
   on — a retail measurement does not retract them. Where a retail run says something different, it is
@@ -2291,7 +2291,7 @@ the `vmcs` upload, and nobody re-ran it after Addendum 9 modelled the engine. It
 because the audit is what found it, and because it moves §§5–8 of this file from "prototype-only,
 superseded" back onto the retail path.
 
-### 7. WRONG — research/19's "28 never written" is 29, and the 29th is undocumented
+### 7. WRONG — research/09's "28 never written" is 29, and the 29th is undocumented
 
 `--input-regs=0x60000000:0x11000000` at both windows, same build, same machine — the only variable is
 the stop condition:
@@ -2320,7 +2320,7 @@ none of them happen before @123 M.
 
 ### 8. SURVIVED — the inter-processor mailbox, but the old control had saturated the log
 
-`research/12` #7 is the one bypass in the ledger held open by an absence claim, so it got the most
+`research/04` #7 is the one bypass in the ledger held open by an absence claim, so it got the most
 care. It survives: `--readlog` + `--storeaddr` over all twelve words of
 `0x60001000..0x6000102f` record **zero reads and zero writes** across the full 600 M baseline.
 
@@ -2360,14 +2360,14 @@ covers the whole run.
 - **`NEXT.md`: "LBA 22169 is absent from the complete retail LBA set."** Survives — checked against
   all 256 commands, and now load-bearing in a way it was not, per §6 above.
 - **Addendum 10 §3: "four GENCMDs issued in an entire boot."** Survives — `bcm: 4 commands kicked`.
-- **research/11 §50: "zero USB register accesses."** Survives on the register half: the PP502x USB
+- **research/03 §50: "zero USB register accesses."** Survives on the register half: the PP502x USB
   block at `0xc5000000` is covered by no region, so any access would be reported unmapped, and the
   only unmapped page in a 600 M baseline is `0xea000078`. **The task half is now wrong** —
   `USBDeviceTask` @49.7 M and `USB MSC` @52.2 M both have TCBs. A device with a driver running
   against it and no register traffic at all is a more interesting state than "nothing asks for USB".
-- **research/19's conclusion** ("what we still invent from nothing is five addresses") survives as a
+- **research/09's conclusion** ("what we still invent from nothing is five addresses") survives as a
   conclusion; the count is six with `0x60006038`.
-- **research/11 §1: "no named task is ever created."** Wrong — 27 named creations. It was already
+- **research/03 §1: "no named task is ever created."** Wrong — 27 named creations. It was already
   contradicted by §41 of its own file and never annotated, and §13 of that file promotes it as *"the
   one negative result in this project that has survived scrutiny."* It has not. Retracted there.
 
@@ -4069,7 +4069,7 @@ handshake did not close either absence, and this addendum does not claim it did.
   It is category (b) — a model that classified a write as an unanswered question — and closing it
   moves nothing on either wall.
 - **Addendum 19 §2** — the chain diagram's last three lines are wrong. §6 above is the replacement.
-- **research/15 §"Click wheel"** — *"The one command still unanswered is `0x8001052A`."* Updated in
+- **research/05 §"Click wheel"** — *"The one command still unanswered is `0x8001052A`."* Updated in
   place.
 
 ### 8. Predictions that measured out to nothing
@@ -4202,7 +4202,7 @@ question instead of a 110-second one.
 
 ## Addendum 23: the show pass walks a child list at `+0x78` — our widgets are in nobody's
 
-> Still current, and folded into [research/22](22-how-retailos-draws.md) §2 with the vtable-slot
+> Still current, and folded into [research/12](12-how-retailos-draws.md) §2 with the vtable-slot
 > correction Addendum 24 §1 makes to §4 below.
 
 2026-08-14, Ghidra + `from-idle.sh`. Addendum 22 established that building and showing are separate
@@ -4275,7 +4275,7 @@ an off-by-one in a vtable index is exactly the kind of error that survives by be
 > screen was blank; 566 paints happen regardless (Addendum 25), and the output stage is a different
 > stage entirely. It remains the reason *that subtree* is not shown, and that question is open. The
 > current description of the pipeline this sits inside is
-> [research/22](22-how-retailos-draws.md) §2 and §9①.
+> [research/12](12-how-retailos-draws.md) §2 and §9①.
 
 2026-08-14, Ghidra MCP + `from-idle.sh`. This closes the mechanism. It does not yet name the writer.
 
@@ -4370,7 +4370,7 @@ levels above them respectively.
 > see the README's "What the sweep changed".)*
 >
 > **The headline — paints many, presents never — is described as a working pipeline in
-> [research/22](22-how-retailos-draws.md) §1 and §3.**
+> [research/12](12-how-retailos-draws.md) §1 and §3.**
 
 2026-08-14. Prompted by the operator asking why a freshly booted RetailOS should need per-object
 visibility coaxing at all. The premise-check was the right move and it reframes Addendum 24.
@@ -4446,7 +4446,7 @@ directory.)*
 > **§1–§3 stand. §4's cause is retracted** — the words at `0x1f0` were never zero; our own
 > `Bcm::read8` halved them on the way to the CPU (Addendum 29 §1). **A model defect looks exactly
 > like missing hardware**, and this is the case that named that lesson. Current description:
-> [research/22](22-how-retailos-draws.md) §3–§5 and §9③.
+> [research/12](12-how-retailos-draws.md) §3–§5 and §9③.
 
 2026-08-14, Ghidra + five full boots. Addendum 25 asked what assigns a view's *draw target*
 `[obj+0xa0]` and why nothing does. The field is not a draw target, the question was aimed one module
@@ -4768,14 +4768,14 @@ yield the service-directory layout by reading the code that writes it.
 That leaves the layout derivable from only one place: **RetailOS's own reader**. Which is the method
 that has already worked twice — `0x8001052a` (Addendum 21) and the ATA abort — and the same
 distinction applies. *Derived from the parser* is a model. *Tuned until the symptom disappears* is a
-bypass and belongs in [research/12](12-bypass-ledger.md).
+bypass and belongs in [research/04](04-bypass-ledger.md).
 
 > **Amended 2026-08-14 — still true, but bounded.** The Alphamosaic patents (notably `US7036001B2`)
 > disclose the architecture and give the encoding shape: **80-bit full / 48-bit compact vector
 > instructions, 16-bit scalar with 32- and 48-bit variants**. Rockbox's `dreamlayers` reached the same
 > patents in 2009 while looking at this exact chip's code. That is not a disassembler and does not
 > change the conclusion above, but "variable-length 48/80-bit" is a much better starting point than
-> "opaque". See [research/21](21-the-videocore-runtime.md) §8.
+> "opaque". See [research/11](11-the-videocore-runtime.md) §8.
 
 ---
 
@@ -4814,7 +4814,7 @@ Grouped by prefix, the runtime is:
 | `vmcs_*` | 10 | `queue_message`, `create_task`, `create_timer`, `display`, `get/set_cookie` |
 | `gencmd_*` | 6 | **`register` · `deregister` · `execute` · `param` · `decode_fourcc` · `decode_int`** |
 | `hostreq_*` | 3 | `notify`, `read_iphoto_block`, `rendertext` — the co-processor calls **back to the ARM host** |
-| `TCC_/TCT_/TCS_/TCF_/SMC_/SMS_/EVC_/TMT_` | ~~21~~ **25** | Nucleus PLUS internals, confirming Addendum 27 by a second route. *(Recount 2026-08-14: 9 + 3 + 2 + 1 + 4 + 1 + 4 + 1 = **25**. See [research/21](21-the-videocore-runtime.md) §2.8.)* |
+| `TCC_/TCT_/TCS_/TCF_/SMC_/SMS_/EVC_/TMT_` | ~~21~~ **25** | Nucleus PLUS internals, confirming Addendum 27 by a second route. *(Recount 2026-08-14: 9 + 3 + 2 + 1 + 4 + 1 + 4 + 1 = **25**. See [research/11](11-the-videocore-runtime.md) §2.8.)* |
 | `audio_*`, `univ_*`, `filesys_*`, `powerman_*`, `pds_*`, `vll_*`, `malloc_*` | | services, plus a C library (`fopen`, `sprintf`, `qsort`, `dlopen`/`dlsym`) |
 
 ### 2. What this settles about the architecture
@@ -4834,7 +4834,7 @@ registered, which is exactly why `0x1f0` is zero in the file (Addendum 27 §3) a
 > `0x1f0` is an 8-entry directory of 16-byte descriptors matched **by numeric tag** (1 / 2 / 7) — a
 > *channel* directory for an RPC transport, one level below GENCMD, not GENCMD itself. The half of
 > the sentence that survives is the important half: both are runtime-populated, which is why the file
-> is zero there. See [research/21](21-the-videocore-runtime.md) §5.4.
+> is zero there. See [research/11](11-the-videocore-runtime.md) §5.4.
 
 **The display model is DispmanX.** Addendum 26 described RetailOS binding an RPC channel, then a
 *layer*, then uploading dirty scanlines to a *surface*. In DispmanX vocabulary those are a display,
@@ -4925,7 +4925,7 @@ one.
 ## Addendum 29: the block at `0x1f0` is a channel table, every field is in the reader — and RetailOS draws
 
 > **This addendum is the last link in a chain, not a description of the result.** For "how RetailOS
-> draws", read [research/22](22-how-retailos-draws.md) — the ARM-side pipeline end to end, with §6's
+> draws", read [research/12](12-how-retailos-draws.md) — the ARM-side pipeline end to end, with §6's
 > chosen-rather-than-derived list carried into its §8. This section remains the derivation and the
 > evidence.
 
@@ -5246,7 +5246,7 @@ screen because we were telling it a charger was plugged in.
 
 ### 3c. Sharper than §3b: it is an export table, not just a run of strings
 
-Measured independently by the agent that wrote [research/21](21-the-videocore-runtime.md), and it
+Measured independently by the agent that wrote [research/11](11-the-videocore-runtime.md), and it
 supersedes §3b's description without contradicting it. The `rsrc` copy carries a real **export table
 at `0x2160C`**: **183 records of `(u32 code_addr, u32 name_ptr)`, sorted for binary search and
 `(0,0)`-terminated.** The strings §3b found at `0x201dc` are what its `name_ptr` fields point at.
@@ -5262,7 +5262,7 @@ And it explains the NOR copy's 2-of-183 cleanly rather than by exception: that c
 **`M25 Diagnostics` build with no display stack at all**, which is why the bootloader can drive a
 screen with it and RetailOS could not have.
 
-**The reference document for this API is now [research/21](21-the-videocore-runtime.md)** — the full
+**The reference document for this API is now [research/11](11-the-videocore-runtime.md)** — the full
 183-symbol table with addresses, the DispmanX model, an evidence-tiered mapping to the documented
 VideoCore IV API, the GENCMD command vocabulary read out of the image, and the bring-up sequence.
 
@@ -5342,7 +5342,7 @@ is polled 1 776 / 1 773 times with and without a charger — identical, therefor
 ### 2. The defect: a completed conversion that reported zero
 
 `GPIOL = 0x08` — nothing plugged in, physically correct — had been tried before and refused to boot
-([research/19](19-what-the-hardware-must-supply.md)), which is why the lie was left in place. That
+([research/09](09-what-the-hardware-must-supply.md)), which is why the lie was left in place. That
 document's conclusion was *"with no charger the bootloader checks the battery, and our PMU cannot
 answer that check convincingly … the acceptance condition is **not** identified."* It was our
 converter, and here is the transaction, from `--storeaddr=0x7000c00c` and
@@ -5374,7 +5374,7 @@ the countdown and was served from the in-flight state; the ADCS2 byte, two micro
 same transfer, was served from the completed one. **One transfer straddling both states**, and the
 only value the firmware was ever allowed to accept was the synthetic zero.
 
-That also explains research/19's otherwise baffling bisect — *only* `--pmu-force=0x30=0xff` **and**
+That also explains research/09's otherwise baffling bisect — *only* `--pmu-force=0x30=0xff` **and**
 `0x31=0x83` **together** boot. `force` short-circuits ahead of the `match`, so `0x30=0xff` alone
 never decrements `busy` and the ready bit never sets; `0x31=0x83` alone still hands ADCS1 the zero.
 Neither is a fact about Apple's firmware. Both are facts about that function.
@@ -5407,7 +5407,7 @@ control matched in width, device and code path (the RTC pair, written and read b
 `--pmu-adc=CH=VALUE` **has never worked.** It pushed into `m.mem.pmu` — the device that existed
 *before* `--pmu` builds one, which on every recipe is `None` — and the `m.mem.pmu = Some(pmu)` three
 lines below then replaced it with a chip whose `adc_values` was empty. It printed
-`pcf50605 ADC channel 0x3 answers 0x03ff` while doing nothing. research/19's *"sweeping channel 3
+`pcf50605 ADC channel 0x3 answers 0x03ff` while doing nothing. research/09's *"sweeping channel 3
 alone from `0x200` to full scale **never** lets the boot proceed, and neither does channel 0, channel
 4, nor all three together"* is therefore **not a measurement**: the device never saw any of it.
 `--pmu-force` sat immediately below and pushed into the right object, which is why forcing worked and
@@ -5427,7 +5427,7 @@ positive control failed, which is the only reason the budget is 120 M:
 ch 3 = 0x07f   ->  halts        ch 3 = 0x080   ->  BOOTS
 ```
 
-**The acceptance condition research/19 asked for is `ADCIN1_SUBTR >= 0x080`** — 128 of 1023, one
+**The acceptance condition research/09 asked for is `ADCIN1_SUBTR >= 0x080`** — 128 of 1023, one
 eighth of full scale, an exact power of two, which reads as a bit test rather than a millivolt
 comparison and is consistent with a subtractor-mode reading whose offset has already been removed.
 The model's catch-all for that channel is `0x200`, four times the threshold; that number is still
@@ -5436,7 +5436,7 @@ unmotivated, but it is now known to sit *where* relative to the only edge that e
 ### 5. `GPIOL` tells the truth now, and it is the emulator's default
 
 `map_hardware` seeds `0x6000d13c 0x00000008` — bit 3 set (no main/FireWire charger), bit 4 clear (no
-USB charger). A bare iPod, matching `GPIOA = 0x20` and `GPIOB = 0x01` beside it. research/19's
+USB charger). A bare iPod, matching `GPIOA = 0x20` and `GPIOB = 0x01` beside it. research/09's
 *"deliberately left reporting charger present — a known, documented lie"* is **retired**, and its
 stated retirement condition is met by §4 rather than waived.
 
@@ -5513,7 +5513,7 @@ seeded default produce **byte-identical** menu dumps.
 
 **The Rockbox oracle is byte-identical, pre-fix and post-fix** — `diff` over the whole run log
 reports no difference. That control exists because a GPIO change once cut Rockbox from 29 frame
-updates to 2 (research/19); it did not this time.
+updates to 2 (research/09); it did not this time.
 
 `cargo test --release`: **26 pass** (24 before, plus the two in §3).
 
@@ -5551,7 +5551,7 @@ updates to 2 (research/19); it did not this time.
   read, 0 dropped, 18 of 18 script steps fired. ~~**Sixteen wheel clicks moved the list one row**,
   which is Apple's own detent ratio and not something this model chose; it is worth knowing before
   anyone writes a script expecting one click per item.~~ **Sixteen is not a ratio and this sentence
-  was read as one** — corrected in [research/23](23-do-the-games-load.md) §2.1–2.2. The same 16-click
+  was read as one** — corrected in [research/13](13-do-the-games-load.md) §2.1–2.2. The same 16-click
   burst moves one row and then three rows *in the same run on the same list*, because what a burst
   moves depends on whether the finger ever came off the wheel. The reproducible unit is a whole
   gesture: `touch, rotate=+8, release` is exactly one row, and one to four clicks in a fresh gesture
@@ -5919,7 +5919,7 @@ measurement rather than a screenshot.
 ### 8. `ipod-gui` did not compile at `HEAD`
 
 Found by building it. `report_headless` reads `d.command_count` on `Ata`, and that field no longer
-exists: the `Capped<T>` work (research/22) replaced it with `commands: Capped<…>`, whose census is
+exists: the `Capped<T>` work (research/12) replaced it with `commands: Capped<…>`, whose census is
 `commands.seen()`. The two changes were merged from different branches and nothing rebuilt the
 window, so the crate on `main` was broken from the moment it landed — which also means the
 `--headless` comparison table in its README (`Idle after 1609725109`, 38 521 buckets, 706 ata) cannot

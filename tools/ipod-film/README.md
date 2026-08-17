@@ -42,7 +42,7 @@ it. The model publishes the frame store back over the transfer buffer after ever
 address a film reads is the panel at every instant except the window between a host staging an image
 and issuing the command that consumes it. A film catches that window when it lands on it — it is the
 5-pixel frame at 5 M in every boot, which is a rectangle header sitting in the buffer. See
-[research/24](../../research/24-the-apple-logo.md) §4. The measured form of the claim above:
+[research/14](../../research/14-the-apple-logo.md) §4. The measured form of the claim above:
 
 ```
 $ ffmpeg -i _out/film/armB/frame-00004.png -pix_fmt rgb24 -y roundtrip.ppm
@@ -74,7 +74,7 @@ film 0x000e0000 320x240 every 2000000 -> _out/film/armB
 That is a whole retail boot: dark panel, five pixels of a rectangle header staged but not yet
 commanded, **the Apple logo**, **950 M instructions of blank white**, and then the Language list.
 *(Frame 2 read `2922 non-black` and was described as "the handoff frame" until 2026-08-14, when it
-turned out to be the logo lying unplaced in the transfer buffer — research/24.)* `held` is the number the
+turned out to be the logo lying unplaced in the transfer buffer — research/14.)* `held` is the number the
 video's timing comes from, and the number a write-up wants: *the white screen is up for 950 M
 instructions*, not *frame 3 appears 475 times*.
 
@@ -82,7 +82,7 @@ A frame whose digest matches one seen **earlier but not immediately before** get
 row and reuses the earlier file, marked `= frame N again`. "The screen went back to what it was" is
 a different fact from "nothing happened", and both are readable off the manifest.
 
-**Do not read the non-black count as "how much was drawn."** research/20 Addendum 30 §8 has three
+**Do not read the non-black count as "how much was drawn."** research/10 Addendum 30 §8 has three
 different white UI screens scoring 76 607 / 75 267 / 75 791 of 76 800. The count separates a
 composited frame from the bootloader's 2 922 and nothing finer; **the digest separates screens, and
 only the image identifies them.** This is rule 2 of the project's working rules and it has cost a
@@ -107,7 +107,7 @@ BUDGET=4000000000 retail-boot.sh --clock=5 --stop-when-idle=400000000 --bcm-regi
 | final `--bcm-dump` | 75 267 non-black | **75 267 — `cmp` says the two `.ppm`s are identical** |
 | wall clock | ~131 s | ~134 s, for 908 samples |
 
-Identical in every number the run reports. The Idle count also reproduces research/20 Addendum 30
+Identical in every number the run reports. The Idle count also reproduces research/10 Addendum 30
 §7's "post-fix, registry on, `GPIOL=8`" row to the instruction, so the machine is the one that table
 was written on. (The two arms ran concurrently on the same laptop, so the 3-second difference is a
 contended figure, not a benchmark — it is quoted to show the order of the cost, which is small.)

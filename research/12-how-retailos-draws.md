@@ -1,10 +1,10 @@
 # How RetailOS draws
 
 **The ARM side of the display, described as it works.** The counterpart to
-[research/21](21-the-videocore-runtime.md), which describes the other side of the bus.
+[research/11](11-the-videocore-runtime.md), which describes the other side of the bus.
 
 This file is deliberately **not** a narrative of how any of it was found. That record lives in
-[research/20](20-the-resource-image.md) Addenda 20–29, it is ten successive corrections, and it is
+[research/10](10-the-resource-image.md) Addenda 20–29, it is ten successive corrections, and it is
 among the most valuable things in this repo precisely because it shows what was believed and why it
 was wrong. It is also, for a reader who wants to know how the pipeline works, ten documents to read
 and three retractions to spot. So: the chronology stays where it is, this is the description, and
@@ -42,7 +42,7 @@ stage 4 onwards, and it gates it completely — 42 flushes producing 0 presents.
 without any of stages 1–5, through a **command interface** the co-processor also carries: stage an
 8-word header plus a rectangle at `BCMA_CMDPARAM`, write the command word, and the co-processor
 places the rectangle. That is what draws the Apple logo, it is a fixed-function protocol rather than
-an RPC, and it is described in [research/24](24-the-apple-logo.md). Two interfaces, one device — and
+an RPC, and it is described in [research/14](14-the-apple-logo.md). Two interfaces, one device — and
 until 2026-08-14 the model implemented neither the placement nor the command, so the bootloader's
 logo sat in the transfer buffer at 62-halfword pitch and was read for weeks as a mangled frame.
 
@@ -230,7 +230,7 @@ nothing is sent. Nothing is broken.
 
 Everything above `FUN_0028861c` is ARM; everything below it is the bus. The transport is a
 **directory of numbered channels**, each a ring pair with a numeric service tag, discovered before
-any display call. Full derivation in [research/20](20-the-resource-image.md) Addendum 29 §2–§3; the
+any display call. Full derivation in [research/10](10-the-resource-image.md) Addendum 29 §2–§3; the
 shape, because a description of the pipeline needs it:
 
 **The header at `0x1f0`** — read by `FUN_00288058`, 16 bytes:
@@ -286,13 +286,13 @@ against the model's own counter (`bcm gencmd: 165 requests answered, 0 dropped`)
 | | | | **165** | |
 
 The DispmanX column is **proposed, not derived** — it is the correspondence argued in
-[research/21](21-the-videocore-runtime.md) §4, and only opcode 8's argument and reply shape force it.
+[research/11](11-the-videocore-runtime.md) §4, and only opcode 8's argument and reply shape force it.
 
 ---
 
 ## 6. The co-processor side
 
-Described in full in [research/21](21-the-videocore-runtime.md) §3. In one paragraph, because the
+Described in full in [research/11](11-the-videocore-runtime.md) §3. In one paragraph, because the
 ARM side is unreadable without it: the co-processor's display model has four object kinds —
 **display** (a physical output, opened by numeric id), **resource** (off-CPU pixel memory the host
 cannot address directly and pushes into), **element** (the binding of a resource onto a display, with
@@ -323,7 +323,7 @@ image rather than an error.
 commands"*. Rockbox stages a bare 320×240 frame there; Apple's bootloader stages a header plus a
 rectangle. **It is a transfer buffer, not the panel** — the panel is the co-processor's own frame
 store, and the model publishes the store back over the buffer so that one address is "the panel" for
-every instrument. [research/24](24-the-apple-logo.md) §2–§4.
+every instrument. [research/14](14-the-apple-logo.md) §2–§4.
 
 > *This block read `2 922 non-black … byte-identical to the ROM→RetailOS handoff dump` until
 > 2026-08-14, and the sentence under it said `0xE0000` is where Rockbox **puts the panel image**.
@@ -350,7 +350,7 @@ absent. None of them would make the machine complain.
    this is wrong, the frame lands somewhere else and §7's pixel count is about the wrong buffer.
    ~~This is the one to attack first.~~ **Attacked 2026-08-14, and it came back a known-wrong choice
    rather than an unexamined one.** `0xE0000` is the co-processor's **command-parameter buffer**
-   ([research/24](24-the-apple-logo.md) §2): the host stages images there for the command interface,
+   ([research/14](14-the-apple-logo.md) §2): the host stages images there for the command interface,
    so a real co-processor would never hand it out as a free resource. The model still hands it out,
    because moving it requires modelling what makes a surface *visible* — `element_add` /
    `update_submit`, whose DispmanX reading §5 marks proposed rather than derived — and that is a
@@ -366,7 +366,7 @@ absent. None of them would make the machine complain.
 
 So: **a drawn frame is evidence that RetailOS's own pipeline works end to end. It is not evidence
 that we have a co-processor.** Bypass #6 is still 🔴 —
-[research/12 §#6 today](12-bypass-ledger.md) carries the retirement condition in these terms.
+[research/04 §#6 today](04-bypass-ledger.md) carries the retirement condition in these terms.
 
 ---
 

@@ -16,7 +16,7 @@
 //!
 //! Appending also has to be **spaced**. A frame posted while the previous one is still unread is a
 //! real overrun (`frames_dropped`), and that is what a whole rotation delivered in one tick would
-//! be: research/20 Addendum 21's arm D posted 39 frames and had 35 of them overwritten unread. So
+//! be: research/10 Addendum 21's arm D posted 39 frames and had 35 of them overwritten unread. So
 //! events drain one per `click_gap` instructions — default 20 000, the same figure
 //! `--wheel-click-instr` uses, which at `--clock=5` is 4 ms per click.
 
@@ -46,7 +46,7 @@ pub const FB_FRONT: u32 = 0x000e_0000;
 pub const FB_BACK: u32 = 0x0010_6000;
 
 /// Apple's ISR frame decoder. Entering it is the evidence that a frame this GUI caused was read
-/// and parsed by RetailOS rather than merely posted into a register; see research/20 Addendum 21 §6.
+/// and parsed by RetailOS rather than merely posted into a register; see research/10 Addendum 21 §6.
 pub const PC_DECODER: u32 = 0x0028_1350;
 /// The button-edge dispatcher `SerialOptoTask` calls on every wake.
 pub const PC_EDGE: u32 = 0x000c_953c;
@@ -99,18 +99,18 @@ pub struct Config {
     /// No window: drive to the main menu at a fixed instruction anchor and watch the panel while
     /// the machine idles. See [`Probe`].
     pub probe: Option<Probe>,
-    /// The instruction count the probe acts at. 1 500 000 000 is research/20 Addendum 30's own
+    /// The instruction count the probe acts at. 1 500 000 000 is research/10 Addendum 30's own
     /// script anchor (`--wheel=@1500M:…`), so a cold arm here and that recipe press Select at the
     /// same point in the same boot; a restored machine is already past it and acts as soon as the
     /// wheel's reporting gate opens.
     pub probe_at: u64,
     /// **Reproduce the version-3 restore**: zero `Memory::slept_usec` after restoring, which is
     /// what the snapshot format did before this session — see `Machine::snapshot`. The two arms of
-    /// research/20 Addendum 31 differ in this flag and nothing else, including the snapshot file
+    /// research/10 Addendum 31 differ in this flag and nothing else, including the snapshot file
     /// itself, which is why it is a run-time ablation rather than a second build.
     pub clock_v3: bool,
     /// Plug the mains charger in: hold `GPIOL` bit 3 low, which is what RetailOS's charger sense
-    /// reads (research/20 Addendum 30 §1 — the pin is active low, and a region default of zero was
+    /// reads (research/10 Addendum 30 §1 — the pin is active low, and a region default of zero was
     /// the accidental lie that made every early boot draw the charging screen). `map_hardware`
     /// seeds the bare-iPod value `0x08`; this puts the machine back on a wall socket **on purpose**,
     /// which is the only configuration in which there is a charging screen to return to.
@@ -128,7 +128,7 @@ pub struct Config {
     pub power_cycle_at: Option<u64>,
     /// `--ablate=pmu` — at the moment the probe acts, replace the PMU with a factory-fresh one.
     ///
-    /// This is the isolation for §5 of research/20 Addendum 31. A **restored** machine differs from
+    /// This is the isolation for §5 of research/10 Addendum 31. A **restored** machine differs from
     /// a cold one at the same instruction count in exactly the state a snapshot does not carry, and
     /// `Memory::pmu` is the largest piece of it: `Machine::restore` never touches the device, so a
     /// restored machine runs with the `Pcf50605` `build()` made — power-on register defaults, an RTC
@@ -169,7 +169,7 @@ enum Outcome {
 /// UI -> emulator, the commands that are not buttons.
 ///
 /// Deliberately not modelled as click-wheel input: nothing measured in this project shows RetailOS
-/// or our model acting on MENU+SELECT (see `Probe::Combo` and research/20 Addendum 31 §5), so a
+/// or our model acting on MENU+SELECT (see `Probe::Combo` and research/10 Addendum 31 §5), so a
 /// control that claimed to be the hardware combo while actually restarting the emulator would be
 /// the UI lying about what the machine does. These restart the *emulator*, and say so.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -197,7 +197,7 @@ pub struct Out {
     /// Not a curiosity. A restored machine can be one page-flip out of phase with a cold one: fed
     /// the identical input it draws the identical picture — same digest, to the pixel — into the
     /// *other* buffer, and a window hard-wired to `0x000e0000` shows a frozen screen and no reason
-    /// for it. Measured in research/20 Addendum 31 §5. Nothing here models which surface the panel
+    /// for it. Measured in research/10 Addendum 31 §5. Nothing here models which surface the panel
     /// is actually scanning out, so the honest thing is to report both and say which one is moving.
     pub fb_other_nonzero: u32,
     pub fb_other_moved: bool,
@@ -349,7 +349,7 @@ pub fn build(cfg: &Config) -> Result<Machine, String> {
         use arm7tdmi::Bus as _;
         m.mem.write32(0x7000_0000, 0x0036_0000);
         // `--charger`: GPIOL bit 3 low is "mains charger attached", and it is what decides between
-        // the charging screen and the UI. See research/20 Addendum 30 §1 and §6.
+        // the charging screen and the UI. See research/10 Addendum 30 §1 and §6.
         if cfg.charger {
             m.mem.write32(0x6000_d13c, 0x0000_0000);
         }
@@ -881,7 +881,7 @@ fn wait_after_stop(link: &Arc<Link>) -> Outcome {
 /// in a log rather than an impression from a screenshot. It pushes through [`Link::push`] — the
 /// same call a mouse drag makes — so what it exercises is the whole chain the window uses: the
 /// inbox, the gap-spaced drain, the appended script, `service_clickwheel`, the posted frame, IRQ 40
-/// and Apple's ISR. The comparison is research/20 Addendum 21 §6, which measured the same counts
+/// and Apple's ISR. The comparison is research/10 Addendum 21 §6, which measured the same counts
 /// from a `--wheel` script: 36 clicks give 36 arrivals at the decoder, 32 at the scroll
 /// accumulator, 15 wheel events and 4 button events.
 ///
@@ -942,7 +942,7 @@ impl SelfTest {
                     // sitting on the first-run Language list — nothing changes: 0 commands in 500 M
                     // instructions, measured. This test used to wait for that gate with no bound,
                     // on a machine where it had always opened within 3.5 M instructions, and it
-                    // would now hang and look like a slow run. See research/20 Addendum 31 §3.
+                    // would now hang and look like a slow run. See research/10 Addendum 31 §3.
                     if self.start.is_none() {
                         self.start = Some(now);
                     }
@@ -1061,7 +1061,7 @@ const PROBE_SAMPLES: [u64; 6] = [8_000_000, 40_000_000, 100_000_000, 200_000_000
 /// before there is a UI) than in a restored one (a few million instructions past a 1.6 G idle) — so
 /// its two arms were never delivering input at the same moment in the boot, and "restored and cold
 /// answer the same input differently" was measured across that confound. This one presses at
-/// `cfg.probe_at` in both arms, which is the anchor research/20 Addendum 30's `--wheel=@1500M:…`
+/// `cfg.probe_at` in both arms, which is the anchor research/10 Addendum 30's `--wheel=@1500M:…`
 /// script uses.
 struct Probing {
     mode: Option<Probe>,
@@ -1185,7 +1185,7 @@ impl Probing {
                 }
                 self.sample(m, "before");
                 // Every arm but the control presses Select once. From the first-run Language list
-                // that is the main menu — research/20 Addendum 30 §6, same event, same anchor — and
+                // that is the main menu — research/10 Addendum 30 §6, same event, same anchor — and
                 // it is what puts the combo arms in front of the same screen as the menu arms.
                 if mode != Probe::MenuControl {
                     link.push(WheelEvent::Touch);
@@ -1290,7 +1290,7 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant) {
     let secs = started.elapsed().as_secs_f64();
     println!("headless: {stop:?} after {} instructions", m.executed);
     // `commands.seen()`, never `commands.sample().len()`: the log is a `Capped<T>` and its length
-    // is a cap wearing a census's clothes. That conflation is research/22's whole subject, and this
+    // is a cap wearing a census's clothes. That conflation is research/12's whole subject, and this
     // line was written as `d.command_count` against a field that no longer exists — which is how it
     // was found that this crate had not been compiled since the `Capped<T>` merge.
     println!("  ata commands: {}", m.mem.ata.as_ref().map(|(_, d)| d.commands.seen()).unwrap_or(0));

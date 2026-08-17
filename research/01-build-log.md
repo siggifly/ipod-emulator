@@ -120,16 +120,15 @@ encrypted. Per [xLinka's Ghidra writeup](https://github.com/Xlinka/iPodReverseEn
 | **Per-account** | iTunes injects account keys into `IC-Info.sidb`. Olsro's exploit: iTunes ships *all* of an account's keys when *any one* of its games syncs | 5 accounts × their keys = a device that can decrypt the whole archive |
 | **Per-device** | `IC-Info.sidb` is bound to the iPod's serial (and "sometimes a currently unknown second value"). A full disk clone **plus a ROM serial swap** has been shown to move signed games between devices | Keys cannot be lifted by copying files |
 
-**Nobody has publicly derived the iPod's internal key.** Every source says so. But that does not
-block us: the 2007 crackers never derived it either — they ran the game on a modified `OSOS` and
-**read the unwrapped key out of RAM**. Recovery, not derivation, is the path. See
-[Extraction](#extraction-how-the-34-get-unlocked).
+**Nobody has publicly derived the iPod's internal key.** Every source says so, and the 2007 effort
+did not derive it either. That is the state of the art and it is worth recording; what this project
+would *do* about it is not published, per **L4**.
 
 ### What this project does about the DRM
 
 **Nothing.** Purchased titles do not launch here, and this emulator neither ships, bundles, nor
 depends on a decrypted copy of any title. The authorisation mechanics above are recorded because
-they explain what the firmware is doing — `research/12` still owes a row for every point where this
+they explain what the firmware is doing — `research/04` still owes a row for every point where this
 emulator diverges from the hardware, and the DRM is one of them.
 
 The games that do run are the ones **built into RetailOS itself** — Brick and its siblings, which
@@ -197,7 +196,7 @@ sitting in the middle of ARM code, holding the constants the loader compares aga
 **This is better than what we went looking for.** The built-in games turned out not to be separate
 eApps — but RetailOS's *own eApp loader* is the authoritative definition of the format.
 
-✅ **Disassembled 2026-08-11 — `research/02-eapp-loader.md` *(not published)*.**
+✅ **Disassembled 2026-08-11 — the eApp loader research *(not published)*.**
 Validation function at `0x101224C4`. Headlines:
 
 - The header layout is **confirmed from Apple's code**, with two corrections: the version field is a
@@ -716,7 +715,7 @@ The naive approach — ML-upscale the framebuffer at runtime — is the *worse* 
 it would be fast on Apple Silicon, but it fights temporal artifacts and has to run every frame.
 
 **The better approach is offline: upscale the assets once.** The formats are fully documented (see
-research/01 *(not published)*)
+the `.ipg` container research *(not published)*)
 — `.tga` spritesheets, `.ipd`, `.anm`, `.raw.lcd5`. Upscale the spritesheets with an ML model, have
 the loader substitute them, pay zero runtime cost. This is the texture-pack model, and it produces
 cleaner results than any per-frame filter.
@@ -913,7 +912,7 @@ What is **not** established is the index→implementation mapping. Recovering it
 layout — most likely by parsing a record whose small count makes the geometry unambiguous
 (`InputEvents` has 2, `Settings` 3, `Filesytem` 4) rather than starting from the 179-entry case.
 
-See `research/02-eapp-loader.md` *(not published)*.
+See the eApp loader research *(not published)*.
 
 ---
 
@@ -1101,7 +1100,7 @@ Pac-Man/audio/*.wav         sound effects
 
 So the next stage is **implementing `AsyncFileIO` (17 functions) against the game's own directory** —
 open, read, seek, close. Every format those files use is already documented in
-`research/01` *(not published)*.
+the `.ipg` container research *(not published)*.
 
 That single subsystem is what stands between four rendering titles and most of the twenty.
 
@@ -1129,33 +1128,15 @@ actually sets.** It costs one disassembly and it has been wrong to skip every si
 
 ## Extraction — how the 34 get unlocked
 
-Needed once, on one authorised 5G. Two strategies; **A is strongly preferred.**
+**Not published.** Recovering the key that protects a purchased title is the one part of this work
+that is a circumvention method rather than a description of hardware, and locked decision **L4**
+says plainly that *nothing that lifts keys gets published*. This section used to be here, with
+addresses, and that was this repository breaking its own rule.
 
-**A — recover the key, decrypt offline.** Read the *unwrapped* AES key out of RAM at launch, then
-decrypt the archived ciphertext on the Mac with stock AES-128-CBC. Byte-exact output, no relocation
-artefacts. xLinka found Tetris 1.0's key at `13d05688` with the IV in R10 at `13b486cc` — so the hook
-point is known to exist.
-
-> **The IV is already in hand — 2026-08-11.** Parsing the real `.sinf` archives shows a 16-byte
-> **`iviv`** atom sitting in plaintext in every one of the 116 executables' side files. So extraction
-> only needs to recover **16 bytes of key per binary**, not key *and* IV. Half the on-device problem
-> disappears, and the IV half can be verified before the iPod is even bought.
-
-**B — dump the decrypted image from RAM.** Fallback. Yields a post-load snapshot: relocated, thunks
-already patched, BSS zeroed. Not a clean file.
-
-**Getting code onto the device.** The 5G is pre-S5L, and xLinka *recomputes checksums* rather than
-re-signing — which implies the bootloader validates a **checksum, not a signature**. That is the same
-door iPodLinux and Rockbox walk through. So: extract `OSOS` from the firmware partition, patch in a
-hook after the key is in the clear, write it back.
-
-**Exfiltrate to disk, not through a crash.** The 2007 crackers dumped RAM after a deliberate crash.
-Unnecessary — the data partition is FAT32 and mounts over USB. Have the patch write 32 bytes to a
-file there, then mount the iPod on the Mac and read it. Re-runnable 34 times without re-flashing.
-
-⚠️ **Two assumptions to confirm on hardware before trusting any of this:** that 5G `OSOS` really is
-checksum-only, and *where* the unwrap happens — the hook must land after the key is plaintext but
-before the game takes control.
+What remains sayable, because it is the state of the art and not a recipe: nobody has publicly
+derived the iPod's internal key, the 2007 effort did not either, and the DRM binds to the device
+rather than to the account. Purchased titles do not launch under this emulator and this repository
+will not explain how to make them.
 
 ---
 
@@ -1164,7 +1145,7 @@ before the game takes control.
 | # | Question | Status |
 |---|---|---|
 | 1 | **What system interface does a game binary use?** Shim or full RetailOS? | ✅ **Shim. A bounded `eapp` import table exists** — see [The eApp ABI](#the-eapp-abi). Reproduction pending |
-| 2 | What is inside a `.ipg`? | ✅ **Closed — `research/01-ipg-format.md` *(not published)***. Full container spec, `.sinf` atom list, asset formats, on-device layout, 5G GUID table |
+| 2 | What is inside a `.ipg`? | ✅ **Closed — the `.ipg` container research *(not published)***. Full container spec, `.sinf` atom list, asset formats, on-device layout, 5G GUID table |
 | 3 | What exactly does FairPlay bind? | ✅ **Three layers** — per-copy AES, per-account keys, per-device `IC-Info.sidb`. See [The encryption](#the-encryption-in-three-layers-added-2026-08-11) |
 | 4 | ~~Does Siggi own an iPod 5G?~~ | ✅ **Obtainable in a few weeks (operator, 2026-08-11).** No longer blocking — the 20 plaintext titles carry all pre-hardware work |
 | 5 | Is clicky the right substrate? | ✅ **No.** Targets 4G grayscale, which cannot run these games at all. Reference only |
