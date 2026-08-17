@@ -771,6 +771,25 @@ pub struct Region {
     pub data: Vec<u8>,
 }
 
+/// The region walk behind [`Memory::peek32`], as a free function so it can be tested against a
+/// plain list of regions rather than a fully built machine.
+pub fn peek_regions(regions: &[Region], addr: u32) -> Option<u32> {
+    let a = addr & !3;
+    // SDRAM has an uncached alias 0x04000000 above its cached view and the firmware uses both;
+    // 0x14937194 and 0x10937194 are the same word, and an observer that resolved only one spelling
+    // would report "unmapped" for the address this facility exists to watch.
+    for candidate in [a, a ^ 0x0400_0000] {
+        for r in regions {
+            let Some(off) = candidate.checked_sub(r.base) else { continue };
+            let off = off as usize;
+            if off + 4 <= r.data.len() {
+                return Some(u32::from_le_bytes(r.data[off..off + 4].try_into().ok()?));
+            }
+        }
+    }
+    None
+}
+
 /// Resolution-cache granularity, and the number of slots in the direct-mapped cache. 65536 slots
 /// covers 256 MB of distinct pages — comfortably more than the 64 MB of SDRAM plus IRAM, NOR and
 /// the device windows, so the working set does not thrash.
@@ -844,17 +863,7 @@ impl Memory {
     /// SDRAM has an uncached alias 0x40000000 above its cached view, and the firmware uses both —
     /// `0x14937194` and `0x10937194` are the same word. Both spellings resolve here.
     pub fn peek32(&self, addr: u32) -> Option<u32> {
-        let a = addr & !3;
-        for candidate in [a, a ^ 0x0400_0000] {
-            for r in &self.regions {
-                let Some(off) = candidate.checked_sub(r.base) else { continue };
-                let off = off as usize;
-                if off + 4 <= r.data.len() {
-                    return Some(u32::from_le_bytes(r.data[off..off + 4].try_into().ok()?));
-                }
-            }
-        }
-        None
+        peek_regions(&self.regions, addr)
     }
 
     /// Whether every address in the 4 KiB page at `page` is answered by plain backing memory —
@@ -6932,5 +6941,57 @@ mod bcm_command_tests {
         assert_eq!(h.panel(0, 0), 0x4321, "the frame store is unchanged");
         assert_eq!(h.bcm.frames, 1, "and neither counted as a frame update");
         assert_eq!(h.bcm.commands, vec![5, 0x13, 0xa]);
+    }
+}
+
+#[cfg(test)]
+mod peek_tests {
+    use super::*;
+
+    fn regions(base: u32, bytes: &[u8]) -> Vec<Region> {
+        vec![Region { name: "sdram", base, data: bytes.to_vec() }]
+    }
+
+    #[test]
+    fn a_word_is_read_from_its_region() {
+        let r = regions(0x1000_0000, &[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
+        assert_eq!(peek_regions(&r, 0x1000_0000), Some(0x4433_2211));
+        assert_eq!(peek_regions(&r, 0x1000_0004), Some(0x8877_6655));
+    }
+
+    /// The firmware writes through the cached view and reads through the uncached alias, so both
+    /// spellings of the same word must resolve. Getting this wrong reports the DRM context address
+    /// as unmapped, which reads like a broken tool rather than a wrong answer.
+    #[test]
+    fn both_sdram_aliases_resolve_to_the_same_word() {
+        let mut data = vec![0u8; 0x100];
+        data[0x40..0x44].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+        let r = regions(0x1000_0000, &data);
+        assert_eq!(peek_regions(&r, 0x1000_0040), Some(0xDEAD_BEEF), "cached view");
+        assert_eq!(peek_regions(&r, 0x1400_0040), Some(0xDEAD_BEEF), "uncached alias");
+    }
+
+    #[test]
+    fn an_unaligned_address_reads_its_containing_word() {
+        let r = regions(0x1000_0000, &[0x11, 0x22, 0x33, 0x44]);
+        for a in 0..4 {
+            assert_eq!(peek_regions(&r, 0x1000_0000 + a), Some(0x4433_2211));
+        }
+    }
+
+    /// **`None`, not zero.** Zero is a meaningful value at `0x14937194` -- a null DRM context is
+    /// exactly what the research recorded -- so "I cannot see this" must never be reported as
+    /// "this contains zero".
+    #[test]
+    fn an_address_outside_every_region_is_none() {
+        let r = regions(0x1000_0000, &[0u8; 16]);
+        assert_eq!(peek_regions(&r, 0x7000_0000), None, "an MMIO window is not backing store");
+        assert_eq!(peek_regions(&r, 0x1000_0020), None, "past the end of the region");
+    }
+
+    #[test]
+    fn a_word_that_would_run_past_the_end_is_none() {
+        let r = regions(0x1000_0000, &[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+        assert_eq!(peek_regions(&r, 0x1000_0004), None, "only two bytes remain");
     }
 }

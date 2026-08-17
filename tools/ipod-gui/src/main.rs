@@ -45,6 +45,7 @@
 //! artefact, and this project has retired nine published conclusions to instruments that lied. The
 //! scale in use is printed under the device in debug mode so it can be checked rather than trusted.
 
+mod control;
 mod emu;
 use eapp_loader::inspect;
 use eapp_loader::ipsw;
@@ -308,6 +309,8 @@ ipod-emulator — an interactive iPod over the eapp-loader emulator
   --selftest              no window: push a scripted gesture through the GUI's own input path
                           and print what reached RetailOS
   --selftest-control      the matched control: the same run with no input at all
+  --control=PATH          open a control socket: wheel / press / shot / peek / state.
+                          Lets something other than a person drive the machine.
   --watch=ADDR[,ADDR]     report a word whenever it changes. `--watch=14937194` is the DRM
                           context pointer; it has been 0 in every arm measured so far.
   --probe=WHICH           no window: act at --probe-at and watch the panel for 800 M instructions.
@@ -451,6 +454,7 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         snapshot: Some(snapshot),
         snap_at,
         cold: args.iter().any(|a| a == "--cold"),
+        control: get("--control=").map(PathBuf::from),
         // Comma-separated hex, with or without 0x, because both spellings turn up in the research
         // notes these addresses are copied out of.
         watch: get("--watch=")
@@ -777,6 +781,12 @@ impl App {
         self.settings.save();
 
         let link = Link::new();
+        // Opt-in: without --control there is no socket and nothing can drive this but a person.
+        if let Some(path) = &self.cfg.control {
+            if let Err(e) = control::serve(path, Arc::clone(&link)) {
+                self.say(format!("control socket: {e}"));
+            }
+        }
         spawn_worker(self.cfg.clone(), Arc::clone(&link));
         self.link = Some(link);
     }

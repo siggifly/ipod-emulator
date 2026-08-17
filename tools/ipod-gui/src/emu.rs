@@ -160,6 +160,11 @@ pub struct Config {
     /// that deliberately to a *cold* machine is the only way to ask whether it is what matters,
     /// short of putting the chip in the snapshot and changing every restored run to find out.
     pub ablate_pmu: bool,
+    /// Where to open the control socket, if anywhere.
+    ///
+    /// Absent by default. A socket that appears without being asked for is an interface nobody
+    /// audited, on a program that reads a NOR dump and a drive image.
+    pub control: Option<PathBuf>,
     /// Addresses to watch, reported whenever one changes.
     ///
     /// Built for a single question: `06-game-drm.md` establishes that `[0x14937194]` is the DRM
@@ -299,12 +304,22 @@ pub struct Link {
     pub inbox: Mutex<Inbox>,
     pub out: Mutex<Out>,
     pub quit: AtomicBool,
+    /// Addresses the control socket has asked about, and what they held when the run loop next
+    /// looked.
+    ///
+    /// A request/answer pair rather than a callback, because `Memory` lives on the emulator thread
+    /// and cannot be borrowed from another one. The run loop drains requests between slices, which
+    /// is also the only moment a read is guaranteed to see a coherent machine.
+    pub peek_req: Mutex<Vec<u32>>,
+    pub peek_ans: Mutex<Vec<(u32, Option<u32>)>>,
 }
 
 impl Link {
     pub fn new() -> Arc<Self> {
         Arc::new(Link {
             inbox: Mutex::new(Inbox::default()),
+            peek_req: Mutex::new(Vec::new()),
+            peek_ans: Mutex::new(Vec::new()),
             out: Mutex::new(Out {
                 phase: Phase::Booting { target: 0 },
                 fb: vec![0; FB_W * FB_H * 3],
@@ -841,6 +856,21 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
             link.quit.store(true, Ordering::Relaxed);
             break;
         }
+        // Answer anything the control socket asked for. Bounded per slice so a client that
+        // floods the queue cannot stall the emulator.
+        {
+            let mut req = link.peek_req.lock().unwrap();
+            if !req.is_empty() {
+                let batch: Vec<u32> = req.drain(..).take(64).collect();
+                drop(req);
+                let mut ans = link.peek_ans.lock().unwrap();
+                for a in batch {
+                    let v = m.mem.peek32(a);
+                    ans.push((a, v));
+                }
+            }
+        }
+
         // Sampled once per slice, and only reported on change: a value printed every slice would
         // be 40 lines a second saying nothing, and the thing worth seeing is the transition.
         if !cfg.watch.is_empty() {
