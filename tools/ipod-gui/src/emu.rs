@@ -17,8 +17,10 @@
 //! Appending also has to be **spaced**. A frame posted while the previous one is still unread is a
 //! real overrun (`frames_dropped`), and that is what a whole rotation delivered in one tick would
 //! be: research/10 Addendum 21's arm D posted 39 frames and had 35 of them overwritten unread. So
-//! events drain one per `click_gap` instructions — default 20 000, the same figure
-//! `--wheel-click-instr` uses, which at `--clock=5` is 4 ms per click.
+//! events drain one per `click_gap` instructions — default 300 000, the same figure
+//! `--wheel-click-instr` uses, which at the default `--clock=75` is 4 ms per click. Both numbers
+//! moved together when the clock went from the research accelerant to the real part; what the
+//! firmware's wheel poll sees is the *simulated* interval, and that is unchanged.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};

@@ -295,8 +295,12 @@ ipod-emulator — an interactive iPod over the eapp-loader emulator
   --cold                  boot from the reset vector even if a snapshot exists (~75 s)
   --snapshot=FILE         where the idle snapshot lives (default: a per-user cache directory)
   --snap-at=N             instruction count the snapshot is taken at (default 1600000000)
-  --clock=N               interpreter instructions per simulated microsecond (default 5)
-  --wheel-click-instr=N   instructions between the frames of a rotation (default 20000)
+  --clock=N               interpreter instructions per simulated microsecond (default 75, the
+                          real part). Lowering it skips the bootloader's timeout-polled delay
+                          loops, which is why measurement used 5 -- but it makes the machine's
+                          own clock outrun its code, and timing-sensitive code notices
+  --wheel-click-instr=N   instructions between the frames of a rotation (default 300000, which
+                          is 4 ms at --clock=75; it was 20000, the same 4 ms at --clock=5)
   --flash=FILE            the NOR image (default: what the setup screen was pointed at,
                           else the retail ROM under resources/)
   --disk=FILE             the drive image (default: as above, else resources/derived/disk/)
@@ -450,7 +454,14 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         .or_else(|| saved.disk.clone())
         .unwrap_or_else(|| res.join("derived/disk/ipod8g-retail.img"));
 
-    let clock = num("--clock=", 5) as usize;
+    // 75 instructions per simulated microsecond is the real PP5021C. It was 5 for most of this
+    // project -- a research accelerant, adopted in research/03 because the bootloader polls with
+    // timeouts and a low clock skips those delay loops, reaching 5 ATA commands in a 600 M budget
+    // where real time reached 2. It was never turned back, and it is wrong for anything that is
+    // being *used* rather than measured: the machine's own sense of time runs 15x fast, so every
+    // wait a game asks for expires almost immediately. Brick's ball was unplayable for this
+    // reason. Measurement can still ask for the accelerant by name.
+    let clock = num("--clock=", 75) as usize;
     let snap_at = num("--snap-at=", 1_600_000_000);
     let cache = cache_paths(&flash, &disk, clock, snap_at);
     // A hand-given snapshot brings its own frozen drive, sitting beside it under the same stem.
@@ -511,7 +522,9 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
                     .collect()
             })
             .unwrap_or_default(),
-        click_gap: num("--wheel-click-instr=", 20_000).max(1),
+        // Held at 4 ms of *simulated* time, which is what the firmware's wheel poll sees. The
+        // figure is 15x the old one because the clock it is divided by went up by 15.
+        click_gap: num("--wheel-click-instr=", 300_000).max(1),
         headless: get("--headless=").and_then(|v| v.replace('_', "").parse().ok()),
         selftest: args.iter().any(|a| a == "--selftest" || a == "--selftest-control"),
         selftest_control: args.iter().any(|a| a == "--selftest-control"),
