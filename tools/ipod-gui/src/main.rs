@@ -523,6 +523,9 @@ struct App {
     /// screen rather than against an offset guessed from the wheel's radius. The first version
     /// guessed, and the guess covered the whole upper half — clicking the screen threw the switch.
     hold_slot: Rect,
+    /// The region the device is drawn in, remembered from the last frame so that input handling —
+    /// which runs before the device is painted — can ask whether the pointer is over it.
+    dev_area: Rect,
     /// `None` = no check has finished. `Some(None)` = a check ran and found nothing, which is what
     /// offline looks like and is never shown.
     update_slot: Arc<Mutex<Option<Option<update::Found>>>>,
@@ -688,6 +691,7 @@ impl App {
             last_shot: None,
             scale: 1,
             hold_slot: Rect::NOTHING,
+            dev_area: Rect::NOTHING,
             update_slot,
             update_line: None,
             update_asked: false,
@@ -1374,6 +1378,7 @@ impl App {
         let (mut scroll, mut pressed, mut released, mut toggle_hold, mut shot, mut toggle_mode) =
             (0i32, Vec::new(), Vec::new(), false, false, false);
         let mut wheel_units = self.wheel_units;
+        let dev_area = self.dev_area;
         ctx.input(|i| {
             // Held rather than pressed, so holding an arrow scrolls. One click per repaint is about
             // 60 clicks a second, which is a brisk but human thumb.
@@ -1406,11 +1411,21 @@ impl App {
             // every mouse has one; a user asked why it did not work and the answer was that nobody
             // had wired it.
             //
-            // A physical notch reports about 50 units in egui, and a trackpad reports a continuous
+            // A physical notch reports about 40 units in egui, and a trackpad reports a continuous
             // stream of small ones. Accumulating and dividing gives one detent per notch and a
             // proportional glide from a trackpad, rather than either flying or doing nothing.
+            //
+            // ONLY over the device. The first version took scroll from anywhere in the window, so
+            // scrolling the instrument panel in debug mode turned the click wheel at the same time
+            // — the panel moved and RetailOS's menu moved with it. The pointer decides whose scroll
+            // it is, and `dev_area` is last frame's rectangle because input is read before the
+            // device is painted.
+            let over_device = i
+                .pointer
+                .latest_pos()
+                .is_some_and(|p| dev_area.contains(p));
             let dy = i.smooth_scroll_delta.y;
-            if dy != 0.0 {
+            if dy != 0.0 && over_device {
                 wheel_units += dy;
             }
         });
@@ -1502,6 +1517,8 @@ impl App {
     }
 
     fn device(&mut self, ui: &mut egui::Ui, area: Rect, out: &emu::Out) {
+        // For the next frame's input handling, which runs before this does.
+        self.dev_area = area;
         let ppp = ui.ctx().pixels_per_point();
         // Everything is derived from ONE integer: the number of physical pixels per emulator pixel.
         // Deriving the device from the panel rather than the panel from the device is what makes
@@ -1838,11 +1855,6 @@ impl App {
                 }
             }
         });
-        ui.small(
-            "Emulator power, not a button on the case: powering off drops the machine, and \
-             powering on enters at the reset vector with fresh state. A cold boot is ~75 s; the \
-             cached snapshot is left alone, so it is never restore-then-pretend.",
-        );
 
         ui.horizontal(|ui| {
             let combo = [Button::Menu, Button::Select];
@@ -1866,13 +1878,6 @@ impl App {
                 }
             }
         });
-        ui.small(
-            "The real hard reset and the real power-off. These deliver the buttons — both bits in \
-             one frame, which the wheel has always been able to report — and nothing in RetailOS \
-             has been measured to act on either: held for 400 M instructions at the main menu, the \
-             machine keeps running (research/10 Addendum 31 §5). On a 5G the pair is caught by the \
-             wheel controller or the PMU, neither of which is modelled here.",
-        );
     }
 
     // ------------------------------------------------------------ the instrument panel
@@ -1886,24 +1891,12 @@ impl App {
                 // one boot is the window disagreeing with itself about how far along it is.
                 Phase::Booting { .. } => {
                     ui.label(egui::RichText::new("cold boot").strong());
-                    ui.small(
-                        "Booting from the reset vector. The first boot of a session also writes a \
-                         snapshot at the idle point, so launching again restores in a few seconds; \
-                         a boot reached by powering the machine back on writes none, deliberately \
-                         — the drive it would be taken against has been written to since.",
-                    );
                 }
                 Phase::Running => {
                     ui.label(egui::RichText::new("running").strong());
                 }
                 Phase::Off => {
                     ui.label(egui::RichText::new("powered off").strong());
-                    ui.small(
-                        "There is no machine: the CPU, all 64 MB of SDRAM and the co-processor's \
-                         surface were dropped. Powering on builds a new one and enters at the reset \
-                         vector — the drive is the only thing that survives, because it is the only \
-                         thing that survives a real power cycle.",
-                    );
                 }
                 Phase::Stopped(why) => {
                     ui.colored_label(Color32::from_rgb(0xd0, 0x50, 0x40), format!("stopped: {why}"));
@@ -1937,20 +1930,6 @@ impl App {
                 row(ui, "simulated clock", &format!("{:.1} s", s.sim_usec as f64 / 1e6));
                 row(ui, "sim vs wall", &format!("{sim_ratio:.2}x"));
             });
-            ui.small(
-                "Two ratios, deliberately, because they disagree. The interpreter does ~30 % of \
-                 the hardware's instruction rate — that is the number a game would feel, and the \
-                 one the footer carries in user mode too. The emulator's own clock is a different \
-                 quantity: --clock=5 advances it 15x faster per instruction than real silicon, and \
-                 the idle task's sleeps skip it forward again, so it need not track either wall \
-                 time or the instruction rate. Reporting one of these as \"the speed\" would \
-                 mislead in whichever direction you guessed.",
-            );
-            ui.small(
-                "Session figures start at the first slice, not at the restore: a snapshot does \
-                 not carry `slept_usec`, so the first instruction after a restore recomputes the \
-                 microsecond clock and discards the restored value.",
-            );
             ui.separator();
 
             // ---- the wheel, as the DEVICE has it, not as the UI thinks it should be
@@ -1972,34 +1951,17 @@ impl App {
                     Color32::from_rgb(0xc8, 0x8a, 0x20),
                     "Hold is engaged in the model, and RetailOS does not act on it.",
                 );
-                ui.small(
-                    "The wheel clears frame bit 31 and the model pulls GPIOA bit 5 low at \
-                     0x6000d030 — which is the line Rockbox's `button_hold()` reads, exactly. \
-                     RetailOS reads somewhere else: the panel is byte-identical with the switch \
-                     thrown and without, no lock icon appears, and its `HoldSwitchTask` sits \
-                     pended on a semaphore rather than polling. Nothing here fakes the icon.",
-                );
             }
             if !s.reporting {
                 ui.colored_label(
                     Color32::from_rgb(0xc8, 0x8a, 0x20),
                     "The wheel has not been told to report yet.",
                 );
-                ui.small(
-                    "A snapshot does not carry the click wheel, so a restored machine starts with \
-                     the 0x052a gate closed and refuses autonomous frames — counted above as \
-                     `suppressed`, never silently eaten. RetailOS re-sends `0x8001052a` about once \
-                     every 20 M instructions, so this clears itself within a second or so.",
-                );
             }
             ui.separator();
 
             // ---- the measurement
             ui.label(egui::RichText::new("does the input reach RetailOS?").strong());
-            ui.small(
-                "Arrivals at the addresses research/10 Addendum 21 §6 measured. Non-zero here is \
-                 the same evidence a `--wheel` script produces, made by a hand on a wheel.",
-            );
             grid(ui, "enters", |ui| {
                 for (i, (_, name)) in emu::WATCHED.iter().enumerate() {
                     row(ui, name, &fmt_u64(s.enters[i]));
@@ -2021,13 +1983,6 @@ impl App {
                 ui.colored_label(
                     Color32::from_rgb(0xc8, 0x8a, 0x20),
                     "The picture is being drawn to the OTHER surface.",
-                );
-                ui.small(
-                    "Tick `back buffer` to see it. A restored machine can sit one page-flip out of \
-                     phase with a cold one: given the identical input it draws the identical \
-                     picture — same digest, to the pixel — into the other buffer. Nothing here \
-                     models which surface the panel scans out, so both are counted and neither is \
-                     guessed at. research/10 Addendum 31 §5.",
                 );
             }
 
@@ -2055,7 +2010,6 @@ impl App {
             ui.separator();
             self.updates(ui);
             ui.separator();
-            ui.small("arrows scroll · Enter/Space select · M menu · P play · , . prev/next · H hold · D mode · S shot");
             for l in &self.log {
                 ui.small(l.as_str());
             }
