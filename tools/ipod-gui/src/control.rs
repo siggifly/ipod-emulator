@@ -14,6 +14,7 @@
 //! hold NAME MS       hold a button, for the combos that need one
 //! shot PATH          write the current framebuffer as a PNG
 //! peek ADDR          read one word, hex in and hex out; unmapped says so
+//! ata FROM TO        whether the drive was ever asked for these sectors
 //! state              phase, instruction count, framebuffer address and non-black pixels
 //! quit               close this connection (the emulator keeps running)
 //! ```
@@ -156,23 +157,33 @@ fn command(line: &str, link: &Arc<Link>) -> String {
         // are counted. A DRM that fails because the hardware doing it is absent looks exactly like a
         // DRM that fails because the keys are wrong, and this is what tells them apart.
         "unmapped" => {
+            // Ask through the peek channel so the list is refreshed between slices, then read it.
             link.peek_req.lock().unwrap().push(UNMAPPED_SENTINEL);
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            let _ = link.peek_ans.lock().unwrap().pop();
+            let out = link.out.lock().unwrap();
+            if out.unmapped_pages.is_empty() {
+                return "ok unmapped none".into();
+            }
+            let list: Vec<String> = out.unmapped_pages.iter().map(|p| format!("{p:#010x}")).collect();
+            format!("ok unmapped {} page(s): {}", list.len(), list.join(" "))
+        }
+        // Did the machine ever ask the drive for these sectors?
+        "ata" => {
+            let (from, to) = match (arg.parse::<u64>(), arg2.parse::<u64>()) {
+                (Ok(a), Ok(b)) => (a, b),
+                _ => return "error: ata wants FROM TO as LBAs".into(),
+            };
+            *link.ata_query.lock().unwrap() = Some((from, to));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             loop {
-                {
-                    let mut ans = link.peek_ans.lock().unwrap();
-                    if let Some(i) = ans.iter().position(|(a, _)| *a == UNMAPPED_SENTINEL) {
-                        let (_, v) = ans.remove(i);
-                        return match v {
-                            Some(n) => format!("ok unmapped pages={n}"),
-                            None => "ok unmapped pages=0".into(),
-                        };
-                    }
+                if let Some(a) = link.ata_answer.lock().unwrap().take() {
+                    return a;
                 }
                 if std::time::Instant::now() > deadline {
                     return "error: timed out".into();
                 }
-                std::thread::sleep(std::time::Duration::from_millis(5));
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }
         "state" => {

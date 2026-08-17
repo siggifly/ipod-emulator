@@ -227,6 +227,12 @@ pub struct Out {
     pub fb_addr: u32,
     /// Bumped whenever `fb` changed, so the UI can skip a texture upload.
     pub fb_seq: u64,
+    /// Page addresses the machine has touched that nothing answers for.
+    ///
+    /// Carried out here rather than asked for, because the question it settles -- *is the DRM
+    /// failing because hardware is missing?* -- wants the addresses, not a count, and a count that
+    /// moved with no way to see what moved it would be a worse instrument than none.
+    pub unmapped_pages: Vec<u32>,
     /// The surface the window is **not** showing, and whether its content has moved since this
     /// session began.
     ///
@@ -312,6 +318,14 @@ pub struct Link {
     /// is also the only moment a read is guaranteed to see a coherent machine.
     pub peek_req: Mutex<Vec<u32>>,
     pub peek_ans: Mutex<Vec<(u32, Option<u32>)>>,
+    /// An LBA range the control socket wants to know about, and the answer.
+    ///
+    /// The question this exists for is the one that splits the DRM problem in half: **does RetailOS
+    /// ever read the key files at all?** Never reading them means the refusal happens before the
+    /// keystore is consulted and no keybag, however perfect, would change it. Reading and rejecting
+    /// them means the opposite. The drive already logs every command with its LBA; this only asks.
+    pub ata_query: Mutex<Option<(u64, u64)>>,
+    pub ata_answer: Mutex<Option<String>>,
 }
 
 impl Link {
@@ -320,11 +334,14 @@ impl Link {
             inbox: Mutex::new(Inbox::default()),
             peek_req: Mutex::new(Vec::new()),
             peek_ans: Mutex::new(Vec::new()),
+            ata_query: Mutex::new(None),
+            ata_answer: Mutex::new(None),
             out: Mutex::new(Out {
                 phase: Phase::Booting { target: 0 },
                 fb: vec![0; FB_W * FB_H * 3],
                 fb_nonzero: 0,
                 fb_addr: FB_FRONT,
+                unmapped_pages: Vec::new(),
                 fb_seq: 0,
                 fb_other_nonzero: 0,
                 fb_other_moved: false,
@@ -856,6 +873,34 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
             link.quit.store(true, Ordering::Relaxed);
             break;
         }
+        // Answer an LBA-range question, if one is pending.
+        {
+            let q = *link.ata_query.lock().unwrap();
+            if let Some((from, to)) = q {
+                let mut hits = 0usize;
+                let mut first = Vec::new();
+                if let Some((_, ata)) = m.mem.ata.as_ref() {
+                    for (cmd, _, n, lba) in ata.commands.sample() {
+                        // A command covers `n` sectors from `lba`; overlap, not containment, or a
+                        // read that starts just below the range would be missed.
+                        let end = lba + (if *n == 0 { 256 } else { *n as u64 });
+                        if *lba <= to && end > from {
+                            hits += 1;
+                            if first.len() < 6 {
+                                first.push(format!("cmd={cmd:#04x}@{lba}+{n}"));
+                            }
+                        }
+                    }
+                }
+                *link.ata_answer.lock().unwrap() = Some(if hits == 0 {
+                    format!("ok ata {from}..{to}: NEVER READ")
+                } else {
+                    format!("ok ata {from}..{to}: {hits} command(s) [{}]", first.join(" "))
+                });
+                *link.ata_query.lock().unwrap() = None;
+            }
+        }
+
         // Answer anything the control socket asked for. Bounded per slice so a client that
         // floods the queue cannot stall the emulator.
         {
@@ -864,6 +909,11 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                 let batch: Vec<u32> = req.drain(..).take(64).collect();
                 drop(req);
                 let mut ans = link.peek_ans.lock().unwrap();
+                {
+                    let mut out = link.out.lock().unwrap();
+                    out.unmapped_pages = m.mem.unmapped.keys().copied().collect();
+                    out.unmapped_pages.sort_unstable();
+                }
                 for a in batch {
                     let v = if a == crate::control::UNMAPPED_SENTINEL {
                         Some(m.mem.unmapped.len() as u32)
