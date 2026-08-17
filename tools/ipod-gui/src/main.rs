@@ -69,18 +69,52 @@ use wheel::{Button, Hit, WheelRing};
 
 // ---------------------------------------------------------------- the device's proportions
 //
-// Millimetres, from Apple's published dimensions for the 5G (A1136) and the 2.5" 4:3 panel. Held as
-// millimetres rather than as ratios so a reader can check them against a tape measure.
-const CASE_W: f32 = 61.8;
-const CASE_H: f32 = 103.5;
-const SCREEN_W: f32 = 50.8;
-const SCREEN_H: f32 = 38.1;
+// Millimetres, from Apple's published dimensions and the panel's own size. Held as millimetres
+// rather than as ratios so a reader can check them against a tape measure.
+//
+// **A struct rather than constants**, because this emulator is named for the line and not for one
+// model. Everything that draws a device reads these, so adding a model is a row here rather than a
+// change to the painter. Only the 5.5G is emulated today and only the 5.5G is listed: a device
+// drawn in the picker is a promise, and an unkeepable one is worse than an absent one.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Device {
+    /// What the setup screen calls it.
+    pub name: &'static str,
+    /// Case outline.
+    pub case_w: f32,
+    pub case_h: f32,
+    /// Active area of the panel.
+    pub screen_w: f32,
+    pub screen_h: f32,
+    /// Top of the case to the top of the active area.
+    pub screen_top: f32,
+    /// The wheel: diameter, and centre measured from the top of the case.
+    pub wheel_d: f32,
+    pub wheel_cy: f32,
+    /// The framebuffer this model's panel actually holds.
+    pub fb: (usize, usize),
+}
 
-/// Top of the case to the top of the active area.
-const SCREEN_TOP: f32 = 9.5;
-/// The wheel: ~28 mm across, centred in the space below the screen.
-const WHEEL_D: f32 = 28.0;
-const WHEEL_CY: f32 = 75.5;
+/// The iPod Video, 5th and 5.5 generation — A1136. The only model this emulator boots.
+pub const IPOD_VIDEO: Device = Device {
+    name: "iPod Video (5G / 5.5G)",
+    case_w: 61.8,
+    case_h: 103.5,
+    screen_w: 50.8,
+    screen_h: 38.1,
+    screen_top: 9.5,
+    wheel_d: 28.0,
+    wheel_cy: 75.5,
+    fb: (FB_W, FB_H),
+};
+
+const CASE_W: f32 = IPOD_VIDEO.case_w;
+const CASE_H: f32 = IPOD_VIDEO.case_h;
+const SCREEN_W: f32 = IPOD_VIDEO.screen_w;
+const SCREEN_H: f32 = IPOD_VIDEO.screen_h;
+const SCREEN_TOP: f32 = IPOD_VIDEO.screen_top;
+const WHEEL_D: f32 = IPOD_VIDEO.wheel_d;
+const WHEEL_CY: f32 = IPOD_VIDEO.wheel_cy;
 
 /// How far the hold switch stands proud of the top edge, and how much room is reserved above the
 /// case for it. It is a control on the top face seen from the front, so what is visible is the part
@@ -509,7 +543,23 @@ struct Drag {
 }
 
 /// The first-run screen: the slots, their paths, and a verdict on what is in each.
+/// Which question the first run is asking.
+///
+/// One at a time, verified before the next. The previous version asked everything at once on a
+/// single screen, with every fact the project knows printed beside each field — which is reference
+/// material, not an instruction, and it read as a settings dialog rather than a first run.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Step {
+    /// The boot ROM.
+    Rom,
+    /// The software: an `.ipsw` to build a drive from, or a drive image.
+    Firmware,
+    /// What is about to happen, including how much disk it will take.
+    Ready,
+}
+
 struct Setup {
+    step: Step,
     flash: String,
     disk: String,
     /// An IPSW to build a drive image *from*, which is the path most people should take: about
@@ -533,6 +583,11 @@ struct Setup {
 /// stays right if that default changes and wrong visibly if it does not.
 const SCROLL_UNITS_PER_DETENT: f32 = 40.0;
 
+/// A verdict's first line — the Ready page summarises, it does not recite.
+fn first_line(s: &str) -> String {
+    s.lines().next().unwrap_or("").trim().to_string()
+}
+
 /// The path as a string, or empty if nothing is there.
 fn existing(p: &Path) -> String {
     if p.is_file() {
@@ -545,6 +600,7 @@ fn existing(p: &Path) -> String {
 impl Setup {
     fn new(cfg: &emu::Config) -> Setup {
         let mut s = Setup {
+            step: Step::Rom,
             // Only prefill a path that is actually there. The defaults are this repository's
             // layout, so a released binary would open on two paths that do not exist and an error
             // under each — telling a first-time user their files are wrong before they have chosen
@@ -801,6 +857,67 @@ impl App {
     }
 }
 
+/// Draw a device at rest — case, wheel and a dark panel — in whatever room it is given.
+///
+/// The running window's `device()` derives its size from the framebuffer, because there the panel
+/// must land on exact pixel boundaries. Nothing is running here, so this one simply fits the height
+/// it is offered. It exists so the setup screen can show the thing being set up.
+fn device_at_rest(p: &egui::Painter, d: &Device, centre: Pos2, height: f32) -> Rect {
+    let k = height / (d.case_h + SWITCH_PROUD);
+    let (w, h) = (d.case_w * k, (d.case_h + SWITCH_PROUD) * k);
+    let o = Pos2::new(centre.x - w / 2.0, centre.y - h / 2.0);
+    let at = |x: f32, y: f32| Pos2::new(o.x + x * k, o.y + (y + SWITCH_PROUD) * k);
+
+    let body = Color32::from_rgb(0xF3, 0xF3, 0xF1);
+    let wheel = Color32::from_rgb(0xE6, 0xE6, 0xE3);
+
+    // The hold switch first, so the case's rounded corner covers the half that is inside it.
+    let sw = Rect::from_min_max(
+        Pos2::new(o.x + SWITCH_X * k, o.y),
+        Pos2::new(o.x + (SWITCH_X + SWITCH_W) * k, o.y + SWITCH_PROUD * 2.0 * k),
+    );
+    // Two tones, because the switch is a slider: the pale half is the travel it sits in.
+    p.rect_filled(sw, CornerRadius::from((1.0 * k) as u8), Color32::from_gray(0x9C));
+    let half = Rect::from_min_max(sw.min, Pos2::new(sw.min.x + sw.width() * 0.5, sw.max.y));
+    p.rect_filled(half, CornerRadius::from((1.0 * k) as u8), Color32::from_gray(0xD8));
+
+    let face = Rect::from_min_max(at(0.0, 0.0), at(d.case_w, d.case_h));
+    p.rect_filled(face, CornerRadius::from((5.5 * k) as u8), body);
+
+    // The panel, dark: there is no machine yet, and a blank white rectangle reads as a fault.
+    let sx = o.x + (d.case_w - d.screen_w) / 2.0 * k;
+    let sy = o.y + (SWITCH_PROUD + d.screen_top) * k;
+    let glass = Rect::from_min_size(Pos2::new(sx, sy), Vec2::new(d.screen_w * k, d.screen_h * k));
+    p.rect_filled(glass.expand(1.2 * k), CornerRadius::from((0.8 * k) as u8), Color32::from_gray(0x24));
+    p.rect_filled(glass, CornerRadius::ZERO, Color32::from_gray(0x0C));
+
+    let c = Pos2::new(o.x + d.case_w / 2.0 * k, o.y + (SWITCH_PROUD + d.wheel_cy) * k);
+    let r = d.wheel_d / 2.0 * k;
+    p.circle_filled(c, r, wheel);
+    p.circle_filled(c, r * 0.34, body);
+
+    // The four labels. Without them a light circle on a light case reads as a blemish rather than
+    // as the control the whole device is known for.
+    //
+    // The transport marks are DRAWN, via the same `transport` the live device uses, not typed. An
+    // earlier version set them as text and they came out as empty boxes: the default font has no
+    // glyph for U+25C2, and a missing glyph is a rectangle rather than nothing, so the wheel
+    // acquired three small squares.
+    let ink = Color32::from_gray(0x8A);
+    p.text(
+        Pos2::new(c.x, c.y - r * 0.64),
+        egui::Align2::CENTER_CENTER,
+        "MENU",
+        egui::FontId::proportional((r * 0.26).max(5.0)),
+        ink,
+    );
+    let g = (r * 0.30).max(4.0);
+    transport(p, Button::Prev, Pos2::new(c.x - r * 0.64, c.y), g, ink);
+    transport(p, Button::Next, Pos2::new(c.x + r * 0.64, c.y), g, ink);
+    transport(p, Button::Play, Pos2::new(c.x, c.y + r * 0.64), g, ink);
+    face
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_update();
@@ -847,139 +964,244 @@ impl eframe::App for App {
 impl App {
     // ------------------------------------------------------------ the first-run screen
 
-    /// What a stranger meets when the two images are not there.
+    /// What a stranger meets when the images are not there: one question at a time.
     ///
-    /// Two slots, a picker and a text field each, and a verdict under each that says what the file
-    /// actually is. The verdict is the point: "no NOR dump" sends somebody to a search engine,
-    /// "this is a 2 MiB dump and the 5G ROM is 1 MiB" tells them what to do next.
+    /// A centred column with margins, the device it is configuring drawn at the top, and a single
+    /// decision per screen with its detail folded away. The previous version put both files, every
+    /// byte count, two model numbers and a paragraph about what RetailOS does on first boot onto
+    /// one page with no margins — which is a reference card, and somebody arriving here wants to
+    /// know what to click.
     fn setup_screen(&mut self, ui: &mut egui::Ui) {
+        let dev = IPOD_VIDEO;
         egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.add_space(18.0);
-            ui.vertical_centered(|ui| {
-                ui.heading("An iPod 5G, once you supply its firmware");
-            });
-            ui.add_space(10.0);
-            ui.label(
-                "This emulator boots Apple's own iPod software. Apple's software is not in this \
-                 repository and will not be, so it needs two things from you.",
-            );
-            ui.add_space(8.0);
-
-            let mut changed = false;
-            changed |= slot(
-                ui,
-                "1 — NOR flash dump",
-                "A 1 MB (1 048 576 byte) dump of the iPod's boot ROM, conventionally named \
-                 `internal_rom_000000-0FFFFF.bin` after the offset range it covers. Read out of an \
-                 iPod you own with Rockbox; not distributed with this project.\n\
-                 \n\
-                 If you are looking for one: the retail iPod Video dump is archived under the wrong \
-                 product. It sits in BootROM collections filed as iPod CLASSIC, in a directory \
-                 named A1238 — which is the Classic 6G's model number, not the Video's (A1136). \
-                 Searching for \"iPod Video\", \"5.5G\" or \"A1136\" finds nothing; searching for the \
-                 Classic finds it. The right one reads HwVr 0x000b0005, Mod# MA146, and has a \
-                 non-blank HwId. A prototype dump also circulates (HwVr 0x000b0011, Mod# M8976, \
-                 blank HwId) and it will NOT boot a pristine firmware partition.",
-                &mut self.setup.flash,
-                self.setup.flash_verdict.as_ref(),
-                &["bin"],
-            );
-            if changed {
-                self.setup.revalidate();
-            }
-
-            ui.add_space(12.0);
-            ui.label(egui::RichText::new("2 — a drive").strong());
-            ui.small(
-                "Only the firmware partition matters. Everything else RetailOS builds itself on \
-                 first boot — it formats and populates the volume, creates Contacts, Calendars, \
-                 Notes and iPod_Control/Device/Accessories, and touches 41 sectors doing it. So an \
-                 iPod software-update bundle is enough, and it is about 14 MB against 8 GB.",
-            );
-            ui.add_space(6.0);
-            self.ipsw_slot(ui);
-
-            ui.add_space(8.0);
-            let mut disk_changed = false;
-            ui.collapsing("…or a drive image you already have", |ui| {
-                disk_changed = slot(
-                    ui,
-                    "Drive image",
-                    "A whole-drive image of an iPod's disk, including its firmware partition. \
-                     Every number in this project's research/ was measured through one of these.",
-                    &mut self.setup.disk,
-                    self.setup.disk_verdict.as_ref(),
-                    &["img", "bin", "dmg", "iso"],
-                );
-            });
-            if disk_changed {
-                self.setup.revalidate();
-            }
-
-            ui.add_space(14.0);
-            ui.separator();
-            ui.add_space(6.0);
-
-            if self.setup.both_good() {
-                if ui.button("Boot the iPod").clicked() {
-                    self.start();
-                }
-                ui.small(
-                    "The first boot runs from the reset vector and takes about 75 seconds. It \
-                     writes a snapshot at the idle point, so every later launch takes about three.",
-                );
-            } else if self.setup.both_present() {
-                ui.colored_label(
-                    Color32::from_rgb(0xc8, 0x8a, 0x20),
-                    "One of these is not what this emulator models.",
-                );
-                ui.small(
-                    "It will almost certainly not boot. Nothing stops you trying — this is a \
-                     research tool and an unexpected image is sometimes the experiment.",
-                );
-                ui.checkbox(&mut self.setup.force, "I know; boot it anyway");
-                if self.setup.force && ui.button("Boot the iPod").clicked() {
-                    self.start();
-                }
-            } else {
-                ui.small("Both files are needed before anything can boot.");
-            }
-
-            ui.add_space(14.0);
-            ui.separator();
-            ui.small(
-                "Nothing here is uploaded, and nothing is downloaded. The paths are remembered in \
-                 a settings file so this screen appears once.",
-            );
-            // Everything this program writes, where it writes it, and how much — stated, with a
-            // way to delete it. It used to write to two directories and say the size of neither,
-            // which is how somebody lost 50 GB to an 8 GB working disk per firmware they tried.
-            ui.small(format!("Everything this program writes lives in {}", settings::data_dir().display()));
+            // The margins the old screen did not have. A measured column rather than the window's
+            // full width, because a 1400-pixel line of prose is unreadable at any contrast.
+            let avail = ui.available_width();
+            let col = avail.min(620.0);
+            let side = ((avail - col) / 2.0).max(0.0);
+            ui.add_space(28.0);
             ui.horizontal(|ui| {
-                let n = cache_size();
-                ui.small(format!("Currently {}.", human(n)));
-                if n > 0 && ui.button("delete cached disks").on_hover_text(
-                    "Removes the working disks and snapshots. Your settings and your own files are \
-                     untouched; the next boot is a cold one and takes about 75 seconds.",
-                ).clicked() {
-                    let freed = prune_cache(Path::new(""), Path::new(""));
-                    self.say(format!("deleted {}", human(freed)));
+                ui.add_space(side);
+                ui.vertical(|ui| {
+                    ui.set_width(col);
+                    self.wizard(ui, &dev);
+                });
+            });
+            ui.add_space(28.0);
+        });
+    }
+
+    /// The column's contents: the device, the step, and the way forward.
+    fn wizard(&mut self, ui: &mut egui::Ui, dev: &Device) {
+        // The device being configured, at rest. It is the only thing on this screen that says what
+        // the program is without being read.
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 150.0), egui::Sense::hover());
+        device_at_rest(ui.painter(), dev, rect.center(), 138.0);
+        ui.add_space(10.0);
+
+        ui.vertical_centered(|ui| {
+            ui.label(egui::RichText::new("ipod-emulator").heading());
+            ui.label(
+                egui::RichText::new("Apple's own iPod software, on a machine that is not one.")
+                    .color(Color32::from_gray(0x9A)),
+            );
+        });
+        ui.add_space(6.0);
+        ui.vertical_centered(|ui| {
+            let n = match self.setup.step {
+                Step::Rom => 1,
+                Step::Firmware => 2,
+                Step::Ready => 3,
+            };
+            ui.label(
+                egui::RichText::new(format!("{}   ·   step {n} of 3", dev.name))
+                    .small()
+                    .color(Color32::from_gray(0x78)),
+            );
+        });
+        ui.add_space(22.0);
+
+        match self.setup.step {
+            Step::Rom => self.step_rom(ui),
+            Step::Firmware => self.step_firmware(ui),
+            Step::Ready => self.step_ready(ui),
+        }
+    }
+
+    /// Step 1 — the boot ROM.
+    fn step_rom(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("First, the boot ROM").size(17.0).strong());
+        ui.add_space(4.0);
+        ui.label("A 1 MB dump of the chip your iPod starts from. Read out of an iPod you own.");
+        ui.add_space(12.0);
+
+        let changed = slot(ui, "NOR flash dump", "", &mut self.setup.flash, self.setup.flash_verdict.as_ref(), &["bin"]);
+        if changed {
+            self.setup.revalidate();
+        }
+        ui.add_space(8.0);
+
+        // The detail somebody stuck will look for, and nobody else has to read.
+        ui.collapsing("Where do I find this?", |ui| {
+            ui.label(
+                "It is archived, but under the wrong product — which is why searching for it fails.",
+            );
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(
+                    "Collections of iPod boot ROMs file the iPod VIDEO dump as iPod CLASSIC, in a \
+                     folder named A1238. That is the Classic's model number; the Video is A1136. So \
+                     searching for \"iPod Video\", \"5.5G\" or \"A1136\" finds nothing, and searching \
+                     for the Classic finds it.",
+                )
+                .color(Color32::from_gray(0xB4)),
+            );
+            ui.add_space(6.0);
+            ui.label("The file is normally called internal_rom_000000-0FFFFF.bin and is exactly 1 048 576 bytes.");
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(
+                    "A prototype dump also circulates. It will not work here — it boots a firmware \
+                     partition that the retail ROM correctly rejects. The one you want reads \
+                     HwVr 0x000b0005 and Mod# MA146; the prototype reads 0x000b0011 and M8976.",
+                )
+                .color(Color32::from_gray(0x9A)),
+            );
+        });
+
+        let ok = matches!(&self.setup.flash_verdict, Some(v) if v.ok());
+        self.nav(ui, None, Some(Step::Firmware), ok, "Next");
+    }
+
+    /// Step 2 — the software.
+    fn step_firmware(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("Now the software").size(17.0).strong());
+        ui.add_space(4.0);
+        ui.label(
+            "Apple's iPod software update. The emulator builds a drive from it — only the firmware \
+             part matters, because the iPod formats the rest itself on first boot.",
+        );
+        ui.add_space(12.0);
+        self.ipsw_slot(ui);
+
+        ui.add_space(8.0);
+        let mut disk_changed = false;
+        ui.collapsing("…or a drive image you already have", |ui| {
+            disk_changed = slot(
+                ui,
+                "Drive image",
+                "A whole-drive image of an iPod's disk, including its firmware partition.",
+                &mut self.setup.disk,
+                self.setup.disk_verdict.as_ref(),
+                &["img", "bin", "dmg", "iso"],
+            );
+        });
+        if disk_changed {
+            self.setup.revalidate();
+        }
+
+        ui.add_space(8.0);
+        ui.collapsing("Where do I find this?", |ui| {
+            ui.label("For the iPod Video the file is iPod_20.1.3.ipsw.");
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(
+                    "The 20 is the updater family and it has to match the iPod your ROM came from — \
+                     iPod_24 and iPod_26 files are other devices and will not boot here.",
+                )
+                .color(Color32::from_gray(0xB4)),
+            );
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new("Apple no longer serves these, so there is no official source to try.")
+                    .color(Color32::from_gray(0x9A)),
+            );
+        });
+
+        let ok = matches!(&self.setup.disk_verdict, Some(v) if v.ok());
+        self.nav(ui, Some(Step::Rom), Some(Step::Ready), ok, "Next");
+    }
+
+    /// Step 3 — what is about to happen, and what it costs.
+    fn step_ready(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("Ready").size(17.0).strong());
+        ui.add_space(10.0);
+
+        for (what, v) in [
+            ("Boot ROM", self.setup.flash_verdict.as_ref()),
+            ("Drive", self.setup.disk_verdict.as_ref()),
+        ] {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(format!("{what}")).strong());
+                let (mark, colour) = match v {
+                    Some(v) if v.ok() => ("ready", Color32::from_rgb(0x6C, 0xC6, 0x88)),
+                    Some(_) => ("check it", Color32::from_rgb(0xE0, 0xA0, 0x40)),
+                    None => ("missing", Color32::from_rgb(0xD0, 0x6C, 0x6C)),
+                };
+                ui.label(egui::RichText::new(mark).color(colour));
+            });
+            if let Some(v) = v {
+                ui.label(egui::RichText::new(first_line(v.text())).small().color(Color32::from_gray(0x9A)));
+            }
+            ui.add_space(8.0);
+        }
+
+        ui.add_space(4.0);
+        // Said before it happens, not discovered afterwards. A user lost 50 GB to this being
+        // silent, an 8 GB working disk at a time.
+        ui.label(
+            egui::RichText::new(
+                "Starting builds a working copy of the drive — up to 8 GB, though it is sparse and \
+                 usually far less on disk — plus a snapshot of the booted machine so that later \
+                 launches take seconds. Both live in the folder below and are replaced, not added \
+                 to, when you change these files.",
+            )
+            .color(Color32::from_gray(0x9A)),
+        );
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(format!("{}   ·   currently {}", settings::data_dir().display(), human(cache_size())))
+                .small()
+                .color(Color32::from_gray(0x78)),
+        );
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new("The first boot takes about 75 seconds. It is a real cold boot.")
+                .small()
+                .color(Color32::from_gray(0x78)),
+        );
+
+        self.nav(ui, Some(Step::Firmware), None, true, "Start");
+    }
+
+    /// Back / forward, in a consistent place, with the forward action disabled until this step is
+    /// satisfied — so "why can I not continue" is answered by the verdict directly above it.
+    fn nav(&mut self, ui: &mut egui::Ui, back: Option<Step>, next: Option<Step>, ready: bool, label: &str) {
+        ui.add_space(22.0);
+        ui.separator();
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            if let Some(b) = back {
+                if ui.button("Back").clicked() {
+                    self.setup.step = b;
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let go = ui.add_enabled(ready, egui::Button::new(format!("  {label}  ")));
+                if go.clicked() {
+                    match next {
+                        Some(n) => self.setup.step = n,
+                        None => self.start(),
+                    }
+                }
+                if !ready {
+                    ui.label(
+                        egui::RichText::new("choose a file above")
+                            .small()
+                            .color(Color32::from_gray(0x78)),
+                    );
                 }
             });
-            for (old, n) in settings::legacy_leftovers() {
-                ui.small(
-                    egui::RichText::new(format!(
-                        "An older version left {} in {} — safe to delete by hand.",
-                        human(n),
-                        old.display()
-                    ))
-                    .color(Color32::from_rgb(0xE0, 0xA0, 0x40)),
-                );
-            }
-            ui.small(
-                "`ipod-emulator --check-images` does the same two checks with no window, if you would \
-                 rather test a pair of files from a terminal.",
-            );
         });
     }
 
