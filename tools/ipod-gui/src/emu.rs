@@ -1514,6 +1514,38 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant) {
         (mm, mw)
     };
     println!("  unmapped: {reads} reads, {writes} writes across {} pages", m.mem.unmapped.len());
+    // Printed unconditionally when a range was asked for, including when it is empty. "Nothing was
+    // recorded" and "nothing was asked" must not look the same, because an instrument that stays
+    // silent when it found nothing is indistinguishable from one that is not running.
+    if let Some((lo, hi)) = m.mem.trace_pc {
+        let n = m.mem.pc_trace.len();
+        let distinct = m.mem.pc_trace.iter().map(|(pc, _)| *pc).collect::<std::collections::BTreeSet<_>>().len();
+        println!("  trace {lo:#010x}..{hi:#010x}: {n} executed, {distinct} distinct addresses");
+        if let Some((first, at)) = m.mem.pc_trace.first() {
+            println!("    first {first:#010x} at {at} instructions");
+        }
+        if let Some((lastpc, at)) = m.mem.pc_trace.last() {
+            println!("    last  {lastpc:#010x} at {at} instructions");
+        }
+        // How many separate visits: a function entered once and a function entered forty times are
+        // different situations, and the entry address is what distinguishes them.
+        let entries = m.mem.pc_trace.iter().filter(|(pc, _)| *pc == lo).count();
+        println!("    entered {entries} time(s)");
+        // The tail is the interesting end. A flattened function is entered and left many times;
+        // where it stops going round is where it decided.
+        let tail: Vec<String> = m.mem.pc_trace.iter().rev().take(24).rev()
+            .map(|(pc, _)| format!("{pc:x}")).collect();
+        if !tail.is_empty() {
+            println!("    last: {}", tail.join(" "));
+        }
+        // And the distinct addresses in first-seen order, which for a dispatch table is the state
+        // sequence rather than the instruction stream.
+        let mut seen = std::collections::BTreeSet::new();
+        let order: Vec<String> = m.mem.pc_trace.iter()
+            .filter(|(pc, _)| seen.insert(*pc))
+            .map(|(pc, _)| format!("{pc:x}")).take(60).collect();
+        println!("    order: {}", order.join(" "));
+    }
     if let Some(n) = &m.novelty {
         println!("  {} code buckets executed", n.len());
     }
