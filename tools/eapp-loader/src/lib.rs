@@ -385,6 +385,15 @@ pub struct Memory {
     /// address it later polls for `COPSLEEPING`, so on a single-core machine the bit must be
     /// reasserted by the model or the wait never ends.
     pub read_overrides: Vec<(u32, u32)>,
+    /// Bits forced **on** in a register, leaving every other bit as the machine actually holds it.
+    ///
+    /// Ledger #8 was a whole-word override: reads of `PLL_STATUS` returned exactly `0x80000000`, so
+    /// the lock bit was asserted and *every other bit read as zero*. Reporting an emulated PLL as
+    /// locked is defensible — it has no physical lock delay — but blanking the rest of the register
+    /// is a second, undocumented lie riding along with the first.
+    ///
+    /// An OR-mask asserts only what is being claimed.
+    pub read_or_masks: Vec<(u32, u32)>,
     /// Address of the free-running microsecond counter, if the machine has one.
     ///
     /// A zeroed MMIO region is a **stopped clock**, and firmware written against a real one waits
@@ -626,6 +635,12 @@ pub struct Memory {
     /// The profiler names *where* the time goes; this names *what it is working on*. At the head of
     /// a bignum loop the registers are the operands -- the limb pointers, the multiplier, the
     /// length -- and those pointers are what makes the data traceable back to whatever produced it.
+    /// Do not force `COP_STATUS` to report the second core asleep.
+    ///
+    /// This does **not** emulate the core — it only stops lying about it. What RetailOS does when
+    /// its wake finally appears to succeed is the measurement; it may proceed, or it may wait for a
+    /// partner that will never answer, and both are worth knowing before building one.
+    pub cop_awake: bool,
     pub regs_at: Option<(u32, usize)>,
     pub regs_seen: Vec<(u64, [u32; 16])>,
     /// `(addr, pc) -> (reads, first icount)`, **uncapped**. The report's per-reader breakdown; the
@@ -916,6 +931,7 @@ impl Memory {
         };
         if self.read_toggle.iter().any(|&(at, _, _)| hits(at, 4))
             || self.read_overrides.iter().any(|&(at, _)| hits(at, 4))
+            || self.read_or_masks.iter().any(|&(at, _)| hits(at, 4))
             || self.int_ack_on_read.iter().any(|&(at, _)| hits(at, 4))
             // The DMA channel blocks, for the read-to-clear latch in `read8_inner`. Two pages
             // total, and the firmware touches them a few dozen times in a whole boot, so taking
@@ -1494,6 +1510,15 @@ impl Memory {
             let off = addr.wrapping_sub(at);
             if off < 4 {
                 return v.to_le_bytes()[off as usize];
+            }
+        }
+        for &(at, mask) in &self.read_or_masks {
+            let off = addr.wrapping_sub(at);
+            if off < 4 {
+                // Whatever the register holds, with the claimed bits asserted -- and nothing else
+                // disturbed.
+                let base = peek_regions(&self.regions, at).unwrap_or(0);
+                return (base | mask).to_le_bytes()[off as usize];
             }
         }
         if let Some(base) = self.usec_timer {
@@ -2250,6 +2275,7 @@ impl Machine {
             trace_calls_from: None,
             call_trace: Vec::new(),
             pc_hist: None,
+            cop_awake: false,
             regs_at: None,
             regs_seen: Vec::new(),
             read_sites: BTreeMap::new(),
@@ -2278,6 +2304,7 @@ impl Machine {
             read_toggle: Vec::new(),
             toggle_state: Vec::new(),
             read_overrides: Vec::new(),
+            read_or_masks: Vec::new(),
             usec_timer: None,
             usec: 0,
             ide_cfg_ack_off: false,
@@ -6748,10 +6775,24 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
     // plain seeded value gets cleared by the very code that then waits for it. We do not emulate
     // the second core, so on this machine the COP is always asleep.
     if m.mem.read_overrides.is_empty() {
-        m.mem.read_overrides.push((0x6000_7004, 0x8000_0000));
-        // PLL_STATUS (Rockbox `pp5020.h`). Firmware programs PLL_CONTROL at 0x60006034 and then
-        // spins until bit 31 says the PLL has locked. An emulated PLL locks instantly.
-        m.mem.read_overrides.push((0x6000_603c, 0x8000_0000));
+        // Ledger #7, and until now unconditional — which meant nothing that depends on the second
+        // core could be A/B'd, because there was no arm B. RetailOS reads this address 5 470 times
+        // and runs Rockbox's `wake_cop` 10 198 times; being able to answer differently is the first
+        // step to knowing whether any of that matters.
+        if !m.mem.cop_awake {
+            m.mem.read_overrides.push((0x6000_7004, 0x8000_0000));
+        } else {
+            // Said out loud. A switch whose effect cannot be observed is indistinguishable from a
+            // switch that is not wired up, and this session has produced enough of those.
+            eprintln!("ledger #7: COP_STATUS override NOT installed (--cop-awake)");
+        }
+    }
+    // Ledger #8, retired as a whole-word override. Firmware programs PLL_CONTROL at 0x60006034 and
+    // spins until bit 31 of PLL_STATUS says the PLL has locked; an emulated PLL locks instantly, so
+    // asserting that bit is honest. Forcing the other 31 bits to zero was not, and was never the
+    // claim being made -- so it is an OR-mask now, and the rest of the register reads as it is.
+    if m.mem.read_or_masks.is_empty() {
+        m.mem.read_or_masks.push((0x6000_603c, 0x8000_0000));
     }
 
     // The uncached view of SDRAM. The firmware computes this address itself, at 0xdb4:

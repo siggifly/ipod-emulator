@@ -309,6 +309,9 @@ ipod-emulator — an interactive iPod over the eapp-loader emulator
   --selftest              no window: push a scripted gesture through the GUI's own input path
                           and print what reached RetailOS
   --selftest-control      the matched control: the same run with no input at all
+  --cop-awake             stop forcing COP_STATUS to say the second core is asleep (ledger #7).
+                          Does NOT emulate the core -- it stops lying about it, so the
+                          dependency can be measured for the first time.
   --watch-writes=BASE:LEN log every write into a range with the PC that made it. A buffer's
                           first writer names where its contents came from.
   --regs-at=ADDR:N        dump the register file the first N times ADDR executes. At a bignum
@@ -469,6 +472,7 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         snap_at,
         cold: args.iter().any(|a| a == "--cold"),
         control: get("--control=").map(PathBuf::from),
+        cop_awake: args.iter().any(|a| a == "--cop-awake"),
         // `--trace-pc=LO:HI`, hex, for watching a flattened function execute.
         watch_writes: get("--watch-writes=").and_then(|s| {
             let (b, n) = s.split_once(':')?;

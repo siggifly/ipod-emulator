@@ -1220,3 +1220,47 @@ fn a_version_3_snapshot_is_refused() {
     img[..8].copy_from_slice(b"IPODSNP4");
     assert!(into.restore(&img), "the harness cannot restore a valid snapshot at all");
 }
+
+// ---------------------------------------------------------------- the OR-masked registers
+
+/// A read OR-mask must reach the firmware, which means the page it sits on must be off the fast
+/// path.
+///
+/// `Memory` serves whole pages of plain storage without consulting any of the per-address tables,
+/// and `page_is_plain` is the list of tables that disqualify a page. `read_or_masks` was added to
+/// the read path and left off that list, so the mask was never consulted: reads of PLL_STATUS
+/// returned the region's zero, the bootrom's lock-bit poll at `0x8780` never came out, and the
+/// machine spun at instruction 23 for as long as it was given. The mechanism existed and did
+/// nothing, which is the failure mode that looks most like success in a diff.
+#[test]
+fn a_read_or_mask_is_observed_through_the_ordinary_read_path() {
+    use arm7tdmi::Bus;
+    let app = EApp::parse(synth_eapp()).expect("parse");
+    let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
+    m.mem.regions.push(eapp_loader::Region {
+        name: "mmio-6",
+        base: 0x6000_0000,
+        data: vec![0; 0x10_000],
+    });
+
+    // Nothing else claims this page, so it is plain unless the mask itself disqualifies it.
+    m.mem.read_or_masks.push((0x6000_603c, 0x8000_0000));
+    assert_eq!(
+        m.mem.read32(0x6000_603c),
+        0x8000_0000,
+        "the OR-mask was not consulted -- the page is still being served from the fast path"
+    );
+
+    // And it is a mask, not a replacement: every other bit is whatever the register holds. This is
+    // the whole reason ledger #8 stopped being a whole-word override.
+    m.mem.write32(0x6000_603c, 0x0000_1234);
+    assert_eq!(
+        m.mem.read32(0x6000_603c),
+        0x8000_1234,
+        "the mask overwrote bits it does not claim"
+    );
+
+    // Neighbouring words are untouched: the window is four bytes wide, not a page.
+    assert_eq!(m.mem.read32(0x6000_6038), 0, "the mask leaked into the word below");
+    assert_eq!(m.mem.read32(0x6000_6040), 0, "the mask leaked into the word above");
+}

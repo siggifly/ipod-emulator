@@ -167,6 +167,8 @@ pub struct Config {
     pub control: Option<PathBuf>,
     /// Record execution inside this address range, for code that resists being read.
     pub trace_pc: Option<(u32, u32)>,
+    /// Stop forcing the second core to report itself asleep (ledger #7).
+    pub cop_awake: bool,
     /// `BASE:LEN` — log writes into this range with the PC that made them.
     ///
     /// The step that turns "these are RSA operands" into "and this is where they came from": a
@@ -449,6 +451,8 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     let app = placeholder_app();
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
 
+    // Set before the peripheral map, which is where the COP_STATUS override is seeded.
+    m.mem.cop_awake = cfg.cop_awake;
     eapp_loader::map_hardware(&mut m, true);
     // Hardware revision probe: boot reads 0x70000000, takes bits 16..23 and compares to 0x36.
     {
