@@ -2259,6 +2259,18 @@ impl App {
                     "Hold is engaged, and RetailOS has been told: GPIOA bit 5 low, port interrupt raised.",
                 );
             }
+            // A machine that has stopped is not a machine that is drawing slowly, and the
+            // difference is invisible without this line.
+            if out.stalled_secs > 2.0 && matches!(out.phase, Phase::Running) {
+                ui.colored_label(
+                    Color32::from_rgb(0xd0, 0x50, 0x40),
+                    format!(
+                        "HALTED — no instruction has executed for {:.0} s. The core is waiting for \
+                         an interrupt that nothing is going to raise.",
+                        out.stalled_secs
+                    ),
+                );
+            }
             if !s.reporting {
                 ui.colored_label(
                     Color32::from_rgb(0xc8, 0x8a, 0x20),

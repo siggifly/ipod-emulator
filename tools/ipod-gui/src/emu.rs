@@ -275,6 +275,15 @@ pub struct Out {
     /// Steps up and down the dimmer has taken. A level that is not moving and a pin that is not
     /// pulsing are different diagnoses, and the level alone cannot tell them apart.
     pub backlight_steps: (u64, u64),
+    /// Wall seconds the instruction count has not moved while the phase says `Running`.
+    ///
+    /// A halted machine and a still screen look identical from the outside — the window keeps
+    /// repainting, the panel keeps its last frame, and nothing says anything. One session stopped
+    /// dead at 2 791 999 952 instructions and was only noticed because two `state` replies happened
+    /// to be compared by hand. The core halts waiting for an interrupt; if nothing has a deadline
+    /// armed, none ever comes, and the clock cannot advance because the clock is made of
+    /// instructions.
+    pub stalled_secs: f32,
     /// Page addresses the machine has touched that nothing answers for.
     ///
     /// Carried out here rather than asked for, because the question it settles -- *is the DRM
@@ -404,6 +413,7 @@ impl Link {
                 fb_seq: 0,
                 backlight: 16,
                 backlight_steps: (0, 0),
+                stalled_secs: 0.0,
                 fb_other_nonzero: 0,
                 fb_other_moved: false,
                 fb_shown_moved: false,
@@ -901,6 +911,8 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
     let mut probe = Probing::new(cfg);
     // `None` means "not yet sampled", which is distinct from an unmapped address.
     let mut watched: Vec<Option<u32>> = vec![None; cfg.watch.len()];
+    let mut last_executed = 0u64;
+    let mut last_moved = std::time::Instant::now();
 
     loop {
         if link.quit.load(Ordering::Relaxed) {
@@ -1134,6 +1146,18 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         // Outside the `refresh` gate: the level moves without a single pixel changing, and a panel
         // that only redraws when the pixels move would show the old brightness until something else
         // happened to repaint.
+        {
+            // Measured against the wall, not against the slice count: a slice that executes
+            // nothing still goes round.
+            let now = std::time::Instant::now();
+            if executed == last_executed {
+                out.stalled_secs = now.duration_since(last_moved).as_secs_f32();
+            } else {
+                last_executed = executed;
+                last_moved = now;
+                out.stalled_secs = 0.0;
+            }
+        }
         out.backlight = m.mem.backlight.level;
         out.backlight_steps = (m.mem.backlight.steps_up, m.mem.backlight.steps_down);
         // The boot is over at the snapshot point whether or not a snapshot was written there — a

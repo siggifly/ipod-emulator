@@ -6547,7 +6547,7 @@ impl Machine {
         let w32 = |o: &mut Vec<u8>, v: u32| o.extend_from_slice(&v.to_le_bytes());
         let w64 = |o: &mut Vec<u8>, v: u64| o.extend_from_slice(&v.to_le_bytes());
 
-        o.extend_from_slice(b"IPODSNP5");
+        o.extend_from_slice(b"IPODSNP6");
         let cpu = self.cpu.save();
         w32(&mut o, cpu.len() as u32);
         for x in &cpu {
@@ -6648,6 +6648,12 @@ impl Machine {
             }
             None => w32(&mut o, 0),
         }
+        // The backlight. Same reasoning as the wheel one line above: the dimmer's counter lives in
+        // the panel's circuit and nothing reads it back, so a restored machine that does not carry
+        // it comes back at the default while the firmware still believes it is wherever the user
+        // left it. The two then disagree for the rest of the session, and the only symptom is a
+        // screen at the wrong brightness.
+        w32(&mut o, self.mem.backlight.level as u32);
         o
     }
 
@@ -6656,7 +6662,7 @@ impl Machine {
     /// Regions are replaced wholesale rather than merged: a partial restore would leave the machine
     /// in a state that never existed, which is worse than refusing.
     pub fn restore(&mut self, b: &[u8]) -> bool {
-        if b.len() < 8 || &b[..8] != b"IPODSNP5" {
+        if b.len() < 8 || &b[..8] != b"IPODSNP6" {
             return false;
         }
         let mut p = 8usize;
@@ -6757,6 +6763,11 @@ impl Machine {
                 w.irq_enabled = irq_enabled;
                 w.reply = reply;
             }
+        }
+        // The dimmer, if this image carries one. Older v6 images stop at the wheel.
+        let level = r32(&mut p);
+        if (1..=32).contains(&level) {
+            self.mem.backlight.level = level as u8;
         }
         true
     }

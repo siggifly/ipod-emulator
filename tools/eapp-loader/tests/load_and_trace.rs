@@ -1206,15 +1206,16 @@ fn dropping_the_sleep_accumulator_moves_the_clock_backwards() {
 /// by any other route would restore the exact machine each fix exists to abolish, and it would do
 /// it silently.
 ///
-/// v4 -> v5 added the click wheel. A v4 image read as v5 would come back with `reporting` false,
-/// which is the state where the wheel is dead and says nothing about it.
+/// v4 -> v5 added the click wheel: a v4 image read as v5 comes back with `reporting` false, which
+/// is the state where the wheel is dead and says nothing about it. v5 -> v6 added the backlight
+/// dimmer, whose absence shows up only as a screen at the wrong brightness.
 #[test]
 fn an_older_snapshot_is_refused() {
     let m = sleeping_machine();
     let mut img = m.snapshot();
-    assert_eq!(&img[..8], b"IPODSNP5", "the format moved past v5; update this test");
+    assert_eq!(&img[..8], b"IPODSNP6", "the format moved past v6; update this test");
 
-    for old in [b"IPODSNP3", b"IPODSNP4"] {
+    for old in [b"IPODSNP3", b"IPODSNP4", b"IPODSNP5"] {
         img[..8].copy_from_slice(old);
         let mut into = sleeping_machine();
         assert!(
@@ -1226,7 +1227,7 @@ fn an_older_snapshot_is_refused() {
 
     // Positive control: the same bytes with the current magic still restore, so what is refused is
     // the version and not the image.
-    img[..8].copy_from_slice(b"IPODSNP5");
+    img[..8].copy_from_slice(b"IPODSNP6");
     let mut into = sleeping_machine();
     assert!(into.restore(&img), "the harness cannot restore a valid snapshot at all");
 }
