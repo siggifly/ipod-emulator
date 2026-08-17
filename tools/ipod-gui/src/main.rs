@@ -2113,22 +2113,32 @@ impl App {
             // predict, and exactly why both are shown rather than one derived from the other.
             let ips = s.executed_here as f64 / s.wall_secs.max(1e-6);
             let sim_ratio = s.sim_usec_here as f64 / (s.wall_secs.max(1e-6) * 1e6);
-            grid(ui, "speed", |ui| {
-                row(ui, "instructions", &fmt_u64(s.executed));
-                row(ui, "this session", &fmt_u64(s.executed_here));
-                row(ui, "rate", &format!("{:.1} M/s", ips / 1e6));
-                row(
-                    ui,
-                    "vs 72 MIPS hardware",
-                    &format!("{:.0} % of real work rate", ips / HARDWARE_MIPS * 100.0),
-                );
-                row(ui, "wall clock", &format!("{:.1} s", s.wall_secs));
-                row(ui, "simulated clock", &format!("{:.1} s", s.sim_usec as f64 / 1e6));
-                row(ui, "sim vs wall", &format!("{sim_ratio:.2}x"));
+            // The headline is the one number that changes what anyone does next: how fast this
+            // machine is running compared to the part. Everything behind it is for when that
+            // number is surprising, which is rare, so it folds away.
+            ui.label(format!(
+                "{:.1} M/s — {:.0} % of hardware",
+                ips / 1e6,
+                ips / HARDWARE_MIPS * 100.0
+            ));
+            ui.collapsing("clocks", |ui| {
+                grid(ui, "speed", |ui| {
+                    row(ui, "instructions", &fmt_u64(s.executed));
+                    row(ui, "this session", &fmt_u64(s.executed_here));
+                    row(ui, "wall clock", &format!("{:.1} s", s.wall_secs));
+                    row(ui, "simulated clock", &format!("{:.1} s", s.sim_usec as f64 / 1e6));
+                    row(ui, "sim vs wall", &format!("{sim_ratio:.2}x"));
+                });
             });
             ui.separator();
 
             // ---- the wheel, as the DEVICE has it, not as the UI thinks it should be
+            //
+            // Folded. Eleven counters were on screen at all times to answer a question that is
+            // asked on the days input is broken, and on every other day they are furniture. The
+            // two conditions worth interrupting for -- hold engaged, reporting not yet enabled --
+            // have their own lines below and do not need the grid open to be seen.
+            ui.collapsing("click wheel", |ui| {
             grid(ui, "click wheel", |ui| {
                 row(ui, "position", &format!("{} / 96", s.position));
                 row(ui, "touched", if s.touched { "yes" } else { "no" });
@@ -2141,6 +2151,7 @@ impl App {
                 row(ui, "DATA reads", &format!("{} ({} with a frame)", s.data_reads, s.data_reads_ready));
                 row(ui, "IRQ 40 assertions", &fmt_u64(s.irqs));
                 row(ui, "queued / dropped", &format!("{} / {}", s.queued, s.input_dropped));
+            });
             });
             if s.hold {
                 // This used to say RetailOS did not act on it, which was true and is not any more:
@@ -2161,22 +2172,29 @@ impl App {
             ui.separator();
 
             // ---- the measurement
-            ui.label(egui::RichText::new("does the input reach RetailOS?").strong());
-            grid(ui, "enters", |ui| {
-                for (i, (_, name)) in emu::WATCHED.iter().enumerate() {
-                    row(ui, name, &fmt_u64(s.enters[i]));
-                }
+            ui.collapsing("does the input reach RetailOS?", |ui| {
+                grid(ui, "enters", |ui| {
+                    for (i, (_, name)) in emu::WATCHED.iter().enumerate() {
+                        row(ui, name, &fmt_u64(s.enters[i]));
+                    }
+                });
             });
             ui.separator();
 
             let other_addr = if out.fb_addr == FB_FRONT { FB_BACK } else { FB_FRONT };
-            grid(ui, "display", |ui| {
-                row(ui, "surface", &format!("{:#010x}", out.fb_addr));
-                row(ui, "non-black pixels", &format!("{} / {}", out.fb_nonzero, FB_W * FB_H));
-                row(ui, &format!("the other, {other_addr:#010x}"), &format!("{} / {}", out.fb_other_nonzero, FB_W * FB_H));
-                row(ui, "bcm frames (session)", &fmt_u64(s.bcm_frames));
-                row(ui, "bcm commands (session)", &s.bcm_commands.to_string());
-                row(ui, "panel scale", &format!("{}x nearest", self.scale));
+            ui.label(format!(
+                "panel {:#010x} — {} / {} lit",
+                out.fb_addr,
+                out.fb_nonzero,
+                FB_W * FB_H
+            ));
+            ui.collapsing("display", |ui| {
+                grid(ui, "display", |ui| {
+                    row(ui, &format!("the other, {other_addr:#010x}"), &format!("{} / {}", out.fb_other_nonzero, FB_W * FB_H));
+                    row(ui, "bcm frames (session)", &fmt_u64(s.bcm_frames));
+                    row(ui, "bcm commands (session)", &s.bcm_commands.to_string());
+                    row(ui, "panel scale", &format!("{}x nearest", self.scale));
+                });
             });
             // The one case where a still screen is the window's fault and not the machine's.
             if out.fb_other_moved && !out.fb_shown_moved {
