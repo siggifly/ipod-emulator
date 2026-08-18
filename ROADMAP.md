@@ -340,18 +340,65 @@ because the bootloader lays its handoff structures at the top of IRAM and everyt
 moves with them. It is also the thing that made `ipodloader2` look wrong; see
 [research/16](research/16-the-third-bootloader.md).
 
-## M5 · A synthesised boot ROM · *the biggest usability win available*
+## M5 · A synthesised boot ROM · **the top of the list, 2026-08-18**
 
 Finding a NOR dump is the hardest step in using this program, and the **first outside report**
-(issue #2) is exactly someone stuck on it.
+(issue #2) is exactly someone stuck on it. It is now also the *only* route to being a 5.5G, because
+our reference hardware is a 5G and a second boot ROM cannot be obtained: boot ROMs are per-unit and
+Apple serves nothing.
 
-The bootloader's job is knowable and largely known: bring up SDRAM, talk to the PMU, upload `vmcs`
-to the co-processor, read the partition table, DMA `osos`, checksum it, jump — leaving a `sysinfo_t`
-block whose layout is documented. We can synthesise that state with our own freely distributable
-code. A user would then need only Apple's firmware bundle.
+### What is actually being synthesised
 
-**Depends on:** the ledger being honest about what the real bootloader leaves behind — so M2 helps
-directly. **Settled by:** RetailOS reaching the menu with no NOR dump supplied.
+**Not the bootloader's code — its end state.** The real one brings up SDRAM, talks to the PMU,
+uploads `vmcs` to the co-processor, reads the partition table, DMAs `osos`, checksums it and jumps,
+leaving behind a machine in a particular condition. Only that condition matters to the OS. So the
+job is to *reach the same condition* by construction, then jump.
+
+### The validation, and it is the good part
+
+**We hold a real boot ROM, so this is checkable rather than hopeful.** Boot the real one, snapshot
+the machine at the handoff; boot the synthetic one, snapshot at the same point; **diff**. Every
+difference is either something the OS does not care about — provable by booting it — or a piece of
+the handoff we have not reproduced.
+
+Concretely, the handoff is already partly known and instrumented: the `sysinfo_t` block Apple leaves
+at the top of IRAM (`0x4001ff18` on this machine's 128 KB), `PROC_ID`, the `COP` reported asleep,
+the memory-map registers `crt0-pp.S` reads back, the drive spun up and its partition table read.
+`--dump`, `--save-region` and the snapshot format already exist to compare all of it.
+
+**Settled when** RetailOS reaches the menu with no NOR dump supplied — *and* the handoff diff
+against the real ROM is empty or explained line by line.
+
+### Identity: three tiers, and the GUID matters more than it looks
+
+A synthetic ROM has to answer *which iPod is this*, and the answer is a setting rather than an
+accident of which file somebody found:
+
+| tier | what it is |
+|---|---|
+| **generate** | plausible serial and FireWire GUID, made up. Boots fine — but the GUID is what Apple's DRM binds a purchased title to, so a generated one can **never** authorise those titles, on any machine, ever. That consequence belongs in the UI, not in a footnote |
+| **provide** | the user types their own values |
+| **read from their own iPod** | drop `iPod_Control/Device/SysInfo` on the window. It is a 349-byte text file on the data partition — the one a Mac already mounts — carrying `pszSerialNumber`, `FirewireGuid`, `BoardHwName` and `boardHwRev`. No NOR dump, no disk-mode driver. `ipod-boot fat cat` reads it today |
+
+**Privacy is not optional here.** That file contains a real person's serial and GUID; `research/07`
+already carries a flagged issue about exactly this class of data. Never write it anywhere shareable,
+and never quote a real one in the documentation.
+
+### 5G, 5.5G, and which is the default
+
+The synthesis makes both reachable — the generations differ, as far as anything we can see, in
+identity values rather than in behaviour, and Rockbox uses one `ipodvideo` target for the pair.
+
+**But they are not equally validated, and the default should say so.** We can diff an HLE **5G**
+against a real 5G ROM. There is **nothing to diff an HLE 5.5G against**: the only 5.5G-ish artefact
+is the prototype dump, which `README` records will not boot a pristine firmware partition. An HLE
+5.5G is a 5G handoff wearing a different `HwVr`, and that may be exactly correct — but it would be
+*unchecked*.
+
+So: **default to the one that can be proven, offer the other plainly labelled.** If the 5.5G variant
+later survives a real test — a 5.5G-only binary that refuses to run on a 5G, say — it can become the
+default on evidence. Shipping an unvalidated configuration as the default is the one thing this
+project has consistently refused to do.
 
 ## Distribution · a Homebrew tap · *not a milestone, and cheap*
 
