@@ -241,6 +241,29 @@ films' 72 M/s is the CPU's rate and makes a rally unwatchable, because at `--clo
 
 **Still open, and small:** `Parachute`, `Music Quiz` and `Solitaire` have never been launched.
 
+## 0b — The retail fingerprint moved to 102 ATA commands and nobody knows why · **BLOCKS THE RELEASE**
+
+`ipod-boot retail` at `BUDGET=600000000` now reports **`ata commands: 102`**, with `unmapped: 132
+reads, 0 writes`, and `--clock=5` gives the identical figure. Earlier today the same budget reported
+**488**, and NEXT.md's own baseline block records 554 before that.
+
+**This is not yet a finding, it is an unexplained difference**, and the honest statement is that the
+comparisons behind it were sloppy: they were taken across different flags (`--clock=5` or not),
+different disks, and — critically — across the retirement of the `.sh` recipes, so some were run
+through `retail-boot.sh` and some through `ipod-boot retail`. Those two are supposed to compose the
+same argv, and the test that used to prove it was deleted along with the scripts.
+
+**What settles it**, and none of it is expensive:
+
+1. Run the same budget against a **pristine clone** rather than whatever `resources/drives/` holds
+   now — several images have been written this session, and a disk that accumulates state makes
+   every measurement depend on how many times it was run before.
+2. Check that `ipod-boot retail` still clones per run the way the shell recipe did.
+3. Bisect the day's commits if it survives 1 and 2.
+
+**Nothing should be released on a fingerprint nobody can explain.** R4 is the rule and this is the
+case it was written for.
+
 ## 0c — Cold-booted Rockbox reads 0 mV and powers itself off · **top of the live queue, 2026-08-18**
 
 *(An orphan duplicate of item 1b's heading stood here with no body until 2026-08-18. Its real

@@ -7349,57 +7349,20 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
     // otherwise, it would spin forever waiting for a COP that never reports sleeping. Every
     // boot before this was a coprocessor boot. Report CPU, and report the COP already asleep.
     m.mem.write32(0x6000_0000, 0x0000_0055); // PROC_ID (read as a byte; 0x55 = CPU)
-    // PP_VER2 / PP_VER1 — the chip's own version string, and the register that told us this
-    // machine's identity was never actually settled.
+    // **The chip-id register is NOT seeded here, and that is a decision.** `trace.rs` seeds
+    // `0x70000000` with `0x00360000`, and its comment records the measurement behind it: Apple's
+    // bootloader reads bits 16..23 and compares against **`0x36`**, taking its PP5021C path when it
+    // matches and a fallback when it does not.
     //
-    // Rockbox decodes the pair in `firmware/target/arm/pp/debug-pp.c:224` as **eight ASCII
-    // characters, most-significant byte first, PP_VER2 then PP_VER1**. So the string here is
-    // `PP5022C-`, and the value is derived from a second implementation rather than invented.
+    // `ipodloader2` reads the *same bits* and compares against **`0x32`** (`ipodhw.c:27`), which is
+    // its test for a PP5022. **Two drivers want different answers from one register**, and Apple's
+    // is the one measured off real firmware, so it wins: writing `'2'` here to satisfy the loader
+    // would break the bootloader that has to run first.
     //
-    // **Why `'2'`.** The argument was circular once and is not any more, and both steps are worth
-    // keeping because the first is how the second got demanded.
-    //
-    // *The circular version:* Apple's bootloader leaves its `IsyS` block at `0x4001ff18`, which
-    // `ipodloader2` calls the PP5022 site, so we are a PP5022. Worthless on its own — the
-    // bootloader puts the block at the **top of whatever IRAM exists**, the two sites differ by
-    // exactly `0x8000` (the top of 96 KB against the top of 128 KB), and we had simply *declared*
-    // IRAM to be `0x20000`.
-    //
-    // *What fixed it:* the declaration was tested. At 96 KB, Apple's bootloader writes **8 800
-    // times into unmapped space** above `0x40018000` and the boot collapses from 488 ATA commands
-    // to 70. So 128 KB is not our preference, it is what this firmware requires — and the block
-    // landing at `0x4001ff18` is then real behaviour on a real part, not an echo of a setting.
-    //
-    // What the actual sources say, and they do not agree:
-    //
-    // | source | says |
-    // |---|---|
-    // | our NOR | `HwVr 0x000b0005`, `Mod# MA146` — the 30 GB **5G** |
-    // | the reference drive's `SysInfo` | `BoardHwName: PP5021C-2`, `boardHwRev 0x00050000` — **5G** |
-    // | Rockbox `config/ipodvideo.h` | `CONFIG_CPU PP5022` — but one target covers 5G *and* 5.5G, so it is a generalisation |
-    // | our own `iram` region | `0x20000` = 128 KB, which is the **PP5022** size |
-    //
-    // So two statements about the real hardware say 5G/PP5021C, and the one thing that looked like
-    // corroboration was our own modelling. **The open question is whether our 128 KB IRAM is right
-    // for this unit at all** — if it is a 5G with 96 KB, that is a model defect with far wider reach
-    // than one register, and it would also move where every handoff structure lands.
-    //
-    // `ipodloader2` is the first code here that ever asked: `ipodhw.c:27` tests bits 23:16 of
-    // PP_VER1, which is character 5 of that string — the digit separating PP502*2* from PP502*0*.
-    // Apple's firmware reads this register 23 times a boot and has never cared what it says,
-    // because it already knows what it is running on. That is the fifth model in this emulator
-    // shaped around the drivers that happened to run against it.
-    //
-    // **KNOWN NOT TO TAKE EFFECT YET, and that is a second bug.** After a cold boot, `0x70000004`
-    // reads back `0x50503530` — this write landed — while `0x70000000` reads `0x00360000`, which is
-    // neither the value written here nor anything any code wrote: `--watch-range=0x70000000:8`
-    // records **zero** writes over the whole boot. Two regions covering the same address, with the
-    // write reaching one and the read served by the other, is exactly the hazard
-    // `fast_region_doc_anchor` is written to warn about. Left in place because the VALUE is right
-    // and sourced; the reason it does not stick is a region-overlap defect to be found separately,
-    // and it must not be "fixed" by seeding it somewhere else until that is understood.
-    m.mem.write32(0x7000_0004, 0x5050_3530); // PP_VER2: 'P','P','5','0'
-    m.mem.write32(0x7000_0000, 0x3232_432d); // PP_VER1: '2','2','C','-'
+    // The conclusion is about `ipodloader2`, not about us: this is a **PP5021C**, its byte is `'6'`,
+    // `ipod_is_pp5022()` correctly answers false, and the loader then falls back to **PP5002**
+    // addressing — 1G/2G/3G hardware — because it only distinguishes PP5022 from everything-else
+    // and has no PP5021C path at all. See [research/16].
     // COP_STATUS must *stay* COPSLEEPING. `COP_CTRL` is the same address, and firmware wakes the
     // coprocessor by writing WAKE (0) to it before waiting for the sleep bit to come back — so a
     // plain seeded value gets cleared by the very code that then waits for it. We do not emulate
