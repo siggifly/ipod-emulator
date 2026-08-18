@@ -7343,6 +7343,36 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
     // otherwise, it would spin forever waiting for a COP that never reports sleeping. Every
     // boot before this was a coprocessor boot. Report CPU, and report the COP already asleep.
     m.mem.write32(0x6000_0000, 0x0000_0055); // PROC_ID (read as a byte; 0x55 = CPU)
+    // PP_VER2 / PP_VER1 — the chip's own version string, and the register that told us this
+    // machine's identity was never actually settled.
+    //
+    // Rockbox decodes the pair in `firmware/target/arm/pp/debug-pp.c:224` as **eight ASCII
+    // characters, most-significant byte first, PP_VER2 then PP_VER1**. So the string here is
+    // `PP5022C-`, and the value is derived from a second implementation rather than invented.
+    //
+    // **Why `'2'` and not `'1'`, when the drive says otherwise.** The reference drive's own
+    // `iPod_Control/Device/SysInfo` reads `BoardHwName: PP5021C-2`, which points at a 5G. Apple's
+    // bootloader disagrees with the file, and the bootloader is the authority: on a real cold boot,
+    // with no `--sysinfo` involved, it leaves its `IsyS` handoff block at **`0x4001ff18`** — the
+    // **PP5022** site — while `0x40017f18`, where a PP5020/5021 keeps it, is all zeros. Hardware
+    // that stores its sysinfo where a PP5022 stores it is a PP5022.
+    //
+    // `ipodloader2` is the first code here that ever asked: `ipodhw.c:27` tests bits 23:16 of
+    // PP_VER1, which is character 5 of that string — the digit separating PP502*2* from PP502*0*.
+    // Apple's firmware reads this register 23 times a boot and has never cared what it says,
+    // because it already knows what it is running on. That is the fifth model in this emulator
+    // shaped around the drivers that happened to run against it.
+    //
+    // **KNOWN NOT TO TAKE EFFECT YET, and that is a second bug.** After a cold boot, `0x70000004`
+    // reads back `0x50503530` — this write landed — while `0x70000000` reads `0x00360000`, which is
+    // neither the value written here nor anything any code wrote: `--watch-range=0x70000000:8`
+    // records **zero** writes over the whole boot. Two regions covering the same address, with the
+    // write reaching one and the read served by the other, is exactly the hazard
+    // `fast_region_doc_anchor` is written to warn about. Left in place because the VALUE is right
+    // and sourced; the reason it does not stick is a region-overlap defect to be found separately,
+    // and it must not be "fixed" by seeding it somewhere else until that is understood.
+    m.mem.write32(0x7000_0004, 0x5050_3530); // PP_VER2: 'P','P','5','0'
+    m.mem.write32(0x7000_0000, 0x3232_432d); // PP_VER1: '2','2','C','-'
     // COP_STATUS must *stay* COPSLEEPING. `COP_CTRL` is the same address, and firmware wakes the
     // coprocessor by writing WAKE (0) to it before waiting for the sleep bit to come back — so a
     // plain seeded value gets cleared by the very code that then waits for it. We do not emulate
