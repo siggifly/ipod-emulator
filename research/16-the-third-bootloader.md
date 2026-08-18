@@ -435,3 +435,59 @@ itself to iTunes has to answer it, and `CIpodDevice::GetSysInfoData` reading
 
 The decompilation is kept at `resources/derived/ghidra/` — outside git, like everything else under
 `resources/`.
+
+### How iTunes knows the colour: **the iPod tells it**
+
+The colour question kept coming back because iTunes visibly showed the right one, and no model table
+could be found in any Apple software. Both facts are true, and the resolution is that the second was
+never needed. `AMPDevicesAgent` (macOS 27) carries the Checkpoint field dispatcher, and among its
+typed setters:
+
+```
+fieldSize == sizeof(IPodColor)
+SetCheckpointDeviceColorValue((CFStringRef) value, (IPodColor *) fieldPtr)
+```
+
+**The device colour arrives as a string in the Checkpoint plist** and is parsed into an `IPodColor`.
+There is no model-number lookup because the iPod reports its own colour. That also explains the
+artwork: `iPod6-White` / `iPod6-Black` / `iPod6-BlackRed` are selected by family plus the colour the
+device stated.
+
+The same dispatcher shows what else the Checkpoint carries — `SetCheckpointFairPlayGUIDStringValue`,
+`SetCheckpointRGBColorValue`, `SetCheckpointNumVersionValue`, `SetCheckpointMediaKindsValue`,
+rotation, gamma, capacity. **This is the specification M9 has to satisfy and M5 has to generate**,
+and it is Apple's own field list rather than a reconstruction.
+
+### The Apple-authored variant discriminator
+
+Three iPod restore images were recovered from the Windows VM, with Apple's own `manifest.plist`:
+
+| variant | firmware | `FamilyID` | `UpdaterFamilyID` |
+|---|---|---|---|
+| 5G Initial | Firmware-13.6.3 | 6 | **13** |
+| 5G RevA | Firmware-20.6.3 | 6 | **20** |
+| **5.5G** | Firmware-25.6.3 | 6 | **25** |
+
+**`FamilyID` does not separate the 5G from the 5.5G — `UpdaterFamilyID` does.** Our own drive's
+`SysInfo` says `updaterFamily: 13`, which is 5G Initial, agreeing with `Mod#`, `HwVr` and
+`boardHwRev`. And the 5.5G firmware payload now exists here (`Firmware-25.6.3`, 13 905 920 bytes
+against the 5G's 13 895 680) — the thing an earlier session went looking for and did not find.
+
+### `.ipod` model numbers for every model, from ipodpatcher
+
+`getmodel()` in `rbutil/ipodpatcher/ipodpatcher.c` maps the firmware partition's version word to the
+`.ipod` header fields this project already writes for the Video:
+
+| `ipod_version` | model | `modelnum` | magic |
+|---|---|---|---|
+| `0x01` | 1st/2nd Generation | 19 | `1g2g` |
+| `0x02` | 3rd Generation | 7 | `ip3g` |
+| `0x40` | Mini 1G | 9 | `mini` |
+| `0x50` | 4th Generation | 8 | `ip4g` |
+| `0x60` | Photo/Color | 3 | `ipco` |
+| `0x70` | Mini 2G | 11 | `mn2g` |
+| `0xb0` | **Video (5G)** | **5** | **`ipvd`** |
+| `0xc0` | Nano 1G | 4 | `nano` |
+| `0x100` | Nano 2G | 62 | `nn2x` |
+
+That is the checksum seed and magic for nine model families, from the code that writes them.
