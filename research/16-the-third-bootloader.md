@@ -328,3 +328,54 @@ model answering wrong — a PP5021C has `'1'` where the test looks for `'2'`. `i
 the PP5002 path from that is **its own gap on a 5G**, not a value we need to invent. The remaining
 question is narrower than it was: not *what should `PP_VER1` be*, but *does `ipodloader2` have a
 PP5021C path at all* — and the honest answer from reading `ipodhw.c` is that it does not.
+
+### Checked: iTunes does **not** carry a model table
+
+The obvious objection to leaning on libgpod is that it is a community reconstruction, and Apple's own
+software is right there. So it was checked, against the Windows VM in `resources/vm/` — iTunes
+12.8.0, `iPodService.exe`, `iPodUpdaterExt.dll`.
+
+**There is no model table in any of them.** Not one of `A146`, `A446`, `A002`, `A448`, `A452` occurs
+as a string in `iTunes.exe`, `iPodUpdaterExt.dll` or `iPodService.exe`. A lookup keyed by the
+`ModelNumStr` a device reports would have to hold those codes as text; none does.
+
+What iTunes actually has:
+
+| where | what |
+|---|---|
+| `iPodService.exe` | a **family-name** table — `iPod`, `iPod Mini`, `iPod Nano`, `iPod Photo`, `iPod Shuffle`, `iPod Touch Wheel`, `iPod with Video` — keyed by `FamilyID` |
+| `iPodDevices.xml` | a per-device **connection log**: GUID, serial, `Family ID`, `Updater Family ID`, firmware version, use count |
+| the updater `manifest.plist` | `FamilyID`, `UpdaterFamilyID`, and a `DefaultColor` that is the placeholder string `XXX` for family 6 |
+
+**iTunes never needed a model table**, which is why it has not got one: the device reports its family
+and its GUID, and that is enough to pick an updater and remember the device. The colour/capacity
+mapping lives in Apple's published "Identify your iPod model" pages, which is where libgpod's table
+came from — so libgpod remains the best available source, and the reason is now known rather than
+assumed.
+
+**This was checked with `strings` and `grep`, not with Ghidra**, and the limit of that is worth
+stating: string-scanning finds names but not the arrays that index them. It is conclusive *here* only
+because the keys would themselves have to be strings — a table keyed on `ModelNumStr` cannot store
+its keys as anything else. A question about *structure* rather than presence would need the
+disassembler.
+
+### A 5.5G sighting, not yet a fact
+
+The same scan turned up a third device's `SysInfo` on that disk, with `ModelNum` **`MA446`** — 30 GB
+black **5.5G**, a model we do not hold. It also appeared to read `BoardHwName: iPod M25` rather than
+the `PP5021C-2` our own two report.
+
+**That is recorded as a sighting, not as data.** The region it came from was fragmented — neighbouring
+fields read as `ModelNumS0`, `Mode`, `Firew`, `Guid` — so `iPod M25` may be a torn read rather than a
+string. It wants confirming from an intact copy before anything is built on it. What survives without
+qualification is that `MA446` exists on that disk at all, which is one more corroboration of the
+libgpod row.
+
+**Also recorded, because it is the receipt for a claim made elsewhere:** `iPodDevices.xml` holds our
+own NOR's serial and GUID, `Family ID 6`, with a use count and a last-connected date. **iTunes
+accepted the identity a virtual iPod presented.** `research/02` said the Gestalt ID work happened "in
+the USB research (not published)"; this is that work's footprint, and it is why
+[`Identity::title_auth`](../tools/eapp-loader/src/identity.rs) has three states rather than two.
+
+That file also contains **several other people's serials and GUIDs**. It is not copied into this
+repository, and no value from it is written down here — the same rule `research/07` already carries.
