@@ -1224,10 +1224,10 @@ mod tests {
 ///
 /// Every tag in this block is a four-character code written little-endian, so a byte dump reads
 /// them reversed: `SCfg` appears as `gfCS`, `SrNm` as `mNrS`, `FwId` as `dIwF`.
-const SYSCFG_AT: usize = 0x4000;
-const SYSCFG_MAGIC: &[u8; 4] = b"gfCS";
-const SYSCFG_HEADER: usize = 0x18;
-const SYSCFG_RECORD: usize = 0x14;
+pub const SYSCFG_AT: usize = 0x4000;
+pub(crate) const SYSCFG_MAGIC: &[u8; 4] = b"gfCS";
+pub const SYSCFG_HEADER: usize = 0x18;
+pub const SYSCFG_RECORD: usize = 0x14;
 
 /// The identity the iPod this NOR came from presents to the world.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1383,6 +1383,130 @@ pub fn syscfg(nor: &[u8]) -> Option<SysCfg> {
     Some(out)
 }
 
+/// Build a `SysCfg` block — the other half of [`syscfg`].
+///
+/// **This is what makes a synthesised boot ROM possible.** A NOR with no `SysCfg` has no identity:
+/// no serial for RetailOS's About screen, no GUID for anything that binds to one. Generating the
+/// block is the difference between "a ROM image" and "*this* iPod's ROM image".
+///
+/// It lives beside the reader on purpose. Two files describing one byte layout drift; a builder and
+/// a parser in the same file with a round-trip test between them cannot.
+///
+/// ## The header, measured
+///
+/// Read straight off the real 5G dump rather than copied from Rockbox's Classic values:
+///
+/// | word | value | what |
+/// |---|---|---|
+/// | 0 | `0x53436667` | `SCfg`, stored little-endian so it reads `gfCS` |
+/// | 1 | `0xa4` | **size**, and it is exactly `0x18 + records × 0x14` — self-checking |
+/// | 2 | `0x2000` | unknown. Rockbox sees `0x200` on the Classic, so it is not a constant |
+/// | 3 | `0x00010001` | a version, and the Classic agrees |
+/// | 4 | `0` | unknown |
+/// | 5 | `7` | record count |
+#[derive(Clone, Debug)]
+pub struct SysCfgBuilder {
+    records: Vec<(String, [u8; 16])>,
+    unknown1: u32,
+    version: u32,
+    unknown2: u32,
+}
+
+impl Default for SysCfgBuilder {
+    fn default() -> Self {
+        SysCfgBuilder::new()
+    }
+}
+
+impl SysCfgBuilder {
+    /// A builder carrying the header words the real 5G dump has.
+    pub fn new() -> SysCfgBuilder {
+        SysCfgBuilder {
+            records: Vec::new(),
+            // Observed on the 5G. The Classic has 0x200 here, so this is per-family rather than
+            // universal — which is why it is a field and not a constant baked into `build`.
+            unknown1: 0x0000_2000,
+            version: 0x0001_0001,
+            unknown2: 0,
+        }
+    }
+
+    /// Override the two header words whose meaning is not known, for a family that differs.
+    pub fn header_words(mut self, unknown1: u32, version: u32, unknown2: u32) -> Self {
+        self.unknown1 = unknown1;
+        self.version = version;
+        self.unknown2 = unknown2;
+        self
+    }
+
+    /// A record whose payload is NUL-terminated ASCII from byte 0 — the shape `SrNm` and `Mod#`
+    /// share. Truncated at 16 bytes, because the payload is 16 bytes and a serial that does not fit
+    /// is a caller's mistake rather than something to grow the record for.
+    pub fn text(mut self, tag: &str, value: &str) -> Self {
+        let mut p = [0u8; 16];
+        let b = value.as_bytes();
+        let n = b.len().min(16);
+        p[..n].copy_from_slice(&b[..n]);
+        self.records.push((tag.to_string(), p));
+        self
+    }
+
+    /// A record holding one little-endian `u32` at byte 4 — `HwVr` and `DrmV`.
+    pub fn word_at4(mut self, tag: &str, value: u32) -> Self {
+        let mut p = [0u8; 16];
+        p[4..8].copy_from_slice(&value.to_le_bytes());
+        self.records.push((tag.to_string(), p));
+        self
+    }
+
+    /// A record holding one little-endian `u32` at byte 0 — `HwId`.
+    pub fn word_at0(mut self, tag: &str, value: u32) -> Self {
+        let mut p = [0u8; 16];
+        p[..4].copy_from_slice(&value.to_le_bytes());
+        self.records.push((tag.to_string(), p));
+        self
+    }
+
+    /// `FwId` — the FireWire GUID, low word at byte 4 and high word at byte 8.
+    pub fn guid(mut self, guid: u64) -> Self {
+        let mut p = [0u8; 16];
+        p[4..8].copy_from_slice(&((guid & 0xffff_ffff) as u32).to_le_bytes());
+        p[8..12].copy_from_slice(&((guid >> 32) as u32).to_le_bytes());
+        self.records.push(("FwId".to_string(), p));
+        self
+    }
+
+    /// A record whose payload is passed through untouched — for carrying a tag forward from a real
+    /// dump without claiming to understand it. `HwId`, `Regn` and `DrmV` are exactly that.
+    pub fn raw(mut self, tag: &str, payload: [u8; 16]) -> Self {
+        self.records.push((tag.to_string(), payload));
+        self
+    }
+
+    /// The block's bytes.
+    pub fn build(&self) -> Vec<u8> {
+        let size = SYSCFG_HEADER + self.records.len() * SYSCFG_RECORD;
+        let mut out = Vec::with_capacity(size);
+        out.extend_from_slice(SYSCFG_MAGIC);
+        out.extend_from_slice(&(size as u32).to_le_bytes());
+        out.extend_from_slice(&self.unknown1.to_le_bytes());
+        out.extend_from_slice(&self.version.to_le_bytes());
+        out.extend_from_slice(&self.unknown2.to_le_bytes());
+        out.extend_from_slice(&(self.records.len() as u32).to_le_bytes());
+        for (tag, payload) in &self.records {
+            // Tags are stored little-endian, so they read backwards in a dump. Written the same way
+            // they are read, from the same constant, so the two cannot disagree.
+            let mut t: Vec<u8> = tag.bytes().collect();
+            t.resize(4, b' ');
+            t.reverse();
+            out.extend_from_slice(&t);
+            out.extend_from_slice(payload);
+        }
+        debug_assert_eq!(out.len(), size, "the size word must be the block's actual length");
+        out
+    }
+}
+
 #[cfg(test)]
 mod syscfg_tests {
     use super::*;
@@ -1458,6 +1582,82 @@ mod syscfg_tests {
     }
 
     /// The OUI check is the cheapest proof the parse is right, so it has to be able to fail.
+    /// Build it, read it back, get what went in. Every payload shape the real dump uses.
+    #[test]
+    fn a_built_block_reads_back_as_what_went_into_it() {
+        let block = SysCfgBuilder::new()
+            .text("SrNm", "AB1234XYZQR")
+            .guid(0x000A_2700_1122_3344)
+            .word_at0("HwId", 0x8201_763A)
+            .word_at4("HwVr", 0x000B_0005)
+            .text("Mod#", "MA146")
+            .word_at4("DrmV", 6)
+            .build();
+
+        let mut nor = vec![0u8; SYSCFG_AT + block.len() + 64];
+        nor[SYSCFG_AT..SYSCFG_AT + block.len()].copy_from_slice(&block);
+
+        let c = syscfg(&nor).expect("what we built must parse");
+        assert_eq!(c.serial.as_deref(), Some("AB1234XYZQR"));
+        assert_eq!(c.guid, Some(0x000A_2700_1122_3344));
+        assert!(c.guid_looks_apple());
+        assert_eq!(c.model.as_deref(), Some("MA146"));
+        assert_eq!(c.hw_vr, Some(0x000B_0005));
+        assert_eq!(c.tags, ["SrNm", "FwId", "HwId", "HwVr", "Mod#", "DrmV"]);
+        let hwid = c.records.iter().find(|(t, _)| t == "HwId").expect("HwId").1;
+        assert_eq!(u32::from_le_bytes(hwid[..4].try_into().unwrap()), 0x8201_763A);
+        assert_eq!(c.model_info().expect("MA146").colour(), crate::identity::Colour::Black);
+        assert_eq!(c.generation_agrees(), Some(true));
+    }
+
+    /// The size word is the block's own length, so it can be checked against itself.
+    #[test]
+    fn the_size_word_counts_the_header_and_every_record() {
+        for n in [0usize, 1, 7, 9] {
+            let mut b = SysCfgBuilder::new();
+            for i in 0..n {
+                b = b.word_at4("Tst#", i as u32);
+            }
+            let block = b.build();
+            assert_eq!(block.len(), SYSCFG_HEADER + n * SYSCFG_RECORD);
+            let size = u32::from_le_bytes(block[4..8].try_into().unwrap()) as usize;
+            assert_eq!(size, block.len(), "the size word must be the real length");
+            let count = u32::from_le_bytes(block[0x14..0x18].try_into().unwrap()) as usize;
+            assert_eq!(count, n);
+        }
+    }
+
+    /// **The one that proves it against reality.** Parse the real dump's block, feed every record
+    /// straight back through the builder, and require the bytes to come out identical. A reader and
+    /// a writer agreeing on a fixture they share prove nothing; agreeing on Apple's own block is
+    /// the test.
+    ///
+    /// Skips loudly when the dump is absent — it lives in gitignored `resources/` — because a test
+    /// that skips in silence is a test nobody notices has stopped running.
+    #[test]
+    fn the_builder_reproduces_the_real_dumps_block_exactly() {
+        // Anchored to the crate, not the working directory: `cargo test` runs from the workspace
+        // root and a relative path here skipped silently until the print above said so.
+        let path = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../resources/roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin"
+        ));
+        let Ok(nor) = std::fs::read(path) else {
+            println!("SKIPPED: {} is not here (it is gitignored)", path.display());
+            return;
+        };
+        let c = syscfg(&nor).expect("the real dump has a SysCfg");
+        let original = &nor[SYSCFG_AT..SYSCFG_AT + SYSCFG_HEADER + c.records.len() * SYSCFG_RECORD];
+
+        let mut b = SysCfgBuilder::new();
+        for (tag, payload) in &c.records {
+            b = b.raw(tag, *payload);
+        }
+        let rebuilt = b.build();
+        assert_eq!(rebuilt.len(), original.len(), "length");
+        assert_eq!(rebuilt, original, "the rebuilt block must be byte-identical to Apple's");
+    }
+
     #[test]
     fn a_guid_without_apples_oui_is_flagged() {
         let v = nor(&[("FwId", fwid(0x1111_2222, 0xDEAD_BEEF))]);

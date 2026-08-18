@@ -205,8 +205,27 @@ impl Identity {
 
     /// Deterministic from `seed` — the same seed always yields the same iPod.
     ///
-    /// The serial follows Apple's shape: location(2) · year(1) · week(2) · unique(3) · model(3).
-    pub fn generate(seed: u64) -> Identity {
+    /// **The serial has to look like a serial.** That is most of the reason this module exists: a
+    /// synthesised iPod whose About screen reads something no Apple factory ever stamped is a
+    /// synthesised iPod that announces itself. So every field is drawn from what real hardware
+    /// carries, for the generation being generated:
+    ///
+    /// | field | where the values come from |
+    /// |---|---|
+    /// | location (2) | factory codes observed on real iPods here |
+    /// | year (1) | [`Generation::year_digits`] — a 5G reads `5` or `6`, not `3` |
+    /// | week (2) | `01`..=`52` |
+    /// | unique (3) | free |
+    /// | model (3) | [`Generation::serial_codes`] — Apple's published endings, plus observed ones |
+    ///
+    /// **The image says it is synthetic, not the serial.** An earlier version ended every generated
+    /// serial `ZZ?` so it could never be mistaken for a real code — which defeated the point of
+    /// generating one. [`crate::nor::SYNTH_MARK`] carries that job, in the ROM image, where it costs
+    /// nothing.
+    ///
+    /// Nothing validates a serial, and a collision with a real device's is harmless: the GUID is
+    /// the field with teeth, and its low 40 bits are drawn from the same seed.
+    pub fn generate(model: &'static Model, seed: u64) -> Identity {
         // SplitMix64 — a few lines, no dependency, and good enough for picking characters. The
         // requirement here is "same seed, same iPod", not statistical quality.
         fn mix(s: &mut u64) -> u64 {
@@ -216,38 +235,42 @@ impl Identity {
             z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
             z ^ (z >> 31)
         }
-        // Apple's serials use digits and upper-case letters.
+        // Apple's serials use digits and upper-case letters. `O` is absent because it is not used
+        // in them — it would be read as a zero.
         const A: &[u8] = b"0123456789ABCDEFGHIJKLMNPQRSTUVWXYZ";
+        // Manufacturing-location prefixes seen on real iPods here. A short, real set beats a long
+        // invented one: two random letters produce prefixes no factory ever had.
+        const LOCATIONS: &[&str] = &["4J", "JQ", "9C"];
+
         let mut st = seed;
         let pick = |st: &mut u64, n: usize| -> String {
             (0..n).map(|_| A[(mix(st) % A.len() as u64) as usize] as char).collect()
         };
-        let loc = pick(&mut st, 2);
-        // The year is a DIGIT — the last digit of the manufacturing year — and both real examples
-        // have one. Picking it from the full alphanumeric set produced serials like `PCL29…`, which
-        // is the same class of tell as an impossible week number.
-        let year = format!("{}", mix(&mut st) % 10);
+
+        let loc = LOCATIONS[(mix(&mut st) % LOCATIONS.len() as u64) as usize];
+        let years = model.generation.year_digits();
+        let year = if years.is_empty() {
+            // No production years established for this generation, so the digit is left free
+            // rather than guessed at.
+            format!("{}", mix(&mut st) % 10)
+        } else {
+            format!("{}", years[(mix(&mut st) % years.len() as u64) as usize])
+        };
         // A real week is 01..=52, and a serial claiming week 99 is the sort of detail that makes
         // somebody doubt everything else on the screen.
         let week = format!("{:02}", mix(&mut st) % 52 + 1);
         let uniq = pick(&mut st, 3);
-        // **The model code is deliberately NOT a real one.**
-        //
-        // Apple's published 5G endings are V9K V9P V9M V9R V9L V9N V9Q V9S WU9 WUA WUB WUC X3N, and
-        // W9G for the U2 edition. Our own two real serials end `TXK` and `TXM`, which are on no
-        // published list while their date fields sit squarely in the 5G period — so those tables are
-        // incomplete, and we have no authority to say which code means which capacity.
-        //
-        // Two ways to be wrong. A *documented* code claims a specific model we may not be; a random
-        // one may collide with a real code and claim it by accident. So generated serials end
-        // **`ZZ` + one character**, which is on no table, and mark the identity as synthetic on
-        // sight. Nothing validates the serial, so this costs nothing — and it means a generated
-        // serial can never be mistaken for a real device's.
-        //
-        // The **model** is not carried here anyway. It is `ModelNumStr`, and it is a separate field
-        // with a sourced table — see [`Model`].
-        let model = format!("ZZ{}", pick(&mut st, 1));
-        let serial = format!("{loc}{year}{week}{uniq}{model}");
+        // The U2 edition has its own published ending, so a U2 gets it rather than a code from the
+        // general pool.
+        let codes = model.generation.serial_codes();
+        let code = if model.colour() == Colour::U2 {
+            "W9G".to_string()
+        } else if codes.is_empty() {
+            pick(&mut st, 3)
+        } else {
+            codes[(mix(&mut st) % codes.len() as u64) as usize].to_string()
+        };
+        let serial = format!("{loc}{year}{week}{uniq}{code}");
 
         // Apple's OUI in the top 24 bits, 40 bits of uniqueness below — the structure every real
         // GUID has.
@@ -370,6 +393,48 @@ impl Generation {
     /// because it switches on the high halfword `0x000B` = 11. **`None` for every other
     /// generation**, because we have not sourced their constants and a plausible guess here would
     /// be indistinguishable from a fact.
+    /// The year digits a real serial from this generation plausibly carries.
+    ///
+    /// Apple's pre-2010 serial holds a **single digit** for the year, so a 5G — on sale from
+    /// October 2005 into 2006 — reads `5` or `6`. Getting this right is most of what makes a
+    /// generated serial look like a serial: a 30 GB Video claiming to be built in 2003 is the same
+    /// class of tell as week 99.
+    ///
+    /// Empty where the generation's production years have not been established here, in which case
+    /// the digit is left free rather than guessed.
+    pub fn year_digits(self) -> &'static [u8] {
+        match self {
+            // On sale October 2005; the Late 2006 revision replaced it in September 2006.
+            Generation::Video1 => &[5, 6],
+            // Late 2006, sold into 2007.
+            Generation::Video2 => &[6, 7],
+            _ => &[],
+        }
+    }
+
+    /// The last three characters of serials **observed on real devices** of this generation.
+    ///
+    /// For the Video these are Apple's published 5th-generation endings plus two this project has
+    /// seen on hardware and which appear on no published list. **Which capacity each denotes is not
+    /// known and is not claimed** — the point is only that these are codes real iPods carry, so a
+    /// generated serial ends in one rather than in something no iPod ever did.
+    ///
+    /// The published list does not separate the 5G from the 5.5G, and a real `MA446` — a 5.5G —
+    /// was observed here ending `V9M`, which is on it. So both Video generations share the set.
+    pub fn serial_codes(self) -> &'static [&'static str] {
+        const VIDEO: &[&str] = &[
+            // Apple's published 5th-generation endings.
+            "V9K", "V9P", "V9M", "V9R", "V9L", "V9N", "V9Q", "V9S", "WU9", "WUA", "WUB", "WUC",
+            "X3N",
+            // Observed here on real hardware, on no published list.
+            "TXK", "TXM",
+        ];
+        match self {
+            Generation::Video1 | Generation::Video2 => VIDEO,
+            _ => &[],
+        }
+    }
+
     /// A short human name. The two Video generations get the names people actually use; the rest
     /// fall back to libgpod's own constant name rather than to an invented marketing string.
     pub fn label(self) -> String {
@@ -426,28 +491,63 @@ mod tests {
     /// the GUID sees a new device on every launch.
     #[test]
     fn generation_is_stable_for_a_seed_and_different_across_seeds() {
-        assert_eq!(Identity::generate(42), Identity::generate(42));
-        assert_ne!(Identity::generate(42).guid, Identity::generate(43).guid);
+        let m = Model::lookup("MA146").expect("MA146");
+        assert_eq!(Identity::generate(m, 42), Identity::generate(m, 42));
+        assert_ne!(Identity::generate(m, 42).guid, Identity::generate(m, 43).guid);
     }
 
-    /// Structure, not decoration: software that inspects a GUID checks the OUI.
+    /// **A generated serial has to look like one a factory stamped.** Every field is checked
+    /// against what real hardware carries, because the whole reason for generating an identity is
+    /// that the result passes for one — an About screen reading something impossible is a
+    /// synthesised iPod announcing itself.
     #[test]
-    fn a_generated_guid_carries_apples_oui_and_a_shaped_serial() {
+    fn a_generated_serial_looks_like_a_real_one() {
+        const LOCATIONS: [&str; 3] = ["4J", "JQ", "9C"];
+        let video = Model::lookup("MA146").expect("MA146");
         for seed in [0u64, 1, 7, 1234, u64::MAX] {
-            let id = Identity::generate(seed);
+            let id = Identity::generate(video, seed);
             assert_eq!(id.guid >> 40, APPLE_OUI, "seed {seed}");
             let s = id.serial.clone().expect("generate always makes one");
             assert_eq!(s.len(), 11, "seed {seed}: {s}");
-            assert!(s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
-            // The date fields are dates: a digit year and a real week. Both are the sort of tell
-            // that makes a reader doubt everything else on the screen.
-            assert!(s[2..3].chars().all(|c| c.is_ascii_digit()), "seed {seed}: {s}");
+            assert!(s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()), "{s}");
+
+            assert!(LOCATIONS.contains(&&s[0..2]), "seed {seed}: {s} — not a real factory prefix");
+            let year: u8 = s[2..3].parse().expect("the year is a digit");
+            assert!(
+                video.generation.year_digits().contains(&year),
+                "seed {seed}: {s} — a 5G was not built in 200{year}"
+            );
             let week: u32 = s[3..5].parse().expect("week digits");
             assert!((1..=52).contains(&week), "seed {seed}: week {week}");
-            // Marked synthetic: `ZZ?` is on no published model-code table, so a generated serial
-            // cannot be mistaken for — or collide with — a real device's.
-            assert_eq!(&s[8..10], "ZZ", "seed {seed}: {s} must carry the synthetic model code");
+            assert!(
+                video.generation.serial_codes().contains(&&s[8..11]),
+                "seed {seed}: {s} — ends in a code no iPod carries"
+            );
         }
+    }
+
+    /// The U2 has its own published ending, and gets it.
+    #[test]
+    fn a_u2_serial_carries_the_u2_code() {
+        let u2 = Model::lookup("MA452").expect("the 30 GB U2");
+        assert_eq!(u2.colour(), Colour::U2);
+        for seed in [0u64, 5, 99] {
+            let s = Identity::generate(u2, seed).serial.expect("a serial");
+            assert!(s.ends_with("W9G"), "{s} should end W9G");
+        }
+    }
+
+    /// A generation whose production years and codes are not established gets a free-form serial
+    /// rather than a Video's — borrowing the Video's codes for a Nano would be inventing a fact.
+    #[test]
+    fn a_generation_with_no_recorded_codes_still_produces_a_shaped_serial() {
+        let nano = Model::lookup("A004").expect("a nano");
+        assert!(nano.generation.serial_codes().is_empty(), "precondition");
+        let s = Identity::generate(nano, 3).serial.expect("a serial");
+        assert_eq!(s.len(), 11);
+        assert!(s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()), "{s}");
+        let week: u32 = s[3..5].parse().expect("week digits");
+        assert!((1..=52).contains(&week));
     }
 
     /// The distinction the DRM actually turns on, and it is three-valued rather than two. Getting
@@ -455,7 +555,8 @@ mod tests {
     /// `ipod-usb` demonstrated works.
     #[test]
     fn only_real_values_can_authorise_titles() {
-        assert_eq!(Identity::generate(1).title_auth(), TitleAuth::Never);
+        let m = Model::lookup("MA146").expect("MA146");
+        assert_eq!(Identity::generate(m, 1).title_auth(), TitleAuth::Never);
         assert_eq!(
             Identity::provided(Some("AB1234XYZQR"), 0x000A_2700_1122_3344).unwrap().title_auth(),
             TitleAuth::IfGenuine

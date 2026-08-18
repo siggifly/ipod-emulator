@@ -199,6 +199,16 @@ fn main() {
     // Not a recipe either: it fetches Apple's firmware so nobody has to go and find an .ipsw.
     // Paired with a synthesised NOR, this is what makes a bare checkout able to build a working
     // iPod with nothing supplied.
+    // Synthesise a boot ROM. The one thing a person could not previously supply without owning
+    // the hardware, and the reason issue #2 exists.
+    if name == "make-nor" {
+        if let Err(e) = make_nor_cmd(&rest) {
+            eprintln!("ipod-boot make-nor: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     if name == "firmware" {
         let sub = rest.first().map(String::as_str).unwrap_or("list");
         let tail: Vec<String> = rest.iter().skip(1).cloned().collect();
@@ -1943,4 +1953,97 @@ fn human(n: u64) -> String {
         i += 1;
     }
     if i == 0 { format!("{n} B") } else { format!("{v:.1} {}", U[i]) }
+}
+
+
+/// `ipod-boot make-nor` — build a boot ROM from a model, a colour and an identity.
+fn make_nor_cmd(args: &[String]) -> Result<(), String> {
+    use eapp_loader::identity::{Colour, Identity, Model};
+    use eapp_loader::nor;
+
+    let flag = |name: &str| -> Option<&String> {
+        args.iter().position(|a| a == name).and_then(|i| args.get(i + 1))
+    };
+    let out = args
+        .iter()
+        .rfind(|a| !a.starts_with("--") && !args.iter().any(|f| f.starts_with("--") && args.iter().position(|x| x == f).map(|i| args.get(i + 1) == Some(*a)).unwrap_or(false)))
+        .ok_or("usage: ipod-boot make-nor [--model A146] [--seed N] [--from FILE] [--serial S] [--guid HEX] OUT.bin")?;
+
+    // The model decides the colour, the capacity and the generation — there is no separate colour
+    // setting because no SysCfg has ever carried one.
+    let model_num = flag("--model").map(String::as_str).unwrap_or("A146");
+    let model = Model::lookup(model_num)
+        .ok_or_else(|| format!("{model_num} is not a model number I know — try `A146`, `A446`, `A002`"))?;
+
+    // `--from` is "make one like this iPod": identity and the records nobody understands both come
+    // off real hardware, which is what somebody with a drive image actually wants.
+    let source = match flag("--from") {
+        Some(p) => {
+            let path = std::path::Path::new(p);
+            let bytes = std::fs::read(path).map_err(|e| format!("{p}: {e}"))?;
+            match eapp_loader::inspect::syscfg(&bytes) {
+                Some(c) => Some(c),
+                None => {
+                    // Not a NOR — try it as a drive, whose SysInfo carries the same identity.
+                    let id = Identity::from_volume(path)
+                        .or_else(|_| Identity::from_nor(path))
+                        .map_err(|e| format!("{p}: no identity found here — {e}"))?;
+                    println!("read identity from {p}");
+                    let _ = id;
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
+    let seed: u64 = match flag("--seed") {
+        Some(v) => v.parse().map_err(|_| format!("--seed wants a number, got {v}"))?,
+        None => 0,
+    };
+
+    let identity = match (flag("--serial"), flag("--guid")) {
+        (s, Some(g)) => {
+            let guid = u64::from_str_radix(g.trim_start_matches("0x"), 16)
+                .map_err(|_| format!("--guid wants 16 hex digits, got {g}"))?;
+            Identity::provided(s.map(String::as_str), guid)?
+        }
+        (Some(_), None) => {
+            return Err("--serial needs --guid too: the GUID is the field with teeth".into())
+        }
+        (None, None) => match &source {
+            // A source's identity wins over a generated one, because a drive's keystore is bound
+            // to it and generating a fresh identity beside it is the one certainly-wrong answer.
+            Some(c) if c.guid.is_some() => Identity {
+                serial: c.serial.clone(),
+                guid: c.guid.expect("checked"),
+                source: eapp_loader::identity::Source::RealDevice,
+            },
+            _ => Identity::generate(model, seed),
+        },
+    };
+
+    let mut spec = nor::Spec::new(model, identity.clone());
+    if let Some(c) = &source {
+        spec = spec.carry_from(c);
+    }
+    let image = nor::synthesise(&spec);
+    std::fs::write(out, &image).map_err(|e| format!("{out}: {e}"))?;
+
+    println!("{out}");
+    println!("  model    {} — {} GB, {}, {}", model.number, model.capacity_gb,
+             match model.colour() {
+                 Colour::White => "white", Colour::Black => "black", Colour::U2 => "U2",
+                 other => Box::leak(other.as_str().to_string().into_boxed_str()),
+             },
+             model.generation.label());
+    println!("  serial   {}", identity.serial.as_deref().unwrap_or("(none)"));
+    println!("  GUID     {}", identity.guid_hex());
+    println!("  identity {}", match identity.source {
+        eapp_loader::identity::Source::Generated => "generated from a seed",
+        eapp_loader::identity::Source::Provided => "provided",
+        eapp_loader::identity::Source::RealDevice => "read from real hardware",
+    });
+    println!("  {} bytes, marked as synthetic", image.len());
+    Ok(())
 }
