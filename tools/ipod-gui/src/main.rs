@@ -1126,6 +1126,11 @@ struct Images {
     /// An IPSW to build a drive image *from*, which is the path most people should take: about
     /// 14 MB of Apple's firmware rather than 8 GB of somebody else's iPod.
     ipsw: String,
+    /// An OS image waiting for a drive to be installed onto, and files waiting for a volume.
+    /// Held rather than acted on immediately, because installing needs a target and the user may
+    /// drop them in either order — the same reason nothing else here has slots.
+    pending_os: Option<String>,
+    pending_bundle: Option<String>,
     flash_verdict: Option<Verdict>,
     disk_verdict: Option<Verdict>,
     ipsw_verdict: Option<Verdict>,
@@ -1213,6 +1218,8 @@ impl Images {
             flash: existing(&cfg.flash),
             disk: existing(&cfg.disk),
             ipsw: String::new(),
+            pending_os: None,
+            pending_bundle: None,
             flash_verdict: None,
             disk_verdict: None,
             ipsw_verdict: None,
@@ -1316,6 +1323,30 @@ impl Images {
                 self.disk = path.to_string_lossy().into_owned();
                 self.revalidate();
                 format!("drive: {name}")
+            }
+            // An operating system or bootloader for the firmware partition. Identified by its own
+            // checksum, so this is a verified claim rather than a size guess — which matters,
+            // because before this arm existed `rockbox.ipod` was 7.5 MB and fell through to the
+            // size test, and the window called an operating system a drive.
+            inspect::Kind::Os => {
+                let (model, len) = inspect::os_checksum(path)
+                    .unwrap_or_else(|| ("????".into(), 0));
+                self.pending_os = Some(path.to_string_lossy().into_owned());
+                if self.disk.is_empty() {
+                    format!(
+                        "{name}: an OS image for the firmware partition — `{model}`, {len} bytes, \
+                         checksum OK. Drop a drive too and it can be installed onto a copy of it."
+                    )
+                } else {
+                    format!("{name}: `{model}`, {len} bytes, checksum OK — ready to install")
+                }
+            }
+            // Files for the data volume rather than the firmware partition — a Rockbox release is
+            // the case this exists for, and it is a zip like an `.ipsw`, so "is a zip" was never
+            // the answer on its own.
+            inspect::Kind::OsBundle => {
+                self.pending_bundle = Some(path.to_string_lossy().into_owned());
+                format!("{name}: files for the volume — ready to copy onto a drive")
             }
             inspect::Kind::Ipsw => {
                 self.ipsw = path.to_string_lossy().into_owned();

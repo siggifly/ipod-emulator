@@ -343,6 +343,10 @@ pub enum Kind {
     Ipsw,
     /// A whole-drive image.
     Disk,
+    /// An operating system or bootloader for the firmware partition — a `.ipod` image, verified.
+    Os,
+    /// An archive of files for the data volume, e.g. a Rockbox release.
+    OsBundle,
     /// None of the three.
     Unknown,
 }
@@ -380,7 +384,22 @@ pub fn classify(path: &Path) -> Kind {
     }
     let head = read_at(path, 0, 4).unwrap_or_default();
     if head.len() == 4 && head[0..2] == *b"PK" && (head[2] == 3 || head[2] == 5 || head[2] == 7) {
-        return Kind::Ipsw;
+        // A Rockbox release is a zip too, so "is a zip" is not the answer on its own — but the
+        // tie is broken on POSITIVE evidence, not on absence. A zip that fails to parse as a bundle
+        // stays `Ipsw` and gets that verdict's explanation of why, which is the same rule the ROM
+        // follows: the right message beats "not recognised".
+        // At MOST 64 KiB: `read_at` wants exactly what it asks for, and a bundle smaller than the
+        // window would otherwise read as empty and be misfiled as an `.ipsw`.
+        let want = (meta.len() as usize).min(65536);
+        let head = read_at(path, 0, want).unwrap_or_default();
+        return if head.windows(8).any(|w| w == b".rockbox") { Kind::OsBundle } else { Kind::Ipsw };
+    }
+    // A `.ipod` image, **verified** rather than guessed. Before this, `rockbox.ipod` was 7.5 MB and
+    // fell through to the size test, so the window called an operating system a drive and handed it
+    // to the disk parser. The checksum is what makes this identification: the format states what it
+    // is and lets us check the claim.
+    if os_checksum(path).is_some() {
+        return Kind::Os;
     }
     if meta.len() == NOR_LEN {
         return Kind::Rom;
@@ -392,6 +411,31 @@ pub fn classify(path: &Path) -> Kind {
         return Kind::Disk;
     }
     Kind::Unknown
+}
+
+/// Verify a `.ipod` image and return `(model, body length)`.
+///
+/// The format is an 8-byte wrapper — big-endian checksum, then a four-character model id — over a
+/// raw ARM image (`tools/scramble.c`), and `scramble` seeds the sum with the model number; 5 is the
+/// Video's. **The sum is the whole point**: unlike "large enough to be a drive", this format states
+/// what it is and lets the claim be checked before anything acts on it.
+///
+/// Bounded at 32 MB so a drive image is never summed. Apple's `osos` is 7.21 MiB and Rockbox's is
+/// smaller, so nothing legitimate comes close to the bound.
+pub fn os_checksum(path: &Path) -> Option<(String, usize)> {
+    const MAX: u64 = 32 * 1024 * 1024;
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() <= 8 || meta.len() > MAX {
+        return None;
+    }
+    let raw = std::fs::read(path).ok()?;
+    if !raw[4..8].iter().all(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let want = u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]);
+    let body = &raw[8..];
+    let sum = body.iter().fold(5u32, |a, &b| a.wrapping_add(b as u32));
+    (sum == want).then(|| (raw[4..8].iter().map(|&c| c as char).collect(), body.len()))
 }
 
 // ---------------------------------------------------------------- the NOR dump
@@ -863,6 +907,66 @@ mod classify_tests {
     /// The drive's opening word is the one worth noticing: it is **nothing at all**, which is why
     /// the drive cannot be recognised from its head and is instead what a file is when it is not
     /// one of the other two.
+
+    fn write_ipod(dir: &std::path::Path, name: &str, model: &[u8; 4], body: &[u8]) -> std::path::PathBuf {
+        let sum = body.iter().fold(5u32, |a, &b| a.wrapping_add(b as u32));
+        let mut v = sum.to_be_bytes().to_vec();
+        v.extend_from_slice(model);
+        v.extend_from_slice(body);
+        let p = dir.join(name);
+        std::fs::write(&p, v).unwrap();
+        p
+    }
+
+    #[test]
+    fn a_valid_ipod_image_is_an_os_and_a_corrupt_one_is_not() {
+        let d = std::env::temp_dir().join(format!("ipod-os-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let good = write_ipod(&d, "good.ipod", b"ipvd", &[1u8; 4096]);
+        assert_eq!(classify(&good), Kind::Os);
+        assert_eq!(os_checksum(&good).unwrap(), ("ipvd".to_string(), 4096));
+
+        // The negative control, and the reason the checksum IS the identification: flip one body
+        // byte and the claim fails. A shape test on bytes 4..8 alone would still say yes.
+        let mut raw = std::fs::read(&good).unwrap();
+        raw[100] ^= 0xff;
+        let bad = d.join("bad.ipod");
+        std::fs::write(&bad, raw).unwrap();
+        assert!(os_checksum(&bad).is_none(), "a flipped byte must fail the checksum");
+        assert_ne!(classify(&bad), Kind::Os);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A zip is only a files-bundle on positive evidence. A zip that is neither stays `Ipsw` so it
+    /// gets that verdict's explanation rather than being quietly renamed.
+    #[test]
+    fn a_zip_is_a_bundle_only_when_it_says_so() {
+        let d = std::env::temp_dir().join(format!("ipod-zip-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let mut rb = b"PK\x03\x04".to_vec();
+        rb.extend_from_slice(&[0u8; 26]);
+        rb.extend_from_slice(b".rockbox/fonts/15-Adobe-Helvetica.fnt");
+        rb.resize(4096, 0);
+        std::fs::write(d.join("rb.zip"), &rb).unwrap();
+        assert_eq!(classify(&d.join("rb.zip")), Kind::OsBundle);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The bug the `Os` arm exists for: `rockbox.ipod` is ~7.5 MB, so before it the file fell
+    /// through to "big enough to be a drive" and an operating system was handed to the disk parser.
+    #[test]
+    fn the_real_rockbox_bootloader_is_an_os_not_a_drive() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent().unwrap().parent().unwrap()
+            .join("resources/vendor/rockbox/bin/bootloader-ipodvideo.ipod");
+        if !p.is_file() {
+            eprintln!("skipped: {} absent", p.display());
+            return;
+        }
+        assert_eq!(classify(&p), Kind::Os, "a verified .ipod must not be classified as a drive");
+        assert_eq!(os_checksum(&p).unwrap().0, "ipvd");
+    }
+
     #[test]
     fn each_file_is_recognised_by_what_it_actually_starts_with() {
         let dir = std::env::temp_dir().join(format!("ipod-classify-{}", std::process::id()));

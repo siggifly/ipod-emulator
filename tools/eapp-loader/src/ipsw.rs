@@ -843,7 +843,7 @@ mod tests {
 
         let f = std::fs::File::open(&p).unwrap();
         assert_eq!(f.metadata().unwrap().len(), DEFAULT_SECTORS * 512);
-        let mut read = |at: u64, n: usize| {
+        let read = |at: u64, n: usize| {
             use std::io::Read;
             let mut f = std::fs::File::open(&p).unwrap();
             f.seek(SeekFrom::Start(at)).unwrap();
