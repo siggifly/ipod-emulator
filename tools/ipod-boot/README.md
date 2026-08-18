@@ -1,38 +1,31 @@
 # `ipod-boot` — cold-booting Apple's firmware
 
-> **There are two front ends to these recipes and they compose the same argv.** The `.sh` files here
-> are the original spelling and are what every number in `research/` was measured through; they are
-> unchanged and stay that way. The **`ipod-boot` binary** (`tools/eapp-loader/src/bin/ipod-boot.rs`,
-> built by `cargo build --release` in that crate) is the same recipes as a program, which is what
-> makes them runnable on Windows:
+> **The `.sh` recipes are gone, and `ipod-boot <recipe>` is what they were.** There were two front
+> ends composing the same `trace` argv, kept in step by a test that read the scripts off disk and
+> compared flag lists. One implementation cannot drift from itself, so the scripts were deleted and
+> the test with them — its premise was the second copy.
+>
+> **`research/` still quotes the old command lines**, because those records say what was actually run
+> on the day. The translation is mechanical and exact: `retail-boot.sh` → `ipod-boot retail`,
+> and the same for `warm`, `flsh`, `rockbox`, `flash-update`, `from-idle`. **One flag does not
+> translate: `--clock=5` is retired** — every recipe now runs the clock at the real part's rate, so a
+> quoted command carrying it describes a machine that no longer exists.
+
+> **One front end, and it is a program.** `ipod-boot`
+> (`tools/eapp-loader/src/bin/ipod-boot.rs`, built by `cargo build --release`) composes and runs
+> every recipe, which is also what makes them work on Windows:
 >
 > ```
-> ipod-boot retail | cold | warm | flsh | rockbox | flash-update | from-idle   [trace flags…]
+> ipod-boot retail | warm | flsh | rockbox | flash-update | from-idle   [trace flags…]
 > ipod-boot <recipe> --print          # show the command line it composes, run nothing
 > ipod-boot make-disk IPSW OUT.img    # build a bootable drive from an iPod software-update bundle
 > ```
->
-> Same environment variables, same defaults, same flags in the same order — and a test
-> (`recipe_flags_match_the_shell_scripts`) reads these `.sh` files off disk and asserts it, so the
-> two cannot drift apart quietly. Measured on 2026-08-14: `BUDGET=4000000000 ipod-boot retail
-> --clock=5 --stop-when-idle=400000000` produces `Idle after 1562789429`, 38 220 buckets, 770 ata
-> commands and 4 unmapped reads — the baseline, through either front end.
->
-> Two deliberate differences, both documented in that file's header: `TRACE` defaults to the `trace`
-> binary **beside** `ipod-boot` rather than to one machine's `~/dev/.cargo-target`, and the disk
-> clone tries `cp -c`, then `cp --reflink=auto`, then a byte copy. macOS still succeeds on the first
-> rung, so nothing measured changed; Linux stopped paying a full 8 GB copy per run.
->
-> **`make-disk` is the answer to "I do not have an 8 GB disk image."** An IPSW is about 14 MB and
-> contains exactly the firmware partition an iPod needs — `Firmware-20.6.3` is 13 895 680 bytes,
-> which is 27 140 sectors, which is the size of MBR partition 0 with nothing left over. RetailOS
-> builds the rest of the volume itself on first boot. See the main README's "Reproducing it" for the
-> measured result, including the one byte (`aupd`'s `+0x08`) that decides whether the first boot
-> runs the OS or Apple's flash updater.
 
-`cold-boot.sh` runs the iPod's **own NOR flash bootloader** under the emulator, entering at `0x0`
-where the CPU fetches out of reset. `warm-boot.sh` is its counterpart — it skips the bootloader,
-enters RetailOS at `0x10000000`, and installs the handoff state by hand (bypass #4).
+`ipod-boot retail` runs the iPod's **own NOR flash bootloader** under the emulator, entering at
+`0x0` where the CPU fetches out of reset. `ipod-boot warm` is its counterpart — it skips the
+bootloader, enters RetailOS at `0x10000000`, and installs the handoff state by hand (bypass #4).
+*(There was a `cold` recipe running a prototype's NOR; it booted a firmware partition the retail ROM
+correctly rejects and was removed.)*
 
 It matters because everything the bootloader leaves behind — the `sysinfo_t` block, the Gestalt ID at
 `sysinfo+0x84`, the SDRAM bank sizes — was previously reconstructed by hand from its consumers. This
@@ -57,7 +50,7 @@ The variables below override that, and are what the `.sh` recipes use directly.
 | `TRACE` | `~/dev/.cargo-target/release/trace` | build with `cargo build --release --bin trace` |
 | `FLASH` | the setup screen's, else `resources/internal_rom_000000-0FFFFF/…bin` | 1 MB NOR dump — **required**, and the thing that makes cold boot possible |
 | `DISK` | the setup screen's, else `resources/drives/ipod8g.img` | a disk image with a firmware partition. **Cold boot's only source for the OS image** |
-| `OSOS` | `resources/derived/fw/OSOS_correct.bin` | `warm-boot.sh` only. A cold boot is not handed it — see below |
+| `OSOS` | `resources/derived/fw/OSOS_correct.bin` | `ipod-boot warm` only. A cold boot is not handed it — see below |
 | `BUDGET` | `150000000` | instructions. The retail boot decision completes and fails by ~150M; 600M was four times more work than the question needed |
 
 ## `cold-boot.sh` is not handed an OS image (ledger #14, retired)
@@ -79,7 +72,7 @@ Two things the removal bought, beyond principle:
   recovered from the SDRAM the ROM filled, bounded by the ATA DMA high-water mark — the same 140
   names at the same addresses the file produced.
 
-`warm-boot.sh` still needs `--osos=`, and that is not a bypass: it enters at `0x10000000` with
+`ipod-boot warm` still needs `--osos=`, and that is not a bypass: it enters at `0x10000000` with
 nothing but zeroed SDRAM there. `--boot-osos` now says so instead of running zeros.
 
 Large binaries live outside git on purpose: the flash and firmware images are Apple's, and the disk

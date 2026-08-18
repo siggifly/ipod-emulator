@@ -14,7 +14,7 @@ tools/ipod-film/film.sh --out=_out/film/menu --every=1M -- --clickwheel \
     --wheel='@1500M:touch,+2M:press=select,+2M:release'
 ```
 
-Everything after `--` goes through to `tools/ipod-boot/retail-boot.sh`, so a wheel script, an
+Everything after `--` goes through to `ipod-boot retail`, so a wheel script, an
 `--enterlog` watch or a second `--bcm-dump` all still work in the same run.
 
 ## What comes out
@@ -94,7 +94,7 @@ A recording instrument that perturbs what it records is this project's oldest fa
 claim is measured rather than argued. Two arms, identical but for the flag:
 
 ```
-BUDGET=4000000000 retail-boot.sh --clock=5 --stop-when-idle=400000000 --bcm-registry \
+BUDGET=4000000000 ipod-boot retail --clock=5 --stop-when-idle=400000000 --bcm-registry \
     [--bcm-film=0xE0000:140:F0:2M:DIR]  --bcm-dump=0xE0000:140:F0:ARM.ppm
 ```
 

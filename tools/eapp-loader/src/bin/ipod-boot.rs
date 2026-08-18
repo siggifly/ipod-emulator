@@ -236,20 +236,6 @@ impl Recipe {
         })
     }
 
-    /// The `.sh` this recipe is the second front end for. Used by the drift test, and only by it —
-    /// the mapping is the test's premise, so it lives beside the recipes rather than inside
-    /// `#[cfg(test)]` where a reader would have to go looking for it.
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn script(self) -> &'static str {
-        match self {
-            Recipe::Retail => "retail-boot.sh",
-            Recipe::Warm => "warm-boot.sh",
-            Recipe::Flsh => "flsh.sh",
-            Recipe::Rockbox => "rockbox.sh",
-            Recipe::FlashUpdate => "flash-update.sh",
-            Recipe::FromIdle => "from-idle.sh",
-        }
-    }
 }
 
 // ---------------------------------------------------------------- where things are
@@ -638,10 +624,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
                     &flash,
                     &disk,
                     &["--disk-writable".into()],
-                    &[
-                        "--clock=5".to_string(),
-                        format!("--snapshot={}:{}", snap_at, snap.display()),
-                    ],
+                    &[format!("--snapshot={}:{}", snap_at, snap.display())],
                 );
                 let status = Command::new(&trace)
                     .args(&build)
@@ -657,7 +640,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
                 }
             }
 
-            let mut tail = vec!["--clock=5".to_string(), format!("--restore={}", snap.display())];
+            let mut tail = vec![format!("--restore={}", snap.display())];
             tail.extend(user.iter().cloned());
             Ok(Plan {
                 trace,
@@ -819,7 +802,7 @@ fn make_disk(args: &[String]) -> Result<(), String> {
          populates it on first boot.",
         sectors / 2048
     );
-    println!("  ipod-boot retail --clock=5     # DISK={out}");
+    println!("  ipod-boot retail     # DISK={out}");
     Ok(())
 }
 
@@ -1007,42 +990,6 @@ mod tests {
             .collect()
     }
 
-    /// The drift guard this file exists to make possible.
-    ///
-    /// Reads each `.sh` off disk, pulls the flags out of its `trace` invocation, and asserts they
-    /// are the flags this program passes, in order. Two front ends composing "the same" argv is a
-    /// claim; this is the test that keeps it one.
-    #[test]
-    fn recipe_flags_match_the_shell_scripts() {
-        let scripts = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("ipod-boot");
-        // Retail is in this list now. It used to be covered only by a test that defined it as
-        // "cold-boot.sh's flags plus --disk-writable", and when the cold recipe was deleted that
-        // test went with it — which would have left the recipe every number in research/ is
-        // measured on with no drift coverage at all.
-        for recipe in [
-            Recipe::Retail,
-            Recipe::Warm,
-            Recipe::Flsh,
-            Recipe::Rockbox,
-            Recipe::FlashUpdate,
-        ] {
-            let text = std::fs::read_to_string(scripts.join(recipe.script()))
-                .unwrap_or_else(|e| panic!("{}: {e}", recipe.script()));
-            let from_script = script_flags(&text);
-            let plan = plan(recipe, &[], true).unwrap();
-            let mine = flags_of(&plan.runs[0]);
-            assert_eq!(
-                mine,
-                from_script,
-                "{} and ipod-boot {:?} disagree about the flags",
-                recipe.script(),
-                recipe
-            );
-        }
-    }
 
 
     /// Extract the flags from a script's `trace` invocation: everything from the line that runs
@@ -1138,14 +1085,10 @@ mod tests {
             ("from-idle", Recipe::FromIdle),
         ] {
             assert_eq!(Recipe::parse(name), Some(want));
-            assert!(scripts_dir().join(want.script()).is_file(), "{}", want.script());
         }
         assert_eq!(Recipe::parse("nonsense"), None);
     }
 
-    fn scripts_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("ipod-boot")
-    }
 }
 
 // ---------------------------------------------------------------- installing an OS

@@ -12,7 +12,7 @@ $CARGO_TARGET_DIR/release/ipod-emulator
 
 **Launched with nothing configured it opens a setup screen** rather than exiting with an error, and
 that is the supported first-run path — see §"The setup screen" below. If `resources/` is present the
-defaults are `retail-boot.sh`'s, verbatim: the retail NOR at
+defaults are `ipod-boot retail`'s, verbatim: the retail NOR at
 `resources/vendor/ipod-bootrom-archive/A1238/` and `resources/drives/ipod8g-retail.img`.
 Whatever the setup screen last accepted is remembered, so the screen appears once.
 
@@ -21,7 +21,7 @@ Whatever the setup screen last accepted is remembered, so the screen appears onc
 seconds. `--cold` forces the long way round. The snapshot cache is keyed on the emulator's own
 source (`lib.rs` and `emu.rs` are hashed into the filename), the two images, the clock and the
 snapshot point, so a change to the model mints a new snapshot rather than silently restoring a
-hybrid machine — the failure mode `tools/ipod-boot/from-idle.sh` documents at length. The cost of
+hybrid machine — the failure mode `ipod-boot from-idle` documents at length. The cost of
 that discipline is that editing `emu.rs` buys you one more cold boot; the alternative is worse.
 
 **One boot leaves three files, and they are a set.** The snapshot is RAM and CPU state; the drive is
@@ -135,7 +135,7 @@ display when left alone — and it is worth knowing about before mistaking it fo
 **Power off drops the machine.** Not a pause: the `Machine` is dropped outright — CPU, all 64 MB of
 SDRAM, the co-processor's surface — the panel goes dark, and the instrument panel's numbers go to
 zero rather than freezing, because there is nothing left for them to describe. Powering on builds a
-new machine and enters at address 0 through the same `call_with(0, …)` `retail-boot.sh` makes. It is
+new machine and enters at address 0 through the same `call_with(0, …)` `ipod-boot retail` makes. It is
 a real cold boot and costs the same ~75 s; it is never restore-then-pretend.
 
 The **drive survives**, because that is what survives a real power cycle: a second boot finds the
@@ -265,7 +265,7 @@ Three things are settled by that pair, and the control is what settles them:
 the same machine as the recipe" is a comparison and not a claim:
 
 ```
-$ ipod-emulator --cold --headless=2000000000       $ BUDGET=4000000000 tools/ipod-boot/retail-boot.sh \
+$ ipod-emulator --cold --headless=2000000000       $ BUDGET=4000000000 ipod-boot retail \
 headless: Idle after 1812313976 instructions      --clock=5 --stop-when-idle=400000000 \
   ata commands: 706                               --clickwheel --bcm-registry \
   unmapped: 0 reads, 0 writes across 0 pages      --bcm-dump=0xE0000:140:F0:out.ppm
@@ -383,7 +383,7 @@ choice exists.
 The switch pulls **GPIOA bit 5 low at `0x6000d030`**, which is the line, bit and polarity Rockbox's
 `button_hold()` reads, exactly (`firmware/target/arm/ipod/button-clickwheel.c:348`), and it clears
 bit 31 of the click-wheel frame. Neither produces any visible effect after boot. Measured
-2026-08-14, all on `retail-boot.sh --clock=5 --bcm-registry --clickwheel`:
+2026-08-14, all on `ipod-boot retail --clock=5 --bcm-registry --clickwheel`:
 
 | | |
 |---|---|
@@ -434,7 +434,7 @@ synthetic test passed throughout, because the helper wrote the same wrong magic.
 `eapp_loader::map_hardware`, and `trace.rs` keeps a one-line delegate. Two front ends now stand the
 same machine up, and a peripheral map that existed in two copies would become two different machines
 the first time either copy was corrected. The move was byte-for-byte and the baseline proved it:
-`BUDGET=4000000000 retail-boot.sh --clock=5 --stop-when-idle=400000000` before and after produced
+`BUDGET=4000000000 ipod-boot retail --clock=5 --stop-when-idle=400000000` before and after produced
 run reports that `diff` reports as identical — at the time, `Idle after 1610279157`, 38 266 code
 buckets, 770 ata commands, 4 unmapped reads, and `cargo test --release` in `eapp-loader` 24 passed
 either way. *(That baseline has since moved to `Idle after 1562789429` / 38 220 buckets — not from

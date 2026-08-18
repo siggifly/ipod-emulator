@@ -134,7 +134,7 @@ the same discipline as R5, applied to the tool instead of to the machine.
 
 ## The baseline
 
-`retail-boot.sh --clock=5 --stop-when-idle=400000000`, re-measured today. Check any run you inherit
+`ipod-boot retail --clock=5 --stop-when-idle=400000000`, re-measured today. Check any run you inherit
 against this before trusting it; if it does not match, find out why before measuring anything else.
 
 **`--bcm-registry` is OFF in everything below.** It is the control arm and every number in
@@ -304,7 +304,7 @@ needed a PMU fix (our ADC reported every completed conversion as **zero**, which
 Apple's bootloader refuse to boot with no charger). With both done:
 
 ```
-retail-boot.sh --clock=5 --stop-when-idle=400000000 --bcm-registry            -> the LANGUAGE list
+ipod-boot retail --clock=5 --stop-when-idle=400000000 --bcm-registry            -> the LANGUAGE list
   ... --clickwheel --wheel=@1500M:touch,+2M:press=select,+2M:release          -> the MAIN MENU
       BUDGET=3000000000 --bcm-dump=0xE0000:140:F0:menu.ppm
 ```
@@ -531,7 +531,7 @@ the only remaining live link between a working wheel and a blank screen.
 
 ## 4 — The prototype ROM's power-off after a restored `aupd` · **bypass #12's open half**
 
-Retired on the retail ROM: `flash-update.sh` reproduces the real thing end to end — boot 1 prints
+Retired on the retail ROM: `ipod-boot flash-update` reproduces the real thing end to end — boot 1 prints
 `Running 'aupd'` → two `iPod CFI Flash Firmware update` passes → `END MARKER - VALID`; boot 2 prints
 `Running 'osos'`, with no file edited between them. The bypass turned out to have been *the
 updater's own last write*: it ends with `WRITE SECTORS` to LBA 96, setting the directory entry's
@@ -597,16 +597,16 @@ in this repo, and every entry below is an item that was worked as *the* blocker.
 ### ~~0 — Retire the ledger before investigating around it~~ · **DONE 2026-08-14 — it is a rule now (R3)**
 
 **Nine bypasses are retired** (#1, #2, #3, #5, #10, #11, #12-retail, #14, #15), and `research/04`
-carries a per-row **`Live in`** column — added after an audit found `flsh.sh` and `flash-update.sh`
+carries a per-row **`Live in`** column — added after an audit found `ipod-boot flsh` and `ipod-boot flash-update`
 still passing three bypasses the file had marked RETIRED, which meant the run that *proved* #12's
 retirement was obtained with three retired bypasses switched on. A ledger that records a retirement
 but not where the flag still lives cannot catch that.
 
-**`retail-boot.sh` carries exactly four live bypasses: #6, #7, #8, #9 — and only #6 is a flag.**
+**`ipod-boot retail` carries exactly four live bypasses: #6, #7, #8, #9 — and only #6 is a flag.**
 #7 (`COP_STATUS` sticky) and #8 (`PLL_STATUS` locked) are pushed unconditionally by `trace.rs`;
 #9 (`IDE0_CFG` bit 3) is ORed in by `Ata::read`. A reader who greps the recipe for "which bypasses
 am I running" finds one of the four. #4 `--sysinfo` is **not** on the retail path at all — verified
-today, `cold-boot.sh` and `retail-boot.sh` pass none. #17 is in no recipe (`grep -l force-vc
+today, `cold-boot.sh` and `ipod-boot retail` pass none. #17 is in no recipe (`grep -l force-vc
 tools/ipod-boot/*.sh` → empty).
 
 ### ~~0b — Model the transfer engine at `0x60009000`~~ · **DONE 2026-08-13 — a second DMA controller**
@@ -639,7 +639,7 @@ queue as open work a day after the commit landed — the exact drift this file e
 
 ### ~~2 — Why does RetailOS never read `rsrc`?~~ · **SUPERSEDED — on the retail path it does**
 
-The premise was prototype-only. `retail-boot.sh` reads LBA 14864 (the FAT boot sector), 14870 (the
+The premise was prototype-only. `ipod-boot retail` reads LBA 14864 (the FAT boot sector), 14870 (the
 FAT), `RenderServer.bin` at 22429 and `vmcs.bin` at 22645+, and lands the latter in SDRAM at
 `0x13eaf188`. The prototype bootloader's 157 self-resets are `BX` to address zero through a null
 `this` (Addendum 5) — that, not a filesystem decision, is what the question was really about.
@@ -657,7 +657,7 @@ spends 99.9 % of each cycle (R8).
 
 **Two defects, each on its own sufficient, both one line, neither an ablation — both landed today:**
 
-- **recipe:** `retail-boot.sh` passed no `--disk-writable`, so every write was refused. It now
+- **recipe:** `ipod-boot retail` passed no `--disk-writable`, so every write was refused. It now
   `cp -c`-clones the image per run (APFS copy-on-write, ~3 ms for 8 GB) and runs writable on the
   clone, never on the pristine file. `WORKDISK=` keeps the disk when you want accumulated state.
 - **model:** `Ata::command`'s write-abort branch set `ERR`/`ABRT` but never `irq_pending`, so the
@@ -738,15 +738,15 @@ for a measurement by someone reading in a hurry, which is what R6 was written ab
 flags, no `how it lies` column, and two rows that existed only in the copy (`tcb`, `dis --iscan`).
 Both have been folded in above and the duplicate deleted. A file that documents an instrument
 twice will eventually update one of them.)*
-Three recipes, not one: `cold-boot.sh` (ROM out of NOR), `warm-boot.sh` (RetailOS entered directly —
+Three recipes, not one: `cold-boot.sh` (ROM out of NOR), `ipod-boot warm` (RetailOS entered directly —
 this existed only as a pasted command line until 2026-08-13, which is why #5 sat unvalidated for
-weeks), and `flash-update.sh` (two boots, `aupd` then `osos`, no file edited between them).
+weeks), and `ipod-boot flash-update` (two boots, `aupd` then `osos`, no file edited between them).
 `--storelog-dump=FILE` writes TSV so one run's addresses feed the next run's `--storeaddr`. That
 chaining is how research/10 got from 791 objects to a named font file in six runs.
 
 ### The recipes
 
-`retail-boot.sh` — **the configuration every current number in `research/` is measured on.** Apple's
+`ipod-boot retail` — **the configuration every current number in `research/` is measured on.** Apple's
 shipping 5G bootloader, the disk image it accepts, and since today a writable per-run APFS clone.
 It `exec`s `cold-boot.sh`, so it inherits every flag there.
 
@@ -755,8 +755,8 @@ That was never a decision, it was the first dump we had. It self-resets 157 time
 `rsrc`. Numbers measured on it do not transfer, and a retail run does not retract them — it
 supersedes them.
 
-`warm-boot.sh` — RetailOS entered directly. `flash-update.sh` — two boots, `aupd` then `osos`, no
-file edited between them. `flsh.sh`, `rockbox.sh` — the remaining two.
+`ipod-boot warm` — RetailOS entered directly. `ipod-boot flash-update` — two boots, `aupd` then `osos`, no
+file edited between them. `ipod-boot flsh`, `ipod-boot rockbox` — the remaining two.
 
 ### Two method notes that cost real runs
 

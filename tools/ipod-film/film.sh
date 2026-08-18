@@ -32,7 +32,7 @@ W=140          # hex, as --bcm-dump reads it: 0x140 = 320
 H=F0           # hex: 0xF0 = 240
 # Instructions per second of video. 72 000 000 is a PP5021C's rate, so the default plays back at the
 # pace the real silicon would have executed these instructions. It is NOT the pace of the emulator's
-# simulated clock: at `--clock=5` that clock runs 15x faster per instruction than real silicon, so
+# simulated clock, which now runs at the real part's rate in every recipe, so
 # firmware timeouts fire far earlier in the film than they would on hardware. Both numbers are real;
 # this one is the one a viewer's intuition matches to "how long did that take".
 RATE=72000000
@@ -73,7 +73,7 @@ export BUDGET
 : "${IDLE:=400000000}"
 
 echo "film -> $OUT   (every $EVERY instructions from $FROM, budget $BUDGET, idle window $IDLE)"
-"$ROOT/tools/ipod-boot/retail-boot.sh" --clock=5 --stop-when-idle="$IDLE" --bcm-registry \
+"${IPOD_BOOT:-ipod-boot}" retail --stop-when-idle="$IDLE" --bcm-registry \
   --bcm-film="$BASE:$W:$H:$EVERY:$OUT" --bcm-film-from="$FROM" \
   "${PASS[@]+"${PASS[@]}"}" | tee "$OUT/run.txt"
 
