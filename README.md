@@ -251,29 +251,26 @@ window can start for you — that is [on the roadmap](ROADMAP.md).
 - **Four values in the co-processor transport are chosen rather than measured**, and there is no timing model at all, so a bug that only appears when a reply is late is invisible
 - **The boot takes ~300 seconds of simulated time** where hardware takes five or ten. Something waits far longer than it should
 
-Three lists, kept apart on purpose. **`KNOWN-BUGS.md`** is what is *wrong*. The section above is
-what is *absent*. **`research/04-bypass-ledger.md`** is what is *faked*, with a written condition
-for retiring each one — and nothing is faked without a row in it. Merging them is how a project
-starts describing its gaps as choices.
-
-**`CHANGELOG.md`** is what changed between releases, and **`RELEASING.md`** is how one is cut —
-including the one edit that sets the version, and the check that proves nothing else holds a copy.
+That list is what is **absent**, which is a different question from what is *wrong* or what is
+*faked*. The table under [Roadmap](#roadmap) says which document answers which.
 
 ## Roadmap
 
-1. **The simulated-time gap in the boot** — ~300 seconds of simulated time where hardware takes
-   five or ten. That is the long white screen, and it is a bug rather than slowness: the
-   interpreter's ~30 % of real-time accounts for a factor of three, not thirty
-2. Audio
-3. A JIT. The interpreter decodes every instruction every time; a JIT would be worth 10–50× here
-4. The GPIO interrupt, so hold reaches the OS
-5. Retiring the last four assumptions in the co-processor transport
-6. **A Homebrew tap**, so `brew install` works. A formula rather than a cask, deliberately: it
-   builds on your machine, and a binary built locally is never quarantined — so the Gatekeeper
-   dance above stops applying to anyone who installs it that way
-7. **Every non-iOS iPod.** This models the 5.5G (PortalPlayer PP5021C). The end goal is the whole
-   clickwheel line, including the Classic — Samsung S5L8702, encrypted firmware, a different chip
-   family and closer to a second project than a port
+**[`ROADMAP.md`](ROADMAP.md)** — what this becomes and in what order, with what would settle each
+milestone. It is the only copy; this section used to carry a second, shorter list that drifted out
+of agreement with it (it still asked for the GPIO interrupt three commits after that shipped).
+
+The four documents each answer one question, and none of them answers another's:
+
+| | |
+|---|---|
+| [`ROADMAP.md`](ROADMAP.md) | what is *intended*, and in what order |
+| [`KNOWN-BUGS.md`](KNOWN-BUGS.md) | what is *wrong* |
+| [`research/04-bypass-ledger.md`](research/04-bypass-ledger.md) | what is *faked*, with a retirement condition for each |
+| [`CHANGELOG.md`](CHANGELOG.md) | what *changed*, release by release |
+| [`RELEASING.md`](RELEASING.md) | how a release is *cut*, including the one edit that sets the version |
+
+Merging them is how a project starts describing its gaps as choices.
 
 ## How it was built
 

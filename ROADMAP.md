@@ -255,6 +255,14 @@ code. A user would then need only Apple's firmware bundle.
 **Depends on:** the ledger being honest about what the real bootloader leaves behind — so M2 helps
 directly. **Settled by:** RetailOS reaching the menu with no NOR dump supplied.
 
+## Distribution · a Homebrew tap · *not a milestone, and cheap*
+
+`brew install` for this program, as a **formula rather than a cask** — deliberately, because a
+formula builds on the user's machine and a locally built binary is never quarantined, so the whole
+Gatekeeper dance in the README stops applying to anyone who installs it that way. It sits beside M5
+in spirit: both are acquisition, not fidelity. Moved here from the README's own roadmap list, which
+was the only place it was written down.
+
 ## M6 · Audio
 
 Nothing is modelled. Rockbox is already writing to the Wolfson codec at I²C `0x1a` and getting
