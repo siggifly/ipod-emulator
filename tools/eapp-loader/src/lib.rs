@@ -7260,6 +7260,12 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
         // in the ledger predicted exactly this. So in cold boot SDRAM is a region where the
         // hardware actually has it, and address 0 belongs to NOR until the MMAP remap is honoured.
         (if cold_boot { "sdram" } else { "sdram-low" }, if cold_boot { 0x1000_0000 } else { 0x0000_0000u32 }, 0x0400_0000usize),
+        // 128 KB, and **measured rather than chosen** (2026-08-18). This line carried no
+        // justification while every region around it did, and the identity argument below leaned on
+        // it, so it was tested: shrink IRAM to 0x18000 (96 KB) and Apple's own bootloader writes
+        // **8 800 times into unmapped space** — `0x40018800`, `0x4001c8fc`, `0x4001d000`, all from
+        // one PC — and the boot collapses from 488 ATA commands to 70. Firmware that writes above
+        // 96 KB is firmware running on a part that has more than 96 KB.
         ("iram", 0x4000_0000, 0x0002_0000),
         ("mmio-7", 0x7000_0000, 0x0010_0000),
         ("mmio-6", 0x6000_0000, 0x0010_0000),
@@ -7350,13 +7356,19 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
     // characters, most-significant byte first, PP_VER2 then PP_VER1**. So the string here is
     // `PP5022C-`, and the value is derived from a second implementation rather than invented.
     //
-    // **Why `'2'` is NOT yet established, and the argument that seemed to establish it was
-    // circular.** It ran: Apple's bootloader leaves its `IsyS` block at `0x4001ff18`, which
-    // `ipodloader2` calls the PP5022 site, so we are a PP5022. That is worthless as evidence,
-    // because the bootloader puts the block at the **top of whatever IRAM exists**, and the two
-    // sites differ by exactly `0x8000` — the top of 96 KB against the top of 128 KB. **We model
-    // IRAM as `0x20000`**, so the placement is a consequence of our own choice and could not have
-    // come out any other way.
+    // **Why `'2'`.** The argument was circular once and is not any more, and both steps are worth
+    // keeping because the first is how the second got demanded.
+    //
+    // *The circular version:* Apple's bootloader leaves its `IsyS` block at `0x4001ff18`, which
+    // `ipodloader2` calls the PP5022 site, so we are a PP5022. Worthless on its own — the
+    // bootloader puts the block at the **top of whatever IRAM exists**, the two sites differ by
+    // exactly `0x8000` (the top of 96 KB against the top of 128 KB), and we had simply *declared*
+    // IRAM to be `0x20000`.
+    //
+    // *What fixed it:* the declaration was tested. At 96 KB, Apple's bootloader writes **8 800
+    // times into unmapped space** above `0x40018000` and the boot collapses from 488 ATA commands
+    // to 70. So 128 KB is not our preference, it is what this firmware requires — and the block
+    // landing at `0x4001ff18` is then real behaviour on a real part, not an echo of a setting.
     //
     // What the actual sources say, and they do not agree:
     //
