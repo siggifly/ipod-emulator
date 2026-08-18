@@ -892,8 +892,29 @@ path does not have at all.
   mode (`bank_irq`, `bank_svc`, `bank_abt`, `bank_und`, `bank_fiq`) as the architecture requires.
 
 **Still open, and now one question instead of a family:** what writes over a one-byte stack local
-between its spill and the copy four instructions later, on the cold path only. `0x00084f70` is the
-first thing to name — 2 808 writes into that span, and absent from the warm arm entirely.
+between its spill and the copy four instructions later, on the cold path only.
+
+Resolved against Rockbox's ELF, the cold-only writers into that span are not anonymous:
+
+| PC | symbol | cold | warm |
+|---|---|---|---|
+| `0x00084f70` | **`queue_wait_w_tmo`** | 2 808 | — |
+| `0x0007eb28` | **`set_cpu_frequency__lock`** | 1 856 | — |
+| `0x0007eb40` | **`set_cpu_frequency__unlock`** | 1 856 | — |
+| `0x00084564` | `corelock_init` | 280 | 292 |
+
+`set_cpu_frequency__lock` / `__unlock` are **corelock** primitives — Rockbox's CPU↔COP mutual
+exclusion — and the cold path runs frequency scaling that the warm path never reaches. That lands
+this squarely on ground the project already knows is faked: **ledger #7** (`COP_STATUS` sticky,
+pushed unconditionally by `trace.rs`) and [ROADMAP](../ROADMAP.md) M2's first oracle finding, that
+`MBX_MSG_STAT` (`0x60001000`) is read **52 868 892** times by Rockbox and never once by RetailOS,
+first from `switch_thread` — *a CPU↔COP mailbox this emulator does not model at all*.
+
+**So the working hypothesis is that this is a second face of the unmodelled co-processor**, not a
+new bug: a corelock whose other half never answers, on a boot path that actually exercises it. It
+is a hypothesis and is written down as one — the discriminator is whether the clobbering write and
+the spill interleave, which one `--storeaddr` on the buffer address, ordered, will show. Do not
+model the mailbox on the strength of this paragraph.
 
 **Settled when** the cold path writes `0x05` to `ADCC1` and the boot survives its own battery
 reading. Everything measured on the cold path before this is fixed is measured through it — R4.
