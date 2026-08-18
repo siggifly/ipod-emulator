@@ -144,6 +144,13 @@ pub fn describe_rom(path: &Path, model: &str) -> Option<String> {
         return None;
     }
     let cfg = syscfg(&nor)?;
+    // **The dump says which iPod it is; the caller only guesses.** `Mod#` resolves through the
+    // model table to a generation, so a 5.5G dump stops being labelled with whatever the caller
+    // assumed — which for this program was always "iPod Video", for every dump ever opened.
+    let model = match cfg.model_info() {
+        Some(m) => format!("{model} {}", m.generation.label()),
+        None => model.to_string(),
+    };
     // The serial reads better than the GUID and is the thing written on the case, so it wins when
     // both are there. Truncated to its tail: the leading characters are the factory and the model,
     // identical across every iPod of a kind, and the distinguishing part is at the end.

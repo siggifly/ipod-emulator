@@ -1070,6 +1070,20 @@ struct App {
     update_slot: Arc<Mutex<Option<Option<update::Found>>>>,
     update_line: Option<String>,
     update_asked: bool,
+    /// The firmware cache, read once and re-read after anything changes it. A `read_dir` every
+    /// frame at 60 Hz to draw a static list is work nobody asked for.
+    fw_cache: Option<(PathBuf, Vec<eapp_loader::firmware::Cached>, u64)>,
+    /// The release the picker is on — an index into [`eapp_loader::firmware::CATALOGUE`].
+    fw_pick: usize,
+    /// Show every iPod ever made, rather than the ones this emulator runs.
+    fw_all: bool,
+    /// The file currently downloading, if any. The window must never block on a socket.
+    fw_busy: Option<String>,
+    fw_result: Arc<Mutex<Option<Result<PathBuf, String>>>>,
+    /// Set by the Clean button, cleared by doing it or changing your mind. **Nothing is deleted
+    /// until this has been through a second click.**
+    fw_confirm_clean: bool,
+    fw_note: Option<String>,
     /// Leftover scroll that has not yet added up to a detent. See [`SCROLL_UNITS_PER_DETENT`].
     wheel_units: f32,
     /// Cache files this launch will not use: their total size, and where they are. Measured at
@@ -1113,6 +1127,10 @@ enum Screen {
     Help,
     /// Everything found inside one of the two chosen files. Which one is [`App::details_row`].
     Details,
+    /// Apple's firmware: fetch it, see what is held, clear it out. **A page rather than a section
+    /// in Settings**, because Settings is already the tallest page this program has and the height
+    /// test exists to stop it growing a scrollbar.
+    Firmware,
 }
 
 /// The two files the emulator runs on, and what they turn out to be.
@@ -1462,6 +1480,13 @@ impl App {
             update_slot,
             update_line: None,
             update_asked: false,
+            fw_cache: None,
+            fw_pick: 0,
+            fw_all: false,
+            fw_busy: None,
+            fw_result: Arc::new(Mutex::new(None)),
+            fw_confirm_clean: false,
+            fw_note: None,
             wheel_units: 0.0,
             stale_cache: (0, Vec::new()),
         };
@@ -1792,6 +1817,7 @@ impl eframe::App for App {
         match self.screen {
             Screen::FirstRun => return self.first_run(ui),
             Screen::Settings => return self.settings_screen(ui),
+            Screen::Firmware => return self.firmware_screen(ui),
             Screen::Help => return self.help_screen(ui),
             Screen::Details => return self.details_screen(ui),
             Screen::Device => {}
@@ -1971,6 +1997,8 @@ impl App {
         ];
         let mut pick: Option<(&str, &[&str])> = None;
         let mut show_details: Option<usize> = None;
+        // Acted on after the group closes, like the two above: `self` is borrowed inside it.
+        let mut want_firmware = false;
         ui.group(|ui| {
             ui.set_width(ui.available_width());
             for (i, (title, which, exts)) in rows.iter().enumerate() {
@@ -2010,6 +2038,17 @@ impl App {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if !name.is_empty() && ui.small_button("replace").clicked() {
                             pick = Some((*title, *exts));
+                        }
+                        // Only on the software row, and only as a button already in it: this page
+                        // is the tallest one here and a new line of its own would push it past the
+                        // minimum window. It sits where somebody realises they need firmware.
+                        if i == 1
+                            && ui
+                                .small_button("get")
+                                .on_hover_text("Download Apple's firmware — you do not have to find an .ipsw yourself.")
+                                .clicked()
+                        {
+                            want_firmware = true;
                         }
                         if name.is_empty() {
                             ui.label(
@@ -2077,6 +2116,10 @@ impl App {
                     .response
                     .on_hover_text(inspect::WHY_FAMILY_MATTERS);
                 });
+        }
+        if want_firmware {
+            self.back_to = self.screen;
+            self.screen = Screen::Firmware;
         }
         if let Some((title, exts)) = pick {
             self.take(&pick_files(title, exts));
@@ -2923,6 +2966,206 @@ impl App {
     /// differs — which is why Apple's own asset for it is named `iPod6-BlackRed` rather than being
     /// a colour of its own. Getting that wrong by tinting the whole case red would be a device
     /// nobody ever sold.
+    fn firmware_screen(&mut self, ui: &mut egui::Ui) {
+        if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.screen = self.back_to;
+            return;
+        }
+        self.column(ui, |app, ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Apple's firmware").heading());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("  Back  ").clicked() {
+                        app.screen = app.back_to;
+                    }
+                });
+            });
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(
+                    "Apple still serves these, and every one is checked against a recorded \
+                     SHA-256 as it lands — a download that does not match is refused rather than \
+                     kept. You never have to use this: your own .ipsw works exactly as before.",
+                )
+                .small()
+                .color(Color32::from_gray(0x9A)),
+            );
+            ui.add_space(12.0);
+            app.firmware_controls(ui);
+        });
+    }
+
+    /// Apple's firmware: fetch it, see what is held, and clear it out.
+    ///
+    /// **The point is that nobody has to go and find an `.ipsw`.** Apple still serves 66 of the 71
+    /// click-wheel releases, every one of them is in the catalogue with its SHA-256, and a download
+    /// that does not match is refused rather than kept.
+    fn firmware_controls(&mut self, ui: &mut egui::Ui) {
+        use eapp_loader::firmware::{self, CacheState};
+
+        // A finished download reports back here. Polled rather than awaited, because the window
+        // must never block on a socket.
+        if let Some(done) = self.fw_result.lock().unwrap().take() {
+            self.fw_busy = None;
+            self.fw_cache = None;
+            self.fw_note = Some(match done {
+                Ok(p) => format!(
+                    "Downloaded and verified: {}",
+                    p.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                Err(e) => e,
+            });
+        }
+
+        let dir = firmware::cache_dir();
+        if self.fw_cache.as_ref().is_none_or(|(d, _, _)| d != &dir) {
+            let items = firmware::cached(&dir, false);
+            let total = items.iter().map(|c| c.bytes).sum();
+            self.fw_cache = Some((dir.clone(), items, total));
+        }
+        let (_, items, total) = self.fw_cache.as_ref().expect("just filled");
+        let held = items.len();
+        let bytes = *total;
+        let corrupt = items.iter().filter(|c| c.state == CacheState::Corrupt).count();
+        let junk: Vec<PathBuf> = items
+            .iter()
+            .filter(|c| {
+                c.state == CacheState::Corrupt
+                    || c.path.extension().is_some_and(|e| e == "part")
+            })
+            .map(|c| c.path.clone())
+            .collect();
+        let all: Vec<PathBuf> = items.iter().map(|c| c.path.clone()).collect();
+
+        // The picker. Defaults to what this emulator actually runs; the rest is a checkbox away.
+        let releases: Vec<&'static firmware::Release> = firmware::CATALOGUE
+            .iter()
+            .filter(|r| r.served && (self.fw_all || r.model.contains("video")))
+            .collect();
+        if self.fw_pick >= releases.len() {
+            self.fw_pick = 0;
+        }
+
+        ui.horizontal(|ui| {
+            ui.label("Get from Apple");
+            let label = releases
+                .get(self.fw_pick)
+                .map(|r| format!("{}  ({})", r.file, r.variant))
+                .unwrap_or_else(|| "nothing to show".into());
+            egui::ComboBox::from_id_salt("fw_pick")
+                .selected_text(label)
+                .width(340.0)
+                .show_ui(ui, |ui| {
+                    for (i, r) in releases.iter().enumerate() {
+                        let held = dir.join(r.file).exists();
+                        let mark = if held { " ✓" } else { "" };
+                        ui.selectable_value(
+                            &mut self.fw_pick,
+                            i,
+                            format!("{}  {}{mark}", r.file, r.variant),
+                        );
+                    }
+                });
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let busy = self.fw_busy.is_some();
+            let have = releases.get(self.fw_pick).map(|r| dir.join(r.file).exists()).unwrap_or(false);
+            let text = if busy {
+                "Downloading…".to_string()
+            } else if have {
+                "Already here".to_string()
+            } else {
+                "Download".to_string()
+            };
+            if ui.add_enabled(!busy && !have, egui::Button::new(text)).clicked() {
+                if let Some(rel) = releases.get(self.fw_pick).copied() {
+                    self.fw_busy = Some(rel.file.to_string());
+                    self.fw_note = None;
+                    let slot = Arc::clone(&self.fw_result);
+                    let dir = dir.clone();
+                    std::thread::Builder::new()
+                        .name("firmware-download".into())
+                        .spawn(move || {
+                            let r = firmware::download(rel, &dir);
+                            *slot.lock().unwrap() = Some(r);
+                        })
+                        .ok();
+                }
+            }
+            ui.checkbox(&mut self.fw_all, "Every iPod, not just the Video");
+        });
+
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new(format!(
+                "{held} file(s), {} in {}",
+                human_bytes(bytes),
+                dir.display()
+            ))
+            .small()
+            .color(Color32::from_gray(0x9A)),
+        );
+        if corrupt > 0 {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{corrupt} do not match what they should be — re-downloading replaces them.",
+                ))
+                .small()
+                .color(Color32::from_rgb(0xE0, 0xA0, 0x40)),
+            );
+        }
+
+        if held > 0 {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                // Two clicks, always. These are files somebody waited on, and several of them are
+                // 100 MB over a slow line.
+                if self.fw_confirm_clean {
+                    if ui.button("Yes, delete all of them").clicked() {
+                        match firmware::remove(&all) {
+                            Ok(n) => self.fw_note = Some(format!("Removed {}.", human_bytes(n))),
+                            Err(e) => self.fw_note = Some(e),
+                        }
+                        self.fw_confirm_clean = false;
+                        self.fw_cache = None;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.fw_confirm_clean = false;
+                    }
+                } else {
+                    if ui
+                        .button("Remove all…")
+                        .on_hover_text("Frees the space. Anything removed can be downloaded again.")
+                        .clicked()
+                    {
+                        self.fw_confirm_clean = true;
+                    }
+                    if !junk.is_empty()
+                        && ui
+                            .button(format!("Remove {} unusable", junk.len()))
+                            .on_hover_text(
+                                "Only the files that are provably wrong, and interrupted \
+                                 downloads. Nothing good is touched.",
+                            )
+                            .clicked()
+                    {
+                        match firmware::remove(&junk) {
+                            Ok(n) => self.fw_note = Some(format!("Removed {}.", human_bytes(n))),
+                            Err(e) => self.fw_note = Some(e),
+                        }
+                        self.fw_cache = None;
+                    }
+                }
+            });
+        }
+
+        if let Some(note) = &self.fw_note {
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(note).small().color(Color32::from_gray(0xC8)));
+        }
+    }
+
     fn palette(&self) -> (Color32, Color32, Color32, Color32) {
         palette_for(self.settings.chassis)
     }
@@ -3878,6 +4121,7 @@ mod tests {
                 match screen {
                     Screen::FirstRun => app.first_run(ui),
                     Screen::Settings => app.settings_screen(ui),
+                    Screen::Firmware => app.firmware_screen(ui),
                     Screen::Help => app.help_screen(ui),
                     Screen::Details => app.details_screen(ui),
                     Screen::Device => {}
@@ -3913,6 +4157,10 @@ mod tests {
             // The details page carries every fact at full size; it is the page that exists
             // because they did not fit anywhere else, so it is the one that must be checked.
             (Screen::Details, Files::Rejected),
+            // The firmware page grows with the cache: a picker, a summary, and the removal
+            // buttons that only appear once something has been downloaded. A page that is not
+            // listed here is a page this test cannot protect.
+            (Screen::Firmware, Files::Chosen),
         ] {
             let used = lay_out(screen, MIN_W, MIN_H, files);
             assert!(
@@ -4041,4 +4289,17 @@ fn palette_for(chassis: Colour) -> (Color32, Color32, Color32, Color32) {
             Color32::from_rgb(0x14, 0x14, 0x15),
         )
     }
+}
+
+
+/// Bytes, in something a person reads.
+fn human_bytes(n: u64) -> String {
+    const U: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 { format!("{n} B") } else { format!("{v:.1} {}", U[i]) }
 }
