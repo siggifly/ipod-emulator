@@ -160,8 +160,43 @@ register value, and no unmapped write. So the brightness path is still unfound, 
 candidate this project has not looked at is the **video co-processor** — which would make this a
 facet of ledger #6 rather than a bug of its own.
 
-**How you would know it is fixed:** arm A produces pulses proportional to the distance the slider
-travelled, arm B produces none, and the level moves monotonically in the direction asked for.
+**Localised, 2026-08-18, by a control that finally matched.** Every earlier attempt compared two
+different *situations* — brightness screen against menu, slider moving against not — so brightness
+and wheel activity were never separated. The control that works keeps everything identical and
+varies only whether brightness can change:
+
+```
+  arm 1   Brightness at MAX, 31 clicks down   brightness falls      wheel: 31
+  arm 2   Brightness at MIN, 31 clicks down   cannot change         wheel: 31
+  arm 3   a MENU,            31 clicks down   redraws, no change    wheel: 31
+```
+
+| | arm 1 | arm 2 | arm 3 |
+|---|---|---|---|
+| `0x6000d80c` | +72 | **0** | +1214 |
+| `0x6000d81c` | +72 | **0** | +1214 |
+| `0x6000d82c` | +36 | **0** | +434 |
+| `0x6000d824` | +18 | **0** | +44 |
+| `0x6000d92c` | +18 | **0** | +52 |
+
+**Arm 2 is zero on every register.** Same screen, same wheel, same redraw path — the only difference
+is that brightness had nowhere left to go. So brightness does write to this block, and the earlier
+conclusion that it was "the wheel" was wrong for the same reason everything before it was wrong: the
+control did not match.
+
+Arm 3 says the block is **shared with the panel** — menu redraws drive it hard. But the ratios
+differ: against `d80c`, register `0x6000d824` is **seven times more active** in the brightness arm
+(0.25) than in the redraw arm (0.036), which is what a different transaction on a shared bus looks
+like.
+
+**What remains is decoding, not searching.** Counting writes cannot separate two transaction types
+on one bus; the bytes can. `watch_range_log` already records `(pc, addr, value)` and is printed only
+by the headless report — exposing it over the control socket would let one brightness step be
+captured as a byte sequence and read.
+
+**How you would know it is fixed:** a single click on the slider produces a decodable transaction
+whose payload tracks the level, and driving the level from it makes the panel dim monotonically
+while menu scrolling changes nothing.
 
 This is the fifth model defect in this project first attributed to missing hardware and found to be
 a misread of a signal we already had.
