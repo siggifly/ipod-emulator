@@ -196,6 +196,19 @@ fn main() {
             }
         }
     }
+    // Not a recipe either: it fetches Apple's firmware so nobody has to go and find an .ipsw.
+    // Paired with a synthesised NOR, this is what makes a bare checkout able to build a working
+    // iPod with nothing supplied.
+    if name == "firmware" {
+        let sub = rest.first().map(String::as_str).unwrap_or("list");
+        let tail: Vec<String> = rest.iter().skip(1).cloned().collect();
+        if let Err(e) = firmware_cmd(sub, &tail) {
+            eprintln!("ipod-boot firmware: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     if name == "fat" {
         match fat_cmd(&rest) {
             Ok(()) => return,
@@ -1763,4 +1776,79 @@ fn put_files(args: &[String]) -> Result<(), String> {
     vol.flush()?;
     println!("  {files} file(s) in {dirs} directory(ies), {bytes} bytes");
     Ok(())
+}
+
+
+/// `ipod-boot firmware list | get`.
+fn firmware_cmd(sub: &str, args: &[String]) -> Result<(), String> {
+    use eapp_loader::firmware;
+    match sub {
+        "list" => {
+            let filter = args.first().map(|s| s.to_lowercase());
+            let mut shown = 0;
+            for r in firmware::CATALOGUE {
+                if let Some(f) = &filter {
+                    if !r.model.to_lowercase().contains(f) && !r.file.to_lowercase().contains(f) {
+                        continue;
+                    }
+                }
+                // The check column is the honest bit: `sha256` means a download can be proven
+                // right, `size` means only that it is the right length.
+                let check = if r.sha256.is_some() { "sha256" } else { "size  " };
+                println!(
+                    "  {:>3}  {check}  {:<30}  {:<28}  {}",
+                    r.updater_family,
+                    r.file,
+                    truncate(r.model, 28),
+                    truncate(r.variant, 26)
+                );
+                shown += 1;
+            }
+            if shown == 0 {
+                println!("  nothing matches");
+            } else {
+                println!("\n{shown} release(s). The left column is the UpdaterFamilyID, which is the");
+                println!("stable key -- FamilyID is NOT stable across firmware versions.");
+            }
+            Ok(())
+        }
+        "get" => {
+            let what = args.first().ok_or(
+                "usage: ipod-boot firmware get <UpdaterFamilyID | filename> [--dir DIR]",
+            )?;
+            let dir = args
+                .iter()
+                .position(|a| a == "--dir")
+                .and_then(|i| args.get(i + 1))
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+            let rel = match what.parse::<u16>() {
+                // Several releases share an updater family; the last is the newest, which is what
+                // somebody asking by family almost always wants.
+                Ok(fam) => firmware::by_updater_family(fam).last().ok_or_else(|| {
+                    format!("no release with UpdaterFamilyID {fam} -- try `firmware list`")
+                })?,
+                Err(_) => firmware::by_file(what)
+                    .ok_or_else(|| format!("no release named {what} -- try `firmware list`"))?,
+            };
+            println!("{} -- {} {}", rel.file, rel.model, rel.variant);
+            println!("  {}", rel.url);
+            if !rel.is_verifiable() {
+                println!("  note: no sha256 on record for this one; it will be size-checked only.");
+            }
+            let at = firmware::download(rel, &dir)?;
+            println!("\nverified -> {}", at.display());
+            Ok(())
+        }
+        _ => Err("usage: ipod-boot firmware list [filter] | get <id|file> [--dir DIR]".to_string()),
+    }
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        s.chars().take(n.saturating_sub(1)).collect::<String>() + "\u{2026}"
+    }
 }

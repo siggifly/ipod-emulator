@@ -1285,16 +1285,45 @@ impl SysCfg {
     }
 }
 
+/// Where the `SysCfg` block actually starts.
+///
+/// **`0x4000` is the 5G's layout, not every iPod's.** Rockbox's `norboot-target.h` puts `SysCfg` at
+/// offset **0** of the boot flash on the s5l8702 — the Nano 2G and the Classic 6G — so a hardcoded
+/// `0x4000` reports "no SysCfg" on a dump that plainly has one. That is the wrong answer to give
+/// somebody who has sent us a dump from an iPod we have never seen.
+///
+/// So the known offsets are tried first, and then the whole image is scanned. The magic is four
+/// bytes and the header is checked for a plausible record count, which is enough to make a chance
+/// match unlikely; a false positive here degrades to "records that do not decode", which the caller
+/// prints as bytes rather than believing.
+fn syscfg_offset(nor: &[u8]) -> Option<usize> {
+    let magic_at = |at: usize| nor.get(at..at + 4) == Some(SYSCFG_MAGIC);
+    // At a DOCUMENTED offset the magic is enough. Requiring a sane record count here as well would
+    // mean a dump with a corrupt count reported "no SysCfg" instead of parsing with the count
+    // bounded — which is a worse answer, and hides the very block somebody needs to look at.
+    if let Some(at) = [SYSCFG_AT, 0].into_iter().find(|&at| magic_at(at)) {
+        return Some(at);
+    }
+    // Scanning is different: here the magic alone could land on a coincidence, so the record count
+    // has to be plausible too. A block at an undocumented offset with a corrupt count is the one
+    // case this will miss, and missing it is better than pointing at random bytes.
+    (0..nor.len().saturating_sub(SYSCFG_HEADER)).step_by(16).find(|&at| {
+        magic_at(at)
+            && nor
+                .get(at + 0x14..at + 0x18)
+                .and_then(|b| b.try_into().ok())
+                .map(u32::from_le_bytes)
+                .is_some_and(|n| n >= 1 && n as usize <= 64)
+    })
+}
+
 /// Read `SysCfg` out of a NOR dump.
 ///
 /// This is what makes the flash identity usable outside the emulator: the authorisation work in
 /// `ipod-usb` needs the GUID of the iPod whose NOR is being booted, because keys minted against
 /// any other identity are keys this machine cannot present.
 pub fn syscfg(nor: &[u8]) -> Option<SysCfg> {
-    let block = nor.get(SYSCFG_AT..)?;
-    if block.get(..4)? != SYSCFG_MAGIC {
-        return None;
-    }
+    let block = nor.get(syscfg_offset(nor)?..)?;
     let count = u32::from_le_bytes(block.get(0x14..0x18)?.try_into().ok()?) as usize;
 
     let mut out =

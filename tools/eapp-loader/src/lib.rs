@@ -22,6 +22,7 @@ pub mod fat;
 pub mod film;
 pub mod png;
 pub mod ghidra;
+pub mod firmware;
 pub mod identity;
 pub mod models;
 pub mod rsrc;
