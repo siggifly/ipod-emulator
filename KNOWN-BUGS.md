@@ -251,7 +251,7 @@ menu scrolling changes nothing.
 This is the fifth model defect in this project first attributed to missing hardware and found to be
 a misread of a signal we already had.
 
-## The boot progress bar is an estimate presented as a measurement — 2026-08-18
+## ~~The boot progress bar is an estimate presented as a measurement~~ — FIXED 2026-08-18
 
 Reported by the operator: *"the boot indicator on the bottom and the actual boot state are not
 properly connected... the language screen was long there before it finished."* Correct, and the code
@@ -271,8 +271,11 @@ teaches somebody to distrust the one progress indicator this program has.
 it means the UI is accepting input — and `Stats::reporting` already carries it. A phase derived from
 that is an observation; a phase derived from a constant is a guess.
 
-**How you would know it is fixed:** the bar completes when the picker appears, not before it and not
-after it, and the phase is driven by something the machine did rather than by an instruction count.
+**Fixed.** The phase now ends on `Stats::reporting` — RetailOS writing `0x8001052a` to ask for wheel
+frames, which is a machine that has finished starting — with `snap_at` kept only as a fallback so a
+boot that dies before the UI does not claim to be booting for ever. The bar itself still counts
+instructions, because nothing better is available *during* a boot, but it says **"roughly N %"** and
+no longer offers a seconds-remaining figure it cannot honour.
 
 ## `MENU`+`SELECT` and `PLAY` are delivered and ignored
 

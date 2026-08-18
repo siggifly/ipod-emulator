@@ -1329,10 +1329,25 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         }
         out.backlight = m.mem.backlight.level;
         out.backlight_steps = (m.mem.backlight.steps_up, m.mem.backlight.steps_down);
-        // The boot is over at the snapshot point whether or not a snapshot was written there — a
-        // session reached by powering back on writes none, and gating the phase on the write would
-        // have it report "running" through 75 seconds of black screen.
-        if executed >= cfg.snap_at && out.phase == (Phase::Booting { target: cfg.snap_at }) {
+        // **The boot is over when RetailOS starts listening, not at an instruction count.**
+        //
+        // This used to flip only at `snap_at`, which is 1.6 G instructions — a point chosen because
+        // it is a good place to *resume from*, not because it is where the boot ends. RetailOS
+        // reaches the language picker before it, so the bar went on filling over a machine that was
+        // already up and taking input, and the "about N s left" beside it counted toward a number
+        // nobody could observe. Reported from use, which is the only way this kind of thing is ever
+        // found: *"the language screen was long there before it finished."*
+        //
+        // `reporting` is the wheel's own gate — RetailOS writing `0x8001052a` to say it wants wheel
+        // frames. A machine asking for input is a machine that has finished starting, and it is an
+        // observation rather than an assumption.
+        //
+        // `snap_at` stays as a fallback for the case the signal never comes: a boot that fails
+        // before the UI should not leave the window claiming to be booting for ever, and the old
+        // behaviour is the honest thing to fall back *to*.
+        if out.phase == (Phase::Booting { target: cfg.snap_at })
+            && (stats.reporting || executed >= cfg.snap_at)
+        {
             out.phase = Phase::Running;
         }
         if stop != Stop::BudgetExhausted && stop != Stop::Idle {

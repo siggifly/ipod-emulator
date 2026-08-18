@@ -2408,9 +2408,13 @@ impl App {
                 // During a cold boot the useful number is how much of it is left, not how fast
                 // it is going, so that is what the leftmost slot says while it lasts.
                 let badge = if let Phase::Booting { target } = &out.phase {
+                    // **An estimate, and it says so.** The fraction is instructions against
+                    // `snap_at`, which is where the snapshot is taken and not where the boot ends —
+                    // the machine is finished when RetailOS asks for wheel frames, which is what
+                    // ends this phase. So the bar is a rough sense of progress and the words no
+                    // longer promise a deadline the program cannot keep.
                     let f = (s.executed as f32 / (*target).max(1) as f32).min(1.0);
-                    let left = (1.0 - f) as f64 * s.wall_secs / f.max(0.001) as f64;
-                    format!("cold boot — {:.0} %, about {left:.0} s left", f * 100.0)
+                    format!("cold boot — roughly {:.0} %", f * 100.0)
                 } else if s.executed_here == 0 {
                     "≈30 % of real-time — emulated".to_string()
                 } else {
