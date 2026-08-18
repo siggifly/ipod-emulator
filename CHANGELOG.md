@@ -14,7 +14,9 @@ behind. Anything published from here gets a new number.
 
 ## 0.5.0
 
-**Your iPod remembers, the settings no longer reboot it, and it tells you what you gave it.**
+**Your iPod remembers, the settings no longer reboot it — and it is not only Apple's iPod any
+more. A second operating system boots here, from a disk this program wrote, started by Apple's own
+bootloader.**
 
 ### The drive is yours, and it is written to
 
@@ -91,10 +93,77 @@ spin and both matched to Rockbox's own source:
 - **The battery ADC was on the wrong channel.** Rockbox's `adc_init` names channel 2 as the
   battery; we answered it with the 3 000 mV catch-all for unknown channels.
 
-It still ends at *"Battery empty! RECHARGE! Shutting down…"* — and that is **not** the battery:
-forcing the ADC to full scale changes nothing, so the trigger is elsewhere. RetailOS is unchanged
-to the digit across both fixes. See [`docs/ideas/run-any-os.md`](docs/ideas/run-any-os.md) for what
-running another OS as a *feature* would take.
+A third followed: **the click wheel only delivered input to firmware that asked Apple's way**, using
+an opcode Rockbox never sends. With that fixed Rockbox reaches **its main menu, takes wheel input,
+and opens its file browser onto a real volume** — one this program's own installer wrote, so the
+theme, the icons and the font are all read back off the emulated disk.
+
+It renders in its own font now, too. It used to come up in the tiny 8 px fallback it carries
+built-in, which was not a bug in the emulator at all: the recipe pointed at a stock Apple drive with
+no Rockbox on it, and a themeless install is an ordinary condition rather than an error, so nothing
+said so.
+
+**Cold-booted from disk it does not yet reach the menu** — it draws its splash and stops. RetailOS
+is unchanged to the digit across every one of these fixes.
+
+### Install an operating system, and cold boot it
+
+**`ipod-boot install-os` puts somebody else's operating system where Apple's bootloader will find
+it** — appended after `osos`, the directory's entry point moved to it, checksums fixed, the later
+images shifted out of the way, exactly as `ipodpatcher` does on hardware. **`ipod-boot put-files`
+writes the other half**: a directory tree into the FAT32 volume, long names and all, 381 files in
+1.7 s.
+
+So the whole chain runs with nothing warm-entered and no step skipped: Apple's boot ROM → Apple's
+bootloader → the bootloader you installed → its operating system off the volume you wrote.
+
+Neither ever touches the image you point it at. `install-os` writes a **new** file, and it
+**reproduces the checksums already in the directory before writing new ones**, refusing if it
+cannot — added because the first version did not, and produced an image the bootloader rejected 71
+ATA commands into a boot with *"Use iTunes to restore."*
+
+### Three bootloaders
+
+Apple's retail bootloader, Rockbox's, and **`ipodloader2`** — which builds and cold-boots for the
+first time. It does not get far yet: it asks whether byte 16 of a chip-id register is ASCII `'2'`,
+does not like our answer, concludes it is running on a 2003 iPod and addresses that machine's
+registers ninety-one million times. Apple's firmware reads that register twenty-three times a boot
+and has never once cared what it says, because it already knows what chip it is on. That is the
+fourth device model found to be shaped around Apple's drivers rather than around the parts, and the
+first found by something other than Rockbox.
+
+### The clock stopped inventing time
+
+**An iPod left alone used to switch itself off after about thirteen seconds.** Not a bug in the
+firmware — the firmware was right. When the processor halts to wait, the emulator used to jump its
+clock forward to whenever the next interrupt was due, which made idle time *free*: a machine doing
+nothing aged thousands of times faster than one doing something, and ten idle minutes went by while
+you were reaching for the wheel.
+
+Now a halt costs what running costs. The whole machine keeps **one honest ratio** to the real part,
+busy or idle: at a third of speed everything takes three times as long, waiting included. Nothing
+was added to pace it and nothing is throttled — the invented time was simply deleted.
+
+The same change fixed a bug nobody had connected to it. Cold-booted Rockbox read its battery as
+0 mV and shut down; the byte carrying the request was being written correctly and read back as
+zero a few instructions later. Time jumping in the middle of a function let something land between
+the two in a way hardware cannot do. `sys_poweroff` went from 315 calls to none.
+
+`--clock=5`, which made the simulated clock run fifteen times fast so the bootloader's delay loops
+would collapse, is retired with it. It turned out to cost nothing: the honest clock reaches the
+same place in **half** the instructions.
+
+### The films have their colours back
+
+Every published animation was built with **one 256-colour palette for the whole film**. A single
+frame of this machine's screen carries 211 to 238 colours and the boot film is 24 different
+screens, so each frame lost 30-45 % of its own colours — which is why the battery's green and
+Brick's bricks looked wrong in the animations while the stills beside them, written from the same
+frames, looked right. Each frame now gets its own palette and is exact.
+
+Three of the still images were also being taken from the wrong frames — a half-drawn menu published
+as `extras`, the Extras menu published as the games list — because the frame numbers had not been
+re-measured since the boot got longer.
 
 ### An empty ROM dump now says so
 
@@ -131,6 +200,18 @@ the file is empty, the dump wrote nothing, and a reset before it finishes leaves
 script regenerates, `vendor/` for upstream checkouts (never renamed, so `git pull` keeps working),
 `roms/` for boot ROMs under names that say what they are. The tree itself moved beside the
 repositories rather than inside the public one.
+
+**The recipes are one program now.** There used to be six `.sh` files and six arms of `ipod-boot`
+composing the same command line, kept equal by a test that read the scripts off disk and compared
+flag lists — and that test was the tell. The scripts are gone; `ipod-boot retail | warm | flsh |
+rockbox | flash-update | from-idle` is what they were, and `--print` still shows the command line it
+composes without running it.
+
+**Two new subcommands, and no Python left in the project.** `ipod-boot fat` reads the FAT32 volume
+out of a drive image — `tree`, `find`, `cat`, and `lba`, which turns the absolute sector numbers in
+`trace`'s DMA log back into paths. `ipod-boot rsrc` does the same for the `rsrc` volume in the
+firmware partition. Both open the image read-only and neither mounts anything, because a
+partitioning command aimed at the wrong device is the one mistake here with no undo.
 
 ## 0.4.0
 
