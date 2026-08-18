@@ -6,6 +6,25 @@
 #
 #   ./rockbox.sh                 # the main binary, warm-entered at 0x10000000
 #   IMG=rb-bootloader.raw ./rockbox.sh
+#
+# WITH THE DEFAULT DISK, THIS RUNS ROCKBOX ON A VOLUME ROCKBOX IS NOT INSTALLED ON.
+#
+# `ipod8g.img` is a stock Apple volume: no `.rockbox`, no theme, no fonts. Rockbox mounts it, finds
+# none of its own files, and falls back silently to the 8 px sysfont compiled into the binary — the
+# menu still draws, so nothing looks wrong, and the project shipped a screenshot of it for a day.
+# There is no error to grep for: a themeless install is an ordinary condition for Rockbox.
+#
+# To run it against a real install, and get the 15 px font `settings_list.c` actually asks for:
+#
+#   cp -c ../../resources/drives/ipod8g.img /tmp/rb.img
+#   unzip -q ../../resources/vendor/rockbox/bin/rockbox-ipodvideo-4.0.zip -d /tmp/rbzip
+#   ipod-boot put-files /tmp/rb.img /tmp/rbzip
+#   DISK=/tmp/rb.img ./rockbox.sh --disk-writable
+#
+# `--disk-writable` is not optional there: Rockbox writes to a volume that has `.rockbox` on it, and
+# without it the boot panics at `dc_writeback_callback()` about 20 M instructions in, long before a
+# font is loaded. On the stock volume it changes nothing — there is nothing to write to — which is
+# why its absence went unnoticed. Both halves are measured in research/06.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)

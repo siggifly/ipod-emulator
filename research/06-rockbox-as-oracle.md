@@ -918,3 +918,200 @@ model the mailbox on the strength of this paragraph.
 
 **Settled when** the cold path writes `0x05` to `ADCC1` and the boot survives its own battery
 reading. Everything measured on the cold path before this is fixed is measured through it — R4.
+## 2026-08-18, later still: the menu's font was never on the volume the recipe mounts
+
+The shipped screenshot of Rockbox's menu renders in the compiled-in 8 px sysfont, not in the
+`15-Adobe-Helvetica` that `apps/settings_list.c:328-368` asks for at `LCD_HEIGHT <= 240`. Two
+explanations were open: the font never reached the volume, or it is on the volume and our FAT32 /
+ATA path hands back the wrong bytes. The second would have been the valuable one — at 231 928 bytes
+it is by far the largest file Rockbox opens at boot, it spans 57 clusters, and a cluster-chain bug
+would surface there and nowhere else.
+
+**It is neither. The FAT32 path is correct and the recipe mounts the wrong disk.**
+
+### `rockbox.sh` defaults to a volume with no `.rockbox` on it at all
+
+`DISK` defaults to `resources/drives/ipod8g.img`, which is a stock Apple volume:
+
+```
+$ IMG=resources/drives/ipod8g.img tools/fat-read.py find rockbox
+# ipod8g.img: FAT32 type 0xc at LBA 32768, 8 sectors/cluster, data starts at LBA 65536
+                                                              (nothing)
+$ IMG=resources/drives/ipod8g.img tools/fat-read.py find ipod_control
+/iPod_Control                                DIR  lba 65560..65567
+/iPod_Control/Device                         DIR  lba 65568..65575
+…9 entries
+```
+
+The second command is the control, and R13 is why it is there: an absence reported by a tool nobody
+has watched succeed on that data is not a measurement. The tool finds things in this image. It finds
+no `.rockbox` because there is none.
+
+With no `/.rockbox/fonts/`, the font load fails and Rockbox falls back to the sysfont it carries.
+Nothing reports it — a themeless install is an ordinary condition for Rockbox, not an error — so the
+failure is silent by design and not by defect.
+
+**And the shipped still is exactly that run.** `rockbox.sh`'s own flags, its own default disk,
+nothing added, filmed at a 2 M cadence:
+
+```
+BUDGET=1200000000 trace --osos=rb-main.raw --boot-osos --flash=… \
+  --disk=resources/drives/ipod8g.img --sysinfo --bcm --pmu \
+  --bcm-film=0xE0000:140:F0:2M:_out/film/asshipped
+```
+
+Frame 5 of that film — up from 48 M to 166 M instructions — differs from
+`docs/media/ipod-14-rockbox-menu.png` in **0 pixels of 76 800**.
+
+### The row pitch, measured
+
+Not eyeballed. The ink profile of the label column, with the gap rule stated as a number: a row with
+**0** lit pixels above the background is a gap, and the pitch is the spacing between gaps.
+
+| run | volume | gap rows | pitch |
+|---|---|---|---|
+| the shipped still | `ipod8g.img`, no `.rockbox` | 31, 39, 47, 55, 63, 71, 79, 87 | **8 px, 7 of 7 gaps** |
+| `put-files` | our own installer's volume | 38, 50, 68, 83, 98, 113, 128, 143, 155 | **15 px, 5 consecutive gaps** |
+| a mounted copy | `ipod8g-rockbox.img` | 38, 48, 64, 79, 94, 109, 124, 139, 153 | **15 px, 5 consecutive gaps** |
+
+15 is `DEFAULT_FONT_HEIGHT`. The instrument's control is printed beside every answer: the busiest
+row in each strip carries 33–102 lit pixels, 33× to 102× the gap rule, so a gap and a glyph row are
+nowhere near each other on this measure. The naive version of this — "a band of lit rows is a
+row" — reports the shipped still's pitch as **55**, because two rows of an 8 px font touch and merge
+into one band. That is R5: the measure has to be matched to what it is measuring.
+
+### The FAT32 writer is exonerated, with the bytes to prove it
+
+`put-files` puts the font on the volume, and it reads back correct:
+
+```
+$ ipod-boot put-files disk.img <the 4.0 zip, unpacked>
+  381 file(s) in 23 directory(ies), 19298918 bytes
+$ IMG=disk.img tools/fat-read.py find helvetica
+/.rockbox/fonts/15-Adobe-Helvetica.fnt   size=231928  lba 6598080..6598535 (57 clusters)
+$ IMG=disk.img tools/fat-read.py cat /.rockbox/fonts/15-Adobe-Helvetica.fnt out.bin
+$ shasum -a 256 out.bin  <the zip's own copy>
+8a7ff4b0…  out.bin
+8a7ff4b0…  .rockbox/fonts/15-Adobe-Helvetica.fnt
+```
+
+Identical across all 57 clusters, read back by the independent reader — and Rockbox agrees, because
+booted on that volume it draws the themed background, the colour icons and 15 px rows. The 232 KB
+multi-cluster read this was supposed to break on does not break. `rockbox.ipod` on the same volume
+is more demanding still and also correct: 187 clusters spread from LBA 1 660 696 to 6 565 959, so
+the chain is followed across a fragmented file and not merely across a contiguous one.
+
+*(`ipod8g-rockbox.img` holds the same font at `/.rockbox/FONTS/` — uppercase, because macOS's FAT
+driver wrote a bare 8.3 name with no long-name entry. It renders identically, so the case is not a
+factor.)*
+
+### One condition, and it is not optional
+
+Rockbox **writes** to a volume that has `.rockbox` on it, and this emulator's ATA is read-only
+unless asked. Without `--disk-writable` the boot panics long before it loads a font:
+
+```
+*PANIC* (4.0)
+dc_writeback_callback() - Could not write sector 8908074 (error -53)
+```
+
+That is at ~20 M instructions. So a run against an installed volume needs `--disk-writable`, and
+`rockbox.sh` does not pass it. On the *stock* volume the flag makes no difference at all — the two
+runs are identical frame for frame and digest for digest, 2 253 ATA commands each — because there is
+nothing there for Rockbox to write to. Which is why the flag's absence never showed up until a
+volume with files on it was put under it.
+
+**The reproduction, end to end:**
+
+```
+cp -c resources/drives/ipod8g.img /tmp/rb.img
+unzip -q resources/vendor/rockbox/bin/rockbox-ipodvideo-4.0.zip -d /tmp/rbzip
+ipod-boot put-files /tmp/rb.img /tmp/rbzip
+DISK=/tmp/rb.img tools/ipod-boot/rockbox.sh --disk-writable      # + --bcm-film to record it
+```
+
+`docs/media/ipod-14-rockbox-menu.png` is now a frame from that run. The re-encoded still is
+pixel-identical to the frame the machine produced — 0 of 76 800 — because what has to be checked is
+what ships, not what was on disk before ffmpeg touched it.
+
+## 2026-08-18: the yellow dashes are the gif encoder, and the raw frames say so
+
+`docs/media/ipod-15-rockbox-wheel.gif` shows yellow tick marks at a 24 px period along the rows of
+the selection bar. Two explanations were open, and the still could not separate them, because a
+still is a settled screen and the dashes are on frames captured mid-scroll: either ffmpeg's
+partial-frame differencing in the gif encode, or our own `lcd_update_rect` going wrong during a
+redraw.
+
+**It is the encoder, and it is not a judgement call — the gif convicts itself.**
+
+### The raw frames are solid, including the ones caught mid-redraw
+
+The panel was filmed under wheel input at a 200 k cadence, then again at **5 000** instructions per
+sample across a single redraw. That is fine enough that the film's dedup keeps transient pictures,
+held for one or two samples where a settled screen is held for thousands — `frame-00001` is up for
+5 000 instructions and `frame-00004` for 10 000. Those are redraws in flight; one of them has row 21
+drawn from x=56 rightwards and no further, which is what a partial update looks like when you catch
+one.
+
+Row 23, on every raw frame that carries the bar:
+
+```
+frame-00000  row 23:  1 yellow run, 320 px   0..319(320)
+frame-00001  row 23:  1 yellow run, 320 px   0..319(320)      <- mid-redraw
+frame-00006  row 23:  1 yellow run, 320 px   0..319(320)      <- mid-redraw
+frame-00007  row 23:  1 yellow run, 320 px   0..319(320)      <- mid-redraw
+```
+
+Never dashed, at either cadence, settled or in flight. Two controls sit beside that, because an
+instrument which has only ever answered "one run of 320" has not been shown able to answer anything
+else: rows 20–22 of the same frames report **7–8 runs totalling ~305 px** — the black label glyphs
+punched through the yellow bar, which is correct rendering and a genuinely interrupted run — and
+frames where the selection has moved away report **0 runs, 0 px**. The measure can say solid, can
+say broken, and can say absent.
+
+### The gif was made from these exact frames
+
+The gif's keyframe differs from the emulator's raw frame in **0 pixels of 76 800**. So the input to
+the encode was clean, and anything the gif shows that the frame does not is the encode's.
+
+### What the gif actually stores
+
+```
+logical screen 320x240, global palette 32 entries
+frame 0  rect 0,0   320x240  disposal 1  transparent no
+frame 1  rect 0,16  320x24   disposal 1  transparent yes idx 0
+frame 2  rect 0,32  320x24   disposal 1  transparent yes idx 0
+frame 3  rect 0,48  320x32   disposal 1  transparent yes idx 0
+```
+
+A keyframe and three difference bands, each with a transparent index and disposal 1 — *leave what is
+underneath*. That is ffmpeg's `-gifflags +transdiff`, which is on by default.
+
+Decoded, stored frame 1 writes exactly one colour on row 23 — `#000000` — and leaves **26 pixels
+transparent**:
+
+```
+transparent pixels on row 23: 22 23  46 47  70 71  94 95  118 119  142 143  166 167
+                              190 191  214 215  238 239  262 263  286 287  310 311
+spacing:                      24
+the keyframe's colour under every one of them: (189,154,16)     <- the bar's yellow
+```
+
+So the composited frame reads **13 yellow runs totalling 26 px** where the raw frame reads one run
+of 320, and every one of those 26 pixels is the keyframe showing through a hole the encoder punched.
+The emulator drew the row black. The gif kept it yellow, at a 24 px comb.
+
+### What was not settled, and it is worth naming
+
+**Which ffmpeg invocation produced it.** Six were run against the same proven-solid frames —
+default, no palette filter, `max_colors=32`, `dither=bayer` at 32 and at 256 colours, and
+`diff_mode=rectangle` — and every one writes a 256-entry palette and a clean row 23. The shipped
+file has a **32-entry** palette, which none of them produce, so the command line is not recoverable
+from the artifact. That is a gap in the account of *how*, not in the account of *who*: the input
+frames are byte-identical to ours and the artifact is made of transparency the input does not have.
+
+**The remedy is verified rather than assumed.** `-gifflags -transdiff` turns `transparent yes` into
+`transparent no` on every frame — measured across that sweep, not read off a manual — and an
+artifact made of transparency cannot survive a file that has none.
+`tools/ipod-film/post-assets.sh`'s `publish()` does not set it. Its own films happen not to show
+this because they are 256-colour with `dither=none`, which is a mitigation and not a defence.

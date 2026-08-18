@@ -322,6 +322,46 @@ between four and eight times, and none from the DRM's own code.
 Arguably not a bug: the emulator is doing what the firmware tells it to. It is here because someone
 will reasonably expect a game they bought to run, and it will not.
 
+## `rockbox.sh` runs Rockbox against a volume Rockbox is not installed on — 2026-08-18
+
+`DISK` defaults to `resources/drives/ipod8g.img`, a stock Apple volume with no `.rockbox` directory
+anywhere on it. Rockbox boots, mounts it, finds no theme and no fonts, and falls back silently to
+the 8 px sysfont it carries — which is what `docs/media/ipod-14-rockbox-menu.png` was a picture of
+until today. Nothing in the run says so: a themeless install is an ordinary condition for Rockbox,
+not an error.
+
+**It is not a FAT32 or ATA defect**, and the measurement that says so is in
+[research/06](research/06-rockbox-as-oracle.md): on a volume written by our own `put-files`, the
+231 928-byte font is present across 57 clusters, reads back SHA-256-identical to the zip's copy
+through the independent reader, and Rockbox loads it — **15 px rows, five consecutive gaps of
+exactly 15**, against **8 px, seven of seven** on the default disk.
+
+A second flag is wanted with it and is equally invisible: Rockbox **writes** to a volume that has
+`.rockbox` on it, so a run against a real install needs `--disk-writable` or it panics at
+`dc_writeback_callback()` about 20 M instructions in. On the stock volume it changes nothing, which
+is why its absence was never noticed.
+
+**How you would know it is fixed:** `rockbox.sh` with no arguments either boots a volume Rockbox is
+installed on, or says out loud that the one it was handed has no `.rockbox`. Today it does neither.
+
+## The gif encode invents pixels the panel never showed — 2026-08-18
+
+Not an emulator defect; an asset-pipeline one, recorded here because it was read as an emulator
+defect and cost a measurement to clear.
+
+`docs/media/ipod-15-rockbox-wheel.gif` carries yellow ticks at a 24 px period that **do not exist in
+any frame the machine produced**. The gif stores a keyframe plus three difference bands, each with a
+transparent index and disposal 1 — ffmpeg's `-gifflags +transdiff`, on by default. On row 23 the
+stored difference frame writes only `#000000` and leaves 26 pixels transparent, and the keyframe
+under every one of them is the selection bar's yellow. So the ticks are the keyframe showing through
+holes the encoder punched. The raw frames read one run of 320 px on that row at every cadence tried,
+including frames caught mid-redraw, and the gif's own keyframe is byte-identical to ours — 0 of
+76 800 pixels differ — so the encode's input was clean.
+
+**How you would know it is fixed:** every frame in a shipped gif reports `transparent no`.
+`-gifflags -transdiff` does that, measured. `tools/ipod-film/post-assets.sh`'s `publish()` does not
+set it.
+
 ---
 
 ## Not bugs, though they look like ones
