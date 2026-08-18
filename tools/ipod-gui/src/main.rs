@@ -615,6 +615,68 @@ impl App {
     }
 }
 
+/// Why this drive is being written to, or not.
+///
+/// The question the window answers out loud, because "your image will be modified" is not something
+/// to discover afterwards.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum WriteTo {
+    /// The drive itself. It is one this program built and can rebuild byte for byte.
+    OursDirect,
+    /// The drive itself, because a person asked for that.
+    YoursDirect,
+    /// A copy, because a person asked for that.
+    ChosenCopy,
+    /// A copy, because the drive came from the user and nothing said otherwise.
+    TheirsByDefault,
+    /// A copy, because the file cannot be opened for writing at all.
+    ReadOnly,
+}
+
+impl WriteTo {
+    fn copies(self) -> bool {
+        !matches!(self, WriteTo::OursDirect | WriteTo::YoursDirect)
+    }
+
+    /// One line for the row, in the user's terms.
+    fn line(self) -> &'static str {
+        match self {
+            WriteTo::OursDirect => "The iPod writes to this drive. It was built here and can be rebuilt.",
+            WriteTo::YoursDirect => "The iPod writes to this drive — your file will change.",
+            WriteTo::ChosenCopy => "The iPod writes to a copy. Your file is untouched.",
+            WriteTo::TheirsByDefault => "The iPod writes to a copy, so your file is untouched. It is yours, not ours.",
+            WriteTo::ReadOnly => "This file is read-only, so the iPod writes to a copy.",
+        }
+    }
+}
+
+/// **Whose file gets written to, and why.**
+///
+/// A drive this program built from a bundle is named for the bundle's version and CRC, so building
+/// it again produces the same bytes at the same path — writing to it costs nothing that cannot be
+/// got back. A drive somebody supplied might be the only image of an iPod they own, and one of
+/// those took twelve iTunes sync rounds to make.
+///
+/// So the *default* follows provenance, and an explicit answer overrides it in either direction.
+/// A read-only file overrides everything, because direct is not merely unwise there, it does not
+/// work: `Ata::open` asks for write access and the operating system refuses, which used to surface
+/// as `disk: Permission denied (os error 13)` after the window had already committed to booting.
+fn write_target(disk: &Path, chosen: Option<bool>) -> WriteTo {
+    let readonly = std::fs::metadata(disk)
+        .map(|m| m.permissions().readonly())
+        .unwrap_or(false);
+    let ours = disk.parent().is_some_and(|p| p == drives_dir());
+    match (readonly, chosen) {
+        (true, _) => WriteTo::ReadOnly,
+        (false, Some(true)) => WriteTo::ChosenCopy,
+        (false, Some(false)) => {
+            if ours { WriteTo::OursDirect } else { WriteTo::YoursDirect }
+        }
+        (false, None) if ours => WriteTo::OursDirect,
+        (false, None) => WriteTo::TheirsByDefault,
+    }
+}
+
 /// Where drives built from Apple's bundles are kept.
 ///
 /// A folder of its own, under the one data directory, because these are the only files here that
@@ -697,10 +759,16 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
     // `--workdisk=` naming a file is itself a request for a working copy — it is a *separate* drive
     // for the machine to write to, which is the whole of what copy mode means.
     let explicit_workdisk = get("--workdisk=").map(PathBuf::from);
-    let work_on_copy = !args.iter().any(|a| a == "--no-copy")
-        && (args.iter().any(|a| a == "--copy")
-            || explicit_workdisk.is_some()
-            || saved.work_on_copy);
+    // The flags are an answer for this run; `saved` is the remembered answer; absent from both, the
+    // drive's own provenance decides. See `write_target`.
+    let chosen = if args.iter().any(|a| a == "--no-copy") {
+        Some(false)
+    } else if args.iter().any(|a| a == "--copy") || explicit_workdisk.is_some() {
+        Some(true)
+    } else {
+        saved.work_on_copy
+    };
+    let work_on_copy = write_target(&disk, chosen).copies();
 
     // **Which drive the machine writes to, decided here and only here.** It used to be decided in
     // the window's `start`, which meant every path that does not go through a window — `--headless`,
@@ -2207,30 +2275,40 @@ impl App {
             app.section(ui, "STORAGE");
             app.cache_controls(ui);
             ui.add_space(8.0);
-            let mut copy = app.cfg.work_on_copy;
-            // **Both modes remember.** They used to differ in that too — a working copy was remade
-            // from the pristine image every launch, so the iPod forgot everything — and they have
-            // not since closing the window started parking the machine: copy mode re-freezes the
-            // working drive on the way out and restores from it on the way in. What is left is the
-            // one difference that was always the real one, which is whose file gets written to.
-            let hint = if copy {
-                "The drive you chose is never written to. The iPod writes to a copy, and remembers \
-                 across launches exactly as it would otherwise — the copy is what gets parked.\n\n\
-                 It costs a second copy of the drive: up to 8 GB where the filesystem cannot share \
-                 blocks, which is most of Linux and all of NTFS."
+            // **Whose file gets written to, said out loud.** Both modes remember across launches
+            // -- copy mode re-freezes its working drive on the way out -- so the only difference
+            // that was ever real is this one, and it is the one a person needs to see before the
+            // machine starts rather than after.
+            let target = write_target(Path::new(app.images.disk.trim()), app.settings.work_on_copy);
+            ui.label(egui::RichText::new(target.line()).small().color(Color32::from_gray(0xC8)));
+            ui.add_space(4.0);
+            if target == WriteTo::ReadOnly {
+                ui.label(
+                    egui::RichText::new(
+                        "There is no choice to make while it stays read-only: opening it for \
+                         writing is refused by the operating system.",
+                    )
+                    .small()
+                    .color(Color32::from_gray(0x9A)),
+                );
             } else {
-                "The iPod writes to the drive you chose, the way a real one writes to its own \
-                 disk.\n\nTurn this on and it writes to a copy instead, leaving your file exactly \
-                 as it is. It remembers either way; the difference is whose file changes."
-            };
-            if ui
-                .checkbox(&mut copy, "Work on a copy, leaving my image untouched")
-                .on_hover_text(hint)
-                .changed()
-            {
-                app.cfg.work_on_copy = copy;
-                app.settings.work_on_copy = copy;
-                app.settings.save();
+                let mut copy = target.copies();
+                if ui
+                    .checkbox(&mut copy, "Work on a copy, leaving my image untouched")
+                    .on_hover_text(
+                        "A copy costs a second drive -- up to 8 GB where the filesystem cannot \
+                         share blocks, which is most of Linux and all of NTFS.\n\nUntouched \
+                         until you set it, this follows where the drive came from: one built here \
+                         from an .ipsw is written to directly, because building it again produces \
+                         the same bytes; one you supplied is copied, because it might be the only \
+                         image of an iPod you own.",
+                    )
+                    .changed()
+                {
+                    app.cfg.work_on_copy = copy;
+                    app.settings.work_on_copy = Some(copy);
+                    app.settings.save();
+                }
             }
 
             ui.add_space(20.0);

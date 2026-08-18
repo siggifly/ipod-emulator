@@ -88,11 +88,30 @@ them.
 **What you see:** the slider moves and the panel does not. Worse, when the window *does* dim, the
 figure it dims by is not the device's brightness.
 
+**Confirmed on a live machine, 2026-08-18.** Driven over the control socket to Settings →
+Brightness, RetailOS's own slider moves from full to a quarter — it is on screen, it responds, the
+firmware is doing its half. Across that:
+
+```
+before:  backlight=32/32 up=46 down=2
+after :  backlight=32/32 up=46 down=2      ← the model saw nothing at all
+unmapped writes: none, before and after
+```
+
+Two facts, and the second is the useful one. The dimmer counts **zero** steps while the slider
+travels its whole range, so the pin it watches is not the one brightness goes to. And **nothing is
+written to an unmodelled address**, so the real write lands in a device this emulator already has —
+it is being received and then not understood, rather than missed. The PCF50605 over I²C is the
+prime suspect, since it drives the panel supply.
+
+The level had also already railed: reaching that screen at all took it from 20 to 32 with **46 up
+against 2 down**, because scrolling keeps the backlight awake and every one of those toggles is
+counted as a brightness step.
+
 **How you would know it is fixed:** moving the slider through its range changes the level
-monotonically, the pulse widths cluster into two populations that a threshold actually separates,
-and the count rises with the number of steps the user asked for. Finding where RetailOS really
-writes brightness comes first — the PCF50605 over I²C is the obvious candidate, since it is what
-drives the panel supply.
+monotonically and in the same direction, and the count rises with the number of steps asked for.
+Finding the register comes first, and the instrument for that is an I²C write census — which does
+not exist yet.
 
 This is the fifth model defect in this project first attributed to missing hardware and found to be
 a misread of a signal we already had.

@@ -62,11 +62,12 @@ pub struct Settings {
     pub check_updates_on_start: bool,
     /// Run on a copy of the drive image rather than on the image itself.
     ///
-    /// Off by default. The iPod writes to its own disk — settings, the chosen language, RetailOS's
-    /// bookkeeping — and running on the image is both what the hardware does and why a real iPod
-    /// remembers anything. The copy is for people who want an untouched master, and it costs a full
-    /// second copy of the drive on any filesystem without reflinks.
-    pub work_on_copy: bool,
+    /// **`None` means "nobody has said", and that is not the same as "no".** With no answer the
+    /// choice is made from where the drive came from: one this program built from a bundle is
+    /// regenerable byte for byte, so writing to it costs nothing; one the user supplied might be
+    /// the only image of an iPod they own, and defaulting to writing on it is how an afternoon
+    /// disappears. `Some` is a person's explicit choice and is obeyed for either kind.
+    pub work_on_copy: Option<bool>,
 }
 
 impl Settings {
@@ -95,7 +96,7 @@ impl Settings {
                 "disk" if !v.is_empty() => s.disk = Some(PathBuf::from(v)),
                 "black_device" => s.black_device = v == "true",
                 "check_updates_on_start" => s.check_updates_on_start = v == "true",
-                "work_on_copy" => s.work_on_copy = v == "true",
+                "work_on_copy" => s.work_on_copy = Some(v == "true"),
                 _ => {}
             }
         }
@@ -115,15 +116,19 @@ impl Settings {
              # An HTTPS GET of the GitHub releases API and a version comparison, on launch.\n\
              # Off by default on purpose. The menu item works whatever this says.\n\
              check_updates_on_start = {}\n\
-             # Run on a COPY of the drive, leaving the original untouched. Off by default: the\n\
-             # iPod writes to its own disk, and a copy costs 8 GB where reflinks are unavailable.\n\
-             work_on_copy = {}\n",
+             # Run on a COPY of the drive, leaving the original untouched. Absent means \"decide\n\
+             # from where the drive came from\": a drive this program built is written to directly,\n\
+             # one you supplied is copied. Set it to true or false to answer for both.\n\
+             {}",
             self.mode.as_str(),
             self.black_device,
             p(&self.flash),
             p(&self.disk),
             self.check_updates_on_start,
-            self.work_on_copy,
+            match self.work_on_copy {
+                Some(v) => format!("work_on_copy = {v}\n"),
+                None => String::new(),
+            },
         )
     }
 
@@ -391,7 +396,7 @@ mod tests {
             flash: Some(PathBuf::from("/a/b/rom.bin")),
             disk: Some(PathBuf::from("/a/b/disk.img")),
             check_updates_on_start: true,
-            work_on_copy: true,
+            work_on_copy: Some(true),
         };
         assert_eq!(Settings::parse(&s.render()), s);
     }
