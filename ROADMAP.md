@@ -232,15 +232,46 @@ a content-routed drop, and a machine list that shows what each drive holds.
 A third stack, and the one most likely to disagree with the other two.
 
 The 5.5G's notorious ATA problem — the 80 GB drive's 1024-byte physical sectors — **does not apply
-here**, because in an emulator we supply the drive. Two concrete local blockers do: our drive
-images use MBR partition type `0x0C` where `ipodloader2` handles only `0x0B` (real iPods use
-`0x0B`), and no kernel image exists locally.
+here**, because in an emulator we supply the drive.
 
-A milestone is reachable with local material alone: build `loader.bin` from the vendored source,
-install it into a copy of `OSOS.bin`, cold boot, and get the loader's own menu. That proves the
-whole chain except the kernel.
+### The partition-type blocker, corrected 2026-08-18 — it points the other way
 
-**Depends on:** M3. **Settled by:** the ipodloader2 menu rendering; then a kernel booting.
+This section used to read *"our drive images use MBR partition type `0x0C` where `ipodloader2`
+handles only `0x0B` (real iPods use `0x0B`)"*. **The parenthetical is false and it reverses whose
+bug this is.** Three facts, each checkable in a second:
+
+| | |
+|---|---|
+| `ipodloader2` accepts | `vfs.c`, `case 0xB:` for FAT — and there is no `case 0xC` |
+| **a real 5.5G's own drive** | `ipod8g-retail.img` — a genuine device's disk, with 56 purchased titles and its SC Info keystore — reads as **type `0x0C`** |
+| what **we** generate | `make-disk` writes **`0x0b`** (`ipsw.rs:536`), so our synthesised images are the ones ipodloader2 would accept |
+
+So real hardware presents `0x0C`, and **`ipodloader2` is the incomplete reader** — it would refuse
+the very iPod it was written for, on a disk it never met because the tooling of the day produced
+`0x0B`. Our image writer is not the divergence; if anything it is *more* conservative than the
+hardware.
+
+That makes it an upstream fix rather than a local one — see *Upstream* under After 1.0 — and it is
+the third stack earning its place before it has booted once, which is exactly what §"What this
+project is" claims the strategy is for. **Do not "fix" our writer to match the loader.** A local
+workaround would make iPodLinux boot and would quietly encode a false belief about the hardware
+into our disks, which is the failure the removed prototype recipe already cost this project once.
+
+The other blocker is real and unchanged: **no kernel image exists locally.** The ZeroSlackr
+`vmlinux` is identified (1 531 200 bytes, raw-ARM magic confirmed) and not fetched.
+
+**Building the loader needs a toolchain we do not have.** `ipodloader2` is bare-metal C plus one
+`.s` and one `.cc`, with its own linker script (`arm_elf_40.x`), and expects `arm-elf-gcc`. No ARM
+cross-compiler is installed; `arm-none-eabi-gcc` is a bottled Homebrew formula, so it is a download
+rather than a build.
+
+A milestone is reachable with local material alone once that is in place: build `loader.bin`,
+install it into a copy of `OSOS.bin` with `install-os`, cold boot, and get the loader's own menu.
+That proves the whole chain except the kernel — and it does it on a `make-disk` image, whose `0x0B`
+sidesteps the argument above entirely.
+
+**Depends on:** M3, and an ARM cross-compiler. **Settled by:** the ipodloader2 menu rendering; then
+a kernel booting.
 
 ## M5 · A synthesised boot ROM · *the biggest usability win available*
 
