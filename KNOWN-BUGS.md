@@ -364,6 +364,38 @@ set it.
 
 ---
 
+## An idle iPod ages thousands of times too fast, so it powers itself off in seconds — 2026-08-18
+
+**Nothing anywhere bounds simulated time against real time**, and the sleep path does not merely
+run fast, it runs *instantly*.
+
+`lib.rs`'s run loop, on `CPU_CTRL`'s sleep bit: the core asks to be switched off, and the clock
+**jumps straight to whichever interrupt is due first** — `slept_usec += delta` — with no real time
+passing and no instructions executed. Rockbox's tick is 100 Hz, so an idle machine loops *run a
+handful of instructions, skip 10 ms, repeat*. One 4 G boot accumulates `2 535 581 halts,
+2 531 061 ms of simulated time skipped`: forty-two minutes of iPod inside a few seconds of ours.
+
+**That is correct for a headless run and wrong at the window**, and the window is where a person is.
+`ipod-gui`'s `emu.rs` uses `Instant` only to *measure* (`wall_secs`) — there is no throttle, no
+frame budget, and no cap on how far the machine may run ahead of the wall clock. Measured: with no
+wheel input, warm Rockbox prints `Shutting down…` at **190 M instructions**, which at the window's
+~14 M instructions/sec is about **thirteen seconds after you stop touching it**. On the hardware the
+same firmware gives you the ten real minutes it was configured for, and any button resets the timer.
+
+**This is not the firmware misbehaving and not a wrong device model.** Rockbox and RetailOS both do
+exactly what an iPod does after N idle minutes; they simply get there absurdly fast. Which is why it
+reads as "the emulator powers off for no reason" and was filed for weeks as an oddity rather than a
+defect — [ROADMAP](ROADMAP.md) M1 carried it as *"honest rather than a defect … but a person at the
+window would not see it, so it wants confirming interactively."* It has now been confirmed from the
+mechanism rather than by watching.
+
+**How you would know it is fixed:** leave the window alone for a minute and the iPod is still on.
+The fix belongs in the window rather than in the machine — clamp the sleep jump so simulated time
+cannot outrun the wall clock while a person is watching, and leave the headless path skipping,
+because a research run that waited out 42 minutes of idle in real time would be useless. That makes
+it the same question as **M7**, approached from the other end: M7 is the machine being too slow while
+executing, this is the machine being infinitely fast while halted.
+
 ## Not bugs, though they look like ones
 
 - **A white screen during a cold boot.** The hardware does this too. Its *length* is the bug above.
