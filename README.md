@@ -219,6 +219,12 @@ transport, then `Scanning disk…`, then the menu, over 2 393 ATA commands of it
 
 <img src="docs/media/ipod-14-rockbox-menu.png" width="320" alt="Rockbox 4.0's main menu running on this emulator">
 
+That is a volume **this project's own installer wrote** — `ipod-boot put-files`, 381 files — so the
+theme, the icons and the 15 px font are all being read back off the emulated disk. It used to be a
+picture of the same menu in Rockbox's built-in 8 px fallback, because the recipe's default drive is
+a stock Apple one with no `.rockbox` on it at all; [research/06](research/06-rockbox-as-oracle.md)
+has the measurement and the reproduction.
+
 A second, source-available operating system on this hardware model is the reason
 [research/06](research/06-rockbox-as-oracle.md) exists — RetailOS is stripped C++ with no symbols,
 Rockbox ships an ELF with 5 808 of them — and it has already earned it. **Three device models here

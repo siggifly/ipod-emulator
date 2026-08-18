@@ -703,3 +703,120 @@ but in the step that copies a read's answer into the controller's data registers
 
 That is four lines of this emulator, and the next measurement is to log what they copy — and
 whether they run at all — on a cold boot.
+
+## 2026-08-18, later still: the menu's font was never on the volume the recipe mounts
+
+The shipped screenshot of Rockbox's menu renders in the compiled-in 8 px sysfont, not in the
+`15-Adobe-Helvetica` that `apps/settings_list.c:328-368` asks for at `LCD_HEIGHT <= 240`. Two
+explanations were open: the font never reached the volume, or it is on the volume and our FAT32 /
+ATA path hands back the wrong bytes. The second would have been the valuable one — at 231 928 bytes
+it is by far the largest file Rockbox opens at boot, it spans 57 clusters, and a cluster-chain bug
+would surface there and nowhere else.
+
+**It is neither. The FAT32 path is correct and the recipe mounts the wrong disk.**
+
+### `rockbox.sh` defaults to a volume with no `.rockbox` on it at all
+
+`DISK` defaults to `resources/drives/ipod8g.img`, which is a stock Apple volume:
+
+```
+$ IMG=resources/drives/ipod8g.img tools/fat-read.py find rockbox
+# ipod8g.img: FAT32 type 0xc at LBA 32768, 8 sectors/cluster, data starts at LBA 65536
+                                                              (nothing)
+$ IMG=resources/drives/ipod8g.img tools/fat-read.py find ipod_control
+/iPod_Control                                DIR  lba 65560..65567
+/iPod_Control/Device                         DIR  lba 65568..65575
+…9 entries
+```
+
+The second command is the control, and R13 is why it is there: an absence reported by a tool nobody
+has watched succeed on that data is not a measurement. The tool finds things in this image. It finds
+no `.rockbox` because there is none.
+
+With no `/.rockbox/fonts/`, the font load fails and Rockbox falls back to the sysfont it carries.
+Nothing reports it — a themeless install is an ordinary condition for Rockbox, not an error — so the
+failure is silent by design and not by defect.
+
+**And the shipped still is exactly that run.** `rockbox.sh`'s own flags, its own default disk,
+nothing added, filmed at a 2 M cadence:
+
+```
+BUDGET=1200000000 trace --osos=rb-main.raw --boot-osos --flash=… \
+  --disk=resources/drives/ipod8g.img --sysinfo --bcm --pmu \
+  --bcm-film=0xE0000:140:F0:2M:_out/film/asshipped
+```
+
+Frame 5 of that film — up from 48 M to 166 M instructions — differs from
+`docs/media/ipod-14-rockbox-menu.png` in **0 pixels of 76 800**.
+
+### The row pitch, measured
+
+Not eyeballed. The ink profile of the label column, with the gap rule stated as a number: a row with
+**0** lit pixels above the background is a gap, and the pitch is the spacing between gaps.
+
+| run | volume | gap rows | pitch |
+|---|---|---|---|
+| the shipped still | `ipod8g.img`, no `.rockbox` | 31, 39, 47, 55, 63, 71, 79, 87 | **8 px, 7 of 7 gaps** |
+| `put-files` | our own installer's volume | 38, 50, 68, 83, 98, 113, 128, 143, 155 | **15 px, 5 consecutive gaps** |
+| a mounted copy | `ipod8g-rockbox.img` | 38, 48, 64, 79, 94, 109, 124, 139, 153 | **15 px, 5 consecutive gaps** |
+
+15 is `DEFAULT_FONT_HEIGHT`. The instrument's control is printed beside every answer: the busiest
+row in each strip carries 33–102 lit pixels, 33× to 102× the gap rule, so a gap and a glyph row are
+nowhere near each other on this measure. The naive version of this — "a band of lit rows is a
+row" — reports the shipped still's pitch as **55**, because two rows of an 8 px font touch and merge
+into one band. That is R5: the measure has to be matched to what it is measuring.
+
+### The FAT32 writer is exonerated, with the bytes to prove it
+
+`put-files` puts the font on the volume, and it reads back correct:
+
+```
+$ ipod-boot put-files disk.img <the 4.0 zip, unpacked>
+  381 file(s) in 23 directory(ies), 19298918 bytes
+$ IMG=disk.img tools/fat-read.py find helvetica
+/.rockbox/fonts/15-Adobe-Helvetica.fnt   size=231928  lba 6598080..6598535 (57 clusters)
+$ IMG=disk.img tools/fat-read.py cat /.rockbox/fonts/15-Adobe-Helvetica.fnt out.bin
+$ shasum -a 256 out.bin  <the zip's own copy>
+8a7ff4b0…  out.bin
+8a7ff4b0…  .rockbox/fonts/15-Adobe-Helvetica.fnt
+```
+
+Identical across all 57 clusters, read back by the independent reader — and Rockbox agrees, because
+booted on that volume it draws the themed background, the colour icons and 15 px rows. The 232 KB
+multi-cluster read this was supposed to break on does not break. `rockbox.ipod` on the same volume
+is more demanding still and also correct: 187 clusters spread from LBA 1 660 696 to 6 565 959, so
+the chain is followed across a fragmented file and not merely across a contiguous one.
+
+*(`ipod8g-rockbox.img` holds the same font at `/.rockbox/FONTS/` — uppercase, because macOS's FAT
+driver wrote a bare 8.3 name with no long-name entry. It renders identically, so the case is not a
+factor.)*
+
+### One condition, and it is not optional
+
+Rockbox **writes** to a volume that has `.rockbox` on it, and this emulator's ATA is read-only
+unless asked. Without `--disk-writable` the boot panics long before it loads a font:
+
+```
+*PANIC* (4.0)
+dc_writeback_callback() - Could not write sector 8908074 (error -53)
+```
+
+That is at ~20 M instructions. So a run against an installed volume needs `--disk-writable`, and
+`rockbox.sh` does not pass it. On the *stock* volume the flag makes no difference at all — the two
+runs are identical frame for frame and digest for digest, 2 253 ATA commands each — because there is
+nothing there for Rockbox to write to. Which is why the flag's absence never showed up until a
+volume with files on it was put under it.
+
+**The reproduction, end to end:**
+
+```
+cp -c resources/drives/ipod8g.img /tmp/rb.img
+unzip -q resources/vendor/rockbox/bin/rockbox-ipodvideo-4.0.zip -d /tmp/rbzip
+ipod-boot put-files /tmp/rb.img /tmp/rbzip
+DISK=/tmp/rb.img tools/ipod-boot/rockbox.sh --disk-writable      # + --bcm-film to record it
+```
+
+`docs/media/ipod-14-rockbox-menu.png` is now a frame from that run. The re-encoded still is
+pixel-identical to the frame the machine produced — 0 of 76 800 — because what has to be checked is
+what ships, not what was on disk before ffmpeg touched it.
+
