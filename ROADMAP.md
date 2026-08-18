@@ -108,10 +108,15 @@ around Apple's driver rather than around the part: autonomous frames were gated 
 which is *RetailOS's* way of asking and which Rockbox never sends. Reporting is on at reset now, and
 the gate is the pair (reporting AND an armed receiver) that the interrupt was always gated on.
 
-**Left:** does `select` open a submenu, does the file browser list a real volume, do plugins load?
-And the idle poweroff — honest rather than a defect, since this emulator fast-forwards idle time
-(1 332 s of skipped sleep inside 11 s of execution), but a person driving the window would not see
-it, so it needs confirming interactively rather than by script.
+`select` opens the file browser, and it **lists a real volume**: the listing looked empty until a
+one-byte positive control (clear the hidden attribute on `iPod_Control` in a *copy* of the image)
+made it appear — every entry at that volume's root is hidden, and `filetree.c:352` skips hidden
+entries. Rockbox mounts our FAT32 through the emulated ATA and filters correctly.
+
+**Left:** the same thing driven from the window rather than by script, and plugins — which need
+`/.rockbox/rocks/` on the volume and therefore wait on M3. The idle poweroff is honest rather than a
+defect (this emulator fast-forwards idle time: 1 332 s of skipped sleep inside 11 s of execution),
+but a person at the window would not see it, so it wants confirming interactively.
 
 **Depends on:** nothing. **Settled by:** driving Rockbox's menus from the window and reaching its
 file browser on a real volume.

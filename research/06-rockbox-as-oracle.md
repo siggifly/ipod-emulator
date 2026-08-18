@@ -483,3 +483,44 @@ click wheel delivers input only to a firmware that speaks that protocol. Rockbox
 after the USB clock-ready bit and the ADC. The pattern is now the most reliable bug-finder this
 project has: *anywhere a device's behaviour was derived from what RetailOS does, a second stack
 finds the seam.*
+
+## 2026-08-18, later still: input, and the file browser on a real volume
+
+Removing the `0x052a` gate (below) let wheel frames reach Rockbox: **78 frames posted, 78 reads of
+`CLICKWHEEL_DATA`, 78 with a frame waiting**, and the menu selection moves. `press=select` on
+*Files* opens the file browser.
+
+### The empty listing was correct, and here is the control
+
+The browser opened on **nothing**, which looked like a failed mount. It is not. Every entry at the
+root of `ipod8g.img` carries the hidden attribute:
+
+| entry | attr | |
+|---|---|---|
+| `IPOD` | `0x08` | volume label, not a file |
+| `SYSTEM~1` | `0x16` | HIDDEN · SYSTEM · DIR |
+| `IPOD_C~1` | `0x12` | HIDDEN · DIR |
+| `$RECYCLEBIN` | `0x16` | HIDDEN · SYSTEM · DIR |
+
+and `apps/filetree.c:352-356` skips them:
+
+```c
+if (*c->dirfilter != SHOW_ALL &&
+    ((entry->d_name[0]=='.') || (info.attribute & ATTR_HIDDEN))) {
+    continue;
+}
+```
+
+**The positive control.** On a *copy* of the image, one byte: clear the hidden bit on `IPOD_C~1`
+(`0x12` → `0x10`). Same build, same script, same everything else.
+
+![Rockbox listing iPod_Control](../docs/media/ipod-16-rockbox-files.png)
+
+The frame goes from 265 non-black pixels to 2 670 and `iPod_Control` is listed and highlighted. So
+Rockbox mounts this emulator's FAT32 volume through the emulated ATA controller, walks its
+directory, and applies its own filter correctly. An absence that a one-byte change turns into a
+presence is a measurement; an absence on its own is not.
+
+*(Partition type was the suspect and is not the cause: our images are FAT32 type `0x0C`, and
+`firmware/common/disk.c` normalises to `PARTITION_TYPE_FAT32_LBA` whenever it finds a valid FAT.
+`ipodloader2` is the one that only accepts `0x0B`, which matters for M4 and not here.)*
