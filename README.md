@@ -1,6 +1,6 @@
 # ipod-emulator
 
-**Apple's retail iPod 5.5G firmware boots here, from the reset vector, on an emulator written from
+**Apple's retail iPod Video firmware boots here, from the reset vector, on an emulator written from
 scratch. It formats its own filesystem, reads the click wheel, draws its own menus, and runs a game.**
 
 ![cold boot through to a game](docs/media/ipod-12-device-boot.gif)
@@ -13,11 +13,20 @@ scratch. It formats its own filesystem, reads the click wheel, draws its own men
 > if something breaks or could be better; the reports so far have found real bugs and every one of
 > them has been fixed.
 
-The iPod Video 5.5G shipped on 12 September 2006. Twenty years next month, its firmware still boots
+The iPod with video shipped on 12 October 2005, and its Late 2006 revision — the one everybody
+calls the 5.5G — eleven months after that. Twenty years on, the firmware still boots
 — with no iPod anywhere near it. The PortalPlayer it addresses is arithmetic, the drive it formats
 is a file, the wheel it reads is a mouse, and none of that is something the firmware can tell. It is
 also the model I owned — my first Apple product, at twelve. That this is the one that ended up
 emulated was not deliberate, and I liked it more than I expected to.
+
+**The reference hardware is a 30 GB 5G**, and the emulator is built against it: the NOR dump's
+`Mod#` reads `MA146` and its `HwVr` reads `0x000B0005`, the drive's `SysInfo` reads
+`boardHwRev: 0x00050000` and `updaterFamily: 13`, and the firmware built into drives here is
+`iPod_20.1.3` — `UpdaterFamilyID` 20, the 5G's RevA. Apple gives both revisions the same
+`FamilyID` of 6 and separates them by `UpdaterFamilyID`, so *iPod Video* is the honest name for what
+runs here and **5.5G is a claim this project has not yet earned** — see [ROADMAP](./ROADMAP.md)
+§"5G, 5.5G, and which is the default".
 
 Not a reimplementation of the interface. Apple's own code the whole way: the bootloader brings up
 SDRAM, talks to the PCF50605 power chip over I²C, uploads firmware to the video co-processor, reads
@@ -325,7 +334,7 @@ In rough order of how much this project owes them:
 - **EE Times**, whose report on the Wedbush Morgan teardown is the only published bill of materials
   for this board — it is where the part numbers came from.
 - **[theapplewiki](https://theapplewiki.com/)**, for the model-to-hardware tables: which model
-  number is which generation, and what silicon is inside it. Sorting the 5.5G from the Classic in
+  number is which generation, and what silicon is inside it. Sorting the Video from the Classic in
   the first place started there.
 - **[Ghidra](https://ghidra-sre.org/)**, and **[GhidraMCP](https://github.com/bethington/ghidra-mcp)**
   for putting it a query away instead of a window away.
