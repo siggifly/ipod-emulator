@@ -72,15 +72,17 @@ exactly what was assumed.
 
 ## Ⅳ. The rest of the line
 
-Everything here assumes one device. `FB_W`/`FB_H` were constants until 0.4.0 and are a `Device`
-struct now — case, screen, wheel and framebuffer in millimetres — which is the first step and the
-only one taken.
+Everything here assumes one device. `Device` carries case, screen, wheel and framebuffer in
+millimetres plus the model number, ROM length and updater family, and `MODELS` is the table every
+picker must draw from — so adding an iPod is a row and its dimensions.
 
-What remains: physical dimensions for each model, a picker, and **identifying the device from the
-dump you hand it**. That last one is not decoration. The first bug report this project received was
-somebody pairing a prototype ROM with a pristine firmware partition and getting
-`Bootloader could not execute target image!` an hour later. A setup screen that recognises what it
-has been given says so in a sentence.
+**Identifying the device from the dump you hand it** is now partly done, and it was never
+decoration: the first bug report this project received was a prototype ROM against a pristine
+firmware partition, `Bootloader could not execute target image!`, an hour later. The window reads
+what it was given, says so, and refuses a pair whose updater families disagree before booting.
+
+What remains: dimensions per model, the picker itself, and telling a *prototype* ROM from a retail
+one by its `HwVr` and `Mod#` rather than only by the family.
 
 Clickwheel models, all PortalPlayer or Samsung: 1G–4G, mini, Video (5/5.5G), Classic (6/6.5/7G),
 nano 1–5G. The nano 6G dropped the wheel and the 7G has a touchscreen, so both need a different

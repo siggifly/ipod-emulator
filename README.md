@@ -34,19 +34,20 @@ down, and draws.
 
 ## What you have to supply
 
-Two files, from an iPod you own. **Neither is distributed here and neither ever will be.**
+Two things, from an iPod you own. Apple wrote both, this project ships neither, and an iPod on your
+desk has both on it.
 
 | | What to look for | |
 |---|---|---|
-| **NOR flash dump** | `internal_rom_000000-0FFFFF.bin` | Exactly 1 048 576 bytes. The name is the convention, after the offset range it covers — `000000`–`0FFFFF` is the whole megabyte. Any name works; the size and the reset vector are what get checked |
-| **IPSW** | `*.ipsw` — Apple's own bundle, about 14 MB | The filename varies and does not tell you which iPod it is for. `ipod-boot make-disk your.ipsw disk.img` builds a fresh drive from it |
+| **The boot ROM** | a 1 MB NOR dump, conventionally `internal_rom_000000-0FFFFF.bin` | Any name works — the size and the reset vector are what get checked |
+| **Something to make a drive from** | Apple's `.ipsw` (~14 MB), **or** a drive image you already have | An `.ipsw` is built into a drive as it lands. `ipod-boot make-disk your.ipsw disk.img` does it without the window |
 
-**The IPSW's updater family must match the iPod your NOR dump came from.** The family is inside the
-bundle, not in its filename — `make-disk` reads it out of the manifest (`Firmware-25.1.2` → family
-25) and prints it, because a mismatch does not fail loudly: RetailOS boots, does not recognise the
-drive as its own, and asks to be restored from iTunes, after roughly 70 ATA commands instead of 600.
+**The two must be for the same iPod**, and the emulator checks before it boots — a mismatched pair
+otherwise fails quietly, reaching about 70 ATA commands and a request to restore from iTunes where a
+matching pair reaches the language picker with 618. Drop both in and it says which files it has,
+what is inside them, and whether they go together.
 
-Without them the emulator starts, tells you what is missing, and does nothing else.
+Without them it starts, says what is missing, and does nothing else.
 
 ### What has actually been tested
 
@@ -65,11 +66,11 @@ Out!) → Dump ROM contents** and copy the `internal_rom_…` file off when you 
 [flash guide](https://www.rockbox.org/wiki/IpodFlash.html) has the detail. This is the route that
 involves nobody else's copy of anything, and the only one guaranteed to match the iPod you have.
 
-**Failing that, it is archived — under the wrong product.**
-BootROM collections file the iPod Video dump as *iPod Classic*, in a directory named `A1238` — which
-is the Classic 6G's model number. The Video is `A1136`. So searching for "iPod Video", "5.5G" or
-"A1136" turns up nothing and searching for the Classic finds it. This cost someone hours before we
-noticed, and we had the same file mislabelled in our own tree.
+**Failing that, it is archived — under the wrong product.** BootROM collections file the iPod
+Video's dump as *iPod Classic*, in a directory named `A1238`, which is the Classic 6G's model
+number. The Video is `A1136`. Searching for "iPod Video", "5.5G" or "A1136" finds nothing;
+searching for the Classic finds it. This cost someone hours, and we had the same file mislabelled
+in our own tree.
 
 A **prototype** dump also circulates (`HwVr 0x000b0011`, `Mod# M8976`, blank `HwId`). It will **not**
 boot a pristine firmware partition. It was this project's first dump, and the recipe that paired it

@@ -14,66 +14,92 @@ behind. Anything published from here gets a new number.
 
 ## Unreleased
 
-**Your iPod remembers, and the settings no longer reboot it.**
+**Your iPod remembers, the settings no longer reboot it, and it tells you what you gave it.**
 
 ### The drive is yours, and it is written to
 
-The emulator now runs **on the drive image you gave it**, the way a real iPod writes to its own
-disk — so your settings, your chosen language and your music stay on it between launches. It used to
-run on a throwaway copy and keep a second frozen copy beside it, which meant two 8 GB files per pair
-of images and an iPod that forgot everything.
+The emulator runs **on the drive image you gave it**, the way a real iPod writes to its own disk, so
+your settings, your language and your music stay on it. It used to run on a throwaway copy and keep
+a second frozen copy beside it — two 8 GB files per pair of images, and an iPod that forgot
+everything.
 
-Closing the window **parks the machine**: RAM and a stamp naming the drive are written together, and
-the next launch resumes in about three seconds. If anything touched the drive in between — iTunes,
-`make-disk`, another window — the stamp does not match, and it cold boots and says why rather than
+Closing the window **parks the machine**: RAM and a stamp naming the drive go down together, and the
+next launch resumes in about three seconds. If anything touched that drive in between — iTunes,
+`make-disk`, a second window — the stamp does not match and it cold boots and says why, rather than
 restoring RAM onto a drive that has moved.
 
-**Work on a copy** is still there, in the settings, for anyone protecting an image they cannot
-rebuild. `--copy` and `--no-copy` choose for one run.
+**Work on a copy** is still there in the settings, and it remembers too now. `--copy` and
+`--no-copy` choose for one run. Switching to direct offers the old drives back: the reclaim figure
+counts them, where before it protected them for ever because their names matched.
 
-Switching to direct offers the two old drives back: the reclaim figure in the settings now counts
-them, where before it protected them for ever because their names matched the images in use.
+### Settings, not setup — and the iPod keeps running behind them
 
-### Setup is Settings, and the iPod keeps running
+Opening the settings used to end the machine and walk you through three pages to get back, because
+the settings screen and the first-run screen were the same screen: the only way to reach it was to
+have no machine.
 
-Pressing settings used to end the machine and walk you through three pages before you could get back
-to it — because the settings screen and the first-run screen were the same screen, and the only way
-to reach it was to have no machine. They are separate now:
+Case colour, the readout and the update check apply as you change them. **Only the two files and
+where the iPod writes need a restart**, and the screen names which changed and offers it; `Done`
+leaves it for the next launch. `Esc` closes. Both are refused only while the images do not validate,
+so a first run cannot be escaped into an emulator with nothing in it.
 
-- **The iPod keeps running behind the settings.** Case colour, the readout and the update check
-  apply as you change them.
-- **Only the two files and where the iPod writes need a restart**, and when one of those changes the
-  screen names which, and offers it. `Done` leaves it for the next launch instead.
-- `Esc` closes them. Both it and `Done` are refused only while the images do not validate, so a
-  first run cannot be escaped into an emulator with nothing in it.
+### One screen, and it sorts your files for you
 
-### The first run is one screen, and it sorts your files for you
+**Drop both files anywhere on the window, in any order.** Each is identified by what it contains — a
+zip is Apple's bundle, exactly 1 MiB is the boot ROM, anything else large enough is a drive — so
+there is nothing to put in the wrong box, and an `.ipsw` builds the drive as it lands instead of
+waiting behind its own button. **Choose…** takes both files at once.
 
-**Drop both files anywhere on the window, in any order.** Each is identified by what it contains —
-a zip is Apple's bundle, exactly 1 MiB is the boot ROM, anything else is a drive — so there are no
-slots to put them in the wrong way round, and a `.ipsw` builds the drive as it lands instead of
-waiting behind its own button. The paths and the text fields are still there, folded away, for
-machines with no file dialog.
+The path fields are gone. Files are named for what they are — `iPod Video · Y7TXK`, `iPod software
+20.6.3` — with the path on hover.
 
-Everything the project knows about *where to get* the two files is behind one disclosure, and the
-warnings that used to sit above every field now appear as the verdict on the file that needs them.
+### It tells you what it found
 
-### The instrument panel is a readout, over the device
+Every verdict already read these files and threw the findings away unless one failed. **What's in
+it** now opens a page per file: the ROM's images, serial, GUID and build string; the drive's
+firmware images, whether there is an OS, whether the flash updater is armed.
 
-The resizable right-hand panel is gone. What was in it split three ways: **power, restart and the
-two-thumb button holds are controls that belong to an iPod**, so they are under the device in every
-mode — a user-mode user previously could not restart the machine at all. **Conditions** — halted, on
-hold, drawing to the surface nobody is looking at — are one line each, in every mode, because the
-person who needs them is the one who does not know what a counter is. What remained was measurement,
-and `D` now draws it as a corner overlay that does not change the window's shape.
+And it checks the **pair**, which no single file's verdict can: a bundle from the wrong updater
+family boots, fails to recognise the drive, and asks to be restored from iTunes after about 70 ATA
+commands where a matching pair reaches the language picker with 618. That reads as a broken
+emulator. It is now caught before the boot — *"These are not the same iPod — Family 24. iPod Video
+takes family 20."*
+
+### One window, and nothing scrolls but the click wheel
+
+Every screen is the same column in the same window. The minimum size is derived from the tallest
+page rather than guessed at, and a test lays every screen out with no window and no GPU and fails if
+one outgrows it. The old minimum was 520 px against pages needing up to 678.
+
+### The readout replaced the instrument panel
+
+The resizable right-hand panel is gone, and what was in it split three ways. **Power, restart and
+the two-thumb holds belong to an iPod**, so they sit under the device in every mode — in user mode
+you previously could not restart the machine at all. **Conditions** — halted, on hold, drawing to
+the surface nobody is looking at — are one line each in every mode. What remained was measurement,
+and `D` draws it over the device without changing the window's shape.
 
 ### Fixed
 
 - **`--headless`, `--selftest`, `--probe` and `--power-cycle-at` could not open a drive.** Which
-  drive the machine writes to was decided inside the window, so every path that has no window kept
-  pointing at a working copy nothing had made.
+  drive the machine writes to was decided inside the window, so every path without a window pointed
+  at a working copy nothing had made.
+- **Building from a second `.ipsw` silently overwrote the first.** Every build landed on one path.
+  Drives are named for the software in them now, keyed on version and CRC, so the same bundle
+  resolves to the same file and a different one cannot land on it.
+- **The storage figure skipped the largest files in the folder** once built drives moved into a
+  subdirectory — `dir_size` stopped at the first level.
 - The frozen drive can no longer be restored over your own image by a mis-wired path: reaching that
-  branch now requires copy mode to be on.
+  branch requires copy mode to be on.
+- `--ipsw=` builds the drive, as dropping the bundle would. It used to fill a field and wait for a
+  button that no longer exists.
+
+### For people working on this
+
+`resources/` was reorganised: `drives/` for images that cannot be rebuilt, `derived/` for what a
+script regenerates, `vendor/` for upstream checkouts (never renamed, so `git pull` keeps working),
+`roms/` for boot ROMs under names that say what they are. The tree itself moved beside the
+repositories rather than inside the public one.
 
 ## 0.4.0
 

@@ -102,7 +102,8 @@ will reasonably expect a game they bought to run, and it will not.
 
 - **A white screen during a cold boot.** The hardware does this too. Its *length* is the bug above.
 - **The charging screen after a while.** Authentic 5G behaviour with a charger attached.
-- **"Restore from iTunes" after `make-disk`.** The IPSW's updater family does not match the iPod
-  your NOR dump came from. `make-disk` prints the family for exactly this reason.
+- **"Restore from iTunes" after `make-disk`.** The bundle's updater family does not match the iPod
+  your NOR dump came from. The window now says so before it boots, and `make-disk` prints the family
+  on the command line, so this should be hard to reach by accident.
 - **`aupd` running the flash updater on first boot.** Correct — it takes two boots.
   `ipod-boot flash-update` is the recipe.
