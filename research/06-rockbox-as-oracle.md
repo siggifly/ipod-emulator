@@ -620,3 +620,46 @@ The ADC census is itself the next clue: **9 237 conversions on channel 0 and exa
 channel 2**. Channel 0 is Apple's bootloader polling before the handoff; one conversion on Rockbox's
 own channel means it shut down before its power thread ever ran a second time — so `voltage_now` is
 being decided by a single early reading, or by nothing at all.
+
+### Narrowing the cold-boot shutdown: the reading is zero, not low
+
+Both addresses read straight out of the code rather than guessed, by disassembling
+`query_force_shutdown` at `0x00068358`:
+
+```
+0006835c  bl 0x00068340          ; power_input_present() -- early out if true
+0006836c  ldr r3, =0x000a6ba8    ; &battery_level_shutoff (u16)
+00068374  ldr r3, =0x000e23b8
+00068378  ldr r3, [r3, #0xfc]    ; voltage_now  ->  0x000e24b4
+0006837c  cmp r3, r0
+00068384  movlt r0, #1           ; voltage_now < shutoff  =>  force shutdown
+```
+
+Watching `voltage_now` separates the two paths immediately. Same store, same code
+(`0x000687e4`), 300 M instructions:
+
+| | `r0` (filter accumulator) | `r3` (new `voltage_now`) | decay per step |
+|---|---|---|---|
+| **warm** | `0x00080f7e` | `0x101d` = **4 125 mV** | −1 |
+| **cold** | `0x000000fe` | **0** | −0x20 = −32 mV |
+
+So the cold path's battery reading is **zero, not merely low**, and the exponential filter walks
+4 160 → 3 300 in about twenty-seven power-thread iterations. That is the shutdown.
+
+**Two more explanations eliminated, both by measurement:**
+
+- *The ADC result registers.* `--pmu-force=0x30=0xb0 --pmu-force=0x31=0x80` rescues the **warm**
+  path (it is what first produced the menu) and does **nothing** in the cold one — 315
+  `sys_poweroff` calls with the force applied. So the failure is upstream of those registers.
+- *The I²C bus never going idle.* `pp_i2c_wait_not_busy` (`i2c-pp.c:55`) gives up after `HZ` ticks
+  and `_adc_read` does not check the result, which would leave `data[2]` as stack garbage — a very
+  good story. It is wrong: `--watch=0x7000c01c` reports **no writes at all** in either path, so
+  `I2C_STATUS` reads 0, `I2C_BUSY` is clear, and the wait returns on its first look. (Consistent
+  with that address sitting in the *both* column of [research/15](15-the-register-agreement-table.md)
+  — a pure input we invent.)
+
+**Where it stands.** The census records exactly **one** channel-2 conversion in the cold path
+against 9 237 on channel 0 (Apple's bootloader, before the handoff). One conversion means
+`adc->data` is populated once by `adc_init`'s own `_adc_read` and cached from then on — so a single
+early read returning zero would explain every later number. The next measurement is to catch that
+one transaction and record the bytes it actually received.
