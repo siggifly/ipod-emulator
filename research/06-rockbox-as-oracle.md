@@ -1115,3 +1115,48 @@ frames are byte-identical to ours and the artifact is made of transparency the i
 artifact made of transparency cannot survive a file that has none.
 `tools/ipod-film/post-assets.sh`'s `publish()` does not set it. Its own films happen not to show
 this because they are 256-colour with `dither=none`, which is a mitigation and not a defence.
+
+
+## 2026-08-18, later still: the cold boot stops powering off, and starts stalling
+
+**The ADC bug is fixed, and not by anything aimed at it.** Retiring the clock's sleep teleport —
+a halted core now costs a loop iteration instead of jumping to the next deadline — fixed it as a
+side effect:
+
+| | `reg 0x2f` writes | last value |
+|---|---|---|
+| before the clock change | 9 240 | `0x00` |
+| after | 5 | **`0x05`** |
+
+`0x05` is `(2 << 1) | 1`, channel 2, which is what the guest asked for all along. So the byte that
+was "written 0x05 and read back 0x00 seventy-two instructions later" was **a consequence of the
+teleport**: jumping time in the middle of `pp_i2c_send` let something land between the spill of
+`data[1]` and the copy into `I2C_DATA(1)` in a way that cannot happen on hardware, where time does
+not move in steps of ten milliseconds between two adjacent instructions. Every hypothesis about a
+lost byte, an alias, or a clobbered stack was chasing a symptom of the clock.
+
+**`sys_poweroff` is now never called.** `--enterlog=0x00068450` reports **0 arrivals** across a
+600 M cold boot, against the 315 calls that opened this whole investigation, and `_battery_voltage`
+runs exactly once, at `@124 522 783`.
+
+### What replaces it, and it is a different question
+
+The panel draws the splash and then goes to **zero non-black pixels** at `@124.6 M` and stays there.
+It is not a shutdown and not a hang: `--novelty` finds new code still appearing at `@353 699 369`,
+and the machine is executing rather than halted. Where it executes, on an 800 M cold boot:
+
+| share | address | symbol |
+|---|---|---|
+| 18.3 % + 12.2 % | `0x40005520` / `0x40005510` | **not in Rockbox's ELF** |
+| 13.3 % + 7.4 % | `0x4000e750` / `0x4000e740` | **not in Rockbox's ELF** |
+| 6.0 % + 6.0 % | `0x0007e8b0` / `0x0007e8a0` | **`usb_reset_controller +0x9c` / `+0x8c`** |
+
+Two things to take from it. **Around 70 % of the time is spent in `0x4000xxxx` code that has no
+symbol in `rockbox.elf`** — the nearest preceding symbol is megabytes away, so these are not
+Rockbox's IRAM functions however much the address range looks like it. And **12 % is a two-address
+spin inside `usb_reset_controller`**, on a machine where [ROADMAP](../ROADMAP.md) records USB as
+*"nothing modelled beyond a clock-ready bit"*.
+
+**Settled when** the cold path reaches the menu the warm path reaches. The first question to
+answer is whose code `0x40005510` is, because 70 % of a run is not a detail — and the answer is not
+in `rockbox.elf`, so it wants the bootloader's own image rather than another guess.
