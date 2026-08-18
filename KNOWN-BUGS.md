@@ -359,7 +359,7 @@ including frames caught mid-redraw, and the gif's own keyframe is byte-identical
 76 800 pixels differ — so the encode's input was clean.
 
 **How you would know it is fixed:** every frame in a shipped gif reports `transparent no`.
-`-gifflags -transdiff` does that, measured. `tools/ipod-film/post-assets.sh`'s `publish()` does not
+`-gifflags -transdiff` does that, measured. `ipod-film asset`'s `publish()` does not
 set it.
 
 ---

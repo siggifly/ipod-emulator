@@ -160,7 +160,7 @@ confirm it grows 15×. See [research/03](../../research/03-rtxc-and-the-video-co
 | `--symbols` | print the function names recovered from RetailOS's own labels — 140 of them, including every RTXC task entry. There is no symbol table; these are read out of the image |
 | `--disasm=ADDR:COUNT` | disassemble the **running** machine. Necessary rather than convenient: much of RetailOS is scatter-loaded, and the file holds zeros where the code will be |
 | `--history=N` | how many instructions of tail to print (also honoured on the cold-boot path, alongside the register file at the halt) |
-| `--bcm-film=ADDR:W:H:EVERY:DIR` | `--bcm-dump`'s timelapse: sample the panel every `EVERY` instructions for the whole run and keep every frame that differs from the one before. Same address/size spelling (hex), same converter, exact 320x240 PNGs. `tools/ipod-film/film.sh` is the recipe that wraps it and assembles a video |
+| `--bcm-film=ADDR:W:H:EVERY:DIR` | `--bcm-dump`'s timelapse: sample the panel every `EVERY` instructions for the whole run and keep every frame that differs from the one before. Same address/size spelling (hex), same converter, exact 320x240 PNGs. `ipod-film run` is the recipe that wraps it and assembles a video |
 
 Two counters print on every boot run and are worth reading: `dma: every staged byte landed` (a
 transfer log reports what was *staged*, so a destination no region answers would otherwise vanish

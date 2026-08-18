@@ -173,7 +173,7 @@ BUDGET=60000000 tools/ipod-boot/retail-boot.sh --clock=5 \
     --bcm-ppm=_out/logo.ppm --bcm-peek=0xe0000:16
 
 # the logo on the panel, held from 10 M to 50 M, in a film
-BUDGET=250000000 tools/ipod-film/film.sh --out=_out/film/logoboot --every=5M
+BUDGET=250000000 ipod-film run --out=_out/film/logoboot --every=5M
 ```
 
 The baseline is **unmoved by all of it** — `--clock=5 --stop-when-idle=400000000` at

@@ -228,7 +228,7 @@ the only reason an open-loop wheel script can play it. The paddle is 57 px wide,
 it 29 px per million instructions, `rotate=+8` every 200 k moves it **150**.
 
 The shipped film is **six returns, eight bricks and a score of 8** —
-[`tools/ipod-film/post-assets.sh gameplay`](tools/ipod-film/post-assets.sh), write-up in
+[`ipod-film asset gameplay`](ipod-film asset), write-up in
 [research/13 §10](research/13-do-the-games-load.md). Four predictions measured out to nothing on the
 way and are in §10.4a; the most useful is that **a wheel script is not inert with respect to the
 game's timing** — traffic costs instructions, so a rally script has to be re-read off its own run.

@@ -84,7 +84,7 @@ whether a new frame appears.
 Every run below is the same recipe with a different `--wheel` script:
 
 ```
-tools/ipod-film/film.sh --out=_out/film/NAME --every=2M -- --clickwheel --wheel='…'
+ipod-film run --out=_out/film/NAME --every=2M -- --clickwheel --wheel='…'
     # = retail-boot.sh --clock=5 --stop-when-idle=400000000 --bcm-registry --bcm-film=…
     #   BUDGET=4000000000
 ```
@@ -441,11 +441,11 @@ SEL=',+60M:touch,+2M:press=select,+5M:release'
 TO_GAMES="$HEAD$ROW$ROW$ROW$SEL$ROW"                    # main menu · Extras · Games highlighted
 
 # §4 — the purchased title: its cover art draws, then Apple's DRM refuses
-BUDGET=5000000000 tools/ipod-film/film.sh --out=_out/film/asphalt --every=2M -- --clickwheel \
+BUDGET=5000000000 ipod-film run --out=_out/film/asphalt --every=2M -- --clickwheel \
   --wheel="$TO_GAMES$SEL,+120M:touch,+2M:press=select,+5M:release"
 
 # §5 + §6 — Brick, launched and then played
-BUDGET=3200000000 IDLE=2000000000 tools/ipod-film/film.sh --out=_out/film/brick --every=1M -- \
+BUDGET=3200000000 IDLE=2000000000 ipod-film run --out=_out/film/brick --every=1M -- \
   --clickwheel --enterlog=0x0024e808 \
   --wheel="$TO_GAMES$SEL,+150M:touch,+2M:rotate=+8,+5M:release$ROW$ROW$ROW$ROW\
 ,+100M:touch,+2M:press=select,+5M:release\
@@ -541,7 +541,7 @@ is a property of the game at `--clock=5`, not of the instrument.
 
 ### 10.4 A rally
 
-The recipe is in [`tools/ipod-film/post-assets.sh`](../tools/ipod-film/post-assets.sh), which is the
+The recipe is in [`ipod-film asset`](../ipod-film asset), which is the
 tool that produces the film, so the script and the write-up cannot drift apart. It is **two paddle
 sweeps and one button press**, and it took five attempts to get there — the interesting part is
 which four things were wrong.
@@ -634,7 +634,7 @@ cmp aa-1.ppm aa-2.ppm    -> silent
 **Identical in every field, and the framebuffers are byte-identical.** The emulator is
 reproducible.
 
-The divergence was **mine**: the `sweep` helper in `post-assets.sh` still spaced its steps 400 k
+The divergence was **mine**: the `sweep` helper in `ipod-film asset` still spaced its steps 400 k
 apart from an earlier take while the calibration had moved to 200 k, and §10.3's whole point is that
 those are different speeds — 29 px per million against 150. Two scripts that read the same in a
 diff of the shell produced schedules that differ from step 11 onward, which the run report prints in

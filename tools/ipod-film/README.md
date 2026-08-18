@@ -9,8 +9,8 @@ This samples the same surface, with the same converter, on an instruction cadenc
 frame that differs from the one before it.
 
 ```
-tools/ipod-film/film.sh --out=_out/film/boot
-tools/ipod-film/film.sh --out=_out/film/menu --every=1M -- --clickwheel \
+ipod-film run --out=_out/film/boot
+ipod-film run --out=_out/film/menu --every=1M -- --clickwheel \
     --wheel='@1500M:touch,+2M:press=select,+2M:release'
 ```
 

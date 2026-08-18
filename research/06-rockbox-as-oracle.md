@@ -1113,7 +1113,7 @@ frames are byte-identical to ours and the artifact is made of transparency the i
 **The remedy is verified rather than assumed.** `-gifflags -transdiff` turns `transparent yes` into
 `transparent no` on every frame — measured across that sweep, not read off a manual — and an
 artifact made of transparency cannot survive a file that has none.
-`tools/ipod-film/post-assets.sh`'s `publish()` does not set it. Its own films happen not to show
+`ipod-film asset`'s `publish()` does not set it. Its own films happen not to show
 this because they are 256-colour with `dither=none`, which is a mitigation and not a defence.
 
 
