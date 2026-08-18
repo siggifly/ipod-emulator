@@ -60,6 +60,13 @@ pub struct Settings {
     /// for no benefit, and this audience notices. The menu item works either way — this only
     /// decides whether the check happens on its own.
     pub check_updates_on_start: bool,
+    /// Run on a copy of the drive image rather than on the image itself.
+    ///
+    /// Off by default. The iPod writes to its own disk — settings, the chosen language, RetailOS's
+    /// bookkeeping — and running on the image is both what the hardware does and why a real iPod
+    /// remembers anything. The copy is for people who want an untouched master, and it costs a full
+    /// second copy of the drive on any filesystem without reflinks.
+    pub work_on_copy: bool,
 }
 
 impl Settings {
@@ -88,6 +95,7 @@ impl Settings {
                 "disk" if !v.is_empty() => s.disk = Some(PathBuf::from(v)),
                 "black_device" => s.black_device = v == "true",
                 "check_updates_on_start" => s.check_updates_on_start = v == "true",
+                "work_on_copy" => s.work_on_copy = v == "true",
                 _ => {}
             }
         }
@@ -106,12 +114,16 @@ impl Settings {
              disk = {}\n\
              # An HTTPS GET of the GitHub releases API and a version comparison, on launch.\n\
              # Off by default on purpose. The menu item works whatever this says.\n\
-             check_updates_on_start = {}\n",
+             check_updates_on_start = {}\n\
+             # Run on a COPY of the drive, leaving the original untouched. Off by default: the\n\
+             # iPod writes to its own disk, and a copy costs 8 GB where reflinks are unavailable.\n\
+             work_on_copy = {}\n",
             self.mode.as_str(),
             self.black_device,
             p(&self.flash),
             p(&self.disk),
             self.check_updates_on_start,
+            self.work_on_copy,
         )
     }
 
@@ -281,12 +293,20 @@ pub fn legacy_leftovers() -> Vec<(PathBuf, u64)> {
         .collect()
 }
 
-/// Total bytes in a directory, one level deep — which is all these ever are.
+/// Total bytes in a directory, including what is nested inside it.
+///
+/// **It used to stop at the first level**, with a comment saying that was all these directories
+/// ever held — which was true until built drives moved into `drives/`. A figure that skipped the
+/// largest files in the folder, on the screen whose whole job is telling somebody what this program
+/// is costing them, is the kind of wrong that reads as reassuring.
 pub fn dir_size(d: &Path) -> u64 {
     let Ok(rd) = std::fs::read_dir(d) else { return 0 };
     rd.flatten()
-        .filter_map(|e| e.metadata().ok())
-        .map(|m| if m.is_dir() { 0 } else { on_disk_size(&m) })
+        .map(|e| match e.metadata() {
+            Ok(m) if m.is_dir() => dir_size(&e.path()),
+            Ok(m) => on_disk_size(&m),
+            Err(_) => 0,
+        })
         .sum()
 }
 
@@ -371,6 +391,7 @@ mod tests {
             flash: Some(PathBuf::from("/a/b/rom.bin")),
             disk: Some(PathBuf::from("/a/b/disk.img")),
             check_updates_on_start: true,
+            work_on_copy: true,
         };
         assert_eq!(Settings::parse(&s.render()), s);
     }
