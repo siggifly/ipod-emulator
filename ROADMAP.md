@@ -308,6 +308,38 @@ sidesteps the argument above entirely.
 **Depends on:** M3, and an ARM cross-compiler. **Settled by:** the ipodloader2 menu rendering; then
 a kernel booting.
 
+## Which iPod is this? · *decided 2026-08-18*
+
+**The reference hardware is a 5G, and this project has been calling itself a 5.5G emulator.** Both
+real sources agree and neither was ever checked against the name: the NOR reads `HwVr 0x000b0005`,
+`Mod# MA146` — the 30 GB 5th generation — and the drive's own `iPod_Control/Device/SysInfo` reads
+`BoardHwName: PP5021C-2`. `research/06` already records that the archived iPodLinux generations
+table lists `0x000B0005` as **5G** and never recorded a 5.5G value at all; the `0x000B0011`
+prototype dump is *inferred* to be 5.5G, and that inference is flagged there as unsourced.
+
+**What actually differs is not settled, and the reachable sources disagree** — one puts the PP5022
+in the iPod *mini* 2G, our drive says PP5021C, Rockbox says `CONFIG_CPU PP5022`. The strongest
+practical signal is that **Rockbox uses ONE target, `ipodvideo`, for both**: whatever separates
+them, a real operating system treats them as the same machine.
+
+So the name becomes **iPod Video (5G / 5.5G)** — what the hardware is, and what the software that
+runs on it already believes.
+
+### Supporting both, without a second boot ROM
+
+We cannot get a 5.5G NOR: boot ROMs are per-unit, and Apple no longer serves anything. **M5 is the
+answer, and this is a second reason to want it.** A synthesised boot ROM makes `HwVr`, the serial
+and the FireWire GUID into *settings* rather than accidents of which dump somebody found — so "which
+iPod is this" becomes a choice, and both generations fall out of the same mechanism that solves
+acquisition. The identity tiers are the same three: generate · provide · read from your own iPod's
+`SysInfo`.
+
+**One measurement is owed first, and it is not a naming question.** Our `iram` region is `0x20000`
+— 128 KB. If this unit is a 96 KB part, that is a model defect reaching much further than a label,
+because the bootloader lays its handoff structures at the top of IRAM and everything downstream
+moves with them. It is also the thing that made `ipodloader2` look wrong; see
+[research/16](research/16-the-third-bootloader.md).
+
 ## M5 · A synthesised boot ROM · *the biggest usability win available*
 
 Finding a NOR dump is the hardest step in using this program, and the **first outside report**
