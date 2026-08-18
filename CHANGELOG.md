@@ -12,6 +12,69 @@ had downloaded it — and that is exactly the mistake this rule exists to preven
 running the first build, their copy would have reported itself current while being four commits
 behind. Anything published from here gets a new number.
 
+## Unreleased
+
+**Your iPod remembers, and the settings no longer reboot it.**
+
+### The drive is yours, and it is written to
+
+The emulator now runs **on the drive image you gave it**, the way a real iPod writes to its own
+disk — so your settings, your chosen language and your music stay on it between launches. It used to
+run on a throwaway copy and keep a second frozen copy beside it, which meant two 8 GB files per pair
+of images and an iPod that forgot everything.
+
+Closing the window **parks the machine**: RAM and a stamp naming the drive are written together, and
+the next launch resumes in about three seconds. If anything touched the drive in between — iTunes,
+`make-disk`, another window — the stamp does not match, and it cold boots and says why rather than
+restoring RAM onto a drive that has moved.
+
+**Work on a copy** is still there, in the settings, for anyone protecting an image they cannot
+rebuild. `--copy` and `--no-copy` choose for one run.
+
+Switching to direct offers the two old drives back: the reclaim figure in the settings now counts
+them, where before it protected them for ever because their names matched the images in use.
+
+### Setup is Settings, and the iPod keeps running
+
+Pressing settings used to end the machine and walk you through three pages before you could get back
+to it — because the settings screen and the first-run screen were the same screen, and the only way
+to reach it was to have no machine. They are separate now:
+
+- **The iPod keeps running behind the settings.** Case colour, the readout and the update check
+  apply as you change them.
+- **Only the two files and where the iPod writes need a restart**, and when one of those changes the
+  screen names which, and offers it. `Done` leaves it for the next launch instead.
+- `Esc` closes them. Both it and `Done` are refused only while the images do not validate, so a
+  first run cannot be escaped into an emulator with nothing in it.
+
+### The first run is one screen, and it sorts your files for you
+
+**Drop both files anywhere on the window, in any order.** Each is identified by what it contains —
+a zip is Apple's bundle, exactly 1 MiB is the boot ROM, anything else is a drive — so there are no
+slots to put them in the wrong way round, and a `.ipsw` builds the drive as it lands instead of
+waiting behind its own button. The paths and the text fields are still there, folded away, for
+machines with no file dialog.
+
+Everything the project knows about *where to get* the two files is behind one disclosure, and the
+warnings that used to sit above every field now appear as the verdict on the file that needs them.
+
+### The instrument panel is a readout, over the device
+
+The resizable right-hand panel is gone. What was in it split three ways: **power, restart and the
+two-thumb button holds are controls that belong to an iPod**, so they are under the device in every
+mode — a user-mode user previously could not restart the machine at all. **Conditions** — halted, on
+hold, drawing to the surface nobody is looking at — are one line each, in every mode, because the
+person who needs them is the one who does not know what a counter is. What remained was measurement,
+and `D` now draws it as a corner overlay that does not change the window's shape.
+
+### Fixed
+
+- **`--headless`, `--selftest`, `--probe` and `--power-cycle-at` could not open a drive.** Which
+  drive the machine writes to was decided inside the window, so every path that has no window kept
+  pointing at a working copy nothing had made.
+- The frozen drive can no longer be restored over your own image by a mis-wired path: reaching that
+  branch now requires copy mode to be on.
+
 ## 0.4.0
 
 Four bugs reported by users, all reproduced, all ours. Plus a setup screen that

@@ -124,3 +124,12 @@ authority. On a real 5G that needs a patched `OSOS`, which is possible because i
 a checksum rather than a signature. Under mode two it needs nothing, because there is no Apple OS to
 satisfy. So *Doom on an emulated iPod* and *Doom on your iPod* are separated by one firmware patch,
 and only the second is anyone else's decision.
+
+## Parked ideas
+
+Written down, deliberately not scheduled. Each says what it would take and why it is not next.
+
+- [**Running from a real iPod in disk mode**](docs/ideas/run-from-a-real-ipod.md) — importing a
+  device's firmware partition is 14 MB and easy; running *off* the device is the dangerous version,
+  because RetailOS would format it. The safe form needs a copy-on-write layer in `Ata`, which is a
+  change to the machine every number in `research/` was measured through.

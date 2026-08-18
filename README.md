@@ -79,18 +79,22 @@ with a hand-modified drive has been removed rather than explained.
 
 ## Running it
 
-**Open it and it asks.** From a [release](https://github.com/siggifly/ipod-emulator/releases),
-unpack it and double-click **`ipod-emulator.app`** on macOS, or run `ipod-emulator` anywhere. With
-nothing set up it opens on a setup screen: a picker for each of the two files, and under each a
-verdict
-saying what the file you chose *actually is* — a 2 MiB dump when the 5G ROM is 1 MiB gets told so,
-rather than failing later. Point the second slot at an `.ipsw` and it builds the drive for you.
+**Open it and drop your files on it.** From a
+[release](https://github.com/siggifly/ipod-emulator/releases), unpack it and double-click
+**`ipod-emulator.app`** on macOS, or run `ipod-emulator` anywhere. With nothing configured it opens
+on one screen asking for your two files — **drop them anywhere on the window, in any order**. Each
+one is identified by what it contains rather than by which box you put it in, so there is nothing to
+get the wrong way round, and an `.ipsw` builds the drive for you as it lands. **Choose…** opens a
+file dialog that takes both at once.
+
+Each file gets a verdict saying what it *actually is*, which is how a 2 MiB dump gets told it is
+somebody else's iPod instead of failing ninety seconds into a boot.
 
 It remembers both, so you do this once.
 
 ```sh
 cargo build --release          # or use a release build
-./target/release/ipod-emulator   # a window; D toggles debug mode
+./target/release/ipod-emulator   # a window; D shows the readout
 ```
 
 Or straight from the repository, with no clone — the packages have to be named, because the
@@ -104,7 +108,7 @@ cargo install --git https://github.com/siggifly/ipod-emulator ipod-gui eapp-load
 
 ### From a terminal
 
-The recipes use whatever the setup screen was pointed at, so once you have done the above they
+The recipes use whatever the window was last pointed at, so once you have done the above they
 need no arguments:
 
 ```sh
@@ -112,7 +116,7 @@ need no arguments:
 ./target/release/ipod-boot retail --print    # compose the argv, run nothing
 ```
 
-`--print` also says where each path came from — environment, setup screen, or repository default —
+`--print` also says where each path came from — environment, the window, or repository default —
 because a recipe with an input you cannot see in its command line is one you cannot check.
 `FLASH=` and `DISK=` override, and `ipod-boot make-disk your.ipsw disk.img` builds a drive without
 the window. `ipod-emulator --check-images --flash=… --disk=…` reports on a pair with no window at all.
@@ -140,14 +144,13 @@ machine. Vector geometry rather than a photograph, because the wheel needs angul
 96 detents and that wants real geometry. The panel is blitted at integer scale with nearest-neighbour
 sampling, so what you see is what the co-processor holds and not an interpolation of it.
 
-| user mode | debug mode |
+| user mode | with the readout |
 |---|---|
 | ![](docs/media/ipod-11-gui-user.png) | ![](docs/media/ipod-10-gui-debug.png) |
 
-**`D` toggles between them.** User mode is the iPod and nothing else. Debug adds instruction counts,
-both clocks, the wheel's state, the surface addresses, and a *does the input reach RetailOS?* panel
-carrying arrival counts at the real addresses — so the window proves its own claim rather than
-asserting it.
+The iPod, the controls that belong to it, and one footer line. **`D` puts the readout over the
+device** — instruction counts, both clocks, the wheel's state and the surface addresses — as a
+corner overlay rather than a panel that changes the window's shape.
 
 | | |
 |---|---|
@@ -156,23 +159,41 @@ asserting it.
 | `M` `P` `,` `.` | menu · play · previous · next |
 | `H` | hold switch |
 | `S` | write a PNG and a PPM into `_out/` |
-| `D` | user ⇄ debug |
+| `D` | show / hide the readout |
+| `Esc` | leave the settings, or the help page |
 
-The footer carries the four things that are about the device rather than the machine: the
-real-time figure, **black** (the 5G shipped in white and black — it is remembered), **keys** (the
-keyboard list, on hover, because the drawn iPod takes clicks and the keys are an accelerator), and
-**setup…**.
+**Power off** and **restart** are real, in every mode: the machine is dropped and re-entered at the
+reset vector, not restored and pretended. `hold MENU+SELECT` and `hold PLAY` latch the two-thumb
+gestures a single pointer cannot make.
 
-**`setup…`** in the footer goes back to the setup screen, to point it at a different NOR dump,
-drive or `.ipsw`. It ends the running machine — a booted RetailOS read its partition table at boot
-and has been writing to that drive since, so there is no honest way to hand it another one.
+Conditions that make a working emulator look broken get a line of their own, in every mode, because
+the person who needs them is the one who does not know what a counter is: a machine that has halted
+says so, a hold switch that is on says so, and a picture being drawn to the surface nobody is
+looking at says that.
 
-**Power off** and **power cycle — cold boot** are real: the machine is dropped and re-entered at the
-reset vector, not restored and pretended. `hold MENU+SELECT` and `hold PLAY` deliver the buttons, and
-the panel says plainly that nothing in RetailOS has been measured to act on either — on a real 5G
-that pair is caught by the wheel controller or the PMU, and neither is modelled here.
+### Settings
 
-It restores a snapshot of the booted machine in about 3 seconds, or cold boots in 75.
+**`settings…`** in the footer opens them, and **the iPod keeps running behind them**. Case colour,
+the readout and the update check apply as you change them. Only the two files and where the iPod
+writes need a restart, and when one of those changes the screen names it and offers the restart —
+`Done` leaves it for the next launch instead. This used to end the machine on the way in, because
+the settings screen and the first-run screen were the same screen.
+
+Dropping a file on a running iPod opens the settings on the row it landed in, rather than changing
+what boots next time without saying so.
+
+### Where the iPod writes
+
+**By default it writes to the drive image you gave it**, exactly as a real one writes to its own
+disk — so your settings, your language and your music stay on it. Closing the window **parks the
+machine**: RAM and a stamp naming the drive go down together, and the next launch resumes in about
+three seconds instead of cold booting for seventy-five. If anything touched the drive in between —
+iTunes, `make-disk`, a second window — the stamp no longer matches and it cold boots and says so.
+
+**Work on a copy** in the settings is the other way: your image is never written to, at the cost of
+a second copy of it — up to 8 GB where the filesystem cannot share blocks, which is most of Linux
+and all of NTFS — and the iPod forgets what it wrote between launches. `--copy` and `--no-copy`
+choose for one run.
 
 ## What works
 
@@ -188,7 +209,7 @@ It restores a snapshot of the booted machine in about 3 seconds, or cold boots i
 - **No audio.** The Wolfson codec is unmodelled
 - **~30 % of real time headless, ~19 % with the window.** About 21 M instructions/sec against an
   80 MHz ARM7TDMI, and around 14 M once a frame is being drawn. The window reports the figure it is
-  actually achieving, in both modes
+  actually achieving, whether or not the readout is up
 - **No USB inside the emulator**
 - **Purchased titles do not launch.** Apple's DRM refuses them; the identity it binds to is understood, the keystore is not
 - **Four values in the co-processor transport are chosen rather than measured**, and there is no timing model at all, so a bug that only appears when a reply is late is invisible
