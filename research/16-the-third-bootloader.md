@@ -168,3 +168,39 @@ Everything needed to observe it is now in place except one number:
 
 **Settled when** the loader draws its own menu. That is [ROADMAP](../ROADMAP.md) M4's first
 checkpoint, and it proves the whole chain except the kernel.
+
+## The handoff block, captured — the specification M5 has to meet
+
+Taken at `--stop-at=0x10000000:1`, the instant Apple's bootloader jumps to the OS. **This is the
+thing a synthesised ROM has to reproduce**, and holding a real ROM is what makes that checkable
+rather than hopeful.
+
+Two levels. At the top of IRAM, a tag and a pointer:
+
+```
+0x4001ff18   "IsyS"  <ptr>        <- 128 KB machine; a 96 KB one keeps this at 0x40017f18
+```
+
+And the block it points at, whose layout `ipodloader2`'s `struct sysinfo_t` documents and which the
+capture confirms field by field:
+
+| offset | field | observed |
+|---|---|---|
+| `+0x00` | `IsyS` magic | present |
+| `+0x04` | `len` | **`0xf8`** — and this is load-bearing: `ipodhw.c` reads `hw_rev` from `sdram_zero2` when `len == 0xf8` and from `boardHwSwInterfaceRev` otherwise |
+| `+0x08` | `BoardHwName[16]` | a model string, NUL-padded |
+| `+0x18` | `pszSerialNumber[32]` | **the unit's real serial** |
+| `+0x38` | `pu8FirewireGuid[16]` | **the unit's real FireWire GUID** |
+| `+0x48` | `boardHwRev` | … |
+
+**The last two are why M5's identity tiers exist, and why the values are not written down here.**
+They belong to whoever owned this iPod. `research/07` already carries a flagged privacy issue about
+exactly this class of data, and a synthesised ROM must take them from the user — generated,
+provided, or read out of their own `iPod_Control/Device/SysInfo` — rather than inheriting a
+stranger's from a dump that circulated.
+
+**What this gives M5 immediately:** the block is small, its layout is known, `len == 0xf8` selects
+which field the OS believes, and the whole thing is reproducible by construction. The remaining
+work is not this block but everything around it — SDRAM up, PMU talked to, `vmcs` uploaded, the
+drive spun and its partition table read — each of which is a diff against a real boot rather than a
+guess.
