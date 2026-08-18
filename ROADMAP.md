@@ -57,7 +57,7 @@ with six devices that all half-work.
 |---|---|
 | RetailOS | **boots** cold from the reset vector, menus, formats its own volume, Brick plays. No sound. ~300 s of simulated time to the menu |
 | Rockbox 4.0 | **boots to its main menu and takes wheel input** (2026-08-18). Beyond the menu: unverified. No sound |
-| iPodLinux | `ipodloader2` **builds and cold-boots** (2026-08-18) — Apple's bootloader enters it, and it misdetects the chip and addresses a 1G iPod's registers until `0x70000000` bit 23:16 answers `'2'`; with that forced it gets past detection and stalls before the drive. [research/16](research/16-the-third-bootloader.md). A verified 5.5G-correct kernel is located (ZeroSlackr `vmlinux`, 1 531 200 bytes) and not yet fetched |
+| iPodLinux | `ipodloader2` **builds and cold-boots** (2026-08-18) — Apple's bootloader enters it, and it misdetects the chip and addresses a 1G iPod's registers until `0x70000000` bit 23:16 answers `'2'`; with that forced it gets past detection and stalls before the drive. [research/16](research/16-the-third-bootloader.md). No kernel. The "located" claim in this file has **no recorded source** and is unsourced until re-established |
 | Installing an OS | **done** — `install-os` for the firmware partition, `put-files` for the FAT32 volume; the whole chain cold-boots |
 | Our own bootloader / OS | not started, and deliberately not designed for yet |
 | Bypass ledger | 5 active entries: #4, #6, #7, #11, #17 — and #7 now has a second consumer to be tested against |
@@ -259,8 +259,23 @@ project is" claims the strategy is for. **Do not "fix" our writer to match the l
 workaround would make iPodLinux boot and would quietly encode a false belief about the hardware
 into our disks, which is the failure the removed prototype recipe already cost this project once.
 
-The other blocker is real and unchanged: **no kernel image exists locally.** The ZeroSlackr
-`vmlinux` is identified (1 531 200 bytes, raw-ARM magic confirmed) and not fetched.
+The other blocker is real, and worse than "not fetched": **the kernel claim has no source.**
+
+This file says a 5.5G-correct kernel "has been located" — ZeroSlackr `vmlinux`, 1 531 200 bytes,
+raw-ARM magic confirmed. **That sentence is the only place it appears.** There is no URL, no
+research file, no note in `NEXT.md`, and nothing on disk. A byte count and a "magic confirmed" imply
+somebody held the file; wherever they got it was never written down, so the claim cannot be acted
+on by anyone, including its author.
+
+Treat it as **unsourced until re-established**. The `iPodLinux` GitHub organisation still carries
+`ipodloader2`, `iPodLinux-SVN` and `podzilla2`, but those are source; a prebuilt `vmlinux` came from
+a ZeroSlackr distribution, which was hosted on services that have since closed. Re-finding it is a
+real task with a real chance of failing, and it is not the same task as "download the thing we
+already found".
+
+**The lesson, and it is the file's own rule turned on itself:** a located artefact is not located
+until its provenance is written next to it. `research/` is full of measurements that survived
+precisely because the command that produced them was recorded beside the number.
 
 **Building the loader needs a toolchain we do not have.** `ipodloader2` is bare-metal C plus one
 `.s` and one `.cc`, with its own linker script (`arm_elf_40.x`), and expects `arm-elf-gcc`. No ARM
