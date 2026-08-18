@@ -61,9 +61,34 @@ with six devices that all half-work.
 | Our own bootloader / OS | not started, and deliberately not designed for yet |
 | Bypass ledger | 5 active entries: #4, #6, #7, #11, #17 — and #7 now has a second consumer to be tested against |
 | Audio | **nothing modelled.** The Wolfson codec answers no I²C; Rockbox is now talking to it and getting silence back |
-| USB | nothing modelled beyond a clock-ready bit |
+| USB | nothing modelled beyond a clock-ready bit — and `disk` (target disk mode) faults after 128 K instructions |
 | Titles | purchased/decrypted games do not launch — the identity Apple's DRM binds to is understood, the keystore is not |
 
+## The machine's other modes
+
+The NOR carries four bootable images besides the OS, and Apple's updater is a fifth mode on the
+drive. They are what a real iPod does when you hold a chord at power-on, and they belong here
+rather than in a footnote. Measured 2026-08-18 with `ipod-boot flsh` (`IMG=diag|disk|scan|logo`)
+and `ipod-boot flash-update`:
+
+| mode | what it is | state |
+|---|---|---|
+| **`aupd`** — flash updater | Apple's firmware updater, run from the drive on first boot | **works.** It runs, it takes, and it retired bypass #12 by itself ([research/07](research/07-the-flash-images.md)) |
+| **`diag`** — diagnostics | the hold-`SELECT`+`REW` service menu | **executes** a full 200 M budget without faulting. [research/07](research/07-the-flash-images.md) records it booting and then waiting to be talked to |
+| **`scan`** | disk scan | executes to budget, no fault |
+| **`logo`** | the boot logo image | executes to budget, no fault |
+| **`disk`** — target disk mode | the "do not disconnect" USB mass-storage mode | **broken.** `Lost(0xe19b0000) after 127 952 instructions` — it runs off into data at `0x18` with registers full of instruction words |
+
+**None of the four draws anything at `0x000e0000`**, and that is reported as a measurement rather
+than a verdict: it is the surface RetailOS and Rockbox use, and these images may not use it. An
+absence at one address is not an absence.
+
+**`disk` is the one that matters and the one that is broken.** Target disk mode is what a person
+actually does with an iPod — it is how the drive gets mounted on a computer — so it is the natural
+companion to **M8 (USB)** and is scheduled with it. The other three are cheap to re-check whenever
+the co-processor or the boot path moves.
+
+## The two modes
 ## The two modes
 
 The emulator has one mode today and should have two.
