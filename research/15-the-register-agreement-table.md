@@ -131,7 +131,7 @@ been about whether anything depends on the lie. The table now separates the two 
 `COP_CTL` (`0x60007004`) is read by **Rockbox and not by RetailOS**, and `MBX_MSG_STAT` — the
 mailbox the two cores talk over — is Rockbox-only and enormously hot. So the second core's *state*
 is not merely something RetailOS is being told; it is a thing an independent OS actively works
-with, through a register we do not model at all.
+with, through a register that until today was not modelled at all.
 
 That does not retire #7 and it does not widen it. It does what the ledger is for: it says the arm
 that would test it (`--cop-awake`) has, for the first time, a second consumer to test against.
