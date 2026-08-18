@@ -132,10 +132,36 @@ By the A–D layout that makes `0x6000d82c` an `OUTPUT_VAL` whose enable and dir
 being toggled 5 106 times each — a pin being bit-banged hard, by something we do not model and have
 never named.
 
-**How you would know it is fixed:** moving the slider through its range changes the level
-monotonically and in the same direction, and the count rises with the number of steps asked for.
-Next step is to correlate a slider move against that bank specifically, which the `writes` command
-can now do in one run.
+**That bank was tried, and it is the wheel — 2026-08-18.** Pointing the dimmer at `0x6000d82c`
+bit `0x80` made the panel dim while somebody *navigated*, which the operator spotted immediately.
+The two-arm control:
+
+```
+  scroll DOWN on the brightness screen — a real brightness change    0 pulses
+  scroll the same amount in a MENU     — no brightness change       +3 pulses
+```
+
+Backwards in both arms, so it is not the dimmer. Reverted.
+
+**The mistake is worth more than the result.** The measurement that pointed there — *"slider full to
+minimum: `0x6000d024` +0, the `0x6000d800` bank +236/+236/+112"* — looks like a controlled A/B and
+is not one. **Moving RetailOS's slider means turning the wheel**, so "what moved while the
+brightness changed" and "what moved while the wheel turned" were one question asked once, and every
+register that answers to the wheel answered it. `research/04`'s rule R5 says a control only proves
+what it exercises; this one exercised the wheel and was read as proving brightness.
+
+The control that separates them is the two-arm one above, and it is cheap. Run it before believing
+any candidate.
+
+**Where that leaves it.** Two pins are now eliminated by measurement rather than by argument:
+`0x6000d024` (steps on screen-wake activity, never on the slider) and `0x6000d82c` (steps on the
+wheel, never on the slider). A real brightness change produced **no pulses on either**, and no PMU
+register value, and no unmapped write. So the brightness path is still unfound, and the remaining
+candidate this project has not looked at is the **video co-processor** — which would make this a
+facet of ledger #6 rather than a bug of its own.
+
+**How you would know it is fixed:** arm A produces pulses proportional to the distance the slider
+travelled, arm B produces none, and the level moves monotonically in the direction asked for.
 
 This is the fifth model defect in this project first attributed to missing hardware and found to be
 a misread of a signal we already had.

@@ -4584,7 +4584,7 @@ pub fn wheel_step_name(ev: WheelEvent) -> String {
 pub const GPIOB_OUTPUT_VAL: u32 = 0x6000_d024;
 pub const GPIOB_BACKLIGHT: u32 = 0x10;
 
-/// The pin the dimmer is actually on, and the bank nobody had named.
+/// A pin that is **not** the dimmer, kept named because finding that out cost a day.
 ///
 /// **Measured, on a running machine, 2026-08-18.** With the whole GPIO window watched and a person
 /// dragging RetailOS's own brightness slider from full to minimum, `0x6000d024` — the pin this
@@ -4602,8 +4602,14 @@ pub const GPIOB_BACKLIGHT: u32 = 0x10;
 /// this model bit-bangs `0x80` too — on `GPIOD_OUTPUT_VAL`, one bank lower. It had the bit right
 /// and the port wrong, and this emulator inherited the port from it and then guessed a different
 /// bit as well, which is how a dimmer came to count an enable line.
-pub const BACKLIGHT_PORT: u32 = 0x6000_d82c;
-pub const BACKLIGHT_PIN: u32 = 0x80;
+pub const WHEEL_BITBANG_PORT: u32 = 0x6000_d82c;
+pub const WHEEL_BITBANG_PIN: u32 = 0x80;
+
+/// Where the dimmer is counted today. **Also not the brightness control** — see `KNOWN-BUGS.md`.
+/// Restored after the pin above turned out to be the wheel: this one at least does not dim the
+/// panel while somebody scrolls a menu.
+pub const BACKLIGHT_PORT: u32 = 0x6000_d024;
+pub const BACKLIGHT_PIN: u32 = 0x10;
 
 /// A pulse low for less than this many microseconds steps the dimmer UP; longer steps it down.
 /// Rockbox's two delays are 10 and 200, so anything in the middle separates them.
