@@ -194,9 +194,34 @@ on one bus; the bytes can. `watch_range_log` already records `(pc, addr, value)`
 by the headless report — exposing it over the control socket would let one brightness step be
 captured as a byte sequence and read.
 
-**How you would know it is fixed:** a single click on the slider produces a decodable transaction
-whose payload tracks the level, and driving the level from it makes the panel dim monotonically
-while menu scrolling changes nothing.
+**The transaction is captured, 2026-08-18.** `bus` on the control socket drains the value log, so
+one brightness step can be isolated. Twenty clicks produced **120 writes = five identical 24-write
+units**, one per step, four clicks apart:
+
+```
+  d82c/d82d = 80 80   @0x282a38        d80c/d80d = 00 20   @0x2829f0
+  d81c/d81d = 80 80   @0x282a04        d81c/d81d = 00 20   @0x282a04
+  d80c/d80d = 80 80   @0x282a18        d80c/d80d = 00 80   @0x2829f0
+  d824/d825 = 08 08   @0x282d80        …  d92c/d92d = 80 80
+```
+
+Two pins bit-banged in one word — bit 7 of each byte — a clock and data pair.
+
+**Stepping UP and stepping DOWN are byte-for-byte identical**, across all 120 writes, and the unit
+repeats identically 5/5 times. So neither the direction nor the level is in any byte. The writer PCs
+are identical to the panel's too, so filtering by routine cannot separate them either.
+
+That leaves the **intervals**, which the log does not record — same writes, different delays, which
+is Rockbox's model of this dimmer after all. The width figure this file used to cite is worthless
+for the same reason: `Backlight` pairs a falling edge with the *next* rising edge, and on a clocked
+bus that spans an entire transaction, giving 820 306 µs for a "pulse".
+
+**The next step is small and specific:** add `usec` to `watch_range_log`'s tuple. With a timestamp
+per write, the intervals inside one unit are readable, and up-versus-down should fall out
+immediately — after which the level is a count of units in a direction, not a guess.
+
+**How you would know it is fixed:** one click produces one unit; the intervals classify it up or
+down; the level tracks the slider monotonically; and menu scrolling changes nothing.
 
 This is the fifth model defect in this project first attributed to missing hardware and found to be
 a misread of a signal we already had.
