@@ -477,6 +477,17 @@ impl Model {
         Model::lookup(&sysinfo_field(text, "ModelNumStr")?)
     }
 
+    /// The model number **in the form the hardware writes it** — `MA146`, not the table key.
+    ///
+    /// [`Model::number`] is libgpod's key, which has had one leading letter stripped for lookup.
+    /// Apple's flash writes the full form in its `Mod#` record and in the handoff block, and the
+    /// drive's `SysInfo` writes that with a further `x` in front again. Writing the key where the
+    /// hardware writes the full form produces a NOR that differs from a real one in a field
+    /// software actually reads.
+    pub fn apple_number(&self) -> String {
+        format!("M{}", self.number)
+    }
+
     /// The case colour this row implies.
     pub fn colour(&self) -> Colour {
         self.model.colour()

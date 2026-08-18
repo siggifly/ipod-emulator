@@ -121,14 +121,102 @@ pub fn synthesise(spec: &Spec) -> Vec<u8> {
         b = b.word_at4("HwVr", hw_vr);
     }
     b = b.raw("Regn", spec.region);
-    // `Mod#` in the form the NOR writes it: bare, no `x` prefix. That is the drive's `SysInfo`
-    // convention, not the flash's.
-    b = b.text("Mod#", spec.model.number);
+    // `Mod#` in the form the flash writes it — `MA146`, the full model number. The table key has
+    // a letter stripped for lookup and is not what the hardware stores; the drive's `SysInfo` adds
+    // a further `x` on top again. Measured from the real dump.
+    b = b.text("Mod#", &spec.model.apple_number());
     b = b.word_at4("DrmV", spec.drm_version);
 
     let block = b.build();
     nor[SYSCFG_AT..SYSCFG_AT + block.len()].copy_from_slice(&block);
     nor
+}
+
+/// The `sysinfo_t` handoff block Apple's boot ROM leaves in IRAM for the OS, **as measured**.
+///
+/// Captured from a real cold boot at the instant of handoff (`--stop-at=0x10000000:1`), not
+/// reconstructed from documentation. Apple puts the block at `0x40015898` and writes a tag and a
+/// pointer to it at the top of IRAM:
+///
+/// ```text
+/// 0x4001ff18  "IsyS"
+/// 0x4001ff1c  -> the block
+/// ```
+///
+/// ## The layout, and which parts are understood
+///
+/// | offset | what | source |
+/// |---|---|---|
+/// | `+0x00` | `IsyS` | measured |
+/// | `+0x04` | `len` = **`0xf8`** | measured — and load-bearing, see below |
+/// | `+0x08` | `BoardHwName[16]` = `"iPod M25"` | measured |
+/// | `+0x18` | `pszSerialNumber[32]` | measured |
+/// | `+0x38` | GUID: low word then high, as `FwId` stores it | measured |
+/// | `+0x84` | the Gestalt ID RetailOS switches on | measured; equals the NOR's `HwVr` |
+/// | `+0x88` | `"1.00    "` | measured, meaning unknown |
+/// | `+0x98` | the model number, e.g. `MA146` | measured |
+/// | `+0xe0`… | four words that look like bases and sizes | measured, **not** understood |
+/// | `+0xf8` | the whole `SysCfg` block, copied verbatim | measured |
+///
+/// **`len` is `0xf8` and that matters.** `research/16` records that `ipodloader2` reads `hw_rev`
+/// from one field when `len == 0xf8` and from another otherwise, so a wrong length there is not
+/// cosmetic — it sends a third-party bootloader to the wrong offset.
+///
+/// Everything not understood is reproduced byte for byte from the capture rather than zeroed or
+/// invented. A field nobody has explained is still a field the firmware may read.
+pub const HANDOFF_AT: u32 = 0x4001_5898;
+/// Where the tag and pointer live, at the top of IRAM.
+pub const HANDOFF_TAG_AT: u32 = 0x4001_ff18;
+/// `sizeof(sysinfo_t)` as Apple's own boot ROM reports it.
+pub const HANDOFF_LEN: usize = 0xf8;
+/// The board name the Video's boot ROM writes. Observed on the retail 5G, and independently in a
+/// 5.5G's `SysInfo` recovered from a Windows install — so it is the family's name, not one unit's.
+pub const BOARD_HW_NAME: &str = "iPod M25";
+
+/// Build the handoff block for an identity, ready to be written at [`HANDOFF_AT`].
+///
+/// `syscfg` is the block as it appears in the NOR; Apple copies it in directly after the struct,
+/// so a synthesised boot passes through the same bytes a real one would.
+pub fn handoff(identity: &Identity, model: &Model, syscfg: &[u8]) -> Vec<u8> {
+    let mut b = vec![0u8; HANDOFF_LEN];
+    let put = |b: &mut [u8], off: usize, v: u32| {
+        b[off..off + 4].copy_from_slice(&v.to_le_bytes());
+    };
+    let text = |b: &mut [u8], off: usize, s: &str, max: usize| {
+        let n = s.len().min(max);
+        b[off..off + n].copy_from_slice(&s.as_bytes()[..n]);
+    };
+
+    b[..4].copy_from_slice(b"IsyS");
+    put(&mut b, 0x04, HANDOFF_LEN as u32);
+    text(&mut b, 0x08, BOARD_HW_NAME, 16);
+    if let Some(sn) = identity.serial.as_deref() {
+        text(&mut b, 0x18, sn, 32);
+    }
+    // Low word then high, the same order `FwId` uses in the flash.
+    put(&mut b, 0x38, (identity.guid & 0xffff_ffff) as u32);
+    put(&mut b, 0x3c, (identity.guid >> 32) as u32);
+
+    // Measured constants. Their meaning is not established, and reproducing what the hardware does
+    // beats leaving a field the firmware might read at zero.
+    put(&mut b, 0x80, 0xfff9_f3b6);
+    if let Some(hw_vr) = model.generation.gestalt() {
+        put(&mut b, 0x84, hw_vr);
+    }
+    text(&mut b, 0x88, "1.00    ", 8);
+    put(&mut b, 0x90, 0x0001_0000);
+    put(&mut b, 0x94, 0x0000_0002);
+    text(&mut b, 0x98, &model.apple_number(), 16);
+    put(&mut b, 0xd0, 0x0006_0000);
+    put(&mut b, 0xe0, 0x0400_0000);
+    put(&mut b, 0xe4, 0x1000_0000);
+    put(&mut b, 0xe8, 0x0002_0000);
+    put(&mut b, 0xec, 0x4000_0000);
+    put(&mut b, 0xf0, 0x0010_0000);
+
+    // Apple copies the SysCfg in immediately after the struct; so do we.
+    b.extend_from_slice(syscfg);
+    b
 }
 
 /// Whether this image was made by [`synthesise`] rather than read off an iPod.
@@ -265,6 +353,55 @@ mod tests {
         Model::lookup(num).expect("a known model")
     }
 
+    /// **Rebuild the handoff from the real dump and compare it to what the boot ROM actually
+    /// leaves.** The reference bytes were captured from a cold boot at `--stop-at=0x10000000:1`;
+    /// the identity-bearing fields are checked against the dump's own `SysCfg` rather than against
+    /// a literal, so nobody's serial ends up in this repository.
+    ///
+    /// Skips loudly without the dump, which is gitignored.
+    #[test]
+    fn the_handoff_matches_what_the_boot_rom_leaves() {
+        let path = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../resources/roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin"
+        ));
+        let Ok(rom) = std::fs::read(path) else {
+            println!("SKIPPED: {} is not here (gitignored)", path.display());
+            return;
+        };
+        let cfg = crate::inspect::syscfg(&rom).expect("the dump has a SysCfg");
+        let m = cfg.model_info().expect("MA146 resolves");
+        let id = Identity {
+            serial: cfg.serial.clone(),
+            guid: cfg.guid.expect("a GUID"),
+            source: crate::identity::Source::RealDevice,
+        };
+        let syscfg_bytes = &rom[crate::inspect::SYSCFG_AT
+            ..crate::inspect::SYSCFG_AT
+                + crate::inspect::SYSCFG_HEADER
+                + cfg.records.len() * crate::inspect::SYSCFG_RECORD];
+        let h = handoff(&id, m, syscfg_bytes);
+
+        // The measured constants, exactly as the capture shows them.
+        assert_eq!(&h[..4], b"IsyS");
+        assert_eq!(u32::from_le_bytes(h[4..8].try_into().unwrap()), 0xf8, "len must be 0xf8");
+        assert_eq!(&h[8..16], b"iPod M25");
+        assert_eq!(u32::from_le_bytes(h[0x84..0x88].try_into().unwrap()), 0x000B_0005);
+        assert_eq!(&h[0x88..0x90], b"1.00    ");
+        assert_eq!(&h[0x98..0x9d], b"MA146");
+
+        // The identity, checked against the dump rather than against a literal.
+        let serial = cfg.serial.clone().expect("the dump has a serial");
+        assert_eq!(&h[0x18..0x18 + serial.len()], serial.as_bytes());
+        let guid = cfg.guid.expect("a GUID");
+        assert_eq!(u32::from_le_bytes(h[0x38..0x3c].try_into().unwrap()), guid as u32);
+        assert_eq!(u32::from_le_bytes(h[0x3c..0x40].try_into().unwrap()), (guid >> 32) as u32);
+
+        // And the SysCfg copied in directly after the struct, byte for byte.
+        assert_eq!(&h[HANDOFF_LEN..HANDOFF_LEN + 4], b"gfCS");
+        assert_eq!(&h[HANDOFF_LEN..], syscfg_bytes);
+    }
+
     /// The whole point: what goes in comes back out through the ordinary reader, with no special
     /// case for having been generated.
     #[test]
@@ -281,7 +418,9 @@ mod tests {
         assert_eq!(c.serial, id.serial);
         assert_eq!(c.guid, Some(id.guid));
         assert!(c.guid_looks_apple());
-        assert_eq!(c.model.as_deref(), Some("A146"));
+        // The form the hardware writes, not the lookup key — which is what a real dump has.
+        assert_eq!(c.model.as_deref(), Some("MA146"));
+        assert_eq!(c.model_info().expect("still resolves").number, "A146");
         assert_eq!(c.hw_vr, Some(0x000B_0005));
         assert_eq!(c.tags, ["SrNm", "FwId", "HwId", "HwVr", "Regn", "Mod#", "DrmV"]);
 
