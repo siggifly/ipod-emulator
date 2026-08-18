@@ -205,12 +205,25 @@ largest and the one M2 is most likely to reframe.
 
 ## M9 · Titles without Apple's OS
 
-The older goal. Around 25 functions carry all rendering across twenty titles; implemented natively,
-a decrypted game runs with no Apple code in the loop. Separately, the DRM question: the identity
-Apple binds to is understood, the keystore is not.
+The older goal, and **now bounded** rather than open-ended. RetailOS publishes a self-describing,
+content-hash-versioned framework surface at `0x000793fc`–`0x00079ce0` — **8 frameworks, 433
+functions** (`OpenGLES` 179, `Metadata` 152, `Audio` 61, `AsyncFileIO` 17, `miscTBD` 15,
+`Filesytem` 4, `Settings` 3, `InputEvents` 2). A title's dependency on it is enumerable *before any
+code is written*: Pac-Man declares 98 of the 433, and its import hashes are byte-identical to the
+ones in RetailOS's own table — the ABI confirmed from both sides at once.
 
-Open and being investigated: whether RetailOS's **built-in** games are the same eApp container as
-the downloadable ones, or are woven into the OS.
+So this is implementing a published interface against a known size, with a hash that says when we
+have got it wrong. Around 25 functions carry all rendering across twenty titles, so the practical
+first cut is far smaller than 433.
+
+Separately, the DRM question: the identity Apple binds to is understood, the keystore is not.
+
+**The built-in games are a different thing and not a shortcut into this.** Settled 2026-08-18: they
+are *not* eApp containers — one `"eapp"` occurrence in the whole of `osos` and it is the loader's
+own literal pool. They are plain compiled-in code with no container, no import table, no resources
+of their own, sharing RetailOS's widget toolkit, display path, string pool, settings store, event
+system and allocator. "Extracting" one means reimplementing the host. See
+[research/13](research/13-do-the-games-load.md).
 
 **Settled by:** a decrypted title running from the window with no `osos` loaded.
 

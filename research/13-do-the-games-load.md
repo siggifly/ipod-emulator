@@ -663,3 +663,74 @@ is the rate the game's timer thinks it is running at, and the ball crosses the s
 Brick intended. It is not a slow-motion effect and it is not a correction applied to make the film
 look better: it is the same choice the boot films make (play at the pace of the clock that drives the
 thing being filmed) applied to a clock that is not the CPU's.
+
+## 2026-08-18: the built-ins are not eApps, and the framework surface is enumerable
+
+Two questions settled in one pass — and they point in opposite directions.
+
+### The stock games are not eApp containers. Definitively.
+
+| scan | result |
+|---|---|
+| `"eapp"` across `OSOS_correct.bin` (7 559 680 B) | **exactly one hit, `0x122508`** — the loader's own literal pool |
+| block magic `68 19 06 29` across OSOS | **exactly one hit, `0x122510`** — the same literal pool. **Zero** import blocks anywhere |
+| `"eapp"` + `Brick`/`Parachute`/`Music Quiz`/`Solitaire`/`BlockO`/`Chopper` in the `rsrc` volume | **0 hits, all seven** |
+| the same needles in `aupd.bin`, `flsh/{diag,disk,scan,vmcs}.bin` | **0 hits** |
+
+`FUN_001222c4` — the eApp header validator, whose literal pool those two hits *are* — has exactly
+one caller, `0x0024e420`, inside the eApp subsystem. §"do the games load" already recorded
+`eAppMotor` (`0x0024e808`) as **NEVER REACHED** when launching Brick. Static and dynamic agree: the
+eApp loader is not entered for a built-in.
+
+Decisive by absence too. The eApp packaging vocabulary is compiled into OSOS at
+`0x00678d24`–`0x00678df8` — `GUID`, `BuildID`, `ExecutablePath`, `HeapSize`, `DRMLevel`,
+`Manifest.plist.p7b`, `.sinf`. A built-in has none of them.
+
+**They are plain compiled-in code.** Their titles sit interleaved with ordinary firmware menu rows
+in the same flat string pool — `"Clock"`, `"Unknown Error"`, `"Parachute"`, `"Music Quiz"`,
+`"Brick"`, `"Screen Lock"` — reached **by ordinal** into one of 24 language blocks (base table
+`0x0069cce4`). Apple's internal names are **`BlockO` = Brick, `Chopper` = Parachute**.
+
+### So "extract a stock game" means "reimplement the host"
+
+|  | purchased eApp | built-in game |
+|---|---|---|
+| container | `eapp` header, block table, own load base `0x18000000` | none — plain `.text` in `osos` |
+| resources | its own directory of files | none; shared string pool + shared view-descriptor table `0x004cc188` |
+| host coupling | **explicit**: named imports patched into `ldr pc,[pc,#N]` thunks | **implicit**: ordinary `bl` into arbitrary firmware internals |
+
+There is no boundary to cut along: no relocation, no import table, shared widget toolkit, shared
+display path (`0x001650f8` → `0x00164f44` → `0x0028861c`), shared settings store, shared event
+system, shared allocator, no task of its own. Nothing in the image even points at `"Brick"` — the
+strings are reached by ordinal, so a pointer scan into the title range returns **0 hits**.
+
+### The tractable direction is the other one, and it is now bounded
+
+RetailOS **publishes** a self-describing, content-hash-versioned surface at
+`0x000793fc`–`0x00079ce0`. Records are keyed on the name pointer: `+0x24` count, `+0x28` next,
+`+0x2c` the function-pointer array, then the 16-byte interface hash, then the next record's magic
+`0x13061973`.
+
+| framework | functions | interface hash |
+|---|---|---|
+| `miscTBD` | 15 | (head record) |
+| `OpenGLES` | 179 | `041f4da520603c37d8ef9b879efbf280` |
+| `Filesytem` *(Apple's typo, preserved)* | 4 | `9aff0ee8f4485b4006ef4c0e578c3c0c` |
+| `Audio` | 61 | `d9c859f2325e3831f974c1218c35672d` |
+| `Metadata` | 152 | `71def8ce4eedefcd5b42dc23a5f45d4d` |
+| `AsyncFileIO` | 17 | `0012f0601105c3a75125314e17aa989a` |
+| `InputEvents` | 2 | `c73357d0487174bd02f378e54437e1e6` |
+| `Settings` | 3 | `91e11cfe3c1f4eda92a085db26c09dba` |
+
+**8 frameworks, 433 functions** — and those hashes are byte-identical to the ones `eapp-inspect`
+prints from Pac-Man's own import blocks, which is independent confirmation of the ABI from both
+sides at once. Pac-Man declares **98** of the 433.
+
+That is the shape of the "run a title with no Apple OS" work: not an unbounded reimplementation,
+but a published interface with a known size, a per-title subset that is enumerable before any code
+is written, and a hash that says when we have got it wrong.
+
+**Open.** The entry address of Brick's own game loop is still unknown, and there is no static handle
+— no RTTI, no symbols, strings by ordinal. The cheap way to name it is a dynamic diff of the two
+runs in §"do the games load" (stop at the Games list vs. launch Brick); that run recorded
+`last new code @2448612522` without printing the address.
