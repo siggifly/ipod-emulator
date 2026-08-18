@@ -2341,6 +2341,25 @@ pub struct Machine {
     /// those collapse when the clock advances quicker. Timing-sensitive code can notice, so it is a
     /// knob rather than a new default.
     pub instr_per_usec: usize,
+    /// Loop iterations spent with the core halted, at the same cost as executing one.
+    ///
+    /// **The clock is a function of work done, and nothing invents time.** A halted core used to
+    /// teleport `usec` to whichever interrupt was due next, which made idle time free: a machine
+    /// doing nothing aged thousands of times faster than one doing something, and Rockbox's ten
+    /// idle minutes arrived about thirteen seconds after a person stopped touching the wheel.
+    /// Now a halt costs the same per microsecond as running does, so the whole machine — busy or
+    /// idle — runs at one honest fraction of the real part's speed. At a third of speed everything
+    /// takes three times as long, which is the point.
+    ///
+    /// Kept apart from [`executed`](Self::executed) deliberately: that must stay a count of
+    /// instructions actually run or every profile and novelty figure becomes a measurement of how
+    /// long we idled. Control flow — the budget, the novelty window, `--stop-when-idle` — uses
+    /// [`steps`](Self::steps), which is the two added together, because a machine that has been
+    /// halted for a million cycles is idle in exactly the sense those are asking about.
+    pub idle_steps: u64,
+    /// Sub-microsecond remainder of the above, so a halt of less than `instr_per_usec` cycles does
+    /// not round up to a whole microsecond and let the clock drift forward.
+    pub idle_frac: usize,
     /// Next fire time in microseconds for TIMER1 and TIMER2; 0 means "not yet armed".
     pub timer_next: [u32; 2],
     /// Times an enabled interrupt was asserted, and times the CPU actually took it. A gap between
@@ -2597,6 +2616,8 @@ impl Machine {
             call_at: 0,
             call_log_on: false,
             instr_per_usec: 75,
+            idle_steps: 0,
+            idle_frac: 0,
             timer_next: [0; 2],
             irqs_asserted: 0,
             irqs_taken: 0,
@@ -3413,6 +3434,14 @@ impl Machine {
         }
     }
 
+    /// Instructions executed plus cycles spent halted — what the budget, the novelty window and
+    /// `--stop-when-idle` are really asking about. A core that has been asleep for a million cycles
+    /// is idle in exactly their sense, and keying them on `executed` alone meant a halted machine
+    /// could never reach the condition that ends a run.
+    pub fn steps(&self) -> u64 {
+        self.executed as u64 + self.idle_steps
+    }
+
     pub fn run(&mut self, budget: usize) -> Stop {
         // Regions, aliases and device mappings are all configured before a run; clearing here means
         // a cached resolution can never outlive the layout it was computed against.
@@ -3421,13 +3450,72 @@ impl Machine {
         for _ in 0..budget {
             // Before the fetch, so a taken IRQ lands on the vector rather than one instruction
             // past it. Rate-limited because it costs several memory accesses.
-            if self.mem.usec_timer.is_some() && self.executed & 0x3f == 0 {
+            if self.mem.usec_timer.is_some() && self.steps() & 0x3f == 0 {
                 self.service_interrupts();
             }
             let pc = self.cpu.regs[15];
             // So an unmapped access can name the instruction that made it.
             self.mem.pc = pc;
             self.mem.icount = self.executed as u64;
+
+            // The core wrote CPU_CTRL's sleep bit. Do not fetch — and do not invent time either.
+            // One loop iteration costs one cycle whether it runs an instruction or not, so the
+            // clock advances at the same rate halted as running and the machine keeps one honest
+            // ratio to the real part. This used to jump straight to the next due interrupt, which
+            // made idle free and powered an untouched iPod off in seconds; see KNOWN-BUGS.
+            if self.mem.cpu_sleep {
+                // Decide first whether this is a halt we can model at all. A deadline we hold is
+                // one we can wait for honestly; with nothing armed, a real core is waiting on an
+                // external event we have no model of, and charging even one cycle for it would be
+                // inventing time. So that case wakes at once and costs nothing, which is what the
+                // teleport did too — it is the only part of the old behaviour worth keeping.
+                let now = self.mem.usec;
+                let (mut armed, mut due) = (false, false);
+                for d in self.timer_next.iter().copied().chain(self.mem.ide_irq_due) {
+                    if d == u32::MAX || d == 0 {
+                        continue;
+                    }
+                    armed = true;
+                    if now.wrapping_sub(d) < 0x8000_0000 {
+                        due = true;
+                    }
+                }
+                if !armed {
+                    self.mem.cpu_sleep = false;
+                } else if due {
+                    self.mem.cpu_sleep = false;
+                    self.mem.sleeps += 1;
+                } else {
+                    // Genuinely halted with a deadline to wait for. One loop iteration costs one
+                    // cycle whether it runs an instruction or not, so the clock advances at the
+                    // same rate halted as running and the machine keeps one honest ratio to the
+                    // real part. This used to jump straight to the deadline, which made idle free
+                    // and powered an untouched iPod off in seconds; see KNOWN-BUGS.
+                    self.idle_steps += 1;
+                    self.idle_frac += 1;
+                    let ipu = self.instr_per_usec.max(1);
+                    if self.idle_frac >= ipu {
+                        self.idle_frac = 0;
+                        self.mem.slept_usec = self.mem.slept_usec.wrapping_add(1);
+                    }
+                    // Every step, not only the ones that tick a microsecond over. The clock is
+                    // defined as `executed / instr_per_usec + slept_usec` and it has to hold at
+                    // every instant, or a reader of `usec` between two ticks sees a stale value —
+                    // and anything that edits `slept_usec` from outside, as a restore does, would
+                    // not take effect until the remainder happened to wrap.
+                    if self.mem.usec_timer.is_some() {
+                        self.mem.usec = (self.executed / ipu) as u32 + self.mem.slept_usec;
+                    }
+                    // A halted machine has to be able to reach "idle", or `--stop-when-idle` waits
+                    // for an instruction that is never going to run.
+                    if let Some(win) = self.stop_when_idle {
+                        if self.steps() - self.last_novel >= win {
+                            return Stop::Idle;
+                        }
+                    }
+                    continue;
+                }
+            }
 
             if pc == self.exit_addr {
                 return Stop::Returned;
@@ -3712,30 +3800,6 @@ impl Machine {
             }
 
             self.executed += 1;
-            // The core asked to be switched off. Rather than halting the interpreter — which would
-            // stall a machine whose only other core we do not run — jump the clock to whichever
-            // interrupt is due first, which is what the core would have woken on. Nothing is due
-            // when no timer is armed and no drive completion is pending, and then the write is a
-            // no-op: a real core would wait for an external event we have no model of, and
-            // pretending otherwise would invent time out of nothing.
-            if self.mem.cpu_sleep {
-                self.mem.cpu_sleep = false;
-                let now = self.mem.usec;
-                let due = self
-                    .timer_next
-                    .iter()
-                    .copied()
-                    .chain(self.mem.ide_irq_due)
-                    .filter(|d| *d != u32::MAX && *d != 0)
-                    .map(|d| d.wrapping_sub(now))
-                    // Already due, or so far past that it wrapped: nothing to skip.
-                    .filter(|delta| *delta < 0x8000_0000)
-                    .min();
-                if let Some(delta) = due {
-                    self.mem.slept_usec = self.mem.slept_usec.wrapping_add(delta);
-                    self.mem.sleeps += 1;
-                }
-            }
             // Advance the microsecond clock. The PP5021C runs at roughly 75 MHz and this
             // interpreter is one instruction per step, so ~75 instructions is ~1 µs. The ratio only
             // has to be plausible: firmware compares elapsed against its own timeouts, so what
@@ -3763,7 +3827,7 @@ impl Machine {
                 let (word, bit) = (b >> 6, 1u64 << (b & 63));
                 if self.seen_bits[word] & bit == 0 {
                     self.seen_bits[word] |= bit;
-                    let n = self.executed as u64;
+                    let n = self.steps();
                     self.last_novel = n;
                     self.last_novel_sleeps = self.mem.sleeps;
                     self.novelty.as_mut().unwrap().insert(pc & !0xf, n);
@@ -3771,7 +3835,7 @@ impl Machine {
                 // Checked here rather than every instruction: this block already costs a bitset
                 // probe, and idleness cannot begin on an instruction that just found new code.
                 if let Some(win) = self.stop_when_idle {
-                    if self.executed as u64 - self.last_novel >= win {
+                    if self.steps() - self.last_novel >= win {
                         return Stop::Idle;
                     }
                 }
@@ -6950,6 +7014,13 @@ impl Machine {
             v
         };
         self.executed = r64(&mut p) as usize;
+        // Run-local halt accounting, deliberately NOT in the image. `idle_frac` is a sub-microsecond
+        // remainder worth less than one tick of the clock, and `idle_steps` only exists to let the
+        // budget and the novelty window see a halted machine. Carrying either across a restore
+        // would make the first step after one credit a microsecond it did not earn — which is how
+        // this was found: the version-3 control fell back by 998 where it owed 999.
+        self.idle_frac = 0;
+        self.idle_steps = 0;
         self.instr_per_usec = r64(&mut p) as usize;
         self.timer_next[0] = r32(&mut p);
         self.timer_next[1] = r32(&mut p);

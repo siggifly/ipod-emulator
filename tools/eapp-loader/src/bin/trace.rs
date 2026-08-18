@@ -1351,7 +1351,7 @@ fn main() {
             }
             if m.mem.sleeps > 0 {
                 println!(
-                    "\ncpu sleep: {} halts, {} ms of simulated time skipped",
+                    "\ncpu sleep: {} halts, {} ms of simulated time spent halted",
                     m.mem.sleeps,
                     m.mem.slept_usec / 1000
                 );

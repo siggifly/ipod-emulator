@@ -142,6 +142,13 @@ against this before trusting it; if it does not match, find out why before measu
 
 **`BUDGET=600000000`** — the fingerprint run.
 
+> **The block below is stale and was re-measured 2026-08-18: `ata commands: 488`, `ata dma: 466
+> transfers, 21 087 744 bytes`.** It reads 554 / 445 / 20 367 872 because it was written on
+> 2026-08-14 and four device fixes have landed since. **This was not the halt-clock change** — that
+> was A/B'd against a binary built from the stashed tree and is byte-identical here, which is the
+> only reason the drift is attributable to anything else. Numbers below the line are the machine of
+> 2026-08-14; treat every one of them as owing a re-run.
+
 ```
 -> BudgetExhausted after 599999952 instructions      29 289 code buckets
 ata commands: 554  (log below shows the first 256 — SAMPLE, NOT A CENSUS)

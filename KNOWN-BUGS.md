@@ -364,7 +364,7 @@ set it.
 
 ---
 
-## An idle iPod ages thousands of times too fast, so it powers itself off in seconds — 2026-08-18
+## ~~An idle iPod ages thousands of times too fast, so it powers itself off in seconds~~ — FIXED 2026-08-18
 
 **Nothing anywhere bounds simulated time against real time**, and the sleep path does not merely
 run fast, it runs *instantly*.
@@ -388,6 +388,30 @@ reads as "the emulator powers off for no reason" and was filed for weeks as an o
 defect — [ROADMAP](ROADMAP.md) M1 carried it as *"honest rather than a defect … but a person at the
 window would not see it, so it wants confirming interactively."* It has now been confirmed from the
 mechanism rather than by watching.
+
+**FIXED the same day, by deleting the teleport rather than by pacing anything.** A halted core now
+costs one loop iteration per cycle, exactly as a running one does, so the clock advances at the same
+rate whether the machine is busy or idle and the whole thing keeps **one honest ratio** to the real
+part. At a third of speed everything takes three times as long — including waiting.
+
+| | halts | simulated time halted | outcome |
+|---|---|---|---|
+| before | 2 535 581 | 2 531 061 ms | `Shutting down…` at 190 M |
+| after | 2 122 | 19 026 ms | menu still up at 1.5 G |
+
+1.43 G idle cycles ÷ 75 per µs = 19.0 s, which is the 19 026 ms reported — the accounting closes.
+
+**The control that matters:** the 600 M fingerprint is **byte-identical** to the pre-change binary
+(`ata commands: 488`, `ata dma: 466 transfers, 21 087 744 bytes`), built by stashing the change and
+compiling the old tree into its own target directory, per R4. The boot path never halts, so this
+could not have moved it — and now it is shown not to have.
+
+Two details worth keeping. **Nothing armed still wakes at once and costs nothing**: with no deadline
+we hold, a real core is waiting on an external event we have no model of, and charging even one
+cycle for it would invent time. And `idle_frac`/`idle_steps` are **not** in the snapshot — a
+sub-microsecond remainder carried across a restore makes the first step after one credit a
+microsecond it did not earn, which is exactly how the version-3 control caught this, falling back
+by 998 where it owed 999.
 
 **How you would know it is fixed:** leave the window alone for a minute and the iPod is still on.
 The fix belongs in the window rather than in the machine — clamp the sleep jump so simulated time
