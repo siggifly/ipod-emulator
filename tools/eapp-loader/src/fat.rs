@@ -18,6 +18,22 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 /// A mounted FAT32 volume, addressed through the image file it lives in.
+/// One directory entry, as read.
+pub struct FatEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub first: u32,
+    pub size: u32,
+}
+
+/// One entry from a whole-volume walk.
+pub struct FatPath {
+    pub path: String,
+    pub first: u32,
+    pub size: u32,
+    pub is_dir: bool,
+}
+
 pub struct Fat32 {
     file: std::fs::File,
     /// Byte offset of the partition within the image.
@@ -55,9 +71,20 @@ impl Fat32 {
     /// Takes the **first** partition whose type is `0x0b` or `0x0c`, which on an iPod is the data
     /// partition; partition 0 is Apple's firmware partition and is not a filesystem at all.
     pub fn open(image: &Path) -> Result<Fat32, String> {
+        Self::open_inner(image, true)
+    }
+
+    /// The same, read-only — which is not merely politeness. The reference drives are `chmod 444`
+    /// on purpose, so a read-write open **fails outright** on exactly the images most worth
+    /// reading, and reading is what most callers want.
+    pub fn open_ro(image: &Path) -> Result<Fat32, String> {
+        Self::open_inner(image, false)
+    }
+
+    fn open_inner(image: &Path, write: bool) -> Result<Fat32, String> {
         let mut file = std::fs::OpenOptions::new()
             .read(true)
-            .write(true)
+            .write(write)
             .open(image)
             .map_err(|e| format!("{}: {e}", image.display()))?;
         let mut mbr = [0u8; 512];
@@ -154,7 +181,7 @@ impl Fat32 {
         Ok(())
     }
 
-    fn chain(&mut self, first: u32) -> Result<Vec<u32>, String> {
+    pub fn chain(&mut self, first: u32) -> Result<Vec<u32>, String> {
         let mut out = vec![first];
         let mut c = first;
         loop {
@@ -416,8 +443,151 @@ impl Fat32 {
         Ok(cur)
     }
 
+    /// Sectors per cluster — the unit `lba` arithmetic is done in.
+    pub fn sectors_per_cluster(&self) -> u32 {
+        self.sectors_per_cluster
+    }
+
     pub fn root(&self) -> u32 {
         self.root_cluster
+    }
+
+
+    // ------------------------------------------------------------ reading
+
+    /// Absolute LBA of a cluster's first sector, in the whole image rather than in the partition —
+    /// which is the form `trace`'s `ata dma:` log prints, and the only reason [`lba_owner`] can
+    /// answer "what did the firmware actually read".
+    ///
+    /// [`lba_owner`]: Self::lba_owner
+    pub fn cluster_lba(&self, cluster: u32) -> u64 {
+        self.cluster_at(cluster) / self.bytes_per_sector as u64
+    }
+
+    /// Every entry under `dir`, with long names reconstructed.
+    ///
+    /// The long name matters more than it looks: the game directories are five-character short
+    /// names and everything around them is not, so a short-name-only reader miscounts the tree.
+    fn dir_entries(&mut self, dir: u32) -> Result<Vec<FatEntry>, String> {
+        let mut out = Vec::new();
+        let mut lfn: Vec<(u8, String)> = Vec::new();
+        for c in self.chain(dir)? {
+            let at = self.cluster_at(c);
+            let n = self.cluster_bytes();
+            let data = self.read_at(at, n)?;
+            for e in data.chunks_exact(ENTRY) {
+                if e[0] == 0x00 {
+                    return Ok(out);
+                }
+                if e[0] == 0xe5 {
+                    lfn.clear();
+                    continue;
+                }
+                if e[11] == ATTR_LFN {
+                    let mut u: Vec<u16> = Vec::new();
+                    for r in [(1usize, 11usize), (14, 26), (28, 32)] {
+                        for p in e[r.0..r.1].chunks_exact(2) {
+                            u.push(u16::from_le_bytes([p[0], p[1]]));
+                        }
+                    }
+                    lfn.push((e[0] & 0x3f, String::from_utf16_lossy(&u)));
+                    continue;
+                }
+                let base = String::from_utf8_lossy(&e[0..8]).trim_end().to_string();
+                let ext = String::from_utf8_lossy(&e[8..11]).trim_end().to_string();
+                let mut name = if ext.is_empty() { base } else { format!("{base}.{ext}") };
+                if !lfn.is_empty() {
+                    lfn.sort_by_key(|(i, _)| *i);
+                    let joined: String = lfn.iter().map(|(_, p)| p.as_str()).collect();
+                    name = joined.split('\0').next().unwrap_or("").to_string();
+                }
+                lfn.clear();
+                if name == "." || name == ".." {
+                    continue;
+                }
+                let first = (le16(e, 20) << 16) | le16(e, 26);
+                out.push(FatEntry {
+                    name,
+                    is_dir: e[11] & ATTR_DIR != 0,
+                    first,
+                    size: le32(e, 28),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every entry in the volume, depth first, with `/`-joined paths.
+    pub fn walk(&mut self) -> Result<Vec<FatPath>, String> {
+        let mut out = Vec::new();
+        let mut stack = vec![(String::new(), self.root_cluster)];
+        let mut depth = 0usize;
+        while let Some((prefix, cluster)) = stack.pop() {
+            depth += 1;
+            if depth > 100_000 {
+                return Err("directory walk did not terminate".into());
+            }
+            for e in self.dir_entries(cluster)? {
+                let path = format!("{prefix}/{}", e.name);
+                out.push(FatPath {
+                    path: path.clone(),
+                    first: e.first,
+                    size: e.size,
+                    is_dir: e.is_dir,
+                });
+                if e.is_dir && e.first >= 2 {
+                    stack.push((path, e.first));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// A file's bytes, bounded by its recorded size as well as by the chain's end.
+    pub fn read_file(&mut self, first: u32, size: u32) -> Result<Vec<u8>, String> {
+        let mut buf = Vec::with_capacity(size as usize);
+        for c in self.chain(first)? {
+            let at = self.cluster_at(c);
+            let n = self.cluster_bytes();
+            buf.extend_from_slice(&self.read_at(at, n)?);
+            if buf.len() >= size as usize {
+                break;
+            }
+        }
+        buf.truncate(size as usize);
+        Ok(buf)
+    }
+
+    /// Which file owns an absolute LBA, if any.
+    ///
+    /// This is the one that pairs with the emulator: `trace` prints the LBAs a boot actually read,
+    /// and turning them back into paths is how *"what did the firmware touch"* stops being a
+    /// question about numbers. An LBA in the FATs, the reserved area or free space belongs to no
+    /// file, and saying so is an answer rather than a miss.
+    pub fn lba_owner(&mut self, lbas: &[u64]) -> Result<Vec<(u64, Option<String>)>, String> {
+        let mut ivs: Vec<(u64, u64, String)> = Vec::new();
+        for e in self.walk()? {
+            if e.first < 2 {
+                continue;
+            }
+            for c in self.chain(e.first)? {
+                let s = self.cluster_lba(c);
+                ivs.push((s, s + self.sectors_per_cluster as u64, e.path.clone()));
+            }
+        }
+        ivs.sort_by_key(|x| x.0);
+        Ok(lbas
+            .iter()
+            .map(|&n| {
+                let i = ivs.partition_point(|x| x.0 <= n);
+                let hit = i
+                    .checked_sub(1)
+                    .and_then(|i| ivs.get(i))
+                    .filter(|x| x.0 <= n && n < x.1)
+                    .map(|x| x.2.clone());
+                (n, hit)
+            })
+            .collect())
     }
 
     pub fn flush(&mut self) -> Result<(), String> {

@@ -138,6 +138,15 @@ fn main() {
 
     // The other half of installing an OS: the firmware partition holds what the bootloader runs,
     // the data partition holds everything that bootloader then looks for.
+    if name == "fat" {
+        match fat_cmd(&rest) {
+            Ok(()) => return,
+            Err(e) => {
+                eprintln!("ipod-boot fat: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     if name == "rsrc" {
         match rsrc_cmd(&rest) {
             Ok(()) => return,
@@ -960,6 +969,129 @@ fn sha256_hex(data: &[u8]) -> String {
         }
     }
     h.iter().map(|x| format!("{x:08x}")).collect()
+}
+
+// ---------------------------------------------------------------- fat
+
+/// `ipod-boot fat DISK.img tree | find NEEDLE | cat PATH [OUT] | catall SUFFIX DIR | lba N...`
+///
+/// Reads the FAT32 data partition without mounting anything. `diskutil`, `hdiutil attach` and every
+/// partitioning command are forbidden in this project — they operate on real disks and a typo
+/// reaches one — so this walks the MBR and the FAT32 structures itself and opens the image
+/// read-only.
+///
+/// **`lba` is the one that pairs with the emulator.** `trace`'s `ata dma:` log prints absolute
+/// LBAs; this turns them back into paths, which is how *"what did the firmware actually read"*
+/// becomes answerable at all.
+fn fat_cmd(args: &[String]) -> Result<(), String> {
+    const USAGE: &str = "usage: ipod-boot fat DISK.img tree | find NEEDLE | cat PATH [OUT] | \
+                         catall SUFFIX DIR | lba N...";
+    let disk = args.first().ok_or(USAGE)?;
+    let cmd = args.get(1).map(String::as_str).unwrap_or("tree");
+    let mut v = eapp_loader::fat::Fat32::open_ro(std::path::Path::new(disk))?;
+
+    match cmd {
+        "tree" => {
+            for e in v.walk()? {
+                let lba0 =
+                    if e.first >= 2 { v.cluster_lba(e.first) as i64 } else { -1 };
+                println!(
+                    "{}{}\tclus={}\tsize={}\tlba0={}",
+                    e.path,
+                    if e.is_dir { "/" } else { "" },
+                    e.first,
+                    e.size,
+                    lba0
+                );
+            }
+        }
+        "find" => {
+            let needle = args.get(2).ok_or("find needs a substring")?.to_lowercase();
+            for e in v.walk()? {
+                if !e.path.to_lowercase().contains(&needle) {
+                    continue;
+                }
+                let rng = if e.first >= 2 {
+                    let ch = v.chain(e.first)?;
+                    match (ch.first(), ch.last()) {
+                        (Some(&a), Some(&b)) => format!(
+                            "{}..{} ({} clusters)",
+                            v.cluster_lba(a),
+                            v.cluster_lba(b) + v.sectors_per_cluster() as u64 - 1,
+                            ch.len()
+                        ),
+                        _ => "-".into(),
+                    }
+                } else {
+                    "-".into()
+                };
+                println!(
+                    "{:<72} {} size={:<10} lba {}",
+                    e.path,
+                    if e.is_dir { "DIR" } else { "   " },
+                    e.size,
+                    rng
+                );
+            }
+        }
+        "cat" => {
+            let want = args.get(2).ok_or("cat needs a path")?;
+            let out = args.get(3);
+            for e in v.walk()? {
+                if e.is_dir || &e.path != want {
+                    continue;
+                }
+                let buf = v.read_file(e.first, e.size)?;
+                match out {
+                    Some(o) => {
+                        std::fs::write(o, &buf).map_err(|x| format!("{o}: {x}"))?;
+                        eprintln!("wrote {} bytes to {o}", buf.len());
+                    }
+                    None => {
+                        use std::io::Write as _;
+                        std::io::stdout().write_all(&buf).map_err(|x| x.to_string())?;
+                    }
+                }
+                return Ok(());
+            }
+            return Err(format!("not found: {want}"));
+        }
+        "catall" => {
+            let suffix = args.get(2).ok_or("catall needs a suffix")?;
+            let dir = args.get(3).ok_or("catall needs an output directory")?;
+            std::fs::create_dir_all(dir).map_err(|e| format!("{dir}: {e}"))?;
+            let mut n = 0;
+            for e in v.walk()? {
+                if e.is_dir || !e.path.ends_with(suffix.as_str()) || e.first < 2 {
+                    continue;
+                }
+                let buf = v.read_file(e.first, e.size)?;
+                let flat = e.path.trim_matches('/').replace('/', "__");
+                std::fs::write(std::path::Path::new(dir).join(&flat), &buf)
+                    .map_err(|x| format!("{flat}: {x}"))?;
+                n += 1;
+            }
+            eprintln!("extracted {n}");
+        }
+        "lba" => {
+            let want: Vec<u64> = args[2..]
+                .iter()
+                .map(|a| {
+                    let t = a.trim_start_matches("0x");
+                    let r = if t.len() == a.len() { a.parse() } else { u64::from_str_radix(t, 16) };
+                    r.map_err(|_| format!("{a}: not a number"))
+                })
+                .collect::<Result<_, _>>()?;
+            for (n, owner) in v.lba_owner(&want)? {
+                match owner {
+                    Some(p) => println!("{n} -> {p}"),
+                    None => println!("{n} -> (metadata, free space, or outside the data area)"),
+                }
+            }
+        }
+        other => return Err(format!("unknown command `{other}`\n{USAGE}")),
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- rsrc

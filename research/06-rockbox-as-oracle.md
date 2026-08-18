@@ -579,7 +579,7 @@ producing a plausible image that dies seventy ATA commands into a boot. Both beh
 `ipod-boot put-files DISK.img SRC_DIR` writes a directory tree into the drive image's FAT32
 volume — the other half of an install, and the half the Rockbox bootloader was asking for when it
 said *"Can't load rockbox.ipod: File not found"*. 381 files, 19.3 MB, in 1.7 s; an independent
-reader (`tools/fat-read.py`) sees all 404 entries with their long names intact.
+reader (`ipod-boot fat`) sees all 404 entries with their long names intact.
 
 **Every link now runs:**
 
@@ -934,10 +934,10 @@ would surface there and nowhere else.
 `DISK` defaults to `resources/drives/ipod8g.img`, which is a stock Apple volume:
 
 ```
-$ IMG=resources/drives/ipod8g.img tools/fat-read.py find rockbox
+$ IMG=resources/drives/ipod8g.img ipod-boot fat DISK.img find rockbox
 # ipod8g.img: FAT32 type 0xc at LBA 32768, 8 sectors/cluster, data starts at LBA 65536
                                                               (nothing)
-$ IMG=resources/drives/ipod8g.img tools/fat-read.py find ipod_control
+$ IMG=resources/drives/ipod8g.img ipod-boot fat DISK.img find ipod_control
 /iPod_Control                                DIR  lba 65560..65567
 /iPod_Control/Device                         DIR  lba 65568..65575
 …9 entries
@@ -987,9 +987,9 @@ into one band. That is R5: the measure has to be matched to what it is measuring
 ```
 $ ipod-boot put-files disk.img <the 4.0 zip, unpacked>
   381 file(s) in 23 directory(ies), 19298918 bytes
-$ IMG=disk.img tools/fat-read.py find helvetica
+$ IMG=disk.img ipod-boot fat DISK.img find helvetica
 /.rockbox/fonts/15-Adobe-Helvetica.fnt   size=231928  lba 6598080..6598535 (57 clusters)
-$ IMG=disk.img tools/fat-read.py cat /.rockbox/fonts/15-Adobe-Helvetica.fnt out.bin
+$ IMG=disk.img ipod-boot fat DISK.img cat /.rockbox/fonts/15-Adobe-Helvetica.fnt out.bin
 $ shasum -a 256 out.bin  <the zip's own copy>
 8a7ff4b0…  out.bin
 8a7ff4b0…  .rockbox/fonts/15-Adobe-Helvetica.fnt

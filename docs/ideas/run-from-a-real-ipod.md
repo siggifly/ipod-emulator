@@ -55,5 +55,5 @@ over an exact, verified command to run, then checks the result. It keeps this bi
 and it puts the one irreversible step in front of a human who can read what it says.
 
 `safety-and-working-model.md` already forbids `diskutil`, `hdiutil attach` and every partitioning
-command in this project, for this reason. `tools/fat-read.py` is the existing precedent: it walks
+command in this project, for this reason. `ipod-boot fat` is the existing precedent: it walks
 MBR and FAT32 itself, read-only, and never mounts anything.
