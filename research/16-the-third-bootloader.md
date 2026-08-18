@@ -233,10 +233,17 @@ JQ 5 51 Y5H TXM        from the drive's iPod_Control/Device/SysInfo
 └────────────── manufacturing location (2)
 ```
 
-**The model-code table is Apple-internal and we do not have it.** `TXK` and `TXM` are 5G-era codes;
-which capacity each denotes is not sourced here and should not be guessed. This matters less than it
-looks: **nothing validates the serial.** RetailOS displays it. So a generated serial needs the right
-*shape*, and its last three characters are cosmetic until somebody shows otherwise.
+**The last three characters are not the model, and chasing them was the wrong thread.** Apple's
+published 5G endings are `V9K V9P V9M V9R V9L V9N V9Q V9S WU9 WUA WUB WUC X3N`, plus `W9G` for the U2
+edition — and **neither `TXK` nor `TXM` is on that list**, while both serials' date fields sit
+squarely in the 5G period (week 51 of 2005, week 08 of 2006). So the published tables are incomplete,
+and no mapping from these codes to a capacity is available or inferable.
+
+It does not matter, because **the model is a different field entirely** and we have it — see
+§"What the NOR says it is" below. Nothing validates the serial; RetailOS displays it. So a generated
+serial needs the right *shape*, and this project's generator deliberately ends its serials `ZZ?`,
+which is on no published table: a generated identity should be recognisable as generated, and can
+then never collide with a real device's code by accident.
 
 ### And a thing the two examples reveal
 
@@ -244,3 +251,80 @@ looks: **nothing validates the serial.** RetailOS displays it. So a generated se
 warns that the two files "must be for the same iPod", and the check that enforces it compares
 *family*, not serial — so this pair passes, correctly, because family is what actually has to match.
 Worth knowing before anyone reads a serial out of one and expects it to appear in the other.
+
+## What the NOR says it is — model, colour, and the generation, all sourced
+
+`ipod-boot syscfg` read two of `SysCfg`'s seven records. The other five were sitting there the whole
+time, and one of them answers a question that had otherwise been headed for somebody's memory:
+
+```
+records SrNm, FwId, HwId, HwVr, Regn, Mod#, DrmV
+```
+
+**`Mod#` is the model number**, and on this dump it is `MA146` — written bare, with no `x` prefix.
+(The drive's `SysInfo` writes the same value as `xMA146`; the NOR does not. A lookup has to take
+both.) **`HwVr` is `0x000B0005`** — the same Gestalt ID `research/02` found RetailOS switching on at
+`sysinfo + 0x84`.
+
+Each tag carries its payload differently, observed on the one real dump held here: `SrNm` and `Mod#`
+are NUL-terminated text from byte 0, while `FwId`, `HwVr` and `DrmV` leave the first word zero and
+put their value at byte 4. There is no general rule to apply to an unfamiliar tag, so unfamiliar tags
+are listed and not decoded.
+
+### The table, from libgpod
+
+`libgpod/src/itdb_device.c` carries `ipod_model_table` — the table iTunes-compatible software has
+used for twenty years. Its 5G/5.5G rows:
+
+| `Mod#` | capacity | colour | generation |
+|---|---|---|---|
+| `A002` / **`A146`** | 30 GB | white / **black** | **`VIDEO_1` — 5G** |
+| `A003` / `A147` | 60 GB | white / black | `VIDEO_1` — 5G |
+| `A452` | 30 GB | U2 | `VIDEO_1` — 5G |
+| `A444` / `A446` | 30 GB | white / black | **`VIDEO_2` — 5.5G** |
+| `A448` / `A450` | 80 GB | white / black | `VIDEO_2` — 5.5G |
+| `A664` | 30 GB | U2 | `VIDEO_2` — 5.5G |
+
+Lookup strips a leading alphabetic character, so `MA146` → `A146`. Our drives' `xMA146` needs *two*
+strips, which libgpod does in two places — its `SysInfo` reader drops the `x`, then the table lookup
+drops the `M`. Reproducing that as two conditional strips is fragile, so `Model::lookup` takes the
+**last four characters** and requires the final three to be digits: that accepts `xMA146`, `MA146`
+and `A146` alike, and rejects strings that are not model numbers.
+
+### So: this is a 30 GB **black** 5G, and the logo confirms it
+
+`A146` = 30 GB, black, 5G. **Three independent fields agree**, which is what makes it a fact rather
+than a reading:
+
+| source | says |
+|---|---|
+| the NOR's `Mod#` | `MA146` → 30 GB, black, 5G |
+| the NOR's `HwVr` | `0x000B0005` → 5G |
+| the drive's `SysInfo` | `xMA146`, `boardHwRev: 0x00050000`, `BoardHwName: PP5021C-2` → 5G |
+
+And a fourth, from a completely different direction: **`research/14` recorded that this NOR draws a
+white Apple logo on a black background.** A black iPod has a white-on-black boot logo and a white one
+has black-on-white — which was offered here as a technician's twenty-year-old recollection, and is
+now corroborated by a model number that independently says *black*. It is one unit, so this confirms
+the pair rather than proving the general rule; but the general rule now has evidence rather than
+memory behind it.
+
+**The default iPod colour therefore comes from the hardware**, not from a constant somebody picked:
+read `Mod#`, look it up, use what it says. A synthesised NOR sets `Mod#` from the model the user
+chose, and the colour follows.
+
+`generation_agrees()` cross-checks `Mod#` against `HwVr` and returns `Option<bool>`, so "not checked"
+stays distinguishable from "agrees" — a bare `false` for absent data is how a check ends up quietly
+never running.
+
+### And it settles §"The wrinkle" above
+
+That section asked *"which chip are we"* and said nothing goes in the model until the NOR's `SCfg`,
+the handoff block and the drive's `SysInfo` are compared. **They have now been compared, and they
+agree: this is a 5G.**
+
+Which means `ipod_is_pp5022()` returning false is **correct on this hardware**, not a symptom of our
+model answering wrong — a PP5021C has `'1'` where the test looks for `'2'`. `ipodloader2` selecting
+the PP5002 path from that is **its own gap on a 5G**, not a value we need to invent. The remaining
+question is narrower than it was: not *what should `PP_VER1` be*, but *does `ipodloader2` have a
+PP5021C path at all* — and the honest answer from reading `ipodhw.c` is that it does not.

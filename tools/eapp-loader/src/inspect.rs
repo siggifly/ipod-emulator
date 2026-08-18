@@ -1233,6 +1233,19 @@ pub struct SysCfg {
     /// the high word followed by the low one. The top of the high word is Apple's FireWire OUI,
     /// `00:0A:27`, which is the cheapest check that this was parsed correctly at all.
     pub guid: Option<u64>,
+    /// `Mod#` — the model number, e.g. `MA146`. **This is the field that says what the iPod is**:
+    /// run it through [`crate::identity::Model::lookup`] and it yields capacity, colour and whether
+    /// this is a 5G or a 5.5G, from a sourced table rather than from anybody's recollection.
+    ///
+    /// Note it has **no `x` prefix here**. The drive's `SysInfo` writes the same value as `xMA146`;
+    /// the NOR writes it bare. The lookup accepts both.
+    pub model: Option<String>,
+    /// `HwVr` — the hardware version, and the same constant RetailOS switches on at `sysinfo + 0x84`
+    /// (`0x000B0005` for the 5G, `0x000B0010` for the 5.5G).
+    ///
+    /// A **second, independent** statement of generation alongside `Mod#`. They should agree; if
+    /// they ever do not, that is worth knowing rather than silently preferring one.
+    pub hw_vr: Option<u32>,
     /// Every tag found, in order, for a dump that does not look like the others.
     pub tags: Vec<String>,
 }
@@ -1248,6 +1261,19 @@ impl SysCfg {
     pub fn guid_looks_apple(&self) -> bool {
         self.guid.is_some_and(|g| (g >> 40) == 0x00_0A_27)
     }
+
+    /// What `Mod#` says this iPod is — capacity, colour, and 5G vs 5.5G.
+    pub fn model_info(&self) -> Option<&'static crate::identity::Model> {
+        crate::identity::Model::lookup(self.model.as_deref()?)
+    }
+
+    /// Whether `Mod#` and `HwVr` tell the same story about the generation.
+    ///
+    /// `None` when either is missing, so "we did not check" is distinguishable from "they agree" —
+    /// a bare `false` for absent data is how a check ends up quietly never running.
+    pub fn generation_agrees(&self) -> Option<bool> {
+        Some(self.model_info()?.generation.gestalt() == self.hw_vr?)
+    }
 }
 
 /// Read `SysCfg` out of a NOR dump.
@@ -1262,7 +1288,8 @@ pub fn syscfg(nor: &[u8]) -> Option<SysCfg> {
     }
     let count = u32::from_le_bytes(block.get(0x14..0x18)?.try_into().ok()?) as usize;
 
-    let mut out = SysCfg { serial: None, guid: None, tags: Vec::new() };
+    let mut out =
+        SysCfg { serial: None, guid: None, model: None, hw_vr: None, tags: Vec::new() };
     let mut at = SYSCFG_HEADER;
     // Bounded by the declared count and by the buffer, because a truncated dump is a normal thing
     // to be handed and must not be read past.
@@ -1270,17 +1297,25 @@ pub fn syscfg(nor: &[u8]) -> Option<SysCfg> {
         let Some(rec) = block.get(at..at + SYSCFG_RECORD) else { break };
         let tag: String = rec[..4].iter().rev().map(|&b| b as char).collect();
         let payload = &rec[4..];
+        // NUL-terminated ASCII from the front of the payload — the shape `SrNm` and `Mod#` share.
+        let text = || -> Option<String> {
+            let s: String = payload
+                .iter()
+                .take_while(|&&b| b != 0)
+                .map(|&b| b as char)
+                .filter(|c| c.is_ascii_graphic())
+                .collect();
+            (!s.is_empty()).then_some(s)
+        };
+        // **Each tag has its own payload layout**, observed on the one real dump held here: `SrNm`
+        // and `Mod#` are text from byte 0, while `FwId`, `HwVr` and `DrmV` leave the first word zero
+        // and put their value at byte 4. There is no general rule to apply to an unfamiliar tag, so
+        // unfamiliar tags are recorded in `tags` and not decoded.
         match tag.as_str() {
-            "SrNm" => {
-                let s: String = payload
-                    .iter()
-                    .take_while(|&&b| b != 0)
-                    .map(|&b| b as char)
-                    .filter(|c| c.is_ascii_graphic())
-                    .collect();
-                if !s.is_empty() {
-                    out.serial = Some(s);
-                }
+            "SrNm" => out.serial = text(),
+            "Mod#" => out.model = text(),
+            "HwVr" => {
+                out.hw_vr = Some(u32::from_le_bytes(payload.get(4..8)?.try_into().ok()?));
             }
             "FwId" => {
                 let lo = u32::from_le_bytes(payload.get(4..8)?.try_into().ok()?) as u64;
@@ -1327,6 +1362,34 @@ mod syscfg_tests {
         let mut p = [0u8; 16];
         p[..s.len()].copy_from_slice(s.as_bytes());
         p
+    }
+
+    /// Text from byte 0, a `u32` from byte 4 — the two payload shapes, on the values the real dump
+    /// here actually holds. **This is the pair that decides the default colour**, so it is worth a
+    /// test that would fail if either offset were guessed wrong.
+    #[test]
+    fn the_model_and_hardware_version_are_read_and_agree() {
+        let mut modn = [0u8; 16];
+        modn[..5].copy_from_slice(b"MA146");
+        let mut hwvr = [0u8; 16];
+        hwvr[4..8].copy_from_slice(&0x000B_0005u32.to_le_bytes());
+        let c = syscfg(&nor(&[("Mod#", modn), ("HwVr", hwvr)])).expect("must parse");
+
+        assert_eq!(c.model.as_deref(), Some("MA146"));
+        assert_eq!(c.hw_vr, Some(0x000B_0005));
+        let info = c.model_info().expect("MA146 is in the table");
+        assert_eq!(info.colour, crate::identity::Colour::Black);
+        assert_eq!(info.capacity_gb, 30);
+        assert_eq!(c.generation_agrees(), Some(true));
+
+        // And it must be able to *disagree*, or the cross-check is decoration. An 80 GB model is
+        // 5.5G-only, so pairing it with the 5G HwVr is a contradiction the check has to catch.
+        let mut eighty = [0u8; 16];
+        eighty[..5].copy_from_slice(b"MA448");
+        assert_eq!(syscfg(&nor(&[("Mod#", eighty), ("HwVr", hwvr)])).unwrap().generation_agrees(),
+                   Some(false));
+        // Absent data is "not checked", never "agrees".
+        assert_eq!(syscfg(&nor(&[("Mod#", modn)])).unwrap().generation_agrees(), None);
     }
 
     /// The GUID is two little-endian words, high one second — so it reads backwards twice over,

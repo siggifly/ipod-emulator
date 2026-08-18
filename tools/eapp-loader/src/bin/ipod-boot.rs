@@ -99,7 +99,37 @@ fn main() {
             Some(g) => println!("  GUID    {g}"),
             None => println!("  GUID    (absent)"),
         }
+        // What the dump says it *is*, as opposed to who it is. `Mod#` resolves through libgpod's
+        // model table, which is where the colour comes from — a fact stated by the hardware rather
+        // than a default somebody picked.
+        match (c.model.as_deref(), c.model_info()) {
+            (Some(m), Some(info)) => println!(
+                "  model   {m} — {} GB, {}, {}",
+                info.capacity_gb,
+                match info.colour {
+                    eapp_loader::identity::Colour::White => "white",
+                    eapp_loader::identity::Colour::Black => "black",
+                    eapp_loader::identity::Colour::U2 => "U2 (black, red wheel)",
+                },
+                match info.generation {
+                    eapp_loader::identity::Generation::Video1 => "5G",
+                    eapp_loader::identity::Generation::Video2 => "5.5G",
+                }
+            ),
+            (Some(m), None) => println!("  model   {m} — not in the model table"),
+            (None, _) => println!("  model   (absent)"),
+        }
+        match c.hw_vr {
+            Some(v) => println!("  HwVr    {v:#010X}"),
+            None => println!("  HwVr    (absent)"),
+        }
         println!("  records {}", c.tags.join(", "));
+        // Two independent fields, so they can disagree — and a disagreement is a finding, not
+        // something to resolve silently by preferring whichever was read first.
+        if c.generation_agrees() == Some(false) {
+            println!();
+            println!("  warning: Mod# and HwVr disagree about the generation.");
+        }
         if !c.guid_looks_apple() {
             // Said rather than assumed correct: the OUI is the one field whose right answer is
             // known in advance, so it is the only check available that this parsed at all.

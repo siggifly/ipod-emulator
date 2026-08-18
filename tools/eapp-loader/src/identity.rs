@@ -1,19 +1,30 @@
-//! Who this iPod says it is: serial number and FireWire GUID.
+//! Who this iPod says it is: model, serial number and FireWire GUID.
 //!
 //! A synthesised boot ROM has to answer *which iPod is this*, and the answer is a **setting** rather
-//! than an accident of which dump somebody found. Three tiers, per [ROADMAP] M5:
+//! than an accident of which dump somebody found. Four tiers, per [ROADMAP] M5:
 //!
-//! * **generate** — deterministic from a seed the caller persists
-//! * **provide** — the user's own values, parsed and checked
-//! * **read** — out of the user's own `iPod_Control/Device/SysInfo`, which is a text file on the
-//!   partition their computer already mounts
+//! * **read the NOR** — the identity of the dump this machine actually boots ([`Identity::from_nor`])
+//! * **read the drive** — out of `iPod_Control/Device/SysInfo` on a volume the user's own computer
+//!   has already mounted, which needs no dump and no disk-mode driver
+//! * **provide** — the user's own values, typed or edited
+//! * **generate** — deterministic from a seed, for anyone who has neither
 //!
-//! ## Two things that are easy to get wrong
+//! ## Prior art this is reconciled against
 //!
-//! **The GUID has teeth and the serial does not.** Apple's DRM binds a purchased title to the
-//! FireWire GUID, so a *generated* one can never authorise those titles — on any machine, ever.
-//! Nothing validates the serial; RetailOS displays it. So the serial owes the right shape and the
-//! GUID owes real structure.
+//! `siggifly/ipod-usb-new` solved the same problem first and solved it against a **real iTunes**,
+//! which is the only authority that can say an identity was got right. Its rules are adopted here
+//! rather than re-derived:
+//!
+//! * **Nothing is hardwired.** No default GUID, no default serial. A plausible-looking constant is
+//!   somebody's real device the moment it is used unthinkingly.
+//! * **The serial is optional; the GUID is not.** The DRM binds to the GUID. A serial is a string
+//!   RetailOS prints on the About screen.
+//! * **A non-Apple OUI warns, it does not refuse.** It is a strong hint of a bad parse, not a fact
+//!   about what a user is permitted to present.
+//! * **Show what was read before using it.** An identity presented without being seen is one nobody
+//!   can catch being wrong.
+//!
+//! ## The one thing that is easy to get wrong
 //!
 //! **A generated identity must be STABLE.** If it were random per launch the machine would be a
 //! different device every time — settings keyed to it, and anything bound to the GUID, would see a
@@ -22,43 +33,179 @@
 //!
 //! [ROADMAP]: ../../../ROADMAP.md
 
+use std::path::Path;
+
 /// Apple's registered OUI, and the top 24 bits of every real iPod's FireWire GUID.
 ///
-/// Observed directly in the handoff block Apple's bootloader leaves, and in the drive's own
-/// `SysInfo`. Software that checks a GUID at all checks this.
+/// Observed directly in the NOR's `SysCfg` block, in the handoff block Apple's bootloader leaves,
+/// and in the drive's own `SysInfo` — three independent sources. Software that checks a GUID at all
+/// checks this.
 pub const APPLE_OUI: u64 = 0x00_0A_27;
 
 /// A machine's identity, as the boot ROM reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
-    /// Eleven characters, Apple's pre-2010 format.
-    pub serial: String,
-    /// 64 bits: Apple's OUI in the top 24, the device's own in the low 40.
+    /// Eleven characters, Apple's pre-2010 format. **Optional**: the DRM binds to the GUID, and a
+    /// dump whose `SrNm` record is absent is still a usable identity.
+    pub serial: Option<String>,
+    /// 64 bits: Apple's OUI in the top 24, the device's own in the low 40. **This is the field with
+    /// teeth** — it is also the USB serial number a host sees.
     pub guid: u64,
-    /// Whether these came from real hardware, which decides what may be claimed about them.
+    /// Where these came from, which decides what may be claimed about them.
     pub source: Source,
 }
 
-/// Where an identity came from. **Kept with the values** because the difference is not cosmetic:
-/// only a real GUID can authorise a purchased title, and a UI that cannot tell the two apart cannot
-/// warn anybody.
+/// Where an identity came from. **Kept with the values** because the difference is not cosmetic —
+/// see [`Identity::title_auth`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
-    /// Made up, deterministically, from a seed. Boots; cannot authorise DRM-bound titles.
+    /// Made up, deterministically, from a seed.
     Generated,
-    /// Typed in by the user.
+    /// Typed in or edited by the user. We cannot tell by looking whether these are a real device's.
     Provided,
-    /// Read out of a real device's `SysInfo`.
+    /// Read out of a real device — its NOR's `SysCfg`, or its drive's `SysInfo`.
     RealDevice,
 }
 
+/// Whether iTunes could authorise DRM-bound titles against this identity.
+///
+/// **This is not a guess.** `siggifly/ipod-usb` presented a virtual iPod to a real iTunes, iTunes
+/// accepted it, and the titles it authorised are the ones `research/13` then loaded. So the
+/// mechanism is known: iTunes mints keys against the identity a device presents, and the emulator
+/// presents whatever is in the NOR it boots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TitleAuth {
+    /// **Never.** Invented values match no purchase that has ever been made, on any machine.
+    Never,
+    /// **Only if they are really yours.** Real values authorise the titles bought for *that*
+    /// device — which is the user's own iPod, or is somebody else's.
+    IfGenuine,
+    /// **Yes**, for the titles bought for this device.
+    Yes,
+}
+
 impl Identity {
+    /// Read the identity out of the NOR dump this machine boots.
+    ///
+    /// **The most relevant tier, because it is the only one that is self-consistent.** Keys
+    /// authorised against any other identity are keys this machine cannot present.
+    pub fn from_nor(path: &Path) -> Result<Identity, String> {
+        let nor = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let c = crate::inspect::syscfg(&nor).ok_or_else(|| {
+            format!(
+                "{}: no SysCfg block at 0x4000.\n\
+                 A 5G/5.5G NOR dump is 1 MiB and starts with the boot ROM; a file that is neither \
+                 will land here.",
+                path.display()
+            )
+        })?;
+        let guid = c.guid.ok_or_else(|| {
+            format!("{}: SysCfg has no FwId record, so there is no GUID", path.display())
+        })?;
+        if !c.guid_looks_apple() {
+            // Warn, do not refuse: this is evidence of a bad parse, not a permission decision.
+            eprintln!(
+                "warning: {guid:016X} does not carry Apple's FireWire OUI ({APPLE_OUI:06X}).\n\
+                 \x20        Either this is not an iPod NOR, or it did not parse."
+            );
+        }
+        Ok(Identity { serial: c.serial, guid, source: Source::RealDevice })
+    }
+
+    /// Read a real device's `iPod_Control/Device/SysInfo`.
+    ///
+    /// `root` is the volume — `/Volumes/IPOD` on macOS, wherever the desktop mounted it elsewhere.
+    /// **This tier needs no NOR dump, no disk-mode driver and no elevated privileges**: it is an
+    /// ordinary read of a file the user's own computer has already mounted, which is the whole
+    /// reason it exists.
+    pub fn from_volume(root: &Path) -> Result<Identity, String> {
+        let p = root.join("iPod_Control/Device/SysInfo");
+        let text = std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+        Identity::from_sysinfo(&text).map_err(|e| format!("{}: {e}", p.display()))
+    }
+
+    /// Every mounted volume that looks like an iPod, with what each reports.
+    ///
+    /// The test is a `SysInfo` that parses — **not** the volume's name, which the owner may have
+    /// changed to anything. A volume that has the file but fails to parse is returned with its
+    /// reason, because "I can see your iPod but its SysInfo is not what I expected" is worth saying
+    /// out loud rather than presenting as no-iPod-found.
+    pub fn detect_mounted() -> Vec<(std::path::PathBuf, Result<Identity, String>)> {
+        // Where a desktop mounts removable media. A missing directory is skipped, so listing all
+        // three costs nothing on a machine that has one of them.
+        const ROOTS: &[&str] = &["/Volumes", "/media", "/run/media"];
+        let mut out = Vec::new();
+        for root in ROOTS {
+            let Ok(entries) = std::fs::read_dir(root) else { continue };
+            for e in entries.flatten() {
+                let vol = e.path();
+                // One level on macOS (`/Volumes/<volume>`), two on Linux (`/media/<user>/<volume>`).
+                // Checking the entry and then its children covers both without knowing which we are.
+                let nested = std::fs::read_dir(&vol).into_iter().flatten().flatten().map(|c| c.path());
+                for c in std::iter::once(vol.clone()).chain(nested) {
+                    if c.join("iPod_Control/Device/SysInfo").is_file() {
+                        let id = Identity::from_volume(&c);
+                        out.push((c, id));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Parse the text of an `iPod_Control/Device/SysInfo`.
+    ///
+    /// ~349 bytes of `Key: value` lines on the data partition.
+    pub fn from_sysinfo(text: &str) -> Result<Identity, String> {
+        let serial = sysinfo_field(text, "pszSerialNumber");
+        let raw = sysinfo_field(text, "FirewireGuid").ok_or("no FirewireGuid line")?;
+        let guid = u64::from_str_radix(raw.trim_start_matches("0x"), 16)
+            .map_err(|_| format!("FirewireGuid is not hex: {raw}"))?;
+        if guid >> 40 != APPLE_OUI {
+            eprintln!(
+                "warning: {guid:016X} does not carry Apple's FireWire OUI ({APPLE_OUI:06X})."
+            );
+        }
+        Ok(Identity { serial, guid, source: Source::RealDevice })
+    }
+
+    /// The user's own values, typed in or edited from a generated pair.
+    ///
+    /// Checked rather than trusted, because both failure modes here are silent: a serial of the
+    /// wrong length renders as garbage on RetailOS's About screen, and a malformed GUID surfaces as
+    /// iTunes quietly declining to identify the device — the least debuggable failure in this
+    /// family of projects.
+    ///
+    /// **The source is `Provided`, not `RealDevice`, even when the user typed a real device's
+    /// values**, because we cannot tell the difference by looking.
+    pub fn provided(serial: Option<&str>, guid: u64) -> Result<Identity, String> {
+        let serial = match serial.map(str::trim).filter(|s| !s.is_empty()) {
+            None => None,
+            Some(s) => {
+                let s = s.to_ascii_uppercase();
+                if s.chars().count() != 11 {
+                    return Err(format!(
+                        "a serial is 11 characters; got {}: {s}",
+                        s.chars().count()
+                    ));
+                }
+                if !s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) {
+                    return Err(format!("a serial is letters and digits only: {s}"));
+                }
+                Some(s)
+            }
+        };
+        if guid >> 40 != APPLE_OUI {
+            eprintln!(
+                "warning: {guid:016X} does not start with Apple's FireWire OUI ({APPLE_OUI:06X})."
+            );
+        }
+        Ok(Identity { serial, guid, source: Source::Provided })
+    }
+
     /// Deterministic from `seed` — the same seed always yields the same iPod.
     ///
     /// The serial follows Apple's shape: location(2) · year(1) · week(2) · unique(3) · model(3).
-    /// **The model code is not derived from the model**, because the table that maps one to the
-    /// other is Apple-internal and we do not have it; guessing it would be inventing a fact. It is
-    /// generated like the rest, and it is cosmetic until somebody demonstrates otherwise.
     pub fn generate(seed: u64) -> Identity {
         // SplitMix64 — a few lines, no dependency, and good enough for picking characters. The
         // requirement here is "same seed, same iPod", not statistical quality.
@@ -84,45 +231,136 @@ impl Identity {
         // somebody doubt everything else on the screen.
         let week = format!("{:02}", mix(&mut st) % 52 + 1);
         let uniq = pick(&mut st, 3);
-        let model = pick(&mut st, 3);
+        // **The model code is deliberately NOT a real one.**
+        //
+        // Apple's published 5G endings are V9K V9P V9M V9R V9L V9N V9Q V9S WU9 WUA WUB WUC X3N, and
+        // W9G for the U2 edition. Our own two real serials end `TXK` and `TXM`, which are on no
+        // published list while their date fields sit squarely in the 5G period — so those tables are
+        // incomplete, and we have no authority to say which code means which capacity.
+        //
+        // Two ways to be wrong. A *documented* code claims a specific model we may not be; a random
+        // one may collide with a real code and claim it by accident. So generated serials end
+        // **`ZZ` + one character**, which is on no table, and mark the identity as synthetic on
+        // sight. Nothing validates the serial, so this costs nothing — and it means a generated
+        // serial can never be mistaken for a real device's.
+        //
+        // The **model** is not carried here anyway. It is `ModelNumStr`, and it is a separate field
+        // with a sourced table — see [`Model`].
+        let model = format!("ZZ{}", pick(&mut st, 1));
         let serial = format!("{loc}{year}{week}{uniq}{model}");
 
         // Apple's OUI in the top 24 bits, 40 bits of uniqueness below — the structure every real
         // GUID has.
         let guid = (APPLE_OUI << 40) | (mix(&mut st) & 0x00_FF_FF_FF_FF_FF);
-        Identity { serial, guid, source: Source::Generated }
+        Identity { serial: Some(serial), guid, source: Source::Generated }
     }
 
-    /// True when this identity can authorise DRM-bound titles — i.e. when it is a real device's.
-    ///
-    /// A generated GUID is not merely unlikely to work: Apple bound those titles to a *specific*
-    /// device, so nothing invented can ever match.
-    pub fn can_authorise_titles(&self) -> bool {
-        self.source == Source::RealDevice
+    /// `000A270014EFE726` — the form iTunes, `SysInfo` and a USB descriptor all use.
+    pub fn guid_hex(&self) -> String {
+        format!("{:016X}", self.guid)
     }
 
-    /// Parse a real device's `iPod_Control/Device/SysInfo`.
-    ///
-    /// The file is ~349 bytes of `Key: value` lines on the data partition — the one a computer
-    /// already mounts when an iPod is plugged in. **This is the tier that needs no NOR dump and no
-    /// disk-mode driver**, which is the whole reason it exists.
-    pub fn from_sysinfo(text: &str) -> Result<Identity, String> {
-        let field = |k: &str| -> Option<String> {
-            text.lines()
-                .find_map(|l| l.split_once(':').filter(|(n, _)| n.trim() == k))
-                .map(|(_, v)| v.trim().to_string())
-        };
-        let serial = field("pszSerialNumber").ok_or("no pszSerialNumber line")?;
-        let raw = field("FirewireGuid").ok_or("no FirewireGuid line")?;
-        let guid = u64::from_str_radix(raw.trim_start_matches("0x"), 16)
-            .map_err(|_| format!("FirewireGuid is not hex: {raw}"))?;
-        if guid >> 40 != APPLE_OUI {
-            return Err(format!(
-                "FirewireGuid {guid:#018x} does not begin with Apple's OUI {APPLE_OUI:#08x} — \
-                 this is not an iPod's GUID"
-            ));
+    /// Whether iTunes could authorise DRM-bound titles against this identity. See [`TitleAuth`].
+    pub fn title_auth(&self) -> TitleAuth {
+        match self.source {
+            Source::Generated => TitleAuth::Never,
+            Source::Provided => TitleAuth::IfGenuine,
+            Source::RealDevice => TitleAuth::Yes,
         }
-        Ok(Identity { serial, guid, source: Source::RealDevice })
+    }
+}
+
+/// One `Key: value` line out of a `SysInfo`.
+fn sysinfo_field(text: &str, key: &str) -> Option<String> {
+    text.lines()
+        .find_map(|l| l.split_once(':').filter(|(n, _)| n.trim() == key))
+        .map(|(_, v)| v.trim().to_string())
+}
+
+/// White, black, or the U2 special edition — **a fact stated by the model number**, not inferred.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Colour {
+    White,
+    Black,
+    /// Black with a red click wheel.
+    U2,
+}
+
+/// 5G or 5.5G. libgpod calls these `VIDEO_1` and `VIDEO_2`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Generation {
+    /// iPod with Video, Late 2005.
+    Video1,
+    /// iPod with Video, Late 2006 — the "5.5G".
+    Video2,
+}
+
+impl Generation {
+    /// The Gestalt ID RetailOS switches on, at `sysinfo + 0x84`.
+    ///
+    /// `research/02` establishes that the jump table at `0x2653a4` accepts both, because it
+    /// switches on the high halfword `0x000B` = 11.
+    pub fn gestalt(self) -> u32 {
+        match self {
+            Generation::Video1 => 0x000B_0005,
+            Generation::Video2 => 0x000B_0010,
+        }
+    }
+}
+
+/// One row of Apple's model table: what a `ModelNumStr` actually means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Model {
+    /// The table key — four characters, e.g. `A146`.
+    pub number: &'static str,
+    pub capacity_gb: u16,
+    pub colour: Colour,
+    pub generation: Generation,
+}
+
+/// Every 5G/5.5G row of libgpod's `ipod_model_table`.
+///
+/// **Sourced, not guessed** — `libgpod/src/itdb_device.c`, the table iTunes-compatible software has
+/// used for twenty years. It settles three questions at once that were otherwise going to be
+/// answered from memory: the **colour** of a unit, its **capacity**, and whether it is a **5G or a
+/// 5.5G** — all from one field that is already sitting in every iPod's `SysInfo`.
+///
+/// Note the shape of the generation split, which is a useful sanity check in itself: the 80 GB
+/// models exist only as `VIDEO_2`, and the 60 GB models only as `VIDEO_1`.
+pub const MODELS: &[Model] = &[
+    Model { number: "A002", capacity_gb: 30, colour: Colour::White, generation: Generation::Video1 },
+    Model { number: "A146", capacity_gb: 30, colour: Colour::Black, generation: Generation::Video1 },
+    Model { number: "A003", capacity_gb: 60, colour: Colour::White, generation: Generation::Video1 },
+    Model { number: "A147", capacity_gb: 60, colour: Colour::Black, generation: Generation::Video1 },
+    Model { number: "A452", capacity_gb: 30, colour: Colour::U2,    generation: Generation::Video1 },
+    Model { number: "A444", capacity_gb: 30, colour: Colour::White, generation: Generation::Video2 },
+    Model { number: "A446", capacity_gb: 30, colour: Colour::Black, generation: Generation::Video2 },
+    Model { number: "A664", capacity_gb: 30, colour: Colour::U2,    generation: Generation::Video2 },
+    Model { number: "A448", capacity_gb: 80, colour: Colour::White, generation: Generation::Video2 },
+    Model { number: "A450", capacity_gb: 80, colour: Colour::Black, generation: Generation::Video2 },
+];
+
+impl Model {
+    /// Look up a `ModelNumStr`, in any of the forms it is written in.
+    ///
+    /// **The normalisation is the whole difficulty.** Our own drives say `xMA146`; the table key is
+    /// `A146`. libgpod gets there in two strips — its `SysInfo` reader drops the leading `x`, then
+    /// `get_ipod_info_from_model_number` drops one further alphabetic character with `isalpha`.
+    /// Reproducing that as two conditional strips is fragile, so this takes the **last four
+    /// characters** and requires the final three to be digits, which accepts every observed form —
+    /// `xMA146`, `MA146`, `A146` — and rejects strings that are not model numbers at all.
+    pub fn lookup(model_num_str: &str) -> Option<&'static Model> {
+        let s = model_num_str.trim().to_ascii_uppercase();
+        let key: String = s.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+        if key.len() != 4 || !key[1..].chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        MODELS.iter().find(|m| m.number == key)
+    }
+
+    /// Look one up from the text of a `SysInfo`.
+    pub fn from_sysinfo(text: &str) -> Option<&'static Model> {
+        Model::lookup(&sysinfo_field(text, "ModelNumStr")?)
     }
 }
 
@@ -144,40 +382,89 @@ mod tests {
         for seed in [0u64, 1, 7, 1234, u64::MAX] {
             let id = Identity::generate(seed);
             assert_eq!(id.guid >> 40, APPLE_OUI, "seed {seed}");
-            assert_eq!(id.serial.len(), 11, "seed {seed}: {}", id.serial);
-            assert!(id.serial.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
+            let s = id.serial.clone().expect("generate always makes one");
+            assert_eq!(s.len(), 11, "seed {seed}: {s}");
+            assert!(s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
             // The date fields are dates: a digit year and a real week. Both are the sort of tell
             // that makes a reader doubt everything else on the screen.
-            assert!(id.serial[2..3].chars().all(|c| c.is_ascii_digit()), "seed {seed}: {}", id.serial);
-            let week: u32 = id.serial[3..5].parse().expect("week digits");
+            assert!(s[2..3].chars().all(|c| c.is_ascii_digit()), "seed {seed}: {s}");
+            let week: u32 = s[3..5].parse().expect("week digits");
             assert!((1..=52).contains(&week), "seed {seed}: week {week}");
+            // Marked synthetic: `ZZ?` is on no published model-code table, so a generated serial
+            // cannot be mistaken for — or collide with — a real device's.
+            assert_eq!(&s[8..10], "ZZ", "seed {seed}: {s} must carry the synthetic model code");
         }
     }
 
-    /// A generated identity must never claim it can authorise titles — the DRM binds to a specific
-    /// real device, so nothing invented can match, and a UI that got this wrong would promise
-    /// something impossible.
+    /// The distinction the DRM actually turns on, and it is three-valued rather than two. Getting
+    /// this wrong in a UI means either promising something impossible or refusing something that
+    /// `ipod-usb` demonstrated works.
     #[test]
-    fn only_a_real_device_can_authorise_titles() {
-        assert!(!Identity::generate(1).can_authorise_titles());
+    fn only_real_values_can_authorise_titles() {
+        assert_eq!(Identity::generate(1).title_auth(), TitleAuth::Never);
+        assert_eq!(
+            Identity::provided(Some("AB1234XYZQR"), 0x000A_2700_1122_3344).unwrap().title_auth(),
+            TitleAuth::IfGenuine
+        );
         let real = Identity::from_sysinfo(
             "BoardHwName: PP5021C-2\npszSerialNumber: AB1234XYZQR\nFirewireGuid: 0x000A270011223344\n",
         )
         .unwrap();
-        assert!(real.can_authorise_titles());
-        assert_eq!(real.serial, "AB1234XYZQR");
-        assert_eq!(real.guid, 0x000A2700_11223344);
+        assert_eq!(real.title_auth(), TitleAuth::Yes);
+        assert_eq!(real.serial.as_deref(), Some("AB1234XYZQR"));
+        assert_eq!(real.guid, 0x000A_2700_1122_3344);
+        assert_eq!(real.guid_hex(), "000A270011223344");
     }
 
-    /// The negative control, and it is the useful half: a file that is not an iPod's must be
-    /// refused with a reason, not accepted with a wrong GUID.
+    /// The serial is optional because the DRM binds to the GUID — a dump with no `SrNm` is still a
+    /// usable identity, and an empty string is not a serial.
     #[test]
-    fn a_guid_without_apples_oui_is_refused() {
-        let e = Identity::from_sysinfo(
-            "pszSerialNumber: AB1234XYZQR\nFirewireGuid: 0xDEADBEEFCAFEBABE\n",
-        )
-        .unwrap_err();
-        assert!(e.contains("Apple's OUI"), "{e}");
+    fn a_blank_serial_is_none_not_an_empty_string() {
+        assert_eq!(Identity::provided(Some("   "), 0x000A_2700_0000_0001).unwrap().serial, None);
+        assert_eq!(Identity::provided(None, 0x000A_2700_0000_0001).unwrap().serial, None);
+    }
+
+    /// Malformed serials are refused; a non-Apple OUI is *not*, per the rule adopted from
+    /// `ipod-usb-new` — it is evidence of a bad parse, not a permission decision.
+    #[test]
+    fn malformed_serials_are_refused_but_a_foreign_oui_is_allowed() {
+        for bad in ["TOOSHORT", "WAYTOOLONGSERIAL", "AB1234-YZQR"] {
+            assert!(Identity::provided(Some(bad), 0x000A_2700_0000_0001).is_err(), "must reject {bad:?}");
+        }
+        assert!(Identity::provided(None, 0xDEAD_BEEF_DEAD_BEEF).is_ok());
         assert!(Identity::from_sysinfo("nothing useful here").is_err());
+    }
+
+    /// **The normalisation, against the form our own hardware actually writes.** `xMA146` is what is
+    /// on every drive image here; if only `A146` resolved, the lookup would silently never fire on
+    /// real data — which is the failure this test exists to prevent.
+    #[test]
+    fn a_model_number_resolves_in_every_form_it_is_written_in() {
+        for form in ["xMA146", "MA146", "A146", "xma146"] {
+            let m = Model::lookup(form).unwrap_or_else(|| panic!("{form} must resolve"));
+            assert_eq!(m.colour, Colour::Black, "{form}");
+            assert_eq!(m.capacity_gb, 30, "{form}");
+            assert_eq!(m.generation, Generation::Video1, "{form}");
+        }
+        // The 80 GB models exist only as 5.5G, which is the table's own consistency check.
+        assert_eq!(Model::lookup("MA448").unwrap().generation, Generation::Video2);
+        assert_eq!(Model::lookup("MA448").unwrap().colour, Colour::White);
+        assert_eq!(Model::lookup("MA450").unwrap().colour, Colour::Black);
+        // Negative controls: things that are not model numbers must not resolve to one.
+        for bad in ["", "A14", "ABCD", "nonsense", "A1466"] {
+            assert!(Model::lookup(bad).is_none(), "must not resolve {bad:?}");
+        }
+    }
+
+    /// Reading it the way it actually arrives — a whole `SysInfo`, exactly as our drives write it.
+    #[test]
+    fn the_model_is_read_out_of_a_real_shaped_sysinfo() {
+        let text = "BoardHwName: PP5021C-2\nModelNumStr: xMA146\nboardHwRev: 0x00050000\n";
+        let m = Model::from_sysinfo(text).expect("must resolve");
+        assert_eq!((m.colour, m.capacity_gb), (Colour::Black, 30));
+        // The model says 5G and `boardHwRev` says 5. Two independent fields, one answer — which is
+        // the check worth having, because either alone could be a misparse.
+        assert_eq!(m.generation, Generation::Video1);
+        assert_eq!(m.generation.gestalt(), 0x000B_0005);
     }
 }
