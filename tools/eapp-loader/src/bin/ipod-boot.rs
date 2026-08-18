@@ -38,7 +38,7 @@
 //! Everything else — the defaults, the environment variables, the flags, the order — is the
 //! scripts'. `research/` numbers are reproducible through either.
 
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -117,6 +117,20 @@ fn main() {
             Ok(()) => return,
             Err(e) => {
                 eprintln!("ipod-boot make-disk: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // `install-os` puts somebody else's operating system where Apple's bootloader will find it,
+    // and cold-boots exactly as the hardware does — the alternative being to warm-enter an image
+    // and skip the bootloader, which is a bypass and would make every later observation
+    // un-attributable. See docs/ideas/run-any-os.md.
+    if name == "install-os" {
+        match install_os(&rest) {
+            Ok(()) => return,
+            Err(e) => {
+                eprintln!("ipod-boot install-os: {e}");
                 std::process::exit(1);
             }
         }
@@ -1119,5 +1133,358 @@ mod tests {
 
     fn scripts_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("ipod-boot")
+    }
+}
+
+// ---------------------------------------------------------------- installing an OS
+
+/// The sector size the firmware directory's offsets are quantised to.
+const FW_SECTOR: u32 = 512;
+/// The `!ATA` directory, relative to the start of the firmware partition.
+const FW_DIRECTORY: u64 = 0x4200;
+
+/// One 40-byte record of the firmware directory, by the offsets the field names sit at.
+struct DirEntry {
+    tag: String,
+    dev_offset: u32,
+    len: u32,
+    entry_offset: u32,
+    chksum: u32,
+}
+
+fn le(b: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
+}
+
+/// Install an operating system into a drive image's firmware partition, into a **new file**.
+///
+/// This is Apple's own arrangement and `ipodpatcher`'s recipe, not an invention: the image is
+/// appended after the existing `osos`, the directory's entry point is moved to it, and the machine's
+/// real bootloader finds it at the address it already looks at. Nothing new boots — the existing
+/// cold path loads it — so a divergence afterwards belongs to the OS rather than to us.
+///
+/// **It never writes to the source.** Apple's `osos` is 7.21 MiB of software that can no longer be
+/// downloaded, and an installer that edits in place is one mistake away from destroying the only
+/// copy somebody has.
+fn install_os(args: &[String]) -> Result<(), String> {
+    const USAGE: &str = "usage: ipod-boot install-os SRC.img OS.ipod OUT.img";
+    let (src, os, out) = match (args.first(), args.get(1), args.get(2)) {
+        (Some(a), Some(b), Some(c)) => (Path::new(a), Path::new(b), Path::new(c)),
+        _ => return Err(USAGE.into()),
+    };
+    if out == src {
+        return Err("OUT.img must not be SRC.img — this never edits the source in place".into());
+    }
+
+    // The payload. A `.ipod` file is an 8-byte wrapper — big-endian checksum, then a 4-character
+    // model id — over a raw ARM image (`tools/scramble.c`). Checking it is the difference between
+    // installing a verified image and installing whatever the file happened to contain.
+    let raw = std::fs::read(os).map_err(|e| format!("{}: {e}", os.display()))?;
+    let payload = if raw.len() > 8 && raw[4..8].iter().all(|c| c.is_ascii_alphanumeric()) {
+        let want = u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]);
+        let model: String = raw[4..8].iter().map(|&c| c as char).collect();
+        let body = &raw[8..];
+        // `scramble` seeds the sum with the model number; 5 is the Video's, per `modelnum`.
+        let sum = body.iter().fold(5u32, |a, &b| a.wrapping_add(b as u32));
+        if sum != want {
+            return Err(format!(
+                "{}: `.ipod` checksum does not match — header says {want:#010x}, the bytes sum to \
+                 {sum:#010x}. The file is truncated or is for another model (`{model}`).",
+                os.display()
+            ));
+        }
+        println!("  {} — `{model}`, {} bytes, checksum OK", os.display(), body.len());
+        body.to_vec()
+    } else {
+        println!("  {} — {} bytes, raw (no `.ipod` header)", os.display(), raw.len());
+        raw
+    };
+
+    // The destination, as a copy. Sparse-aware on APFS and harmless elsewhere.
+    std::fs::copy(src, out).map_err(|e| format!("copying {} -> {}: {e}", src.display(), out.display()))?;
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(out)
+        .map_err(|e| format!("{}: {e}", out.display()))?;
+
+    // Where the firmware partition is. Type 0x00 is Apple's, and it is the first entry.
+    let mut mbr = [0u8; 512];
+    f.seek(SeekFrom::Start(0)).and_then(|_| f.read_exact(&mut mbr)).map_err(|e| e.to_string())?;
+    if mbr[510] != 0x55 || mbr[511] != 0xAA {
+        return Err(format!("{}: no MBR signature — is this a drive image?", src.display()));
+    }
+    if mbr[446 + 4] != 0x00 {
+        return Err(format!(
+            "{}: partition 0 is type {:#04x}, not Apple's firmware partition (0x00)",
+            src.display(),
+            mbr[446 + 4]
+        ));
+    }
+    let part = le(&mbr, 446 + 8) as u64 * 512;
+    let part_sectors = le(&mbr, 446 + 12) as u64;
+    // **Image data lives one sector past the partition; the directory does not.**
+    // `ipodpatcher.c:1586` — `fwoffset = start + sector_size` — and it is measurable rather than
+    // taken on trust: both recorded checksums in a stock image match a byte sum over
+    // `[devOffset + 512, +len)` and neither matches one over `[devOffset, +len)`. Getting this
+    // wrong writes an image Apple's bootloader rejects after ~70 ATA commands with
+    // "Connect to your computer. Use iTunes to restore." — which is what it did.
+    let fw = part + FW_SECTOR as u64;
+
+    // The directory.
+    let mut dir = vec![0u8; FW_SECTOR as usize];
+    f.seek(SeekFrom::Start(part + FW_DIRECTORY)).and_then(|_| f.read_exact(&mut dir)).map_err(|e| e.to_string())?;
+    let mut images = Vec::new();
+    for i in 0..(FW_SECTOR as usize / 40) {
+        let r = &dir[i * 40..i * 40 + 40];
+        if &r[0..4] != b"ATA!" && &r[0..4] != b"!ATA" {
+            break;
+        }
+        images.push(DirEntry {
+            tag: r[4..8].iter().rev().map(|&b| b as char).collect(),
+            dev_offset: le(r, 0x0c),
+            len: le(r, 0x10),
+            entry_offset: le(r, 0x18),
+            chksum: le(r, 0x1c),
+        });
+    }
+    let first = images.first().ok_or("no images in the firmware directory")?;
+    if first.tag != "osos" {
+        return Err(format!("image 0 is `{}`, expected `osos`", first.tag));
+    }
+    // **Reproduce the checksums that are already there before writing new ones.** If our idea of
+    // where an image starts or how it is summed is wrong, this fails here — on a file nobody has
+    // modified — instead of producing a plausible image that the bootloader silently rejects
+    // seventy ATA commands into a boot. It is the same check `--check-images` performs on the
+    // inputs, applied to our own understanding of the format.
+    for img in &images {
+        let mut sum = 0u32;
+        let mut left = img.len as usize;
+        let mut buf = vec![0u8; 1 << 20];
+        f.seek(SeekFrom::Start(fw + img.dev_offset as u64)).map_err(|e| e.to_string())?;
+        while left > 0 {
+            let n = left.min(buf.len());
+            f.read_exact(&mut buf[..n]).map_err(|e| e.to_string())?;
+            sum = buf[..n].iter().fold(sum, |a, &b| a.wrapping_add(b as u32));
+            left -= n;
+        }
+        if sum != img.chksum {
+            return Err(format!(
+                "`{}`: the checksum in the directory is {:#010x} but its bytes sum to {sum:#010x}.                  Either this image is already damaged, or this tool has the firmware layout wrong                  — and in both cases writing to it would make things worse.",
+                img.tag, img.chksum
+            ));
+        }
+    }
+    println!("  existing checksums reproduce — the layout is understood");
+    println!(
+        "  firmware partition at {part:#x}, {} image(s): {}",
+        images.len(),
+        images.iter().map(|i| i.tag.as_str()).collect::<Vec<_>>().join(" · ")
+    );
+
+    // Where the new image goes. Re-installing over a previous one reuses the same slot rather than
+    // pushing everything along again, which is what `entryOffset > 0` means.
+    let align = |n: u32| (n + FW_SECTOR - 1) & !(FW_SECTOR - 1);
+    let entry_offset =
+        if first.entry_offset > 0 { first.entry_offset } else { align(first.len) };
+    let length = payload.len() as u32;
+    let padded = align(length);
+
+    // Anything after `osos` has to move out of the way. The gap here is 512 bytes against a
+    // 52 KB bootloader, so this is the normal case and not an edge one.
+    let mut delta = 0u32;
+    if let Some(next) = images.get(1) {
+        let end = first.dev_offset + entry_offset + padded;
+        if end > next.dev_offset {
+            delta = end - next.dev_offset + FW_SECTOR;
+            let last = images.last().unwrap();
+            let needed = (last.dev_offset + align(last.len) + delta) as u64;
+            if needed > part_sectors * 512 {
+                return Err(format!(
+                    "no room: moving the later images by {delta} bytes needs {needed} of a \
+                     {}-byte partition",
+                    part_sectors * 512
+                ));
+            }
+            println!("  moving {} later image(s) on by {delta} bytes", images.len() - 1);
+            // Backwards, so a shift never overwrites the source of a later block.
+            for img in images[1..].iter().rev() {
+                let n = align(img.len) as usize;
+                let mut buf = vec![0u8; n];
+                f.seek(SeekFrom::Start(fw + img.dev_offset as u64))
+                    .and_then(|_| f.read_exact(&mut buf))
+                    .map_err(|e| e.to_string())?;
+                f.seek(SeekFrom::Start(fw + (img.dev_offset + delta) as u64))
+                    .and_then(|_| f.write_all(&buf))
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    // The combined image, and its checksum over every byte of it.
+    f.seek(SeekFrom::Start(fw + first.dev_offset as u64)).map_err(|e| e.to_string())?;
+    let mut combined = vec![0u8; entry_offset as usize];
+    f.read_exact(&mut combined).map_err(|e| e.to_string())?;
+    combined.extend_from_slice(&payload);
+    let chksum = combined.iter().fold(0u32, |a, &b| a.wrapping_add(b as u32));
+    combined.resize((entry_offset + padded) as usize, 0);
+    f.seek(SeekFrom::Start(fw + first.dev_offset as u64))
+        .and_then(|_| f.write_all(&combined))
+        .map_err(|e| e.to_string())?;
+
+    // And the directory: image 0 gains the payload and points its entry at it; the rest follow
+    // their data. `loadAddr` is cleared the way `ipodpatcher` clears it.
+    dir[0x10..0x14].copy_from_slice(&(entry_offset + length).to_le_bytes());
+    dir[0x18..0x1c].copy_from_slice(&entry_offset.to_le_bytes());
+    dir[0x1c..0x20].copy_from_slice(&chksum.to_le_bytes());
+    dir[0x24..0x28].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+    if delta > 0 {
+        for i in 1..images.len() {
+            let at = i * 40 + 0x0c;
+            let moved = le(&dir, at) + delta;
+            dir[at..at + 4].copy_from_slice(&moved.to_le_bytes());
+        }
+    }
+    f.seek(SeekFrom::Start(part + FW_DIRECTORY))
+        .and_then(|_| f.write_all(&dir))
+        .map_err(|e| e.to_string())?;
+    f.sync_all().map_err(|e| e.to_string())?;
+
+    println!(
+        "  installed at +{entry_offset:#x}, {length} bytes, checksum {chksum:#010x}\n\
+         {} — cold boot it and Apple's own bootloader will run it.",
+        out.display()
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod install_tests {
+    use super::*;
+
+    /// A minimal drive image with a firmware partition: MBR, a directory of two images, and their
+    /// bytes at `partition + 512 + devOffset` — the layout `fwoffset = start + sector_size` means,
+    /// and the one whose absence produced an image the bootloader rejected.
+    fn synth_disk(path: &Path, osos: &[u8], rsrc: &[u8]) {
+        const PART_LBA: u32 = 63;
+        const SECTORS: u32 = 27140;
+        let mut img = vec![0u8; (PART_LBA as usize + SECTORS as usize) * 512];
+        img[446 + 4] = 0x00; // Apple firmware partition
+        img[446 + 8..446 + 12].copy_from_slice(&PART_LBA.to_le_bytes());
+        img[446 + 12..446 + 16].copy_from_slice(&SECTORS.to_le_bytes());
+        img[510] = 0x55;
+        img[511] = 0xAA;
+
+        let part = PART_LBA as usize * 512;
+        let fw = part + 512;
+        let sum = |b: &[u8]| b.iter().fold(0u32, |a, &x| a.wrapping_add(x as u32));
+        let mut put = |i: usize, tag: &[u8; 4], dev: u32, body: &[u8]| {
+            let at = part + 0x4200 + i * 40;
+            img[at..at + 4].copy_from_slice(b"ATA!");
+            let mut t = *tag;
+            t.reverse();
+            img[at + 4..at + 8].copy_from_slice(&t);
+            img[at + 0x0c..at + 0x10].copy_from_slice(&dev.to_le_bytes());
+            img[at + 0x10..at + 0x14].copy_from_slice(&(body.len() as u32).to_le_bytes());
+            img[at + 0x14..at + 0x18].copy_from_slice(&0x1000_0000u32.to_le_bytes());
+            img[at + 0x1c..at + 0x20].copy_from_slice(&sum(body).to_le_bytes());
+            img[fw + dev as usize..fw + dev as usize + body.len()].copy_from_slice(body);
+        };
+        put(0, b"osos", 0x4400, osos);
+        put(1, b"rsrc", 0x4400 + osos.len() as u32, rsrc);
+        std::fs::write(path, &img).unwrap();
+    }
+
+    fn dir_entry(path: &Path, i: usize) -> [u32; 8] {
+        let mut f = std::fs::File::open(path).unwrap();
+        f.seek(SeekFrom::Start(63 * 512 + 0x4200 + (i * 40) as u64)).unwrap();
+        let mut b = [0u8; 40];
+        f.read_exact(&mut b).unwrap();
+        let mut out = [0u32; 8];
+        for (k, o) in out.iter_mut().enumerate() {
+            *o = le(&b, 8 + k * 4);
+        }
+        out
+    }
+
+    #[test]
+    fn installing_appends_the_image_moves_the_rest_and_rewrites_the_directory() {
+        let dir = std::env::temp_dir();
+        let (src, os, out) = (
+            dir.join("ipodboot-src.img"),
+            dir.join("ipodboot-os.bin"),
+            dir.join("ipodboot-out.img"),
+        );
+        let osos: Vec<u8> = (0..0x2000u32).map(|i| (i % 251) as u8).collect();
+        let rsrc: Vec<u8> = (0..0x1000u32).map(|i| (i % 241) as u8).collect();
+        synth_disk(&src, &osos, &rsrc);
+        std::fs::write(&os, vec![0xAAu8; 0x900]).unwrap();
+        let _ = std::fs::remove_file(&out);
+
+        install_os(&[
+            src.display().to_string(),
+            os.display().to_string(),
+            out.display().to_string(),
+        ])
+        .expect("install");
+
+        // entryOffset is the old length rounded up; len covers the payload; loadAddr is cleared.
+        let e0 = dir_entry(&out, 0);
+        assert_eq!(e0[4], 0x2000, "entryOffset");
+        assert_eq!(e0[2], 0x2000 + 0x900, "len must cover the appended image");
+        assert_eq!(e0[7], 0xffff_ffff, "loadAddr must be cleared");
+
+        // `rsrc` had to move, and its directory entry has to follow its bytes.
+        let e1 = dir_entry(&out, 1);
+        assert!(e1[1] > 0x4400 + 0x2000, "rsrc did not move: {:#x}", e1[1]);
+
+        // The new checksum has to describe what is actually on the disk, at fwoffset + devOffset.
+        let mut f = std::fs::File::open(&out).unwrap();
+        f.seek(SeekFrom::Start(63 * 512 + 512 + e0[1] as u64)).unwrap();
+        let mut body = vec![0u8; e0[2] as usize];
+        f.read_exact(&mut body).unwrap();
+        let sum = body.iter().fold(0u32, |a, &x| a.wrapping_add(x as u32));
+        assert_eq!(sum, e0[5], "the directory checksum does not describe the bytes written");
+
+        // And `rsrc` survived the move intact.
+        f.seek(SeekFrom::Start(63 * 512 + 512 + e1[1] as u64)).unwrap();
+        let mut moved = vec![0u8; rsrc.len()];
+        f.read_exact(&mut moved).unwrap();
+        assert_eq!(moved, rsrc, "rsrc was corrupted by the move");
+
+        for p in [src, os, out] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    /// The guard that would have caught the wrong base offset immediately, instead of after a
+    /// 1.5 G-instruction boot ending in "Use iTunes to restore".
+    #[test]
+    fn a_directory_whose_checksums_do_not_reproduce_is_refused() {
+        let dir = std::env::temp_dir();
+        let (src, os, out) = (
+            dir.join("ipodboot-bad-src.img"),
+            dir.join("ipodboot-bad-os.bin"),
+            dir.join("ipodboot-bad-out.img"),
+        );
+        synth_disk(&src, &vec![1u8; 0x1000], &vec![2u8; 0x1000]);
+        // Corrupt one byte of `osos` so its recorded checksum no longer describes it.
+        let mut img = std::fs::read(&src).unwrap();
+        img[63 * 512 + 512 + 0x4400] ^= 0xff;
+        std::fs::write(&src, &img).unwrap();
+        std::fs::write(&os, vec![0xAAu8; 16]).unwrap();
+
+        let err = install_os(&[
+            src.display().to_string(),
+            os.display().to_string(),
+            out.display().to_string(),
+        ])
+        .expect_err("a damaged image must be refused");
+        assert!(err.contains("osos"), "{err}");
+        assert!(err.contains("checksum") || err.contains("sum to"), "{err}");
+
+        for p in [src, os, out] {
+            let _ = std::fs::remove_file(p);
+        }
     }
 }

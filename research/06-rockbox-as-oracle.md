@@ -524,3 +524,52 @@ presence is a measurement; an absence on its own is not.
 *(Partition type was the suspect and is not the cause: our images are FAT32 type `0x0C`, and
 `firmware/common/disk.c` normalises to `PARTITION_TYPE_FAT32_LBA` whenever it finds a valid FAT.
 `ipodloader2` is the one that only accepts `0x0B`, which matters for M4 and not here.)*
+
+## 2026-08-18: installed, and cold-booted by Apple's own bootloader
+
+`ipod-boot install-os SRC.img OS.ipod OUT.img` writes an operating system into a **new** drive
+image's firmware partition, the way `ipodpatcher` does on hardware: append after `osos`, point the
+directory's `entryOffset` at it, fix the checksum, shift the later images out of the way. Nothing
+new boots — the machine's real cold path finds it at the address it already looks at, so this is
+not a seventh bypass.
+
+**And it works:**
+
+![The Rockbox bootloader, cold-booted](../docs/media/ipod-17-rockbox-bootloader.png)
+
+```
+Rockbox boot loader          Version: v4.0
+IPOD version: 0x000B0005
+Emulated iPod Disk
+Partition 1: 0x0C 16744448 sectors
+Loading Rockbox...
+Error!  Can't load rockbox.ipod: File not found
+```
+
+Read that as a report on *us*. It found the ROM's hardware revision (`0x000B0005`, the value in our
+NOR dump), read our ATA IDENTIFY string back (`Emulated iPod Disk`), and parsed our partition table
+— **type `0x0C`, accepted**. Then it looked for `/.rockbox/rockbox.ipod` on the FAT32 volume and
+correctly reported that it is not there, because it is not.
+
+### The first attempt produced an image the bootloader rejected, and the fix is worth recording
+
+It booted to *"Connect to your computer. Use iTunes to restore."* after **71 ATA commands** —
+against 637 for the unmodified image through the same recipe, which is the control that made it
+attributable.
+
+The cause: **image data begins one sector past the partition; the directory does not.**
+`ipodpatcher.c:1586` sets `fwoffset = start + sector_size`, and `diroffset` is relative to `start`.
+Writing both at the partition base put every byte 512 short.
+
+It is measurable rather than a matter of reading the C: in a stock image, **both** recorded
+checksums match a byte sum over `[devOffset + 512, +len)` and **neither** matches one over
+`[devOffset, +len)`.
+
+```
+osos: recorded 0x2c7c48f3 · sum[dev,+len) = 0x2c7d4460 · sum[dev+512,+len) = 0x2c7c48f3
+rsrc: recorded 0x18319bab · sum[dev,+len) = 0x1832856f · sum[dev+512,+len) = 0x18319bab
+```
+
+So the installer now **reproduces the checksums that are already there before writing new ones**,
+and refuses if it cannot. That check fails on a file nobody has modified, in a second, instead of
+producing a plausible image that dies seventy ATA commands into a boot. Both behaviours are tested.

@@ -57,6 +57,7 @@ with six devices that all half-work.
 | RetailOS | **boots** cold from the reset vector, menus, formats its own volume, Brick plays. No sound. ~300 s of simulated time to the menu |
 | Rockbox 4.0 | **boots to its main menu and takes wheel input** (2026-08-18). Beyond the menu: unverified. No sound |
 | iPodLinux | **a verified 5.5G-correct kernel has been located** (ZeroSlackr `vmlinux`, 1 531 200 bytes, raw-ARM magic confirmed) and not yet fetched. `ipodloader2` is vendored as source and not yet built |
+| Installing an OS | **done** — `ipod-boot install-os`, cold-booted through Apple's bootloader |
 | Our own bootloader / OS | not started, and deliberately not designed for yet |
 | Bypass ledger | 5 active entries: #4, #6, #7, #11, #17 — and #7 now has a second consumer to be tested against |
 | Audio | **nothing modelled.** The Wolfson codec answers no I²C; Rockbox is now talking to it and getting silence back |
@@ -141,18 +142,26 @@ It also gave ledger **#7** its second consumer: `COP_CTL` is read by Rockbox and
 table instead of a flag. And the standing caveat: it reports reads-before-writes, so it is a floor
 on where we invent, never a ceiling.
 
-## M3 · Install an OS, don't warm-enter one
+## M3 · Install an OS, don't warm-enter one *(done)*
 
 `trace --osos=FILE --boot-osos` skips the bootloader. Making that a normal path would mean every
 observation afterwards is missing what the bootloader established — a seventh bypass, and the end
 of the controlled comparison M2 depends on.
 
-The route that is not a bypass: write the OS into a **new** drive image's firmware partition and
-cold boot it, exactly as `ipodpatcher` does on real hardware. It lands on the window's existing
-content-routed drop — a `.ipod` file carries a checkable `ipvd` checksum, so it is identification
-rather than a guess.
+**Done 2026-08-18.** `ipod-boot install-os SRC.img OS.ipod OUT.img` writes the OS into a **new**
+drive image's firmware partition exactly as `ipodpatcher` does — append after `osos`, move the
+directory's entry point to it, fix the checksum, shift the later images — and the machine's own
+cold path runs it. The Rockbox bootloader boots this way and reports our hardware back to us:
+`IPOD version: 0x000B0005`, `Emulated iPod Disk`, `Partition 1: 0x0C 16744448 sectors`. It never
+touches the source image; Apple's `osos` cannot be re-downloaded.
 
-**Depends on:** M1. **Settled by:** dropping `rockbox.ipod` on the window and cold booting it.
+The installer **reproduces the checksums already in the directory before writing new ones** and
+refuses if it cannot — added because the first attempt did not, and produced an image the
+bootloader rejected after 71 ATA commands with *"Use iTunes to restore"*.
+
+**Left:** the same thing from the window, as a content-routed drop (`.ipod` files carry a checkable
+`ipvd` checksum, so it is identification rather than a guess), and a machine list that shows what
+each drive holds.
 
 ## M4 · iPodLinux
 
