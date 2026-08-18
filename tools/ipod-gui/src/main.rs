@@ -1173,6 +1173,13 @@ struct Images {
     flash_verdict: Option<Verdict>,
     disk_verdict: Option<Verdict>,
     ipsw_verdict: Option<Verdict>,
+    /// Whether this is byte-for-byte one of Apple's, established from its **contents**.
+    ///
+    /// Filenames are not evidence — people rename downloads and browsers add `(1)` — so this is a
+    /// hash lookup. A file that is not one of Apple's is still accepted; running modified firmware
+    /// is a good reason to want an emulator. It is reported so nobody debugs a strange iPod for an
+    /// hour without knowing its firmware was not stock.
+    ipsw_provenance: Option<eapp_loader::firmware::Provenance>,
     /// What each file *is*, when that can be said — the model and the device a ROM came off, the
     /// software version a drive holds. `None` falls back to the filename. See
     /// [`inspect::describe_rom`].
@@ -1262,6 +1269,7 @@ impl Images {
             flash_verdict: None,
             disk_verdict: None,
             ipsw_verdict: None,
+            ipsw_provenance: None,
             flash_name: None,
             disk_name: None,
             flash_facts: Vec::new(),
@@ -1330,6 +1338,14 @@ impl Images {
     fn revalidate_ipsw(&mut self) {
         let p = PathBuf::from(self.ipsw.trim());
         self.ipsw_verdict = p.is_file().then(|| inspect::ipsw(&p));
+        // Only when it is a firmware bundle at all: hashing something that failed to parse would
+        // be reading 100 MB to answer a question already answered.
+        self.ipsw_provenance = match &self.ipsw_verdict {
+            Some(v) if v.ok() => {
+                std::fs::read(&p).ok().map(|b| eapp_loader::firmware::identify(&b))
+            }
+            _ => None,
+        };
         self.built = None;
         self.recheck_pair();
     }
@@ -1398,6 +1414,15 @@ impl Images {
                         .unwrap_or_else(|| "could not be read".into());
                     return format!("{name}: {why}");
                 }
+                // **Say whose firmware this is, before building a drive out of it.** Reported
+                // whichever way it goes: nothing is refused for being unrecognised, and nobody
+                // should spend an hour on a strange iPod without having been told.
+                let provenance = self
+                    .ipsw_provenance
+                    .as_ref()
+                    .and_then(|p| p.warning())
+                    .map(|w| format!("\n\n⚠ {w}"))
+                    .unwrap_or_default();
                 // Named for the bundle it comes from, so a second build cannot land on the first.
                 let out = match inspect::ipsw_identity(path) {
                     Some((v, crc)) => into_dir.join(inspect::built_drive_name(&v, crc)),
@@ -1413,14 +1438,14 @@ impl Images {
                     self.disk = out.to_string_lossy().into_owned();
                     self.revalidate();
                     self.built = Some(Ok(format!("{} was already built", out.display())));
-                    return format!("{name}: that drive is already built");
+                    return format!("{name}: that drive is already built{provenance}");
                 }
                 let built = inspect::build_from_ipsw(path, &out);
                 let line = match &built {
                     Ok(what) => {
                         self.disk = out.to_string_lossy().into_owned();
                         self.revalidate();
-                        format!("built a drive from {name} — {}", first_line(what))
+                        format!("built a drive from {name} — {}{provenance}", first_line(what))
                     }
                     Err(e) => format!("{name}: {e}"),
                 };

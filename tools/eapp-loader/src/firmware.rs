@@ -355,6 +355,67 @@ fn http_get_to_file(url: &str, dest: &std::path::Path) -> Result<(), String> {
     }
 }
 
+/// What a firmware file somebody handed us turned out to be.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Provenance {
+    /// Byte-for-byte one of Apple's, whatever it has been renamed to.
+    Apple(&'static Release),
+    /// Not one we hold a hash for. **This is allowed**, and deliberately so: people modify iPod
+    /// firmware, and running modified firmware is a perfectly good reason to want an emulator. It
+    /// is reported so they know, not to stop them.
+    Unrecognised,
+}
+
+/// Identify a firmware file by its **contents**, ignoring what it is called.
+///
+/// Filenames are the first thing to go: people rename downloads, browsers add `(1)`, and a file
+/// called `iPod_25.1.3.ipsw` is not evidence of anything. The hash is.
+///
+/// Sizes are checked first so the common case is fast — the catalogue's files run to 121 MB, and
+/// hashing every candidate to identify one would be a noticeable pause for no reason. Only releases
+/// of exactly the right length are hashed, which is usually one and often none.
+pub fn identify(data: &[u8]) -> Provenance {
+    let len = data.len() as u64;
+    let candidates: Vec<&Release> = CATALOGUE.iter().filter(|r| r.bytes == len).collect();
+    if candidates.is_empty() {
+        return Provenance::Unrecognised;
+    }
+    let got = sha256(data);
+    match candidates.iter().find(|r| r.sha256 == Some(got.as_str())) {
+        Some(r) => Provenance::Apple(r),
+        None => Provenance::Unrecognised,
+    }
+}
+
+impl Provenance {
+    /// One line to show beside the file.
+    pub fn line(&self) -> String {
+        match self {
+            Provenance::Apple(r) => {
+                format!("{} — Apple's {} {}, verified", r.file, r.model, r.variant)
+            }
+            Provenance::Unrecognised => "not a firmware we recognise".to_string(),
+        }
+    }
+
+    /// The paragraph a person needs when it is not one of Apple's, or `None` when it is.
+    ///
+    /// Worded to inform rather than to scold: this is a supported thing to do, and the only reason
+    /// to say anything is that "the iPod behaves oddly" is very hard to debug if nobody mentioned
+    /// the firmware was not stock.
+    pub fn warning(&self) -> Option<&'static str> {
+        match self {
+            Provenance::Apple(_) => None,
+            Provenance::Unrecognised => Some(
+                "This does not match any firmware Apple published, so it has either been modified \
+                 or it is a release this program does not know about. It will run here either way \
+                 — the emulator does not care. But if the iPod behaves strangely, this is the \
+                 first thing to suspect.",
+            ),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // The cache
 // ---------------------------------------------------------------------------------------------
@@ -578,6 +639,47 @@ mod tests {
         let nowhere = std::env::temp_dir().join("ipod-fw-does-not-exist-9e3f");
         assert!(cached(&nowhere, false).is_empty());
         assert_eq!(cache_bytes(&nowhere), 0);
+    }
+
+    /// **A renamed file is still identified, and an altered one still isn't.** The filename is
+    /// deliberately not consulted: it is the first thing to go, and it is not evidence.
+    #[test]
+    fn firmware_is_identified_by_content_not_by_name() {
+        let rel = by_file("iPod_20.1.3.ipsw").expect("a known release");
+        let path = cache_dir().join(rel.file);
+        let Ok(real) = std::fs::read(&path) else {
+            // The catalogue is 2.7 GB and gitignored; say so rather than skipping in silence.
+            println!("SKIPPED: {} is not downloaded here", path.display());
+            return;
+        };
+        assert_eq!(identify(&real), Provenance::Apple(rel), "renaming changes nothing");
+        assert!(identify(&real).warning().is_none());
+
+        // One byte different, same length: must NOT be vouched for.
+        let mut tweaked = real.clone();
+        let last = tweaked.len() - 1;
+        tweaked[last] ^= 0xff;
+        assert_eq!(identify(&tweaked), Provenance::Unrecognised, "a modified build is not Apple's");
+        assert!(identify(&tweaked).warning().is_some(), "and it has to say so");
+    }
+
+    /// Runs with no corpus present, so there is always a live assertion here rather than only
+    /// when 2.7 GB happens to be downloaded.
+    #[test]
+    fn identification_needs_the_hash_and_not_merely_the_size() {
+        assert_eq!(identify(b"not a firmware bundle"), Provenance::Unrecognised);
+        assert_eq!(identify(&[]), Provenance::Unrecognised);
+
+        // Exactly the right LENGTH for a real release, and nothing else about it right. Matching
+        // on size alone would call this Apple's; it must not.
+        let rel = by_file("iPod_20.1.3.ipsw").expect("a known release");
+        let impostor = vec![0u8; rel.bytes as usize];
+        assert_eq!(
+            identify(&impostor),
+            Provenance::Unrecognised,
+            "the right size is not the right file"
+        );
+        assert!(identify(&impostor).warning().is_some());
     }
 
     /// Verification has to be able to FAIL, or it is decoration.
