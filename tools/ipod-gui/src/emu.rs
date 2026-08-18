@@ -311,8 +311,8 @@ pub struct Out {
     /// The `--watch-writes` census, `(word address, writes, 0)`, handed over on request. The
     /// third field is a placeholder: `WatchWord` keeps the writers, not the value.
     pub watched_writes: Vec<(u32, u64, u8)>,
-    /// The `--watch-writes` value log, `(pc, address, byte)`, drained on request.
-    pub bus_log: Vec<(u32, u32, u32)>,
+    /// The `--watch-writes` value log, `(pc, address, byte, usec)`, drained on request.
+    pub bus_log: Vec<(u32, u32, u32, u32)>,
     /// The surface the window is **not** showing, and whether its content has moved since this
     /// session began.
     ///
@@ -1172,7 +1172,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                             .watch_range_log
                             .drain()
                             .into_iter()
-                            .map(|(pc, addr, v, _)| (pc, addr, v))
+                            .map(|(pc, addr, v, us)| (pc, addr, v, us))
                             .collect();
                         Some(out.bus_log.len() as u32)
                     } else if a == crate::control::WRITES_SENTINEL {

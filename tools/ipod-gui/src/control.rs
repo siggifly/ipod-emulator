@@ -285,8 +285,8 @@ fn command(line: &str, link: &Arc<Link>) -> String {
             if shown < rows.len() {
                 s.push_str(" (TRUNCATED)");
             }
-            for (pc, addr, val) in rows.iter().take(shown) {
-                s.push_str(&format!(" {addr:#x}={val:#04x}@{pc:#x}"));
+            for (pc, addr, val, us) in rows.iter().take(shown) {
+                s.push_str(&format!(" {addr:#x}={val:#04x}@{pc:#x}t{us}"));
             }
             s
         }

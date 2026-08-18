@@ -521,7 +521,15 @@ pub struct Memory {
     /// leaned on twice more. This records the write itself, over a whole structure.
     pub watch_range: Option<(u32, u32)>,
     /// An ordered **sample** of those writes. The report is driven by `watch_range_words` below.
-    pub watch_range_log: Capped<(u32, u32, u32, u8)>,
+    /// An ordered **sample** of those writes, as `(pc, address, byte, usec)`.
+    ///
+    /// The fourth field was a `u8` placeholder holding zero. It is the **simulated microsecond**
+    /// now, because a bus that carries the same bytes for two different commands carries the
+    /// difference in its timing — the click-wheel/panel block on this iPod emits a byte-for-byte
+    /// identical 24-write transaction whether brightness goes up or down, so the payload cannot be
+    /// what distinguishes them and the gaps are the only thing left. A log of what was written
+    /// without when is unreadable for that class of question.
+    pub watch_range_log: Capped<(u32, u32, u32, u32)>,
     /// `word -> (byte-writes, PC -> count)`, **uncapped**.
     ///
     /// The two failures this replaces were one instrument and two bugs. The log capped at 4 096, and
@@ -1262,7 +1270,8 @@ impl Memory {
                     });
                     e.writes += 1;
                     *e.pcs.entry(pc).or_insert(0) += 1;
-                    self.watch_range_log.push((pc, addr, v as u32, 0));
+                    let now = self.usec;
+                    self.watch_range_log.push((pc, addr, v as u32, now));
                 }
             }
         }
