@@ -14,14 +14,15 @@ own — *and* a controlled environment for writing new ones.
 That framing is not decoration; it is the measurement strategy. One stack can only ever tell you
 that your emulator satisfies *that stack*. Two disagree, and the disagreement names the hardware.
 
-**This paid for itself the day it was adopted.** Rockbox found, inside two days, **three** device
-models that Apple's firmware can never exercise:
+**This paid for itself immediately.** Running a second stack found **three** device models that
+Apple's firmware can never exercise, and a third stack later found a fourth:
 
 | what was wrong | why RetailOS could not find it |
 |---|---|
 | A USB clock-ready bit that never arrived | Apple's firmware reads `0x70000028` **zero** times in a 600 M boot |
 | The ADC completed after two *read transfers* rather than after *time* | Apple's driver polls, so its own poll loop supplied the transfers. Rockbox reads once and never polls — so it never completed a conversion, read 0 mV, and powered the machine off |
 | The click wheel delivered frames only after opcode `0x052a` | That opcode is *RetailOS's* way of asking. Rockbox arms the receiver its own way and got silence — 0 frames in a whole boot |
+| The chip-id register at `0x70000000` answered something whose byte 16 is not `'2'` | Apple's bootloader reads it 23 times a boot and RetailOS once, and neither cares what it says — they already know what chip they are on. `ipodloader2` is the first code here that has to *ask*, and it concluded PP5002 and addressed a 1G iPod's registers 91 M times ([research/16](research/16-the-third-bootloader.md)) |
 
 All three are the same shape, and it is the shape to watch for: a model that is not so much wrong
 as **shaped around one driver**. No amount of care with a single stack finds those — the stack that
@@ -158,7 +159,7 @@ Each says what it unlocks, what it depends on, and what would settle it.
 ## M1 · Rockbox all the way through *(in progress)*
 
 **Done:** it boots, reaches its main menu, and **takes wheel input** — 78 frames delivered, 78 reads
-of `CLICKWHEEL_DATA`, and the selection moves. The blocker was the third model in two days shaped
+of `CLICKWHEEL_DATA`, and the selection moves. The blocker was the third model shaped
 around Apple's driver rather than around the part: autonomous frames were gated on opcode `0x052a`,
 which is *RetailOS's* way of asking and which Rockbox never sends. Reporting is on at reset now, and
 the gate is the pair (reporting AND an armed receiver) that the interrupt was always gated on.

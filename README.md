@@ -7,7 +7,7 @@ scratch. It formats its own filesystem, reads the click wheel, draws its own men
 
 > ### This is alpha software
 >
-> It boots, it draws, it plays Brick — and it is five days old with one pair of images behind it.
+> It boots, it draws, it plays Brick — and it is young, with one pair of images behind it.
 > Expect rough edges, expect to read a paragraph to get started, and expect things that work here
 > to fail on files we have never seen. **[Please open an issue](https://github.com/siggifly/ipod-emulator/issues)**
 > if something breaks or could be better; the reports so far have found real bugs and every one of
@@ -282,7 +282,7 @@ Merging them is how a project starts describing its gaps as choices.
 
 ## How it was built
 
-Five days, day by day, in `docs/HOW-IT-WAS-BUILT.md` — taken from the commit log rather than memory,
+Day by day, in `docs/HOW-IT-WAS-BUILT.md` — taken from the commit log rather than memory,
 because memory was wrong about several of them.
 
 ## The research
@@ -364,7 +364,7 @@ player to run this on when the hardware runs out.
 ## Who wrote this
 
 **I did not write a single line of code in this project.** It was written with Claude Opus 5 under
-direction over five days. What I did was steer: decide what was worth chasing, push back when an
+direction. What I did was steer: decide what was worth chasing, push back when an
 answer sounded too convenient, find the prior art that unstuck it, and say "that can't be right, look
 again". That isn't nothing, and it also isn't writing an emulator. I would rather say so than let
 anyone assume otherwise.

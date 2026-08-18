@@ -247,7 +247,7 @@ films' 72 M/s is the CPU's rate and makes a rally unwatchable, because at `--clo
 entry, retired, is further down. A file that carries a heading twice will eventually have someone
 answer the empty one.)*
 
-**This file is four days older than the work.** Everything below item 0c is RetailOS, measured
+**This file is older than the work below it.** Everything under item 0c is RetailOS, measured
 2026-08-14; since then a **second operating system boots here** and is now the sharper instrument
 (ROADMAP.md M1/M2). Numbers below are not wrong, they are un-re-run, and R4 applies to every one of
 them that a Rockbox-driven model change has touched.
