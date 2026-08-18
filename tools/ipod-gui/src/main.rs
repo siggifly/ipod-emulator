@@ -61,6 +61,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eapp_loader::WheelEvent;
+use eapp_loader::identity::Colour;
 use eframe::egui;
 use egui::{Align2, Color32, CornerRadius, FontId, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
@@ -1505,6 +1506,7 @@ impl App {
         self.notice = self.inspect_drive();
 
         // Remember what worked, so the next launch opens straight into the iPod.
+        self.adopt_chassis_from_nor(&self.cfg.flash.clone());
         self.settings.flash = Some(self.cfg.flash.clone());
         self.settings.disk = Some(self.cfg.disk.clone());
         self.settings.save();
@@ -1701,14 +1703,19 @@ impl App {
 /// The running window's `device()` derives its size from the framebuffer, because there the panel
 /// must land on exact pixel boundaries. Nothing is running here, so this one simply fits the height
 /// it is offered. It exists so the first-run screen can show the thing being set up.
-fn device_at_rest(p: &egui::Painter, d: &Device, centre: Pos2, height: f32) -> Rect {
+fn device_at_rest(
+    p: &egui::Painter,
+    d: &Device,
+    centre: Pos2,
+    height: f32,
+    chassis: Colour,
+) -> Rect {
     let k = height / (d.case_h + SWITCH_PROUD);
     let (w, h) = (d.case_w * k, (d.case_h + SWITCH_PROUD) * k);
     let o = Pos2::new(centre.x - w / 2.0, centre.y - h / 2.0);
     let at = |x: f32, y: f32| Pos2::new(o.x + x * k, o.y + (y + SWITCH_PROUD) * k);
 
-    let body = Color32::from_rgb(0xF3, 0xF3, 0xF1);
-    let wheel = Color32::from_rgb(0xE6, 0xE6, 0xE3);
+    let (body, wheel, ink, _glass) = palette_for(chassis);
 
     // The hold switch first, so the case's rounded corner covers the half that is inside it.
     let sw = Rect::from_min_max(
@@ -1742,7 +1749,6 @@ fn device_at_rest(p: &egui::Painter, d: &Device, centre: Pos2, height: f32) -> R
     // earlier version set them as text and they came out as empty boxes: the default font has no
     // glyph for U+25C2, and a missing glyph is a rectangle rather than nothing, so the wheel
     // acquired three small squares.
-    let ink = Color32::from_gray(0x8A);
     p.text(
         Pos2::new(c.x, c.y - r * 0.64),
         egui::Align2::CENTER_CENTER,
@@ -1893,7 +1899,7 @@ impl App {
             let dev = IPOD_VIDEO;
             let (rect, _) =
                 ui.allocate_exact_size(Vec2::new(ui.available_width(), 130.0), egui::Sense::hover());
-            device_at_rest(ui.painter(), &dev, rect.center(), 120.0);
+            device_at_rest(ui.painter(), &dev, rect.center(), 120.0, app.settings.chassis);
             ui.add_space(10.0);
 
             ui.vertical_centered(|ui| {
@@ -2379,11 +2385,16 @@ impl App {
             app.section(ui, "APPEARANCE");
             ui.horizontal(|ui| {
                 ui.label("Case");
-                let mut black = app.settings.black_device;
-                if ui.selectable_value(&mut black, false, "White").clicked()
-                    | ui.selectable_value(&mut black, true, "Black").clicked()
-                {
-                    app.settings.black_device = black;
+                // Three, not two: the U2 Special Edition is a black case with a RED wheel, and
+                // Apple's own asset names for this family are `iPod6-White`, `iPod6-Black` and
+                // `iPod6-BlackRed`. Offering only two was leaving out a device that shipped.
+                let mut c = app.settings.chassis;
+                let mut hit = false;
+                for opt in [Colour::White, Colour::Black, Colour::U2] {
+                    hit |= ui.selectable_value(&mut c, opt, opt.label()).clicked();
+                }
+                if hit {
+                    app.settings.chassis = c;
                     app.settings.save();
                 }
             });
@@ -2479,11 +2490,31 @@ impl App {
     }
 
     /// Leave the settings. Nothing is applied here that was not applied as it was changed.
+    /// Take the case colour from the NOR, when a *different* dump is chosen.
+    ///
+    /// `SysCfg`'s `Mod#` states which iPod the dump came from, and libgpod's table turns that into
+    /// a colour — so the first answer comes from the hardware rather than from a constant. Our own
+    /// reference dump is an `MA146`, a 30 GB black 5G, and it draws a white Apple logo on black.
+    ///
+    /// **Only on a change of dump.** Doing it on every launch would overwrite a deliberate choice
+    /// in Appearance, and a setting that will not stay set is worse than no setting. A dump whose
+    /// `Mod#` is absent or unknown changes nothing — silence is not an instruction to go white.
+    fn adopt_chassis_from_nor(&mut self, nor: &std::path::Path) {
+        if self.settings.flash.as_deref() == Some(nor) {
+            return;
+        }
+        let Ok(bytes) = std::fs::read(nor) else { return };
+        if let Some(m) = eapp_loader::inspect::syscfg(&bytes).and_then(|c| c.model_info()) {
+            self.settings.chassis = m.colour;
+        }
+    }
+
     fn close_settings(&mut self) {
         self.cold_at_open = None;
         // The images may have been changed without a restart, in which case the machine on screen
         // is still the old pair's and the new one takes effect next launch. What is remembered is
         // what was *chosen*, because that is what the next launch will open.
+        self.adopt_chassis_from_nor(&PathBuf::from(self.images.flash.trim()));
         self.settings.flash = Some(PathBuf::from(self.images.flash.trim()));
         self.settings.disk = Some(PathBuf::from(self.images.disk.trim()));
         self.settings.save();
@@ -2886,23 +2917,14 @@ impl App {
         }
     }
 
-    /// White or black, and nothing in between — the two the 5G shipped as.
+    /// The three the 5G shipped as: `(body, wheel, ring text, glass)`.
+    ///
+    /// The U2 is the reason this is not a boolean. Its case is the black one and only the WHEEL
+    /// differs — which is why Apple's own asset for it is named `iPod6-BlackRed` rather than being
+    /// a colour of its own. Getting that wrong by tinting the whole case red would be a device
+    /// nobody ever sold.
     fn palette(&self) -> (Color32, Color32, Color32, Color32) {
-        if self.settings.black_device {
-            (
-                Color32::from_rgb(0x24, 0x25, 0x27),
-                Color32::from_rgb(0x33, 0x34, 0x36),
-                Color32::from_rgb(0x9a, 0x9b, 0x9d),
-                Color32::from_rgb(0x0a, 0x0a, 0x0b),
-            )
-        } else {
-            (
-                Color32::from_rgb(0xf3, 0xf3, 0xf1),
-                Color32::from_rgb(0xe6, 0xe6, 0xe3),
-                Color32::from_rgb(0x87, 0x88, 0x86),
-                Color32::from_rgb(0x14, 0x14, 0x15),
-            )
-        }
+        palette_for(self.settings.chassis)
     }
 
     /// The hold switch, as a control **protruding from the top edge of the front view**.
@@ -3987,5 +4009,36 @@ mod tests {
         // The Video's ROM is 1 MiB, and `inspect` leads its verdict with that length. The two
         // numbers being the same number is what makes identifying a dump by model possible at all.
         assert_eq!(IPOD_VIDEO.rom_len, eapp_loader::inspect::NOR_LEN);
+    }
+}
+
+/// `(body, wheel, ring text, glass)` for a chassis colour.
+///
+/// A free function because **two** things draw an iPod — the running device and the at-rest one on
+/// the first-run screen — and the at-rest one had its own hardcoded white pair. So a person who
+/// chose black met a white iPod on the setup screen and a black one afterwards.
+fn palette_for(chassis: Colour) -> (Color32, Color32, Color32, Color32) {
+    if chassis == Colour::U2 {
+        (
+            Color32::from_rgb(0x24, 0x25, 0x27),
+            // Apple's "Product Red" wheel. Dark enough that the white ring text still reads.
+            Color32::from_rgb(0xb8, 0x1c, 0x22),
+            Color32::from_rgb(0xf0, 0xe2, 0xe2),
+            Color32::from_rgb(0x0a, 0x0a, 0x0b),
+        )
+    } else if chassis == Colour::Black {
+        (
+            Color32::from_rgb(0x24, 0x25, 0x27),
+            Color32::from_rgb(0x33, 0x34, 0x36),
+            Color32::from_rgb(0x9a, 0x9b, 0x9d),
+            Color32::from_rgb(0x0a, 0x0a, 0x0b),
+        )
+    } else {
+        (
+            Color32::from_rgb(0xf3, 0xf3, 0xf1),
+            Color32::from_rgb(0xe6, 0xe6, 0xe3),
+            Color32::from_rgb(0x87, 0x88, 0x86),
+            Color32::from_rgb(0x14, 0x14, 0x15),
+        )
     }
 }

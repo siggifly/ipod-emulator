@@ -53,9 +53,14 @@ pub struct Settings {
     /// picks them, which is the state a fresh clone is in.
     pub flash: Option<PathBuf>,
     pub disk: Option<PathBuf>,
-    /// Which of the two colours the 5G shipped in. Not an instrument — it is which iPod you had,
-    /// so it lives in user mode and is remembered like the rest of the setup.
-    pub black_device: bool,
+    /// Which iPod this is, cosmetically. Not an instrument — it is which iPod you had, so it lives
+    /// in user mode and is remembered like the rest of the setup.
+    ///
+    /// **Defaulted from the NOR when one is chosen**, because the dump states it: `SysCfg`'s `Mod#`
+    /// resolves through [`crate::identity::Model`] to a colour. A person can still override it —
+    /// they know what was in their hand — but the first answer comes from the hardware rather than
+    /// from a constant.
+    pub chassis: crate::identity::Colour,
     /// **Off unless asked for.** An emulator that phones home on launch is a bad first impression
     /// for no benefit, and this audience notices. The menu item works either way — this only
     /// decides whether the check happens on its own.
@@ -94,7 +99,14 @@ impl Settings {
                 // Empty is "not set", which is what an editor that blanked a line means.
                 "flash" if !v.is_empty() => s.flash = Some(PathBuf::from(v)),
                 "disk" if !v.is_empty() => s.disk = Some(PathBuf::from(v)),
-                "black_device" => s.black_device = v == "true",
+                "chassis" => {
+                    if let Some(c) = crate::identity::Colour::parse(v) {
+                        s.chassis = c;
+                    }
+                }
+                // The key this replaced. Honoured so that anyone who had already chosen black does
+                // not silently get a white iPod back on the next launch.
+                "black_device" if v == "true" => s.chassis = crate::identity::Colour::Black,
                 "check_updates_on_start" => s.check_updates_on_start = v == "true",
                 "work_on_copy" => s.work_on_copy = Some(v == "true"),
                 _ => {}
@@ -110,7 +122,8 @@ impl Settings {
         format!(
             "# ipod-gui settings. Hand-editable; unknown keys are ignored.\n\
              mode = {}\n\
-             black_device = {}\n\
+             # white, black, or u2. Defaulted from the NOR's Mod# when one is chosen.\n\
+             chassis = {}\n\
              flash = {}\n\
              disk = {}\n\
              # An HTTPS GET of the GitHub releases API and a version comparison, on launch.\n\
@@ -121,7 +134,7 @@ impl Settings {
              # one you supplied is copied. Set it to true or false to answer for both.\n\
              {}",
             self.mode.as_str(),
-            self.black_device,
+            self.chassis.as_str(),
             p(&self.flash),
             p(&self.disk),
             self.check_updates_on_start,
@@ -387,12 +400,26 @@ mod tests {
         assert!(!s.check_updates_on_start);
     }
 
+    /// All three colours survive the file, and **the key this replaced is still honoured** — a
+    /// person who had already chosen black must not meet a white iPod after an update.
+    #[test]
+    fn the_chassis_colour_round_trips_and_the_old_key_still_works() {
+        use crate::identity::Colour;
+        for c in [Colour::White, Colour::Black, Colour::U2] {
+            let s = Settings { chassis: c, ..Settings::default() };
+            assert_eq!(Settings::parse(&s.render()).chassis, c, "{c:?}");
+        }
+        assert_eq!(Settings::parse("black_device = true").chassis, Colour::Black);
+        // An unreadable value falls back rather than picking a colour at random.
+        assert_eq!(Settings::parse("chassis = chartreuse").chassis, Colour::default());
+    }
+
     /// The round trip is the contract: whatever the window writes, the next launch reads back.
     #[test]
     fn settings_round_trip_through_the_file_format() {
         let s = Settings {
             mode: Mode::Debug,
-            black_device: true,
+            chassis: crate::identity::Colour::Black,
             flash: Some(PathBuf::from("/a/b/rom.bin")),
             disk: Some(PathBuf::from("/a/b/disk.img")),
             check_updates_on_start: true,

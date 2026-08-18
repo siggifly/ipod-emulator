@@ -278,12 +278,48 @@ fn sysinfo_field(text: &str, key: &str) -> Option<String> {
 }
 
 /// White, black, or the U2 special edition — **a fact stated by the model number**, not inferred.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// The default is black, and only applies before a NOR has been chosen: once there is a dump, the
+/// colour comes from its `Mod#`. Black because the reference hardware this project is built against
+/// is an `MA146`, so it is the colour most of the recorded output was taken on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Colour {
     White,
+    #[default]
     Black,
     /// Black with a red click wheel.
     U2,
+}
+
+impl Colour {
+    /// The settings-file spelling, and the label a person reads.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Colour::White => "white",
+            Colour::Black => "black",
+            Colour::U2 => "u2",
+        }
+    }
+
+    /// Parse the settings-file spelling. `None` for anything else, so an unreadable value falls
+    /// back to the default rather than picking a colour at random.
+    pub fn parse(s: &str) -> Option<Colour> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "white" => Some(Colour::White),
+            "black" => Some(Colour::Black),
+            "u2" => Some(Colour::U2),
+            _ => None,
+        }
+    }
+
+    /// What to call it on screen.
+    pub fn label(self) -> &'static str {
+        match self {
+            Colour::White => "White",
+            Colour::Black => "Black",
+            Colour::U2 => "U2 Special Edition",
+        }
+    }
 }
 
 /// 5G or 5.5G. libgpod calls these `VIDEO_1` and `VIDEO_2`.
