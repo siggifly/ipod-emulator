@@ -1157,6 +1157,39 @@ Rockbox's IRAM functions however much the address range looks like it. And **12 
 spin inside `usb_reset_controller`**, on a machine where [ROADMAP](../ROADMAP.md) records USB as
 *"nothing modelled beyond a clock-ready bit"*.
 
-**Settled when** the cold path reaches the menu the warm path reaches. The first question to
-answer is whose code `0x40005510` is, because 70 % of a run is not a detail — and the answer is not
-in `rockbox.elf`, so it wants the bootloader's own image rather than another guess.
+### Whose code `0x40005510` is: nobody's
+
+**It is not code.** `rockbox.elf`'s section map answers it in one command, and the answer is that
+the addresses holding 70 % of the run are data:
+
+```
+.ibss         vma 40000000  size 68c4     ->  40000000..400068c4
+.iram         vma 400068c4  size 25fc     ->  400068c4..40008ec0
+.idle_stacks  vma 40008ec0  size 0100
+.stack        vma 40008fc0  size 2000     ->  40008fc0..4000afc0
+```
+
+| address | share | what it is |
+|---|---|---|
+| `0x40005510` / `0x40005520` | 30.5 % | **`.ibss`** — `downmix_buf +0x5f0`, an audio buffer |
+| `0x4000e740` / `0x4000e750` | 20.7 % | **past the end of every section**, `stackend +0x3780` |
+| `0x40009cf0` | 7.0 % | `.stack` / past it |
+
+**The cold-booted machine is executing BSS and running off the end of IRAM.** The earlier framing —
+"70 % in code with no symbol" — was too generous: the addresses are inside the ELF's address space
+and they are not code at all. My first symbol lookup asked only for *function* symbols, which is why
+they came back unresolved and looked like somebody else's binary.
+
+It does not fault because that memory is **mapped**, and an ARM word of `0x00000000` decodes as
+`andeq r0, r0, r0` — a no-op. So the PC walks forward through zeroes indefinitely. That is also why
+`--novelty` kept reporting new code as late as `@353 699 369` and why nothing draws: the novelty
+counter is watching a program counter stroll through an empty buffer.
+
+**This is a `Lost` that the machine cannot detect**, because `Lost` fires on an *unmapped* fetch and
+IRAM is mapped for its whole length. Worth considering as a real instrument gap: a fetch from a
+region the loaded image declares as `.bss` or `.stack` is a fault in every sense that matters, and
+nothing reports it.
+
+**Settled when** the cold path reaches the menu the warm path reaches. The next question is no
+longer "whose code" but **where the PC leaves real code**, which is one `--callgraph` or a watch on
+the last `.iram` address before the walk begins.
