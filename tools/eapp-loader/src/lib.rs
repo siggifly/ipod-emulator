@@ -5103,6 +5103,13 @@ pub struct Pcf50605 {
     /// here, inside the device, is the difference between knowing which register a poll loop is
     /// hammering and inferring it.
     pub polled: BTreeMap<u8, u64>,
+    /// `register -> (writes, last value)`, **uncapped**, counted inside the device.
+    ///
+    /// The mirror of [`polled`](Self::polled), and it exists for the same reason: the I²C log's data
+    /// column cannot tell you which register a byte was destined for. Written because a whole class
+    /// of question — *where does the firmware put this setting* — is answerable by moving a control
+    /// and seeing which register moved with it, and there was no way to ask it.
+    pub written: BTreeMap<u8, (u64, u8)>,
     /// Every ADC conversion: (channel, value returned), so the channel map can be read off a run
     /// rather than guessed. `ADCC2` bits 4:1 select the channel. An ordered **sample**; the
     /// per-channel census is `adc_by_channel`.
@@ -5143,6 +5150,7 @@ impl Pcf50605 {
             force: Vec::new(),
             adc_values: Vec::new(),
             polled: BTreeMap::new(),
+            written: BTreeMap::new(),
             adc_log: Capped::new(4096),
             adc_by_channel: BTreeMap::new(),
             reads: 0,
@@ -5212,6 +5220,11 @@ impl Pcf50605 {
 
     fn write_reg(&mut self, reg: u8, val: u8) {
         let r = (reg & 0x3f) as usize;
+        // Before the read-only guard below, because a write the part ignores is still a write the
+        // firmware made, and "which register did it aim at" is the question this answers.
+        let e = self.written.entry(r as u8).or_insert((0, 0));
+        e.0 += 1;
+        e.1 = val;
         // The ADC result registers are read-only on the part. Letting a write land on them lets the
         // firmware overwrite the very value it is about to poll for, which presents as a converter
         // that never produces a result rather than as a bad write.

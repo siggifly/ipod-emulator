@@ -303,6 +303,14 @@ pub struct Out {
     pub unmapped_pages: Vec<u32>,
     /// The most recent PC trace handed over by the run loop.
     pub pc_trace: Vec<(u32, u64)>,
+    /// The PMU's write census, `(register, writes, last value)`, handed over on request.
+    ///
+    /// Carried through `Out` rather than read directly because `Pcf50605` lives on the emulator
+    /// thread; this is the same request/answer route `peek` and `trace` use, for the same reason.
+    pub pmu_written: Vec<(u8, u64, u8)>,
+    /// The `--watch-writes` census, `(word address, writes, 0)`, handed over on request. The
+    /// third field is a placeholder: `WatchWord` keeps the writers, not the value.
+    pub watched_writes: Vec<(u32, u64, u8)>,
     /// The surface the window is **not** showing, and whether its content has moved since this
     /// session began.
     ///
@@ -433,6 +441,8 @@ impl Link {
                 fb_addr: FB_FRONT,
                 unmapped_pages: Vec::new(),
                 pc_trace: Vec::new(),
+                pmu_written: Vec::new(),
+                watched_writes: Vec::new(),
                 fb_seq: 0,
                 backlight: 16,
                 backlight_steps: (0, 0),
@@ -1152,6 +1162,24 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                 for a in batch {
                     let v = if a == crate::control::UNMAPPED_SENTINEL {
                         Some(m.mem.unmapped.len() as u32)
+                    } else if a == crate::control::WRITES_SENTINEL {
+                        let mut out = link.out.lock().unwrap();
+                        out.watched_writes = m
+                            .mem
+                            .watch_range_words
+                            .iter()
+                            .map(|(addr, w)| (*addr, w.writes, 0u8))
+                            .collect();
+                        Some(out.watched_writes.len() as u32)
+                    } else if a == crate::control::PMU_SENTINEL {
+                        let mut out = link.out.lock().unwrap();
+                        out.pmu_written = m
+                            .mem
+                            .pmu
+                            .as_ref()
+                            .map(|p| p.written.iter().map(|(r, (n, v))| (*r, *n, *v)).collect())
+                            .unwrap_or_default();
+                        Some(out.pmu_written.len() as u32)
                     } else if a == crate::control::TRACE_SENTINEL {
                         // Hand the trace over and clear it, so a second dump shows what happened
                         // since the first rather than repeating it.

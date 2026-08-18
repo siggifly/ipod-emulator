@@ -36,6 +36,12 @@ use std::sync::Arc;
 /// with one place that answers questions, rather than two that can drift apart.
 pub const UNMAPPED_SENTINEL: u32 = 0xFFFF_FFFF;
 pub const TRACE_SENTINEL: u32 = 0xFFFF_FFFE;
+/// Ask the run loop for the PMU's per-register write census. Same request/answer route as the
+/// others, because `Pcf50605` lives on the emulator thread and cannot be borrowed from this one.
+pub const PMU_SENTINEL: u32 = 0xFFFF_FFFD;
+/// Ask for the `--watch-writes` census: which words in the watched range have been written, how
+/// often, and by whom. Live, so a control can be moved and the answer asked for immediately.
+pub const WRITES_SENTINEL: u32 = 0xFFFF_FFFC;
 
 /// Start listening. Returns immediately; each connection is served on its own thread.
 pub fn serve(path: &Path, link: Arc<Link>) -> Result<(), String> {
@@ -233,6 +239,34 @@ fn command(line: &str, link: &Arc<Link>) -> String {
                 }
             }
             format!("ok trace {} entries, {} transitions: {}", out.pc_trace.len(), seq.len(), seq.join(" "))
+        }
+        "pmu" => {
+            link.peek_req.lock().unwrap().push(PMU_SENTINEL);
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let _ = link.peek_ans.lock().unwrap().pop();
+            let rows = link.out.lock().unwrap().pmu_written.clone();
+            if rows.is_empty() {
+                return "ok pmu no writes".into();
+            }
+            let mut s = String::from("ok pmu");
+            for (reg, n, last) in rows {
+                s.push_str(&format!(" {reg:#04x}={last:#04x}(x{n})"));
+            }
+            s
+        }
+        "writes" => {
+            link.peek_req.lock().unwrap().push(WRITES_SENTINEL);
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let _ = link.peek_ans.lock().unwrap().pop();
+            let rows = link.out.lock().unwrap().watched_writes.clone();
+            if rows.is_empty() {
+                return "ok writes none".into();
+            }
+            let mut s = String::from("ok writes");
+            for (addr, n, _) in rows {
+                s.push_str(&format!(" {addr:#010x}(x{n})"));
+            }
+            s
         }
         "state" => {
             let out = link.out.lock().unwrap();

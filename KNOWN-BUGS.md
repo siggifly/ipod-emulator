@@ -108,10 +108,34 @@ The level had also already railed: reaching that screen at all took it from 20 t
 against 2 down**, because scrolling keeps the backlight awake and every one of those toggles is
 counted as a brightness step.
 
+**Where the search has got to.** The instrument now exists: `pmu` and `writes` on the control
+socket dump the PMU's per-register write census and the `--watch-writes` census live, so a control
+can be moved and the answer asked for immediately.
+
+Ruled out, each by measurement rather than by argument:
+
+| | |
+|---|---|
+| **The PMU** | Slider full → 65 %: not one PCF50605 register *value* changed. Only `0x2e`/`0x2f` moved, and only their counts — those are the ADC control registers being polled |
+| **An unmodelled address** | `unmapped` is empty before and after, so the write lands somewhere this emulator already maps |
+| **GPIOD bit 0x80** | Rockbox's own method for this model. RetailOS writes `0x6000d02c` **twice in a whole boot**, with `0x20` |
+
+What the census did turn up is a **second GPIO bank at `0x6000d800`–`0x6000d96c`**, which appears
+nowhere in this project's notes and nowhere in Rockbox's `pp5020.h`. It mirrors the A–D bank's
+layout one bank up, and it is the busiest thing in the device window:
+
+```
+0x6000d80c  x5106     0x6000d81c  x5106     0x6000d82c  x1730     0x6000d92c  x1440
+```
+
+By the A–D layout that makes `0x6000d82c` an `OUTPUT_VAL` whose enable and direction registers are
+being toggled 5 106 times each — a pin being bit-banged hard, by something we do not model and have
+never named.
+
 **How you would know it is fixed:** moving the slider through its range changes the level
 monotonically and in the same direction, and the count rises with the number of steps asked for.
-Finding the register comes first, and the instrument for that is an I²C write census — which does
-not exist yet.
+Next step is to correlate a slider move against that bank specifically, which the `writes` command
+can now do in one run.
 
 This is the fifth model defect in this project first attributed to missing hardware and found to be
 a misread of a signal we already had.
