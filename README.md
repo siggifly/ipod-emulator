@@ -214,7 +214,6 @@ choose for one run.
 - **No USB inside the emulator**
 - **Purchased titles do not launch.** Apple's DRM refuses them; the identity it binds to is understood, the keystore is not
 - **Four values in the co-processor transport are chosen rather than measured**, and there is no timing model at all, so a bug that only appears when a reply is late is invisible
-- **Hold does not reach RetailOS after boot.** The line is right and is read four times, all before instruction 49 689 152; what is missing is a GPIO interrupt, which this emulator does not model
 - **The boot takes ~300 seconds of simulated time** where hardware takes five or ten. Something waits far longer than it should
 
 Three lists, kept apart on purpose. **`KNOWN-BUGS.md`** is what is *wrong*. The section above is
