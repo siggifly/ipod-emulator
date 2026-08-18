@@ -47,7 +47,7 @@ chooses which of two IRAM addresses holds the `sysinfo_t` pointer Apple's bootlo
 wrong pointer, fails the `IsyS` magic check, leaves `ipod.hw_rev` at **0**, computes
 `hw_ver = 0 >> 16 = 0`, and selects the oldest hardware it knows.
 
-### Confirmed by forcing it, one variable
+### ~~Confirmed by forcing it, one variable~~ — RETRACTED 2026-08-18, it was not one variable
 
 `--rdval=0x70000000=0x32323035` — a value whose bits 23:16 are `0x32`, used as this project's
 documented bisect instrument and **not** as a model:
@@ -57,7 +57,36 @@ documented bisect instrument and **not** as a model:
 | as-is | **91 499 510** across 14 pages |
 | chip id forced | **8** across 1 page |
 
-The `0xcf00xxxx` traffic disappears completely. The detection was the whole of it.
+The `0xcf00xxxx` traffic disappears completely.
+
+> **"The detection was the whole of it" is wrong, and the control was confounded.** Forcing
+> `0x70000000` does not touch only `ipodloader2`: **Apple's bootloader reads that register 23 times
+> a boot**, as the table at the top of this file says in the very next section. With the value
+> forced, Apple's bootloader itself hangs — in IRAM at `0x400038cc`, before `ipodloader2` runs at
+> all:
+>
+> ```
+> 400038c0  ldr r0, [r4, #0x28]     ; r4 = 0x70000000
+> 400038c4  bic r0, r0, #0x800
+> 400038c8  str r0, [r4, #0x28]
+> 400038cc  ldr r0, [r4, #0x28]
+> 400038d0  tst r0, #0x80
+> 400038d4  beq 400038cc            ; wait for bit 7, forever
+> ```
+>
+> The bytes in memory there do not match `loader.bin` at the same offset — checked, and they differ
+> completely — which is what proves whose code it is. **So the unmapped reads went to 8 because the
+> machine stopped getting that far, not because the model was fixed.** A number improving is not the
+> same as the thing improving, and this is R5: a control only proves what it exercises, and this one
+> exercised two drivers while claiming to isolate one.
+>
+> What survives: `ipod_is_pp5022()` really does test byte 16 for `'2'`, and our answer really does
+> fail it. What does not survive is any claim about what happens *after* that test, because no run
+> has yet got there with Apple's bootloader still working.
+>
+> **The fix is therefore narrower and harder than "set the byte":** the value has to satisfy Apple's
+> bootloader *and* `ipodloader2` at once, which means the **real** `PP_VER1`, sourced. An invented
+> word that pleases one and hangs the other is not progress, it is a different bug.
 
 ## Why no earlier stack found this
 
