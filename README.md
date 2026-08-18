@@ -214,18 +214,23 @@ choose for one run.
 
 ### It is not only Apple's software
 
-**Rockbox 4.0 boots here** — its own logo through the same co-processor transport, then
-`Scanning disk…`, then 2 393 ATA commands of it actually reading the volume. A second,
-source-available operating system driving this hardware model is the reason
-[research/06](research/06-rockbox-as-oracle.md) exists: RetailOS is stripped C++ with no symbols,
-and Rockbox ships an ELF with 5 808 of them, so a divergence names a function instead of an address.
+**Rockbox 4.0 boots here, to its main menu** — its own logo through the same co-processor
+transport, then `Scanning disk…`, then the menu, over 2 393 ATA commands of it reading the volume.
 
-<img src="docs/media/ipod-13-rockbox-boot.gif" width="320" alt="Rockbox 4.0 booting on this emulator: splash, scanning disk, then shutting down">
+<img src="docs/media/ipod-14-rockbox-menu.png" width="320" alt="Rockbox 4.0's main menu running on this emulator">
 
-**It does not finish.** After the disk scan it prints *"Battery empty! RECHARGE! Shutting down…"*
-and powers off — and that is **not** the battery: forcing the ADC to full scale changes nothing, so
-the trigger is something else on the shutdown path. Running Rockbox or iPodLinux as something you
-*use* rather than measure with is [a design, not a feature](docs/ideas/run-any-os.md).
+A second, source-available operating system on this hardware model is the reason
+[research/06](research/06-rockbox-as-oracle.md) exists — RetailOS is stripped C++ with no symbols,
+Rockbox ships an ELF with 5 808 of them — and it has already earned it. **Three device models here
+turned out to be shaped around Apple's drivers rather than around the parts**: a USB clock-ready
+bit Apple's firmware never reads, an ADC that completed after a number of *transfers* rather than
+after *time*, and a click wheel that only delivers input to firmware speaking Apple's own opcode.
+None of the three is findable with one operating system.
+
+**It is not usable yet.** Rockbox does not receive wheel input (the third bug above), so it sits at
+its menu until the idle timer powers it off — correctly, since this emulator fast-forwards idle
+time. Running Rockbox or iPodLinux as something you *use* rather than measure with is
+[on the roadmap](ROADMAP.md), not done.
 
 ## What does not
 

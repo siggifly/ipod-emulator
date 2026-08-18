@@ -419,3 +419,67 @@ reporting ON with 2 `0x052a` commands.
 Why a shutdown is requested at all. Rockbox has 5 808 symbols and this is a two-frame window
 between `Scanning disk…` and the message — which is the entire argument this file was written to
 make.
+
+## 2026-08-18, later: the menu, and a third model shaped around Apple
+
+### It reaches the menu
+
+Fixing the ADC (below) took Rockbox from a splash to its **main menu** — Files, Database, Resume
+Playback, Settings, Recording, Playlists, Plugins, System, Shortcuts — drawn through the same
+co-processor transport RetailOS uses.
+
+![Rockbox 4.0's main menu](../docs/media/ipod-14-rockbox-menu.png)
+
+### The ADC completed on transfers, not on time
+
+`_adc_read` (`adc-ipod-pcf.c:50-55`) writes `ADCC1` and reads `ADCS1`/`ADCS2` **immediately**, one
+read per conversion, no poll of the ready bit, once per 400 ms. This model completed a conversion
+after a countdown of **two read transfers** — which Apple's polling driver satisfies out of its own
+poll loop, and Rockbox never does. The countdown went 2 → 1, the next conversion reset it to 2, and
+`latch` did not run once in 27 000 conversions. Rockbox read 0 mV and `query_force_shutdown()`
+powered the machine off.
+
+A conversion now settles before the host's next transfer. A microsecond deadline was tried first
+and is wrong here for a specific reason: **this model's bus costs no simulated time**, so a deadline
+in µs is compared against a clock that never advanced for the transaction it was meant to outlast.
+
+RetailOS across the change: **27 510 code buckets, 76 800 non-black pixels, wheel reporting on with
+2 commands and 3 frames, same ATA opcode census** — unchanged.
+
+### The shutdown that remains is not a bug
+
+With the ADC fixed, every `sys_poweroff` call comes from **one** site — `handle_auto_poweroff+0xb8`,
+the idle-timeout branch, not the battery branch that produced the earlier message.
+
+And the idle timeout is expiring honestly:
+
+```
+cpu sleep: 7 526 995 halts, 1 332 504 ms of simulated time skipped
+irqs: 7 051 288 asserted, 1 034 209 taken; usec 1 343 170 682
+```
+
+**22 simulated minutes, of which 1 332 s was skipped sleep**, inside about 11 s of executed time.
+Rockbox reaches its menu, idles, and this emulator fast-forwards the idling — so its 10-minute
+idle poweroff arrives on schedule. Rockbox is correct and the emulator is correct; what is missing
+is a thumb on the wheel.
+
+### And a thumb on the wheel does not reach it
+
+Driving `--wheel` from just after the menu appears changes nothing: **0 frames posted, 0 word reads
+of `CLICKWHEEL_DATA`**, and Rockbox writes `0x7000c104` exactly **once** in a run where RetailOS
+re-arms it continuously.
+
+`lib.rs:4801` is why:
+
+```rust
+if !w.reporting { w.frames_suppressed += 1; continue; }
+```
+
+`reporting` is set by opcode **`0x052a`** — *RetailOS's* way of asking for autonomous frames. Our
+click wheel delivers input only to a firmware that speaks that protocol. Rockbox's
+`button-clickwheel.c` arms the receiver its own way and is handed silence.
+
+**That is the third model in two days shaped around Apple's driver rather than around the part** —
+after the USB clock-ready bit and the ADC. The pattern is now the most reliable bug-finder this
+project has: *anywhere a device's behaviour was derived from what RetailOS does, a second stack
+finds the seam.*
