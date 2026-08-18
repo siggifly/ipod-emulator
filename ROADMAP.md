@@ -81,7 +81,7 @@ GUI carrying those changes · screenshots that are honest about all of it.
 | deferred | why |
 |---|---|
 | **Audio** (M6) | a 1.0 condition. Nothing before it depends on it, Doom included |
-| **iPodLinux** (M4) | the kernel is located but not fetched and `ipodloader2` is not built — that is a milestone, not a release note |
+| **iPodLinux** (M4) | **reopened 2026-08-18** — `ipodloader2` now builds and cold-boots, so the stated reason for deferring it is gone. What remains is its own stall before the drive, an unsourced chip-id byte, and an unfetched kernel. In if it reaches its menu; out if it does not |
 | **Target disk mode** | it is a USB feature and ships with M9. Being a NOR mode is how it is reached, not a reason to pull it early |
 | **Titles** (M8) | gated on a keystore nobody has, in a private repository |
 | **JIT** | belongs inside M7, and second — see there |
