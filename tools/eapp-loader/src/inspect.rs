@@ -116,6 +116,284 @@ fn read_at(path: &Path, at: u64, n: usize) -> std::io::Result<Vec<u8>> {
     Ok(buf)
 }
 
+// ---------------------------------------------------------------- what shall we call it?
+//
+// **A filename is what a file is called, not what it is.** Everything this program is handed
+// arrives under a name chosen by whoever uploaded it: the boot ROM is
+// `internal_rom_000000-0FFFFF.bin` by convention and `A1238/internal_rom.bin` in the archive that
+// files it under the wrong product; Apple's bundle is `iPod_20.1.3.ipsw` or `iPod_20.1.3.zip`
+// depending on what the browser did to it. None of those is worth showing to somebody who has
+// three of them.
+//
+// So a file is described by what is *inside* it, and the filename is what you get on hover. This
+// matters more the moment there is more than one iPod: `internal_rom_000000-0FFFFF.bin` three times
+// is a list of nothing, and "iPod Video · 5A82…" three times is a list of iPods.
+
+/// What a boot ROM is, in a few words — the model, and the device it came off.
+///
+/// The serial is the one printed on the back of the case, and the GUID is the FireWire ID that a
+/// USB host sees; between them they are the difference between "an iPod Video ROM" and "*this* iPod
+/// Video's ROM". That distinction is not cosmetic: `SysCfg` is per-device, the authorisation work
+/// binds to the GUID in it, and two dumps of the same model are the same file only if you never
+/// look at those bytes.
+///
+/// `None` when the file is not a ROM this program recognises — the caller has a verdict for that.
+pub fn describe_rom(path: &Path, model: &str) -> Option<String> {
+    let nor = std::fs::read(path).ok()?;
+    if nor.len() as u64 != NOR_LEN {
+        return None;
+    }
+    let cfg = syscfg(&nor)?;
+    // The serial reads better than the GUID and is the thing written on the case, so it wins when
+    // both are there. Truncated to its tail: the leading characters are the factory and the model,
+    // identical across every iPod of a kind, and the distinguishing part is at the end.
+    if let Some(sn) = cfg.serial.as_ref() {
+        let tail: String = sn.chars().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect();
+        return Some(format!("{model} · {tail}"));
+    }
+    cfg.guid.map(|g| format!("{model} · {:04X}", g & 0xffff))
+}
+
+/// The version and content fingerprint of an Apple software bundle.
+///
+/// Both come from the firmware member the archive already has to parse: its name carries the
+/// version (`Firmware-20.6.3`) and its zip record carries a CRC-32 of the contents. Together they
+/// name a drive built from it in a way that is stable for the same bundle and different for a
+/// different one — see [`built_drive_name`].
+pub fn ipsw_identity(path: &Path) -> Option<(String, u32)> {
+    let zip = crate::ipsw::Zip::open(path).ok()?;
+    let (m, _) = zip.firmware().ok()?;
+    let version = m.name.strip_prefix("Firmware-")?.to_string();
+    Some((version, m.crc))
+}
+
+/// What to call a drive built from a bundle, on disk.
+///
+/// **Named for what it is, and never for the last thing that happened to it.** Every build used to
+/// land on one path, `ipod-from-ipsw.img`, so building from a second bundle silently overwrote the
+/// first — under a name that still looked right, while anything pointed at it had quietly become a
+/// different iPod's software. Including the version makes the folder readable, and including the
+/// CRC means the same bundle always resolves to the same file (so a rebuild is a no-op) while a
+/// different one cannot land on it.
+pub fn built_drive_name(version: &str, crc: u32) -> String {
+    format!("ipod-{version}-{crc:08x}.img")
+}
+
+/// Read a drive's description back out of the name [`built_drive_name`] gave it.
+///
+/// A drive the user supplied themselves gets no description, because there is nothing honest to
+/// say: the firmware version is inside the partition and this does not read it. The caller falls
+/// back to the filename, which is the user's own word for it and therefore the right fallback.
+pub fn describe_drive(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    let rest = name.strip_prefix("ipod-")?.strip_suffix(".img")?;
+    let (version, crc) = rest.rsplit_once('-')?;
+    if crc.len() != 8 || !crc.chars().all(|c| c.is_ascii_hexdigit()) || version.is_empty() {
+        return None;
+    }
+    Some(format!("iPod software {version}"))
+}
+
+// ---------------------------------------------------------------- what did we find in it?
+//
+// **The parse already happened; this is what it found.** Every verdict here reads a file and knows
+// a great deal about it, and until now all of that was thrown away unless the file failed. A person
+// holding three dumps off three iPods wants to know which is which, and a person about to spend
+// seventy-five seconds on a boot wants to know the two files go together — both are questions these
+// bytes have already answered.
+
+/// One thing worth knowing about a file: a label and a value, short enough to sit on one line.
+pub type Fact = (&'static str, String);
+
+/// What a boot ROM turned out to contain.
+pub fn rom_facts(path: &Path) -> Vec<Fact> {
+    let Ok(nor) = std::fs::read(path) else { return Vec::new() };
+    let mut out = Vec::new();
+    if let Some(dir) = nor.get(NOR_DIRECTORY as usize..) {
+        let images = parse_entries(dir, b"hslf");
+        if !images.is_empty() {
+            let names: Vec<&str> = images.iter().map(|e| e.tag.as_str()).collect();
+            out.push(("Images", names.join(" · ")));
+        }
+    }
+    if let Some(cfg) = syscfg(&nor) {
+        if let Some(s) = cfg.serial {
+            out.push(("Serial", s));
+        }
+        // The FireWire GUID **is** the USB serial a host sees, and it is what an authorisation is
+        // minted against — so it is the one number that makes this dump *this iPod's* dump.
+        if let Some(g) = cfg.guid {
+            out.push(("FireWire GUID", format!("{g:016X}")));
+        }
+    }
+    if let Some(b) = build_string(path) {
+        out.push(("Build", b));
+    }
+    out
+}
+
+/// What a drive image turned out to contain.
+pub fn drive_facts(path: &Path) -> Vec<Fact> {
+    let mut out = Vec::new();
+    if let Ok(m) = std::fs::metadata(path) {
+        out.push(("Size", bytes(m.len())));
+    }
+    if let Ok(state) = crate::ipsw::firmware_state(path) {
+        if !state.tags.is_empty() {
+            out.push(("Firmware images", state.tags.join(" · ")));
+        }
+        out.push(("Operating system", if state.has_os { "present" } else { "MISSING" }.into()));
+        if state.aupd_armed {
+            // Not a detail. On hardware this is the first of two boots and the second runs the OS;
+            // here nothing power-cycles the machine, so this drive stops at the updater.
+            out.push(("Flash updater", "armed — this drive boots the updater, not the OS".into()));
+        }
+    }
+    if let Some(f) = drive_family(path) {
+        out.push(("Updater family", f.to_string()));
+    }
+    out
+}
+
+/// What an Apple software bundle turned out to contain.
+pub fn ipsw_facts(path: &Path) -> Vec<Fact> {
+    let Ok(zip) = crate::ipsw::Zip::open(path) else { return Vec::new() };
+    let Ok((m, fw)) = zip.firmware() else { return Vec::new() };
+    let mut out = vec![
+        ("Firmware", m.name.clone()),
+        ("Size", format!("{} bytes ({} sectors)", fw.len(), fw.len() / 512)),
+    ];
+    if let Some(f) = family_of(&m.name) {
+        out.push(("Updater family", f.to_string()));
+    }
+    let images = crate::ipsw::images(&fw);
+    if !images.is_empty() {
+        let names: Vec<&str> = images.iter().map(|i| i.tag.as_str()).collect();
+        out.push(("Images", names.join(" · ")));
+    }
+    out
+}
+
+/// The updater family in a `Firmware-20.6.3` member name.
+fn family_of(member: &str) -> Option<u32> {
+    member.strip_prefix("Firmware-")?.split('.').next()?.parse().ok()
+}
+
+/// The updater family of an Apple bundle.
+pub fn ipsw_family(path: &Path) -> Option<u32> {
+    let zip = crate::ipsw::Zip::open(path).ok()?;
+    let (m, _) = zip.firmware().ok()?;
+    family_of(&m.name)
+}
+
+/// The updater family of a drive **this program built**, read back out of the name it was given.
+///
+/// A drive somebody supplied themselves answers `None`, and that is the honest answer rather than a
+/// gap: the version lives inside the firmware partition in a form this does not read, and guessing
+/// it would put a confident number next to a mismatch warning that might be backwards.
+pub fn drive_family(path: &Path) -> Option<u32> {
+    let name = path.file_name()?.to_str()?;
+    let rest = name.strip_prefix("ipod-")?.strip_suffix(".img")?;
+    let (version, _) = rest.rsplit_once('-')?;
+    version.split('.').next()?.parse().ok()
+}
+
+/// Do this boot ROM and this software belong together?
+///
+/// **The single most expensive failure this project has**, and it is silent: a bundle from the
+/// wrong updater family boots, is not recognised as this iPod's own software, and shows the
+/// plug-into-a-computer screen after about 70 ATA commands where a matching pair reaches the
+/// language picker with 618. That reads as a broken emulator. It cost the first person who hit it
+/// an hour, and it is knowable before the boot starts from two numbers both already parsed.
+///
+/// `None` means "no reason to object" — which includes *not knowing*, and the two are deliberately
+/// the same answer. A drive somebody supplied has no family this can read, and a warning that
+/// fired on every such drive would be noise that teaches people to ignore the one that matters.
+pub fn family_mismatch(model: &str, model_family: u32, software: Option<u32>) -> Option<String> {
+    let found = software?;
+    if found == model_family {
+        return None;
+    }
+    // No article before the model name. "a {model}" produces "a iPod Video", and the fix is not a
+    // vowel test — the next model added would break it again, in a string nobody re-reads.
+    Some(format!("Family {found}. {model} takes family {model_family}."))
+}
+
+/// Why a family mismatch matters, for the hover rather than the page.
+///
+/// Split from the warning itself because the warning has to fit next to everything else that can be
+/// wrong at once — measured at 717 px against a 680 px window when this was one paragraph — and
+/// because the *fact* is what somebody needs at a glance while the *consequence* is what they need
+/// only if they doubt it.
+pub const WHY_FAMILY_MATTERS: &str =
+    "Apple ships a model's software under an updater family, and an iPod only recognises its own. \
+     A mismatched pair is not rejected: it boots, fails to recognise the drive as its own, and \
+     asks to be restored from iTunes after about 70 ATA commands where a matching pair reaches the \
+     language picker with 618. That looks like a broken emulator, and it is the single most \
+     expensive misunderstanding this project has met.";
+
+// ---------------------------------------------------------------- what did they just hand us?
+
+/// Which of the three files the emulator takes this one is, judged by its contents.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    /// A NOR flash dump — the boot ROM.
+    Rom,
+    /// An Apple software bundle, to build a drive from.
+    Ipsw,
+    /// A whole-drive image.
+    Disk,
+    /// None of the three.
+    Unknown,
+}
+
+/// Say what a file *is*, so the user does not have to say it.
+///
+/// **This is what lets the first-run screen have no slots.** Asking somebody to put the right file
+/// in the right box is asking them to already know the answer to the question they came here with —
+/// and the two files are told apart by four bytes and a length, which is a thing a program should
+/// do. Drop both in any order, or drop them one at a time, or drop them on the wrong half of the
+/// window: each one is identified and routed.
+///
+/// Cheap enough to run on a drop rather than on a timer: one `metadata` call and four bytes. The
+/// real verdict — [`flash`], [`ipsw`], [`disk`] — is what gets run afterwards on the one that
+/// matched, and that is where the reading of hundreds of bytes happens.
+///
+/// The order of the tests is the order of how *specific* they are, not how likely:
+///
+/// 1. **Zip magic** is four bytes and cannot be anything else here. An `.ipsw` is a zip; a drive
+///    image begins with an MBR or an Apple Partition Map, neither of which starts `PK`.
+/// 2. **Exactly 1 MiB** is the NOR, and the size is the check the ROM's own verdict leads with.
+///    A file of that size that turns out not to be a ROM gets [`flash`]'s message about its reset
+///    vector, which is the right message — better than "not recognised".
+/// 3. **Everything else is judged as a drive**, because that is the file with the widest legitimate
+///    variation (capacities, partition maps, Mac and Windows formats), and because [`disk`] has
+///    the best sentences for the near misses: an Apple Partition Map, a GPT, a partition image
+///    rather than a whole drive.
+///
+/// A file that is none of these is [`Kind::Unknown`], and the screen says so with its size — which
+/// is more use than the wrong file's verdict would be.
+pub fn classify(path: &Path) -> Kind {
+    let Ok(meta) = std::fs::metadata(path) else { return Kind::Unknown };
+    if !meta.is_file() {
+        return Kind::Unknown;
+    }
+    let head = read_at(path, 0, 4).unwrap_or_default();
+    if head.len() == 4 && head[0..2] == *b"PK" && (head[2] == 3 || head[2] == 5 || head[2] == 7) {
+        return Kind::Ipsw;
+    }
+    if meta.len() == NOR_LEN {
+        return Kind::Rom;
+    }
+    // A drive is at least a partition table, and the smallest thing worth calling one is far more
+    // than a sector. Below that there is nothing to say but "this is not any of them", and saying
+    // it about a 12-byte file is more useful than handing it to the disk parser.
+    if meta.len() >= 1024 * 1024 {
+        return Kind::Disk;
+    }
+    Kind::Unknown
+}
+
 // ---------------------------------------------------------------- the NOR dump
 
 /// Parse a NOR flash dump and say what it is.
@@ -417,6 +695,197 @@ pub fn report(flash_path: &Path, disk_path: &Path) -> i32 {
         0
     } else {
         1
+    }
+}
+
+#[cfg(test)]
+mod naming_tests {
+    use super::*;
+
+    /// A built drive is named for the software in it, and two different bundles cannot collide.
+    ///
+    /// **The bug this closes:** every build landed on one path, `ipod-from-ipsw.img`. Building
+    /// from a second bundle overwrote the first in place — no prompt, no rename, and the path an
+    /// iPod had been booting from now held a different iPod's software under a name that still
+    /// looked right. The version makes the folder readable; the CRC makes the collision impossible.
+    #[test]
+    fn a_built_drive_is_named_for_what_is_in_it() {
+        let a = built_drive_name("20.6.3", 0xdead_beef);
+        assert_eq!(a, "ipod-20.6.3-deadbeef.img");
+
+        // Same bundle, same name — so a rebuild resolves to the file that already exists instead
+        // of spending eight gigabytes proving it is identical.
+        assert_eq!(a, built_drive_name("20.6.3", 0xdead_beef));
+        // Different contents at the same version, and different versions, both get their own file.
+        assert_ne!(a, built_drive_name("20.6.3", 0x0000_0001));
+        assert_ne!(a, built_drive_name("24.1.1", 0xdead_beef));
+        // Padded, so the names sort and read as a fixed shape rather than a ragged one.
+        assert_eq!(built_drive_name("20.6.3", 1), "ipod-20.6.3-00000001.img");
+    }
+
+    /// The name survives the round trip, and nothing else is mistaken for one.
+    #[test]
+    fn a_drive_describes_itself_only_when_we_named_it() {
+        let p = std::path::PathBuf::from("/x/y").join(built_drive_name("20.6.3", 0xabcd_1234));
+        assert_eq!(describe_drive(&p).as_deref(), Some("iPod software 20.6.3"));
+
+        // A drive the user brought has no description here, and must not be given a wrong one:
+        // the firmware version lives inside the partition and this function does not read it.
+        for other in [
+            "/x/my-ipod-backup.img",
+            "/x/ipod.img",
+            "/x/ipod-.img",              // no version
+            "/x/ipod-20.6.3.img",        // no fingerprint
+            "/x/ipod-20.6.3-zzzzzzzz.img", // not hex
+            "/x/ipod-20.6.3-abcd.img",   // too short to be one
+        ] {
+            assert_eq!(
+                describe_drive(std::path::Path::new(other)),
+                None,
+                "{other} must fall back to its filename"
+            );
+        }
+    }
+
+    /// A mismatched pair is caught, a matching one is silent, and an unknown one is silent too.
+    ///
+    /// The third is the design decision: a drive somebody supplied has no family this can read, and
+    /// a warning that fired on every such drive would be noise that teaches people to ignore the
+    /// one that matters.
+    #[test]
+    fn a_pair_from_two_different_ipods_is_named_before_the_boot() {
+        assert_eq!(family_mismatch("iPod Video", 20, Some(20)), None, "the matching pair");
+        assert_eq!(family_mismatch("iPod Video", 20, None), None, "not knowing is not objecting");
+
+        let m = family_mismatch("iPod Video", 20, Some(24)).expect("24 against 20 is a mismatch");
+        assert!(m.contains("24") && m.contains("20"), "both numbers, so it can be acted on: {m}");
+        // The article trap: "a iPod Video" shipped once. There is no article at all now, because
+        // the fix for one model is not the fix for the next one.
+        assert!(!m.contains(" a iPod"), "grammar: {m}");
+        assert!(!m.contains(" an iPod"), "no article, rather than the right article: {m}");
+    }
+
+    /// A ROM is described by the device it came off, not by the name it was uploaded under.
+    ///
+    /// The fixture is a `SysCfg` block built to the layout `syscfg` parses, because the point of
+    /// the description is that it reads bytes rather than a filename — and a test that fed it a
+    /// filename would be testing nothing.
+    #[test]
+    fn a_rom_is_described_by_the_ipod_it_came_off() {
+        let dir = std::env::temp_dir().join(format!("ipod-describe-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+
+        // No SysCfg at all: nothing honest to say, so nothing is said.
+        let blank = dir.join("blank.bin");
+        std::fs::write(&blank, vec![0u8; NOR_LEN as usize]).unwrap();
+        assert_eq!(describe_rom(&blank, "iPod Video"), None);
+
+        // A dump carrying a serial is named by its tail — the leading characters are the factory
+        // and the model and are identical across every iPod of a kind.
+        let mut nor = vec![0u8; NOR_LEN as usize];
+        write_syscfg(&mut nor, Some("7Q7411K2VQK"), None);
+        let with_serial = dir.join("serial.bin");
+        std::fs::write(&with_serial, &nor).unwrap();
+        assert_eq!(
+            describe_rom(&with_serial, "iPod Video").as_deref(),
+            Some("iPod Video · K2VQK"),
+            "the distinguishing part of a serial is its tail"
+        );
+
+        // Wrong length is not a ROM, whatever is inside it.
+        let short = dir.join("short.bin");
+        std::fs::write(&short, vec![0u8; 4096]).unwrap();
+        assert_eq!(describe_rom(&short, "iPod Video"), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Write a `SysCfg` block into a NOR image, in the layout [`syscfg`] reads.
+    fn write_syscfg(nor: &mut [u8], serial: Option<&str>, guid: Option<u64>) {
+        let block = &mut nor[SYSCFG_AT as usize..];
+        block[..4].copy_from_slice(SYSCFG_MAGIC);
+        let mut count = 0u32;
+        let mut at = SYSCFG_HEADER;
+        if let Some(s) = serial {
+            // The tag is a little-endian u32 of four characters, so it goes in backwards.
+            block[at..at + 4].copy_from_slice(b"mNrS");
+            let bytes = s.as_bytes();
+            block[at + 4..at + 4 + bytes.len()].copy_from_slice(bytes);
+            at += SYSCFG_RECORD;
+            count += 1;
+        }
+        if let Some(g) = guid {
+            block[at..at + 4].copy_from_slice(b"dIwF");
+            block[at + 8..at + 12].copy_from_slice(&((g & 0xffff_ffff) as u32).to_le_bytes());
+            block[at + 12..at + 16].copy_from_slice(&((g >> 32) as u32).to_le_bytes());
+            count += 1;
+        }
+        block[0x14..0x18].copy_from_slice(&count.to_le_bytes());
+    }
+}
+
+#[cfg(test)]
+mod classify_tests {
+    use super::*;
+
+    /// A file of `n` bytes beginning with `head`, in a directory this test owns.
+    fn file(dir: &Path, name: &str, head: &[u8], n: usize) -> std::path::PathBuf {
+        let p = dir.join(name);
+        let mut body = vec![0u8; n];
+        body[..head.len()].copy_from_slice(head);
+        std::fs::write(&p, &body).unwrap();
+        p
+    }
+
+    /// **The first four bytes of each real file**, read off this project's own resources.
+    ///
+    /// The same rule the magic test below follows, for the same reason: the whole value of routing
+    /// a dropped file by content is that the content is what it says it is, and a fixture invented
+    /// by the author of the router proves only that the author is self-consistent.
+    ///
+    /// ```text
+    ///   iPod_20.1.3.zip                    50 4b 03 04    "PK\x03\x04"
+    ///   internal_rom_000000-0FFFFF.bin     fe 1f 00 ea    0xea001ffe, the ARM branch
+    ///   ipod8g-retail.img                  00 00 00 00    an MBR begins with a jump it does not need
+    /// ```
+    ///
+    /// The drive's opening word is the one worth noticing: it is **nothing at all**, which is why
+    /// the drive cannot be recognised from its head and is instead what a file is when it is not
+    /// one of the other two.
+    #[test]
+    fn each_file_is_recognised_by_what_it_actually_starts_with() {
+        let dir = std::env::temp_dir().join(format!("ipod-classify-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+
+        let rom = file(&dir, "rom.bin", &[0xfe, 0x1f, 0x00, 0xea], NOR_LEN as usize);
+        let ipsw = file(&dir, "sw.ipsw", b"PK\x03\x04", 4096);
+        let drive = file(&dir, "d.img", &[0, 0, 0, 0], 4 * 1024 * 1024);
+
+        assert_eq!(classify(&rom), Kind::Rom, "exactly 1 MiB is the boot ROM");
+        assert_eq!(classify(&ipsw), Kind::Ipsw, "a zip is Apple's bundle");
+        assert_eq!(classify(&drive), Kind::Disk, "anything else large enough is a drive");
+
+        // The extension is not consulted, and must not be: these files are handed around under
+        // every name imaginable, and `internal_rom_000000-0FFFFF.bin` is a convention rather than
+        // a rule. A drive named `.bin` is still a drive.
+        let lying = file(&dir, "definitely-a-rom.bin", b"PK\x03\x04", 4096);
+        assert_eq!(classify(&lying), Kind::Ipsw, "contents win over the name");
+
+        // A 1 MiB zip is a zip. Order matters, and this is the pair that proves which way.
+        let zip_1mib = file(&dir, "big.ipsw", b"PK\x03\x04", NOR_LEN as usize);
+        assert_eq!(classify(&zip_1mib), Kind::Ipsw, "the zip test runs before the length test");
+
+        // Too small to be any of them, which the screen says with its size rather than by handing
+        // it to a parser and reporting whatever that parser makes of twelve bytes.
+        let tiny = file(&dir, "note.txt", b"hello", 12);
+        assert_eq!(classify(&tiny), Kind::Unknown);
+
+        // Neither a directory nor an absent path is a file, and neither may panic: both are things
+        // a drag-and-drop can deliver.
+        assert_eq!(classify(&dir), Kind::Unknown, "a dropped folder");
+        assert_eq!(classify(&dir.join("nothing-here")), Kind::Unknown);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
