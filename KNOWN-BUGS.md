@@ -344,6 +344,24 @@ is why its absence was never noticed.
 **How you would know it is fixed:** `rockbox.sh` with no arguments either boots a volume Rockbox is
 installed on, or says out loud that the one it was handed has no `.rockbox`. Today it does neither.
 
+## The gif encode invents pixels the panel never showed — 2026-08-18
+
+Not an emulator defect; an asset-pipeline one, recorded here because it was read as an emulator
+defect and cost a measurement to clear.
+
+`docs/media/ipod-15-rockbox-wheel.gif` carries yellow ticks at a 24 px period that **do not exist in
+any frame the machine produced**. The gif stores a keyframe plus three difference bands, each with a
+transparent index and disposal 1 — ffmpeg's `-gifflags +transdiff`, on by default. On row 23 the
+stored difference frame writes only `#000000` and leaves 26 pixels transparent, and the keyframe
+under every one of them is the selection bar's yellow. So the ticks are the keyframe showing through
+holes the encoder punched. The raw frames read one run of 320 px on that row at every cadence tried,
+including frames caught mid-redraw, and the gif's own keyframe is byte-identical to ours — 0 of
+76 800 pixels differ — so the encode's input was clean.
+
+**How you would know it is fixed:** every frame in a shipped gif reports `transparent no`.
+`-gifflags -transdiff` does that, measured. `tools/ipod-film/post-assets.sh`'s `publish()` does not
+set it.
+
 ---
 
 ## Not bugs, though they look like ones

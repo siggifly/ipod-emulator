@@ -820,3 +820,84 @@ DISK=/tmp/rb.img tools/ipod-boot/rockbox.sh --disk-writable      # + --bcm-film 
 pixel-identical to the frame the machine produced — 0 of 76 800 — because what has to be checked is
 what ships, not what was on disk before ffmpeg touched it.
 
+## 2026-08-18: the yellow dashes are the gif encoder, and the raw frames say so
+
+`docs/media/ipod-15-rockbox-wheel.gif` shows yellow tick marks at a 24 px period along the rows of
+the selection bar. Two explanations were open, and the still could not separate them, because a
+still is a settled screen and the dashes are on frames captured mid-scroll: either ffmpeg's
+partial-frame differencing in the gif encode, or our own `lcd_update_rect` going wrong during a
+redraw.
+
+**It is the encoder, and it is not a judgement call — the gif convicts itself.**
+
+### The raw frames are solid, including the ones caught mid-redraw
+
+The panel was filmed under wheel input at a 200 k cadence, then again at **5 000** instructions per
+sample across a single redraw. That is fine enough that the film's dedup keeps transient pictures,
+held for one or two samples where a settled screen is held for thousands — `frame-00001` is up for
+5 000 instructions and `frame-00004` for 10 000. Those are redraws in flight; one of them has row 21
+drawn from x=56 rightwards and no further, which is what a partial update looks like when you catch
+one.
+
+Row 23, on every raw frame that carries the bar:
+
+```
+frame-00000  row 23:  1 yellow run, 320 px   0..319(320)
+frame-00001  row 23:  1 yellow run, 320 px   0..319(320)      <- mid-redraw
+frame-00006  row 23:  1 yellow run, 320 px   0..319(320)      <- mid-redraw
+frame-00007  row 23:  1 yellow run, 320 px   0..319(320)      <- mid-redraw
+```
+
+Never dashed, at either cadence, settled or in flight. Two controls sit beside that, because an
+instrument which has only ever answered "one run of 320" has not been shown able to answer anything
+else: rows 20–22 of the same frames report **7–8 runs totalling ~305 px** — the black label glyphs
+punched through the yellow bar, which is correct rendering and a genuinely interrupted run — and
+frames where the selection has moved away report **0 runs, 0 px**. The measure can say solid, can
+say broken, and can say absent.
+
+### The gif was made from these exact frames
+
+The gif's keyframe differs from the emulator's raw frame in **0 pixels of 76 800**. So the input to
+the encode was clean, and anything the gif shows that the frame does not is the encode's.
+
+### What the gif actually stores
+
+```
+logical screen 320x240, global palette 32 entries
+frame 0  rect 0,0   320x240  disposal 1  transparent no
+frame 1  rect 0,16  320x24   disposal 1  transparent yes idx 0
+frame 2  rect 0,32  320x24   disposal 1  transparent yes idx 0
+frame 3  rect 0,48  320x32   disposal 1  transparent yes idx 0
+```
+
+A keyframe and three difference bands, each with a transparent index and disposal 1 — *leave what is
+underneath*. That is ffmpeg's `-gifflags +transdiff`, which is on by default.
+
+Decoded, stored frame 1 writes exactly one colour on row 23 — `#000000` — and leaves **26 pixels
+transparent**:
+
+```
+transparent pixels on row 23: 22 23  46 47  70 71  94 95  118 119  142 143  166 167
+                              190 191  214 215  238 239  262 263  286 287  310 311
+spacing:                      24
+the keyframe's colour under every one of them: (189,154,16)     <- the bar's yellow
+```
+
+So the composited frame reads **13 yellow runs totalling 26 px** where the raw frame reads one run
+of 320, and every one of those 26 pixels is the keyframe showing through a hole the encoder punched.
+The emulator drew the row black. The gif kept it yellow, at a 24 px comb.
+
+### What was not settled, and it is worth naming
+
+**Which ffmpeg invocation produced it.** Six were run against the same proven-solid frames —
+default, no palette filter, `max_colors=32`, `dither=bayer` at 32 and at 256 colours, and
+`diff_mode=rectangle` — and every one writes a 256-entry palette and a clean row 23. The shipped
+file has a **32-entry** palette, which none of them produce, so the command line is not recoverable
+from the artifact. That is a gap in the account of *how*, not in the account of *who*: the input
+frames are byte-identical to ours and the artifact is made of transparency the input does not have.
+
+**The remedy is verified rather than assumed.** `-gifflags -transdiff` turns `transparent yes` into
+`transparent no` on every frame — measured across that sweep, not read off a manual — and an
+artifact made of transparency cannot survive a file that has none.
+`tools/ipod-film/post-assets.sh`'s `publish()` does not set it. Its own films happen not to show
+this because they are 256-colour with `dither=none`, which is a mitigation and not a defence.
