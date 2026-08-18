@@ -7350,12 +7350,27 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
     // characters, most-significant byte first, PP_VER2 then PP_VER1**. So the string here is
     // `PP5022C-`, and the value is derived from a second implementation rather than invented.
     //
-    // **Why `'2'` and not `'1'`, when the drive says otherwise.** The reference drive's own
-    // `iPod_Control/Device/SysInfo` reads `BoardHwName: PP5021C-2`, which points at a 5G. Apple's
-    // bootloader disagrees with the file, and the bootloader is the authority: on a real cold boot,
-    // with no `--sysinfo` involved, it leaves its `IsyS` handoff block at **`0x4001ff18`** — the
-    // **PP5022** site — while `0x40017f18`, where a PP5020/5021 keeps it, is all zeros. Hardware
-    // that stores its sysinfo where a PP5022 stores it is a PP5022.
+    // **Why `'2'` is NOT yet established, and the argument that seemed to establish it was
+    // circular.** It ran: Apple's bootloader leaves its `IsyS` block at `0x4001ff18`, which
+    // `ipodloader2` calls the PP5022 site, so we are a PP5022. That is worthless as evidence,
+    // because the bootloader puts the block at the **top of whatever IRAM exists**, and the two
+    // sites differ by exactly `0x8000` — the top of 96 KB against the top of 128 KB. **We model
+    // IRAM as `0x20000`**, so the placement is a consequence of our own choice and could not have
+    // come out any other way.
+    //
+    // What the actual sources say, and they do not agree:
+    //
+    // | source | says |
+    // |---|---|
+    // | our NOR | `HwVr 0x000b0005`, `Mod# MA146` — the 30 GB **5G** |
+    // | the reference drive's `SysInfo` | `BoardHwName: PP5021C-2`, `boardHwRev 0x00050000` — **5G** |
+    // | Rockbox `config/ipodvideo.h` | `CONFIG_CPU PP5022` — but one target covers 5G *and* 5.5G, so it is a generalisation |
+    // | our own `iram` region | `0x20000` = 128 KB, which is the **PP5022** size |
+    //
+    // So two statements about the real hardware say 5G/PP5021C, and the one thing that looked like
+    // corroboration was our own modelling. **The open question is whether our 128 KB IRAM is right
+    // for this unit at all** — if it is a 5G with 96 KB, that is a model defect with far wider reach
+    // than one register, and it would also move where every handoff structure lands.
     //
     // `ipodloader2` is the first code here that ever asked: `ipodhw.c:27` tests bits 23:16 of
     // PP_VER1, which is character 5 of that string — the digit separating PP502*2* from PP502*0*.
