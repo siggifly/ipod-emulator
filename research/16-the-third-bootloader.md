@@ -96,18 +96,75 @@ reads `0x70000000` 23 times in a cold boot and RetailOS once, and neither of the
 16 says — they already know what chip they are. `ipodloader2` is the first code here that has to
 *ask*, and it is the first code that could be wrong about the answer.
 
-**What it does not yet tell us is the right value.** Rockbox names the register (`PP_VER1`,
-`pp5020.h:374`) and never decodes it, so nothing we hold sources the actual bytes a PP5022 returns.
-The forced value satisfies the loader's test and is otherwise invented. **Do not promote it to a
-model on the strength of this file** — the honest options are a datasheet, a second implementation
-that decodes rather than names it, or a reading off real hardware.
+### The right value, derived from a second implementation
+
+**Rockbox does decode it**, in `firmware/target/arm/pp/debug-pp.c:224`, and that is the source the
+earlier draft of this file said we did not have:
+
+```c
+char pp_version[] = { (PP_VER2 >> 24) & 0xff, (PP_VER2 >> 16) & 0xff,
+                      (PP_VER2 >>  8) & 0xff, (PP_VER2)       & 0xff,
+                      (PP_VER1 >> 24) & 0xff, (PP_VER1 >> 16) & 0xff,
+                      (PP_VER1 >>  8) & 0xff, (PP_VER1)       & 0xff, '\0' };
+```
+
+So the two registers are an **eight-character ASCII string**, most-significant byte first, `PP_VER2`
+then `PP_VER1`. Line that up against `ipodloader2`'s test — `(inl(0x70000000) << 8) >> 24`, which is
+bits 23:16 of `PP_VER1`:
+
+```
+ "P  P  5  0  2  2  C  -"
+  0  1  2  3  4  5  6  7
+              ^ index 5 = (PP_VER1 >> 16) & 0xff
+```
+
+**The test is not arbitrary: index 5 is the digit that separates PP502*2* from PP502*0*.** That
+makes the loader's one-line check a sensible thing to write, and it makes the value derivable rather
+than invented:
+
+| | |
+|---|---|
+| `PP_VER2` (`0x70000004`) | `0x50503530` — `'P','P','5','0'` |
+| `PP_VER1` (`0x70000000`) | `0x3232432D` — `'2','2','C','-'` |
+
+### The wrinkle, and why this is still not a model
+
+**Our reference hardware may not be a PP5022 at all.** The real drive's own
+`iPod_Control/Device/SysInfo` says:
+
+```
+BoardHwName: PP5021C-2
+boardHwRev:  0x00050000
+ModelNumStr: xMA146
+```
+
+`PP5021C`, and a board revision of 5 — which is the **5G**, not the 5.5G, and `MA146` is the 30 GB
+5G. If that is what this machine is, then character 5 is `'1'`, `ipod_is_pp5022()` correctly returns
+false, and **`ipodloader2` taking the PP5002 path is the loader's own bug on a 5G rather than our
+model's**. Choosing `'2'` to make the loader happy would then be inventing a different iPod.
+
+**So the open question is not "what value" but "which chip are we".** It is answerable — the NOR's
+`SCfg`, the `sysinfo_t` Apple's bootloader leaves at `0x4001ff1c`, and this `SysInfo` file are three
+independent statements of identity, and they should agree. Until they are compared, nothing goes in
+the model.
 
 ## Where it stops now
 
-With the chip id forced, the loader gets past detection and then does **nothing visible**: 400 M
-instructions, `ata commands: 0`, no console output, a blank panel, 8 unmapped reads at
-`0xc5000140`. So it is stalled before it ever reaches the drive — a different and much smaller
-question than the one above, and the next one to work.
+**Nowhere useful, and the honest statement is that we do not know.** With the chip id forced,
+`ata commands: 0` and the panel is blank — but that is Apple's bootloader hanging, per the
+retraction above, so it says nothing about `ipodloader2`. Without the chip id forced, the loader
+runs and addresses a 1G iPod. **There is no run yet in which Apple's bootloader completes AND the
+loader detects the right chip**, so the loader's own behaviour past detection has never been
+observed.
+
+Everything needed to observe it is now in place except one number:
+
+| | |
+|---|---|
+| the loader | builds, wraps, installs, and is entered by Apple's bootloader |
+| the kernel | **found and sourced** — ZeroSlackr `boot/vmlinux`, 1 531 200 bytes, sha256 `9c7b66e2…` |
+| the drive | built: loader in the firmware partition, `/boot/vmlinux` across 374 clusters, `loader.cfg` at the root |
+| the blocker | the **real** `PP_VER1`, which must satisfy Apple's bootloader and `ipodloader2` at once |
 
 **Settled when** the loader draws its own menu. That is [ROADMAP](../ROADMAP.md) M4's first
 checkpoint, and it proves the whole chain except the kernel.
