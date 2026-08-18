@@ -356,9 +356,14 @@ pub struct Stats {
     pub touched: bool,
     pub position: u8,
     pub buttons: u8,
-    /// The `0x052a` gate. Autonomous frames are refused while this is false, and after a restore it
-    /// starts false because the click wheel is not part of a snapshot — see the module note.
+    /// The `0x052a` gate. **On at reset** — the part streams unless told not to, which is what
+    /// lets a driver that never sends the command (Rockbox) receive anything at all. Autonomous
+    /// frames also need the receiver armed; both conditions live in `eapp-loader`.
     pub reporting: bool,
+    /// Whether the firmware has *sent* `0x052a` at all — a different question from whether the
+    /// stream is on, and the one that means "this machine has finished starting and wants input".
+    /// After a restore it starts false, because the click wheel is not part of a snapshot.
+    pub asked_for_frames: bool,
     pub frames_posted: u64,
     pub frames_dropped: u64,
     pub frames_suppressed: u64,
@@ -862,6 +867,7 @@ fn collect(m: &Machine, started: Instant, base: (u64, u32)) -> Stats {
         s.position = w.position;
         s.buttons = w.buttons;
         s.reporting = w.reporting;
+        s.asked_for_frames = w.set_commands > 0;
         s.frames_posted = w.frames_posted;
         s.frames_dropped = w.frames_dropped;
         s.frames_suppressed = w.frames_suppressed;
@@ -1338,15 +1344,19 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         // nobody could observe. Reported from use, which is the only way this kind of thing is ever
         // found: *"the language screen was long there before it finished."*
         //
-        // `reporting` is the wheel's own gate — RetailOS writing `0x8001052a` to say it wants wheel
-        // frames. A machine asking for input is a machine that has finished starting, and it is an
-        // observation rather than an assumption.
+        // RetailOS writing `0x8001052a` to say it wants wheel frames. A machine asking for input is
+        // a machine that has finished starting, and it is an observation rather than an assumption.
+        //
+        // The *sending* of the command, not the resulting flag: autonomous reporting is on at
+        // reset (the part streams unless told not to, which is how Rockbox gets input without ever
+        // sending this), so the flag is true from the first instruction and would end the boot
+        // phase immediately.
         //
         // `snap_at` stays as a fallback for the case the signal never comes: a boot that fails
         // before the UI should not leave the window claiming to be booting for ever, and the old
         // behaviour is the honest thing to fall back *to*.
         if out.phase == (Phase::Booting { target: cfg.snap_at })
-            && (stats.reporting || executed >= cfg.snap_at)
+            && (stats.asked_for_frames || executed >= cfg.snap_at)
         {
             out.phase = Phase::Running;
         }
@@ -1466,7 +1476,9 @@ impl SelfTest {
     /// Returns true when the test is finished and the run should stop.
     fn tick(&mut self, m: &Machine, link: &Arc<Link>, started: Instant, control: bool) -> bool {
         let now = m.executed as u64;
-        let reporting = m.mem.clickwheel.as_ref().is_some_and(|w| w.reporting);
+        // Whether RetailOS has ASKED, not whether the stream is on: reporting is on at reset now,
+        // so the flag no longer marks the moment the firmware is ready for input.
+        let reporting = m.mem.clickwheel.as_ref().is_some_and(|w| w.set_commands > 0);
         match self.stage {
             0 => {
                 // Wait for the firmware to open the gate itself.

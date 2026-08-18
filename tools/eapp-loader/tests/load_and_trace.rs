@@ -290,6 +290,12 @@ fn enable_reporting(m: &mut Machine) {
     m.mem.write32(0x7000_c104, 0x0c00_0000);
     m.mem.write32(0x7000_c120, 0x8001_052a);
     m.mem.write32(0x7000_c100, 0x8000_0000);
+    // ...and the re-arm, which this helper used to stop short of. `0x00283fa0` acknowledges with
+    // `0x0c000000` to STATUS and then ORs `0x60000000` into CTRL — the receiver has to be armed or
+    // there is nowhere for a frame to land. It was omissible only while the model gated the stream
+    // on `0x052a` alone; now that the gate is the pair (reporting AND armed), which is what the
+    // interrupt below was always gated on, the helper has to be the whole sequence.
+    m.mem.write32(0x7000_c100, 0x6000_0000);
     assert!(m.mem.clickwheel.as_ref().unwrap().reporting, "the enable did not take");
 }
 
@@ -524,9 +530,16 @@ fn a_scripted_rotation_posts_one_frame_per_click_and_wraps_at_96() {
 /// `0x002813e4`, Rockbox `outl(inl(0x7000c104) | 0x0c000000, 0x7000c104)`. Modelled as ordinary
 /// storage that write puts the flag back up, and the handler re-enters forever.
 ///
-/// The arm gate carries the control: the same posted frame must raise nothing before
-/// `0x7000c100` bit 30 is written and the line must appear the moment it is, so "no interrupt" is
-/// attributable to the gate rather than to a model that never raises one.
+/// The arm gate carries the control: with the receiver disarmed the same script step must produce
+/// **nothing at all**, and both the flag and the line must appear once it is armed — so "no
+/// interrupt" is attributable to the gate rather than to a model that never raises one.
+///
+/// That control changed shape on 2026-08-18 and the reason is worth stating. It used to post the
+/// frame while unarmed and withhold only the interrupt. But "armed" is the receiver being ready to
+/// accept a frame; an unarmed one has nowhere for the frame to land, so the delivery does not
+/// happen and there is nothing to raise later. The gate now sits on the post as well as on the
+/// line, which is also what makes Rockbox work: it arms with `0xc00a1f00` and never sends the
+/// `0x052a` this model used to demand.
 #[test]
 fn receive_ready_is_write_one_to_clear_and_the_line_follows_it() {
     use arm7tdmi::Bus as _;
@@ -535,15 +548,26 @@ fn receive_ready_is_write_one_to_clear_and_the_line_follows_it() {
     enable_reporting(&mut m);
     let line = 1u32 << OPTO_IRQ_HI;
 
+    // Disarm, and confirm a frame is not delivered at all.
+    m.mem.write32(0x7000_c100, 0x0000_0000);
     m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@0:touch", 10).expect("script");
     m.mem.icount = 0;
     m.service_interrupts();
-    assert_ne!(m.mem.read32(0x7000_c104) & 0x0400_0000, 0, "the frame did not set receive-ready");
+    assert_eq!(
+        m.mem.read32(0x7000_c104) & 0x0400_0000,
+        0,
+        "an unarmed receiver accepted a frame"
+    );
     assert_eq!(m.mem.int_pending_hi & line, 0, "an unarmed receiver must not interrupt");
+    assert_eq!(m.mem.clickwheel.as_ref().unwrap().frames_posted, 0);
 
-    // 0x002813f0 / Rockbox's ISR tail: arm the receiver.
+    // 0x002813f0 / Rockbox's ISR tail: arm the receiver, then let the next step through.
     m.mem.write32(0x7000_c100, 0x6000_0000);
+    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@1:touch", 10).expect("script");
+    m.mem.clickwheel.as_mut().unwrap().next = 0;
+    m.mem.icount = 1;
     m.service_interrupts();
+    assert_ne!(m.mem.read32(0x7000_c104) & 0x0400_0000, 0, "the frame did not set receive-ready");
     assert_eq!(m.mem.int_pending_hi & line, line, "arming did not raise the pending frame's line");
     assert_eq!(m.mem.clickwheel.as_ref().unwrap().irqs, 1);
 
@@ -1164,7 +1188,7 @@ fn sleeping_machine() -> Machine {
 /// the broken format too. See research/20 Addendum 31.
 #[test]
 fn a_snapshot_round_trips_the_simulated_clock() {
-    let mut m = sleeping_machine();
+    let m = sleeping_machine();
     let (executed, usec, slept) = (m.executed, m.mem.usec, m.mem.slept_usec);
 
     // The fixture must be unsaturated in both directions, or what follows is vacuous.
@@ -1198,7 +1222,7 @@ fn a_snapshot_round_trips_the_simulated_clock() {
 /// Without this, "the clock round-trips" is a claim about an instrument nobody has shown can fail.
 #[test]
 fn dropping_the_sleep_accumulator_moves_the_clock_backwards() {
-    let mut m = sleeping_machine();
+    let m = sleeping_machine();
     let (usec, slept) = (m.mem.usec, m.mem.slept_usec);
     let img = m.snapshot();
 
@@ -1337,7 +1361,7 @@ fn the_dimmer_counts_short_pulses_up_and_long_pulses_down() {
 
     // One short pulse: low at t, high 10 us later.
     let mut t = 1_000u32;
-    let mut pulse = |b: &mut Backlight, low_for: u32, t: &mut u32| {
+    let pulse = |b: &mut Backlight, low_for: u32, t: &mut u32| {
         b.port_written(0, *t);
         *t += low_for;
         b.port_written(BACKLIGHT_PIN, *t);

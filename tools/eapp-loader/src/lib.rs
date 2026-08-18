@@ -4162,7 +4162,20 @@ pub struct ClickWheel {
     /// The distinct unknown command words, capped. `unknown_commands` is the uncapped count of
     /// occurrences; this is the set, and it can be truncated — so the report says when it was.
     pub unknown: Capped<u32>,
-    /// Autonomous reporting, as the firmware last set it with opcode `0x052a` — see
+    /// Autonomous reporting, as the firmware last set it with opcode `0x052a`.
+    ///
+    /// **On at reset**, corrected 2026-08-18. It defaulted to off, so a driver that never sent
+    /// `0x052a` was handed silence for ever — and Rockbox is exactly that driver. Its
+    /// `opto_i2c_init` writes `0xc00a1f00` to `CTRL` and nothing else (`button-clickwheel.c:97`;
+    /// the extra `0x7000c104` poke beside it is `#if IPOD_4G || IPOD_COLOR` and does not compile
+    /// for the Video), then its ISR expects the same `0x1a`-tagged autonomous frames RetailOS
+    /// does. It works on hardware, so the part cannot require the command in order to stream.
+    /// Measured before the correction: Rockbox reached its menu with **0 frames posted and 0 reads
+    /// of `CLICKWHEEL_DATA`**.
+    ///
+    /// The command is still real and still does what the old model said it did — `0x000b2ce0`
+    /// picks between `0x8001052a` and `0x8000052a`, so RetailOS can turn the stream *off* — it
+    /// simply is not what turns it on. See
     /// [`ClickWheel::transmit`]. **Starts off**, because a wheel nobody has spoken to has not been
     /// told to report, and because that is the one thing about this command that is falsifiable:
     /// events injected before the firmware's own enable are suppressed instead of being silently
@@ -4304,7 +4317,7 @@ impl ClickWheel {
             commands: 0,
             unknown_commands: 0,
             unknown: Capped::new(16),
-            reporting: false,
+            reporting: true,
             set_commands: 0,
             last_set: None,
             frames_suppressed: 0,
@@ -4792,13 +4805,29 @@ impl Memory {
                 hold_moved = Some(on);
             }
             // The physical state moves whether or not anybody is listening — a finger on a wheel
-            // that has not been armed is still a finger on a wheel — but the *report* is gated on
-            // the firmware having sent `0x052a` with a non-zero payload. That is what the setter
-            // means, and it is the one falsifiable consequence of reading it: an event injected
-            // before RetailOS's own opto init is refused by the device rather than posted into a
-            // driver that is not listening. Hold still reaches GPIOA below; it is a switch, not a
+            // that has not been armed is still a finger on a wheel — but the *report* needs a
+            // receiver armed to land in, which is `CTRL` bit 30 and is exactly what the interrupt
+            // below is gated on too. Hold still reaches GPIOA regardless; it is a switch, not a
             // report.
-            if !w.reporting {
+            //
+            // **Two conditions, and the second used to be the only one.** The gate was "the
+            // firmware sent `0x052a` with a non-zero payload", with reporting off at reset — which
+            // was Apple's protocol mistaken for the part's. Rockbox
+            // never sends `0x052a`. Its `opto_i2c_init` writes `0xc00a1f00` to `CTRL` and nothing
+            // else (`button-clickwheel.c:97-107`; the extra `0x7000c104` poke beside it is
+            // `#if IPOD_4G || IPOD_COLOR` and does not compile for the Video), and its ISR then
+            // expects the same autonomous frames tagged `0x1a` that RetailOS does. It works on
+            // hardware. So the PSoC cannot require `0x052a` to stream, and a model that did was
+            // one that only Apple's driver could ever satisfy — the same shape as the ADC's
+            // transfer countdown and the USB clock-ready bit. Measured before the change: Rockbox
+            // ran to its menu with **0 frames posted and 0 reads of `CLICKWHEEL_DATA`**.
+            //
+            // `reporting` survives as a real gate — RetailOS can switch the stream off — but it
+            // is **on at reset**, so it no longer has to be switched on. What the window uses to
+            // end its cold-boot phase is the separate observation that RetailOS *sent* the
+            // command at all (`set_commands`), which is the thing that actually says "this machine
+            // has finished starting and wants input".
+            if !w.reporting || w.ctrl & ClickWheel::ARM == 0 {
                 w.frames_suppressed += 1;
                 continue;
             }
