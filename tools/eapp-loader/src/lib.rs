@@ -22,6 +22,7 @@ pub mod fat;
 pub mod film;
 pub mod png;
 pub mod ghidra;
+pub mod identity;
 pub mod rsrc;
 
 /// Building a drive image from an IPSW, so nobody has to be handed 8 GB of somebody else's iPod.
