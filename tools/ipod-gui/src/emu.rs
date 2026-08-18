@@ -106,6 +106,17 @@ pub struct Config {
     pub snapshot: Option<PathBuf>,
     /// Instruction count the snapshot is taken at.
     pub snap_at: u64,
+    /// Keep the user's drive image pristine by running on a copy of it.
+    ///
+    /// **Off by default: the emulator runs on the image it is given, and the iPod writes to it.**
+    /// That is what the hardware does — settings, the language you picked, RetailOS's own
+    /// bookkeeping — and it is why a real iPod remembers things. The copy existed to protect an
+    /// image that took twelve iTunes sync rounds to build from an emulator bug writing to the wrong
+    /// sector, which has happened here before; it is kept as an option for exactly that, and it
+    /// costs 8 GB on any filesystem without reflinks, which is most of Linux and all of NTFS.
+    ///
+    /// It also decides what the snapshot pairs with — see [`Config::pair_is_whole`].
+    pub work_on_copy: bool,
     /// Ignore any existing snapshot and boot from the reset vector.
     pub cold: bool,
     pub click_gap: u64,
@@ -377,6 +388,18 @@ pub struct Link {
     /// drive beside it), so re-taking it has to write both, which is why this is a request to the
     /// run loop rather than something the socket thread can do itself.
     pub resnap: AtomicBool,
+    /// Park the machine on the way out: write the restore point before honouring `quit`.
+    ///
+    /// **This is what makes working directly on the drive worth doing.** A restore point taken at
+    /// `--snap-at` pairs with a drive the machine then goes on writing to, so it is stale before
+    /// anything can use it; the only instant at which RAM and the user's own drive provably agree
+    /// is the one after which nothing runs. Set by the window as it closes, and by nothing else —
+    /// `--headless`, `--selftest` and `--probe` all end through `quit` too, and none of them should
+    /// leave a restore point behind.
+    pub save_on_quit: AtomicBool,
+    /// Set while the restore point is being written, so the window can say what it is waiting for
+    /// rather than appearing to hang for the second or two a 1.6 GB write takes.
+    pub saving: AtomicBool,
     /// Addresses the control socket has asked about, and what they held when the run loop next
     /// looked.
     ///
@@ -421,6 +444,8 @@ impl Link {
             }),
             quit: AtomicBool::new(false),
             resnap: AtomicBool::new(false),
+            save_on_quit: AtomicBool::new(false),
+            saving: AtomicBool::new(false),
         })
     }
 
@@ -478,17 +503,109 @@ impl Config {
     /// Whether this launch may restore — asked in exactly one place because two places would
     /// eventually disagree, and disagreeing is the bug.
     ///
-    /// A snapshot **and** the drive it was taken against must both be present. Either alone is an
-    /// incomplete pair, and using half of one is what produced the intermittent "connect to
-    /// computer" screen; see [`Config::frozen`]. A snapshot written before the frozen drive existed
-    /// is therefore ignored once, cold-booted past, and replaced by a complete set.
+    /// A snapshot **and** the drive it was taken against must both be present and must still
+    /// agree. Either alone is an incomplete pair, and using half of one is what produced the
+    /// intermittent "connect to computer" screen; see [`Config::frozen`]. A snapshot written
+    /// before its other half existed is therefore ignored once, cold-booted past, and replaced by
+    /// a complete set.
+    ///
+    /// What "the drive it was taken against" *is* differs by mode, and [`Config::pair_is_whole`]
+    /// is the single place that knows which.
     ///
     /// `first` is false for a power cycle inside a running session, which never restores.
     pub fn may_restore(&self, first: bool) -> bool {
         !self.cold
             && first
-            && self.frozen.exists()
+            && self.pair_is_whole()
             && self.snapshot.as_ref().is_some_and(|p| p.exists())
+    }
+
+    /// Where the drive stamp lives: beside the snapshot, under the same stem.
+    ///
+    /// The same rule `--snapshot=` already follows for the frozen drive, and for the same reason —
+    /// a hand-given snapshot must bring its own other half rather than pairing with whatever the
+    /// cache happens to hold.
+    pub fn stamp(&self) -> Option<PathBuf> {
+        self.snapshot.as_ref().map(|s| s.with_extension("drive"))
+    }
+
+    /// The drive as it stands, in the two numbers that change when anything writes to it.
+    ///
+    /// Running on the image directly means the snapshot's other half is the user's own file, and
+    /// nothing stops iTunes, `make-disk` or another emulator session touching it in between. Size
+    /// and modification time are what a filesystem will tell us for free; they are not a hash, and
+    /// they are not meant to be. What they catch is the case that matters — the drive moved on
+    /// without this RAM — and a stale pair is the bug that produced "connect to computer" on every
+    /// third start before the frozen drive existed.
+    ///
+    /// **Nanoseconds, not seconds.** A one-second mtime is coarser than the gap between stamping
+    /// the drive and the machine writing to it again, which would let a pair that has already
+    /// diverged still compare equal. Filesystems vary in what they actually store, so this narrows
+    /// the window rather than closing it — the reason the stamp is written at a moment when
+    /// nothing can write next, rather than relying on the resolution.
+    pub fn drive_fingerprint(&self) -> (u64, u128) {
+        match std::fs::metadata(&self.workdisk) {
+            Ok(m) => {
+                let nanos = m
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
+                (m.len(), nanos)
+            }
+            Err(_) => (0, 0),
+        }
+    }
+
+    /// What a stamp file holds. One line, so a person who finds one can read it.
+    fn stamp_line(&self) -> String {
+        let (len, nanos) = self.drive_fingerprint();
+        format!("{len} {nanos}")
+    }
+
+    /// Is the half of the pair that is *not* RAM present, and does it still describe this drive?
+    ///
+    /// **Two modes, two answers, one question.**
+    ///
+    /// - Working **on a copy**, the other half is a frozen clone taken at the snapshot instant, and
+    ///   the machine then runs on a throwaway. The pair is coherent by construction and existence
+    ///   is the whole test.
+    /// - Working **directly**, there is no clone: the drive under the snapshot is the user's own
+    ///   file, and it keeps moving for as long as the machine runs. So the pair is only whole if
+    ///   the drive has not been touched since the stamp was written — by this emulator, by iTunes,
+    ///   by `make-disk`, or by a second window.
+    ///
+    /// Every way this can be wrong resolves to `false`, which costs a cold boot. That direction is
+    /// deliberate: the opposite mistake is a restored RAM against a drive that has moved, which is
+    /// a machine that looks fine and is not.
+    pub fn pair_is_whole(&self) -> bool {
+        if self.work_on_copy {
+            return self.frozen.exists();
+        }
+        let Some(stamp) = self.stamp() else { return false };
+        match std::fs::read_to_string(&stamp) {
+            Ok(text) => text.trim() == self.stamp_line(),
+            Err(_) => false,
+        }
+    }
+
+    /// Write the half of the pair the snapshot does not carry, for whichever mode this is.
+    ///
+    /// Called at the instant the snapshot is written and at no other time, because the two are one
+    /// act: a snapshot whose companion was written a moment later describes a drive that had
+    /// already moved.
+    pub fn pair_with_drive(&self) -> Result<String, String> {
+        if self.work_on_copy {
+            clone_disk(&self.workdisk, &self.frozen)?;
+            return Ok(format!("frozen drive -> {}", self.frozen.display()));
+        }
+        let Some(stamp) = self.stamp() else {
+            return Err("no snapshot path, so there is nothing to pair a drive with".into());
+        };
+        std::fs::write(&stamp, self.stamp_line())
+            .map_err(|e| format!("{}: {e}", stamp.display()))?;
+        Ok(format!("drive stamp -> {}", stamp.display()))
     }
 }
 
@@ -552,7 +669,18 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // *Which* image it is cloned from is the whole of the coherence fix — see `Config::frozen`. A
     // run that is about to restore takes the drive that snapshot was taken against; a run that is
     // about to cold-boot takes the pristine one. Either way the clone is remade, never reused.
-    clone_disk(if cfg.may_restore(first) { &cfg.frozen } else { &cfg.disk }, &cfg.workdisk)?;
+    //
+    // **Direct is the default, and then there is no clone at all**: `workdisk` IS the user's image,
+    // so the iPod's writes land where the user can see them, which is what the hardware does.
+    //
+    // `work_on_copy` is tested here rather than left to the paths, and that is not belt-and-braces.
+    // The frozen drive is the only input to this function that gets *written over* the working one,
+    // and in direct mode the working one is the user's own image — the file that took twelve iTunes
+    // sync rounds to build. A mis-wired `frozen` would then restore a stale drive over it, silently,
+    // before the machine even starts. Reaching that line requires copy mode to be on, so the
+    // destructive branch cannot be entered by a path bug alone.
+    let source = if cfg.work_on_copy && cfg.may_restore(first) { &cfg.frozen } else { &cfg.disk };
+    clone_disk(source, &cfg.workdisk)?;
     let d = Ata::open(&cfg.workdisk, true).map_err(|e| format!("disk: {e}"))?;
     m.mem.ata = Some((0xc300_0000, d));
 
@@ -916,6 +1044,17 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
 
     loop {
         if link.quit.load(Ordering::Relaxed) {
+            // Park it, if the window asked and there is a machine worth parking. `Phase::Running`
+            // is the test rather than any instruction count: it is set by the restore and by the
+            // end of the cold boot, which are exactly the two ways to arrive at a machine that has
+            // finished starting. A restore point taken mid-boot would resume into a window that
+            // says "running" over an iPod still drawing its logo.
+            let running = matches!(link.out.lock().unwrap().phase, Phase::Running);
+            if running && link.save_on_quit.load(Ordering::Relaxed) {
+                link.saving.store(true, Ordering::Relaxed);
+                write_restore_point(cfg, &m);
+                link.saving.store(false, Ordering::Relaxed);
+            }
             break;
         }
         // Power commands are read before input, so a click queued behind a power-off is discarded
@@ -1052,31 +1191,20 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
 
         // The cold boot's finish line. Written once, then the machine keeps running — the snapshot
         // is a side effect of getting here, not a reason to stop.
+        //
+        // **Working directly, this instant is the wrong one to write at.** The machine goes on
+        // running and goes on writing to the user's own drive, so a restore point taken here
+        // describes a drive that has already moved by the time anything could use it: 1.6 GB
+        // written to produce a pair that `pair_is_whole` will correctly refuse. Direct mode's
+        // restore point is written when the machine stops, where nothing can write next. What this
+        // instant still means in both modes is that the cold boot is over, which is the phase
+        // change below.
         let asked = link.resnap.swap(false, Ordering::Relaxed);
-        if (want_snapshot && executed >= cfg.snap_at) || asked {
+        let reached_snap_at = want_snapshot && executed >= cfg.snap_at;
+        if reached_snap_at || asked {
             want_snapshot = false;
-            if let Some(path) = &cfg.snapshot {
-                let img = m.snapshot();
-                if let Some(dir) = path.parent() {
-                    let _ = std::fs::create_dir_all(dir);
-                }
-                match std::fs::write(path, &img) {
-                    Ok(()) => eprintln!("snapshot -> {} ({} bytes)", path.display(), img.len()),
-                    Err(e) => eprintln!("snapshot {}: {e}", path.display()),
-                }
-                // And the drive as it stands at this instant, which is the half of the machine the
-                // snapshot does not carry. Safe to copy while the machine holds the file open:
-                // `Ata` seeks and `write_all`s each sector straight through, keeping no dirty
-                // buffer of its own, so what is on disk now is exactly what this RAM believes.
-                match clone_disk(&cfg.workdisk, &cfg.frozen) {
-                    Ok(()) => eprintln!("frozen drive -> {}", cfg.frozen.display()),
-                    // Not fatal, and deliberately not silent: the snapshot is still written, but
-                    // without its drive it must not be restored, so the next launch cold-boots.
-                    Err(e) => {
-                        eprintln!("frozen drive {}: {e} — this snapshot will not be restored", cfg.frozen.display());
-                        let _ = std::fs::remove_file(path);
-                    }
-                }
+            if cfg.work_on_copy || asked {
+                write_restore_point(cfg, &m);
             }
             link.out.lock().unwrap().phase = Phase::Running;
         }
@@ -1176,6 +1304,38 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         }
     }
     Outcome::Quit
+}
+
+/// Write both halves of the restore point: RAM, and whatever pairs with the drive in this mode.
+///
+/// **One function because they are one act.** A snapshot whose companion was written at a
+/// different instant describes a drive that had already moved — the stale pair that produced
+/// "connect to computer" on every third start. When the companion cannot be written the snapshot
+/// is deleted rather than left behind, so half a pair is never on disk to be found later.
+///
+/// Safe to run while the machine holds the drive open: `Ata` seeks and `write_all`s each sector
+/// straight through, keeping no dirty buffer of its own, so what is on disk now is exactly what
+/// this RAM believes.
+fn write_restore_point(cfg: &Config, m: &Machine) {
+    let Some(path) = &cfg.snapshot else { return };
+    let img = m.snapshot();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = std::fs::write(path, &img) {
+        eprintln!("snapshot {}: {e}", path.display());
+        return;
+    }
+    eprintln!("snapshot -> {} ({} bytes)", path.display(), img.len());
+    match cfg.pair_with_drive() {
+        Ok(line) => eprintln!("{line}"),
+        // Not fatal, and deliberately not silent: without its other half the snapshot must not be
+        // restored, so it goes and the next launch cold-boots.
+        Err(e) => {
+            eprintln!("{e} — this snapshot will not be restored");
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 /// The machine stopped on its own. Keep the reason on screen and wait for a power command.
@@ -1830,7 +1990,7 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
 mod tests {
     use super::*;
 
-    /// A snapshot without its frozen drive is **not** restorable.
+    /// A snapshot without its frozen drive is **not** restorable — the copy-mode half of the rule.
     ///
     /// This is the migration case, and it is the one that would have re-introduced the bug
     /// inverted: every user upgrading into this change has a snapshot on disk and no frozen drive
@@ -1853,6 +2013,7 @@ mod tests {
             snapshot: Some(snap.clone()),
             snap_at: 1,
             cold: false,
+            work_on_copy: true,
             ..Default::default()
         };
 
@@ -1865,6 +2026,63 @@ mod tests {
         cfg.cold = false;
         std::fs::remove_file(&snap).unwrap();
         assert!(!cfg.may_restore(true), "a frozen drive with no snapshot is the other half");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Working directly, a drive that has moved since the stamp is **not** restorable.
+    ///
+    /// The same rule as the frozen drive above, asked of the mode that has no frozen drive to ask
+    /// about. There the pair is coherent by construction; here it is coherent only while nothing
+    /// writes, and the things that write are not all ours — iTunes, `make-disk`, a second window,
+    /// and the emulator itself for as long as it runs. Every one of those has to land on "cold
+    /// boot", because the alternative is restored RAM over a drive that moved, which is the machine
+    /// that looks fine and is not.
+    ///
+    /// The size half of the fingerprint is what is asserted against a real edit. The mtime half is
+    /// asserted against a stamp written by hand, because how finely a filesystem records mtime is a
+    /// property of the filesystem and asserting it here would be testing the volume the test ran on.
+    #[test]
+    fn a_drive_that_moved_since_the_stamp_is_refused() {
+        let dir = std::env::temp_dir().join(format!("ipod-stamp-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let snap = dir.join("b.snap");
+        let drive = dir.join("b.img");
+        std::fs::write(&snap, b"snapshot").unwrap();
+        std::fs::write(&drive, b"the drive as it was").unwrap();
+
+        // Direct mode: the working drive IS the user's image, which is the condition that makes
+        // the stamp necessary in the first place.
+        let cfg = Config {
+            flash: dir.join("f.bin"),
+            disk: drive.clone(),
+            workdisk: drive.clone(),
+            frozen: dir.join("b.frozen"),
+            clock: 5,
+            snapshot: Some(snap.clone()),
+            snap_at: 1,
+            cold: false,
+            work_on_copy: false,
+            ..Default::default()
+        };
+
+        assert!(!cfg.may_restore(true), "no stamp yet, so there is no pair");
+        cfg.pair_with_drive().expect("stamping a drive that exists must work");
+        assert!(cfg.may_restore(true), "stamped, and nothing has touched the drive since");
+
+        // What iTunes, `make-disk` or a second window does to it.
+        std::fs::write(&drive, b"the drive after something else wrote to it").unwrap();
+        assert!(!cfg.may_restore(true), "the drive moved, so the snapshot no longer describes it");
+
+        // And the case where the stamp itself is unreadable or from another build.
+        cfg.pair_with_drive().unwrap();
+        assert!(cfg.may_restore(true), "re-stamped");
+        std::fs::write(cfg.stamp().unwrap(), b"not a fingerprint").unwrap();
+        assert!(!cfg.may_restore(true), "a stamp that does not parse is not a match");
+
+        // The stamp lives beside the snapshot, not beside the drive: a hand-given `--snapshot=`
+        // has to bring its own, exactly as the frozen drive does.
+        assert_eq!(cfg.stamp().unwrap(), dir.join("b.drive"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
