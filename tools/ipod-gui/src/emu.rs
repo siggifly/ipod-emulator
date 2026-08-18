@@ -668,32 +668,95 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     }
 
     let flash = cfg.nor.bytes()?;
-    // **A synthesised ROM carries no boot code**, only the identity block. Executing it would
-    // branch to 0x8000, find zeros, and hang — a machine that looks like it is running and never
-    // draws. Refused with the reason until the high-level boot path lands, because a clear error
-    // beats a hang nobody can diagnose.
-    if eapp_loader::nor::is_synthetic(&flash) {
-        return Err(
-            "this boot ROM was synthesised, and the high-level boot that goes with it is not \n\
-             built yet (ROADMAP M5). A synthesised ROM carries the identity block but no code, so \n\
-             there is nothing to execute.\n\n\
-             Point this at a real 1 MiB NOR dump for now — the window's Boot ROM row takes one."
-                .to_string(),
+    // **The high-level boot.**
+    //
+    // A synthesised ROM carries the identity block and no code — executing it would branch to
+    // 0x8000, find zeros and hang. So the boot ROM's *effects* are produced here instead of its
+    // instructions being run: the OS is copied out of the drive's own firmware partition to
+    // 0x10000000, the `sysinfo_t` handoff block is written where Apple writes it, and the CPU
+    // starts at the OS's entry. That is what "HLE" means here — see [`eapp_loader::nor`].
+    //
+    // Everything about *which iPod this is* comes from the synthesised flash, so RetailOS reads the
+    // same identity it would read off a real one.
+    use arm7tdmi::Bus as _;
+    let synthetic = eapp_loader::nor::is_synthetic(&flash);
+    if synthetic {
+        let (osos, load_at) = eapp_loader::ipsw::osos_from_drive(&cfg.disk)?;
+        println!(
+            "  high-level boot: {} bytes of OS from {} -> {load_at:#010x}",
+            osos.len(),
+            cfg.disk.display()
+        );
+        // Apple's boot code jumps to physical 0x23c, so the image has to answer at 0 as well —
+        // the usual ARM arrangement where the vector table is mirrored low. This is also where the
+        // CPU begins, which is why no reset vector has to be synthesised for it to execute.
+        m.mem.regions.push(Region { name: "osos-low", base: 0, data: osos.clone() });
+        m.mem.regions.push(Region { name: "osos", base: load_at, data: osos });
+
+        // The handoff, byte for byte as a cold boot leaves it.
+        let cfg_block = eapp_loader::inspect::syscfg(&flash);
+        let identity = cfg.nor.identity()?;
+        let model = cfg
+            .nor
+            .model()
+            .ok_or("the synthesised ROM names a model this program does not know")?;
+        let syscfg_bytes = match &cfg_block {
+            Some(c) => {
+                let at = eapp_loader::inspect::SYSCFG_AT;
+                let len = eapp_loader::inspect::SYSCFG_HEADER
+                    + c.records.len() * eapp_loader::inspect::SYSCFG_RECORD;
+                flash.get(at..at + len).unwrap_or(&[]).to_vec()
+            }
+            None => Vec::new(),
+        };
+        let block = eapp_loader::nor::handoff(&identity, model, &syscfg_bytes);
+        for (i, chunk) in block.chunks(4).enumerate() {
+            let mut w = [0u8; 4];
+            w[..chunk.len()].copy_from_slice(chunk);
+            m.mem.write32(eapp_loader::nor::HANDOFF_AT + (i as u32) * 4, u32::from_le_bytes(w));
+        }
+        // The scaffolding a real ROM would already have done — see `install_sysinfo` in trace.rs,
+        // where the same reasoning is spelled out and bisected.
+        let hw = |m: &mut Machine, off: u32, v: u32| {
+            m.mem.write32(eapp_loader::nor::HANDOFF_AT + off, v)
+        };
+        hw(&mut m, 0x60, u32::from_le_bytes(*b"Flsh"));
+        hw(&mut m, 0x68, 0x2000_0000);
+        hw(&mut m, 0x6c, 0x0010_0000);
+        hw(&mut m, 0x74, u32::from_le_bytes(*b"Sdrm"));
+        hw(&mut m, 0x7c, 0x1000_0000);
+        hw(&mut m, 0x80, RAM_SIZE as u32);
+        hw(&mut m, 0x88, u32::from_le_bytes(*b"Frwr"));
+        hw(&mut m, 0x9c, u32::from_le_bytes(*b"Iram"));
+        hw(&mut m, 0xa4, 0x4000_0000);
+        hw(&mut m, 0xa8, 0x0002_0000);
+        hw(&mut m, 0xe0, RAM_SIZE as u32);
+        hw(&mut m, 0x128, 0x0005_0014);
+        m.mem.write32(eapp_loader::nor::HANDOFF_TAG_AT, u32::from_le_bytes(*b"IsyS"));
+        m.mem.write32(eapp_loader::nor::HANDOFF_TAG_AT + 4, eapp_loader::nor::HANDOFF_AT);
+        println!(
+            "  identity: {} · {}",
+            identity.serial.as_deref().unwrap_or("(no serial)"),
+            identity.guid_hex()
         );
     }
     let size = flash.len() as u32;
     // Cold boot: the flash also answers at 0, where the CPU fetches out of reset. Inserted at the
     // front so it wins the first-match lookup for low addresses.
-    m.mem.readonly.push("flash-low");
-    m.mem
-        .regions
-        .insert(0, Region { name: "flash-low", base: 0, data: flash.clone() });
+    if !synthetic {
+        m.mem.readonly.push("flash-low");
+        m.mem
+            .regions
+            .insert(0, Region { name: "flash-low", base: 0, data: flash.clone() });
+    }
     m.mem.readonly.push("flash");
     m.mem.regions.push(Region { name: "flash", base: 0x2000_0000, data: flash });
-    m.mem.nor = Some(Nor::sst39wf800a(
-        vec![(0x2000_0000, size), (0, size)],
-        vec!["flash", "flash-low"],
-    ));
+    m.mem.nor = Some(if synthetic {
+        // No low mirror on a high-level boot: address 0 is the OS.
+        Nor::sst39wf800a(vec![(0x2000_0000, size)], vec!["flash"])
+    } else {
+        Nor::sst39wf800a(vec![(0x2000_0000, size), (0, size)], vec!["flash", "flash-low"])
+    });
 
     // The co-processor, with the GENCMD registry published. Without `registry` RetailOS never gets
     // an answer to its service lookup and never draws — the panel would be a black rectangle and

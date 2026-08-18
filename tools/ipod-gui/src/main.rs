@@ -2719,21 +2719,21 @@ impl App {
 
             ui.add_space(20.0);
             app.section(ui, "APPEARANCE");
-            ui.horizontal(|ui| {
-                ui.label("Case");
-                // Three, not two: the U2 Special Edition is a black case with a RED wheel, and
-                // Apple's own asset names for this family are `iPod6-White`, `iPod6-Black` and
-                // `iPod6-BlackRed`. Offering only two was leaving out a device that shipped.
-                let mut c = app.settings.chassis;
-                let mut hit = false;
-                for opt in [Colour::White, Colour::Black, Colour::U2] {
-                    hit |= ui.selectable_value(&mut c, opt, opt.label()).clicked();
-                }
-                if hit {
-                    app.settings.chassis = c;
-                    app.settings.save();
-                }
-            });
+            // **No case-colour switch.** The colour is not a setting — it is stated by the model
+            // number, and no `SysCfg` on any iPod carries one. A supplied dump's `Mod#` decides it;
+            // a synthesised one is whatever model was chosen. A switch here could disagree with the
+            // machine's own identity, and then the window would be showing an iPod that does not
+            // exist.
+            ui.label(
+                egui::RichText::new(format!(
+                    "Case: {} — from the model number ({}). Change it on the setup screen by \
+                     choosing a different iPod.",
+                    app.settings.chassis.label(),
+                    app.synthetic_model().apple_number()
+                ))
+                .small()
+                .color(Color32::from_gray(0x9A)),
+            );
             ui.add_space(4.0);
             let mut debug = app.settings.mode == Mode::Debug;
             if ui

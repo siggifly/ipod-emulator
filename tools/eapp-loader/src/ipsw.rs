@@ -461,6 +461,69 @@ pub fn images(fw: &[u8]) -> Vec<Image> {
     out
 }
 
+/// Pull the OS image out of a drive's own firmware partition.
+///
+/// **This is what a high-level boot needs and a warm boot did not.** `--osos=` takes the image as a
+/// separate file, which is fine for research and useless to somebody who has a drive and nothing
+/// else: the drive already carries the OS, at LBA 63, indexed by the same `!ATA` directory
+/// [`images`] reads. Reading it from there is the difference between "supply three files" and
+/// "supply one".
+///
+/// Returns the image and the address it loads at.
+pub fn osos_from_drive(path: &std::path::Path) -> Result<(Vec<u8>, u32), String> {
+    // **The 0x200 that this project has got wrong before.**
+    //
+    // `devOffset` in the `!ATA` directory is relative to the firmware PARTITION, but what is
+    // written at LBA 63 is Apple's extracted `Firmware-…` file, which carries its own 0x200 header
+    // on top. So a byte position inside the drive is `devOffset + 0x200`, and taking devOffset
+    // literally lands one sector early -- which is precisely the `OSOS.bin` vs `OSOS_correct.bin`
+    // mistake recorded in `research/02` §Provenance, and which this reproduced on its first run.
+    //
+    // The proof needs no specification: an ARM image entered at its base begins with the exception
+    // vector table, so the first word is a branch. Read one sector early it is data, and the CPU
+    // spins in the vectors executing it -- which is exactly what happened.
+    const FILE_HEADER: u64 = 0x200;
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let base = FIRMWARE_LBA as u64 * 512;
+
+    // The directory alone, first: a drive whose firmware partition is missing or empty should say
+    // so rather than have several megabytes read out of it before anyone notices.
+    // `DIRECTORY_AT` is already the offset within the FILE, so this one needs no adjustment.
+    let mut dir = vec![0u8; DIRECTORY_AT + 0x200];
+    f.seek(SeekFrom::Start(base)).map_err(|e| format!("{}: {e}", path.display()))?;
+    f.read_exact(&mut dir).map_err(|e| {
+        format!("{}: cannot read the firmware partition at LBA {FIRMWARE_LBA}: {e}", path.display())
+    })?;
+
+    let dir_images = images(&dir);
+    if dir_images.is_empty() {
+        return Err(format!(
+            "{}: no `!ATA` firmware directory at LBA {FIRMWARE_LBA}. This drive has no OS in it — \
+             build one from an .ipsw, or point at a drive that already has one.",
+            path.display()
+        ));
+    }
+    let osos = dir_images.iter().find(|i| i.tag == "osos").ok_or_else(|| {
+        format!(
+            "{}: the firmware directory lists {} but no `osos`, so there is no OS to boot.",
+            path.display(),
+            dir_images.iter().map(|i| i.tag.as_str()).collect::<Vec<_>>().join(", ")
+        )
+    })?;
+    if osos.len == 0 || osos.len > 64 * 1024 * 1024 {
+        return Err(format!("{}: `osos` claims {} bytes, which is not a size an OS image has", path.display(), osos.len));
+    }
+
+    let mut image = vec![0u8; osos.len as usize];
+    f.seek(SeekFrom::Start(base + FILE_HEADER + osos.offset as u64))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    f.read_exact(&mut image).map_err(|e| {
+        format!("{}: `osos` runs past the end of the image: {e}", path.display())
+    })?;
+    Ok((image, osos.addr))
+}
+
 // ---------------------------------------------------------------- building the drive
 
 /// Default drive size: 8 GiB, which is `ipod8g-retail.img`'s, so a disk built here and the
@@ -751,6 +814,51 @@ pub fn inspect(path: &Path) -> Ipsw {
 
 #[cfg(test)]
 mod tests {
+    /// **Read the OS out of a real drive**, which is what a high-level boot does. Skips loudly
+    /// without one — the drives are gitignored and 8 GB each.
+    #[test]
+    fn the_os_can_be_read_out_of_a_drives_firmware_partition() {
+        let p = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../resources/drives/ipod8g-retail.img"
+        ));
+        if !p.is_file() {
+            println!("SKIPPED: {} is not here (gitignored)", p.display());
+            return;
+        }
+        let (img, addr) = super::osos_from_drive(p).expect("a retail drive has an OS");
+        assert_eq!(addr, super::LOAD_ADDR_5G, "the 5G loads its OS at 0x10000000");
+        assert!(img.len() > 1_000_000, "an OS image is megabytes, got {}", img.len());
+        // **The check research/02 gives**: an ARM image entered at its base begins with the
+        // exception vector table, so word 0 is a branch. Read one sector early it is data, and
+        // this assertion is what catches that.
+        let w0 = u32::from_le_bytes(img[..4].try_into().unwrap());
+        assert_eq!(w0 >> 24, 0xEA, "word 0 is {w0:#010x}, which is not an ARM branch");
+        // And its length agrees with what the directory claimed, which is the read this could
+        // plausibly get wrong.
+        let mut dir = vec![0u8; super::DIRECTORY_AT + 0x200];
+        use std::io::{Read, Seek, SeekFrom};
+        let mut f = std::fs::File::open(p).expect("open");
+        f.seek(SeekFrom::Start(super::FIRMWARE_LBA as u64 * 512)).expect("seek");
+        f.read_exact(&mut dir).expect("read");
+        let entry = super::images(&dir).into_iter().find(|i| i.tag == "osos").expect("osos");
+        assert_eq!(img.len() as u32, entry.len);
+        assert_eq!(addr, entry.addr);
+    }
+
+    /// A drive with no firmware partition says so, rather than reading megabytes of nothing.
+    #[test]
+    fn a_drive_with_no_firmware_directory_is_refused_with_a_reason() {
+        let dir = std::env::temp_dir().join(format!("ipod-osos-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let blank = dir.join("blank.img");
+        std::fs::write(&blank, vec![0u8; 64 * 1024]).expect("write");
+        let e = super::osos_from_drive(&blank).unwrap_err();
+        assert!(e.contains("firmware"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+
     use super::*;
 
     #[test]

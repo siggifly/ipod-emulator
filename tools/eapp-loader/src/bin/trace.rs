@@ -323,6 +323,34 @@ fn main() {
     // ones set up. Which vector is the main loop is a question for the trace, not a guess.
     // --osos=FILE --run-loader : map RetailOS and execute its own eApp loader, then read back
     // the thunks it patched. Apple's binding logic is the authority on every import address.
+    // --osos-from-disk : take the OS out of the drive's own firmware partition instead of a
+    // separate file. This is what a high-level boot does, and it is the difference between
+    // "supply three files" and "supply one" -- the drive already carries the OS.
+    if args.iter().any(|a| a == "--osos-from-disk") {
+        match args.iter().find_map(|a| a.strip_prefix("--disk=")) {
+            None => {
+                eprintln!("--osos-from-disk needs --disk=PATH to read it out of");
+                std::process::exit(1);
+            }
+            Some(disk) => match eapp_loader::ipsw::osos_from_drive(std::path::Path::new(disk)) {
+                Ok((d, at)) => {
+                    let n = d.len();
+                    m.symbols = eapp_loader::extract_symbols(&d, 0);
+                    match m.map_osos(d) {
+                        Ok(()) => println!("mapped OSOS from the drive: {n} bytes at {at:#010x}"),
+                        Err(e) => {
+                            eprintln!("cannot map OSOS: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            },
+        }
+    }
     if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--osos=")) {
         match fs::read(path) {
             Ok(d) => {
