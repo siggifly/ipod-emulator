@@ -355,6 +355,108 @@ fn http_get_to_file(url: &str, dest: &std::path::Path) -> Result<(), String> {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// The cache
+// ---------------------------------------------------------------------------------------------
+
+/// Where downloaded firmware lives, so it is downloaded **once**.
+///
+/// `IPOD_EMULATOR_FIRMWARE_DIR` overrides it — which is how a machine that already holds the whole
+/// catalogue points at it instead of fetching a second copy. Otherwise it sits beside the rest of
+/// the program's data, because a download that lands in whatever directory you happened to be in is
+/// a download you will fetch again next week.
+pub fn cache_dir() -> std::path::PathBuf {
+    if let Some(d) = std::env::var_os("IPOD_EMULATOR_FIRMWARE_DIR") {
+        let d = std::path::PathBuf::from(d);
+        if !d.as_os_str().is_empty() {
+            return d;
+        }
+    }
+    crate::settings::data_dir().join("firmware")
+}
+
+/// What a cached file turned out to be.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheState {
+    /// Size matches, and the hash was checked and matched.
+    Verified,
+    /// Size matches. The hash was **not** checked — listing the cache hashes nothing by default,
+    /// because hashing 2.7 GB to draw a list is not a thing to do behind somebody's back.
+    SizeOk,
+    /// In the catalogue, and wrong. A truncated download, or a different file under the same name.
+    Corrupt,
+    /// Not in the catalogue at all — somebody's own `.ipsw`, or a release we do not list.
+    Unknown,
+}
+
+/// One file in the cache.
+#[derive(Clone, Debug)]
+pub struct Cached {
+    pub path: std::path::PathBuf,
+    pub bytes: u64,
+    pub release: Option<&'static Release>,
+    pub state: CacheState,
+}
+
+/// Everything in the cache directory, newest-irrelevant, sorted by name.
+///
+/// `verify` decides whether each file is hashed. **It is off by default and that is deliberate**:
+/// the full catalogue is 2.7 GB, and a listing that silently spends thirty seconds hashing is a
+/// listing people learn not to run.
+pub fn cached(dir: &std::path::Path, verify_hashes: bool) -> Vec<Cached> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut out: Vec<Cached> = entries
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .filter_map(|e| {
+            let path = e.path();
+            let name = path.file_name()?.to_string_lossy().into_owned();
+            // `.part` files are interrupted downloads. They are listed so they can be cleaned, and
+            // never mistaken for a release.
+            let bytes = e.metadata().ok()?.len();
+            let release = by_file(&name);
+            let state = match release {
+                None => CacheState::Unknown,
+                Some(r) if r.bytes != 0 && bytes != r.bytes => CacheState::Corrupt,
+                Some(r) => {
+                    if !verify_hashes {
+                        CacheState::SizeOk
+                    } else {
+                        match (r.sha256, std::fs::read(&path)) {
+                            (Some(want), Ok(b)) if sha256(&b) == want => CacheState::Verified,
+                            (Some(_), Ok(_)) => CacheState::Corrupt,
+                            _ => CacheState::SizeOk,
+                        }
+                    }
+                }
+            };
+            Some(Cached { path, bytes, release, state })
+        })
+        .collect();
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out
+}
+
+/// Total bytes held in a cache directory.
+pub fn cache_bytes(dir: &std::path::Path) -> u64 {
+    cached(dir, false).iter().map(|c| c.bytes).sum()
+}
+
+/// Delete the named files, returning how many bytes went.
+///
+/// **Takes an explicit list.** There is no "clean everything" flag in this function on purpose: the
+/// caller decides what goes, and a caller that wants everything has to enumerate it and say so.
+/// Deleting a user's files on a wildcard is how an afternoon of downloads disappears.
+pub fn remove(paths: &[std::path::PathBuf]) -> Result<u64, String> {
+    let mut freed = 0;
+    for p in paths {
+        let n = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        std::fs::remove_file(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        freed += n;
+    }
+    Ok(freed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,6 +537,47 @@ mod tests {
             let e = download(r, std::path::Path::new("/nonexistent")).unwrap_err();
             assert!(e.contains("403"), "{}: should explain, not just fail: {e}", r.file);
         }
+    }
+
+    /// The cache has to tell a corrupt file from an unknown one from a fine one, because the three
+    /// call for different actions: re-download, leave alone, and nothing.
+    #[test]
+    fn the_cache_sorts_what_it_finds() {
+        let dir = std::env::temp_dir().join(format!("ipod-fw-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let rel = by_file("iPod_20.1.3.ipsw").expect("a known release");
+        // Right name, wrong length.
+        std::fs::write(dir.join(rel.file), b"truncated").expect("write");
+        // A file that is not ours at all.
+        std::fs::write(dir.join("somebody-elses.ipsw"), b"whatever").expect("write");
+        // An interrupted download.
+        std::fs::write(dir.join("iPod_13.1.3.ipsw.part"), b"half").expect("write");
+
+        let items = cached(&dir, false);
+        assert_eq!(items.len(), 3);
+        let by = |n: &str| items.iter().find(|c| c.path.ends_with(n)).expect(n).state;
+        assert_eq!(by(rel.file), CacheState::Corrupt, "wrong size must not read as fine");
+        assert_eq!(by("somebody-elses.ipsw"), CacheState::Unknown);
+        assert_eq!(by("iPod_13.1.3.ipsw.part"), CacheState::Unknown, "a .part is not a release");
+
+        assert_eq!(cache_bytes(&dir), items.iter().map(|c| c.bytes).sum::<u64>());
+
+        // Removal reports what it actually freed, and takes an explicit list rather than a wildcard.
+        let doomed = vec![dir.join("somebody-elses.ipsw")];
+        assert_eq!(remove(&doomed).expect("remove"), 8);
+        assert_eq!(cached(&dir, false).len(), 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A missing cache directory is empty, not an error — this runs before anything is downloaded.
+    #[test]
+    fn an_absent_cache_directory_is_simply_empty() {
+        let nowhere = std::env::temp_dir().join("ipod-fw-does-not-exist-9e3f");
+        assert!(cached(&nowhere, false).is_empty());
+        assert_eq!(cache_bytes(&nowhere), 0);
     }
 
     /// Verification has to be able to FAIL, or it is decoration.

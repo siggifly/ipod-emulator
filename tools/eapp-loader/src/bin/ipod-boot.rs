@@ -1829,7 +1829,7 @@ fn firmware_cmd(sub: &str, args: &[String]) -> Result<(), String> {
                 .position(|a| a == "--dir")
                 .and_then(|i| args.get(i + 1))
                 .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| std::path::PathBuf::from("."));
+                .unwrap_or_else(firmware::cache_dir);
 
             let rel = match what.parse::<u16>() {
                 // Several releases share an updater family; the last is the newest, which is what
@@ -1851,7 +1851,76 @@ fn firmware_cmd(sub: &str, args: &[String]) -> Result<(), String> {
             println!("\nverified -> {}", at.display());
             Ok(())
         }
-        _ => Err("usage: ipod-boot firmware list [filter] | get <id|file> [--dir DIR]".to_string()),
+        "cache" => {
+            let dir = firmware::cache_dir();
+            let verify = args.iter().any(|a| a == "--verify");
+            let items = firmware::cached(&dir, verify);
+            println!("{}", dir.display());
+            if items.is_empty() {
+                println!("  empty — nothing downloaded yet");
+                return Ok(());
+            }
+            let mut total = 0u64;
+            for c in &items {
+                let name = c.path.file_name().unwrap_or_default().to_string_lossy();
+                let state = match c.state {
+                    firmware::CacheState::Verified => "verified",
+                    firmware::CacheState::SizeOk => "size ok ",
+                    firmware::CacheState::Corrupt => "CORRUPT ",
+                    firmware::CacheState::Unknown => "not ours",
+                };
+                println!("  {state}  {:>9}  {name}", human(c.bytes));
+                total += c.bytes;
+            }
+            println!("\n  {} in {} file(s)", human(total), items.len());
+            if !verify {
+                // Say what was NOT done, so "size ok" is never read as "checked".
+                println!("  sizes only — pass --verify to hash them, which reads every byte");
+            }
+            Ok(())
+        }
+        "clean" => {
+            let dir = firmware::cache_dir();
+            let yes = args.iter().any(|a| a == "--yes");
+            let only_bad = args.iter().any(|a| a == "--corrupt");
+            let items = firmware::cached(&dir, false);
+            let doomed: Vec<_> = items
+                .iter()
+                .filter(|c| {
+                    if only_bad {
+                        matches!(c.state, firmware::CacheState::Corrupt)
+                            || c.path.extension().is_some_and(|e| e == "part")
+                    } else {
+                        true
+                    }
+                })
+                .collect();
+            if doomed.is_empty() {
+                println!("nothing to remove in {}", dir.display());
+                return Ok(());
+            }
+            let total: u64 = doomed.iter().map(|c| c.bytes).sum();
+            println!("{}", dir.display());
+            for c in &doomed {
+                println!("  {:>9}  {}", human(c.bytes), c.path.file_name().unwrap_or_default().to_string_lossy());
+            }
+            println!("\n{} in {} file(s) would be removed.", human(total), doomed.len());
+            // **Nothing is deleted without being asked for.** These are files somebody waited on,
+            // and a `clean` that acts on sight is one nobody can run twice.
+            if !yes {
+                println!("Nothing has been deleted. Re-run with --yes to go ahead.");
+                return Ok(());
+            }
+            let paths: Vec<_> = doomed.iter().map(|c| c.path.clone()).collect();
+            let freed = firmware::remove(&paths)?;
+            println!("removed {}.", human(freed));
+            Ok(())
+        }
+        _ => Err(
+            "usage: ipod-boot firmware list [filter] | get <id|file> [--dir DIR]\n\
+             \x20                       | cache [--verify] | clean [--corrupt] [--yes]"
+                .to_string(),
+        ),
     }
 }
 
@@ -1861,4 +1930,17 @@ fn truncate(s: &str, n: usize) -> String {
     } else {
         s.chars().take(n.saturating_sub(1)).collect::<String>() + "\u{2026}"
     }
+}
+
+
+/// Bytes, in something a person reads.
+fn human(n: u64) -> String {
+    const U: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 { format!("{n} B") } else { format!("{v:.1} {}", U[i]) }
 }
