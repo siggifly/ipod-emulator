@@ -1248,6 +1248,15 @@ pub struct SysCfg {
     pub hw_vr: Option<u32>,
     /// Every tag found, in order, for a dump that does not look like the others.
     pub tags: Vec<String>,
+    /// **Every record, raw.** The point of keeping these is dumps we have never seen: Rockbox's
+    /// `norboot-target.h` names nine tags — `SrNm` `FwId` `HwId` `HwVr` `Codc` `SwVr` `MLBN` `Mod#`
+    /// `Regn` — and our own 5G NOR carries a tenth, `DrmV`, that Rockbox does not list, while
+    /// carrying none of `Codc` `SwVr` `MLBN`. So neither list is complete and the next dump may
+    /// hold a tag nobody has written down.
+    ///
+    /// Decoding only what is understood and **showing the rest as bytes** is the difference between
+    /// "we do not know what this is" and silently dropping it.
+    pub records: Vec<(String, [u8; 16])>,
 }
 
 impl SysCfg {
@@ -1289,7 +1298,14 @@ pub fn syscfg(nor: &[u8]) -> Option<SysCfg> {
     let count = u32::from_le_bytes(block.get(0x14..0x18)?.try_into().ok()?) as usize;
 
     let mut out =
-        SysCfg { serial: None, guid: None, model: None, hw_vr: None, tags: Vec::new() };
+        SysCfg {
+            serial: None,
+            guid: None,
+            model: None,
+            hw_vr: None,
+            tags: Vec::new(),
+            records: Vec::new(),
+        };
     let mut at = SYSCFG_HEADER;
     // Bounded by the declared count and by the buffer, because a truncated dump is a normal thing
     // to be handed and must not be read past.
@@ -1324,6 +1340,7 @@ pub fn syscfg(nor: &[u8]) -> Option<SysCfg> {
             }
             _ => {}
         }
+        out.records.push((tag.clone(), payload.try_into().unwrap_or([0; 16])));
         out.tags.push(tag);
         at += SYSCFG_RECORD;
     }
@@ -1423,6 +1440,28 @@ mod syscfg_tests {
     }
 
     /// A count larger than the block does not walk off the end.
+    /// **A tag nobody has written down must survive.** Rockbox's `norboot-target.h` names nine
+    /// tags; our own 5G NOR carries `DrmV`, which is not among them, and carries none of
+    /// `Codc`/`SwVr`/`MLBN`, which are. So the next dump may hold something new — and dropping it
+    /// silently would make the one dump that could teach us something look exactly like a dump
+    /// that taught us nothing.
+    #[test]
+    fn an_unrecognised_record_is_kept_as_bytes_rather_than_dropped() {
+        let mut drmv = [0u8; 16];
+        drmv[4..8].copy_from_slice(&6u32.to_le_bytes());
+        let mut wat = [0u8; 16];
+        wat[..4].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+
+        let c = syscfg(&nor(&[("DrmV", drmv), ("ZzZz", wat)])).expect("must parse");
+        assert_eq!(c.tags, ["DrmV", "ZzZz"]);
+        assert_eq!(c.records.len(), 2);
+        assert_eq!(c.records[0].0, "DrmV");
+        assert_eq!(c.records[0].1[4..8], 6u32.to_le_bytes());
+        // A wholly unknown tag, wholly preserved.
+        assert_eq!(c.records[1].0, "ZzZz");
+        assert_eq!(c.records[1].1[..4], [0xde, 0xad, 0xbe, 0xef]);
+    }
+
     #[test]
     fn a_lying_record_count_is_bounded() {
         let mut v = nor(&[("FwId", fwid(1, 0x000A_2700))]);

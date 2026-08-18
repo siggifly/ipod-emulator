@@ -379,3 +379,59 @@ the USB research (not published)"; this is that work's footprint, and it is why
 
 That file also contains **several other people's serials and GUIDs**. It is not copied into this
 repository, and no value from it is written down here — the same rule `research/07` already carries.
+
+### Settled with Ghidra: how Apple's own software identifies an iPod
+
+The `strings` result above — that no model code appears in iTunes — was a negative, and a negative
+from a text scan is weak evidence. Two things were done about that.
+
+**First, the scan was redone in UTF-16.** The original searched ASCII bytes only, and iTunes on
+Windows is a Unicode program, so a literal `MA146` would very plausibly be stored as
+`4D 00 41 00 31 00 34 00 36 00` — which an ASCII `grep` cannot match. **The conclusion survived**:
+none of `MA146`/`MA446`/`A146`/`A446`/`A002`/`A448`/`A452`/`A664` occurs in `iTunes.exe`,
+`iPodUpdaterExt.dll` or `iPodService.exe` in *either* encoding.
+
+**Second, `iPodService.exe` was disassembled** (Ghidra 12.1.2, headless, x86-64 PE). That turns the
+negative into a positive: we no longer merely fail to find a model table, we can see what Apple
+uses *instead*. Its own C++ symbol names survive in assert strings:
+
+| symbol | what it does |
+|---|---|
+| `CCheckpointData::Initialize` | reads a **Checkpoint** off the device via `SCSIGetVitalPages`, paged, `MinPageIndex..MaxPageIndex` |
+| `CAppleUsbControl::GetCheckpointData` | the same over USB — `AppleUsbCheckpointRequest` |
+| `CCheckpointData::ParseCheckpoint` | parses it as **XML** |
+| `CIpodDevice::GetSysInfoData` | the fallback: reads `:\iPod_Control\Device\SysInfo` off the disk |
+| `CiPod::CalculateBuildAndFamily` | derives build + family when there is no checkpoint |
+| `CIpodDevice::ParseInterfaceStringForSerialNumber` | takes the serial from the USB interface string |
+
+And the fields it parses are spelled out as literal plist paths:
+
+```
+plist/dict/SerialNumber:string/
+plist/dict/UpdaterFamilyID:integer/
+plist/dict/Versions:dict/VersionsIndex:dict/iPodFamily:integer/
+plist/dict/Versions:dict/VersionsIndex:dict/updaterFamily:integer/
+```
+
+with the failure message naming the complete set it needs:
+
+```
+XML_Parse for device succeeded, but no family (%d), BuildID (%d), BuildVersion (%d), or GUID (%d)
+```
+
+**Serial, family, updaterFamily, BuildID, BuildVersion, GUID. No model number. No colour. No
+capacity.** That is not an inference from absent strings any more — it is the field list Apple's own
+device-management code asks for. **iTunes has no model table because iTunes never identifies a model**;
+it identifies a *family* and a *device*, and family is all it needs to choose an updater.
+
+So `Mod#` → colour/capacity/generation genuinely has no Apple-software source to recover, and
+libgpod's table — sourced from Apple's published "Identify your iPod model" pages — is not a
+second-best. It is the only place that mapping has ever existed outside Apple's website.
+
+**A side finding that belongs to M9.** The Checkpoint is a real mechanism this project has not
+modelled: an XML plist the device serves over SCSI vital pages *and* over USB. Anything presenting
+itself to iTunes has to answer it, and `CIpodDevice::GetSysInfoData` reading
+`iPod_Control/Device/SysInfo` is the documented fallback when it cannot.
+
+The decompilation is kept at `resources/derived/ghidra/` — outside git, like everything else under
+`resources/`.

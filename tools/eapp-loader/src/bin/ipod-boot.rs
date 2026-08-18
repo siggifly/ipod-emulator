@@ -117,6 +117,24 @@ fn main() {
             None => println!("  HwVr    (absent)"),
         }
         println!("  records {}", c.tags.join(", "));
+        // **Show what we could not decode.** Rockbox's norboot-target.h names nine tags and this
+        // 5G NOR carries a tenth it does not list, so the next dump may hold one nobody has
+        // written down. Printing the bytes is the difference between "we do not know what this
+        // is" and quietly dropping it — and it is what makes a dump from an unfamiliar iPod worth
+        // sending us.
+        const DECODED: &[&str] = &["SrNm", "FwId", "Mod#", "HwVr"];
+        let undecoded: Vec<_> =
+            c.records.iter().filter(|(t, _)| !DECODED.contains(&t.as_str())).collect();
+        if !undecoded.is_empty() {
+            println!("  not decoded (payload bytes, as stored):");
+            for (tag, payload) in undecoded {
+                let words: Vec<String> = payload
+                    .chunks(4)
+                    .map(|w| w.iter().map(|b| format!("{b:02x}")).collect::<String>())
+                    .collect();
+                println!("    {tag}  {}", words.join(" "));
+            }
+        }
         // Two independent fields, so they can disagree — and a disagreement is a finding, not
         // something to resolve silently by preferring whichever was read first.
         if c.generation_agrees() == Some(false) {
