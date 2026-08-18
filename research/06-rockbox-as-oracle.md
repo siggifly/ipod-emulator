@@ -663,3 +663,43 @@ against 9 237 on channel 0 (Apple's bootloader, before the handoff). One convers
 `adc->data` is populated once by `adc_init`'s own `_adc_read` and cached from then on — so a single
 early read returning zero would explain every later number. The next measurement is to catch that
 one transaction and record the bytes it actually received.
+
+### The cold-boot shutdown, narrowed to the I²C response path
+
+`adc_read(ADC_BATTERY)` returns **`0x2c0` warm and `0` cold** — caught at `0x0007e228`, the
+instruction after `_battery_voltage`'s call to `adc_read` at `0x000836e8`. Everything below follows
+from separating that one value.
+
+**The disk is not the variable.** Same instrument, three runs:
+
+| | raw ADC value |
+|---|---|
+| warm + stock drive | `0x2c0` |
+| warm + the drive with Rockbox installed | `0x2c0` |
+| **cold** + the same installed drive | **`0`** |
+
+So it is the boot path — state Apple's bootloader leaves behind — and nothing to do with the files
+we wrote.
+
+**Four more explanations eliminated, each by measurement:**
+
+- *`adc_init` never ran, so `channelnum` stayed at its BSS zero.* No — `--break=0x03e9131c` hits
+  **exactly once in both paths**.
+- *Rockbox converts the wrong channel.* No. The ordered census shows the cold path's first
+  conversions are Apple's (`(0,704) (0,704) (4,512) (4,512) (3,512)…`) and then **`(2,704)`** —
+  Rockbox's own, right channel, right value.
+- *The PMU model ends up holding the wrong bytes.* No — **both** paths finish with
+  `data registers now [0xb0 0x80 0x00 0x00]`, which is 704 with the ready bit set.
+- *The I²C bus never goes idle, so `pp_i2c_read_bytes` returns `-2` and leaves `data[2]`
+  uninitialised.* No — `--watch=0x7000c01c` reports **no writes at all** in either path, so
+  `I2C_STATUS` reads 0 and `pp_i2c_wait_not_busy` returns on its first look.
+
+**What is left, and it is narrow.** `--pmu-force=0x30=0xb0 --pmu-force=0x31=0x80` forces those
+registers on every read. It rescues the **warm** path — it is what first produced the menu — and
+changes nothing cold (315 `sys_poweroff` calls with the force applied). A forced register that does
+not reach the guest means the failure is **not in the conversion and not in the register file**,
+but in the step that copies a read's answer into the controller's data registers at
+`i2c_base + 0x0c + 4i`.
+
+That is four lines of this emulator, and the next measurement is to log what they copy — and
+whether they run at all — on a cold boot.
