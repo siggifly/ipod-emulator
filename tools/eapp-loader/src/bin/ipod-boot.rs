@@ -1369,6 +1369,23 @@ fn install_os(args: &[String]) -> Result<(), String> {
 
     // The destination, as a copy. Sparse-aware on APFS and harmless elsewhere.
     std::fs::copy(src, out).map_err(|e| format!("copying {} -> {}: {e}", src.display(), out.display()))?;
+    // **`copy` carries the source's mode, and the sources here are deliberately read-only.**
+    // `drives/*.PRISTINE.img` is `chmod 444` so a bug cannot damage it, which meant installing FROM
+    // it produced an output that could not be written and failed with a bare `Permission denied`
+    // naming the destination — a file this command had just created itself. The same defect in
+    // `clone_file` is why a fingerprint got measured on a mutable working copy for a day.
+    if let Ok(md) = std::fs::metadata(out) {
+        let mut perm = md.permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            perm.set_mode(perm.mode() | 0o600);
+        }
+        #[cfg(not(unix))]
+        #[allow(clippy::permissions_set_readonly_false)]
+        perm.set_readonly(false);
+        let _ = std::fs::set_permissions(out, perm);
+    }
     let mut f = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
