@@ -59,8 +59,14 @@ reads that made this look broken were never the whole story.
 
 ## The brightness slider does nothing, and the dimmer is reading the wrong signal — 2026-08-18
 
-Moving brightness in RetailOS's settings does not change the panel, and the level the window shows
-is not a brightness at all.
+**What you actually see.** The panel does dim — the level drops during the boot and the window
+renders it — so it looks like brightness support and is not. Moving RetailOS's own slider changes
+nothing, and the number the window dims by is a tally of screen-wake toggles rather than a
+brightness. Partially working in appearance, not in fact, which is the worst of the three states and
+the reason this entry is long.
+
+**Parked 2026-08-18** after six eliminations. What follows is the record, so that the next attempt
+starts from what is ruled out rather than from the top.
 
 `Backlight` counts pulses on **`GPIOB_OUTPUT_VAL` bit 0x10** and decides direction from how long the
 pin stayed low: shorter than `BACKLIGHT_STEP_USEC` steps up, longer steps down. The threshold is
