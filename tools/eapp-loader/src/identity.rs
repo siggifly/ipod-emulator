@@ -277,114 +277,127 @@ fn sysinfo_field(text: &str, key: &str) -> Option<String> {
         .map(|(_, v)| v.trim().to_string())
 }
 
-/// White, black, or the U2 special edition — **a fact stated by the model number**, not inferred.
+/// A case colour — **a fact stated by the model number**, not inferred.
 ///
-/// The default is black, and only applies before a NOR has been chosen: once there is a dump, the
-/// colour comes from its `Mod#`. Black because the reference hardware this project is built against
-/// is an `MA146`, so it is the colour most of the recorded output was taken on.
+/// The full set across every iPod, because the table covers every iPod. `Unspecified` is its own
+/// answer and matters: many early models came in exactly one colour and say nothing about it, and
+/// recording that as white would be inventing a fact about hardware we have never seen.
+///
+/// The default is black, and applies only before a NOR has been chosen: once there is a dump the
+/// colour comes from its `Mod#`. Black because the reference hardware here is an `MA146`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Colour {
     White,
     #[default]
     Black,
-    /// Black with a red click wheel.
+    /// Black case, **red** wheel. Apple's own asset for it is named `iPod6-BlackRed`.
     U2,
+    Silver,
+    Blue,
+    Gold,
+    Green,
+    Pink,
+    Orange,
+    Purple,
+    Red,
+    Yellow,
+    Stainless,
+    /// The model constant names no colour.
+    Unspecified,
 }
 
 impl Colour {
-    /// The settings-file spelling, and the label a person reads.
+    /// The settings-file spelling.
     pub fn as_str(self) -> &'static str {
         match self {
             Colour::White => "white",
             Colour::Black => "black",
             Colour::U2 => "u2",
+            Colour::Silver => "silver",
+            Colour::Blue => "blue",
+            Colour::Gold => "gold",
+            Colour::Green => "green",
+            Colour::Pink => "pink",
+            Colour::Orange => "orange",
+            Colour::Purple => "purple",
+            Colour::Red => "red",
+            Colour::Yellow => "yellow",
+            Colour::Stainless => "stainless",
+            Colour::Unspecified => "unspecified",
         }
     }
 
     /// Parse the settings-file spelling. `None` for anything else, so an unreadable value falls
     /// back to the default rather than picking a colour at random.
     pub fn parse(s: &str) -> Option<Colour> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "white" => Some(Colour::White),
-            "black" => Some(Colour::Black),
-            "u2" => Some(Colour::U2),
-            _ => None,
-        }
+        let s = s.trim().to_ascii_lowercase();
+        [
+            Colour::White, Colour::Black, Colour::U2, Colour::Silver, Colour::Blue, Colour::Gold,
+            Colour::Green, Colour::Pink, Colour::Orange, Colour::Purple, Colour::Red,
+            Colour::Yellow, Colour::Stainless, Colour::Unspecified,
+        ]
+        .into_iter()
+        .find(|c| c.as_str() == s)
     }
 
     /// What to call it on screen.
     pub fn label(self) -> &'static str {
         match self {
+            Colour::U2 => "U2 Special Edition",
+            Colour::Unspecified => "Standard",
             Colour::White => "White",
             Colour::Black => "Black",
-            Colour::U2 => "U2 Special Edition",
+            Colour::Silver => "Silver",
+            Colour::Blue => "Blue",
+            Colour::Gold => "Gold",
+            Colour::Green => "Green",
+            Colour::Pink => "Pink",
+            Colour::Orange => "Orange",
+            Colour::Purple => "Purple",
+            Colour::Red => "Red",
+            Colour::Yellow => "Yellow",
+            Colour::Stainless => "Stainless steel",
         }
     }
 }
 
-/// 5G or 5.5G. libgpod calls these `VIDEO_1` and `VIDEO_2`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Generation {
-    /// iPod with Video, Late 2005.
-    Video1,
-    /// iPod with Video, Late 2006 — the "5.5G".
-    Video2,
-}
+pub use crate::models::{Generation, IpodModel, Row as Model, MODELS};
 
 impl Generation {
     /// The Gestalt ID RetailOS switches on, at `sysinfo + 0x84`.
     ///
-    /// `research/02` establishes that the jump table at `0x2653a4` accepts both, because it
-    /// switches on the high halfword `0x000B` = 11.
-    pub fn gestalt(self) -> u32 {
+    /// `research/02` establishes that its jump table at `0x2653a4` accepts both Video generations,
+    /// because it switches on the high halfword `0x000B` = 11. **`None` for every other
+    /// generation**, because we have not sourced their constants and a plausible guess here would
+    /// be indistinguishable from a fact.
+    /// A short human name. The two Video generations get the names people actually use; the rest
+    /// fall back to libgpod's own constant name rather than to an invented marketing string.
+    pub fn label(self) -> String {
         match self {
-            Generation::Video1 => 0x000B_0005,
-            Generation::Video2 => 0x000B_0010,
+            Generation::Video1 => "5G".into(),
+            Generation::Video2 => "5.5G".into(),
+            other => format!("{other:?}"),
+        }
+    }
+
+    pub fn gestalt(self) -> Option<u32> {
+        match self {
+            Generation::Video1 => Some(0x000B_0005),
+            Generation::Video2 => Some(0x000B_0010),
+            _ => None,
         }
     }
 }
 
-/// One row of Apple's model table: what a `ModelNumStr` actually means.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Model {
-    /// The table key — four characters, e.g. `A146`.
-    pub number: &'static str,
-    pub capacity_gb: u16,
-    pub colour: Colour,
-    pub generation: Generation,
-}
-
-/// Every 5G/5.5G row of libgpod's `ipod_model_table`.
-///
-/// **Sourced, not guessed** — `libgpod/src/itdb_device.c`, the table iTunes-compatible software has
-/// used for twenty years. It settles three questions at once that were otherwise going to be
-/// answered from memory: the **colour** of a unit, its **capacity**, and whether it is a **5G or a
-/// 5.5G** — all from one field that is already sitting in every iPod's `SysInfo`.
-///
-/// Note the shape of the generation split, which is a useful sanity check in itself: the 80 GB
-/// models exist only as `VIDEO_2`, and the 60 GB models only as `VIDEO_1`.
-pub const MODELS: &[Model] = &[
-    Model { number: "A002", capacity_gb: 30, colour: Colour::White, generation: Generation::Video1 },
-    Model { number: "A146", capacity_gb: 30, colour: Colour::Black, generation: Generation::Video1 },
-    Model { number: "A003", capacity_gb: 60, colour: Colour::White, generation: Generation::Video1 },
-    Model { number: "A147", capacity_gb: 60, colour: Colour::Black, generation: Generation::Video1 },
-    Model { number: "A452", capacity_gb: 30, colour: Colour::U2,    generation: Generation::Video1 },
-    Model { number: "A444", capacity_gb: 30, colour: Colour::White, generation: Generation::Video2 },
-    Model { number: "A446", capacity_gb: 30, colour: Colour::Black, generation: Generation::Video2 },
-    Model { number: "A664", capacity_gb: 30, colour: Colour::U2,    generation: Generation::Video2 },
-    Model { number: "A448", capacity_gb: 80, colour: Colour::White, generation: Generation::Video2 },
-    Model { number: "A450", capacity_gb: 80, colour: Colour::Black, generation: Generation::Video2 },
-];
-
 impl Model {
     /// Look up a `ModelNumStr`, in any of the forms it is written in.
     ///
-    /// **The normalisation is the whole difficulty.** Our own drives say `xMA146`; the table key is
-    /// `A146`. libgpod gets there in two strips — its `SysInfo` reader drops the leading `x`, then
-    /// `get_ipod_info_from_model_number` drops one further alphabetic character with `isalpha`.
+    /// **The normalisation is the whole difficulty.** Our own drives say `xMA146`; the NOR's `Mod#`
+    /// says `MA146`; the table key is `A146`. libgpod gets there in two strips — its `SysInfo`
+    /// reader drops the leading `x`, then the table lookup drops one further alphabetic character.
     /// Reproducing that as two conditional strips is fragile, so this takes the **last four
-    /// characters** and requires the final three to be digits, which accepts every observed form —
-    /// `xMA146`, `MA146`, `A146` — and rejects strings that are not model numbers at all.
+    /// characters** and requires the final three to be digits, which accepts every observed form
+    /// and rejects strings that are not model numbers.
     pub fn lookup(model_num_str: &str) -> Option<&'static Model> {
         let s = model_num_str.trim().to_ascii_uppercase();
         let key: String = s.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
@@ -397,6 +410,11 @@ impl Model {
     /// Look one up from the text of a `SysInfo`.
     pub fn from_sysinfo(text: &str) -> Option<&'static Model> {
         Model::lookup(&sysinfo_field(text, "ModelNumStr")?)
+    }
+
+    /// The case colour this row implies.
+    pub fn colour(&self) -> Colour {
+        self.model.colour()
     }
 }
 
@@ -478,14 +496,14 @@ mod tests {
     fn a_model_number_resolves_in_every_form_it_is_written_in() {
         for form in ["xMA146", "MA146", "A146", "xma146"] {
             let m = Model::lookup(form).unwrap_or_else(|| panic!("{form} must resolve"));
-            assert_eq!(m.colour, Colour::Black, "{form}");
+            assert_eq!(m.colour(), Colour::Black, "{form}");
             assert_eq!(m.capacity_gb, 30, "{form}");
             assert_eq!(m.generation, Generation::Video1, "{form}");
         }
         // The 80 GB models exist only as 5.5G, which is the table's own consistency check.
         assert_eq!(Model::lookup("MA448").unwrap().generation, Generation::Video2);
-        assert_eq!(Model::lookup("MA448").unwrap().colour, Colour::White);
-        assert_eq!(Model::lookup("MA450").unwrap().colour, Colour::Black);
+        assert_eq!(Model::lookup("MA448").unwrap().colour(), Colour::White);
+        assert_eq!(Model::lookup("MA450").unwrap().colour(), Colour::Black);
         // Negative controls: things that are not model numbers must not resolve to one.
         for bad in ["", "A14", "ABCD", "nonsense", "A1466"] {
             assert!(Model::lookup(bad).is_none(), "must not resolve {bad:?}");
@@ -497,10 +515,12 @@ mod tests {
     fn the_model_is_read_out_of_a_real_shaped_sysinfo() {
         let text = "BoardHwName: PP5021C-2\nModelNumStr: xMA146\nboardHwRev: 0x00050000\n";
         let m = Model::from_sysinfo(text).expect("must resolve");
-        assert_eq!((m.colour, m.capacity_gb), (Colour::Black, 30));
+        assert_eq!((m.colour(), m.capacity_gb), (Colour::Black, 30));
         // The model says 5G and `boardHwRev` says 5. Two independent fields, one answer — which is
         // the check worth having, because either alone could be a misparse.
         assert_eq!(m.generation, Generation::Video1);
-        assert_eq!(m.generation.gestalt(), 0x000B_0005);
+        assert_eq!(m.generation.gestalt(), Some(0x000B_0005));
+        // Every other generation is honest about not knowing.
+        assert_eq!(Generation::Nano1.gestalt(), None);
     }
 }

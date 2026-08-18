@@ -106,15 +106,8 @@ fn main() {
             (Some(m), Some(info)) => println!(
                 "  model   {m} — {} GB, {}, {}",
                 info.capacity_gb,
-                match info.colour {
-                    eapp_loader::identity::Colour::White => "white",
-                    eapp_loader::identity::Colour::Black => "black",
-                    eapp_loader::identity::Colour::U2 => "U2 (black, red wheel)",
-                },
-                match info.generation {
-                    eapp_loader::identity::Generation::Video1 => "5G",
-                    eapp_loader::identity::Generation::Video2 => "5.5G",
-                }
+                info.colour().label(),
+                info.generation.label()
             ),
             (Some(m), None) => println!("  model   {m} — not in the model table"),
             (None, _) => println!("  model   (absent)"),

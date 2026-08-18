@@ -1272,7 +1272,7 @@ impl SysCfg {
     /// `None` when either is missing, so "we did not check" is distinguishable from "they agree" —
     /// a bare `false` for absent data is how a check ends up quietly never running.
     pub fn generation_agrees(&self) -> Option<bool> {
-        Some(self.model_info()?.generation.gestalt() == self.hw_vr?)
+        Some(self.model_info()?.generation.gestalt()? == self.hw_vr?)
     }
 }
 
@@ -1378,7 +1378,7 @@ mod syscfg_tests {
         assert_eq!(c.model.as_deref(), Some("MA146"));
         assert_eq!(c.hw_vr, Some(0x000B_0005));
         let info = c.model_info().expect("MA146 is in the table");
-        assert_eq!(info.colour, crate::identity::Colour::Black);
+        assert_eq!(info.colour(), crate::identity::Colour::Black);
         assert_eq!(info.capacity_gb, 30);
         assert_eq!(c.generation_agrees(), Some(true));
 

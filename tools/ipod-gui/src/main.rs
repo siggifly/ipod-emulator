@@ -2505,7 +2505,7 @@ impl App {
         }
         let Ok(bytes) = std::fs::read(nor) else { return };
         if let Some(m) = eapp_loader::inspect::syscfg(&bytes).and_then(|c| c.model_info()) {
-            self.settings.chassis = m.colour;
+            self.settings.chassis = m.colour();
         }
     }
 
