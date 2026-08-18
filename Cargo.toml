@@ -6,7 +6,7 @@
 #
 # `ipod-boot` and `ipod-film` are not listed because they are not crates — they are shell recipes
 # plus, for `ipod-boot`, a binary that lives inside `eapp-loader`. `ghidra` is shell wrappers around
-# a third-party server. `fat-read.py` and `rsrc-extract.py` are standalone scripts.
+# a third-party server. `fat-read.py` is a standalone script.
 [workspace]
 resolver = "2"
 members = [

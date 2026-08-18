@@ -4711,7 +4711,7 @@ measurement that made the derivation possible; only §4's *cause* was wrong.
 ## Addendum 27: `vmcs.bin` is a Nucleus PLUS application, and the `0x1f0` block really is runtime-only
 
 2026-08-14. `vmcs.bin` has sat at the centre of the last open bypass for the whole project and had
-**never been extracted to the host**, because nothing could read `rsrc`. `tools/rsrc-extract.py` now
+**never been extracted to the host**, because nothing could read `rsrc`. `ipod-boot rsrc` now
 can — pure parsing, no `hdiutil`, no mounting.
 
 ### 1. The volume, in full

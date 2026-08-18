@@ -138,6 +138,15 @@ fn main() {
 
     // The other half of installing an OS: the firmware partition holds what the bootloader runs,
     // the data partition holds everything that bootloader then looks for.
+    if name == "rsrc" {
+        match rsrc_cmd(&rest) {
+            Ok(()) => return,
+            Err(e) => {
+                eprintln!("ipod-boot rsrc: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     if name == "put-files" {
         match put_files(&rest) {
             Ok(()) => return,
@@ -953,6 +962,77 @@ fn sha256_hex(data: &[u8]) -> String {
     h.iter().map(|x| format!("{x:08x}")).collect()
 }
 
+// ---------------------------------------------------------------- rsrc
+
+/// `ipod-boot rsrc DISK.img [--list | --get PATH [-o OUT] | --volume OUT]`
+///
+/// Reads the `rsrc` volume out of the firmware partition without mounting anything. The parsing
+/// lives in [`eapp_loader::rsrc`] so it is testable without a disk image, and there is no write
+/// path in it at all — a stronger guarantee than remembering to open the file read-only, on a tree
+/// whose reference images cannot be regenerated.
+fn rsrc_cmd(args: &[String]) -> Result<(), String> {
+    const USAGE: &str =
+        "usage: ipod-boot rsrc DISK.img [--list | --get PATH [-o OUT] | --volume OUT]";
+    let disk_path = args.first().ok_or(USAGE)?;
+    if disk_path.starts_with("--") {
+        return Err(USAGE.into());
+    }
+    let val = |k: &str| -> Option<String> {
+        args.iter()
+            .find_map(|a| a.strip_prefix(&format!("{k}=")).map(str::to_string))
+            .or_else(|| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned())
+    };
+    let get = val("--get");
+    let volume = val("--volume");
+    let out = val("-o").or_else(|| val("--out"));
+
+    let disk = std::fs::read(disk_path).map_err(|e| format!("{disk_path}: {e}"))?;
+    let dir =
+        eapp_loader::rsrc::read_directory(&disk, 63).map_err(|e| format!("{disk_path}: {e}"))?;
+    let img =
+        dir.iter().find(|i| i.tag == "rsrc").ok_or("no `rsrc` image in the firmware directory")?;
+    let (a, b) = (img.offset as usize, img.offset as usize + img.len as usize);
+    if b > disk.len() {
+        return Err(format!("`rsrc` claims {} bytes at {a:#x}, past the end of the image", img.len));
+    }
+    let vol = &disk[a..b];
+
+    if let Some(o) = volume {
+        std::fs::write(&o, vol).map_err(|e| format!("{o}: {e}"))?;
+        println!("{o}: {} bytes", vol.len());
+        return Ok(());
+    }
+
+    // Past the 0x200 image header, at the FAT12 boot sector.
+    if vol.len() < 0x200 {
+        return Err("`rsrc` is shorter than its own header".into());
+    }
+    let fat = eapp_loader::rsrc::Fat12::new(&vol[0x200..])?;
+    let walk = fat.walk();
+
+    let Some(want) = get else {
+        for e in &walk {
+            if e.is_dir {
+                println!("  {}", e.path);
+            } else {
+                println!("  {:<44} {}", e.path, e.size);
+            }
+        }
+        return Ok(());
+    };
+    let want = want.trim_start_matches('/').to_uppercase();
+    for e in &walk {
+        if !e.is_dir && e.path.to_uppercase() == want {
+            let data = fat.read_chain(e.cluster, e.size);
+            let o = out.unwrap_or_else(|| e.path.rsplit('/').next().unwrap().to_string());
+            std::fs::write(&o, &data).map_err(|err| format!("{o}: {err}"))?;
+            println!("{o}: {} bytes", data.len());
+            return Ok(());
+        }
+    }
+    Err(format!("{want}: not found — run with --list for the tree"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -980,51 +1060,9 @@ mod tests {
         );
     }
 
-    fn flags_of(argv: &[String]) -> Vec<String> {
-        argv.iter()
-            .filter(|a| a.starts_with("--"))
-            .map(|a| match a.split_once('=') {
-                Some((k, _)) => format!("{k}="),
-                None => a.clone(),
-            })
-            .collect()
-    }
 
 
 
-    /// Extract the flags from a script's `trace` invocation: everything from the line that runs
-    /// `$TRACE` to the end of its backslash continuations.
-    fn script_flags(text: &str) -> Vec<String> {
-        let mut out = Vec::new();
-        let mut in_call = false;
-        for line in text.lines() {
-            let t = line.trim();
-            if t.starts_with('#') {
-                continue;
-            }
-            if !in_call && t.contains("\"$TRACE\"") {
-                in_call = true;
-            }
-            if in_call {
-                for tok in t.split_whitespace() {
-                    if let Some(f) = tok.strip_prefix("--") {
-                        let name = f.split('=').next().unwrap_or(f);
-                        let has_value = f.contains('=');
-                        // `"$@"` is the caller's flags, not the recipe's.
-                        out.push(if has_value {
-                            format!("--{name}=")
-                        } else {
-                            format!("--{name}")
-                        });
-                    }
-                }
-                if !t.ends_with('\\') {
-                    break;
-                }
-            }
-        }
-        out
-    }
 
     /// `flash-update` boots twice with an identical argv. That is the measurement — the second boot
     /// proves the first one's write took, and it only proves it if nothing differs between them.
