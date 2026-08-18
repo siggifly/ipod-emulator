@@ -123,12 +123,25 @@ and that is the whole problem.
 
 Run the binaries. Not "they linked" — run them.
 
-- [ ] `cargo test --release --workspace` on **every** platform built. The count is the check: 183.
+- [ ] `cargo test --release --workspace` on **every** platform built. The count is the check: **231**
+      (2026-08-18). **Run it at the workspace, and read the count.** `cargo test -p eapp-loader`
+      answers `0 passed; 0 failed … 0.00s` and calls it `ok`, because the crate's tests are in the
+      lib target and that invocation reached a bin. A green line with a zero in it is not a pass,
+      and this checklist is the only place that says so. *(This line read 183 until today, which is
+      the same failure one level out: a count that is not re-measured stops being a check and
+      becomes a number.)*
 - [ ] Extract an archive somewhere else and run from there. `ipod-boot` finds `trace` beside
       itself, and that is what makes an archive work with no configuration.
 - [ ] `ipod-emulator --check-update` exits 0 with no network.
 - [ ] `ipod-emulator --check-images --flash=no --disk=no` says `UNREADABLE`.
-- [ ] All seven recipes compose: `for r in retail cold warm flsh rockbox flash-update from-idle`.
+- [ ] All **six** recipes compose: `for r in retail warm flsh rockbox flash-update from-idle`, each
+      with `--print`. **`cold` is not one of them and must not be added back.** It was the
+      prototype's NOR, it booted a firmware partition the retail ROM correctly rejects, and shipping
+      it sent at least one person hours down a path that cannot work — `retail-boot.sh`'s header
+      carries the measured difference. This list said `cold` until 2026-08-18, so the gate failed on
+      a retired recipe, and the obvious way to make it pass again was to resurrect the recipe.
+      **A checklist that fails for the right reason still teaches the wrong fix if it names the
+      wrong thing.**
 - [ ] macOS: `codesign -v "iPod 5G.app"`, and the bundle reports the right version and name —
       `plutil -p Contents/Info.plist`.
 - [ ] Windows: run it. `wine` on the Linux box is enough to prove the recipes compose and the

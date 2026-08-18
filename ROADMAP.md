@@ -64,6 +64,34 @@ with six devices that all half-work.
 | USB | nothing modelled beyond a clock-ready bit — and `disk` (target disk mode) faults after 128 K instructions |
 | Titles | purchased/decrypted games do not launch — the identity Apple's DRM binds to is understood, the keystore is not |
 
+## What 0.5 is, and what it is deliberately not
+
+Decided 2026-08-18, because the list of things that *could* go in kept growing into the 1.0 table
+above. **0.5 ships what is finished.** `CHANGELOG.md`'s `0.5.0` section was already written across
+ten headings — drive persistence, settings that no longer reboot the machine, one setup screen, the
+readout that replaced the instrument panel, and Rockbox booting — and none of that is published,
+because the tags stop at `v0.4.0`.
+
+**In:** everything in that changelog · the cold-boot Rockbox fix · the font it renders with · the
+GUI carrying those changes · screenshots that are honest about all of it.
+
+**Out, and each for a stated reason, not for lack of time:**
+
+| deferred | why |
+|---|---|
+| **Audio** (M6) | a 1.0 condition. Nothing before it depends on it, Doom included |
+| **iPodLinux** (M4) | the kernel is located but not fetched and `ipodloader2` is not built — that is a milestone, not a release note |
+| **Target disk mode** | it is a USB feature and ships with M9. Being a NOR mode is how it is reached, not a reason to pull it early |
+| **Titles** (M8) | gated on a keystore nobody has, in a private repository |
+| **JIT** | belongs inside M7, and second — see there |
+
+**The trap this section exists to stop:** every item above is individually reasonable to want in
+0.5, and adding all of them makes 0.5 into 1.0 under a smaller number. A release that waits for
+everything is a release that never dates its binaries.
+
+**Screenshots go last.** Three of the shipped Rockbox images are pictures of the font bug and one is
+a picture of a GIF-palette bug. Regenerating before those land bakes both into the release.
+
 ## The machine's other modes
 
 The NOR carries four bootable images besides the OS, and Apple's updater is a fifth mode on the
@@ -85,10 +113,10 @@ absence at one address is not an absence.
 
 **`disk` is the one that matters and the one that is broken.** Target disk mode is what a person
 actually does with an iPod — it is how the drive gets mounted on a computer — so it is the natural
-companion to **M8 (USB)** and is scheduled with it. The other three are cheap to re-check whenever
-the co-processor or the boot path moves.
+companion to **M9 (USB)** and is scheduled with it — not worked early because it happens to be one
+of the NOR's modes. The other three are cheap to re-check whenever the co-processor or the boot
+path moves.
 
-## The two modes
 ## The two modes
 
 The emulator has one mode today and should have two.
@@ -111,7 +139,7 @@ Two separate ambitions get called the same thing, and keeping them apart matters
 - **Replacing the bootloader** (M5) is an *acquisition* win. It deletes the hardest step in using
   this program — finding a NOR dump — and costs no fidelity, because the bootloader's job is
   finished before RetailOS gets control.
-- **Replacing the OS under a game** (M9) is a *different program*: the title runs with no Apple
+- **Replacing the OS under a game** (M8) is a *different program*: the title runs with no Apple
   code in the loop at all.
 
 **Neither is a shortcut around understanding.** You can only replace what you have measured — a
@@ -239,24 +267,27 @@ samples, which is why M7 sits next to it.
 **Depends on:** M7 in practice. **Settled by:** Brick's sounds, at the right pitch, in time — and
 Rockbox playing a file.
 
+**What does NOT depend on this, and was nearly scheduled behind it:** Rockbox's **plugins, Doom
+included, run silent.** A plugin needs `/.rockbox/rocks/` on the volume, a working cold boot, input
+and a display — not the codec. Audio is a 1.0 condition and it is not a gate on anything before it.
+
 ## M7 · The boot-time gap and real-time speed
 
 ~300 seconds of simulated time to reach the menu against five or ten on hardware. The interpreter's
 ~30 % of real speed explains a factor of three, not thirty: something waits far longer than it
 should, and that is a bug rather than slowness.
 
+**A JIT belongs here, and second.** It is how this milestone finishes, not how it starts: the
+missing factor is **thirty**, and the interpreter only accounts for three. Compiling first would buy
+a 10× speedup and leave the machine three times too slow for a reason nobody had understood — and
+with the evidence gone, because the wait would now be hidden inside generated code. Find the wait,
+then compile. The interpreter also stays: it is the differential oracle a JIT is checked against,
+the same way two operating systems check the device models.
+
 **Settled by:** a cold boot reaching the language picker in a simulated time of the same order as
 the hardware, and the window reporting ≥ 100 % of real time.
 
-## M8 · USB, and the ledger to zero
-
-USB unlocks disk mode and restore — the two things a user does to a real iPod. The remaining ledger
-entries (#4, #6, #7, #11, #17) close here, #6 (the video co-processor's `vmcs` firmware) being the
-largest and the one M2 is most likely to reframe.
-
-**Settled by:** `research/04-bypass-ledger.md` with an empty active section.
-
-## M9 · Titles without Apple's OS
+## M8 · Titles without Apple's OS
 
 The older goal, and **now bounded** rather than open-ended. RetailOS publishes a self-describing,
 content-hash-versioned framework surface at `0x000793fc`–`0x00079ce0` — **8 frameworks, 433
@@ -279,6 +310,38 @@ system and allocator. "Extracting" one means reimplementing the host. See
 [research/13](research/13-do-the-games-load.md).
 
 **Settled by:** a decrypted title running from the window with no `osos` loaded.
+
+**Where the work lives.** The runtime is this repository's, because it is our code and a mode of
+this program. The research it rests on is not: `ipod-games` (the eApp format and the loader read out
+of Apple's firmware) and `ipod-drm` (how iTunes authorises a title) are private, and `ipod-emulator`
+is the public arm. **That split is by what can be published, not by subject** — so extraction and
+keystore work belongs there and arrives here as a decrypted file plus a specification.
+
+## M9 · USB, and target disk mode
+
+USB unlocks disk mode and restore — the two things a person actually does with a real iPod. **Target
+disk mode is scheduled here and nowhere else**: it is a USB feature, and the fact that it is one of
+the NOR's five modes is a detail of how it is reached, not a reason to work it early. It is broken
+today — `Lost(0xe19b0000)` after 127 952 instructions, running off into data at `0x18` with
+registers full of instruction words.
+
+USB is also the route by which a real iTunes could see this device, which is why it sits near M8
+rather than far from it — but M8 does not depend on it, because `ipod-drm`'s premise is authorising
+**without** iTunes.
+
+**Settled by:** a host mounting the emulated drive over USB, and a restore completing.
+
+## The bypass ledger · *standing, not a milestone*
+
+The five active entries (#4, #6, #7, #11, #17) used to be bundled into the USB milestone, which
+made a continuous obligation look like a thing someone would one day sit down and do. It is not:
+bypasses retire as the subsystems around them become real, and M2's oracle table is the mechanism
+that keeps finding them — #7 got its second consumer that way, and the CPU↔COP mailbox behind it is
+the current best explanation for the cold-boot ADC failure.
+
+**#6** (the video co-processor's `vmcs` firmware) is the largest and the one M2 is most likely to
+reframe. **An empty active section is a 1.0 gate**, and it is the only place the ledger is allowed
+to be a deadline.
 
 ## M10 · 1.0
 
