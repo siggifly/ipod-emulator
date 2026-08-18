@@ -136,6 +136,18 @@ fn main() {
         }
     }
 
+    // The other half of installing an OS: the firmware partition holds what the bootloader runs,
+    // the data partition holds everything that bootloader then looks for.
+    if name == "put-files" {
+        match put_files(&rest) {
+            Ok(()) => return,
+            Err(e) => {
+                eprintln!("ipod-boot put-files: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     let Some(recipe) = Recipe::parse(name) else {
         eprintln!("unknown recipe `{name}`\n");
         usage();
@@ -1487,4 +1499,55 @@ mod install_tests {
             let _ = std::fs::remove_file(p);
         }
     }
+}
+
+/// Copy a local directory tree into the drive image's FAT32 volume.
+///
+/// **This modifies DISK.img in place**, unlike `install-os`, and says so before it starts. The
+/// image it is meant for is one `install-os` just produced — a derived file — and copying 8 GB
+/// again for every file added would be its own kind of hostile.
+fn put_files(args: &[String]) -> Result<(), String> {
+    const USAGE: &str = "usage: ipod-boot put-files DISK.img SRC_DIR [DEST_PATH]\n\
+                         copies the CONTENTS of SRC_DIR into DEST_PATH (default: the volume root)";
+    let (disk, src) = match (args.first(), args.get(1)) {
+        (Some(a), Some(b)) => (Path::new(a), Path::new(b)),
+        _ => return Err(USAGE.into()),
+    };
+    let dest = args.get(2).map(String::as_str).unwrap_or("");
+    if !src.is_dir() {
+        return Err(format!("{}: not a directory", src.display()));
+    }
+
+    let mut vol = eapp_loader::fat::Fat32::open(disk)?;
+    let root = if dest.is_empty() { vol.root() } else { vol.mkdir_p(dest)? };
+    println!("  {} — writing into {}", disk.display(), if dest.is_empty() { "/" } else { dest });
+
+    // Breadth-first, so a directory exists before anything is written into it.
+    let mut queue = vec![(src.to_path_buf(), root)];
+    let (mut files, mut bytes, mut dirs) = (0u64, 0u64, 0u64);
+    while let Some((from, into)) = queue.pop() {
+        let mut items: Vec<_> = std::fs::read_dir(&from)
+            .map_err(|e| format!("{}: {e}", from.display()))?
+            .filter_map(|e| e.ok())
+            .collect();
+        items.sort_by_key(|e| e.file_name());
+        for item in items {
+            let name = item.file_name().to_string_lossy().to_string();
+            let path = item.path();
+            let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            if meta.is_dir() {
+                let sub = vol.mkdir(into, &name)?;
+                dirs += 1;
+                queue.push((path, sub));
+            } else {
+                let body = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                vol.write_file(into, &name, &body)?;
+                files += 1;
+                bytes += body.len() as u64;
+            }
+        }
+    }
+    vol.flush()?;
+    println!("  {files} file(s) in {dirs} directory(ies), {bytes} bytes");
+    Ok(())
 }

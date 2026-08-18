@@ -573,3 +573,50 @@ rsrc: recorded 0x18319bab · sum[dev,+len) = 0x1832856f · sum[dev+512,+len) = 0
 So the installer now **reproduces the checksums that are already there before writing new ones**,
 and refuses if it cannot. That check fails on a file nobody has modified, in a second, instead of
 producing a plausible image that dies seventy ATA commands into a boot. Both behaviours are tested.
+
+## 2026-08-18: the whole chain, from Apple's reset vector to Rockbox's own binary
+
+`ipod-boot put-files DISK.img SRC_DIR` writes a directory tree into the drive image's FAT32
+volume — the other half of an install, and the half the Rockbox bootloader was asking for when it
+said *"Can't load rockbox.ipod: File not found"*. 381 files, 19.3 MB, in 1.7 s; an independent
+reader (`tools/fat-read.py`) sees all 404 entries with their long names intact.
+
+**Every link now runs:**
+
+```
+Apple's boot ROM  →  Apple's bootloader  →  the Rockbox bootloader we installed into the
+firmware partition  →  rockbox.ipod, loaded from the FAT32 volume we wrote  →  Rockbox
+```
+
+![Rockbox, cold-booted from its own binary on disk](../docs/media/ipod-18-rockbox-cold.png)
+
+The splash appears at ~110 M instructions and holds for 15 M. Nothing here is warm-entered and no
+step is skipped.
+
+### And then it powers off — from a *different* branch than the warm path does
+
+Bounded precisely, which is the useful part:
+
+| | warm-entered (`rockbox.sh`) | cold-booted from disk |
+|---|---|---|
+| draws | splash → `Scanning disk…` → **menu** | splash, then black |
+| `sys_poweroff` callers | all `handle_auto_poweroff+0xb8` — the **idle** branch | all `+0x64` — the **`query_force_shutdown`** branch |
+| `power_off()` | — | **230 calls** (it cannot actually power off, so it loops) |
+
+So the cold path fails a battery check that the warm path passes, with the same ADC model and the
+same `--pmu` flag in both recipes.
+
+**What has been ruled out**, each by measurement rather than reasoning:
+
+- *The firmware partition was damaged by the FAT writes.* No — both directory checksums still
+  reproduce exactly after `put-files`.
+- *Wheel input would keep it alive.* No — 124 frames delivered from during the splash, 117 reads of
+  `CLICKWHEEL_DATA`, and it still blanks at the same instruction count.
+- *A `battery_levels.cfg` in the installed tree moved the thresholds.* No — the Rockbox 4.0 build
+  contains no such file.
+- *The ADC answers badly.* Channel 2 returns `0x2c0` (4 125 mV) here as everywhere.
+
+The ADC census is itself the next clue: **9 237 conversions on channel 0 and exactly one on
+channel 2**. Channel 0 is Apple's bootloader polling before the handoff; one conversion on Rockbox's
+own channel means it shut down before its power thread ever ran a second time — so `voltage_now` is
+being decided by a single early reading, or by nothing at all.

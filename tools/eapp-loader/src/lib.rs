@@ -18,6 +18,7 @@ use arm7tdmi::{Bus, Cpu, Mode};
 /// Recording the co-processor's panel over a run, and the PNG writer that lands the frames.
 /// Neither touches the machine: `film` reads `Bcm::mem` between chunks of the run and costs the
 /// emulated CPU nothing. See `tools/ipod-film/README.md`.
+pub mod fat;
 pub mod film;
 pub mod png;
 

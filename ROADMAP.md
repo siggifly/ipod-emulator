@@ -57,7 +57,7 @@ with six devices that all half-work.
 | RetailOS | **boots** cold from the reset vector, menus, formats its own volume, Brick plays. No sound. ~300 s of simulated time to the menu |
 | Rockbox 4.0 | **boots to its main menu and takes wheel input** (2026-08-18). Beyond the menu: unverified. No sound |
 | iPodLinux | **a verified 5.5G-correct kernel has been located** (ZeroSlackr `vmlinux`, 1 531 200 bytes, raw-ARM magic confirmed) and not yet fetched. `ipodloader2` is vendored as source and not yet built |
-| Installing an OS | **done** — `ipod-boot install-os`, cold-booted through Apple's bootloader |
+| Installing an OS | **done** — `install-os` for the firmware partition, `put-files` for the FAT32 volume; the whole chain cold-boots |
 | Our own bootloader / OS | not started, and deliberately not designed for yet |
 | Bypass ledger | 5 active entries: #4, #6, #7, #11, #17 — and #7 now has a second consumer to be tested against |
 | Audio | **nothing modelled.** The Wolfson codec answers no I²C; Rockbox is now talking to it and getting silence back |
@@ -159,9 +159,20 @@ The installer **reproduces the checksums already in the directory before writing
 refuses if it cannot — added because the first attempt did not, and produced an image the
 bootloader rejected after 71 ATA commands with *"Use iTunes to restore"*.
 
-**Left:** the same thing from the window, as a content-routed drop (`.ipod` files carry a checkable
-`ipvd` checksum, so it is identification rather than a guess), and a machine list that shows what
-each drive holds.
+The data partition is the other half, and `ipod-boot put-files DISK.img SRC_DIR` does it — a
+FAT32 writer with long-name support, because the two paths it was written for are `.rockbox`
+(leading dot) and `rockbox.ipod` (four-character extension) and neither fits 8.3. 381 files in
+1.7 s, verified against an independent reader.
+
+**So the whole chain runs**: Apple's boot ROM → Apple's bootloader → the Rockbox bootloader in the
+firmware partition → `rockbox.ipod` off the FAT32 volume → Rockbox's splash. Nothing warm-entered,
+no step skipped.
+
+**Left:** the cold-booted Rockbox powers off after its splash, from
+`handle_auto_poweroff+0x64` — the `query_force_shutdown` branch — where the warm-entered one goes
+to `+0xb8`, the idle branch. Four explanations are already eliminated by measurement
+([research/06](research/06-rockbox-as-oracle.md)). Also left: doing all of this from the window as
+a content-routed drop, and a machine list that shows what each drive holds.
 
 ## M4 · iPodLinux
 
