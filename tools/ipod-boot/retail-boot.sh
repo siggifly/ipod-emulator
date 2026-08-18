@@ -31,7 +31,7 @@ RES="$ROOT/resources"
 # Mislabelled upstream; the bytes are a retail 5G. SrNm <SERIAL-ROM>, Mod# MA146, HwVr 0x000b0005.
 # `trace` beside this script's build, not one machine's target directory. The old default was
 # `$HOME/dev/.cargo-target/release/trace`, which is a path only its author had.
-: "${TRACE:=$(cd "$HERE/../.." && pwd)/target/release/trace}"
+: "${TRACE:=$HOME/dev/.cargo-target/release/trace}"
 : "${BUDGET:=150000000}"
 : "${FLASH:=$RES/roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin}"
 # The image whose firmware partition this bootloader accepts — the pristine 13 895 680-byte

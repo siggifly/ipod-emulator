@@ -56,6 +56,10 @@ The hard part is not the samples. It is timing, which is why Ⅰ comes first.
 Finding a NOR dump is the hardest step in using this program. It is archived under the wrong product
 name, and the alternative is owning an iPod and running Rockbox on it.
 
+**The first outside report confirms this is the wall.** Issue #2 is someone with the firmware
+bundle already in hand, stuck for want of the 1 MiB ROM, whose own iPod produced an empty dump —
+and who noticed the prototype HLE bootloader had been removed. Every step of that is this item.
+
 The bootloader's job is knowable and largely known: bring up SDRAM, talk to the PMU, upload `vmcs`
 to the co-processor, read the partition table, DMA `osos`, checksum it, jump — leaving a `sysinfo_t`
 block whose layout is documented. **We can synthesise that state and enter `osos` directly**, with
@@ -131,6 +135,10 @@ and only the second is anyone else's decision.
 
 Written down, deliberately not scheduled. Each says what it would take and why it is not next.
 
+- [**Running an OS that is not RetailOS**](docs/ideas/run-any-os.md) — Rockbox 4.0 already boots
+  here and scans the disk. Making it something you *use* means installing it into the drive's
+  firmware partition and cold-booting it, rather than warm-entering an image and adding a seventh
+  bypass. Blocked on the shutdown it requests after the scan.
 - [**Running from a real iPod in disk mode**](docs/ideas/run-from-a-real-ipod.md) — importing a
   device's firmware partition is 14 MB and easy; running *off* the device is the dangerous version,
   because RetailOS would format it. The safe form needs a copy-on-write layer in `Ata`, which is a

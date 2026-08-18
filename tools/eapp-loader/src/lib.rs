@@ -1950,6 +1950,17 @@ impl Memory {
             }
             _ => val,
         };
+        // Switching the USB clock on makes it report ready. Applied after the store below so the
+        // enable itself is recorded first, and through the same region the firmware reads.
+        let usb = match self.xmb.as_mut() {
+            Some(x) => x.usb_clock(addr, val),
+            None => None,
+        };
+        if let Some((at, bit)) = usb {
+            if let Some((buf, i)) = self.locate_write(at) {
+                buf[i] |= bit;
+            }
+        }
         match self.locate_write(addr) {
             Some((buf, i)) => buf[i] = val,
             None => {
@@ -3954,6 +3965,8 @@ pub struct Xmb {
     pub gate_closes: u64,
     /// Times bit 24 was written set. Two per boot is the SDRAM bring-up's two configurations.
     pub ram_kicks: u64,
+    /// Times `INIT_USB` was written into `DEV_INIT2`. See [`Xmb::usb_clock`].
+    pub usb_enables: u64,
 }
 
 impl Xmb {
@@ -3968,7 +3981,40 @@ impl Xmb {
     const RAM_DONE: u8 = 0x80;
 
     pub fn new(base: u32) -> Self {
-        Self { base, gate_opens: 0, gate_closes: 0, ram_kicks: 0 }
+        Self { base, gate_opens: 0, gate_closes: 0, ram_kicks: 0, usb_enables: 0 }
+    }
+
+    /// Byte 3 of `+0x20` — `DEV_INIT2`'s high byte, holding `INIT_USB` (bit 31).
+    const DEV_INIT2_HI: u32 = 0x23;
+    const INIT_USB_HI: u8 = 0x80;
+    /// `+0x28`, whose bit 7 the USB clock reports itself ready in.
+    const USB_STATUS: u32 = 0x28;
+    const USB_CLOCK_READY: u8 = 0x80;
+
+    /// The USB clock reporting ready, once something has switched it on.
+    ///
+    /// **Rockbox hangs forever without this**, at `usb-fw-pp502x.c:116` — `DEV_INIT2 |= INIT_USB;`
+    /// and then `while ((inl(0x70000028) & 0x80) == 0);`, a spin with no timeout on a bit this
+    /// emulator had no reason to have ever set. It is the first thing Rockbox does after drawing
+    /// its splash, which is why the splash was as far as it got.
+    ///
+    /// Modelled as a *consequence of the enable* rather than as a bit that is simply always on,
+    /// because those differ: a machine that reports its USB clock locked before anyone started it
+    /// is answering a question nobody asked, and would hide a driver that forgot to start it.
+    ///
+    /// **Not a bypass, and measured rather than assumed.** `--read-count=0x70000028,0x70000020`
+    /// over a 600 M-instruction RetailOS boot: `0x70000020` is read ten times, from five call
+    /// sites, and `0x70000028` is read **zero** times. Apple's firmware never looks at this
+    /// address, so nothing in `research/` is measured through it.
+    ///
+    /// Returned as a side effect for the caller to apply, in keeping with the rest of this model:
+    /// the state lives in the region, so a snapshot carries it without knowing this device exists.
+    pub fn usb_clock(&mut self, addr: u32, val: u8) -> Option<(u32, u8)> {
+        if addr.wrapping_sub(self.base) != Self::DEV_INIT2_HI || val & Self::INIT_USB_HI == 0 {
+            return None;
+        }
+        self.usb_enables += 1;
+        Some((self.base + Self::USB_STATUS, Self::USB_CLOCK_READY))
     }
 
     /// The reset value of byte 3 of `+0x30`: ready, gate closed.
@@ -4503,7 +4549,7 @@ pub fn parse_wheel_script(spec: &str, click_instr: u64) -> Result<Vec<WheelStep>
             _ => return Err(format!("step {raw:?}: time must start with '@' or '+'")),
         };
         prev = at;
-        let mut push = |at: u64, event: WheelEvent, out: &mut Vec<WheelStep>| {
+        let push = |at: u64, event: WheelEvent, out: &mut Vec<WheelStep>| {
             out.push(WheelStep { at, event });
         };
         match action {
@@ -5308,15 +5354,24 @@ impl Pcf50605 {
     fn convert(&mut self) {
         let channel = (self.regs[0x2f] >> 1) & 0xf;
         // Rockbox's `powermgmt-ipod-pcf.c` gives the scale: `mV = (adc * 6000) >> 10`, so 0x2c0 is
-        // 4125 mV and the 0x200 catch-all is 3000 mV. The catch-all is left as-is deliberately:
-        // raising it did NOT let the bootloader boot with no charger present (research/09), so the
-        // threshold is not simply "a healthy cell" and inventing a higher number would be guessing.
+        // 4125 mV and the 0x200 catch-all is 3000 mV. The catch-all for **unknown** channels is
+        // left as-is deliberately: raising it did NOT let the bootloader boot with no charger
+        // present (research/09), so the threshold is not simply "a healthy cell" and inventing a
+        // higher number would be guessing. Channel 2 has since stopped being an unknown channel —
+        // Rockbox names it — so it is answered from a source rather than from that guess.
         let value: u16 = match self.adc_values.iter().find(|&&(c, _)| c == channel) {
             Some(&(_, v)) => v,
             None => match channel {
-                0x0 | 0x1 | 0xc => 0x2c0, // battery volts — 704 -> 4125 mV, a charged, not-full cell
-                0x4 => 0x200,             // battery temperature — mid-scale, i.e. not hot
-                _ => 0x200,               // unknown channels
+                // Channel 2 is the battery **on this board**, and Rockbox says so in one line:
+                // `adc_battery->channelnum = 0x2; /* ADCVIN1, resistive divider */`
+                // (`firmware/target/arm/ipod/adc-ipod-pcf.c`, `adc_init`). The 0/1/0xc below are
+                // the PCF50605's own battery inputs from the datasheet; the iPod does not use
+                // them for this. Answering 2 with the 3000 mV catch-all is what made Rockbox
+                // print **"Battery empty! RECHARGE! Shutting down…"** and power off after a
+                // complete, disk-mounting boot — its danger threshold is 3400 mV.
+                0x0 | 0x1 | 0x2 | 0xc => 0x2c0, // 704 -> 4125 mV, a charged, not-full cell
+                0x4 => 0x200,                   // battery temperature — mid-scale, i.e. not hot
+                _ => 0x200,                     // unknown channels
             },
         };
         self.note_conversion(channel as u8, value);
@@ -7390,6 +7445,38 @@ mod bcm_command_tests {
         assert_eq!(h.panel(0, 0), 0x4321, "the frame store is unchanged");
         assert_eq!(h.bcm.frames, 1, "and neither counted as a frame update");
         assert_eq!(h.bcm.commands, vec![5, 0x13, 0xa]);
+    }
+}
+
+#[cfg(test)]
+mod xmb_usb_tests {
+    use super::*;
+
+    /// Rockbox spins forever on this bit (`usb-fw-pp502x.c:116`), so the bit has to arrive — but
+    /// only once something asks for it, which is the difference between modelling the clock and
+    /// hard-wiring the answer.
+    #[test]
+    fn the_usb_clock_reports_ready_only_after_it_is_enabled() {
+        let mut x = Xmb::new(0x7000_0000);
+        // Reads before any enable, and writes that are not INIT_USB, produce nothing.
+        assert_eq!(x.usb_clock(0x7000_0023, 0x00), None);
+        assert_eq!(x.usb_clock(0x7000_0023, 0x40), None, "bit 30 is not INIT_USB");
+        assert_eq!(x.usb_clock(0x7000_0033, 0x80), None, "a different register entirely");
+        assert_eq!(x.usb_enables, 0);
+
+        // `DEV_INIT2 |= INIT_USB` is bit 31, which is bit 7 of the byte at +0x23.
+        assert_eq!(x.usb_clock(0x7000_0023, 0x80), Some((0x7000_0028, 0x80)));
+        assert_eq!(x.usb_enables, 1);
+    }
+
+    /// The address Apple's firmware never reads, so that the constant cannot drift away from the
+    /// measurement that made it safe (`--read-count`, 600 M boot, zero reads).
+    #[test]
+    fn the_ready_bit_lands_where_rockbox_polls() {
+        let mut x = Xmb::new(0x7000_0000);
+        let (at, bit) = x.usb_clock(0x7000_0023, 0x80).expect("enable is recognised");
+        assert_eq!(at, 0x7000_0028);
+        assert_eq!(bit & 0x80, 0x80, "Rockbox tests `& 0x80`");
     }
 }
 

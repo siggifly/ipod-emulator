@@ -53,7 +53,7 @@ existed and still claiming `0.1.0`. A workspace has one lockfile, at its root. T
 ```sh
 # 1. Bump, changelog, commit, push.
 $EDITOR Cargo.toml CHANGELOG.md
-cargo test --release --workspace          # 183 at 0.3.0
+cargo test --release --workspace          # 220 at 0.5.0
 git commit -am "0.X.0 — …" && git push
 
 # 2. Tag the commit the binaries will be built from.

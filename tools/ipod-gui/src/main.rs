@@ -299,7 +299,11 @@ fn main() -> eframe::Result {
             .with_inner_size([DEFAULT_W, DEFAULT_H])
             .with_min_inner_size([MIN_W, MIN_H])
             .with_icon(icon)
-            .with_title("ipod-emulator"),
+            // The machine, not the binary. A window called `ipod-emulator` says what ran it; one
+            // called `iPod Video (5G / 5.5G)` says what is in it, which is the thing a second
+            // model would change. Deliberately no `— RetailOS`: the OS is whatever the drive
+            // holds, and this window will one day boot a drive that holds something else.
+            .with_title(IPOD_VIDEO.name),
         ..Default::default()
     };
     // `--ipsw=` hands a bundle to the window at launch, which builds a drive from it exactly as

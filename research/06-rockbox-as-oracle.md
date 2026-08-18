@@ -339,3 +339,83 @@ memory-model lie of this class.** That closes off the hypothesis that the unboun
 
 It is a negative, and it is worth the run: it removes the last explanation that would have made the
 blocker *our* fault rather than RetailOS's state.
+
+
+## 2026-08-18: Rockbox boots, and two device models were missing
+
+Re-run on the current tree after the resource reorganisation, which had left this script's `FLASH`
+default — and `retail-boot.sh`'s `TRACE` default — pointing at paths that no longer existed.
+
+### First result: it draws, and then stops dead
+
+| | |
+|---|---|
+| budget | 200 M, then 3 000 M |
+| result | `BudgetExhausted` both times — no fall out of DRAM, so the `.init` copy bug above stays fixed |
+| panel | **22 179 non-black pixels**: the Rockbox logo and `Ver. 4.0` |
+| ATA commands | **0** |
+| halt | `r15 = 0x0007e888`, and the splash is unchanged from 200 M to 3 000 M |
+
+The map file names it: `0x0007e888` is inside `wmcodec_write` (`0x7e7cc..0x7e900`) with `LR` in
+`usb_init_device`. **The map was misleading and the disassembly settled it** — `--dis=0x7e858:0x58`
+gives
+
+```
+0007e870  ldr r3, [r2, #0x20]     ; r2 = 0x70000000
+0007e874  orr r3, r3, #0x80000000 ; INIT_USB
+0007e878  str r3, [r2, #0x20]     ; DEV_INIT2 |= INIT_USB
+0007e87c  ldr r3, [r2, #0x28]
+0007e880  tst r3, #0x80
+0007e888  beq 0x0007e87c          ; spin, no timeout
+```
+
+which is `usb-fw-pp502x.c:114-116` word for word, including the `|= 0x2`, the `udelay` through
+`0x60005000` and `XMB_RAM_CFG |= 0x47A` that follow it. Rockbox was waiting for a **USB clock-ready
+bit this emulator had never had a reason to set**, and the previous section's *"Rockbox to its
+menu"* could not have been produced by this recipe.
+
+### The fix, and why it is not a bypass
+
+`Xmb::usb_clock` sets bit 7 of `0x70000028` when `INIT_USB` is written to `DEV_INIT2` — modelled as
+a *consequence of the enable*, not as a bit that is simply always on, so a driver that forgot to
+start the clock would still hang.
+
+**Measured before it was written**, with `--read-count=0x70000028,0x70000020` over a 600 M RetailOS
+boot: `0x70000020` is read ten times from five call sites, and **`0x70000028` is read zero times**.
+Apple's firmware never looks at this address.
+
+### Second result: it boots
+
+| | before | after |
+|---|---|---|
+| ATA commands | 0 | **2 393** |
+| distinct pictures | 2 | **4** |
+| what it draws | splash | splash → `Scanning disk…` → *"Battery empty! RECHARGE! Shutting down…"* |
+
+![Rockbox 4.0 booting on this emulator](../docs/media/ipod-13-rockbox-boot.gif)
+
+### The battery message is not the battery
+
+Rockbox's `adc_init` says `adc_battery->channelnum = 0x2; /* ADCVIN1, resistive divider */`, and
+the census showed **every one of 25 677 conversions on channel 2** — which this emulator was
+answering with the 3 000 mV catch-all for unknown channels, below Rockbox's 3 400 mV danger
+threshold. Channel 2 now answers `0x2c0` (4 125 mV) like the other battery inputs, sourced from
+that line rather than guessed.
+
+**It did not fix the shutdown, and the control is why we know.** Forcing `--pmu-adc=2=0x3ff` —
+5 994 mV, full scale — still prints the same message and still powers off. So the voltage is not
+the trigger, the ADC correction stands on its own evidence rather than on having fixed anything,
+and the real cause is elsewhere on `shutdown_screen()`'s path. `battery_level_safe()` reads
+`voltage_now`, a filtered value the power thread maintains; a shutdown *requested* for some other
+reason would print exactly this while that filter is still empty.
+
+Both changes were re-validated against the recipe every number here is measured on. RetailOS at
+600 M is **unchanged to the digit**: 27 510 code buckets, 76 800 non-black pixels, `0xc8 READ DMA
+x475 · 0x20 READ SECTORS x4 · 0xca WRITE DMA x4 · 0xec IDENTIFY x3 · 0xef SET FEATURES x11`, wheel
+reporting ON with 2 `0x052a` commands.
+
+### What is next, and it is bounded
+
+Why a shutdown is requested at all. Rockbox has 5 808 symbols and this is a two-frame window
+between `Scanning disk…` and the message — which is the entire argument this file was written to
+make.

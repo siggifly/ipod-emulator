@@ -21,7 +21,7 @@ members = [
 # `CARGO_PKG_VERSION` against the latest release tag, so this number and the tag are the same
 # statement made twice; bumping here is the whole of bumping.
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 
 # One shared target directory. Each crate previously built its own, so a full build wrote four
 # copies of the same dependency graph. This also means `CARGO_TARGET_DIR` in the environment still

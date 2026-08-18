@@ -12,7 +12,7 @@ had downloaded it — and that is exactly the mistake this rule exists to preven
 running the first build, their copy would have reported itself current while being four commits
 behind. Anything published from here gets a new number.
 
-## Unreleased
+## 0.5.0
 
 **Your iPod remembers, the settings no longer reboot it, and it tells you what you gave it.**
 
@@ -79,11 +79,42 @@ you previously could not restart the machine at all. **Conditions** — halted, 
 the surface nobody is looking at — are one line each in every mode. What remained was measurement,
 and `D` draws it over the device without changing the window's shape.
 
+### Rockbox boots here
+
+**Rockbox 4.0 gets to `Scanning disk…` and reads the volume** — 2 393 ATA commands where it
+previously issued none. Two missing device models were in the way, both found by disassembling the
+spin and both matched to Rockbox's own source:
+
+- **A USB clock that never reported ready.** `usb-fw-pp502x.c` sets `INIT_USB` and then spins on
+  bit 7 of `0x70000028` with no timeout. That bit now follows the enable. Apple's firmware reads
+  the address **zero** times in a 600 M boot, measured before the change was written.
+- **The battery ADC was on the wrong channel.** Rockbox's `adc_init` names channel 2 as the
+  battery; we answered it with the 3 000 mV catch-all for unknown channels.
+
+It still ends at *"Battery empty! RECHARGE! Shutting down…"* — and that is **not** the battery:
+forcing the ADC to full scale changes nothing, so the trigger is elsewhere. RetailOS is unchanged
+to the digit across both fixes. See [`docs/ideas/run-any-os.md`](docs/ideas/run-any-os.md) for what
+running another OS as a *feature* would take.
+
+### An empty ROM dump now says so
+
+Rockbox's **Dump ROM contents** can leave a correctly named file with nothing in it — reported from
+a real 5.5G, and the failure looks like success until something tries to read it. `--check-images`
+used to answer *"cannot read this file: failed to fill whole buffer"*, because it read the file
+before it measured it. It measures first now, and an empty dump gets the sentence written for it:
+the file is empty, the dump wrote nothing, and a reset before it finishes leaves exactly this.
+
 ### Fixed
 
 - **`--headless`, `--selftest`, `--probe` and `--power-cycle-at` could not open a drive.** Which
   drive the machine writes to was decided inside the window, so every path without a window pointed
   at a working copy nothing had made.
+- **The window called itself `ipod-emulator`.** It names the machine now — `iPod Video (5G / 5.5G)`
+  — which is the thing a second model would change. Deliberately without the old `— RetailOS`: the
+  OS is whatever the drive holds, and this window already boots a drive that holds something else.
+- **Three boot scripts pointed at a ROM directory the resource reorganisation had removed.**
+  `flsh.sh`, `rockbox.sh` and `warm-boot.sh` defaulted to a path that no longer existed; all five
+  scripts' defaults now resolve.
 - **Building from a second `.ipsw` silently overwrote the first.** Every build landed on one path.
   Drives are named for the software in them now, keyed on version and CRC, so the same bundle
   resolves to the same file and a different one cannot land on it.

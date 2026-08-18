@@ -66,6 +66,13 @@ Out!) → Dump ROM contents** and copy the `internal_rom_…` file off when you 
 [flash guide](https://www.rockbox.org/wiki/IpodFlash.html) has the detail. This is the route that
 involves nobody else's copy of anything, and the only one guaranteed to match the iPod you have.
 
+**If the dump comes out 0 bytes**, which has been reported: the file is written and closed at the
+end, so an iPod reset before it finishes leaves a correctly named empty file. Let it finish rather
+than hard-resetting — the read itself is seconds, not minutes, so a wheel still frozen after a
+minute has failed rather than gone slowly — and shut down through Rockbox so the volume is flushed
+before you unplug. `ipod-emulator --check-images --flash=… --disk=…` will tell you which of the
+size, the reset vector and the image directory is wrong with any dump you end up with.
+
 **Failing that, it is archived — under the wrong product.** BootROM collections file the iPod
 Video's dump as *iPod Classic*, in a directory named `A1238`, which is the Classic 6G's model
 number. The Video is `A1136`. Searching for "iPod Video", "5.5G" or "A1136" finds nothing;
@@ -204,6 +211,21 @@ choose for one run.
 - The click wheel, 96 detents of absolute position, and the hold switch
 - The display, through a co-processor transport derived from RetailOS's own parser
 - The games built into RetailOS. Brick plays
+
+### It is not only Apple's software
+
+**Rockbox 4.0 boots here** — its own logo through the same co-processor transport, then
+`Scanning disk…`, then 2 393 ATA commands of it actually reading the volume. A second,
+source-available operating system driving this hardware model is the reason
+[research/06](research/06-rockbox-as-oracle.md) exists: RetailOS is stripped C++ with no symbols,
+and Rockbox ships an ELF with 5 808 of them, so a divergence names a function instead of an address.
+
+<img src="docs/media/ipod-13-rockbox-boot.gif" width="320" alt="Rockbox 4.0 booting on this emulator: splash, scanning disk, then shutting down">
+
+**It does not finish.** After the disk scan it prints *"Battery empty! RECHARGE! Shutting down…"*
+and powers off — and that is **not** the battery: forcing the ADC to full scale changes nothing, so
+the trigger is something else on the shutdown path. Running Rockbox or iPodLinux as something you
+*use* rather than measure with is [a design, not a feature](docs/ideas/run-any-os.md).
 
 ## What does not
 

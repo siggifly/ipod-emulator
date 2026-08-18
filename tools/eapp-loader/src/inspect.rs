@@ -412,13 +412,20 @@ pub fn flash(path: &Path) -> Verdict {
         Ok(m) => m.len(),
         Err(e) => return Verdict::Bad(format!("cannot read this file: {e}")),
     };
-    let head = match read_at(path, 0, 4) {
-        Ok(b) => u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
-        Err(e) => return Verdict::Bad(format!("cannot read this file: {e}")),
-    };
-
-    // Size first, because it is the check that produces the most useful sentence. The conventional
-    // filename says the range: `internal_rom_000000-0FFFFF.bin` is this one, 0x00000..0xFFFFF.
+    // Size first, because it is the check that produces the most useful sentence, and because
+    // reading before measuring turns every short file into "failed to fill whole buffer" — which
+    // is what an empty dump used to report, the one case where the length *is* the whole diagnosis.
+    if len == 0 {
+        return Verdict::Bad(
+            "the file is empty (0 bytes). The dump did not write anything. Rockbox's \
+             \"Dump ROM contents\" writes its output at the end, so an iPod reset before it \
+             finishes — or one that never finishes — leaves exactly this: a file with the right \
+             name and no contents."
+                .into(),
+        );
+    }
+    // The conventional filename says the range: `internal_rom_000000-0FFFFF.bin` is this one,
+    // 0x00000..0xFFFFF.
     if len < NOR_LEN {
         return Verdict::Wrong(format!(
             "{} — too small for a 5G/5.5G NOR, which is exactly 1 MiB (1 048 576 bytes). \
@@ -443,6 +450,10 @@ pub fn flash(path: &Path) -> Verdict {
             bytes(len)
         ));
     }
+    let head = match read_at(path, 0, 4) {
+        Ok(b) => u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+        Err(e) => return Verdict::Bad(format!("cannot read this file: {e}")),
+    };
     if head >> 24 != 0xEA {
         return Verdict::Bad(format!(
             "word 0 is {head:#010x}, which is not an ARM branch. A PP502x fetches its reset vector \
@@ -1071,6 +1082,20 @@ mod tests {
         let v = flash(&p);
         assert!(matches!(v, Verdict::Bad(_)), "{v:?}");
         assert!(v.text().contains("ARM branch"), "{v:?}");
+        let _ = std::fs::remove_file(p);
+    }
+
+    /// The failure a real person reported (issue #2): Rockbox's dumper leaves a correctly named
+    /// file with nothing in it. Measuring before reading is what lets us say that, instead of
+    /// reporting the read error that measuring would have prevented.
+    #[test]
+    fn an_empty_dump_is_diagnosed_rather_than_read() {
+        let p = std::env::temp_dir().join("ipod-gui-empty-dump.bin");
+        std::fs::write(&p, []).unwrap();
+        let v = flash(&p);
+        assert!(matches!(v, Verdict::Bad(_)), "{v:?}");
+        assert!(v.text().contains("empty"), "{v:?}");
+        assert!(!v.text().contains("whole buffer"), "leaked the read error: {v:?}");
         let _ = std::fs::remove_file(p);
     }
 
