@@ -685,9 +685,13 @@ we wrote.
 
 - *`adc_init` never ran, so `channelnum` stayed at its BSS zero.* No — `--break=0x03e9131c` hits
   **exactly once in both paths**.
-- *Rockbox converts the wrong channel.* No. The ordered census shows the cold path's first
+- *Rockbox converts the wrong channel.* ~~No. The ordered census shows the cold path's first
   conversions are Apple's (`(0,704) (0,704) (4,512) (4,512) (3,512)…`) and then **`(2,704)`** —
-  Rockbox's own, right channel, right value.
+  Rockbox's own, right channel, right value.~~ **RETRACTED — that `(2,704)` is Apple's.** The
+  print is `order (first 12 of N kept)` off a log capped at 4 096, so it is the first twelve
+  conversions of the *whole run*, and on a cold boot the run opens with the bootloader's 9 237.
+  Nothing in it is Rockbox's. See §"The ordered census is not a window onto Rockbox" below, which
+  turns this row from an elimination into the opposite finding.
 - *The PMU model ends up holding the wrong bytes.* No — **both** paths finish with
   `data registers now [0xb0 0x80 0x00 0x00]`, which is 704 with the ready bit set.
 - *The I²C bus never goes idle, so `pp_i2c_read_bytes` returns `-2` and leaves `data[2]`
@@ -703,3 +707,96 @@ but in the step that copies a read's answer into the controller's data registers
 
 That is four lines of this emulator, and the next measurement is to log what they copy — and
 whether they run at all — on a cold boot.
+
+### The ordered census is not a window onto Rockbox
+
+**The `(2,704)` above is Apple's bootloader's, and reading it as Rockbox's inverted the finding.**
+`trace.rs` prints `order (first 12 of N kept)` from `Pcf50605::adc_log`, which is
+`Capped::new(4096)` — so those twelve are the first twelve conversions of the **entire run**. A cold
+boot opens with Apple's bootloader doing **9 237** conversions on channel 0 before Rockbox executes
+an instruction, so nothing in that window can be Rockbox's. This is R6 arriving in a place the
+instrument table does not cover: the ADC has no row in it, and the by-channel tally beside this
+print *is* uncapped (`adc_by_channel`), which makes the two numbers on screen look like one
+instrument when they are two.
+
+Put the uncapped tally back against the corrected ordering and the conclusion reverses:
+
+| | cold |
+|---|---|
+| channel-0 conversions (uncapped tally) | 9 237 — Apple's |
+| channel-2 conversions (uncapped tally) | **exactly 1** |
+| does that one appear in the first twelve of the run? | **yes** |
+
+One channel-2 conversion in the whole run, and it happens before Rockbox runs. **So Rockbox issued
+no ADC conversion at all on a cold boot** — not a wrong channel, not a wrong value, none. Its first
+`_adc_read` returned `0x2c0` by reading result registers that Apple's bootloader had already
+latched, which is why the first read looked correct and made the second look like a regression. It
+was never a regression; the first read was the accident.
+
+### What the driver source says, and one more elimination that was too narrow
+
+`resources/vendor/rockbox/src/firmware/target/arm/ipod/adc-ipod-pcf.c` is the driver, and it
+settles the struct that was inferred from the store addresses:
+
+```c
+struct adc_struct {
+    long timeout;                              /* +0  */
+    void (*conversion)(unsigned short *data);  /* +4  */
+    short channelnum;                          /* +8  */
+    unsigned short data;                       /* +10 */
+};                                             /* 12 bytes, IDATA_ATTR -> IRAM */
+```
+
+With `adcdata[]` at `0x40008e9c`, that puts `channelnum`/`data` in the word at `0x40008ea4` — which
+is what was watched, and it matches to the bit (`0x02c00002` is data `0x2c0` beside channelnum 2).
+It also puts **`conversion` at `0x40008ea0`**, one word below, and that word has never been looked
+at. `adc_init` never assigns it; the field is only ever zero because the IRAM init copy is supposed
+to make it zero. The cold path is precisely the path where IRAM was seen carrying instruction words
+before being cleared.
+
+**And the fourth elimination above was sound but too narrow.** It reads as though
+`pp_i2c_wait_not_busy` were the one thing standing between the transfer and the store. Two things
+the source shows instead:
+
+- `_adc_read` has **no early return inside the branch at all**. Once `TIME_AFTER` passes, the write
+  to `ADCC1`, the read of `ADCS1`/`ADCS2`, and the store `adc->data = value` all happen
+  unconditionally. So a store IS evidence the branch was entered — and therefore evidence that
+  `pcf50605_write(0x2f, …)` was executed.
+- `pp_i2c_read_bytes` (`firmware/target/arm/pp/i2c-pp.c`) calls `pp_i2c_wait_not_busy` **twice** —
+  once before it touches the controller and again *after* `I2C_SEND`. Returning `-2` from the
+  second one skips the `*data++ = I2C_DATA(i)` copy entirely and leaves `data[2]` as uninitialised
+  stack, and `_adc_read` ignores the return value. The `--watch=0x7000c01c` measurement eliminates
+  both sites, since `I2C_STATUS` reads 0 throughout — but it was written as though there were one.
+
+### The contradiction that names the next measurement
+
+Two measured facts that cannot both be innocent:
+
+1. The store at `0x000836ac` executed **twice**, and it sits after the register write with nothing
+   between them that can skip it. Two stores therefore mean two writes to `ADCC1`.
+2. The uncapped per-channel tally records **one** channel-2 conversion in the whole run, and that
+   one is Apple's.
+
+So a write to `ADCC1` was executed by the CPU and did not become a conversion in the device. The
+cheapest explanation covering both symptoms at once is that **the controller's data registers at
+`i2c_base + 0x0c + 4i` are not backed on the cold path**: `pp_i2c_send_bytes` stages the register
+number and the value there before raising `I2C_SEND`, so if the model reads back zeros it performs
+a write to PMU register `0x00` instead of `0x2f` — no conversion — and the read that follows copies
+its answer into the same dead registers, so `data[0]`/`data[1]` come back zero and
+`value = data[0] << 2 | (data[1] & 3)` is `0`. One broken mapping, both symptoms, no second bug
+required.
+
+That is a hypothesis, and it has a competitor that must not be assumed away: a non-zero
+`adc->conversion` at `0x40008ea0` would also zero `value`, via `adc->conversion(&value)` — but it
+would leave the conversion count at two, so **it cannot explain the missing conversion** and can
+only ever be half the story.
+
+Three measurements settle it, none costing more than a run:
+
+- `--watch=0x40008ea0` on both paths. Zero cold ⇒ the function pointer is innocent and the whole
+  question is the I²C mapping.
+- Count the read replies the model actually delivers into `i2c_base + 0x0c + 4i`, and the bytes
+  that find no region to land in.
+- Count the same for the **write** direction — what the model reads back out of those registers
+  when `I2C_SEND` goes up. This is the half that discriminates, because it is the half that decides
+  whether a conversion starts, and no instrument reports it today.

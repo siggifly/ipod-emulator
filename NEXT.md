@@ -234,9 +234,45 @@ films' 72 M/s is the CPU's rate and makes a rally unwatchable, because at `--clo
 
 **Still open, and small:** `Parachute`, `Music Quiz` and `Solitaire` have never been launched.
 
-## 1b — The UI phase: two walls, and only one of them is ours · **top of the live queue, 2026-08-14**
+## 0c — Cold-booted Rockbox reads 0 mV and powers itself off · **top of the live queue, 2026-08-18**
 
-## 1 — Where does a surface actually live on the co-processor? · **top of the live queue, 2026-08-14**
+*(An orphan duplicate of item 1b's heading stood here with no body until 2026-08-18. Its real
+entry, retired, is further down. A file that carries a heading twice will eventually have someone
+answer the empty one.)*
+
+**This file is four days older than the work.** Everything below item 0c is RetailOS, measured
+2026-08-14; since then a **second operating system boots here** and is now the sharper instrument
+(ROADMAP.md M1/M2). Numbers below are not wrong, they are un-re-run, and R4 applies to every one of
+them that a Rockbox-driven model change has touched.
+
+`adc_read(ADC_BATTERY)` returns `0x2c0` warm and **`0` cold**, the filter walks 4 160 → 3 300 mV in
+about twenty-seven power-thread iterations, and `query_force_shutdown` fires — 315 `sys_poweroff`
+calls in a run. The disk is not the variable; the boot path is. Nine explanations are eliminated by
+measurement in [research/06](research/06-rockbox-as-oracle.md), and one of the nine was retracted
+there for being read off the wrong instrument (see the ADC row in the table below — the correction
+**inverted** the finding: Rockbox issued no conversion at all).
+
+**What is left is one contradiction, and it names its own measurement.** The store at `0x000836ac`
+ran twice, and `adc-ipod-pcf.c` shows nothing between the `ADCC1` write and that store that could
+skip it — so two stores mean two conversions were *started*. The uncapped tally records **one**, and
+it is Apple's. A write the CPU executed did not become a conversion in the device.
+
+The cheapest hypothesis covering both symptoms is that the controller's data registers at
+`i2c_base + 0x0c + 4i` are unbacked on the cold path: `pp_i2c_send_bytes` stages the register number
+and value there before raising `I2C_SEND`, so the model would write PMU register `0x00` instead of
+`0x2f` (no conversion) and the following read would copy its answer into the same dead registers
+(`data[0..1]` zero, `value` zero). One broken mapping, both symptoms. Its competitor is a non-zero
+`adc->conversion` at **`0x40008ea0`** — never assigned by `adc_init`, only ever zeroed by the IRAM
+init copy, on the one path where IRAM was seen carrying instruction words — but that can only
+explain the zero, never the missing conversion.
+
+**Settled when** the cold path completes a Rockbox-issued channel-2 conversion and the boot survives
+its own battery reading. Three commands get there: `--watch=0x40008ea0`; a count of read replies
+delivered into those registers and bytes that found no region; and the same count for the **write**
+direction, which is the half that decides whether a conversion starts and which no instrument
+reports today.
+
+## 1 — Where does a surface actually live on the co-processor? · **top of the RetailOS queue, 2026-08-14**
 
 **This is the successor to "make RetailOS draw", and it is what that question could not check.**
 RetailOS draws: with `--bcm-registry` it presents 41 times and lands **76 607 non-black pixels** at
@@ -668,6 +704,7 @@ for a measurement by someone reading in a hurry, which is what R6 was written ab
 | `--watch-range=B:N` | writes to a span, distinguishing "wrote 0" from "never wrote" | `watch_range_log` caps at **4 096**, and the report prints only the **first** PC per word — so on a busy span it is an attribution instrument that cannot attribute. **2026-08-14: this cap, already documented in this row, produced "RetailOS never touches the VideoCore" (research/10 Addendum 25).** The bootloader's own firmware upload fills all 4 096 slots before RetailOS runs an instruction; `writes into the watched range: 4096` is a saturation flag, not a count. Retracted in Addendum 26 by arrival counters on the three functions that carry the `0x3000xxxx` literals. **Was blind to word-sized writes into a mapped region until 2026-08-13** — it only ever saw byte writes, because `read32`/`write32` hoist the `count()` call behind a list of consumers `watch_range` was not on. That produced "the engine at `0x60009000` is never programmed". Fixed; everything that concluded *absence* from it was re-run (Addendum 8b). **Both remaining defects fixed 2026-08-14**: the per-word table is counted on the store rather than tallied from the log, and it names **every** writing PC instead of the first. On the same command that produced the retracted claim it now reports **423 450 byte-writes across 5 words** (was `4096` across 4), with RetailOS's `0x00287ca8` / `0x00287c28` / `0x002879a4` beside the bootloader's `0x4000exxx` — so the instrument refutes its own claim |
 | `--input-regs=B:N` | which addresses the firmware reads that nothing ever wrote — hardware *inputs* | same 2026-08-13 bug and worse: `input_probe` was missing from the `read32` hoist too, so it undercounted reads as well as missing writes. It produced [research/09](research/09-what-the-hardware-must-supply.md)'s register table, which is superseded; the conclusion under that table survived re-measurement |
 | `i2c: N transfers` in the run report | which chips the firmware drives and which of their registers | **was a capped log length**: `i2c_log` stops at 4 096 and the 4 G baseline printed exactly that, so every histogram under it — by device, by register, by CTRL — was a picture of the first 4 096 transfers. `NEXT.md` §5 was about to fit a WM8758 model to a number out of it. **Fixed 2026-08-14**: the census is **4 933**, the tallies are kept on the bus, and the ordered log is labelled as the sample it is. At 600 M the log never fills (3 749), which is why the defect survived so long |
+| `pcf50605 ADC conversions by channel` in the run report | which ADC channels were converted, how often, and in what order | **two instruments printed as one, and only one of them is a census.** The by-channel table is `adc_by_channel` and is uncapped — trust it. The line under it, `order (first 12 of N kept)`, is the head of `adc_log`, which caps at **4 096**, so it shows the first twelve conversions of the **whole run** and never a later window. On a cold boot Apple's bootloader converts 9 237 times before Rockbox executes an instruction, so *nothing Rockbox does can appear in that ordering at all* — and research/06 read a `(2,704)` out of it as "Rockbox's own, right channel, right value" when it was the bootloader's. The correction inverted the finding: Rockbox issued **no** conversion on that boot. **The ordering answers "how did this run open", never "what did the second stack do"** |
 | `--writelog=…` | stores by region, with a DROPPED tag | `write_log_entries` caps at **8 192**; the per-region totals — including **DROPPED**, which is the whole question — are counted on the store and cannot. The "last 4" rows are the last 4 *kept*, which on a truncated log is not the last 4 that happened, and the report says so |
 | `--stop-when-idle=N` | ends a run once N instructions pass with no NEW code | a **novelty** test, not a halt test. ~~Use 40 000 000~~ — **40 M truncates the boot**: at 40 M this recipe stops at @308 909 460 with 29 279 buckets and 464 ATA commands, against @1 610 256 821 / 38 262 / 770 at 400 M. RetailOS's startup contains a bounded 226 M-instruction scan loop over already-seen code (`0x000ff2ec`) and 40 M stops inside it while the machine runs at full rate — that is how "`bl 0x001ebe9c` never returns" got published. **Use `400000000`.** Read the second line of the stop report: `0 CPU sleeps` in the trailing window means busy, and the tool now says `<- BUSY, not blocked` outright |
 | `--callers=ADDR` | every branch *in memory* that targets ADDR — static, so it finds paths a run did not take | reports `region.base + offset`, so an address is only right if the region is mapped where its base says — **IRAM code scatter-loaded out of NOR is not**. Counts both `bl` and plain `b` (a tail call is a caller: `0x4000b534` is reached only by `b`, and a BL-only scan calls it uncalled). Prints 24, then `… and N more` |
