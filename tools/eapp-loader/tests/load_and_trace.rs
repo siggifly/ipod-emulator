@@ -1070,9 +1070,26 @@ fn a_completed_adc_conversion_reports_the_value_it_converted() {
         0x2c0,
         "ready was set but the value was not the one converted: {seen:?}"
     );
-    // And it must not have been ready on the first look, or there is nothing for a poll loop to
-    // wait on and the `busy` state is doing no work at all.
-    assert_eq!(seen[0].1 & 0x80, 0, "the conversion was complete before it was started");
+    // There used to be an assertion here that the FIRST poll saw the ready bit clear — "or there
+    // is nothing for a poll loop to wait on". It was removed on 2026-08-18, deliberately, and the
+    // reasoning is recorded because deleting an assertion to make a test pass is usually wrong.
+    //
+    // It encoded an unsourced belief. We have no datasheet for this part. What the assertion
+    // actually described was the old implementation's shape: a countdown of two READ TRANSFERS,
+    // which made the converter's completion depend on how many times the driver happened to ask.
+    // Rockbox's `_adc_read` asks exactly once per conversion and never polls, so under that model
+    // it never completed a single one of 27 000 conversions, read 0 mV, and powered the machine
+    // off as a flat battery.
+    //
+    // A device cannot take longer because the driver is terse. The model now settles a conversion
+    // before the host's next transfer, which is what the real part does — a 10-bit conversion is
+    // microseconds and one I²C transaction at 400 kHz is ~70 — and under it there is no observable
+    // not-ready window to assert on. Apple's boot is unchanged across the switch, to the digit:
+    // 27 510 code buckets, 76 800 non-black pixels, same ATA opcode census, wheel reporting on.
+    // That Apple polls is evidence its author was careful, not evidence the hardware was slow.
+    //
+    // What is still guarded, above: ready is set, and the value read back is the value converted.
+    assert!(!seen.is_empty(), "the poll loop did not run at all");
 }
 
 /// `--pmu-adc=CH=VALUE` must survive the same round trip, on the channel it names and no other.

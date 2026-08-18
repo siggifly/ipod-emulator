@@ -5162,15 +5162,37 @@ pub struct Pcf50605 {
     /// this model resolves instantly — the PLL, the ADC's arithmetic — but the *observability* of
     /// this one has to change over time or a poll loop has nothing to wait for.
     ///
-    /// **Counted per read transfer, not per read of `ADCS1`** — and that distinction is the whole
-    /// of research/10 Addendum 30. A conversion does not advance because the host happened to read
-    /// one particular register of the chip; and the two halves of one result, fetched in a single
-    /// I²C transfer, cannot describe different states of the converter. Counting inside
-    /// `read_reg(0x30)` did both: it advanced the countdown on the first byte of a two-byte read
-    /// and then answered the second byte from the *new* state, so every conversion Apple's
-    /// bootloader ever observed as complete carried the value **zero**.
-    busy: u8,
-    /// The conversion in flight, latched into `ADCS1`/`ADCS2` only when `busy` reaches zero.
+    /// **Counted in simulated microseconds, not in transfers** — and the difference is a whole
+    /// operating system.
+    ///
+    /// This was a countdown of two *read transfers*, which is right for a driver that polls the
+    /// ready bit: Apple's does, so its poll loop supplied the transfers and the conversion landed.
+    /// Rockbox's `_adc_read` does not poll. It writes `ADCC1` and reads `ADCS1`/`ADCS2`
+    /// immediately, one read per conversion, then starts the next — so the countdown went 2 → 1,
+    /// was reset to 2, and `latch` **never ran once in a 27 000-conversion boot**. The result
+    /// registers held their reset value for the entire run, Rockbox read 0 mV, and
+    /// `query_force_shutdown()` powered the machine off.
+    ///
+    /// A conversion completes because time passes — never because of how the driver is written,
+    /// which is what a transfer countdown made it. That is the same mistake as `OPTO_REPLY_USEC`
+    /// and `IDE_COMPLETION_USEC`, for the third time in this file, and the previous two both carry
+    /// a comment saying it must not happen again.
+    ///
+    /// **The unit here is "before the host looks again", and that is a statement about hardware,
+    /// not a shortcut.** A 10-bit conversion on this part takes microseconds; one I²C transaction
+    /// at 400 kHz takes on the order of 70. The conversion is therefore always finished by the
+    /// time the host can next address the chip — so `settle` runs at the top of every transfer,
+    /// and the transfer that *starts* a conversion cannot also finish it. A µs deadline was tried
+    /// first and is wrong here for a specific reason: this model's bus costs **no simulated time**,
+    /// so a deadline measured in µs is compared against a clock that never advanced for the
+    /// transaction it was supposed to outlast.
+    ///
+    /// The earlier lesson survives and is still load-bearing: the two halves of one result,
+    /// fetched in a single I²C transfer, must describe the *same* state of the converter.
+    /// Settling inside `read_reg(0x30)` broke that and answered every completed conversion with
+    /// zero (research/10 Addendum 30). Settling happens once per transfer, before any byte.
+    settling: bool,
+    /// The conversion in flight, latched into `ADCS1`/`ADCS2` when its deadline passes.
     ///
     /// Result registers are result registers: while a conversion runs they hold the *previous*
     /// one, with the ready bit clear. The model used to answer `ADCS1` with a synthetic `0` while
@@ -5225,6 +5247,7 @@ impl Pcf50605 {
     /// I²C address, from Rockbox's `pcf50605_read`/`_write`, which pass `0x8`.
     pub const ADDR: u8 = 0x08;
 
+
     pub fn new() -> Self {
         let mut regs = [0u8; 0x40];
         // iPod Video power-on defaults, quoted from Rockbox `pcf50605_init()`.
@@ -5238,7 +5261,7 @@ impl Pcf50605 {
             regs,
             ptr: 0,
             data: [0; 4],
-            busy: 0,
+            settling: false,
             pending: None,
             force: Vec::new(),
             adc_values: Vec::new(),
@@ -5255,17 +5278,23 @@ impl Pcf50605 {
     /// 1..2 carry `len - 1`.
     pub fn transfer(&mut self, ctrl: u8, d: [u8; 4]) {
         let len = (((ctrl >> 1) & 3) as usize + 1).min(4);
+        // Settle any finished conversion **before this transfer is looked at at all** — before a
+        // byte is served and before a write can start the next one. Both halves matter:
+        //
+        // - before the bytes, so every byte of one read describes one state of the converter
+        //   (research/10 Addendum 30);
+        // - before the write, because Rockbox's next contact with this chip after reading is the
+        //   *write* that starts the following conversion, 400 ms later. Settling only on reads
+        //   left the result of every conversion un-latched at the moment the next one replaced
+        //   it, which is the transfer-countdown bug again wearing a clock.
+        //
+        // The host reading or writing a register is when it finds out; it is not what makes it
+        // happen. Time is.
+        if self.settling {
+            self.settling = false;
+            self.latch();
+        }
         if ctrl & 0x20 != 0 {
-            // Advance the conversion **before** any byte of this transfer is served, so every byte
-            // of one read describes one state of the converter. The countdown lives here rather
-            // than in `read_reg` because a conversion progresses on its own; the host reading a
-            // register is when it finds out, not what makes it happen.
-            if self.busy > 0 {
-                self.busy -= 1;
-                if self.busy == 0 {
-                    self.latch();
-                }
-            }
             for i in 0..len {
                 self.data[i] = self.read_reg(self.ptr.wrapping_add(i as u8));
             }
@@ -5389,13 +5418,13 @@ impl Pcf50605 {
         self.regs[0x31] &= !0x80;
         self.regs[0x32] &= !0x01;
         self.pending = Some(value);
-        self.busy = 2;
+        self.settling = true;
         // The start bit is self-clearing, as it is on every converter that has one: the driver
         // writes it to begin and the hardware drops it when the result is latched.
         self.regs[0x2f] &= !0x01;
     }
 
-    /// Publish the conversion that was in flight. Called when `busy` runs out, from `transfer`.
+    /// Publish the conversion that was in flight. Called when its deadline passes, from `transfer`.
     ///
     /// Split per Rockbox: `ADCS1` holds bits 9:2 and `ADCS2` the low two plus the ready bit in
     /// bit 7, so a driver recombines them as `ADCS1 << 2 | (ADCS2 & 3)`.
@@ -7445,6 +7474,66 @@ mod bcm_command_tests {
         assert_eq!(h.panel(0, 0), 0x4321, "the frame store is unchanged");
         assert_eq!(h.bcm.frames, 1, "and neither counted as a frame update");
         assert_eq!(h.bcm.commands, vec![5, 0x13, 0xa]);
+    }
+}
+
+#[cfg(test)]
+mod pcf_adc_tests {
+    use super::*;
+
+    /// One I²C write of `reg = val`: CTRL `0x82` is a two-byte write.
+    fn write(p: &mut Pcf50605, reg: u8, val: u8) {
+        p.transfer(0x82, [reg, val, 0, 0]);
+    }
+    /// One I²C two-byte read from `reg`: address it, then read. CTRL `0xa2` is a two-byte read.
+    fn read2(p: &mut Pcf50605, reg: u8) -> (u8, u8) {
+        p.transfer(0x80, [reg, 0, 0, 0]);
+        p.transfer(0xa2, [0, 0, 0, 0]);
+        (p.data_byte(0), p.data_byte(1))
+    }
+
+    /// **Rockbox's exact access pattern**, which the old transfer-countdown model starved forever:
+    /// start a conversion, read the result straight away, never poll the ready bit, repeat.
+    ///
+    /// `adc-ipod-pcf.c` does precisely this, once per 400 ms, and got `0` for 27 000 conversions —
+    /// so `voltage_now` sat at zero and Rockbox powered the machine off as a flat battery.
+    #[test]
+    fn a_driver_that_never_polls_still_gets_its_conversion() {
+        let mut p = Pcf50605::default();
+        // Channel 2 is the battery on this board; `(2 << 1) | 1` starts it, per `adc_init`.
+        for _ in 0..3 {
+            write(&mut p, 0x2f, (2 << 1) | 1);
+            let _ = read2(&mut p, 0x30);
+        }
+        // By the third cycle the result registers must carry a real conversion, not their reset
+        // value. 0x2c0 = 704 -> ADCS1 = 0xb0, and ADCS2 carries the low bits plus ready in bit 7.
+        write(&mut p, 0x2f, (2 << 1) | 1);
+        let (adcs1, adcs2) = read2(&mut p, 0x30);
+        let value = ((adcs1 as u16) << 2) | (adcs2 as u16 & 3);
+        assert_eq!(value, 0x2c0, "ADCS1={adcs1:#04x} ADCS2={adcs2:#04x}");
+        assert_eq!(adcs2 & 0x80, 0x80, "ready bit must be set once a result is published");
+    }
+
+    /// The other stack's pattern, so a fix for Rockbox cannot silently break Apple: start a
+    /// conversion, then poll `ADCS1`/`ADCS2` until the ready bit appears, then use the value.
+    ///
+    /// There is deliberately no test that the *starting* transfer fails to publish. It is a real
+    /// property of the model, and it is unobservable from the host by construction — every way the
+    /// host could look is itself a transfer, and a transfer settles first. Asserting it would mean
+    /// reaching past the I²C boundary to prove something no driver can ever see.
+    #[test]
+    fn a_driver_that_polls_the_ready_bit_still_gets_its_conversion() {
+        let mut p = Pcf50605::default();
+        write(&mut p, 0x2f, (2 << 1) | 1);
+        let mut seen = None;
+        for _ in 0..4 {
+            let (adcs1, adcs2) = read2(&mut p, 0x30);
+            if adcs2 & 0x80 != 0 {
+                seen = Some(((adcs1 as u16) << 2) | (adcs2 as u16 & 3));
+                break;
+            }
+        }
+        assert_eq!(seen, Some(0x2c0), "polling never saw a published conversion");
     }
 }
 
