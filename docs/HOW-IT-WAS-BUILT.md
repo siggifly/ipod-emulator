@@ -50,6 +50,33 @@ identified the display stack as DispmanX, which is publicly documented two chip 
 The transport itself was derived from RetailOS's own parser, on the principle that code which reads a
 structure is a specification of that structure. Then the language picker, the main menu, and Brick.
 
+## Day 5 — a second operating system, a third bootloader, and an honest clock
+
+The strategy changed rather than the pace. **Rockbox was adopted as an oracle**: RetailOS is
+stripped C++ with no symbols, Rockbox drives the same PP5022 and ships an ELF with 5 808 of them, so
+a divergence stops being a hex address and becomes a function and a line. It paid immediately —
+three device models turned out to be shaped around Apple's drivers rather than around the parts, and
+none of the three is findable with one operating system.
+
+Then the chain got real. `install-os` writes an OS into a drive image's firmware partition the way
+`ipodpatcher` does, and `put-files` writes the FAT32 volume beside it, so Apple's own bootloader
+cold-boots somebody else's operating system with nothing warm-entered and no step skipped. The first
+installer attempt produced an image the bootloader rejected after 71 ATA commands; the fix — image
+data begins one sector past the partition and the directory does not — is measurable rather than a
+matter of reading the C, and the installer now reproduces the checksums already present before it
+writes new ones.
+
+**`ipodloader2` built and cold-booted**, making three bootloaders. It immediately addressed a 1G
+iPod's registers, because one line asks whether byte 16 of a chip-id register is ASCII `'2'` and
+nothing in this emulator had ever had to be right about that answer. That is the fourth model shaped
+around one driver, and the first found by a stack other than Rockbox.
+
+The day's last change was subtraction. A halted core used to teleport the clock to whichever
+interrupt was due next, which made idle time free — an untouched iPod aged thousands of times too
+fast and powered itself off about thirteen seconds after you stopped touching the wheel. Now a halt
+costs one loop iteration, exactly as running does, so the machine keeps one honest ratio to the real
+part whether it is busy or idle. Nothing was added to pace it. The teleport was simply deleted.
+
 ## What the work actually looked like
 
 Not a straight line. Several walls turned out to be the emulator's own instruments rather than the

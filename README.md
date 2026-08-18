@@ -7,7 +7,7 @@ scratch. It formats its own filesystem, reads the click wheel, draws its own men
 
 > ### This is alpha software
 >
-> It boots, it draws, it plays Brick — and it is four days old with one pair of images behind it.
+> It boots, it draws, it plays Brick — and it is five days old with one pair of images behind it.
 > Expect rough edges, expect to read a paragraph to get started, and expect things that work here
 > to fail on files we have never seen. **[Please open an issue](https://github.com/siggifly/ipod-emulator/issues)**
 > if something breaks or could be better; the reports so far have found real bugs and every one of
@@ -205,12 +205,16 @@ choose for one run.
 
 ## What works
 
-- The boot chain, cold from address 0, including Apple's flash updater
-- RTXC, 61 tasks, all 24 startup modules and all five startup phases
-- The disk: ATA with bus-master DMA, both PP502x DMA controllers, RetailOS formatting its own volume
-- The click wheel, 96 detents of absolute position, and the hold switch
-- The display, through a co-processor transport derived from RetailOS's own parser
-- The games built into RetailOS. Brick plays
+The boot chain runs cold from address 0 — Apple's bootloader, RTXC and its 61 tasks, the drive over
+ATA with bus-master DMA, the click wheel's 96 detents, the display through a co-processor transport
+derived from RetailOS's own parser, and the games built into RetailOS. Brick plays.
+
+**Three bootloaders and two operating systems boot here**: Apple's retail bootloader, Rockbox's, and
+`ipodloader2`; RetailOS and Rockbox 4.0.
+
+*Per-subsystem state lives in one place — the* **Where we are** *table in
+[`ROADMAP.md`](ROADMAP.md). It used to be duplicated here as a bullet list, and the two disagreed
+within a day.*
 
 ### It is not only Apple's software
 
@@ -227,11 +231,12 @@ has the measurement and the reproduction.
 
 A second, source-available operating system on this hardware model is the reason
 [research/06](research/06-rockbox-as-oracle.md) exists — RetailOS is stripped C++ with no symbols,
-Rockbox ships an ELF with 5 808 of them — and it has already earned it. **Three device models here
+Rockbox ships an ELF with 5 808 of them — and it has already earned it. **Four device models here
 turned out to be shaped around Apple's drivers rather than around the parts**: a USB clock-ready
 bit Apple's firmware never reads, an ADC that completed after a number of *transfers* rather than
-after *time*, and a click wheel that only delivers input to firmware speaking Apple's own opcode.
-None of the three is findable with one operating system.
+after *time*, a click wheel that only delivers input to firmware speaking Apple's own opcode, and a
+chip-id register whose answer nothing had ever had to be right about until a third bootloader
+asked. None of the four is findable with one operating system.
 
 **And the wheel drives it** — the third bug above is fixed, so the menu selection moves:
 
@@ -242,17 +247,19 @@ window can start for you — that is [on the roadmap](ROADMAP.md).
 
 ## What does not
 
-- **No audio.** The Wolfson codec is unmodelled
-- **~30 % of real time headless, ~19 % with the window.** About 21 M instructions/sec against an
-  80 MHz ARM7TDMI, and around 14 M once a frame is being drawn. The window reports the figure it is
-  actually achieving, whether or not the readout is up
-- **No USB inside the emulator**
-- **Purchased titles do not launch.** Apple's DRM refuses them; the identity it binds to is understood, the keystore is not
-- **Four values in the co-processor transport are chosen rather than measured**, and there is no timing model at all, so a bug that only appears when a reply is late is invisible
-- **The boot takes ~300 seconds of simulated time** where hardware takes five or ten. Something waits far longer than it should
+The three you would notice first:
 
-That list is what is **absent**, which is a different question from what is *wrong* or what is
-*faked*. The table under [Roadmap](#roadmap) says which document answers which.
+- **No audio at all.** The Wolfson codec is unmodelled, so nothing here makes a sound.
+- **~30 % of real time headless, ~19 % with the window** — about 21 M instructions/sec against an
+  80 MHz ARM7TDMI, and around 14 M once a frame is being drawn. That ratio is honest and uniform:
+  idle time costs the same as busy time, so an iPod left alone ages at the same fraction of real
+  speed as one being used. The window reports what it is actually achieving.
+- **No USB**, so no target disk mode and no restore.
+
+Beyond those, the rule is one document per question rather than a list here that goes stale:
+what is **wrong** is [`KNOWN-BUGS.md`](KNOWN-BUGS.md), what is **absent or planned** is
+[`ROADMAP.md`](ROADMAP.md), and what is **faked** — with a written condition for retiring each one —
+is [`research/04-bypass-ledger.md`](research/04-bypass-ledger.md).
 
 ## Roadmap
 
@@ -269,17 +276,18 @@ The four documents each answer one question, and none of them answers another's:
 | [`research/04-bypass-ledger.md`](research/04-bypass-ledger.md) | what is *faked*, with a retirement condition for each |
 | [`CHANGELOG.md`](CHANGELOG.md) | what *changed*, release by release |
 | [`RELEASING.md`](RELEASING.md) | how a release is *cut*, including the one edit that sets the version |
+| [`NEXT.md`](NEXT.md) | what is being *worked on now* — the live queue, its rules, and every instrument with a note on how each one lies |
 
 Merging them is how a project starts describing its gaps as choices.
 
 ## How it was built
 
-Four days, day by day, in `docs/HOW-IT-WAS-BUILT.md` — taken from the commit log rather than memory,
+Five days, day by day, in `docs/HOW-IT-WAS-BUILT.md` — taken from the commit log rather than memory,
 because memory was wrong about several of them.
 
 ## The research
 
-`research/` is the larger half of this project: 20-odd documents, and the record of what was believed
+`research/` is the larger half of this project: sixteen documents, and the record of what was believed
 and why it was wrong is deliberately preserved rather than tidied away. Retractions are made in
 place. `research/04` is the bypass ledger, `research/11` documents the co-processor's runtime, and
 `research/12` describes how RetailOS draws.
@@ -356,7 +364,7 @@ player to run this on when the hardware runs out.
 ## Who wrote this
 
 **I did not write a single line of code in this project.** It was written with Claude Opus 5 under
-direction over four days. What I did was steer: decide what was worth chasing, push back when an
+direction over five days. What I did was steer: decide what was worth chasing, push back when an
 answer sounded too convenient, find the prior art that unstuck it, and say "that can't be right, look
 again". That isn't nothing, and it also isn't writing an emulator. I would rather say so than let
 anyone assume otherwise.
