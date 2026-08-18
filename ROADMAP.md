@@ -259,7 +259,25 @@ project is" claims the strategy is for. **Do not "fix" our writer to match the l
 workaround would make iPodLinux boot and would quietly encode a false belief about the hardware
 into our disks, which is the failure the removed prototype recipe already cost this project once.
 
-The other blocker is real, and worse than "not fetched": **the kernel claim has no source.**
+### The kernel — found, and now sourced
+
+**Located 2026-08-18, and the claim was true all along.** It is in the ZeroSlackr distribution:
+
+| | |
+|---|---|
+| archive | `ZeroSlackr-SVN-snapshot-2008-08-11.7z`, 101 146 859 bytes, from `sourceforge.net/projects/zeroslackr/files/latest/download` |
+| path inside | `boot/vmlinux` |
+| size | **1 531 200 bytes** — exactly the figure this file cited |
+| sha256 | `9c7b66e297b02408d0c33ba82f76025ddf90968d2236c4307b1ae95a806e5302` |
+| first word | `0xea001ffe`, an ARM `B` — the "raw-ARM magic", and the same reset-vector shape as Apple's NOR |
+
+`ipodloader2` loads it from **`(hd0,1)/boot/vmlinux`** — the FAT32 data partition, which `put-files`
+writes — with `loader.cfg` at the volume root. A drive with both plus the loader in its firmware
+partition is built and boots as far as the loader.
+
+*What follows is kept because it is the lesson, not because the file is still missing.*
+
+**The claim had no source, and that cost a re-find.**
 
 This file says a 5.5G-correct kernel "has been located" — ZeroSlackr `vmlinux`, 1 531 200 bytes,
 raw-ARM magic confirmed. **That sentence is the only place it appears.** There is no URL, no
