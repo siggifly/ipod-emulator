@@ -142,8 +142,9 @@ against this before trusting it; if it does not match, find out why before measu
 
 **`BUDGET=600000000`** — the fingerprint run.
 
-> **The block below is stale and was re-measured 2026-08-18: `ata commands: 488`, `ata dma: 466
-> transfers, 21 087 744 bytes`.** It reads 554 / 445 / 20 367 872 because it was written on
+> **The block below is stale. Re-measured 2026-08-18 against a PRISTINE disk: `ata commands: 576`,
+> `ata dma: 467 transfers, 21 088 768 bytes`** — and see item 0b for why the working image gives a
+> different, meaningless answer. It reads 554 / 445 / 20 367 872 because it was written on
 > 2026-08-14 and four device fixes have landed since. **This was not the halt-clock change** — that
 > was A/B'd against a binary built from the stashed tree and is byte-identical here, which is the
 > only reason the drift is attributable to anything else. Numbers below the line are the machine of
@@ -241,28 +242,33 @@ films' 72 M/s is the CPU's rate and makes a rally unwatchable, because at `--clo
 
 **Still open, and small:** `Parachute`, `Music Quiz` and `Solitaire` have never been launched.
 
-## 0b — The retail fingerprint moved to 102 ATA commands and nobody knows why · **BLOCKS THE RELEASE**
+## 0b — ~~The retail fingerprint moved to 102 and nobody knows why~~ · **SETTLED 2026-08-18 — the disk had been written to**
 
-`ipod-boot retail` at `BUDGET=600000000` now reports **`ata commands: 102`**, with `unmapped: 132
-reads, 0 writes`, and `--clock=5` gives the identical figure. Earlier today the same budget reported
-**488**, and NEXT.md's own baseline block records 554 before that.
+**Not a regression, and not the code.** On a genuinely pristine disk the fingerprint is:
 
-**This is not yet a finding, it is an unexplained difference**, and the honest statement is that the
-comparisons behind it were sloppy: they were taken across different flags (`--clock=5` or not),
-different disks, and — critically — across the retirement of the `.sh` recipes, so some were run
-through `retail-boot.sh` and some through `ipod-boot retail`. Those two are supposed to compose the
-same argv, and the test that used to prove it was deleted along with the scripts.
+```
+ipod-boot retail --clock=5, BUDGET=600000000, DISK=…PRISTINE.img
+  ata commands: 576      ata dma: 467 transfers, 21 088 768 bytes
+  unmapped: 4 reads, 0 writes across 1 pages
+```
 
-**What settles it**, and none of it is expensive:
+which is in family with the 554 this file recorded on 2026-08-14, the difference being the device
+fixes since. **The 102 was the working image having accumulated state**: `drives/ipod8g-retail.img`
+was written at 14:41 that day, so RetailOS found its volume already formatted and did a fraction of
+the work. Every number taken against that file since depended on how many times it had been booted.
 
-1. Run the same budget against a **pristine clone** rather than whatever `resources/drives/` holds
-   now — several images have been written this session, and a disk that accumulates state makes
-   every measurement depend on how many times it was run before.
-2. Check that `ipod-boot retail` still clones per run the way the shell recipe did.
-3. Bisect the day's commits if it survives 1 and 2.
+**Two real defects came out of it, and the second is the one that mattered:**
 
-**Nothing should be released on a fingerprint nobody can explain.** R4 is the rule and this is the
-case it was written for.
+1. The recipe clones per run, so a run cannot dirty its source — that part was working. But the
+   **source itself is mutable**, and nothing announced that it had changed.
+2. **The recipe could not run against `PRISTINE` at all.** The clone inherits the source's mode,
+   `*.PRISTINE.img` is `chmod 444` on purpose, and the machine died with `Permission denied` before
+   executing an instruction — on precisely the image most worth measuring against. That is *why* the
+   fingerprint came to be taken on a mutable working copy. Fixed: `clone_file` now makes the clone
+   writable, and `ipod-boot retail` against `PRISTINE` reproduces 576.
+
+**Measure against `PRISTINE`.** A fingerprint taken on the working image is a statement about that
+file's history, not about the machine — and it will not reproduce on anyone else's copy.
 
 ## 0c — Cold-booted Rockbox reads 0 mV and powers itself off · **top of the live queue, 2026-08-18**
 

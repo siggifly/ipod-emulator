@@ -383,6 +383,30 @@ fn require(p: &Path, what: &str) -> Result<(), String> {
 /// program is not going to reach for. `WORKDISK=` is the answer on a filesystem with no clone —
 /// pay the copy once and keep the image.
 fn clone_file(from: &Path, to: &Path) -> Result<(), String> {
+    let r = clone_file_inner(from, to);
+    // **The clone inherits the source's mode, and the source is often read-only.**
+    // `drives/*.PRISTINE.img` is `chmod 444` on purpose, so a clone of it cannot be written and the
+    // machine dies with `Permission denied` before executing an instruction — on precisely the
+    // image most worth measuring against, which is how a fingerprint came to be taken on a mutable
+    // working copy instead. The drive must be writable: RetailOS formats its own volume during boot.
+    if r.is_ok() {
+        if let Ok(md) = std::fs::metadata(to) {
+            let mut perm = md.permissions();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                perm.set_mode(perm.mode() | 0o600);
+            }
+            #[cfg(not(unix))]
+            #[allow(clippy::permissions_set_readonly_false)]
+            perm.set_readonly(false);
+            let _ = std::fs::set_permissions(to, perm);
+        }
+    }
+    r
+}
+
+fn clone_file_inner(from: &Path, to: &Path) -> Result<(), String> {
     if to.exists() {
         return Ok(());
     }
@@ -410,6 +434,7 @@ fn clone_file(from: &Path, to: &Path) -> Result<(), String> {
     std::fs::copy(from, to)
         .map(|_| ())
         .map_err(|e| format!("copying {} -> {}: {e}", from.display(), to.display()))
+
 }
 
 // ---------------------------------------------------------------- the recipes
