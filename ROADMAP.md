@@ -56,10 +56,11 @@ with six devices that all half-work.
 |---|---|
 | RetailOS | **boots** cold from the reset vector, menus, formats its own volume, Brick plays. No sound. ~300 s of simulated time to the menu |
 | Rockbox 4.0 | **boots to its main menu and takes wheel input** (2026-08-18). Beyond the menu: unverified. No sound |
-| iPodLinux | **a verified 5.5G-correct kernel has been located** (ZeroSlackr `vmlinux`, 1 531 200 bytes, raw-ARM magic confirmed) and not yet fetched. `ipodloader2` is vendored as source and not yet built |
+| iPodLinux | `ipodloader2` **builds and cold-boots** (2026-08-18) — Apple's bootloader enters it, and it misdetects the chip and addresses a 1G iPod's registers until `0x70000000` bit 23:16 answers `'2'`; with that forced it gets past detection and stalls before the drive. [research/16](research/16-the-third-bootloader.md). A verified 5.5G-correct kernel is located (ZeroSlackr `vmlinux`, 1 531 200 bytes) and not yet fetched |
 | Installing an OS | **done** — `install-os` for the firmware partition, `put-files` for the FAT32 volume; the whole chain cold-boots |
 | Our own bootloader / OS | not started, and deliberately not designed for yet |
 | Bypass ledger | 5 active entries: #4, #6, #7, #11, #17 — and #7 now has a second consumer to be tested against |
+| Bootloaders | **three, and all three run**: Apple's retail, Rockbox's, and `ipodloader2` |
 | Audio | **nothing modelled.** The Wolfson codec answers no I²C; Rockbox is now talking to it and getting silence back |
 | USB | nothing modelled beyond a clock-ready bit — and `disk` (target disk mode) faults after 128 K instructions |
 | Titles | purchased/decrypted games do not launch — the identity Apple's DRM binds to is understood, the keystore is not |
