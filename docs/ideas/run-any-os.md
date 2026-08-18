@@ -1,6 +1,6 @@
 # Running an OS that is not RetailOS
 
-**Proposed, 2026-08-18. Not in 0.5.** Written down because the design falls out of parts that
+**Proposed 2026-08-18; steps 1 and 2 shipped the same day, step 3 is the open one.** Written down because the design falls out of parts that
 already exist, and because the obvious implementation is the one that would quietly undo the thing
 this emulator is for.
 
@@ -56,20 +56,42 @@ does (`built_drive_name()`), leaving the original alone.
 That makes the machine list the natural home for this: RetailOS and Rockbox are two drives, not one
 drive in two moods, and switching between them is switching machines.
 
+## The chord, and why there is no boot picker
+
+**A real iPod boots whatever is in its firmware partition.** There is no menu asking which operating
+system you meant, and there must not be one here either — a picker would be a bypass in spirit: it
+would let the window start something the machine's own bootloader never chose, and every divergence
+afterwards would be un-attributable between *"the OS does this"* and *"we started it a way nothing
+starts it."* Switching OS is switching **drives**, which is what the machine list is for.
+
+The one place a chooser is honest is the one the hardware has: **the hold-a-button-at-power-on
+chord.** `diag`, `disk`, `scan` and `logo` are reached on a real 5.5G by holding `SELECT`+`REW` and
+friends while it starts, and the window already draws those buttons and delivers them to the
+machine. So the interaction is *hold the chord on the wheel while the iPod boots* — not a menu item.
+That is the same design rule as everything else here: the way in is the way the device has.
+
 ## Honest state of the destination
 
-Rockbox reaches `Scanning disk…` and reads the volume, then prints *"Battery empty! RECHARGE!
-Shutting down…"* and powers off. It does not reach a menu. **iPodLinux is untested, and we do not
-have a kernel image to test with** — the tree vendors `ipodloader2`, which is the bootloader that
-would load one, not the OS itself.
+**Updated 2026-08-18, twice in one day.** Rockbox reaches **its main menu**, takes wheel input, and
+opens its file browser onto a volume `put-files` wrote — in its own font, off the emulated disk. The
+shutdown that made this section say *"the most likely outcome is a device that boots and then
+switches itself off"* is gone: it was the emulator's clock teleporting through idle time, and
+`sys_poweroff` went from 315 calls a boot to **none**.
 
-So shipping this today would ship a feature whose most likely outcome is a device that boots and
-then switches itself off. **Finishing the boot is the prerequisite, not the UI.** It is also a good
-problem to have: unlike RetailOS, Rockbox has source and symbols, so it names a function.
+**Cold-booted from disk it still stops after its splash**, so the destination is not finished — but
+it is no longer a device that turns itself off, and the failure now has a bounded shape rather than
+a symptom.
+
+**iPodLinux** still has no kernel here. `ipodloader2` — the bootloader that would load one — now
+**builds and cold-boots**, and immediately misidentifies the chip; see
+[research/16](../../research/16-the-third-bootloader.md).
 
 ## Order
 
-1. Find out why a shutdown is requested after the disk scan. It has symbols; this is a debuggable
-   question rather than a hex address.
-2. `osos` installation into a **new** drive image, with the `ipvd` checksum verified.
-3. Content routing for `.ipod` files, and the machine list showing what each drive holds.
+1. ~~Find out why a shutdown is requested after the disk scan.~~ **Done** — it was the clock, not
+   the battery, and not Rockbox.
+2. ~~`osos` installation into a **new** drive image, with the `ipvd` checksum verified.~~ **Done** —
+   `ipod-boot install-os`, which refuses unless the checksums already in the directory reproduce
+   first, and `ipod-boot put-files` for the volume beside it.
+3. **Content routing for `.ipod` files, and the machine list showing what each drive holds.** The
+   open one, and now the only thing between a person and a second operating system.
