@@ -52,17 +52,84 @@ TO_BRICK="$TO_GAMES$SEL,+150M:touch,+2M:rotate=+8,+5M:release$ROW$ROW$ROW$ROW\
 # `-t TOTAL` is not optional: the concat demuxer will not honour the last entry's duration unless
 # something follows it, so film.sh lists the last file twice — and the repeat then plays for that
 # duration a second time. The manifest's own total trims it back.
+# The fourth argument is the gif's palette mode, and it is spelled out at each call site rather
+# than defaulted, because the two films want opposite answers and the reason is measured.
+#
+#   held    one palette PER FRAME, frames held at their real durations.
+#   resampled  one palette for the WHOLE film, frames resampled to a constant rate.
+#
+# `held` is correct and `resampled` is not, so `resampled` needs a reason every time it is used.
+# The reason is never "it looks fine" — it is the frame-merge described under MINIMUM DELAY below.
 publish() {
-  local dir=$1 name=$2 fps=$3
+  local dir=$1 name=$2 fps=$3 mode=$4
   [ -s "$dir/frames.concat" ] || { echo "no film in $dir" >&2; return 1; }
   local total
   total=$(cat "$dir/frames.total")
   mkdir -p "$POST"
   # `dither=none`: this is a 16-bit UI of flat fills and one-pixel rules, and dithering it adds
-  # noise that was never on the panel. One palette generated from the whole film is enough.
-  ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i "$dir/frames.concat" -t "$total" \
-    -vf "scale=iw*2:ih*2:flags=neighbor,fps=$fps,split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none" \
-    -loop 0 "$POST/$name.gif"
+  # noise that was never on the panel. That half was right and is unchanged.
+  #
+  # THE PALETTE. `stats_mode=single` is one palette per frame. This comment used to read "one
+  # palette generated from the whole film is enough", and that claim was false. Measured on the
+  # frames this script writes: the boot film is 24 distinct screens whose colours UNION to 548, and
+  # one 256-entry table cannot hold 548. So it quantised, and the loss is per-frame and large — the
+  # main menu reached the gif with 147 of its 211 colours and Brick's playfield with 167 of its 238.
+  # That is why the battery's green and Brick's bricks read as wrong in the gif while the stills
+  # beside them, written straight from the same PNGs, read as right. The stills were never broken.
+  #
+  #   boot film, per frame, source -> gif        colours        RMSE vs the source PNG
+  #     one palette for the whole film           211 -> 147     0.00111
+  #     one palette per frame                    211 -> 211     0.000067
+  #     Brick, one palette for the film          238 -> 167     0.00212
+  #     Brick, one palette per frame             238 -> 238     0.0000142
+  #
+  # Frames that carry more than 256 colours of their own still lose the excess — five of the boot
+  # film's 24 do, topping out at 270 — but that is the GIF format's limit rather than this recipe's.
+  #
+  # `reserve_transparent=0` spends the 256th slot on a colour rather than on a transparency index
+  # that opaque panel frames never use. `new=1` is what makes the rest of it real: without it
+  # paletteuse takes the first palette and reuses it for the whole film, so the per-frame palettes
+  # are generated and then thrown away and the output is the broken one again.
+  #
+  # THE COST, and why `fps=` goes away with the palette. A new palette per frame forces every frame
+  # to be a full keyframe, so resampling 24 distinct screens up to 1084 constant-rate frames writes
+  # 1084 keyframes — 21.5 MB, against 370 KB for the broken global-palette version of the same film.
+  # Held at their real durations the same film is 24 frames and 617 KB, which is 1.7x the broken
+  # one for exact colour. Constant-rate resampling is also lossy in its own right: it dropped
+  # frame-00010 outright, a screen the machine really displayed, because it was held 0.0278 s and
+  # the 30 fps grid had no slot for it.
+  #
+  # MINIMUM DELAY, and why the gameplay film does not get any of this. The gif muxer will not write
+  # a frame delay shorter than 4 centiseconds. The boot film does not care: its 24 screens are held
+  # 0.0278 s to 12.4 s and all 24 survive. The gameplay film is 253 screens because the ball moves
+  # in every one of them, and 93 of those are held exactly 0.02 s — under the floor. Encoding it
+  # held merges them away: 253 screens in, 215 out, 38 of the machine's own frames gone from a film
+  # whose entire subject is motion. It is also 12.5 MB against 193 KB. So it stays `resampled`, and
+  # what that costs is a 282-colour union quantised to 256 — measured as 238 -> 229 with RMSE
+  # 0.0002, roughly a tenth of the boot film's damage and the reason nobody reported it. That is a
+  # real defect being kept on purpose, not a clean bill of health. Making it exact costs 30 MB
+  # (`held` + constant rate keeps all 253 frames); if that is ever the right trade, change the word
+  # at the call site.
+  #
+  # `-final_delay` is the held half of the `-t TOTAL` problem described above. In constant-rate mode
+  # the trailing duplicate frame is what gives the last screen its length; held, the trim removes it
+  # and the final screen collapses to a single tick — the boot film measured 34.08 s against a
+  # manifest saying 36.1389. Handing the muxer the last frame's own duration puts it back (36.15 s,
+  # which is centisecond rounding). A film whose length does not match its manifest is an
+  # instrument that lies, and that rule does not stop applying because the palette got better.
+  local final_delay
+  final_delay=$(awk '/^duration/ {d=$2} END {printf "%d", d*100 + 0.5}' "$dir/frames.concat")
+  case $mode in
+    held)
+      ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i "$dir/frames.concat" -t "$total" \
+        -vf "scale=iw*2:ih*2:flags=neighbor,split[a][b];[a]palettegen=stats_mode=single:reserve_transparent=0[p];[b][p]paletteuse=dither=none:new=1" \
+        -fps_mode vfr -final_delay "$final_delay" -loop 0 "$POST/$name.gif" ;;
+    resampled)
+      ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i "$dir/frames.concat" -t "$total" \
+        -vf "scale=iw*2:ih*2:flags=neighbor,fps=$fps,split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none" \
+        -loop 0 "$POST/$name.gif" ;;
+    *) echo "publish: unknown palette mode '$mode' (want held|resampled)" >&2; return 2 ;;
+  esac
   ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i "$dir/frames.concat" -t "$total" \
     -vf "scale=iw*2:ih*2:flags=neighbor,fps=$fps" \
     -c:v libx264 -preset veryslow -crf 18 -pix_fmt yuv420p "$POST/$name.mp4"
@@ -88,16 +155,28 @@ do_boot() {
   # timing is the machine's timing and this is what the machine does.
   BUDGET=2600000000 IDLE=2000000000 "$HERE/film.sh" --out="$FILM/boot-to-brick" \
     --every=2M --rate=72000000 --fps=30 -- --clickwheel --wheel="$TO_BRICK"
-  publish "$FILM/boot-to-brick" ipod-01-boot-to-brick 30
+  # `held`: 24 distinct screens, none of them under the muxer's 4 cs delay floor, and a 548-colour
+  # union that one palette cannot hold. This is the film the wrong-colour report was about.
+  publish "$FILM/boot-to-brick" ipod-01-boot-to-brick 30 held
   # Frame indices, not instruction counts, because the film's dedup is what assigns them — and they
   # are stable as long as the descent is. `frames.tsv` is the check: the non-black counts below are
   # 75267 / 75791 / 75565 / 74160 / 76763 / 2916, and rule 2 says look at the picture as well.
+  #
+  # Three of these indices were stale and the check above is what caught it. They read 10 / 13 / 21
+  # for Extras / Games / Brick, and today's film puts those screens at 11 / 15 / 23 — the descent
+  # now resolves two more distinct pictures than it did when the numbers were written, so every
+  # index after the Extras menu had slid. Running the script as it stood would have published the
+  # half-drawn Extras frame as `ipod-04-extras`, the Extras menu as `ipod-05-games-list` and the
+  # Games list as `ipod-06-brick`: three stills of the wrong screen, from a script that looked like
+  # it worked. The non-black counts never moved — 75565 / 74160 / 76763 are exactly what frames
+  # 11 / 15 / 23 measure today — which is why they are the check and not decoration. Verified the
+  # other way as well: each shipped still compares against its frame here at RMSE 0.
   local d="$FILM/boot-to-brick"
   still "$d" frame-00004.png ipod-02-language
   still "$d" frame-00006.png ipod-03-main-menu
-  still "$d" frame-00010.png ipod-04-extras
-  still "$d" frame-00013.png ipod-05-games-list
-  still "$d" frame-00021.png ipod-06-brick
+  still "$d" frame-00011.png ipod-04-extras
+  still "$d" frame-00015.png ipod-05-games-list
+  still "$d" frame-00023.png ipod-06-brick
   still "$d" frame-00002.png ipod-07-apple-logo
 }
 
@@ -130,7 +209,11 @@ do_gameplay() {
   # game would go on: there is a third ball behind it.
   BUDGET=2630000000 IDLE=2000000000 "$HERE/film.sh" --out="$FILM/brick-gameplay" \
     --every=100k --from=2574M --rate=5000000 --fps=50 -- --clickwheel --wheel="$TO_BRICK$W"
-  publish "$FILM/brick-gameplay" ipod-08-brick-gameplay 50
+  # `resampled`, deliberately, and it is the worse of the two options on colour: 93 of this film's
+  # 253 screens are held 0.02 s, under the muxer's 4 cs floor, so encoding it `held` would merge 38
+  # of them away — motion is this film's entire subject. It keeps a real defect (238 -> 229, a tenth
+  # of the boot film's) to keep every frame. See MINIMUM DELAY in publish().
+  publish "$FILM/brick-gameplay" ipod-08-brick-gameplay 50 resampled
   still "$FILM/brick-gameplay" frame-00060.png ipod-09-brick-rally
 }
 
