@@ -226,6 +226,29 @@ down; the level tracks the slider monotonically; and menu scrolling changes noth
 This is the fifth model defect in this project first attributed to missing hardware and found to be
 a misread of a signal we already had.
 
+## The boot progress bar is an estimate presented as a measurement — 2026-08-18
+
+Reported by the operator: *"the boot indicator on the bottom and the actual boot state are not
+properly connected... the language screen was long there before it finished."* Correct, and the code
+says so plainly.
+
+The bar is `executed / snap_at`, and the phase flips on `executed >= cfg.snap_at`. `snap_at` is
+**1 600 000 000 instructions** — a point chosen because it is a good place to *resume from*, not
+because it is where the boot ends. RetailOS reaches the language picker before it, so the bar keeps
+filling after the machine is up and interactive, and the "about N s left" beside it is counting
+toward a number the user cannot observe.
+
+**What is wrong is the claim, not the number.** An instruction budget is a fine trigger for taking a
+snapshot. It is not a statement about whether the OS has finished starting, and presenting it as one
+teaches somebody to distrust the one progress indicator this program has.
+
+**There is a real signal.** The click wheel's `reporting` flag is RetailOS enabling wheel reports —
+it means the UI is accepting input — and `Stats::reporting` already carries it. A phase derived from
+that is an observation; a phase derived from a constant is a guess.
+
+**How you would know it is fixed:** the bar completes when the picker appears, not before it and not
+after it, and the phase is driven by something the machine did rather than by an instruction count.
+
 ## `MENU`+`SELECT` and `PLAY` are delivered and ignored
 
 Held for 400 M instructions at the main menu, the machine keeps running (`research/10` Addendum 31
