@@ -109,6 +109,17 @@ impl<T> Capped<T> {
         &self.kept
     }
 
+    /// Take the retained rows and start counting again.
+    ///
+    /// For the case the report format never had: *what happened between these two moments*. A log
+    /// that only ever accumulates answers "what has this run ever done", which is the wrong
+    /// question when one click of a control is the thing being read. Resets `seen` with the rows,
+    /// so the truncation warning describes the new window rather than the old one.
+    pub fn drain(&mut self) -> Vec<T> {
+        self.seen = 0;
+        std::mem::take(&mut self.kept)
+    }
+
     pub fn iter(&self) -> std::slice::Iter<'_, T> {
         self.kept.iter()
     }

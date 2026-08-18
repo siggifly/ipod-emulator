@@ -311,6 +311,8 @@ pub struct Out {
     /// The `--watch-writes` census, `(word address, writes, 0)`, handed over on request. The
     /// third field is a placeholder: `WatchWord` keeps the writers, not the value.
     pub watched_writes: Vec<(u32, u64, u8)>,
+    /// The `--watch-writes` value log, `(pc, address, byte)`, drained on request.
+    pub bus_log: Vec<(u32, u32, u32)>,
     /// The surface the window is **not** showing, and whether its content has moved since this
     /// session began.
     ///
@@ -443,6 +445,7 @@ impl Link {
                 pc_trace: Vec::new(),
                 pmu_written: Vec::new(),
                 watched_writes: Vec::new(),
+                bus_log: Vec::new(),
                 fb_seq: 0,
                 backlight: 16,
                 backlight_steps: (0, 0),
@@ -1162,6 +1165,16 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                 for a in batch {
                     let v = if a == crate::control::UNMAPPED_SENTINEL {
                         Some(m.mem.unmapped.len() as u32)
+                    } else if a == crate::control::BUS_SENTINEL {
+                        let mut out = link.out.lock().unwrap();
+                        out.bus_log = m
+                            .mem
+                            .watch_range_log
+                            .drain()
+                            .into_iter()
+                            .map(|(pc, addr, v, _)| (pc, addr, v))
+                            .collect();
+                        Some(out.bus_log.len() as u32)
                     } else if a == crate::control::WRITES_SENTINEL {
                         let mut out = link.out.lock().unwrap();
                         out.watched_writes = m

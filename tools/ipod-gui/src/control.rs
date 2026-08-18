@@ -42,6 +42,10 @@ pub const PMU_SENTINEL: u32 = 0xFFFF_FFFD;
 /// Ask for the `--watch-writes` census: which words in the watched range have been written, how
 /// often, and by whom. Live, so a control can be moved and the answer asked for immediately.
 pub const WRITES_SENTINEL: u32 = 0xFFFF_FFFC;
+/// Take the `--watch-writes` **value** log and clear it, so the next dump covers only what happened
+/// since this one. Counting writes cannot tell two transaction types on one bus apart; their bytes
+/// can, and this is how one click of a control gets read as a byte sequence.
+pub const BUS_SENTINEL: u32 = 0xFFFF_FFFB;
 
 /// Start listening. Returns immediately; each connection is served on its own thread.
 pub fn serve(path: &Path, link: Arc<Link>) -> Result<(), String> {
@@ -265,6 +269,24 @@ fn command(line: &str, link: &Arc<Link>) -> String {
             let mut s = String::from("ok writes");
             for (addr, n, _) in rows {
                 s.push_str(&format!(" {addr:#010x}(x{n})"));
+            }
+            s
+        }
+        "bus" => {
+            link.peek_req.lock().unwrap().push(BUS_SENTINEL);
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            let _ = link.peek_ans.lock().unwrap().pop();
+            let rows = link.out.lock().unwrap().bus_log.clone();
+            if rows.is_empty() {
+                return "ok bus empty".into();
+            }
+            let shown = rows.len().min(600);
+            let mut s = format!("ok bus {} writes", rows.len());
+            if shown < rows.len() {
+                s.push_str(" (TRUNCATED)");
+            }
+            for (pc, addr, val) in rows.iter().take(shown) {
+                s.push_str(&format!(" {addr:#x}={val:#04x}@{pc:#x}"));
             }
             s
         }
