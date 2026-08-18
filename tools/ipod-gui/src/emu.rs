@@ -1775,6 +1775,36 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
         "  backlight: {} / 32 ({} up, {} down)",
         m.mem.backlight.level, m.mem.backlight.steps_up, m.mem.backlight.steps_down
     );
+    // The widths, not just the verdict they produced. `BACKLIGHT_STEP_USEC` is inferred from
+    // Rockbox's 10 µs / 200 µs delays, and Apple's firmware is not Rockbox — if its two delays
+    // land on the same side of the threshold, every pulse steps the same way and the dimmer walks
+    // to a rail. That is invisible from the level and obvious from this line.
+    {
+        let w = &m.mem.backlight.widths;
+        if w.seen() > 0 {
+            let rows = w.sample();
+            let (lo, hi): (Vec<u32>, Vec<u32>) =
+                rows.iter().partition(|&&u| u < eapp_loader::BACKLIGHT_STEP_USEC);
+            println!(
+                "    pulse widths: {} pulses{} — {} under {} µs, {} over{}",
+                w.seen(),
+                if rows.len() as u64 == w.seen() { "" } else { " (SAMPLE, NOT A CENSUS)" },
+                lo.len(),
+                eapp_loader::BACKLIGHT_STEP_USEC,
+                hi.len(),
+                if rows.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ". min {} µs, max {} µs, first few {:?}",
+                        rows.iter().min().unwrap(),
+                        rows.iter().max().unwrap(),
+                        &rows[..rows.len().min(8)]
+                    )
+                }
+            );
+        }
+    }
     println!("  ata commands: {}", m.mem.ata.as_ref().map(|(_, d)| d.commands.seen()).unwrap_or(0));
     if let Some((_, d)) = &m.mem.ata {
         let names = |c: u8| match c {

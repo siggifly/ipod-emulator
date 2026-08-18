@@ -57,6 +57,46 @@ does not fire — the released level does not match `INT_LEV` — and RetailOS n
 once locked it polls the pin rather than waiting. So the release half needed no code, and the four
 reads that made this look broken were never the whole story.
 
+## The brightness slider does nothing, and the dimmer is reading the wrong signal — 2026-08-18
+
+Moving brightness in RetailOS's settings does not change the panel, and the level the window shows
+is not a brightness at all.
+
+`Backlight` counts pulses on **`GPIOB_OUTPUT_VAL` bit 0x10** and decides direction from how long the
+pin stayed low: shorter than `BACKLIGHT_STEP_USEC` steps up, longer steps down. The threshold is
+100 µs because **Rockbox's** `backlight_hw_brightness` delays 10 µs to brighten and 200 µs to dim.
+
+Rockbox is not the firmware this emulator runs, and the widths say so. Instrumented over a 2.2 G
+boot, the eight pulses measure:
+
+```
+0 µs · 1 µs · 28 157 µs · 10 232 702 µs   (and four more at 0)
+```
+
+Nothing there is 10 or 200. Six land under the threshold by being **zero** — both edges inside the
+same simulated microsecond — and two are separated by tens of milliseconds and ten *seconds*. Those
+are not the two ends of a pulse; they are unrelated events being paired by a model that assumes
+every falling edge is a dimmer step.
+
+Rockbox is also explicit that this is the wrong pin for the job. `backlight_hw_brightness` pulses
+**`GPIOD_OUTPUT_VAL` bit 0x80**; `GPIOB` bit `0x08` and `GPIOD` bit `0x80` together are the
+*enable*. Our `0x6000d024` bit `0x10` is neither, and `0x6000d02c` is written exactly twice in a
+whole boot, at init, with `0x20`. So GPIOB bit 0x10 is almost certainly an enable line — a handful
+of toggles for screen-on and inactivity — and the level derived from it is an artefact of counting
+them.
+
+**What you see:** the slider moves and the panel does not. Worse, when the window *does* dim, the
+figure it dims by is not the device's brightness.
+
+**How you would know it is fixed:** moving the slider through its range changes the level
+monotonically, the pulse widths cluster into two populations that a threshold actually separates,
+and the count rises with the number of steps the user asked for. Finding where RetailOS really
+writes brightness comes first — the PCF50605 over I²C is the obvious candidate, since it is what
+drives the panel supply.
+
+This is the fifth model defect in this project first attributed to missing hardware and found to be
+a misread of a signal we already had.
+
 ## `MENU`+`SELECT` and `PLAY` are delivered and ignored
 
 Held for 400 M instructions at the main menu, the machine keeps running (`research/10` Addendum 31

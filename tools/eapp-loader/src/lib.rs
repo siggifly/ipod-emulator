@@ -69,7 +69,7 @@ const TRAP_STRIDE: u32 = 0x1000;
 ///
 /// [`push_with`](Self::push_with) is the same contract for entries that cost something to build:
 /// the count still rises when the closure is not run, so laziness never costs a number.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Capped<T> {
     cap: usize,
     kept: Vec<T>,
@@ -4598,11 +4598,26 @@ pub struct Backlight {
     low_since: Option<u32>,
     pub steps_up: u64,
     pub steps_down: u64,
+    /// Every pulse's low width, in microseconds, in order.
+    ///
+    /// **[`BACKLIGHT_STEP_USEC`] is inferred, not measured.** It comes from Rockbox's driver, whose
+    /// two delays are 10 µs and 200 µs — and Rockbox is not the firmware this emulator runs. If
+    /// Apple's own delays fall on the same side of the threshold, every pulse steps the same way,
+    /// the level walks to a rail, and the dimmer looks like it does nothing. That failure is
+    /// invisible from the level alone, which is why the widths are kept rather than just the
+    /// verdict they produced.
+    pub widths: Capped<u32>,
 }
 
 impl Default for Backlight {
     fn default() -> Self {
-        Self { level: 16, low_since: None, steps_up: 0, steps_down: 0 }
+        Self {
+            level: 16,
+            low_since: None,
+            steps_up: 0,
+            steps_down: 0,
+            widths: Capped::new(256),
+        }
     }
 }
 
@@ -4620,6 +4635,7 @@ impl Backlight {
             (Some(at), true) => {
                 self.low_since = None;
                 let width = usec.wrapping_sub(at);
+                self.widths.push(width);
                 if width < BACKLIGHT_STEP_USEC {
                     self.steps_up += 1;
                     self.level = (self.level + 1).min(32);
