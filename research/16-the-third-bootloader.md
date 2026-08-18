@@ -204,3 +204,43 @@ which field the OS believes, and the whole thing is reproducible by construction
 work is not this block but everything around it — SDRAM up, PMU talked to, `vmcs` uploaded, the
 drive spun and its partition table read — each of which is a diff against a real boot rather than a
 guess.
+
+## Identity formats, for M5's generator
+
+Both fields decompose from data already held, and neither needs a datasheet.
+
+### FireWire GUID — fully specified
+
+The observed GUID begins `0x000A27`, which is **Apple's registered OUI**. The remaining 40 bits are
+the device's own. So generation is exactly: Apple's OUI in the high 24 bits, 40 bits of uniqueness
+below, and nothing else is required for software to accept it.
+
+**This is the field with teeth.** Apple's DRM binds a purchased title to it, so a generated GUID
+means those titles can never authorise — which is a fact for the UI, not a footnote. It is also the
+reason the "read it from your own iPod" tier exists.
+
+### Serial — Apple's pre-2010 eleven-character format
+
+Two real examples, from two different sources, agree on the shape:
+
+```
+4J 6 08 2Y7 TXK        from the NOR's handoff block
+JQ 5 51 Y5H TXM        from the drive's iPod_Control/Device/SysInfo
+│  │ │  │   └── model code (3)
+│  │ │  └────── unique (3)
+│  │ └───────── week of year (2)
+│  └─────────── year, last digit
+└────────────── manufacturing location (2)
+```
+
+**The model-code table is Apple-internal and we do not have it.** `TXK` and `TXM` are 5G-era codes;
+which capacity each denotes is not sourced here and should not be guessed. This matters less than it
+looks: **nothing validates the serial.** RetailOS displays it. So a generated serial needs the right
+*shape*, and its last three characters are cosmetic until somebody shows otherwise.
+
+### And a thing the two examples reveal
+
+**Those are two different serials, so the NOR and the drive came from different iPods.** The README
+warns that the two files "must be for the same iPod", and the check that enforces it compares
+*family*, not serial — so this pair passes, correctly, because family is what actually has to match.
+Worth knowing before anyone reads a serial out of one and expects it to appear in the other.
