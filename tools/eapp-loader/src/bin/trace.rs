@@ -486,7 +486,11 @@ fn main() {
             a.strip_prefix("--sysinfo=").map(Some).or(if a == "--sysinfo" { Some(None) } else { None })
         }) {
             let size = spec.and_then(parse_addr).unwrap_or(0x0400_0000);
-            install_sysinfo(&mut m, 0x4001_fd00, size);
+            // The NOR, when one was given: the handoff's identity, model and Gestalt all come out
+            // of its SysCfg rather than out of constants. `--flash=` is parsed further down, so it
+            // is read from the arguments directly here.
+            let flash_for_sysinfo = args.iter().find_map(|a| a.strip_prefix("--flash="));
+            install_sysinfo(&mut m, eapp_loader::nor::HANDOFF_AT, size, flash_for_sysinfo);
         }
         // --input-regs=BASE:SIZE : which addresses are read before ever being written.
         if let Some(spec) = args.iter().find_map(|a| a.strip_prefix("--input-regs=")) {
@@ -2143,47 +2147,88 @@ fn report_profile(m: &eapp_loader::Machine) {
 /// plausibly carry it — including `+0xe0`, which the firmware demonstrably reads and which falls
 /// inside the region iPodLinux calls `pad7[120]`, i.e. bytes they never identified. That one is a
 /// deliberate guess, and the run either clears the assertion or it does not.
-fn install_sysinfo(m: &mut eapp_loader::Machine, base: u32, sdram_size: u32) {
-    // Four-character tags, as they appear in memory: bytes 'I','s','y','S' little-endian.
-    let tag = |s: &[u8; 4]| u32::from_le_bytes(*s);
+fn install_sysinfo(
+    m: &mut eapp_loader::Machine,
+    base: u32,
+    sdram_size: u32,
+    flash: Option<&str>,
+) {
+    // Everything the block says about *which iPod this is* comes from the NOR, when there is one.
+    // The constants this used to carry were measured on the PROTOTYPE dump, before the retail one
+    // existed: it wrote a Gestalt of 0x000b0011 where the retail NOR's HwVr record reads
+    // 0x000B0005, and a `len` of 0x184 where a real cold boot writes 0xf8.
+    let from_nor = flash
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|rom| eapp_loader::inspect::syscfg(&rom).map(|c| (rom, c)));
+
+    let block = match &from_nor {
+        Some((rom, cfg)) => {
+            let model = cfg.model_info();
+            let identity = eapp_loader::identity::Identity {
+                serial: cfg.serial.clone(),
+                guid: cfg.guid.unwrap_or(0),
+                source: eapp_loader::identity::Source::RealDevice,
+            };
+            let at = eapp_loader::inspect::SYSCFG_AT;
+            let len = eapp_loader::inspect::SYSCFG_HEADER
+                + cfg.records.len() * eapp_loader::inspect::SYSCFG_RECORD;
+            let syscfg = rom.get(at..at + len).unwrap_or(&[]);
+            match model {
+                Some(mdl) => eapp_loader::nor::handoff(&identity, mdl, syscfg),
+                // A dump whose Mod# we cannot resolve still has a serial and a GUID worth passing
+                // through; only the model-derived fields go missing.
+                None => {
+                    let fallback = eapp_loader::identity::Model::lookup("A146")
+                        .expect("A146 is in the table");
+                    eapp_loader::nor::handoff(&identity, fallback, syscfg)
+                }
+            }
+        }
+        // No NOR at all — a warm boot straight into an OS image. The block still has to exist or
+        // RetailOS asserts at 0xda0, so it is built from a generated identity.
+        None => {
+            let model = eapp_loader::identity::Model::lookup("A146").expect("A146 is in the table");
+            let identity = eapp_loader::identity::Identity::generate(model, 0);
+            eapp_loader::nor::handoff(&identity, model, &[])
+        }
+    };
+
+    for (i, chunk) in block.chunks(4).enumerate() {
+        let mut w = [0u8; 4];
+        w[..chunk.len()].copy_from_slice(chunk);
+        m.mem.write32(base + (i as u32) * 4, u32::from_le_bytes(w));
+    }
+    // **The scaffolding a warm boot has no ROM to have left.**
+    //
+    // The block above is what a real COLD boot leaves, measured — and on real hardware those
+    // offsets (+0x60, +0x74, +0x9c) are zero, because by then the ROM has already set up whatever
+    // these describe. A warm boot starts with the OS already in memory and none of that done, so
+    // the tags iPodLinux documents are written here to stand in for it.
+    //
+    // Bisected rather than assumed: with them removed the warm boot fell from 18 ATA commands to
+    // 7 and sent a thousand reads to a garbage pointer, and neither the block's address nor its
+    // Gestalt changed that. They are warm-path scaffolding, not part of the handoff.
     let w = |m: &mut eapp_loader::Machine, off: u32, v: u32| m.mem.write32(base + off, v);
-
-    w(m, 0x00, tag(b"IsyS"));
-    w(m, 0x04, 0x184); // len, per clicky's HLE bootloader
-    // 0x08 BoardHwName[16], 0x18 pszSerialNumber[32], 0x38 pu8FirewireGuid[16] — left zeroed.
-    w(m, 0x48, 0x0000_0005); // boardHwRev
-    w(m, 0x60, tag(b"Flsh"));
-    w(m, 0x68, 0x2000_0000); // flash_base — where Rockbox's mmap window puts the 1 MB NOR
-    w(m, 0x6c, 0x0010_0000); // flash_size
-    w(m, 0x74, tag(b"Sdrm"));
-    w(m, 0x7c, 0x1000_0000); // sdram_base
+    w(m, 0x60, u32::from_le_bytes(*b"Flsh"));
+    w(m, 0x68, 0x2000_0000);
+    w(m, 0x6c, 0x0010_0000);
+    w(m, 0x74, u32::from_le_bytes(*b"Sdrm"));
+    w(m, 0x7c, 0x1000_0000);
     w(m, 0x80, sdram_size);
-    w(m, 0x88, tag(b"Frwr"));
-    w(m, 0x9c, tag(b"Iram"));
-    w(m, 0xa4, 0x4000_0000); // iram_base
-    w(m, 0xa8, 0x0002_0000); // iram_size — 128 KB, the PP5022-class part
-    // The hardware/Gestalt ID. RetailOS copies the first 248 bytes of this block verbatim into a
-    // device singleton (`0x281224`) and then reads `+0x84` as the model — measured, by breaking at
-    // `0x281238` and finding `r1` pointing straight at this structure.
-    //
-    // The value is **this machine's own**, not the published one: it is the `HwVr` record of the
-    // `SCfg` block at flash `0x4054`, which Apple's bootloader fetches by key lookup at `0x400098dc`
-    // and stores here. Cold boot reads `0x000b0011` straight out of the NOR dump.
-    //
-    // It used to be `0x000B0005` — theapplewiki's published 5G Gestalt, borrowed from the USB work
-    // — and the warm path never noticed, because the selector at `0x2653a4` switches on the HIGH
-    // half and both values carry 11. Correcting it changes exactly one thing that is visible:
-    // RetailOS's first MBR read becomes `nsector 4` instead of `nsector 1` — 2048 bytes instead of
-    // 512, which is the drive-configuration step asking for more of the disk than it used to.
-    // Everything else holds: 104 arrivals at the selector from the same two call sites, 18 ATA
-    // commands, 220 unmapped reads and no unmapped writes, 17 972 code buckets against 17 968.
-    w(m, 0x84, 0x000b_0011);
-    w(m, 0xe0, sdram_size); // read by RetailOS at 0x13e8; inside iPodLinux's pad7
-    w(m, 0x128, 0x0005_0014); // boardHwSwInterfaceRev, per clicky
+    w(m, 0x88, u32::from_le_bytes(*b"Frwr"));
+    w(m, 0x9c, u32::from_le_bytes(*b"Iram"));
+    w(m, 0xa4, 0x4000_0000);
+    w(m, 0xa8, 0x0002_0000);
+    w(m, 0xe0, sdram_size);
+    w(m, 0x128, 0x0005_0014);
 
-    m.mem.write32(0x4001_ff18, tag(b"IsyS"));
-    m.mem.write32(0x4001_ff1c, base);
-    println!("  sysinfo at {base:#010x}, sdram_size {sdram_size:#x}");
+    m.mem.write32(eapp_loader::nor::HANDOFF_TAG_AT, u32::from_le_bytes(*b"IsyS"));
+    m.mem.write32(eapp_loader::nor::HANDOFF_TAG_AT + 4, base);
+    let who = match &from_nor {
+        Some((_, c)) => c.model.clone().unwrap_or_else(|| "unknown model".into()),
+        None => "generated".into(),
+    };
+    println!("  sysinfo at {base:#010x}, sdram_size {sdram_size:#x}, from {who}");
 }
 
 /// `--findptr=VALUE[/MASK]` — every aligned word in memory matching VALUE under MASK.
