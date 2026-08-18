@@ -386,19 +386,39 @@ and never quote a real one in the documentation.
 
 ### 5G, 5.5G, and which is the default
 
-The synthesis makes both reachable — the generations differ, as far as anything we can see, in
-identity values rather than in behaviour, and Rockbox uses one `ipodvideo` target for the pair.
+**5.5G is the default, gated on a test it has to pass.** Operator decision, 2026-08-18, and it
+overrides an earlier draft of this section that wanted 5G by default on the grounds that only 5G
+can be diffed against a real ROM. That reasoning applied the wrong standard.
 
-**But they are not equally validated, and the default should say so.** We can diff an HLE **5G**
-against a real 5G ROM. There is **nothing to diff an HLE 5.5G against**: the only 5.5G-ish artefact
-is the prototype dump, which `README` records will not boot a pristine firmware partition. An HLE
-5.5G is a 5G handoff wearing a different `HwVr`, and that may be exactly correct — but it would be
-*unchecked*.
+**Two kinds of evidence, and both count:**
 
-So: **default to the one that can be proven, offer the other plainly labelled.** If the 5.5G variant
-later survives a real test — a 5.5G-only binary that refuses to run on a 5G, say — it can become the
-default on evidence. Shipping an unvalidated configuration as the default is the one thing this
-project has consistently refused to do.
+| | proves | available for |
+|---|---|---|
+| **diff** against the real ROM's handoff | **fidelity** — we reproduce what the hardware actually leaves | 5G only |
+| **acceptance** by independent stacks | **sufficiency** — what we leave is enough for real software | both |
+
+Insisting on fidelity evidence for the 5.5G means never shipping a 5.5G, because a 5.5G boot ROM
+cannot be obtained. And acceptance is not a consolation prize: it is **this project's own method**,
+stated in §"What this project is" — *one stack tells you only that you satisfy that stack; two
+disagree and the disagreement names the hardware.* Four device models were found that way, by
+software refusing to run rather than by any diff.
+
+### The gate
+
+**HLE 5.5G becomes the preselected default when it passes all of these, and not before:**
+
+- **Apple's bootloader path** — RetailOS to the menu, its own volume formatted, a game playable
+- **Rockbox** — its bootloader, then Rockbox to its menu, wheel input, its file browser on a real volume
+- **iPodLinux** — `ipodloader2` to its own menu, then the kernel
+- **the NOR's other modes** — `diag` drawing, and the rest reached by the chord
+
+And **HLE 5G must diff clean against the real ROM's handoff** — that arm is where fidelity gets
+proven, and it is what makes the 5.5G's acceptance mean something rather than being the only
+evidence in the building.
+
+**Until the gate passes, the default is whatever is proven.** The label in the UI says which kind of
+evidence each rests on, because a user choosing between them deserves to know that one has been
+diffed against real hardware and the other has been accepted by real software.
 
 ## Distribution · a Homebrew tap · *not a milestone, and cheap*
 
