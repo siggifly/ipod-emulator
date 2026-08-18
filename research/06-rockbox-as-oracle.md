@@ -685,13 +685,12 @@ we wrote.
 
 - *`adc_init` never ran, so `channelnum` stayed at its BSS zero.* No — `--break=0x03e9131c` hits
   **exactly once in both paths**.
-- *Rockbox converts the wrong channel.* ~~No. The ordered census shows the cold path's first
-  conversions are Apple's (`(0,704) (0,704) (4,512) (4,512) (3,512)…`) and then **`(2,704)`** —
-  Rockbox's own, right channel, right value.~~ **RETRACTED — that `(2,704)` is Apple's.** The
-  print is `order (first 12 of N kept)` off a log capped at 4 096, so it is the first twelve
-  conversions of the *whole run*, and on a cold boot the run opens with the bootloader's 9 237.
-  Nothing in it is Rockbox's. See §"The ordered census is not a window onto Rockbox" below, which
-  turns this row from an elimination into the opposite finding.
+- *Rockbox converts the wrong channel.* **It does — but not by asking for the wrong one.** The
+  original text read this off `order (first 12 of N kept)`, which is a 4 096-capped sample of the
+  *whole run* and cannot attribute anything to the second stack; that reasoning was unsound and is
+  replaced below. The measured answer needed a control run, and it is that **9 235 of the cold
+  path's conversions are Rockbox's and land on channel 0** — while the guest asks for channel 2
+  every single time. See §"The channel is right in the guest and wrong at the device".
 - *The PMU model ends up holding the wrong bytes.* No — **both** paths finish with
   `data registers now [0xb0 0x80 0x00 0x00]`, which is 704 with the ready bit set.
 - *The I²C bus never goes idle, so `pp_i2c_read_bytes` returns `-2` and leaves `data[2]`
@@ -709,6 +708,22 @@ That is four lines of this emulator, and the next measurement is to log what the
 whether they run at all — on a cold boot.
 
 ### The ordered census is not a window onto Rockbox
+
+> **Superseded within the hour it was written, and the way it failed is the lesson.** This section
+> replaced one unsourced attribution with another: it argued — correctly — that the ordered print
+> cannot attribute a conversion to a stack, and then attributed that `(2,704)` to Apple anyway, on
+> the same evidence it had just declared insufficient. **It is Rockbox's.** A control run settles it
+> in one command and nothing else does: cold-boot Apple's own image, where no Rockbox exists.
+>
+> ```
+> retail-boot.sh                                  ->  20 conversions: ch0 x2, ch3 x9, ch4 x9
+> retail-boot.sh DISK=rockbox-cold.img            ->  9 246:  ch0 x9237, ch2 x1, ch3 x5, ch4 x3
+> ```
+>
+> **Apple's bootloader converts channel 2 zero times.** So the single channel-2 conversion is
+> Rockbox's, and the 9 235 extra channel-0 conversions are Rockbox's too. The reasoning below about
+> the instrument stands and is why the ADC now has a row in `NEXT.md`'s table; the conclusion it was
+> used to reach did not, and the corrected finding is the section after this one.
 
 **The `(2,704)` above is Apple's bootloader's, and reading it as Rockbox's inverted the finding.**
 `trace.rs` prints `order (first 12 of N kept)` from `Pcf50605::adc_log`, which is
@@ -800,3 +815,85 @@ Three measurements settle it, none costing more than a run:
 - Count the same for the **write** direction — what the model reads back out of those registers
   when `I2C_SEND` goes up. This is the half that discriminates, because it is the half that decides
   whether a conversion starts, and no instrument reports it today.
+
+### The channel is right in the guest and wrong at the device
+
+**The value byte of a two-byte PMU write is lost inside this emulator on the cold path.** Not the
+register byte beside it, not the read direction, and not on the warm path. Everything else in this
+investigation was downstream of that.
+
+The instrument that was missing: `Pcf50605::written` has carried `register -> (writes, last value)`
+uncapped for weeks and **was never printed**, so "which register is the firmware hammering" was
+answerable and "what is it putting in it" was not. The ADC's channel select *is* the value —
+`ADCC1` bits 4:1 — so the read-side table saying `reg 0x2f x9236` says a conversion was requested
+and says nothing at all about which channel. Printed, both arms of the standard recipe:
+
+| | `reg 0x2f` writes | last value | meaning |
+|---|---|---|---|
+| **warm** (`rockbox.sh`) | 8 895 | **`0x05`** | `(2 << 1) \| 1` — channel 2, correct |
+| **cold** (`retail-boot.sh DISK=rockbox-cold.img`) | 9 240 | **`0x00`** | channel 0 |
+
+`0x00` is not a value that expression can produce: `(channelnum << 1) | 0x1` has bit 0 set
+unconditionally, for every possible `channelnum`. So the byte reaching the device was never
+computed by Rockbox, and the question stops being "what does the guest believe" and becomes "where
+did the byte go".
+
+**The guest is innocent, measured at the call.** `--enterlog=0x0007e144` on `pcf50605_write(reg,
+val)` — address from Rockbox's own ELF, so this is a named function and not an inferred one:
+
+```
+0x0007e144 lr=0x00083670  r0=0x0000002f r1=0x00000005   @109269868
+0x0007e144 lr=0x00083670  r0=0x0000002f r1=0x00000005   @124934640
+…
+386 of 386 calls with r0=0x2f carry r1=0x05, and all 386 come from lr=0x00083670 — inside _adc_read.
+```
+
+**Every call asks for channel 2.** The loss is between that call and the bus.
+
+**It is lost at the store.** `--storeaddr=0x7000c010` (`I2C_DATA(1)`) on the cold path shows
+`pp_i2c_send_bytes`'s copy loop writing the byte it was handed:
+
+```
+0x0007e328 -> [0x7000c010] = 0x00000005   @109269952     <- adc_init's read: the one good conversion
+0x0007e328 -> [0x7000c010] = 0x00000000   @124934724     <- and every one after it
+0x0007e328 -> [0x7000c010] = 0x00000000   @124965954
+```
+
+So `I2C_DATA(1) = *data++` stored **zero**, which means `data[1]` read as zero. `pcf50605_write`
+takes `val` by value and passes `&val` down, so `data` is a one-byte stack local: **it is written
+with 5 and read back as 0.**
+
+`--enterlog=0x0007e2c0` gives the buffer address, and it is the same on both paths —
+`r2 = 0x4000af5c`, IRAM. `--watch-range=0x4000af5c:8`:
+
+| | byte-writes | distinct writing PCs | hottest |
+|---|---|---|---|
+| warm | 2 186 | 90 / 91 | `0x00084564` x292 |
+| **cold** | **10 670** | 41 / 49 | **`0x00084f70` x2808**, `0x0007eb28` x1856, `0x0007eb40` x1856 |
+
+That span is a heavily reused stack frame, and the cold path has hot writers on it that the warm
+path does not have at all.
+
+**What this is not** — each ruled out by measurement, not by reasoning:
+
+- *Apple's bootloader still writing the bus underneath Rockbox.* It does write `I2C_DATA(0)`
+  **26 517** times from `0x4000acac` — and identically often on Apple's own cold boot, which is the
+  control. Its last write is `@63 401 686`; Rockbox's first is `@108 443 429`. **They never
+  overlap.**
+- *The controller's data registers being unbacked.* `replies delivered 44 978 (0 byte(s) with
+  nowhere to land)` cold, `19 060 (0)` warm. Both directions of that mapping are fine, which kills
+  the hypothesis the previous section was built on.
+- *`adc_init` not running, or not setting the field.* `--watch-range=0x40008e9c:48` shows all three
+  entries initialised by `.init` — `0x03e91328` writes `channelnum` **once, two bytes**, and no
+  other PC ever writes that halfword.
+- *`adc->conversion` being a live garbage pointer.* `0x40008ea0` takes **12 byte-writes in the whole
+  run**, all from the three init/copy PCs, none later. The field is written once and never again.
+- *Exception modes running on the interrupted stack.* `arm7tdmi`'s `cpu.rs` banks `r13`/`r14` per
+  mode (`bank_irq`, `bank_svc`, `bank_abt`, `bank_und`, `bank_fiq`) as the architecture requires.
+
+**Still open, and now one question instead of a family:** what writes over a one-byte stack local
+between its spill and the copy four instructions later, on the cold path only. `0x00084f70` is the
+first thing to name — 2 808 writes into that span, and absent from the warm arm entirely.
+
+**Settled when** the cold path writes `0x05` to `ADCC1` and the boot survives its own battery
+reading. Everything measured on the cold path before this is fixed is measured through it — R4.

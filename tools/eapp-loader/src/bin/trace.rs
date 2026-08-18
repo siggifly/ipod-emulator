@@ -1505,6 +1505,23 @@ fn main() {
                 pmu.writes,
                 (0..4).map(|i| format!("{:#04x}", pmu.data_byte(i))).collect::<Vec<_>>().join(" ")
             );
+            // The read half of "did the device's answer reach the guest". A conversion that is
+            // computed correctly and then copied nowhere is indistinguishable, from the CPU's side,
+            // from one that was never started — and the cold-boot ADC hunt burned a session on
+            // exactly that ambiguity. `dropped` is the discriminator: it counts bytes for which
+            // `locate_write` found no region behind `i2c_base + 0x0c + 4i`.
+            println!(
+                "  replies delivered {} ({} byte(s) with nowhere to land); last {:#010x} = [{}] x{}",
+                m.mem.i2c_replies,
+                m.mem.i2c_reply_dropped,
+                m.mem.i2c_last_reply.0,
+                m.mem.i2c_last_reply.1[..m.mem.i2c_last_reply.2.max(1)]
+                    .iter()
+                    .map(|b| format!("{b:#04x}"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                m.mem.i2c_last_reply.2
+            );
             let mut by_reg: Vec<_> = pmu.polled.iter().collect();
             by_reg.sort_by_key(|&(r, n)| (std::cmp::Reverse(*n), *r));
             // `polled` is a map and cannot saturate, so the tally IS complete — but this print was
@@ -1513,6 +1530,20 @@ fn main() {
             println!("  registers read, busiest first ({} distinct, all shown):", by_reg.len());
             for (r, n) in by_reg.iter() {
                 println!("    reg {r:#04x}  x{n}");
+            }
+            // The write side of the same question, and it had no print at all until 2026-08-18.
+            // `written` has been carrying `register -> (writes, last value)` uncapped for weeks
+            // while only `polled` was rendered, so "which register is the firmware hammering" was
+            // answerable and "what is it putting in it" was not. That gap cost a session: the ADC
+            // channel select is `ADCC1` bit 4:1, so `reg 0x2f` in the read table says a conversion
+            // was requested and only the VALUE says which channel was requested — and a run that
+            // writes 9 236 times to `0x2f` while converting channel 0 is either a guest that asked
+            // for channel 0 or a bus that lost the byte, which are different bugs.
+            let mut by_wreg: Vec<_> = pmu.written.iter().collect();
+            by_wreg.sort_by_key(|&(r, (n, _))| (std::cmp::Reverse(*n), *r));
+            println!("  registers written, busiest first ({} distinct, all shown):", by_wreg.len());
+            for (r, (n, last)) in by_wreg.iter() {
+                println!("    reg {r:#04x}  x{n}  last value {last:#04x}");
             }
         }
         if !m.mem.watch_range_log.is_empty() {

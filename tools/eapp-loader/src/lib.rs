@@ -469,6 +469,17 @@ pub struct Memory {
     /// firmware polls reads as *set*, which answers "is it waiting on a bit that never asserts?"
     /// in one run without having to guess which bit.
     pub i2c_fill: Option<u8>,
+    /// Read transfers to the PMU whose answer was copied into the controller's data registers.
+    ///
+    /// A device that computes the right answer and fails to deliver it is indistinguishable, from
+    /// the guest's side, from one that computed the wrong answer — and this emulator spent a whole
+    /// session unable to tell those apart on a cold boot. Counted, so the question is one run
+    /// rather than one more hypothesis.
+    pub i2c_replies: u64,
+    /// Bytes of those answers that had nowhere to land — `locate_write` found no region.
+    pub i2c_reply_dropped: u64,
+    /// The last answer actually written, and where it went.
+    pub i2c_last_reply: (u32, [u8; 4], usize),
     /// The PCF50605 itself, when modelled rather than answered with a fixed byte.
     pub pmu: Option<Pcf50605>,
     /// The external memory bus controller, when modelled rather than answered with `--rdval`.
@@ -1921,11 +1932,17 @@ impl Memory {
                         // return zero, which is why a modelled chip answering all-ones still
                         // behaved differently from a bus that answered all-ones.
                         let bytes: Vec<u8> = (0..len).map(|i| pmu.data_byte(i)).collect();
+                        self.i2c_replies += 1;
+                        let mut seen = [0u8; 4];
                         for (i, b) in bytes.iter().enumerate() {
+                            seen[i] = *b;
                             if let Some((buf, j)) = self.locate_write(base + 0x0c + 4 * i as u32) {
                                 buf[j] = *b;
+                            } else {
+                                self.i2c_reply_dropped += 1;
                             }
                         }
+                        self.i2c_last_reply = (base + 0x0c, seen, len);
                     }
                 }
                 // SEND is self-clearing: the controller raises it to start a transfer and drops it
@@ -2449,6 +2466,9 @@ impl Machine {
             i2c_log: Capped::new(4096),
             i2c_tally: BTreeMap::new(),
             i2c_fill: None,
+            i2c_replies: 0,
+            i2c_reply_dropped: 0,
+            i2c_last_reply: (0, [0; 4], 0),
             pmu: None,
             xmb: None,
             clickwheel: None,
