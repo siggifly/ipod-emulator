@@ -253,9 +253,18 @@ pub enum Source {
 }
 
 impl Default for Source {
-    /// A 30 GB black 5G, which is the reference hardware this emulator is built against.
+    /// A 30 GB black **5.5G** — the newest generation, per the operator decision recorded in
+    /// [ROADMAP] §"5G, 5.5G, and which is the default".
+    ///
+    /// Synthesis is what makes that default honest. It was previously blocked on this project
+    /// owning exactly one dump, which is a 5G: defaulting to a machine we could not produce would
+    /// have been a setting that did not work. A generated ROM is whichever model is asked for.
+    ///
+    /// The reference hardware every measurement in `research/` was taken on is still the 5G
+    /// (`A146`), and a checkout that has the dump still boots it — see the source resolution in
+    /// the window's argument parsing.
     fn default() -> Source {
-        Source::Synthetic { model: "A146".into(), seed: 0, serial: None, guid: None }
+        Source::Synthetic { model: "A446".into(), seed: 0, serial: None, guid: None }
     }
 }
 

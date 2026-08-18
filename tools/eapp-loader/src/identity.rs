@@ -488,6 +488,19 @@ impl Model {
         format!("M{}", self.number)
     }
 
+    /// The drive size this model shipped with, in 512-byte sectors.
+    ///
+    /// Decimal GB, the way drives are labelled and the way Apple advertised them — a "30 GB" iPod
+    /// is 30 000 000 000 bytes, not 30 GiB, and reports about 27.9 GiB formatted.
+    ///
+    /// **This is cheap to honour.** `build_disk` creates the image with `set_len`, so it is sparse:
+    /// an 80 GB drive occupies the ~14 MB actually written on APFS, ext4, btrfs and NTFS. And the
+    /// 5.5G's notorious 80 GB problem — 1024-byte physical sectors — does not reach us, because in
+    /// an emulator we supply the drive.
+    pub fn sectors(&self) -> u64 {
+        (self.capacity_gb as u64) * 1_000_000_000 / 512
+    }
+
     /// The case colour this row implies.
     pub fn colour(&self) -> Colour {
         self.model.colour()
@@ -535,6 +548,25 @@ mod tests {
                 "seed {seed}: {s} — ends in a code no iPod carries"
             );
         }
+    }
+
+    /// Capacity is decimal GB, and the sector count follows the model rather than a constant.
+    ///
+    /// This existed as a hardcoded 8 GiB while the reference model was a 30 GB `MA146`, so the
+    /// About screen and the model name had never agreed. RetailOS reads the size from ATA, so
+    /// making them agree is something we do, not something that happens.
+    #[test]
+    fn the_drive_size_follows_the_model() {
+        let thirty = Model::lookup("MA146").expect("MA146");
+        assert_eq!(thirty.capacity_gb, 30);
+        assert_eq!(thirty.sectors(), 30_000_000_000 / 512);
+        // 80 GB is 5.5G-only, and is the one that would have been a real file without sparseness.
+        let eighty = Model::lookup("MA448").expect("MA448");
+        assert_eq!(eighty.capacity_gb, 80);
+        assert_eq!(eighty.sectors(), 80_000_000_000 / 512);
+        // Bigger model, bigger drive — and both larger than the 8 GiB constant they replaced.
+        assert!(eighty.sectors() > thirty.sectors());
+        assert!(thirty.sectors() > 16_777_216);
     }
 
     /// The U2 has its own published ending, and gets it.

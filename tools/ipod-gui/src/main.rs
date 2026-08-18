@@ -1351,8 +1351,15 @@ impl Images {
     }
 
     fn both_good(&self) -> bool {
-        matches!(&self.flash_verdict, Some(v) if v.ok())
-            && matches!(&self.disk_verdict, Some(v) if v.ok())
+        matches!(&self.flash_verdict, Some(v) if v.ok()) && self.disk_good()
+    }
+
+    /// Whether the software half is answered.
+    ///
+    /// **The only requirement on the first-run screen**, because a synthesised boot ROM needs no
+    /// file: the ROM half is always answered, either by a dump or by generating one.
+    fn disk_good(&self) -> bool {
+        matches!(&self.disk_verdict, Some(v) if v.ok())
     }
 
     /// Take a file the user gave us — dropped anywhere on the window, or chosen from a dialog — and
@@ -1365,7 +1372,7 @@ impl Images {
     /// takes about a second — inflate 13.9 MB, check its CRC-32, write an 8 GiB sparse file of
     /// which about 20 MB is real — and the only reason it was ever a separate step is that the
     /// screen had steps.
-    fn accept(&mut self, path: &Path, into_dir: &Path) -> String {
+    fn accept(&mut self, path: &Path, into_dir: &Path, sectors: u64) -> String {
         self.rejected = None;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         match inspect::classify(path) {
@@ -1440,7 +1447,8 @@ impl Images {
                     self.built = Some(Ok(format!("{} was already built", out.display())));
                     return format!("{name}: that drive is already built{provenance}");
                 }
-                let built = inspect::build_from_ipsw(path, &out);
+                // Sized to the iPod being built, not to a constant — see `Model::sectors`.
+                let built = inspect::build_from_ipsw_sized(path, &out, sectors);
                 let line = match &built {
                     Ok(what) => {
                         self.disk = out.to_string_lossy().into_owned();
@@ -1489,7 +1497,17 @@ impl App {
         // build happens when a bundle arrives, whichever way it arrives. So the flag goes through
         // the same door a dropped file does, and means what its name says.
         if !ipsw.is_empty() {
-            images.accept(Path::new(&ipsw), &drives_dir());
+            // No window yet, so the default model's size — the same one the first-run screen
+            // will be showing.
+            let sectors = match eapp_loader::nor::Source::default() {
+                eapp_loader::nor::Source::Synthetic { model, .. } => {
+                    eapp_loader::identity::Model::lookup(&model)
+                        .map(|m| m.sectors())
+                        .unwrap_or(eapp_loader::ipsw::DEFAULT_SECTORS)
+                }
+                eapp_loader::nor::Source::File(_) => eapp_loader::ipsw::DEFAULT_SECTORS,
+            };
+            images.accept(Path::new(&ipsw), &drives_dir(), sectors);
         }
         let update_slot = Arc::new(Mutex::new(None));
         // Opt-in, and only opt-in. Off by default; the button in the panel works regardless.
@@ -1848,7 +1866,8 @@ impl eframe::App for App {
         if !dropped.is_empty() {
             let before = self.cold();
             for p in dropped {
-                let line = self.images.accept(&p, &drives_dir());
+                let sectors = self.synthetic_model().sectors();
+                let line = self.images.accept(&p, &drives_dir(), sectors);
                 self.say(line);
             }
             // A file dropped on a *running* iPod cannot be applied to it, and applying it silently
@@ -1971,9 +1990,9 @@ impl App {
         self.column(ui, |app, ui| {
             let dev = IPOD_VIDEO;
             let (rect, _) =
-                ui.allocate_exact_size(Vec2::new(ui.available_width(), 130.0), egui::Sense::hover());
-            device_at_rest(ui.painter(), &dev, rect.center(), 120.0, app.settings.chassis);
-            ui.add_space(10.0);
+                ui.allocate_exact_size(Vec2::new(ui.available_width(), 118.0), egui::Sense::hover());
+            device_at_rest(ui.painter(), &dev, rect.center(), 108.0, app.settings.chassis);
+            ui.add_space(6.0);
 
             ui.vertical_centered(|ui| {
                 ui.label(egui::RichText::new("ipod-emulator").heading());
@@ -1982,52 +2001,279 @@ impl App {
                         .color(Color32::from_gray(0x9A)),
                 );
             });
-            ui.add_space(20.0);
-
-            ui.vertical_centered(|ui| {
-                ui.label("Drop your iPod's boot ROM and its software anywhere on this window.");
-                ui.add_space(2.0);
-                ui.label(
-                    egui::RichText::new(
-                        "The software can be Apple's .ipsw, or a drive image you already have.",
-                    )
-                    .small()
-                    .color(Color32::from_gray(0x9A)),
-                );
-                ui.add_space(8.0);
-                if ui.button("  Choose…  ").clicked() {
-                    app.choose_files();
-                }
-            });
-            ui.add_space(18.0);
-
-            app.file_rows(ui);
             ui.add_space(16.0);
 
+            // **Choose an iPod, press the button.** Nothing has to be supplied: the boot ROM is
+            // generated and the firmware comes from Apple. Everything below is already answered,
+            // and every answer can be changed.
+            app.model_rows(ui);
+            ui.add_space(12.0);
+            app.source_rows(ui);
+            ui.add_space(10.0);
+
             ui.vertical_centered(|ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Already have files? Drop a dump, an .ipsw or a drive image anywhere on \
+                         this window.",
+                    )
+                    .small()
+                    .color(Color32::from_gray(0x78)),
+                );
+                ui.add_space(2.0);
                 if ui.link("What are these, and where do I get them?").clicked() {
                     app.open_help();
                 }
             });
 
-            ui.add_space(22.0);
+            ui.add_space(14.0);
             ui.separator();
-            ui.add_space(10.0);
+            ui.add_space(8.0);
             ui.vertical_centered(|ui| {
-                let ready = app.images.both_good();
-                if ui.add_enabled(ready, egui::Button::new("      Start      ")).clicked() {
+                // A generated ROM needs no file, so readiness is only ever about the software.
+                let ready = app.images.disk_good();
+                let label = if ready { "   Build my iPod   " } else { "   Build my iPod   " };
+                if ui.add_enabled(ready, egui::Button::new(label)).clicked() {
                     app.start();
                 }
                 if !ready {
                     ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new("both files are needed")
-                            .small()
-                            .color(Color32::from_gray(0x78)),
+                        egui::RichText::new(
+                            "Choose where the software comes from — download it, or point at a \
+                             file you have.",
+                        )
+                        .small()
+                        .color(Color32::from_gray(0x78)),
                     );
                 }
             });
         });
+    }
+
+    /// Every model this emulator can present itself as, **newest generation first**.
+    ///
+    /// Driven from the model table rather than listed here, so a row added there appears without
+    /// anything in the window changing. The table is in Apple's release order, which puts the
+    /// oldest first; a person choosing an iPod is far likelier to want the later one, and it is
+    /// the default.
+    fn offered_models() -> Vec<&'static eapp_loader::identity::Model> {
+        use eapp_loader::identity::Generation;
+        let mut v: Vec<_> = eapp_loader::identity::MODELS
+            .iter()
+            .filter(|m| matches!(m.generation, Generation::Video1 | Generation::Video2))
+            .collect();
+        // Newest first, and within a generation the larger drive first — both are what somebody
+        // reaches for. `sort_by_key` is stable, so equal keys keep the table's own order.
+        v.sort_by_key(|m| {
+            let gen = match m.generation {
+                Generation::Video2 => 0,
+                _ => 1,
+            };
+            (gen, std::cmp::Reverse(m.capacity_gb))
+        });
+        v
+    }
+
+    /// The model a synthesised ROM is currently set to, falling back to the default.
+    fn synthetic_model(&self) -> &'static eapp_loader::identity::Model {
+        // Falls back to whatever `Source::default()` says rather than to a literal, so the
+        // default lives in exactly one place.
+        let default_num = match eapp_loader::nor::Source::default() {
+            eapp_loader::nor::Source::Synthetic { model, .. } => model,
+            eapp_loader::nor::Source::File(_) => "A446".to_string(),
+        };
+        let num = match &self.settings.nor {
+            eapp_loader::nor::Source::Synthetic { model, .. } => model.clone(),
+            eapp_loader::nor::Source::File(_) => default_num.clone(),
+        };
+        eapp_loader::identity::Model::lookup(&num)
+            .or_else(|| eapp_loader::identity::Model::lookup(&default_num))
+            .expect("the default model is in the table")
+    }
+
+    /// Point the synthesised ROM at a different model, keeping the seed so the same person keeps
+    /// the same machine when they only change its colour.
+    fn set_synthetic_model(&mut self, m: &'static eapp_loader::identity::Model) {
+        let (seed, serial, guid) = match &self.settings.nor {
+            eapp_loader::nor::Source::Synthetic { seed, serial, guid, .. } => {
+                (*seed, serial.clone(), *guid)
+            }
+            eapp_loader::nor::Source::File(_) => (0, None, None),
+        };
+        self.settings.nor = eapp_loader::nor::Source::Synthetic {
+            model: m.number.to_string(),
+            seed,
+            serial,
+            guid,
+        };
+        // The case follows the model number, because that is the only thing that decides it.
+        self.settings.chassis = m.colour();
+        self.settings.save();
+    }
+
+    /// Model and colour, as two rows.
+    ///
+    /// **Colour is not a separate fact.** No `SysCfg` on any iPod carries one; the model number
+    /// decides it. So this picks a generation and a capacity, and then which of the model numbers
+    /// sharing them — which is the same choice Apple's own part numbers encode.
+    fn model_rows(&mut self, ui: &mut egui::Ui) {
+        use eapp_loader::identity::Generation;
+        let all = Self::offered_models();
+        let current = self.synthetic_model();
+
+        // (generation, capacity) is what a person thinks of as "which iPod".
+        let mut kinds: Vec<(Generation, u16)> = all.iter().map(|m| (m.generation, m.capacity_gb)).collect();
+        kinds.dedup();
+        let mut chosen_kind = (current.generation, current.capacity_gb);
+
+        let mut pick: Option<&'static eapp_loader::identity::Model> = None;
+        ui.horizontal(|ui| {
+            ui.label("Model");
+            egui::ComboBox::from_id_salt("setup_model")
+                .selected_text(format!(
+                    "iPod Video — {}, {} GB",
+                    chosen_kind.0.label(),
+                    chosen_kind.1
+                ))
+                .width(260.0)
+                .show_ui(ui, |ui| {
+                    for k in &kinds {
+                        let label = format!("iPod Video — {}, {} GB", k.0.label(), k.1);
+                        if ui.selectable_value(&mut chosen_kind, *k, label).clicked() {
+                            // Keep the colour if this kind has it, else take its first.
+                            pick = all
+                                .iter()
+                                .find(|m| {
+                                    (m.generation, m.capacity_gb) == *k
+                                        && m.colour() == current.colour()
+                                })
+                                .or_else(|| {
+                                    all.iter().find(|m| (m.generation, m.capacity_gb) == *k)
+                                })
+                                .copied();
+                        }
+                    }
+                });
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Colour");
+            for m in all.iter().filter(|m| (m.generation, m.capacity_gb) == chosen_kind) {
+                let mut sel = m.number == current.number;
+                if ui.selectable_value(&mut sel, true, m.colour().label()).clicked() {
+                    pick = Some(m);
+                }
+            }
+        });
+        if let Some(m) = pick {
+            self.set_synthetic_model(m);
+        }
+    }
+
+    /// Where the boot ROM and the software come from — the two questions setup exists to answer.
+    ///
+    /// **Neither has a mode flag.** Which way each row is set is read from the state itself: the
+    /// ROM is synthesised unless a dump has been chosen, and the software is downloaded unless a
+    /// file has been. A separate flag could disagree with the state, and then the window would be
+    /// showing one thing and doing another.
+    fn source_rows(&mut self, ui: &mut egui::Ui) {
+        use eapp_loader::nor::Source;
+        let mut want_own_rom = false;
+        let mut want_generate = false;
+        let mut want_firmware = false;
+        let mut want_own_software = false;
+
+        ui.group(|ui| {
+            ui.set_width(ui.available_width());
+
+            // ---- boot ROM -------------------------------------------------------------------
+            let generating = matches!(self.settings.nor, Source::Synthetic { .. });
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Boot ROM").strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let mut own = !generating;
+                    if ui.selectable_value(&mut own, true, "Use my dump").clicked() {
+                        want_own_rom = true;
+                    }
+                    if ui.selectable_value(&mut own, false, "Generate").clicked() {
+                        want_generate = true;
+                    }
+                });
+            });
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new(self.settings.nor.describe())
+                    .small()
+                    .color(Color32::from_gray(0xC8)),
+            );
+            if generating {
+                ui.label(
+                    egui::RichText::new(
+                        "No dump needed. The serial and FireWire GUID are made up — which means \
+                         purchased titles cannot authorise against them, on any machine.",
+                    )
+                    .small()
+                    .color(Color32::from_gray(0x78)),
+                );
+            }
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            // ---- software -------------------------------------------------------------------
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Software").strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.images.disk.trim().is_empty() {
+                        if ui.button("Choose a file…").clicked() {
+                            want_own_software = true;
+                        }
+                        if ui.button("Download from Apple").clicked() {
+                            want_firmware = true;
+                        }
+                    } else if ui.small_button("replace").clicked() {
+                        want_own_software = true;
+                    }
+                });
+            });
+            ui.add_space(2.0);
+            let line = if self.images.disk.trim().is_empty() {
+                "Apple's firmware, or a drive image you already have.".to_string()
+            } else {
+                self.images
+                    .disk_name
+                    .clone()
+                    .unwrap_or_else(|| self.images.disk.trim().to_string())
+            };
+            ui.label(egui::RichText::new(line).small().color(Color32::from_gray(0xC8)));
+            // Whose firmware it is, whenever we can say — and the warning when we cannot vouch
+            // for it, which is allowed and only needs mentioning.
+            if let Some(p) = &self.images.ipsw_provenance {
+                let (text, colour) = match p.warning() {
+                    None => (p.line(), Color32::from_rgb(0x6C, 0xC6, 0x88)),
+                    Some(w) => (format!("⚠ {w}"), Color32::from_rgb(0xE0, 0xA0, 0x40)),
+                };
+                ui.add_space(2.0);
+                ui.label(egui::RichText::new(text).small().color(colour));
+            }
+        });
+
+        if want_generate {
+            let m = self.synthetic_model();
+            self.set_synthetic_model(m);
+        }
+        if want_own_rom {
+            self.take(&pick_files("Boot ROM", &["bin"]));
+        }
+        if want_own_software {
+            self.take(&pick_files("Software", &["img", "bin", "dmg", "iso", "ipsw", "zip"]));
+        }
+        if want_firmware {
+            self.back_to = self.screen;
+            self.screen = Screen::Firmware;
+        }
     }
 
     /// The two rows, and what the window makes of what is in them.
@@ -2194,8 +2440,8 @@ impl App {
     /// place where "what is this file" could be answered differently.
     fn take(&mut self, paths: &[String]) {
         for p in paths {
-            let line =
-                self.images.accept(Path::new(p), &drives_dir());
+            let sectors = self.synthetic_model().sectors();
+            let line = self.images.accept(Path::new(p), &drives_dir(), sectors);
             self.say(line);
         }
     }
@@ -4004,7 +4250,7 @@ mod tests {
         for order in [[&rom, &drive], [&drive, &rom]] {
             let mut im = Images::new(&emu::Config::default());
             for p in order {
-                im.accept(p, &unused);
+                im.accept(p, &unused, eapp_loader::ipsw::DEFAULT_SECTORS);
             }
             assert_eq!(im.flash, rom.to_string_lossy(), "the ROM went to the ROM");
             assert_eq!(im.disk, drive.to_string_lossy(), "the drive went to the drive");
@@ -4016,7 +4262,7 @@ mod tests {
         let junk = dir.join("notes.txt");
         std::fs::write(&junk, b"not an iPod").unwrap();
         let mut im = Images::new(&emu::Config::default());
-        let said = im.accept(&junk, &unused);
+        let said = im.accept(&junk, &unused, eapp_loader::ipsw::DEFAULT_SECTORS);
         assert!(said.contains("notes.txt"), "it says which file: {said}");
         assert!(im.rejected.is_some());
         assert!(im.flash.is_empty() && im.disk.is_empty(), "and it lands in neither row");

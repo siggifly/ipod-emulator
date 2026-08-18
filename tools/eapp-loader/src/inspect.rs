@@ -705,6 +705,16 @@ pub fn ipsw(path: &Path) -> Verdict {
 
 /// Build a drive image from an IPSW, at `out`. Returns what to say about it.
 pub fn build_from_ipsw(src: &Path, out: &Path) -> Result<String, String> {
+    build_from_ipsw_sized(src, out, crate::ipsw::DEFAULT_SECTORS)
+}
+
+/// Build a drive of a given size from a firmware bundle.
+///
+/// The size is the model's, so a 30 GB iPod gets a 30 GB drive and reports one — RetailOS learns
+/// the capacity from ATA `IDENTIFY`, never from `Mod#`, so the two agreeing is something we have to
+/// do rather than something that happens. It costs almost nothing: the image is sparse, and only
+/// the firmware partition and about 41 sectors are ever written.
+pub fn build_from_ipsw_sized(src: &Path, out: &Path, sectors: u64) -> Result<String, String> {
     let fw = match crate::ipsw::inspect(src) {
         crate::ipsw::Ipsw::Good(_, fw) => fw,
         crate::ipsw::Ipsw::Wrong(s) | crate::ipsw::Ipsw::Bad(s) => return Err(s),
@@ -712,7 +722,7 @@ pub fn build_from_ipsw(src: &Path, out: &Path) -> Result<String, String> {
     if let Some(d) = out.parent() {
         let _ = std::fs::create_dir_all(d);
     }
-    crate::ipsw::build_disk(&fw, out, crate::ipsw::DEFAULT_SECTORS)?;
+    crate::ipsw::build_disk(&fw, out, sectors)?;
     Ok(format!(
         "built {} — 8 GiB, sparse, about 20 MB on disk. Apple's firmware partition byte for byte, \
          and an empty FAT32 volume that RetailOS populates itself on first boot.",
