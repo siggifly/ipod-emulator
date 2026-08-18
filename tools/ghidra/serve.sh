@@ -1,29 +1,79 @@
-#!/bin/sh
-# Launch the GhidraMCP headless server — no GUI, no window, nothing to look at.
+#!/usr/bin/env bash
 #
-# `python -m tools.setup deploy` starts the *GUI* and hosts the endpoint inside it; killing the
-# window kills the server. This is the standalone path from the project's own docker/entrypoint.sh.
+# Bring Ghidra up WITH THE PROGRAM IN IT, which is the only state worth calling "up".
+#
+# What this replaces, and why: this script used to launch `GhidraMCPHeadlessServer`, which answers
+# /check_connection cheerfully and cannot ever hold a program. Both routes that would load one --
+# /import_file and /open_program -- return "requires GUI mode (PluginTool not available)". So the
+# headless server is permanently empty, every MCP tool answers "No program loaded", and from inside
+# an AI session that is indistinguishable from a broken integration. The README one directory up
+# warns about exactly this failure at the level of the *bridge*; it was live one layer deeper.
+#
+# The plugin lives in CodeBrowser. So: start the GUI on the project, then ask it to open the program
+# in a CodeBrowser, then VERIFY a program is actually loaded before claiming success. A launcher
+# that cannot fail is not a launcher, it is a wish.
+#
+#   ./serve.sh            bring it up and verify
+#   ./serve.sh --status   say what is up right now, change nothing
+#
+# Build the project first, once (~6 min):
+#
+#   analyzeHeadless <resources>/derived/ghidra retailos \
+#     -import <resources>/derived/fw/OSOS_correct.bin \
+#     -processor ARM:LE:32:v4t -loader BinaryLoader -loader-baseAddr 0x0
+#
+# Loaded flat at base 0 because that is where RetailOS executes -- the low alias, not the
+# 0x10000000 view it is loaded through. Ghidra's addresses then match the emulator's PCs directly.
 set -eu
-# Both defaults are one machine's layout. Neither ships here: Ghidra is installed separately, and
-# the GhidraMCP jar is built from its own repository — nothing under `resources/` is committed.
-: "${GHIDRA_HOME:=/opt/homebrew/Cellar/ghidra/12.1.2/libexec}"
-: "${MCP_JAR:=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)/resources/reference/ghidra-mcp/target/GhidraMCP-7.0.0.jar}"
-[ -f "$MCP_JAR" ] || { echo "no GhidraMCP jar at $MCP_JAR — build it and set MCP_JAR" >&2; exit 1; }
-[ -d "$GHIDRA_HOME" ] || { echo "no Ghidra at $GHIDRA_HOME — set GHIDRA_HOME" >&2; exit 1; }
-: "${PORT:=8089}"
-: "${BIND:=127.0.0.1}"
-export JAVA_HOME=/opt/homebrew/opt/openjdk@21
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(cd "$HERE/../.." && pwd)
+
+: "${GHIDRA_URL:=http://127.0.0.1:8089}"
+: "${JAVA_HOME:=/opt/homebrew/opt/openjdk@21}"
+: "${PROJECT:=$ROOT/resources/derived/ghidra/retailos.gpr}"
+: "${PROGRAM:=/OSOS_correct.bin}"
+
+export JAVA_HOME
 PATH="$JAVA_HOME/bin:$PATH"; export PATH
 
-CP="$MCP_JAR"
-for j in "$GHIDRA_HOME"/Ghidra/Framework/*/lib/*.jar \
-         "$GHIDRA_HOME"/Ghidra/Features/*/lib/*.jar \
-         "$GHIDRA_HOME"/Ghidra/Processors/*/lib/*.jar; do
-  [ -f "$j" ] && CP="$CP:$j"
-done
+loaded() { curl -s -m 10 "$GHIDRA_URL/get_metadata" 2>/dev/null | grep -q '"program_name"'; }
+up()     { curl -s -m 5 "$GHIDRA_URL/check_connection" 2>/dev/null | grep -q .; }
 
-exec java -Xmx6g \
-  -Dghidra.home="$GHIDRA_HOME" \
-  -Dapplication.name=GhidraMCP \
-  -classpath "$CP" \
-  com.xebyte.headless.GhidraMCPHeadlessServer --port "$PORT" --bind "$BIND"
+if [ "${1:-}" = "--status" ]; then
+  if loaded; then
+    curl -s -m 10 "$GHIDRA_URL/get_metadata" | python3 -m json.tool 2>/dev/null || true
+  elif up; then
+    echo "plugin is up but NO PROGRAM IS LOADED — this is the state that looks like success" >&2
+    exit 1
+  else
+    echo "nothing at $GHIDRA_URL" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+if loaded; then
+  echo "already up with a program loaded"
+  exit 0
+fi
+
+if ! up; then
+  [ -f "$PROJECT" ] || { echo "no Ghidra project at $PROJECT — build it first, see the header" >&2; exit 1; }
+  echo "starting Ghidra on $PROJECT …"
+  nohup ghidraRun "$PROJECT" >/tmp/ghidra-gui.log 2>&1 &
+  # The GUI takes the better part of a minute to get its class search and plugins up.
+  for _ in $(seq 1 40); do up && break; sleep 3; done
+  up || { echo "Ghidra did not come up; see /tmp/ghidra-gui.log" >&2; exit 1; }
+fi
+
+echo "opening $PROGRAM in a CodeBrowser …"
+curl -s -m 120 -X POST "$GHIDRA_URL/tool/launch_codebrowser" \
+  -H 'Content-Type: application/json' -d "{\"path\":\"$PROGRAM\"}" >/dev/null || true
+
+for _ in $(seq 1 30); do loaded && break; sleep 3; done
+loaded || {
+  echo "CodeBrowser did not end up with a program loaded — do NOT trust query results" >&2
+  exit 1
+}
+curl -s -m 10 "$GHIDRA_URL/get_metadata" | python3 -m json.tool 2>/dev/null || true
