@@ -21,7 +21,7 @@ models that Apple's firmware can never exercise:
 |---|---|
 | A USB clock-ready bit that never arrived | Apple's firmware reads `0x70000028` **zero** times in a 600 M boot |
 | The ADC completed after two *read transfers* rather than after *time* | Apple's driver polls, so its own poll loop supplied the transfers. Rockbox reads once and never polls — so it never completed a conversion, read 0 mV, and powered the machine off |
-| The click wheel delivers frames only after opcode `0x052a` | That opcode is *RetailOS's* way of asking. Rockbox arms the receiver its own way and gets silence |
+| The click wheel delivered frames only after opcode `0x052a` | That opcode is *RetailOS's* way of asking. Rockbox arms the receiver its own way and got silence — 0 frames in a whole boot |
 
 All three are the same shape, and it is the shape to watch for: a model that is not so much wrong
 as **shaped around one driver**. No amount of care with a single stack finds those — the stack that
@@ -55,7 +55,7 @@ with six devices that all half-work.
 | | state |
 |---|---|
 | RetailOS | **boots** cold from the reset vector, menus, formats its own volume, Brick plays. No sound. ~300 s of simulated time to the menu |
-| Rockbox 4.0 | **boots to its main menu** (2026-08-18). Takes no input — the click wheel answers Apple's protocol only. No sound |
+| Rockbox 4.0 | **boots to its main menu and takes wheel input** (2026-08-18). Beyond the menu: unverified. No sound |
 | iPodLinux | **a verified 5.5G-correct kernel has been located** (ZeroSlackr `vmlinux`, 1 531 200 bytes, raw-ARM magic confirmed) and not yet fetched. `ipodloader2` is vendored as source and not yet built |
 | Our own bootloader / OS | not started, and deliberately not designed for yet |
 | Bypass ledger | 5 active entries: #4, #6, #7, #11, #17 |
@@ -100,18 +100,18 @@ bootloader: a thing that worked with a hand-modified drive for reasons nobody co
 
 Each says what it unlocks, what it depends on, and what would settle it.
 
-## M1 · Rockbox all the way through *(next)*
+## M1 · Rockbox all the way through *(in progress)*
 
-It reaches the menu and then powers off, and **the cause is measured, not guessed**: our click
-wheel posts frames only when `reporting` is set, and `reporting` is set by opcode `0x052a` —
-*RetailOS's* way of asking for autonomous frames (`lib.rs:4801`). Rockbox arms the receiver its own
-way and is handed silence: **0 frames posted, 0 reads of `CLICKWHEEL_DATA`**, and it writes
-`0x7000c104` once where RetailOS re-arms continuously. With no input, its 10-minute idle poweroff
-arrives on schedule — honestly, because this emulator fast-forwards idle time (1 332 s of skipped
-sleep inside 11 s of execution).
+**Done:** it boots, reaches its main menu, and **takes wheel input** — 78 frames delivered, 78 reads
+of `CLICKWHEEL_DATA`, and the selection moves. The blocker was the third model in two days shaped
+around Apple's driver rather than around the part: autonomous frames were gated on opcode `0x052a`,
+which is *RetailOS's* way of asking and which Rockbox never sends. Reporting is on at reset now, and
+the gate is the pair (reporting AND an armed receiver) that the interrupt was always gated on.
 
-So the wheel has to answer the part's protocol rather than Apple's driver. That is the third model
-in two days shaped that way, after the USB clock-ready bit and the ADC.
+**Left:** does `select` open a submenu, does the file browser list a real volume, do plugins load?
+And the idle poweroff — honest rather than a defect, since this emulator fast-forwards idle time
+(1 332 s of skipped sleep inside 11 s of execution), but a person driving the window would not see
+it, so it needs confirming interactively rather than by script.
 
 **Depends on:** nothing. **Settled by:** driving Rockbox's menus from the window and reaching its
 file browser on a real volume.

@@ -227,10 +227,12 @@ bit Apple's firmware never reads, an ADC that completed after a number of *trans
 after *time*, and a click wheel that only delivers input to firmware speaking Apple's own opcode.
 None of the three is findable with one operating system.
 
-**It is not usable yet.** Rockbox does not receive wheel input (the third bug above), so it sits at
-its menu until the idle timer powers it off — correctly, since this emulator fast-forwards idle
-time. Running Rockbox or iPodLinux as something you *use* rather than measure with is
-[on the roadmap](ROADMAP.md), not done.
+**And the wheel drives it** — the third bug above is fixed, so the menu selection moves:
+
+<img src="docs/media/ipod-15-rockbox-wheel.gif" width="320" alt="Rockbox's menu selection moving under wheel input">
+
+Not finished: nothing past the menu is verified, there is no sound, and it is not yet something the
+window can start for you — that is [on the roadmap](ROADMAP.md).
 
 ## What does not
 
