@@ -1461,7 +1461,13 @@ impl Bus for Memory {
             self.cpu_sleep = true;
         }
         let a = addr & !3;
-        if let Some((idx, off)) = self.fast_region(a, true) {
+        // The mailbox strobes must not take the fast path: it copies straight into the region and
+        // returns, so a device whose write has an effect on a DIFFERENT address would have that
+        // effect silently dropped. This is the third thing to go missing from this hoist — the two
+        // before it are named in the comment below and cost two retractions in research/09 — so it
+        // is routed to the byte path rather than reimplemented here. Duplicating the effect inside
+        // the hoist is exactly how the first two were lost.
+        if let Some((idx, off)) = self.fast_region(a, true).filter(|_| Mbx::strobe(a).is_none()) {
             // `watch_range` and `input_probe` were missing from this hoist, and `count` is the only
             // thing that feeds them — so `--watch-range` saw *byte* writes (write8_inner calls
             // `count` unconditionally) and no word writes at all, unless some other flag happened to
@@ -1959,6 +1965,28 @@ impl Memory {
         if let Some((at, bit)) = usb {
             if let Some((buf, i)) = self.locate_write(at) {
                 buf[i] |= bit;
+            }
+        }
+        // The CPU<->COP mailbox: `MBX_MSG_SET` and `MBX_MSG_CLR` are write-only strobes onto the
+        // bits `MBX_MSG_STAT` reports. Ours were three unrelated words of backing store, so a
+        // driver could set a bit and read it back as zero for ever.
+        //
+        // **Found by the register-agreement table** (research/15), which is the whole point of
+        // that table: `MBX_MSG_STAT` is read **52 868 892 times** by Rockbox — first from
+        // `switch_thread`, its scheduler — and **not once** by RetailOS. Apple's firmware could
+        // never have surfaced this, and it went unnoticed because answering a constant zero
+        // happens to satisfy `core_sleep`'s two wait loops on a machine with one core running.
+        //
+        // Modelled rather than left benign because "it works out" is not a model, and because
+        // ledger #7's second core is exactly what this register exists to coordinate with: the day
+        // the COP runs, an inert mailbox is a deadlock. Zero risk to what we measure — RetailOS
+        // does not touch it.
+        if let Some(set) = Mbx::strobe(addr) {
+            // Byte-wise, because a 32-bit store arrives here as four of these; the lane is the
+            // low two address bits and is the same lane in STAT.
+            let stat = Mbx::BASE + Mbx::STAT + (addr & 3);
+            if let Some((buf, i)) = self.locate_write(stat) {
+                buf[i] = if set { buf[i] | val } else { buf[i] & !val };
             }
         }
         match self.locate_write(addr) {
@@ -4058,6 +4086,36 @@ impl Xmb {
 }
 
 // ---------------------------------------------------------------- click wheel
+
+/// The CPU<->COP mailbox at `0x60001000`, as Rockbox's `pp5020.h` names it.
+///
+/// Three registers, and only the first is storage: `MBX_MSG_STAT` at `+0x00` reports the bits,
+/// `MBX_MSG_SET` at `+0x04` raises the ones written to it, `MBX_MSG_CLR` at `+0x08` drops them.
+/// Modelling it is four lines; not modelling it made a set-then-read return zero.
+///
+/// `thread-pp.c` is the specification. `core_sleep` writes `0x4 << core` to SET to announce it is
+/// going down, tests `0x10 << core` in STAT to see whether anyone is trying to wake it, clears
+/// `0x14 << core`, then spins on `while (MBX_MSG_STAT & (0x1 << core))`; `core_wake` sets
+/// `0x11 << othercore` and waits on `0x4 << othercore`. All of that is a conversation between two
+/// cores, and with one core running it happens to survive a mailbox stuck at zero — which is why
+/// this went unseen until something counted the reads.
+pub struct Mbx;
+
+impl Mbx {
+    pub const BASE: u32 = 0x6000_1000;
+    pub const STAT: u32 = 0x00;
+    pub const SET: u32 = 0x04;
+    pub const CLR: u32 = 0x08;
+
+    /// `Some(true)` for a write to SET, `Some(false)` for CLR, `None` for anything else.
+    pub fn strobe(addr: u32) -> Option<bool> {
+        match addr.wrapping_sub(Self::BASE) & !3 {
+            Self::SET => Some(true),
+            Self::CLR => Some(false),
+            _ => None,
+        }
+    }
+}
 
 /// The click wheel, at the level the SoC presents it — four registers in the `0x7000c000` block.
 ///

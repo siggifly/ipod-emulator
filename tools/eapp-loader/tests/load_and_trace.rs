@@ -1391,3 +1391,43 @@ fn the_dimmer_counts_short_pulses_up_and_long_pulses_down() {
     assert_eq!(b.level, before, "a write with the pin already high is not a pulse");
     assert_eq!(b.steps_up + b.steps_down, 82, "and it was not counted as one");
 }
+
+/// `thread-pp.c`'s `core_sleep` sets a mailbox bit and reads it back. Ours returned zero for ever,
+/// which one running core happens to survive and two would not — found by counting reads rather
+/// than by anything failing (research/15: 52 868 892 reads by Rockbox, none by RetailOS).
+#[test]
+fn setting_a_mailbox_bit_makes_it_readable_and_clearing_it_removes_it() {
+    use arm7tdmi::Bus as _;
+    use eapp_loader::Mbx;
+    let mut m = wheel_machine();
+    assert_eq!(m.mem.read32(Mbx::BASE), 0, "the mailbox does not start with bits raised");
+
+    // core_wake(0): MBX_MSG_SET = 0x11 << 0
+    m.mem.write32(Mbx::BASE + Mbx::SET, 0x11);
+    assert_eq!(m.mem.read32(Mbx::BASE), 0x11, "a set bit did not appear in STAT");
+
+    // core_sleep(0): MBX_MSG_SET = 0x4 << 0, on top of what is already raised.
+    m.mem.write32(Mbx::BASE + Mbx::SET, 0x4);
+    assert_eq!(m.mem.read32(Mbx::BASE), 0x15, "SET must OR, not replace");
+
+    // core_sleep(0): MBX_MSG_CLR = 0x14 << 0 — drops two of the three.
+    m.mem.write32(Mbx::BASE + Mbx::CLR, 0x14);
+    assert_eq!(m.mem.read32(Mbx::BASE), 0x01, "CLR must clear only the bits written");
+
+    // The loop `core_sleep` ends on: `while (MBX_MSG_STAT & (0x1 << core));`
+    m.mem.write32(Mbx::BASE + Mbx::CLR, 0x1);
+    assert_eq!(m.mem.read32(Mbx::BASE) & 0x1, 0, "the wait loop would never terminate");
+}
+
+/// Bits above the low byte must survive, because a 32-bit store arrives as four byte writes and
+/// the lane arithmetic is the part that can be wrong.
+#[test]
+fn the_mailbox_is_thirty_two_bits_wide_not_eight() {
+    use arm7tdmi::Bus as _;
+    use eapp_loader::Mbx;
+    let mut m = wheel_machine();
+    m.mem.write32(Mbx::BASE + Mbx::SET, 0x8040_2010);
+    assert_eq!(m.mem.read32(Mbx::BASE), 0x8040_2010);
+    m.mem.write32(Mbx::BASE + Mbx::CLR, 0x0040_0010);
+    assert_eq!(m.mem.read32(Mbx::BASE), 0x8000_2000);
+}

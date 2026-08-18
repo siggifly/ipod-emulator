@@ -102,6 +102,28 @@ that could be made about Rockbox here.
 
 **It is also the first thing this table found that no amount of RetailOS work could have.**
 
+### Modelled, same day
+
+`thread-pp.c` is the specification and it is four lines of hardware: `MBX_MSG_SET` (`+0x04`) raises
+the bits `MBX_MSG_STAT` (`+0x00`) reports, `MBX_MSG_CLR` (`+0x08`) drops them. Ours were three
+unrelated words of backing store, so a driver could set a bit and read it back as zero for ever.
+
+Why it survived: with one core running, a mailbox stuck at zero *happens* to satisfy both of
+`core_sleep`'s wait loops — `(MBX_MSG_STAT & (0x10 << core)) == 0` reads as "nobody is waking me",
+and `while (MBX_MSG_STAT & (0x1 << core))` exits immediately. Nothing failed. **Nothing was going
+to fail until the COP ran**, which is ledger #7's whole subject, and by then it would present as a
+deadlock with no obvious cause.
+
+RetailOS is unchanged across the fix — 27 510 code buckets, 76 800 non-black pixels — which is what
+"Rockbox-only" predicted and is therefore also a check on the table itself.
+
+**And it caught a fourth instance of a bug this file already warns about.** The first test of the
+new model failed: `write32` has a fast path that copies straight into the region and returns, so a
+write whose effect lands on a *different* address is dropped. `watch_range` and `input_probe` had
+both gone missing from that same hoist before, at the cost of two retractions in research/09. The
+mailbox is routed to the byte path rather than reimplemented inside the hoist, because duplicating
+the effect there is precisely how the first two were lost.
+
 ## What this does to the bypass ledger
 
 **Ledger #7 — "COP_STATUS says the second core is asleep."** Its retirement condition has always
