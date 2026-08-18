@@ -1794,7 +1794,13 @@ fn firmware_cmd(sub: &str, args: &[String]) -> Result<(), String> {
                 }
                 // The check column is the honest bit: `sha256` means a download can be proven
                 // right, `size` means only that it is the right length.
-                let check = if r.sha256.is_some() { "sha256" } else { "size  " };
+                let check = if !r.served {
+                    "gone  "
+                } else if r.sha256.is_some() {
+                    "sha256"
+                } else {
+                    "size  "
+                };
                 println!(
                     "  {:>3}  {check}  {:<30}  {:<28}  {}",
                     r.updater_family,
@@ -1809,6 +1815,8 @@ fn firmware_cmd(sub: &str, args: &[String]) -> Result<(), String> {
             } else {
                 println!("\n{shown} release(s). The left column is the UpdaterFamilyID, which is the");
                 println!("stable key -- FamilyID is NOT stable across firmware versions.");
+                println!("`gone` means Apple's URL now returns 403; another release in the same");
+                println!("updater family will do instead.");
             }
             Ok(())
         }
@@ -1834,7 +1842,9 @@ fn firmware_cmd(sub: &str, args: &[String]) -> Result<(), String> {
             };
             println!("{} -- {} {}", rel.file, rel.model, rel.variant);
             println!("  {}", rel.url);
-            if !rel.is_verifiable() {
+            if !rel.served {
+                println!("  note: Apple no longer serves this one.");
+            } else if !rel.is_verifiable() {
                 println!("  note: no sha256 on record for this one; it will be size-checked only.");
             }
             let at = firmware::download(rel, &dir)?;
