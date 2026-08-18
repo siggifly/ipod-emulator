@@ -5,7 +5,7 @@
 //! ipod-emulator [--user | --debug] [--cold] [--clock=N] [--snapshot=FILE] [--snap-at=N]
 //!          [--flash=FILE] [--disk=FILE] [--workdisk=FILE] [--wheel-click-instr=N]
 //!          [--headless=N | --selftest | --selftest-control]
-//!          [--check-images] [--check-update]
+//!          [--check-images] [--check-update] [--make-app DIR [ICON.png]]
 //! ```
 //!
 //! See `tools/ipod-emulator/README.md` for what it is for, what it measures, and the two speed ratios it
@@ -223,6 +223,83 @@ const COLUMN_W: f32 = 620.0;
 /// The space above a page's first line and below its last.
 const PAGE_MARGIN: f32 = 20.0;
 
+/// Wrap this binary in a macOS `.app` bundle.
+///
+/// **It bundles itself.** The shell script this replaced took the binary as an argument, which is
+/// one more thing a release step can get wrong — pointing it at yesterday's build produces an app
+/// that looks right and is stale, and RELEASING already carries a check for exactly that class of
+/// mistake. `current_exe()` cannot be the wrong binary.
+///
+/// The icon work shells out to `sips` and `iconutil`, which are macOS's own and have no Rust
+/// equivalent worth carrying. Missing either is not fatal: an app with no icon still runs, and a
+/// release that stopped because of a picture would be worse.
+#[cfg(target_os = "macos")]
+fn make_app(out: &str, icon: Option<&str>) -> Result<String, String> {
+    use std::path::PathBuf;
+    let me = std::env::current_exe().map_err(|e| e.to_string())?;
+    let app = PathBuf::from(out).join("ipod-emulator.app");
+    let _ = std::fs::remove_dir_all(&app);
+    let macos = app.join("Contents/MacOS");
+    let res = app.join("Contents/Resources");
+    std::fs::create_dir_all(&macos).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&res).map_err(|e| e.to_string())?;
+    std::fs::copy(&me, macos.join("ipod-emulator")).map_err(|e| format!("copying self: {e}"))?;
+
+    if let Some(icon) = icon.filter(|p| std::path::Path::new(p).is_file()) {
+        let set = std::env::temp_dir().join(format!("ipod-iconset-{}", std::process::id())).join("icon.iconset");
+        if std::fs::create_dir_all(&set).is_ok() {
+            for s in [16u32, 32, 128, 256, 512] {
+                for (px, name) in [(s, format!("icon_{s}x{s}.png")), (s * 2, format!("icon_{s}x{s}@2x.png"))] {
+                    let _ = std::process::Command::new("sips")
+                        .args(["-z", &px.to_string(), &px.to_string(), icon, "--out"])
+                        .arg(set.join(&name))
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+                }
+            }
+            let _ = std::process::Command::new("iconutil")
+                .arg("-c").arg("icns").arg(&set).arg("-o").arg(res.join("icon.icns"))
+                .stderr(std::process::Stdio::null())
+                .status();
+            let _ = std::fs::remove_dir_all(set.parent().unwrap());
+        }
+    }
+
+    // One version, from the workspace, so the bundle cannot report a different number from the
+    // program inside it.
+    let v = env!("CARGO_PKG_VERSION");
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>                 <string>ipod-emulator</string>
+  <key>CFBundleDisplayName</key>          <string>ipod-emulator</string>
+  <key>CFBundleExecutable</key>           <string>ipod-emulator</string>
+  <key>CFBundleIdentifier</key>           <string>net.siggifly.ipod-emulator</string>
+  <key>CFBundleVersion</key>              <string>{v}</string>
+  <key>CFBundleShortVersionString</key>   <string>{v}</string>
+  <key>CFBundlePackageType</key>          <string>APPL</string>
+  <key>CFBundleIconFile</key>             <string>icon</string>
+  <key>LSMinimumSystemVersion</key>       <string>11.0</string>
+  <!-- The panel is 320x240 upscaled; without this it renders at 1x and looks soft on Retina. -->
+  <key>NSHighResolutionCapable</key>      <true/>
+</dict>
+</plist>
+"#
+    );
+    std::fs::write(app.join("Contents/Info.plist"), plist).map_err(|e| e.to_string())?;
+    Ok(app.display().to_string())
+}
+
+/// The bundle is a macOS format; everywhere else this is an error rather than a silent no-op, so a
+/// release script cannot "succeed" at producing nothing.
+#[cfg(not(target_os = "macos"))]
+fn make_app(_out: &str, _icon: Option<&str>) -> Result<String, String> {
+    Err("a .app bundle is a macOS format; there is nothing to build here".into())
+}
+
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
@@ -231,6 +308,20 @@ fn main() -> eframe::Result {
     }
     // Two answers that need no machine, no window and no images. Both print and exit, so they work
     // over SSH and in CI.
+    if let Some(i) = args.iter().position(|a| a == "--make-app") {
+        let out = args.get(i + 1).cloned().unwrap_or_else(|| ".".into());
+        let icon = args.get(i + 2).cloned();
+        match make_app(&out, icon.as_deref()) {
+            Ok(p) => {
+                println!("{p}");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("--make-app: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     if args.iter().any(|a| a == "--check-update") {
         match update::check() {
             Some(f) => println!("{}", f.line()),

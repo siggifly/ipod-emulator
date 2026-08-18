@@ -93,9 +93,9 @@ jobs:
           for b in trace ipod-boot dis tcb eapp-inspect disasm ; do
             cp "$BIN/$b$EXE" "dist/$DIR/tools/"
           done
-          # A double-clickable app on macOS. No certificate involved — see tools/ipod-gui/make-app.sh.
+          # A double-clickable app on macOS. No certificate involved — see ipod-emulator --make-app.
           if [ "${{ runner.os }}" = "macOS" ]; then
-            sh tools/ipod-gui/make-app.sh "$BIN/ipod-emulator" "dist/$DIR"
+            sh ipod-emulator --make-app "$BIN/ipod-emulator" "dist/$DIR"
           fi
           cp README.md "dist/$DIR/README.md"
           cp tools/ipod-gui/README.md "dist/$DIR/README-window.md"
