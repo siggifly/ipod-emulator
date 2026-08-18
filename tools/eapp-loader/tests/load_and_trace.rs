@@ -1314,7 +1314,7 @@ fn a_read_or_mask_is_observed_through_the_ordinary_read_path() {
 /// rather than against a round number of its own.
 #[test]
 fn the_dimmer_counts_short_pulses_up_and_long_pulses_down() {
-    use eapp_loader::{Backlight, GPIOB_BACKLIGHT};
+    use eapp_loader::{Backlight, BACKLIGHT_PIN};
     let mut b = Backlight::default();
     assert_eq!(b.level, 16, "the circuit is assumed to wake at the driver's midpoint");
 
@@ -1323,7 +1323,7 @@ fn the_dimmer_counts_short_pulses_up_and_long_pulses_down() {
     let mut pulse = |b: &mut Backlight, low_for: u32, t: &mut u32| {
         b.port_written(0, *t);
         *t += low_for;
-        b.port_written(GPIOB_BACKLIGHT, *t);
+        b.port_written(BACKLIGHT_PIN, *t);
         *t += 10;
     };
     pulse(&mut b, 10, &mut t);
@@ -1345,8 +1345,8 @@ fn the_dimmer_counts_short_pulses_up_and_long_pulses_down() {
     // Writes that do not move the pin are not edges. The firmware writes the whole port, so every
     // unrelated pin on it lands here too.
     let before = b.level;
-    b.port_written(GPIOB_BACKLIGHT, t);
-    b.port_written(GPIOB_BACKLIGHT | 0x21, t + 5);
+    b.port_written(BACKLIGHT_PIN, t);
+    b.port_written(BACKLIGHT_PIN | 0x21, t + 5);
     assert_eq!(b.level, before, "a write with the pin already high is not a pulse");
     assert_eq!(b.steps_up + b.steps_down, 82, "and it was not counted as one");
 }

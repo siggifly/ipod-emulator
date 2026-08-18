@@ -1765,10 +1765,10 @@ impl Memory {
         // clearing hold must not silence a wheel edge that arrived while it ran.
         // The backlight dimmer counts pulses on this pin; nothing reads the level back, so if the
         // emulator does not count them with the firmware, the level exists nowhere at all.
-        if addr & !3 == GPIOB_OUTPUT_VAL {
+        if addr & !3 == BACKLIGHT_PORT {
             let shift = (addr & 3) * 8;
-            let word = (self.read32(GPIOB_OUTPUT_VAL) & !(0xffu32 << shift))
-                | ((val as u32) << shift);
+            let word =
+                (self.read32(BACKLIGHT_PORT) & !(0xffu32 << shift)) | ((val as u32) << shift);
             let usec = self.usec;
             self.backlight.port_written(word, usec);
         }
@@ -4584,6 +4584,27 @@ pub fn wheel_step_name(ev: WheelEvent) -> String {
 pub const GPIOB_OUTPUT_VAL: u32 = 0x6000_d024;
 pub const GPIOB_BACKLIGHT: u32 = 0x10;
 
+/// The pin the dimmer is actually on, and the bank nobody had named.
+///
+/// **Measured, on a running machine, 2026-08-18.** With the whole GPIO window watched and a person
+/// dragging RetailOS's own brightness slider from full to minimum, `0x6000d024` — the pin this
+/// model had counted since the dimmer was written — took **zero** writes, and so did every other
+/// register in the A–D bank. What moved was a second bank at `0x6000d800`, which appears neither in
+/// this project's notes nor in Rockbox's `pp5020.h`:
+///
+/// ```text
+///   0x6000d80c  +236     enable, toggled around each pulse
+///   0x6000d81c  +236     direction, likewise
+///   0x6000d82c  +112     the pin
+/// ```
+///
+/// The bit is `0x80`, read straight out of the register. Rockbox's `backlight_hw_brightness` for
+/// this model bit-bangs `0x80` too — on `GPIOD_OUTPUT_VAL`, one bank lower. It had the bit right
+/// and the port wrong, and this emulator inherited the port from it and then guessed a different
+/// bit as well, which is how a dimmer came to count an enable line.
+pub const BACKLIGHT_PORT: u32 = 0x6000_d82c;
+pub const BACKLIGHT_PIN: u32 = 0x80;
+
 /// A pulse low for less than this many microseconds steps the dimmer UP; longer steps it down.
 /// Rockbox's two delays are 10 and 200, so anything in the middle separates them.
 pub const BACKLIGHT_STEP_USEC: u32 = 100;
@@ -4624,7 +4645,7 @@ impl Default for Backlight {
 impl Backlight {
     /// One write of the port. Returns true if the level moved.
     pub fn port_written(&mut self, val: u32, usec: u32) -> bool {
-        let high = val & GPIOB_BACKLIGHT != 0;
+        let high = val & BACKLIGHT_PIN != 0;
         match (self.low_since, high) {
             // Falling edge: start timing.
             (None, false) => {
