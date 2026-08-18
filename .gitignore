@@ -32,3 +32,6 @@ _out/
 
 # Release archives, staged by .github/workflows/release.yml or by hand when Actions cannot run.
 dist/
+
+# The release checklist is the operator's, not the reader's. Kept on disk, out of the tree.
+RELEASING.md

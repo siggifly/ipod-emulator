@@ -40,7 +40,7 @@ desk has both on it.
 | | What to look for | |
 |---|---|---|
 | **The boot ROM** | a 1 MB NOR dump, conventionally `internal_rom_000000-0FFFFF.bin` | Any name works — the size and the reset vector are what get checked |
-| **Something to make a drive from** | Apple's `.ipsw` (~14 MB), **or** a drive image you already have | An `.ipsw` is built into a drive as it lands. `ipod-boot make-disk your.ipsw disk.img` does it without the window |
+| **Something to make a drive from** | Apple's `.ipsw` (~14 MB), **or** a drive image you already have | An `.ipsw` is built into a drive as it lands. `ipod-boot make-disk iPod_20.1.3.ipsw disk.img` does it without the window |
 
 **The two must be for the same iPod**, and the emulator checks before it boots — a mismatched pair
 otherwise fails quietly, reaching about 70 ATA commands and a request to restore from iTunes where a
@@ -126,7 +126,7 @@ need no arguments:
 
 `--print` also says where each path came from — environment, the window, or repository default —
 because a recipe with an input you cannot see in its command line is one you cannot check.
-`FLASH=` and `DISK=` override, and `ipod-boot make-disk your.ipsw disk.img` builds a drive without
+`FLASH=` and `DISK=` override, and `ipod-boot make-disk iPod_20.1.3.ipsw disk.img` builds a drive without
 the window. `ipod-emulator --check-images --flash=… --disk=…` reports on a pair with no window at all.
 
 `tools/ipod-boot/README.md` covers the command-line recipes, and `tools/ipod-film/` records the
@@ -275,7 +275,6 @@ The four documents each answer one question, and none of them answers another's:
 | [`KNOWN-BUGS.md`](KNOWN-BUGS.md) | what is *wrong* |
 | [`research/04-bypass-ledger.md`](research/04-bypass-ledger.md) | what is *faked*, with a retirement condition for each |
 | [`CHANGELOG.md`](CHANGELOG.md) | what *changed*, release by release |
-| [`RELEASING.md`](RELEASING.md) | how a release is *cut*, including the one edit that sets the version |
 | [`NEXT.md`](NEXT.md) | what is being *worked on now* — the live queue, its rules, and every instrument with a note on how each one lies |
 
 Merging them is how a project starts describing its gaps as choices.
