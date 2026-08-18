@@ -351,6 +351,11 @@ pub struct Stats {
     /// Instructions executed in this process — the numerator of the honest speed ratio. Distinct
     /// from `executed`, which includes everything a restored snapshot had already done.
     pub executed_here: u64,
+    /// Simulated microseconds elapsed in this process. **Computed and not yet shown** — and it
+    /// became worth showing the day the clock stopped inventing time: against `wall_secs` it is the
+    /// honest "how fast is this iPod running compared to a real one", now that idle costs what
+    /// running costs. The readout has the instruction ratio and not this one.
+    #[allow(dead_code)]
     pub sim_usec_here: u64,
     pub hold: bool,
     pub touched: bool,
@@ -372,6 +377,10 @@ pub struct Stats {
     pub irqs: u64,
     /// Steps refused because the drain queue was already full — always shown, never silent.
     pub input_dropped: u64,
+    /// Depth of the input drain queue. Computed and not shown; `input_dropped` above is the one
+    /// that matters, because a refused step is a lie about what the user did and a deep queue is
+    /// only ever the reason for one.
+    #[allow(dead_code)]
     pub queued: usize,
     /// Arrivals at each of [`WATCHED`], in that order.
     pub enters: [u64; WATCHED.len()],

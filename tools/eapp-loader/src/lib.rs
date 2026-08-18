@@ -1019,6 +1019,10 @@ impl Memory {
     ///
     /// **It must agree with the slow path.** `locate_idx` takes the *first* region containing an
     /// address; if this cache picks a different one, reads and writes silently disagree.
+    /// Never called, and that is the point: it exists to hang the invariant above on, next to the
+    /// cache it constrains. `#[allow]` rather than deletion, because deleting it would delete the
+    /// only place that rule is written down.
+    #[allow(dead_code)]
     fn fast_region_doc_anchor(&self) {}
 
     /// Apply a finished flash operation to every region that holds the chip's bytes. Two windows
@@ -1239,14 +1243,6 @@ impl Memory {
             .collect()
     }
 
-    /// Account for an access whose region index is already known — the scan is not repeated.
-    fn bump(&mut self, idx: usize, write: bool) {
-        let v = if write { &mut self.region_writes } else { &mut self.region_reads };
-        if v.len() <= idx {
-            v.resize(idx + 1, 0);
-        }
-        v[idx] += 1;
-    }
 
     /// `wval` is the byte **being written**, and is meaningless on a read.
     ///
@@ -5781,6 +5777,9 @@ pub const DMA_STATUS_INTR: u32 = 1 << 30;
 /// arithmetic in registers — `sub r2, r3, #0x4` at `0x0028dff8`, where r3 is the chunk length.
 pub const DMA_SIZE_MASK: u32 = 0xfffc;
 
+// Unused, deliberately kept: these four are the drive's status register, and a set with a hole in
+// it invites someone to re-derive the missing bit from a datasheet nobody has.
+#[allow(dead_code)]
 const ATA_BSY: u8 = 0x80;
 const ATA_DRDY: u8 = 0x40;
 const ATA_DSC: u8 = 0x10;
@@ -7000,7 +6999,7 @@ impl Machine {
             return false;
         }
         let mut p = 8usize;
-        let mut r32 = |p: &mut usize| -> u32 {
+        let r32 = |p: &mut usize| -> u32 {
             let v = u32::from_le_bytes(b[*p..*p + 4].try_into().unwrap());
             *p += 4;
             v
