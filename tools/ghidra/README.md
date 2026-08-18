@@ -25,7 +25,7 @@ cd ghidra-mcp && mvn package                          # builds target/GhidraMCP-
 Then, from the repo root:
 
 ```sh
-claude mcp add ghidra -- "$PWD/tools/ghidra/bridge.sh"
+claude mcp add ghidra -- "$PWD/ipod-boot ghidra bridge"
 ```
 
 The MCP tools appear after Claude Code restarts — servers are loaded at session start. Until then
@@ -51,8 +51,8 @@ is a standing trap, noted in `NEXT.md`'s instrument table.
 The question was why RetailOS never draws. `0x001acca8` is the widget's "show" dispatcher.
 
 ```sh
-./q.sh xref 0x001acca8      # -> one caller: 0x001ae080, in FUN_001ae070
-./q.sh xref 0x001ae070      # -> one reference, type DATA, from 0x0066db98
+ipod-boot ghidra q xref 0x001acca8      # -> one caller: 0x001ae080, in FUN_001ae070
+ipod-boot ghidra q xref 0x001ae070      # -> one reference, type DATA, from 0x0066db98
 ```
 
 The class vtable is at `0x0066daf4`, so `0x0066db98` is slot `+0xa4` — `setVisible`. *Show* is

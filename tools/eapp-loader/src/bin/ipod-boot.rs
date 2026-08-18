@@ -138,6 +138,23 @@ fn main() {
 
     // The other half of installing an OS: the firmware partition holds what the bootloader runs,
     // the data partition holds everything that bootloader then looks for.
+    if name == "ghidra" {
+        let sub = rest.first().map(String::as_str).unwrap_or("");
+        let tail: Vec<String> = rest.iter().skip(1).cloned().collect();
+        let r = match sub {
+            "bridge" => eapp_loader::ghidra::bridge(&tail),
+            "serve" => eapp_loader::ghidra::serve(tail.iter().any(|a| a == "--status")),
+            "q" => eapp_loader::ghidra::query(&tail),
+            _ => Err("usage: ipod-boot ghidra bridge | serve [--status] | q …".to_string()),
+        };
+        match r {
+            Ok(()) => return,
+            Err(e) => {
+                eprintln!("ipod-boot ghidra: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     if name == "fat" {
         match fat_cmd(&rest) {
             Ok(()) => return,
