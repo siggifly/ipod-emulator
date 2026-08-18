@@ -1,6 +1,6 @@
 # The disk images — what they are, and how they are protected
 
-**`resources/derived/disk/ipod8g-retail.img` is irreplaceable.** It is a real 5.5G's 8 GB drive with
+**`resources/drives/ipod8g-retail.img` is irreplaceable.** It is a real 5.5G's 8 GB drive with
 a working RetailOS install: 56 titles in `Games_RO` (counted from the FAT32 directory entries
 2026-08-14; this line said 196, which had no source), the matching `GameData_RW` / `GameStats_WO`
 trees, `iPod_Control`, an `iTunesDB`, and the SC Info keystore. It cannot be regenerated — restoring
@@ -15,7 +15,7 @@ a fresh one would produce a different disk, and the games came from a specific p
 Verify before trusting a measurement, and after anything that could have written:
 
 ```sh
-shasum -a 256 resources/derived/disk/ipod8g-retail.img
+shasum -a 256 resources/drives/ipod8g-retail.img
 ```
 
 ## How the recipes protect it

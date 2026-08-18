@@ -450,7 +450,7 @@ lookup that fails is downstream of a driver that has not yet read a byte it trus
 
 ## The full inventory of `rsrc`
 
-Extracted from `resources/derived/disk/ipod8g-retail.img`: MBR partition 0 (type `0x00`, LBA 63),
+Extracted from `resources/drives/ipod8g-retail.img`: MBR partition 0 (type `0x00`, LBA 63),
 `!ATA` entry `rsrc` at devOffset `0x0073a000`, length `0x00500000`, so the FAT volume begins at
 absolute byte `0x742000` (LBA 14864) after the 0x200 image header. **Verified byte-exact**:
 `sum(payload) & 0xffffffff == 0x18319bab`, matching the directory's checksum field, and the three
@@ -4131,7 +4131,7 @@ all been present for the whole project and **nothing had ever used them**. A hea
 fact already running with `OSOS_correct.bin` loaded and analysed. Now registered:
 
 ```
-claude mcp add ghidra -- uv run --project resources/reference/ghidra-mcp bridge-mcp-ghidra
+claude mcp add ghidra -- uv run --project resources/vendor/ghidra-mcp bridge-mcp-ghidra
 ```
 
 The bridge is stdio MCP; the server is a plain REST API on `127.0.0.1:8089` and can be driven with

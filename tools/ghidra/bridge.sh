@@ -16,7 +16,7 @@ set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 
-: "${GHIDRA_MCP_HOME:=$ROOT/resources/reference/ghidra-mcp}"
+: "${GHIDRA_MCP_HOME:=$ROOT/resources/vendor/ghidra-mcp}"
 
 if [ ! -d "$GHIDRA_MCP_HOME" ]; then
   echo "ghidra-mcp checkout not found at $GHIDRA_MCP_HOME" >&2

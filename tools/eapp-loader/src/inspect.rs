@@ -918,7 +918,7 @@ mod tests {
     /// parser's fixtures have to come from the format, not from the parser's author.
     #[test]
     fn the_two_magics_are_the_bytes_the_real_images_carry() {
-        // resources/derived/disk/ipod8g-retail.img at 63*512 + 0x4200 — the `osos` record.
+        // resources/drives/ipod8g-retail.img at 63*512 + 0x4200 — the `osos` record.
         let disk: [u8; 40] = [
             0x21, 0x41, 0x54, 0x41, 0x73, 0x6f, 0x73, 0x6f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x44,
             0x00, 0x00, 0x00, 0x5a, 0x73, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00,

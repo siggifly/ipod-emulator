@@ -90,7 +90,7 @@ have.
 
 ## A retail NOR — and the prototype was never the problem
 
-The retail dump was **already in this repo, mislabelled**. `resources/reference/ipod-bootrom-archive/`
+The retail dump was **already in this repo, mislabelled**. `resources/vendor/ipod-bootrom-archive/`
 files it under `A1238`, which is the iPod *classic* 6G's model number; the bytes say otherwise.
 
 | field | prototype (ours) | retail dump |

@@ -33,11 +33,11 @@ RES="$ROOT/resources"
 # `$HOME/dev/.cargo-target/release/trace`, which is a path only its author had.
 : "${TRACE:=$(cd "$HERE/../.." && pwd)/target/release/trace}"
 : "${BUDGET:=150000000}"
-: "${FLASH:=$RES/reference/ipod-bootrom-archive/A1238/internal_rom_000000-0FFFFF.bin}"
+: "${FLASH:=$RES/roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin}"
 # The image whose firmware partition this bootloader accepts — the pristine 13 895 680-byte
 # Firmware-20.6.3 written over a partition it fits exactly. The retail ROM validates what the
 # prototype waved through, and rejects the other image with Apple's own restore screen.
-: "${DISK:=$RES/derived/disk/ipod8g-retail.img}"
+: "${DISK:=$RES/drives/ipod8g-retail.img}"
 # Exported, not merely assigned: cold-boot.sh reads them as environment defaults, and the first
 # version of this file set them as plain shell variables — so `exec` passed neither and it silently
 # ran the prototype configuration this recipe exists to avoid. It looked like it worked.
@@ -50,7 +50,7 @@ export FLASH
 # deadlock; it retries on a 3.9 s timeout, forever. See research/10 Addendum 15.
 #
 # Cloned per run rather than written in place, for two different reasons that both matter:
-# `$RES/derived/disk/` is reference material and a recipe must never mutate it, and a disk that
+# `$RES/drives/` is reference material and a recipe must never mutate it, and a disk that
 # accumulates state across runs makes every measurement depend on how many times it was run before.
 # APFS `cp -c` is a copy-on-write clone — ~3 ms for 8 GB, so a fresh disk per run is free.
 #

@@ -18,7 +18,7 @@ RES="$ROOT/resources"
 : "${TRACE:=$HOME/dev/.cargo-target/release/trace}"
 : "${IMG:=diag}"
 : "${FLASH:=$RES/internal_rom_000000-0FFFFF/internal_rom_000000-0FFFFF.bin}"
-: "${DISK:=$RES/derived/disk/ipod8g.img}"
+: "${DISK:=$RES/drives/ipod8g.img}"
 : "${BUDGET:=200000000}"
 
 # The two `--rdval` guesses that used to live here are gone, for the same reason they left

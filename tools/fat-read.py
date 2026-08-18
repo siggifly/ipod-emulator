@@ -26,7 +26,7 @@ import struct, sys, os, bisect
 IMG = os.environ.get(
     'IMG',
     os.path.join(os.path.dirname(os.path.abspath(__file__)), '..',
-                 'resources/derived/disk/ipod8g-retail.PRISTINE.img'))
+                 'resources/drives/ipod8g-retail.PRISTINE.img'))
 
 
 class Vol:

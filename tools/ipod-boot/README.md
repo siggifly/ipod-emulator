@@ -56,7 +56,7 @@ The variables below override that, and are what the `.sh` recipes use directly.
 |---|---|---|
 | `TRACE` | `~/dev/.cargo-target/release/trace` | build with `cargo build --release --bin trace` |
 | `FLASH` | the setup screen's, else `resources/internal_rom_000000-0FFFFF/…bin` | 1 MB NOR dump — **required**, and the thing that makes cold boot possible |
-| `DISK` | the setup screen's, else `resources/derived/disk/ipod8g.img` | a disk image with a firmware partition. **Cold boot's only source for the OS image** |
+| `DISK` | the setup screen's, else `resources/drives/ipod8g.img` | a disk image with a firmware partition. **Cold boot's only source for the OS image** |
 | `OSOS` | `resources/derived/fw/OSOS_correct.bin` | `warm-boot.sh` only. A cold boot is not handed it — see below |
 | `BUDGET` | `150000000` | instructions. The retail boot decision completes and fails by ~150M; 600M was four times more work than the question needed |
 
@@ -93,7 +93,7 @@ regenerated from anything else in the tree.
 
 | Path | What | Regenerable? |
 |---|---|---|
-| `derived/disk/ipod8g.img` | 8 GB disk image with the firmware partition the cold boot reads | rebuildable, slowly |
+| `drives/ipod8g.img` | 8 GB disk image with the firmware partition the cold boot reads | rebuildable, slowly |
 | `derived/fw/OSOS_correct.bin` | the 7.5 MB RetailOS image, correctly placed | yes, from `Firmware-20.6.3` |
 | `derived/fw/Firmware-20.6.3` | Apple's firmware bundle, the source of the above | **no** — re-download |
 | `derived/re/iram.bin` | the bootloader as it *executes*, scatter-loaded into IRAM | yes, via `--save-region` |

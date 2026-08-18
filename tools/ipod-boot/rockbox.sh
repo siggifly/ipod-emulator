@@ -10,12 +10,12 @@ set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 RES="$ROOT/resources"
-RB="$RES/reference/rockbox/bin"
+RB="$RES/vendor/rockbox/bin"
 
 : "${TRACE:=$HOME/dev/.cargo-target/release/trace}"
 : "${IMG:=rb-main.raw}"
 : "${FLASH:=$RES/internal_rom_000000-0FFFFF/internal_rom_000000-0FFFFF.bin}"
-: "${DISK:=$RES/derived/disk/ipod8g.img}"
+: "${DISK:=$RES/drives/ipod8g.img}"
 : "${BUDGET:=200000000}"
 
 # Rockbox's own contract, per tools/scramble.c + bootloader/ipod.c: the image is linked for

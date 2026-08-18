@@ -33,7 +33,7 @@ The MCP tools appear after Claude Code restarts — servers are loaded at sessio
 
 **The third-party checkout is not in git.** It is 179 MB and 3 000+ files of code we did not write,
 and the project's rule is *borrow freely to learn, never to depend*. `bridge.sh` defaults to
-`resources/reference/ghidra-mcp`; override with `GHIDRA_MCP_HOME`. That indirection is the whole
+`resources/vendor/ghidra-mcp`; override with `GHIDRA_MCP_HOME`. That indirection is the whole
 reason `bridge.sh` exists — registering Claude Code directly against a path inside gitignored
 material means the integration breaks silently the next time that tree is rebuilt or cloned fresh,
 and **an MCP server that fails to start is indistinguishable, from inside a session, from one that

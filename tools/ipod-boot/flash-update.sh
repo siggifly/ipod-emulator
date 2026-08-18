@@ -28,8 +28,8 @@ ROOT=$(cd "$HERE/../.." && pwd)
 RES="$ROOT/resources"
 
 : "${TRACE:=$HOME/dev/.cargo-target/release/trace}"
-: "${FLASH:=$RES/reference/ipod-bootrom-archive/A1238/internal_rom_000000-0FFFFF.bin}"
-: "${SRCDISK:=$RES/derived/disk/ipod8g.img}"
+: "${FLASH:=$RES/roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin}"
+: "${SRCDISK:=$RES/drives/ipod8g.img}"
 : "${FW:=$RES/derived/fw/Firmware-20.6.3}"
 : "${BUDGET:=600000000}"
 : "${WORK:=${TMPDIR:-/tmp}/ipod-flash-update}"

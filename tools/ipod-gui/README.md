@@ -13,7 +13,7 @@ $CARGO_TARGET_DIR/release/ipod-emulator
 **Launched with nothing configured it opens a setup screen** rather than exiting with an error, and
 that is the supported first-run path — see §"The setup screen" below. If `resources/` is present the
 defaults are `retail-boot.sh`'s, verbatim: the retail NOR at
-`resources/reference/ipod-bootrom-archive/A1238/` and `resources/derived/disk/ipod8g-retail.img`.
+`resources/vendor/ipod-bootrom-archive/A1238/` and `resources/drives/ipod8g-retail.img`.
 Whatever the setup screen last accepted is remembered, so the screen appears once.
 
 **First launch costs about 75 seconds** and shows a progress bar: it is doing the cold boot. At

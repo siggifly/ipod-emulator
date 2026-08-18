@@ -399,7 +399,7 @@ ipod-emulator — an interactive iPod over the eapp-loader emulator
                           is 4 ms at --clock=75; it was 20000, the same 4 ms at --clock=5)
   --flash=FILE            the NOR image (default: what the window was last pointed at,
                           else the retail ROM under resources/)
-  --disk=FILE             the drive image (default: as above, else resources/derived/disk/)
+  --disk=FILE             the drive image (default: as above, else resources/drives/)
   --workdisk=FILE         the writable per-run clone. Naming one implies --copy
   --ipsw=FILE             build a drive from this bundle at launch, exactly as dropping it on
                           the window would; `ipod-boot make-disk IPSW OUT.img` needs no window
@@ -661,12 +661,12 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         .map(PathBuf::from)
         .or_else(|| saved.flash.clone())
         .unwrap_or_else(|| {
-            res.join("reference/ipod-bootrom-archive/A1238/internal_rom_000000-0FFFFF.bin")
+            res.join("roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin")
         });
     let disk = get("--disk=")
         .map(PathBuf::from)
         .or_else(|| saved.disk.clone())
-        .unwrap_or_else(|| res.join("derived/disk/ipod8g-retail.img"));
+        .unwrap_or_else(|| res.join("drives/ipod8g-retail.img"));
 
     // 75 instructions per simulated microsecond is the real PP5021C. It was 5 for most of this
     // project -- a research accelerant, adopted in research/03 because the bootloader polls with
@@ -3306,9 +3306,20 @@ mod tests {
         assert_eq!(c.flash, PathBuf::from("/cli/rom.bin"));
         assert_eq!(c.disk, PathBuf::from("/saved/disk.img"));
 
+        // The defaults land on **our** copies, under names that say what they are — not on the
+        // vendored archive's `A1238/internal_rom_000000-0FFFFF.bin`, which is upstream's directory
+        // for the iPod Classic and is where the Video's ROM is mis-filed. Asserted by whole
+        // filename, because `Path::ends_with` compares components and would otherwise pass on any
+        // file of that name anywhere.
         let c = config(&[], &Settings::default()).unwrap();
-        assert!(c.flash.ends_with("internal_rom_000000-0FFFFF.bin"), "{:?}", c.flash);
+        assert!(
+            c.flash.ends_with("retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin"),
+            "{:?}",
+            c.flash
+        );
         assert!(c.disk.ends_with("ipod8g-retail.img"), "{:?}", c.disk);
+        assert!(c.flash.parent().is_some_and(|p| p.ends_with("roms")), "{:?}", c.flash);
+        assert!(c.disk.parent().is_some_and(|p| p.ends_with("drives")), "{:?}", c.disk);
     }
 
     /// A different pair of images must get a different snapshot. Restoring one machine's snapshot

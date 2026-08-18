@@ -50,10 +50,10 @@ none should be.
 ### Reproducing the measurements
 
 ```
-tools/rsrc-extract.py resources/derived/disk/ipod8g-retail.img --list
-tools/rsrc-extract.py resources/derived/disk/ipod8g-retail.img \
+tools/rsrc-extract.py resources/drives/ipod8g-retail.img --list
+tools/rsrc-extract.py resources/drives/ipod8g-retail.img \
     --get RESOUR~1/VIDEOC~1/LIBRARY/MPLAYER.VLL -o MPLAYER.vll
-tools/rsrc-extract.py resources/derived/disk/ipod8g-retail.img \
+tools/rsrc-extract.py resources/drives/ipod8g-retail.img \
     --get RESOUR~1/VIDEOC~1/BOOT/VMCS.BIN -o vmcs.bin
 ```
 

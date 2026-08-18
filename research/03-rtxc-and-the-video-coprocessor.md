@@ -2026,7 +2026,7 @@ self-clearing, and the I²C write hook stopped dying after 4096 transfers. Both 
 are innocent — patching the SEND clear back out still gives 1 arrival, and so does **the binary
 built from `078615d` itself**, the very commit that reported the loop.
 
-So the emulator was never the cause. The inputs changed. `resources/derived/disk/ipod8g.img` and
+So the emulator was never the cause. The inputs changed. `resources/drives/ipod8g.img` and
 `resources/derived/recovery/osos_region_backup.bin` share a timestamp — 13 Aug 02:05 — which is the
 firmware-partition surgery, performed *after* the loop was measured and never re-measured against.
 

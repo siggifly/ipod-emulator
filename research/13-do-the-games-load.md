@@ -218,7 +218,7 @@ carries.
 > ⚠️ **Correction (2026-08-14): the disk carries 56 titles, not 196.** `iPod_Control/Games_RO` has
 > **56 subdirectories**, counted from the FAT32 directory entries, which matches research/07's own
 > heading *"The full archive is on the device: 56 games + keys"* and the 56 `Manifest.plist` files
-> under `resources/iPod Games Files/`. The 196 in this section and in
+> under `resources/games/purchased/`. The 196 in this section and in
 > `tools/ipod-boot/DISK-IMAGES.md` had no source; both are corrected. Nothing else in this file
 > depends on the number — the list renders, the navigation lands, and the eight-click primitive
 > holds on a 56-row list exactly as recorded.

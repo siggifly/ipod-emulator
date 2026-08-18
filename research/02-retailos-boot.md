@@ -851,7 +851,7 @@ vector table, not executable at `0x10000000`. And the relationship between the t
 
 ### The other 512 bytes, which is a different bug
 
-The `osos` region written into `resources/derived/disk/ipod8g.img` was for a time the correct image
+The `osos` region written into `resources/drives/ipod8g.img` was for a time the correct image
 with its **first sector removed** — `backup[i] == OSOS_correct[i + 512]`. That is the opposite
 direction to the extraction error, and it is the one that produced the phantom boot loop diagnosed
 and retracted in [research/03](03-rtxc-and-the-video-coprocessor.md) §40.

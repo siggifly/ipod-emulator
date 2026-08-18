@@ -19,7 +19,7 @@ RES="$ROOT/resources"
 
 : "${TRACE:=$HOME/dev/.cargo-target/release/trace}"
 : "${FLASH:=$RES/internal_rom_000000-0FFFFF/internal_rom_000000-0FFFFF.bin}"
-: "${DISK:=$RES/derived/disk/ipod8g.img}"
+: "${DISK:=$RES/drives/ipod8g.img}"
 : "${OSOS:=$RES/derived/fw/OSOS_correct.bin}"
 : "${BUDGET:=600000000}"
 
