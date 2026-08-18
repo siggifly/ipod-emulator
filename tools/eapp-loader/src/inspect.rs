@@ -316,6 +316,24 @@ pub fn drive_family(path: &Path) -> Option<u32> {
 /// `None` means "no reason to object" — which includes *not knowing*, and the two are deliberately
 /// the same answer. A drive somebody supplied has no family this can read, and a warning that
 /// fired on every such drive would be noise that teaches people to ignore the one that matters.
+pub fn generation_mismatch(
+    model: &crate::identity::Model,
+    software: Option<u32>,
+) -> Option<String> {
+    let found = software?;
+    let want = model.generation.updater_families();
+    // Nothing recorded for this generation: say nothing rather than warn on every pair.
+    if want.is_empty() || want.contains(&found) {
+        return None;
+    }
+    Some(format!(
+        "This firmware is updater family {found}. {} — a {} — takes {}.",
+        model.apple_number(),
+        model.generation.label(),
+        want.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(" or ")
+    ))
+}
+
 pub fn family_mismatch(model: &str, model_family: u32, software: Option<u32>) -> Option<String> {
     let found = software?;
     if found == model_family {
@@ -1592,6 +1610,33 @@ mod syscfg_tests {
     }
 
     /// The OUI check is the cheapest proof the parse is right, so it has to be able to fail.
+    /// **The check that separates a 5G from a 5.5G**, which a family check cannot: they share
+    /// FamilyID 6, and only the updater family tells them apart.
+    #[test]
+    fn a_firmware_for_the_wrong_generation_is_caught() {
+        use crate::identity::Model;
+        let five = Model::lookup("A146").expect("a 5G");
+        let five_five = Model::lookup("A446").expect("a 5.5G");
+
+        // Right pairs say nothing.
+        assert_eq!(generation_mismatch(five, Some(13)), None, "5G Initial");
+        assert_eq!(generation_mismatch(five, Some(20)), None, "5G Rev A");
+        assert_eq!(generation_mismatch(five_five, Some(25)), None, "5.5G");
+
+        // Wrong ones say which, both ways round. This is the case the old fixed-constant check got
+        // backwards: it hardcoded 20, so a correct 5.5G pair would have been warned as wrong.
+        let e = generation_mismatch(five_five, Some(20)).expect("5.5G with 5G firmware");
+        assert!(e.contains("20") && e.contains("25"), "{e}");
+        let e = generation_mismatch(five, Some(25)).expect("5G with 5.5G firmware");
+        assert!(e.contains("25") && e.contains("13"), "{e}");
+
+        // Nothing to compare against is silence, not a warning.
+        assert_eq!(generation_mismatch(five, None), None);
+        let nano = Model::lookup("A004").expect("a nano");
+        assert!(nano.generation.updater_families().is_empty(), "precondition");
+        assert_eq!(generation_mismatch(nano, Some(99)), None, "unknown mapping must not warn");
+    }
+
     /// Build it, read it back, get what went in. Every payload shape the real dump uses.
     #[test]
     fn a_built_block_reads_back_as_what_went_into_it() {

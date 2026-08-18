@@ -725,12 +725,23 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         hw(&mut m, 0x6c, 0x0010_0000);
         hw(&mut m, 0x74, u32::from_le_bytes(*b"Sdrm"));
         hw(&mut m, 0x7c, 0x1000_0000);
-        hw(&mut m, 0x80, RAM_SIZE as u32);
+        // **Not `RAM_SIZE`** — that is this loader's 8 MB scratch region, and writing it here told
+        // RetailOS the iPod had 8 MB of SDRAM. The value a real cold boot leaves in these fields is
+        // 0x04000000, measured; `trace`'s `--sysinfo` default is the same number.
+        //
+        // Whether it varies by model is NOT established. The 5.5G 80 GB is widely reported to carry
+        // 64 MB against everything else's 32 MB, and Rockbox builds the Video for 64 "always. This
+        // is reduced at runtime if needed" — but our own hardware is a 30 GB 5G, which should then
+        // be 32 MB, and its handoff reads 0x04000000 here anyway. So either this field is not the
+        // memory size or the reporting is wrong, and until that is measured the hardware's own
+        // value is used rather than a per-model guess.
+        const MEASURED_SDRAM_WORD: u32 = 0x0400_0000;
+        hw(&mut m, 0x80, MEASURED_SDRAM_WORD);
         hw(&mut m, 0x88, u32::from_le_bytes(*b"Frwr"));
         hw(&mut m, 0x9c, u32::from_le_bytes(*b"Iram"));
         hw(&mut m, 0xa4, 0x4000_0000);
         hw(&mut m, 0xa8, 0x0002_0000);
-        hw(&mut m, 0xe0, RAM_SIZE as u32);
+        hw(&mut m, 0xe0, MEASURED_SDRAM_WORD);
         hw(&mut m, 0x128, 0x0005_0014);
         m.mem.write32(eapp_loader::nor::HANDOFF_TAG_AT, u32::from_le_bytes(*b"IsyS"));
         m.mem.write32(eapp_loader::nor::HANDOFF_TAG_AT + 4, eapp_loader::nor::HANDOFF_AT);

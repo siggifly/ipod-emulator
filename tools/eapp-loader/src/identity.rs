@@ -435,6 +435,23 @@ impl Generation {
         }
     }
 
+    /// The `UpdaterFamilyID`s Apple shipped firmware under for this generation.
+    ///
+    /// **This is the only thing that separates a 5G from a 5.5G in a firmware bundle**, because
+    /// they share `FamilyID` 6. Read out of Apple's own restore manifests: `Firmware-13.6.3` and
+    /// `Firmware-20.6.3` are the 5G's Initial and Rev A, `Firmware-25.6.3` is the 5.5G's. The
+    /// number is also the one in the filename.
+    ///
+    /// Empty where the mapping has not been established, and an empty list means "cannot say"
+    /// rather than "nothing matches" — a check on it has to treat the two differently.
+    pub fn updater_families(self) -> &'static [u32] {
+        match self {
+            Generation::Video1 => &[13, 20],
+            Generation::Video2 => &[25],
+            _ => &[],
+        }
+    }
+
     /// A short human name. The two Video generations get the names people actually use; the rest
     /// fall back to libgpod's own constant name rather than to an invented marketing string.
     pub fn label(self) -> String {
@@ -499,6 +516,27 @@ impl Model {
     /// an emulator we supply the drive.
     pub fn sectors(&self) -> u64 {
         (self.capacity_gb as u64) * 1_000_000_000 / 512
+    }
+
+    /// SDRAM, in bytes.
+    ///
+    /// **Memory follows the CAPACITY, not the generation** — a 60 GB 5G has 64 MB while a 30 GB
+    /// 5.5G has 32 MB, so "the 5.5G has double the RAM" is wrong in both directions. The two
+    /// generations are revisions of one platform: same PP5021C, same BCM2722, same WM8758, same
+    /// 320x240 panel; what changed is the board (820-1763-A to 820-1975-A), a brighter screen, and
+    /// Search in the firmware.
+    ///
+    /// **Not measured here, and it is contradicted by our own hardware.** Our unit is a 30 GB 5G,
+    /// which this rule puts at 32 MB — and the word at `+0xe0` of its real handoff block reads
+    /// `0x04000000`. Either that field is not the memory size (the likelier reading, and it is
+    /// already flagged as not understood) or the rule is wrong. Until one of those is settled this
+    /// value is not written into the handoff; it is here to be tested against.
+    pub fn sdram_bytes(&self) -> u32 {
+        if self.capacity_gb >= 60 {
+            64 * 1024 * 1024
+        } else {
+            32 * 1024 * 1024
+        }
     }
 
     /// The case colour this row implies.

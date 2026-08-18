@@ -1180,6 +1180,11 @@ struct Images {
     /// is a good reason to want an emulator. It is reported so nobody debugs a strange iPod for an
     /// hour without knowing its firmware was not stock.
     ipsw_provenance: Option<eapp_loader::firmware::Provenance>,
+    /// Which iPod the pair is being judged against.
+    ///
+    /// A supplied dump names itself through `Mod#`; a synthesised one is whatever model was chosen.
+    /// Held here because the pair check needs it and `Images` is where the pair lives.
+    model: &'static eapp_loader::identity::Model,
     /// What each file *is*, when that can be said — the model and the device a ROM came off, the
     /// software version a drive holds. `None` falls back to the filename. See
     /// [`inspect::describe_rom`].
@@ -1270,6 +1275,8 @@ impl Images {
             disk_verdict: None,
             ipsw_verdict: None,
             ipsw_provenance: None,
+            model: eapp_loader::identity::Model::lookup("A446")
+                .expect("the default model is in the table"),
             flash_name: None,
             disk_name: None,
             flash_facts: Vec::new(),
@@ -1299,6 +1306,18 @@ impl Images {
             Some(v) if v.ok() => inspect::describe_rom(&f, IPOD_VIDEO.short),
             _ => None,
         };
+        // **A supplied dump decides which iPod the pair is judged against.** Its `Mod#` says what
+        // it is; taking the model from a setting instead would let a 5G dump be checked against a
+        // 5.5G's firmware families without a word.
+        if matches!(&self.flash_verdict, Some(v) if v.ok()) {
+            if let Some(m) = std::fs::read(&f)
+                .ok()
+                .and_then(|rom| inspect::syscfg(&rom))
+                .and_then(|c| c.model_info())
+            {
+                self.model = m;
+            }
+        }
         self.disk_name = match &self.disk_verdict {
             Some(v) if v.ok() => inspect::describe_drive(&d),
             _ => None,
@@ -1328,9 +1347,12 @@ impl Images {
         } else {
             inspect::drive_family(Path::new(self.disk.trim()))
         };
-        self.mismatch = rom_ok
-            .then(|| inspect::family_mismatch(IPOD_VIDEO.short, IPOD_VIDEO.ipsw_family, family))
-            .flatten();
+        // **Against the NOR's own generation, not a constant.** `ipsw_family: 20` hardcoded the
+        // 5G Rev A, so a correct 5.5G pair — family 25 — would have been warned as wrong the moment
+        // 5.5G was supported. A 5G and a 5.5G share FamilyID 6; only the UPDATER family separates
+        // them, which is why this had to move off a fixed number.
+        self.mismatch =
+            rom_ok.then(|| inspect::generation_mismatch(self.model, family)).flatten();
     }
 
     /// The IPSW is checked separately because checking it means inflating 13.9 MB and hashing it,
@@ -2109,6 +2131,9 @@ impl App {
         };
         // The case follows the model number, because that is the only thing that decides it.
         self.settings.chassis = m.colour();
+        // And the pair check is judged against the same iPod.
+        self.images.model = m;
+        self.images.recheck_pair();
         self.settings.save();
     }
 
