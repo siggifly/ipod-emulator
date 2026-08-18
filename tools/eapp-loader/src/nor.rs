@@ -136,6 +136,126 @@ pub fn is_synthetic(nor: &[u8]) -> bool {
     nor.get(SYNTH_MARK_AT..SYNTH_MARK_AT + SYNTH_MARK.len()) == Some(SYNTH_MARK)
 }
 
+/// Where a boot ROM comes from.
+///
+/// **Synthetic is not a file.** The image is a pure function of a model, a seed and any overrides,
+/// so what gets persisted is that recipe and not the megabyte it produces. Storing the artifact
+/// would buy a cache to manage, files to clean up, and a stale image every time this module's
+/// output changes; storing the recipe costs a few bytes in the settings file and regenerates in
+/// microseconds.
+///
+/// It also removes the only way a generated ROM could be mistaken for a dump: there is nothing on
+/// disk to mistake. [`SYNTH_MARK`] still goes into any image that *is* written out, via
+/// `ipod-boot make-nor`, which exists for exporting one — to inspect, to hand to another tool, or
+/// to attach to a bug report.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// A dump the user supplied. Read as-is.
+    File(std::path::PathBuf),
+    /// Built on demand.
+    Synthetic {
+        /// A model number in any written form — `A146`, `MA146`, `xMA146`.
+        model: String,
+        /// The seed. Persisted, so the same machine comes back on the next launch.
+        seed: u64,
+        /// An identity typed or edited by the user, overriding what the seed would produce.
+        serial: Option<String>,
+        guid: Option<u64>,
+    },
+}
+
+impl Default for Source {
+    /// A 30 GB black 5G, which is the reference hardware this emulator is built against.
+    fn default() -> Source {
+        Source::Synthetic { model: "A146".into(), seed: 0, serial: None, guid: None }
+    }
+}
+
+impl Source {
+    /// The bytes, read or built.
+    pub fn bytes(&self) -> Result<Vec<u8>, String> {
+        match self {
+            Source::File(p) => std::fs::read(p).map_err(|e| format!("{}: {e}", p.display())),
+            Source::Synthetic { model, seed, serial, guid } => {
+                let m = Model::lookup(model)
+                    .ok_or_else(|| format!("{model} is not a model number this program knows"))?;
+                let identity = match guid {
+                    // A typed identity wins over the seed's, and is marked `Provided` because we
+                    // cannot tell by looking whether it is a real device's.
+                    Some(g) => Identity::provided(serial.as_deref(), *g)?,
+                    None => Identity::generate(m, *seed),
+                };
+                Ok(synthesise(&Spec::new(m, identity)))
+            }
+        }
+    }
+
+    /// The identity this source will present, without building the image.
+    pub fn identity(&self) -> Result<Identity, String> {
+        match self {
+            Source::File(p) => Identity::from_nor(p),
+            Source::Synthetic { model, seed, serial, guid } => {
+                let m = Model::lookup(model)
+                    .ok_or_else(|| format!("{model} is not a model number this program knows"))?;
+                match guid {
+                    Some(g) => Identity::provided(serial.as_deref(), *g),
+                    None => Ok(Identity::generate(m, *seed)),
+                }
+            }
+        }
+    }
+
+    /// The model, where it is known without reading anything.
+    pub fn model(&self) -> Option<&'static Model> {
+        match self {
+            Source::File(p) => {
+                let nor = std::fs::read(p).ok()?;
+                crate::inspect::syscfg(&nor)?.model_info()
+            }
+            Source::Synthetic { model, .. } => Model::lookup(model),
+        }
+    }
+
+    /// A stable string identifying this source, for cache keys.
+    ///
+    /// A synthesised ROM has no path, so keying a cache on one would give every generated machine
+    /// the same key — a 5.5G would restore a 5G's snapshot. The recipe is the identity, so the
+    /// recipe is the key.
+    pub fn cache_tag(&self) -> String {
+        match self {
+            Source::File(p) => p.to_string_lossy().into_owned(),
+            Source::Synthetic { model, seed, serial, guid } => format!(
+                "synthetic:{model}:{seed}:{}:{}",
+                serial.as_deref().unwrap_or("-"),
+                guid.map(|g| format!("{g:016X}")).unwrap_or_else(|| "-".into())
+            ),
+        }
+    }
+
+    /// One line for a person.
+    pub fn describe(&self) -> String {
+        match self {
+            Source::File(p) => {
+                let name = p.file_name().unwrap_or_default().to_string_lossy();
+                match crate::inspect::describe_rom(p, "iPod") {
+                    Some(d) => format!("{d} — from {name}"),
+                    None => format!("from {name}"),
+                }
+            }
+            Source::Synthetic { .. } => match (self.model(), self.identity()) {
+                (Some(m), Ok(id)) => format!(
+                    "generated — {} GB {}, {} · {}",
+                    m.capacity_gb,
+                    m.colour().label().to_lowercase(),
+                    m.generation.label(),
+                    id.serial.as_deref().unwrap_or("no serial")
+                ),
+                _ => "generated".to_string(),
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -49,9 +49,15 @@ impl Mode {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Settings {
     pub mode: Mode,
-    /// The NOR dump and the drive image the setup screen was pointed at. Absent until somebody
-    /// picks them, which is the state a fresh clone is in.
-    pub flash: Option<PathBuf>,
+    /// Where the boot ROM comes from — a dump, or a recipe for synthesising one.
+    ///
+    /// **Stored as a recipe rather than as a megabyte.** A synthesised ROM is a pure function of a
+    /// model, a seed and any typed-in identity, so persisting those regenerates it exactly and
+    /// leaves nothing on disk to go stale, to clean up, or to be mistaken for a real dump.
+    ///
+    /// The file case is still a path, and [`Settings::flash`] returns it — which is what the
+    /// recipes want, because they pass a path to a subprocess.
+    pub nor: crate::nor::Source,
     pub disk: Option<PathBuf>,
     /// Which iPod this is, cosmetically. Not an instrument — it is which iPod you had, so it lives
     /// in user mode and is remembered like the rest of the setup.
@@ -97,7 +103,21 @@ impl Settings {
             match k {
                 "mode" => s.mode = Mode::parse(v).unwrap_or_default(),
                 // Empty is "not set", which is what an editor that blanked a line means.
-                "flash" if !v.is_empty() => s.flash = Some(PathBuf::from(v)),
+                // The key an older settings file has. Still read, so an existing setup keeps its
+                // dump instead of silently switching to a generated one.
+                "flash" if !v.is_empty() => s.nor = crate::nor::Source::File(PathBuf::from(v)),
+                "nor_model" if !v.is_empty() => s.nor = with_model(s.nor.clone(), v),
+                "nor_seed" => {
+                    if let Ok(n) = v.parse::<u64>() {
+                        s.nor = with_seed(s.nor.clone(), n);
+                    }
+                }
+                "nor_serial" => s.nor = with_serial(s.nor.clone(), v),
+                "nor_guid" => {
+                    if let Ok(g) = u64::from_str_radix(v.trim_start_matches("0x"), 16) {
+                        s.nor = with_guid(s.nor.clone(), g);
+                    }
+                }
                 "disk" if !v.is_empty() => s.disk = Some(PathBuf::from(v)),
                 "chassis" => {
                     if let Some(c) = crate::identity::Colour::parse(v) {
@@ -115,6 +135,34 @@ impl Settings {
         s
     }
 
+    /// The path of a supplied dump, or `None` when the ROM is synthesised.
+    ///
+    /// The recipes hand a path to a subprocess, so they need this; a synthesised ROM has no path
+    /// and they say so rather than inventing one.
+    pub fn flash(&self) -> Option<PathBuf> {
+        match &self.nor {
+            crate::nor::Source::File(p) => Some(p.clone()),
+            crate::nor::Source::Synthetic { .. } => None,
+        }
+    }
+
+    /// The `nor` half of the settings file.
+    fn render_nor(&self) -> String {
+        match &self.nor {
+            crate::nor::Source::File(p) => format!("flash = {}\n", p.display()),
+            crate::nor::Source::Synthetic { model, seed, serial, guid } => {
+                let mut out = format!("nor_model = {model}\nnor_seed = {seed}\n");
+                if let Some(s) = serial {
+                    out.push_str(&format!("nor_serial = {s}\n"));
+                }
+                if let Some(g) = guid {
+                    out.push_str(&format!("nor_guid = {g:016X}\n"));
+                }
+                out
+            }
+        }
+    }
+
     pub fn render(&self) -> String {
         let p = |o: &Option<PathBuf>| {
             o.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
@@ -124,7 +172,7 @@ impl Settings {
              mode = {}\n\
              # white, black, or u2. Defaulted from the NOR's Mod# when one is chosen.\n\
              chassis = {}\n\
-             flash = {}\n\
+{}\
              disk = {}\n\
              # An HTTPS GET of the GitHub releases API and a version comparison, on launch.\n\
              # Off by default on purpose. The menu item works whatever this says.\n\
@@ -135,7 +183,7 @@ impl Settings {
              {}",
             self.mode.as_str(),
             self.chassis.as_str(),
-            p(&self.flash),
+            self.render_nor(),
             p(&self.disk),
             self.check_updates_on_start,
             match self.work_on_copy {
@@ -395,7 +443,7 @@ mod tests {
     fn a_missing_file_is_user_mode_with_nothing_configured() {
         let s = Settings::parse("");
         assert_eq!(s.mode, Mode::User);
-        assert_eq!(s.flash, None);
+        assert_eq!(s.flash(), None);
         assert_eq!(s.disk, None);
         assert!(!s.check_updates_on_start);
     }
@@ -414,13 +462,58 @@ mod tests {
         assert_eq!(Settings::parse("chassis = chartreuse").chassis, Colour::default());
     }
 
+    /// A synthesised ROM is stored as its recipe, and the recipe has to survive the file.
+    #[test]
+    fn a_synthetic_nor_round_trips_as_a_recipe_not_as_bytes() {
+        use crate::nor::Source;
+        let s = Settings {
+            nor: Source::Synthetic {
+                model: "A446".into(),
+                seed: 987654321,
+                serial: Some("AB1234XYZQR".into()),
+                guid: Some(0x000A_2700_1122_3344),
+            },
+            ..Settings::default()
+        };
+        let text = s.render();
+        // Stored as a few lines, not a megabyte.
+        assert!(text.contains("nor_model = A446"), "{text}");
+        assert!(text.contains("nor_seed = 987654321"), "{text}");
+        assert!(text.contains("nor_guid = 000A270011223344"), "{text}");
+        assert!(!text.contains("flash ="), "a synthetic ROM has no path: {text}");
+        assert_eq!(Settings::parse(&text).nor, s.nor);
+    }
+
+    /// **The key an older settings file uses still works.** Somebody who had pointed this at their
+    /// own dump must not silently get a generated iPod after an update.
+    #[test]
+    fn an_older_settings_file_keeps_its_dump() {
+        use crate::nor::Source;
+        let s = Settings::parse("flash = /somewhere/internal_rom.bin\ndisk = /somewhere/d.img\n");
+        assert_eq!(s.nor, Source::File(PathBuf::from("/somewhere/internal_rom.bin")));
+        assert_eq!(s.flash(), Some(PathBuf::from("/somewhere/internal_rom.bin")));
+    }
+
+    /// With nothing configured the ROM is generated rather than missing — which is the whole point
+    /// of the synthetic path, and it means a fresh clone has a working iPod to offer.
+    #[test]
+    fn a_fresh_install_defaults_to_a_generated_rom() {
+        let s = Settings::default();
+        assert_eq!(s.flash(), None, "nothing to load from disk");
+        let id = s.nor.identity().expect("a generated identity");
+        assert_eq!(id.guid >> 40, crate::identity::APPLE_OUI);
+        assert!(s.nor.bytes().expect("builds").len() == crate::inspect::NOR_LEN as usize);
+        // And it is a real, described machine rather than a blank.
+        assert!(s.nor.describe().contains("30 GB"), "{}", s.nor.describe());
+    }
+
     /// The round trip is the contract: whatever the window writes, the next launch reads back.
     #[test]
     fn settings_round_trip_through_the_file_format() {
         let s = Settings {
             mode: Mode::Debug,
             chassis: crate::identity::Colour::Black,
-            flash: Some(PathBuf::from("/a/b/rom.bin")),
+            nor: crate::nor::Source::File(PathBuf::from("/a/b/rom.bin")),
             disk: Some(PathBuf::from("/a/b/disk.img")),
             check_updates_on_start: true,
             work_on_copy: Some(true),
@@ -518,4 +611,37 @@ pub fn repo_root() -> PathBuf {
         return cwd;
     }
     PathBuf::from(".")
+}
+
+
+// Small helpers so a settings file can set the synthetic fields in any order, and so a `flash =`
+// line followed by `nor_model =` does the obvious thing rather than half of each.
+fn as_synth(src: crate::nor::Source) -> (String, u64, Option<String>, Option<u64>) {
+    match src {
+        crate::nor::Source::Synthetic { model, seed, serial, guid } => (model, seed, serial, guid),
+        crate::nor::Source::File(_) => match crate::nor::Source::default() {
+            crate::nor::Source::Synthetic { model, seed, serial, guid } => {
+                (model, seed, serial, guid)
+            }
+            crate::nor::Source::File(_) => unreachable!("the default is synthetic"),
+        },
+    }
+}
+
+fn with_model(src: crate::nor::Source, v: &str) -> crate::nor::Source {
+    let (_, seed, serial, guid) = as_synth(src);
+    crate::nor::Source::Synthetic { model: v.to_string(), seed, serial, guid }
+}
+fn with_seed(src: crate::nor::Source, n: u64) -> crate::nor::Source {
+    let (model, _, serial, guid) = as_synth(src);
+    crate::nor::Source::Synthetic { model, seed: n, serial, guid }
+}
+fn with_serial(src: crate::nor::Source, v: &str) -> crate::nor::Source {
+    let (model, seed, _, guid) = as_synth(src);
+    let serial = (!v.trim().is_empty()).then(|| v.trim().to_string());
+    crate::nor::Source::Synthetic { model, seed, serial, guid }
+}
+fn with_guid(src: crate::nor::Source, g: u64) -> crate::nor::Source {
+    let (model, seed, serial, _) = as_synth(src);
+    crate::nor::Source::Synthetic { model, seed, serial, guid: Some(g) }
 }

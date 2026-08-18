@@ -562,7 +562,7 @@ Keys: arrows scroll the wheel · Enter/Space select · M menu · P play · , / .
 /// Three files, and the third is load-bearing: `.frozen` is the drive as it stood when `.snap` was
 /// taken, and `.img` is the throwaway the machine actually writes to. See `emu::Config::frozen` for
 /// why a snapshot without its drive is not restorable.
-fn cache_paths(flash: &Path, disk: &Path, clock: usize, snap_at: u64) -> Cache {
+fn cache_paths(flash: &str, disk: &Path, clock: usize, snap_at: u64) -> Cache {
     let key = cache_key(flash, disk, clock, snap_at);
     let cache = settings::data_dir();
     let _ = std::fs::create_dir_all(&cache);
@@ -815,12 +815,31 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
     // machine from every number in research/ with nothing saying so.
     let root = settings::repo_root();
     let res = root.join("resources");
-    let flash = get("--flash=")
-        .map(PathBuf::from)
-        .or_else(|| saved.flash.clone())
-        .unwrap_or_else(|| {
-            res.join("roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin")
-        });
+    // Four answers, in order of how explicit they are. The last is the change: with nothing
+    // supplied at all the ROM is **synthesised** rather than missing, so a fresh clone has a
+    // working iPod instead of an error.
+    let nor = if let Some(p) = get("--flash=") {
+        eapp_loader::nor::Source::File(PathBuf::from(p))
+    } else if let Some(p) = saved.flash() {
+        eapp_loader::nor::Source::File(p)
+    } else if matches!(saved.nor, eapp_loader::nor::Source::Synthetic { .. })
+        && res.join("roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin").is_file()
+    {
+        // The gitignored `resources/` tree the recipes use, and only when it is actually there.
+        // This is `retail-boot.sh`'s default verbatim, because a checkout that quietly booted a
+        // *generated* ROM would produce a different machine from every number in research/ with
+        // nothing saying so.
+        eapp_loader::nor::Source::File(
+            res.join("roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin"),
+        )
+    } else {
+        saved.nor.clone()
+    };
+    // The display/inspect path. Empty for a synthesised ROM, which has none.
+    let flash = match &nor {
+        eapp_loader::nor::Source::File(p) => p.clone(),
+        eapp_loader::nor::Source::Synthetic { .. } => PathBuf::new(),
+    };
     let disk = get("--disk=")
         .map(PathBuf::from)
         .or_else(|| saved.disk.clone())
@@ -835,7 +854,7 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
     // reason. Measurement can still ask for the accelerant by name.
     let clock = num("--clock=", 75) as usize;
     let snap_at = num("--snap-at=", 1_600_000_000);
-    let cache = cache_paths(&flash, &disk, clock, snap_at);
+    let cache = cache_paths(&nor.cache_tag(), &disk, clock, snap_at);
     // A hand-given snapshot brings its own frozen drive, sitting beside it under the same stem.
     // Letting it fall back to the keyed one would pair a snapshot chosen by the user with a drive
     // chosen by the cache — which is the stale pair again, arrived at from a different direction.
@@ -878,6 +897,7 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
 
     Ok(emu::Config {
         flash,
+        nor,
         disk,
         workdisk,
         frozen,
@@ -997,7 +1017,7 @@ fn missing_images(cfg: &emu::Config) -> Option<String> {
 
 /// A short hash over everything that decides what the snapshot *is*. Not cryptographic — this is a
 /// cache key, and its only job is to change whenever the machine would.
-fn cache_key(flash: &std::path::Path, disk: &std::path::Path, clock: usize, snap_at: u64) -> String {
+fn cache_key(flash: &str, disk: &std::path::Path, clock: usize, snap_at: u64) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut eat = |b: &[u8]| {
         for x in b {
@@ -1005,7 +1025,7 @@ fn cache_key(flash: &std::path::Path, disk: &std::path::Path, clock: usize, snap
             h = h.wrapping_mul(0x100_0000_01b3);
         }
     };
-    eat(flash.to_string_lossy().as_bytes());
+    eat(flash.as_bytes());
     eat(disk.to_string_lossy().as_bytes());
     eat(&clock.to_le_bytes());
     eat(&snap_at.to_le_bytes());
@@ -1506,7 +1526,7 @@ impl App {
         self.cfg.disk = PathBuf::from(self.images.disk.trim());
         // The cache key includes both paths, so a different pair of images gets a different
         // snapshot rather than restoring one taken on the other machine.
-        let cache = cache_paths(&self.cfg.flash, &self.cfg.disk, self.cfg.clock, self.cfg.snap_at);
+        let cache = cache_paths(&self.cfg.nor.cache_tag(), &self.cfg.disk, self.cfg.clock, self.cfg.snap_at);
         // Measured, not deleted. Anything cached for a different pair of images -- or for an
         // older build of this emulator, which is the common case -- is reported and left alone.
         let (stale, paths) = reclaimable(&settings::data_dir(), &cache, self.cfg.work_on_copy);
@@ -1532,7 +1552,9 @@ impl App {
 
         // Remember what worked, so the next launch opens straight into the iPod.
         self.adopt_chassis_from_nor(&self.cfg.flash.clone());
-        self.settings.flash = Some(self.cfg.flash.clone());
+        // Only when there IS a file. A synthesised ROM has no path, and writing one here would
+        // turn "generate a 5.5G" into "load a file that is not there" on the next launch.
+        self.settings.nor = eapp_loader::nor::Source::File(self.cfg.flash.clone());
         self.settings.disk = Some(self.cfg.disk.clone());
         self.settings.save();
 
@@ -2543,7 +2565,7 @@ impl App {
     /// in Appearance, and a setting that will not stay set is worse than no setting. A dump whose
     /// `Mod#` is absent or unknown changes nothing — silence is not an instruction to go white.
     fn adopt_chassis_from_nor(&mut self, nor: &std::path::Path) {
-        if self.settings.flash.as_deref() == Some(nor) {
+        if self.settings.flash().as_deref() == Some(nor) {
             return;
         }
         let Ok(bytes) = std::fs::read(nor) else { return };
@@ -2558,7 +2580,10 @@ impl App {
         // is still the old pair's and the new one takes effect next launch. What is remembered is
         // what was *chosen*, because that is what the next launch will open.
         self.adopt_chassis_from_nor(&PathBuf::from(self.images.flash.trim()));
-        self.settings.flash = Some(PathBuf::from(self.images.flash.trim()));
+        let chosen = self.images.flash.trim();
+        if !chosen.is_empty() {
+            self.settings.nor = eapp_loader::nor::Source::File(PathBuf::from(chosen));
+        }
         self.settings.disk = Some(PathBuf::from(self.images.disk.trim()));
         self.settings.save();
         self.screen = if self.link.is_some() { Screen::Device } else { Screen::FirstRun };
@@ -3761,7 +3786,7 @@ mod tests {
     fn a_fresh_install_opens_in_user_mode_with_nothing_configured() {
         let s = Settings::default();
         assert_eq!(s.mode, Mode::User);
-        assert!(s.flash.is_none() && s.disk.is_none());
+        assert!(s.flash().is_none() && s.disk.is_none());
         assert!(!s.check_updates_on_start, "the update check is opt-in");
     }
 
@@ -3771,7 +3796,7 @@ mod tests {
     #[test]
     fn the_command_line_beats_the_remembered_paths_which_beat_the_defaults() {
         let saved = Settings {
-            flash: Some(PathBuf::from("/saved/rom.bin")),
+            nor: eapp_loader::nor::Source::File(PathBuf::from("/saved/rom.bin")),
             disk: Some(PathBuf::from("/saved/disk.img")),
             ..Default::default()
         };
@@ -3800,10 +3825,10 @@ mod tests {
     /// the only thing standing between this window and it.
     #[test]
     fn different_images_get_different_snapshots() {
-        let a = cache_key(Path::new("/a.bin"), Path::new("/x.img"), 5, 1_600_000_000);
-        let b = cache_key(Path::new("/b.bin"), Path::new("/x.img"), 5, 1_600_000_000);
-        let c = cache_key(Path::new("/a.bin"), Path::new("/x.img"), 75, 1_600_000_000);
-        let d = cache_key(Path::new("/a.bin"), Path::new("/x.img"), 5, 1_700_000_000);
+        let a = cache_key("/a.bin", Path::new("/x.img"), 5, 1_600_000_000);
+        let b = cache_key("/b.bin", Path::new("/x.img"), 5, 1_600_000_000);
+        let c = cache_key("/a.bin", Path::new("/x.img"), 75, 1_600_000_000);
+        let d = cache_key("/a.bin", Path::new("/x.img"), 5, 1_700_000_000);
         assert_ne!(a, b, "the NOR is part of the machine");
         assert_ne!(a, c, "so is the clock");
         assert_ne!(a, d, "so is where the snapshot was taken");
@@ -3814,7 +3839,7 @@ mod tests {
     /// or eats half the machine.
     #[test]
     fn the_working_disk_does_not_go_in_the_temp_directory_on_linux() {
-        let c = cache_paths(Path::new("/a.bin"), Path::new("/x.img"), 5, 1);
+        let c = cache_paths("/a.bin", Path::new("/x.img"), 5, 1);
         if cfg!(target_os = "linux") {
             for p in [&c.snap, &c.frozen, &c.work] {
                 assert!(!p.starts_with("/tmp"), "{}", p.display());

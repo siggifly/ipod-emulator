@@ -567,7 +567,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         // retail-boot.sh: the retail defaults, a writable per-run clone, then cold-boot.sh
         // --disk-writable "$@" — so --disk-writable lands ahead of the caller's own flags.
         Recipe::Retail => {
-            let (flash, flash_from) = resolve("FLASH", saved.flash.clone(), retail_flash());
+            let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
             let (src, disk_from) = resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g-retail.img"));
             let budget = env_u64("BUDGET", 150_000_000);
             let (work, cleanup) = match env_path("WORKDISK") {
@@ -600,7 +600,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         // trace BUDGET --osos= --boot-osos --osos-at=0x04000000 --sysinfo --flash= --disk=
         //       --bcm --pmu "$@"
         Recipe::Warm => {
-            let (flash, flash_from) = resolve("FLASH", saved.flash.clone(), retail_flash());
+            let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
             let (disk, disk_from) = resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
             let osos = env_path("OSOS").unwrap_or_else(|| res.join("derived/fw/OSOS_correct.bin"));
             let budget = env_u64("BUDGET", 600_000_000);
@@ -626,7 +626,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         //       --bcm --pmu --nor "$@"
         Recipe::Flsh => {
             let img = std::env::var("IMG").unwrap_or_else(|_| "diag".into());
-            let (flash, flash_from) = resolve("FLASH", saved.flash.clone(), retail_flash());
+            let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
             let (disk, disk_from) = resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
             let osos = res.join(format!("derived/fw/flsh/{img}.bin"));
             let budget = env_u64("BUDGET", 200_000_000);
@@ -651,7 +651,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         // trace BUDGET --osos=$RB/$IMG --boot-osos --flash= --disk= --sysinfo --bcm --pmu "$@"
         Recipe::Rockbox => {
             let img = std::env::var("IMG").unwrap_or_else(|_| "rb-main.raw".into());
-            let (flash, flash_from) = resolve("FLASH", saved.flash.clone(), retail_flash());
+            let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
             let (disk, disk_from) = resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
             let osos = res.join("vendor/rockbox/bin").join(&img);
             let budget = env_u64("BUDGET", 200_000_000);
@@ -675,7 +675,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         // Two boots of the same argv, against a disk whose firmware partition was written from the
         // pristine bundle. The first is the update; the second is the proof that the update took.
         Recipe::FlashUpdate => {
-            let (flash, flash_from) = resolve("FLASH", saved.flash.clone(), retail_flash());
+            let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
             let srcdisk =
                 env_path("SRCDISK").unwrap_or_else(|| res.join("drives/ipod8g.img"));
             let fw = env_path("FW").unwrap_or_else(|| res.join("derived/fw/Firmware-20.6.3"));
@@ -714,7 +714,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             let snap_at = env_u64("SNAP_AT", 1_600_000_000);
             let budget = env_u64("BUDGET", 60_000_000);
             let cache = env_path("CACHE").unwrap_or_else(|| std::env::temp_dir().join("ipod-from-idle"));
-            let (flash, flash_from) = resolve("FLASH", saved.flash.clone(), retail_flash());
+            let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
             let (src, disk_from) = resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g-retail.img"));
 
             // Keyed on the emulator binary, and this is the load-bearing line in the file: a
@@ -802,7 +802,7 @@ fn setup() -> Result<(), String> {
     );
 
     // The NOR dump. No way to build one — it comes off an iPod, or an archive of one.
-    let flash = ask("NOR dump (1 MB, e.g. internal_rom_000000-0FFFFF.bin)", s.flash.as_deref())?;
+    let flash = ask("NOR dump (1 MB, e.g. internal_rom_000000-0FFFFF.bin)", s.flash().as_deref())?;
     if let Some(p) = &flash {
         let v = inspect::flash(p);
         println!("  {}\n", v.text());
@@ -813,7 +813,7 @@ fn setup() -> Result<(), String> {
                 return Err("nothing saved".into());
             }
         }
-        s.flash = Some(p.clone());
+        s.nor = eapp_loader::nor::Source::File(p.clone());
     }
 
     // The drive, or the .ipsw one is built from. `make-disk` is right here, so offer it rather

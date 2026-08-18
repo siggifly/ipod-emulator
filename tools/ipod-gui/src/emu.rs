@@ -75,7 +75,12 @@ pub const WATCHED: [(u32, &str); 5] = [
 /// other eighteen fields to do it.
 #[derive(Clone, Default)]
 pub struct Config {
+    /// The path a supplied dump came from. Empty when the ROM is synthesised — [`Config::nor`] is
+    /// what actually produces the bytes.
     pub flash: PathBuf,
+    /// Where the boot ROM comes from. A synthesised one is built here, in memory, from a recipe:
+    /// there is no file, nothing to cache and nothing to go stale.
+    pub nor: eapp_loader::nor::Source,
     /// The pristine image. Never written — a per-run clone is.
     pub disk: PathBuf,
     /// The writable clone the machine actually runs against. Re-made every launch.
@@ -662,8 +667,20 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         }
     }
 
-    let flash = std::fs::read(&cfg.flash)
-        .map_err(|e| format!("{}: {e}", cfg.flash.display()))?;
+    let flash = cfg.nor.bytes()?;
+    // **A synthesised ROM carries no boot code**, only the identity block. Executing it would
+    // branch to 0x8000, find zeros, and hang — a machine that looks like it is running and never
+    // draws. Refused with the reason until the high-level boot path lands, because a clear error
+    // beats a hang nobody can diagnose.
+    if eapp_loader::nor::is_synthetic(&flash) {
+        return Err(
+            "this boot ROM was synthesised, and the high-level boot that goes with it is not \n\
+             built yet (ROADMAP M5). A synthesised ROM carries the identity block but no code, so \n\
+             there is nothing to execute.\n\n\
+             Point this at a real 1 MiB NOR dump for now — the window's Boot ROM row takes one."
+                .to_string(),
+        );
+    }
     let size = flash.len() as u32;
     // Cold boot: the flash also answers at 0, where the CPU fetches out of reset. Inserted at the
     // front so it wins the first-match lookup for low addresses.
