@@ -763,6 +763,18 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // the GUI would be showing a true picture of a machine configured not to work.
     let mut bcm = Bcm::new(0x3000_0000);
     bcm.registry = true;
+    // The boot screen. A real NOR carries a `logo` image and Apple's bootloader blits it; a
+    // synthesised one has none, and could not carry Apple's artwork if it wanted to. So the
+    // project's own mark goes up instead, in the colours the model boots in — white iPods dark on
+    // white, black and U2 white on black.
+    if synthetic {
+        if let Some(model) = cfg.nor.model() {
+            let px = eapp_loader::nor::boot_screen(model.colour(), FB_W, FB_H);
+            for (i, v) in px.iter().enumerate() {
+                bcm.mem.insert(FB_FRONT + (i as u32) * 2, *v);
+            }
+        }
+    }
     m.mem.bcm = Some(bcm);
 
     let mut w = ClickWheel::new(0x7000_c000);

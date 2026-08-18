@@ -2045,5 +2045,23 @@ fn make_nor_cmd(args: &[String]) -> Result<(), String> {
         eapp_loader::identity::Source::RealDevice => "read from real hardware",
     });
     println!("  {} bytes, marked as synthetic", image.len());
+
+    // --preview=PATH.png : what this iPod shows while it boots. A white case boots dark-on-white,
+    // a black one and the U2 white-on-black -- the model number decides that, like it decides the
+    // colour of the plastic.
+    if let Some(png_path) = flag("--preview") {
+        let (w, h) = (320usize, 240usize);
+        let px = nor::boot_screen(model.colour(), w, h);
+        let mut rgb = vec![0u8; w * h * 3];
+        for (i, p) in px.iter().enumerate() {
+            let (r, g, b) = ((p >> 11) & 0x1f, (p >> 5) & 0x3f, p & 0x1f);
+            rgb[i * 3] = ((r << 3) | (r >> 2)) as u8;
+            rgb[i * 3 + 1] = ((g << 2) | (g >> 4)) as u8;
+            rgb[i * 3 + 2] = ((b << 3) | (b >> 2)) as u8;
+        }
+        std::fs::write(png_path, eapp_loader::png::encode(&rgb, w, h))
+            .map_err(|e| format!("{png_path}: {e}"))?;
+        println!("  boot screen -> {png_path}");
+    }
     Ok(())
 }

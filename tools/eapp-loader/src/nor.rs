@@ -219,6 +219,66 @@ pub fn handoff(identity: &Identity, model: &Model, syscfg: &[u8]) -> Vec<u8> {
     b
 }
 
+/// The boot screen a synthesised iPod shows, as RGB565 pixels for a `w`×`h` panel.
+///
+/// ## Why this exists at all
+///
+/// A real NOR carries a `logo` image and Apple's bootloader blits it — 62×78 pixels to
+/// `(129,81)`, measured in `research/14`. A **synthesised** NOR has no such image, and it could not
+/// carry Apple's if it did: that artwork is Apple's, and a generated ROM handing it out is a
+/// generated ROM redistributing it. So this draws the project's own mark instead — a click wheel
+/// outline, which is the iPod's most recognisable shape and is not a trademark.
+///
+/// ## The colours are the hardware's, not a choice
+///
+/// A white iPod boots to a **dark logo on white**; a black one and the U2 boot to a **white logo on
+/// black**. So the screen follows the model number, like everything else about the case — the same
+/// `Mod#` that decides the colour of the plastic decides the colour of this.
+pub fn boot_screen(colour: crate::identity::Colour, w: usize, h: usize) -> Vec<u16> {
+    use crate::identity::Colour;
+    // RGB565. The panel is 16-bit, and 0 is black, so a white background has to be written.
+    const WHITE: u16 = 0xffff;
+    const BLACK: u16 = 0x0000;
+    // Not pure black on white: the real logo is a dark grey-black shape, and pure 0 on 0xffff
+    // rings harshly on an LCD this small.
+    const INK_DARK: u16 = 0x2104;
+
+    let (bg, fg) = match colour {
+        Colour::White => (WHITE, INK_DARK),
+        // Black and the U2 both boot white-on-black. The U2's red is the WHEEL, not the case, and
+        // not the boot screen.
+        _ => (BLACK, WHITE),
+    };
+
+    let mut fb = vec![bg; w * h];
+
+    // The rectangle Apple's own logo occupies, so ours sits exactly where a real one would.
+    const LOGO_W: f32 = 62.0;
+    const LOGO_H: f32 = 78.0;
+    let cx = (w as f32) / 2.0;
+    let cy = (h as f32) / 2.0;
+    // The wheel is round, so the short side bounds it.
+    let outer = LOGO_W.min(LOGO_H) / 2.0 - 1.0;
+    // The same proportion the window draws the real wheel at: the centre button is 0.34 of the
+    // wheel's radius.
+    let inner = outer * 0.34;
+    let stroke = 2.0;
+
+    for y in 0..h {
+        for x in 0..w {
+            let dx = x as f32 + 0.5 - cx;
+            let dy = y as f32 + 0.5 - cy;
+            let d = (dx * dx + dy * dy).sqrt();
+            let on_outer = (d - outer).abs() <= stroke / 2.0;
+            let on_inner = (d - inner).abs() <= stroke / 2.0;
+            if on_outer || on_inner {
+                fb[y * w + x] = fg;
+            }
+        }
+    }
+    fb
+}
+
 /// Whether this image was made by [`synthesise`] rather than read off an iPod.
 pub fn is_synthetic(nor: &[u8]) -> bool {
     nor.get(SYNTH_MARK_AT..SYNTH_MARK_AT + SYNTH_MARK.len()) == Some(SYNTH_MARK)
@@ -454,6 +514,38 @@ mod tests {
                 .colour();
             assert_eq!(got, want, "{num}");
         }
+    }
+
+    /// **The colour rule is the hardware's.** A white iPod boots dark-on-white; a black one and
+    /// the U2 boot white-on-black. Getting this backwards would be visible in the first frame.
+    #[test]
+    fn the_boot_screen_follows_the_case_colour() {
+        use crate::identity::Colour;
+        let (w, h) = (320usize, 240usize);
+
+        let white = boot_screen(Colour::White, w, h);
+        let black = boot_screen(Colour::Black, w, h);
+        let u2 = boot_screen(Colour::U2, w, h);
+        assert_eq!(white.len(), w * h);
+
+        // A corner is background, and the two backgrounds are opposites.
+        assert_eq!(white[0], 0xffff, "a white iPod boots to a white screen");
+        assert_eq!(black[0], 0x0000, "a black iPod boots to a black screen");
+        // The U2 is a black case with a red WHEEL -- its boot screen is the black one, not a red
+        // one, and not the white one.
+        assert_eq!(u2, black, "the U2 boots exactly as the black iPod does");
+
+        // The mark is drawn, and in the foreground colour.
+        let ink_white_case = white.iter().filter(|&&p| p != 0xffff).count();
+        let ink_black_case = black.iter().filter(|&&p| p != 0x0000).count();
+        assert!(ink_white_case > 200, "nothing was drawn on the white case: {ink_white_case}");
+        assert!(ink_black_case > 200, "nothing was drawn on the black case: {ink_black_case}");
+        // Two rings of the same geometry, so the same number of pixels either way.
+        assert_eq!(ink_white_case, ink_black_case);
+
+        // It is a RING, not a disc: the centre is background on both.
+        assert_eq!(white[(h / 2) * w + w / 2], 0xffff, "the middle must be empty");
+        assert_eq!(black[(h / 2) * w + w / 2], 0x0000, "the middle must be empty");
     }
 
     /// A generated ROM must be recognisable as generated, and a real one must not trip the check.
