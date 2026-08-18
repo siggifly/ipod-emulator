@@ -220,8 +220,33 @@ bus that spans an entire transaction, giving 820 306 µs for a "pulse".
 per write, the intervals inside one unit are readable, and up-versus-down should fall out
 immediately — after which the level is a count of units in a direction, not a guess.
 
-**How you would know it is fixed:** one click produces one unit; the intervals classify it up or
-down; the level tracks the slider monotonically; and menu scrolling changes nothing.
+**And the interval measurement retires that whole line of attack — 2026-08-18.** With `usec` in the
+log, one step down and one step up were captured and compared:
+
+```
+  DOWN   0 0 0 0 0  1 0  2 0 0 0  1 0 0 0  30  0 0 0 0  1 0     (us between writes)
+  UP     0 0 0 0 0  0 0  3 0 0 0  1 0 0 0  30  0 0 0 0  1 0
+```
+
+Identical structure, the same 30 µs gap in the same place, 1–3 µs of jitter and nothing else. So the
+direction is **not** in the bytes, **not** in the writer PCs, and **not** in the timing.
+
+**Which means the "found it" above was over-claimed, and the control was confounded again.** The
+argument was: arm 2 changed nothing because brightness had nowhere to go. The truer reading is that
+with the slider already at the floor **nothing redrew** — and arm 3 shows this window answers to
+redraws hard (`d80c` +1214, `d82c` +434 for a menu scroll that changes no brightness at all). Arm 1
+changed brightness *and* redrew the slider bar, so its traffic is explained by the redraw alone.
+Varying two things together is the same mistake as before, better disguised.
+
+**Honest state: brightness produces no observable MMIO write in any window yet watched** — GPIO A–D,
+the `0x6000d800` bank, the PMU's registers, the `0x70000000` window, unmapped space. The one path
+that is structurally invisible to `--watch-writes` is the video co-processor, which RetailOS feeds
+by DMA, and that is where this now points. It makes brightness a facet of ledger **#6** rather than
+a defect of its own.
+
+**How you would know it is fixed:** a control that varies brightness while holding *redraw* constant
+— not merely wheel movement — shows traffic, and the level tracks the slider monotonically while
+menu scrolling changes nothing.
 
 This is the fifth model defect in this project first attributed to missing hardware and found to be
 a misread of a signal we already had.
