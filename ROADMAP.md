@@ -58,7 +58,7 @@ with six devices that all half-work.
 | Rockbox 4.0 | **boots to its main menu and takes wheel input** (2026-08-18). Beyond the menu: unverified. No sound |
 | iPodLinux | **a verified 5.5G-correct kernel has been located** (ZeroSlackr `vmlinux`, 1 531 200 bytes, raw-ARM magic confirmed) and not yet fetched. `ipodloader2` is vendored as source and not yet built |
 | Our own bootloader / OS | not started, and deliberately not designed for yet |
-| Bypass ledger | 5 active entries: #4, #6, #7, #11, #17 |
+| Bypass ledger | 5 active entries: #4, #6, #7, #11, #17 — and #7 now has a second consumer to be tested against |
 | Audio | **nothing modelled.** The Wolfson codec answers no I²C; Rockbox is now talking to it and getting silence back |
 | USB | nothing modelled beyond a clock-ready bit |
 | Titles | purchased/decrypted games do not launch — the identity Apple's DRM binds to is understood, the keystore is not |
@@ -121,22 +121,25 @@ but a person at the window would not see it, so it wants confirming interactivel
 **Depends on:** nothing. **Settled by:** driving Rockbox's menus from the window and reaching its
 file browser on a real volume.
 
-## M2 · The oracle instrument
+## M2 · The oracle instrument *(built; now a standing job)*
 
-Running several stacks is not the instrument. The instrument is a **register-agreement table**: for
-every MMIO address, which implementations touch it, and do they agree.
+**Built 2026-08-18** — [research/15](research/15-the-register-agreement-table.md). Same instrument
+on both stacks, diffed: **93 addresses, 18 both, 56 RetailOS-only, 19 Rockbox-only**, each named
+from Rockbox's own `pp5020.h`.
 
-Half of it exists — `--input-regs` already enumerates addresses read before ever written, which is
-literally the list of places this emulator invents. Run it per stack and diff, and the four-way
-split falls out mechanically:
+It found something on its first run that no amount of RetailOS work could have: **`MBX_MSG_STAT`
+(`0x60001000`) is read 52 868 892 times by Rockbox and never by RetailOS**, first from
+`switch_thread` — Rockbox's scheduler leaning on a CPU↔COP mailbox this emulator does not model at
+all, at the rate of a spin loop. It sits directly under every timing claim that could be made about
+Rockbox here.
 
-- touched by all, same expectation → **hardware behaviour**
-- touched by one → **OS-specific**
-- read-before-written by all, invented by us → **an emulator assumption, ranked by how many stacks
-  depend on it**
+It also gave ledger **#7** its second consumer: `COP_CTL` is read by Rockbox and not by RetailOS, so
+`--cop-awake` finally has something other than Apple's firmware to be tested against.
 
-**Depends on:** M1 (a second stack that runs long enough to touch things).
-**Settled by:** a generated table in `research/`, and at least one ledger row moved because of it.
+**Left:** regenerate it whenever a stack is added or a device model changes — that is the R4 rule
+(*a new instrument's first job is to re-run the conclusions the old one produced*) applied to a
+table instead of a flag. And the standing caveat: it reports reads-before-writes, so it is a floor
+on where we invent, never a ceiling.
 
 ## M3 · Install an OS, don't warm-enter one
 
