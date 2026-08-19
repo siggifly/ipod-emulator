@@ -955,6 +955,16 @@ reading.
 > our COP's *presence* does. The coprocessor entered here at the same reset vector as the CPU and its
 > stack is not something this project has yet established — that is the next measurement, and it is
 > the same open question as ledger #7's default.
+>
+> **One measurement toward it, taken the same day.** On a cold boot with `--second-core`, the
+> coprocessor ends 400 M instructions at **`pc 0x00000734`**, having run 291 612 061 of its own and
+> slept and woken four times. `0x734` is in **Apple's boot ROM**, not in Rockbox — so on the cold
+> path our COP spends the whole run executing Apple's startup code beside the CPU, and it is
+> executing it *as the CPU would*: the same instructions set the same stack pointer, because they
+> are the same instructions. Two cores writing one stack is a mechanism that would produce exactly
+> the byte-shaped corruption above without anything else being wrong. What Apple's ROM does with a
+> core that reads `PROC_ID` as `0xAA` — and where it expects that core's stack to be — is the thing
+> to read next, and this project has the disassembly to read it.
  Everything measured on the cold path before this is fixed is measured through it — R4.
 ## 2026-08-18, later still: the menu's font was never on the volume the recipe mounts
 
