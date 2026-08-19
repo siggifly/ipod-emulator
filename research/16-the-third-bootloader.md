@@ -590,6 +590,48 @@ not ipodloader2's own headers. Two PCs a few instructions apart, inside the inte
 reading it four million times. That is the next question, and it is a much better one than the one
 this note started with.
 
+### `--rdval=0x70000000` is an ABLATION, not a fake — and I had to break the machine to be sure
+
+**2026-08-19.** The `loader` recipe's `--rdval=0x70000000=0x3232432D` looks exactly like the thing
+this project is trying to delete: a per-guest value that one operating system needs. So it was
+attacked on the theory that the register should simply be truthful for everybody, and the attack
+**failed in a way worth keeping**.
+
+The reasoning that started it was: Apple's own boot ROM writes its `IsyS` tag and pointer to
+`0x4001ff18`/`0x4001ff1c` and **never touches `0x40017f18`** — measured — and those are precisely
+the two addresses `ipodhw.c`'s `ipod_set_sysinfo` picks between on the strength of this register. So
+the ROM appeared to have already answered the question about its own part, and `PP5022C-` looked
+like the honest reading.
+
+It is not. `0x70000000`/`0x70000004` were made read-only and seeded with `PP5022C-`, and **the
+retail boot went from 599 ATA commands to 0.** Apple's bootloader reads bits 16..23 and wants
+`0x36`; handed `0x32` it takes a path it cannot finish. That is the outcome this file predicted
+before the experiment, and `lib.rs` already carried the measurement and the decision in a comment
+nobody re-read:
+
+> *Apple's bootloader reads bits 16..23 and compares against `0x36`, taking its PP5021C path when it
+> matches… `ipodloader2` reads the same bits and compares against `0x32`… Two drivers want different
+> answers from one register, and Apple's is the one measured off real firmware, so it wins.*
+
+**So the machine was already right, and the sysinfo-pointer inference was wrong** — where the ROM
+parks that pointer is a statement about IRAM size, not about the part's name. Reverted; 599 ATA and
+2 916 non-black pixels restored.
+
+**The distinction this buys is the useful part.** Two different things wear the same `--rdval`
+costume:
+
+| | what it covers | what to do |
+|---|---|---|
+| a **fake** | our own failure to model a register | delete it by modelling the register |
+| an **ablation** | a defect in the *guest*, on hardware we emulate correctly | keep it, label it, never put it in a recipe that measures the machine |
+
+This one is the second kind. **This is a PP5021C, its byte is `'6'`, and `ipod_is_pp5022()`
+correctly answers false** — the bug is that `ipodloader2` only distinguishes PP5022 from
+everything-else and has no PP5021C path, so it falls back to 1G addressing. Forcing `'2'` is
+telling the loader a lie that happens to route it past its own missing branch, which is a legitimate
+thing to do on purpose and an illegitimate thing to do silently. It belongs in the ledger beside
+`--force-sem`, and the `loader` recipe should say so on the line that passes it.
+
 ### The recipe, which was the actual blocker — 2026-08-19
 
 This file recorded the numbers and not the command that produced them, and the cost of that was a
