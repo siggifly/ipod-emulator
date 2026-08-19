@@ -1032,8 +1032,48 @@ reading.
 > | 1000 | 113 | 0 |
 >
 > That is worth having: the wake edge *was* a granularity bug and this is not one, so the whole
-> class is ruled out rather than suspected. Two cores are now genuinely running Rockbox's own
-> synchronisation primitive and one of them is not getting what it waits for.
+> class is ruled out rather than suspected.
+>
+> ### And then the livelock turned out not to exist — 2026-08-19
+>
+> **Three claims in the paragraph above are wrong, and the controls are what killed them.**
+>
+> **It is not the corelock.** `0x86300` symbolises against Rockbox's own link map as
+> `switch_thread+0x6c`, and `0x845dc` — the call from it — is `corelock_unlock`, not a lock
+> acquisition. `objdump` on the ELF shows `86310..86348` is `core_sleep()` inlined: write
+> `PROC_SLEEP` to `CPU_CTL` (`r9` = `0x60007000`, from the pool at `+0x180`), then spin on
+> `[0x60001000]` — the mailbox — until this core's bit clears. Both cores idling in the scheduler is
+> what a booted Rockbox *does*.
+>
+> **It is not a starved tick, and the control says so.** The cold run reports 13 153 408 interrupts
+> asserted against 332 taken, 1 593 halts, 14 336 ms halted in 16 s — which looks alarming until the
+> **warm boot that reaches the menu** is measured the same way: 6 683 180 asserted, 228 taken, 771
+> halts, 7 036 ms halted in 8 s. Normalised, the two are the same machine — 100 halts/s against 96,
+> 21 interrupts/s against 28. The IDE interrupt is `DELIVERED to a handler 0 times, enabled=0,
+> pending=1` in **both**, because Rockbox polls the status register. An alarming ratio with no
+> control beside it is not a finding.
+>
+> **And it is not stuck.** Symbolising the whole novelty map, cold enters 347 distinct functions and
+> ends at `usb_start_monitoring` → `button_get_w_tmo` → `ata_event` → `ata_spindown` →
+> `query_force_shutdown`. `ata_init`, `disk_mount_all`, `disk_mount` and `fat_mount` all run, in
+> both arms. It boots, mounts the volume, and sits in the main input wait.
+>
+> **The panel was the instrument, not the machine.** `--bcm-dump=0xE0000` is where *RetailOS* keeps
+> its surface; reading it after a Rockbox boot and finding black says nothing about whether Rockbox
+> drew. The write census says it did: **283 480 halfwords and 4 frame updates**.
+>
+> ### What is actually different, measured
+>
+> | | address latches | the HI half is written to |
+> |---|---|---|
+> | warm — reaches the menu | **156** | `0x10002` |
+> | cold | **81 718** | `0x10000` |
+>
+> Five hundred times the latch traffic, and the high half of the address register going to the
+> **same offset as the low half** instead of the one beside it. That is one bug or two, it is in the
+> display path rather than the scheduler, and it is the whole of the remaining question. It is also
+> the right *kind* of question: the only thing that differs between these two arms is what Apple's
+> bootloader left in the co-processor before Rockbox took it over.
 >
 > **One measurement toward it, taken the same day.** On a cold boot with `--second-core`, the
 > coprocessor ends 400 M instructions at **`pc 0x00000734`**, having run 291 612 061 of its own and
