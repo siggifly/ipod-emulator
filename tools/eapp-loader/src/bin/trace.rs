@@ -682,7 +682,7 @@ fn main() {
                     w.script.len()
                 );
                 for s in &w.script {
-                    println!("    @{:<12} {}", s.at, eapp_loader::wheel_step_name(s.event));
+                    println!("    @{:<14} {}", s.when(), eapp_loader::wheel_step_name(s.event));
                 }
             }
             m.mem.clickwheel = Some(w);

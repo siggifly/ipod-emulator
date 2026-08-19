@@ -622,8 +622,8 @@ fn a_script_expands_to_the_steps_it_prints_and_a_bad_one_is_refused() {
     use eapp_loader::*;
     let s = parse_wheel_script("@1000:press=select", 25).expect("script");
     assert_eq!(s.len(), 2);
-    assert_eq!(s[0], WheelStep { at: 1000, event: WheelEvent::Button(WHEEL_SELECT, true) });
-    assert_eq!(s[1], WheelStep { at: 1025, event: WheelEvent::Button(WHEEL_SELECT, false) });
+    assert_eq!(s[0], WheelStep::instr(1000, WheelEvent::Button(WHEEL_SELECT, true)));
+    assert_eq!(s[1], WheelStep::instr(1025, WheelEvent::Button(WHEEL_SELECT, false)));
     assert_eq!(wheel_step_name(s[0].event), "down=select");
 
     // `+N` is relative to the previous step's *last* expanded click, so a sequence stays in order.

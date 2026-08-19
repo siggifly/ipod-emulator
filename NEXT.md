@@ -616,13 +616,35 @@ Until it is measured, the window's `power off` and `restart` stay what they are 
 they are: dropping the machine is the equivalent of pulling the battery, not the sleep chord, and
 the hover text now says so and points at the key that is.
 
-## 4c — `--wheel` scripts do not fire under `ipod-film`
+## 4c — ~~`--wheel` scripts do not fire under `ipod-film`~~ · **SETTLED 2026-08-19 — it was the unit**
 
-Measured 2026-08-19 on a Rockbox run: `script: 0 of 20 steps fired`, on a 2 G budget with the first
-step at `@1600M`. The same mechanism works under `ipod-film` for `diag`, where the tour's four steps
-fired and drove the whole menu — so it is not "the film ignores the wheel", and the difference has
-not been isolated. **Any claim that Rockbox does or does not take input is untested until this is**,
-including the picture of it that used to be in the README and has been withdrawn.
+The film was not the cause and neither was Rockbox. **`--wheel` anchors in *executed instructions*,
+and a machine sitting at a menu spends most of its budget halted**, so the two diverge silently:
+
+```
+IMG=rb-main.raw BUDGET=200000000 ... --wheel="@50M:touch,+10M:down=select,+30M:up=select,+10M:release"
+  script: 2 of 4 steps fired          <- with and WITHOUT the film, identically
+```
+
+Under a 200 M budget it executed under 90 M. So a script anchored at `@1600M` over a 2 G budget
+fired **0 of 20 steps**, and that read as "Rockbox ignores the wheel". It does not — the press never
+happened.
+
+A step may now be anchored in **simulated time** instead: `@12s`, `+250ms`. Same script, same drive,
+same everything else:
+
+```
+--wheel="@12s:touch,+1s:down=select,+1s:up=select,+2s:release"
+  script: 4 of 4 steps fired
+  bcm: 34 commands kicked, 34 frame updates      (23 with no input)
+```
+
+and Rockbox opens its file browser.
+
+**Instructions stay the default and stay right for measurement** — reproducible, unmoved by how much
+the machine slept, which is what every calibrated recipe here depends on. Seconds are for driving a
+user interface, which is what the firmware's own timers measure. A script must use one or the other
+throughout; mixing is refused rather than resolved by a rule nobody would remember.
 
 ## 5 — Standing, unblocked, small
 

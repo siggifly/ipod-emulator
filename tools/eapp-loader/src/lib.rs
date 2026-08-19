@@ -4363,9 +4363,46 @@ pub struct ClickWheel {
 /// `research/` is instruction-anchored (`OptoTask` enters `@49678867`), and so is this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WheelStep {
-    /// Instruction count at which this step fires.
+    /// When this step fires — an executed-instruction count, or a moment in simulated
+    /// microseconds when [`WheelStep::in_usec`] is set.
     pub at: u64,
+    /// Read `at` as simulated microseconds rather than as executed instructions.
+    ///
+    /// **The two diverge on a machine that idles, and the failure is silent.** Instructions are the
+    /// right anchor for a measurement — reproducible, and unmoved by how much the machine slept —
+    /// which is why they are the default and why every calibrated recipe here uses them. But a
+    /// machine sitting at a menu spends most of its budget halted: measured on Rockbox, a 200 M
+    /// budget executed under 90 M, so a script anchored at `@1600M` over a 2 G budget fired
+    /// **0 of 20 steps** and read as "Rockbox ignores the wheel". It does not. The press never
+    /// happened.
+    ///
+    /// So driving a user interface wants the unit a person means and the firmware's own timers
+    /// use: `@20s`, not `@1500M`.
+    pub in_usec: bool,
     pub event: WheelEvent,
+}
+
+impl WheelStep {
+    /// A step at an executed-instruction count.
+    pub fn instr(at: u64, event: WheelEvent) -> WheelStep {
+        WheelStep { at, in_usec: false, event }
+    }
+    /// A step at a moment in simulated microseconds.
+    pub fn usec(at: u64, event: WheelEvent) -> WheelStep {
+        WheelStep { at, in_usec: true, event }
+    }
+    /// Whether this step is due, given both clocks.
+    pub fn due(&self, icount: u64, usec: u64) -> bool {
+        self.at <= if self.in_usec { usec } else { icount }
+    }
+    /// `@2 000 000 us` or `@150M`, for the schedule a run prints so a log reproduces itself.
+    pub fn when(&self) -> String {
+        if self.in_usec {
+            format!("{} us", self.at)
+        } else {
+            format!("{}", self.at)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4697,8 +4734,36 @@ pub fn parse_wheel_script(spec: &str, click_instr: u64) -> Result<Vec<WheelStep>
     /// Enough for a hundred full rotations; beyond that a script is a stress test, not a sequence,
     /// and would push the printed schedule past anything a run report can carry.
     const MAX_STEPS: usize = 16384;
-    let number = |t: &str| -> Result<u64, String> {
+    // **Two units, and the difference is not cosmetic.**
+    //
+    // `2M` is two million *executed* instructions. That is the right anchor for a measurement,
+    // because it is reproducible and does not move when the machine idles — which is why it is the
+    // original and stays the default.
+    //
+    // It is the wrong anchor for **driving a user interface**, and the failure is silent. A machine
+    // sitting at a menu spends most of its budget halted: measured on Rockbox, a 200 M budget
+    // executed under 90 M, so a script anchored at `@1600M` on a 2 G budget fired **0 of 20 steps**
+    // and read as "Rockbox ignores the wheel". It does not; the press never happened.
+    //
+    // So `2s` / `250ms` anchor in **simulated time**, which is what a person means by "press it
+    // twenty seconds in" and what the firmware's own timers measure. `CLOCK` instructions per
+    // simulated microsecond is the conversion, and the run's printed schedule shows the resolved
+    // instruction counts either way.
+    // Returns the value and whether it is simulated microseconds.
+    let number = |t: &str| -> Result<(u64, bool), String> {
         let t = t.replace('_', "");
+        if let Some(d) = t.strip_suffix("ms") {
+            return d
+                .parse::<u64>()
+                .map(|v| (v * 1_000, true))
+                .map_err(|_| format!("not a number of milliseconds: {d:?}"));
+        }
+        if let Some(d) = t.strip_suffix('s') {
+            return d
+                .parse::<u64>()
+                .map(|v| (v * 1_000_000, true))
+                .map_err(|_| format!("not a number of seconds: {d:?}"));
+        }
         let (digits, mul) = match t.strip_suffix(['k', 'K']) {
             Some(d) => (d.to_string(), 1_000u64),
             None => match t.strip_suffix(['m', 'M']) {
@@ -4708,23 +4773,47 @@ pub fn parse_wheel_script(spec: &str, click_instr: u64) -> Result<Vec<WheelStep>
         };
         digits
             .parse::<u64>()
-            .map(|v| v * mul)
+            .map(|v| (v * mul, false))
             .map_err(|_| format!("not a number: {t:?}"))
     };
     let mut out: Vec<WheelStep> = Vec::new();
     let mut prev = 0u64;
+    // **One unit per script.** Mixing "at 20 seconds" with "1.5 million instructions later" reads
+    // like it means something and does not: the two clocks run at different rates whenever the
+    // machine idles, so the second step's position would depend on how much it slept. Refused
+    // rather than resolved by a rule nobody would remember.
+    let mut in_usec: Option<bool> = None;
     for raw in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {
         let (when, action) = raw
             .split_once(':')
             .ok_or_else(|| format!("step {raw:?} has no ':' — expected @N:ACTION or +N:ACTION"))?;
-        let at = match when.chars().next() {
+        let (at, unit) = match when.chars().next() {
             Some('@') => number(&when[1..])?,
-            Some('+') => prev + number(&when[1..])?,
+            Some('+') => {
+                let (d, u) = number(&when[1..])?;
+                (prev + d, u)
+            }
             _ => return Err(format!("step {raw:?}: time must start with '@' or '+'")),
         };
+        match in_usec {
+            None => in_usec = Some(unit),
+            Some(u) if u != unit => {
+                return Err(format!(
+                    "step {raw:?} mixes units: this script is in {}, and the two clocks diverge \
+                     whenever the machine idles. Use one or the other throughout.",
+                    if u { "seconds" } else { "instructions" }
+                ))
+            }
+            _ => {}
+        }
+        let in_usec = unit;
+        // The gap between the clicks of a `rotate`, and between a `press`'s down and up, is
+        // configured in instructions. In a time-anchored script it has to be the same unit as
+        // everything else, or a rotation would land somewhere unrelated to where it was asked for.
+        let click_instr = if in_usec { (click_instr / CLOCK as u64).max(1) } else { click_instr };
         prev = at;
         let push = |at: u64, event: WheelEvent, out: &mut Vec<WheelStep>| {
-            out.push(WheelStep { at, event });
+            out.push(WheelStep { at, in_usec, event });
         };
         match action {
             "touch" => push(at, WheelEvent::Touch, &mut out),
@@ -4741,7 +4830,8 @@ pub fn parse_wheel_script(spec: &str, click_instr: u64) -> Result<Vec<WheelStep>
                             Some(m) => (-1i8, m),
                             None => (1i8, arg.strip_prefix('+').unwrap_or(arg)),
                         };
-                        let n = number(mag)?;
+                        // A repeat count, not a time — `rotate=+8` is eight clicks.
+                        let (n, _) = number(mag)?;
                         if n == 0 {
                             return Err(format!("step {raw:?}: rotate=0 does nothing"));
                         }
@@ -4959,7 +5049,7 @@ impl Memory {
         // Strictly in order. A script is a *sequence* — a step whose instant has already gone by
         // fires at the first opportunity rather than being skipped, so a schedule can never be
         // silently half-executed.
-        while w.next < w.script.len() && w.script[w.next].at <= now {
+        while w.next < w.script.len() && w.script[w.next].due(now, self.usec as u64) {
             let ev = w.script[w.next].event;
             w.next += 1;
             if let Some(on) = w.apply(ev) {

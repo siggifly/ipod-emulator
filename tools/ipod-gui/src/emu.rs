@@ -1193,7 +1193,9 @@ fn drain(m: &mut Machine, inbox: &Mutex<Inbox>, next_at: &mut u64, gap: u64) -> 
             break;
         }
         inbox.events.pop_front();
-        w.script.push(WheelStep { at, event: ev });
+        // The window always anchors in instructions: `next_at` and `MIN_BUTTON_HOLD` are both
+        // instruction counts, and mixing a clock in here would make the hold mean two things.
+        w.script.push(WheelStep::instr(at, ev));
         *next_at = at.max(*next_at) + gap;
     }
     inbox.events.len()
@@ -2470,7 +2472,7 @@ mod tests {
             "a hold of {MIN_BUTTON_HOLD} cannot be seen by a reader polling every {DIAG_POLL}"
         );
 
-        let down = WheelStep { at: 1_000, event: WheelEvent::Button(eapp_loader::WHEEL_MENU, true) };
+        let down = WheelStep::instr(1_000, WheelEvent::Button(eapp_loader::WHEEL_MENU, true));
         let script = vec![down];
         let up = WheelEvent::Button(eapp_loader::WHEEL_MENU, false);
 
@@ -2494,7 +2496,7 @@ mod tests {
         assert_eq!(schedule_at(&[], up, 1_300), 1_300);
         // And it is *this* button's press that counts, not any press.
         let other =
-            vec![WheelStep { at: 1_000, event: WheelEvent::Button(eapp_loader::WHEEL_PLAY, true) }];
+            vec![WheelStep::instr(1_000, WheelEvent::Button(eapp_loader::WHEEL_PLAY, true))];
         assert_eq!(schedule_at(&other, up, 1_300), 1_300);
     }
 
