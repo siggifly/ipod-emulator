@@ -2166,6 +2166,19 @@ pub enum Stub {
     },
 }
 
+/// Interpreter instructions per simulated microsecond, and **the only place this number lives**.
+///
+/// 75 is the real PP5021C. Lowering it makes simulated time run faster than the code executing it,
+/// which collapses the delay loops the bootloader spends billions of instructions in — 5 was this
+/// project's default for a long time for exactly that reason, and it is **not** a default any more:
+/// the machine's own sense of time then runs fifteen times fast, every wait a game asks for expires
+/// immediately, and Brick's ball is unplayable. It stays available as `--clock=N` for measurement.
+///
+/// It is a constant rather than a literal in each place because it had drifted into three: the
+/// library's default, the window's argument default, and two test fixtures still carrying the old 5.
+pub const CLOCK: usize = 75;
+
+
 pub struct Machine {
     pub cpu: Cpu,
     pub mem: Memory,
@@ -2338,7 +2351,8 @@ pub struct Machine {
     pub call_log_on: bool,
     /// Interpreter instructions per simulated microsecond.
     ///
-    /// The PP5021C runs at roughly 75 MHz, so 75 models real time. **Lowering it makes simulated
+    /// The PP5021C runs at roughly 75 MHz, so 75 models real time — see [`CLOCK`], which is the
+    /// one place that number lives. **Lowering it makes simulated
     /// time run faster than the code executing it**, which is the cheap answer to firmware that
     /// polls with timeouts: the bootloader spends billions of instructions in delay loops, and
     /// those collapse when the clock advances quicker. Timing-sensitive code can notice, so it is a
@@ -2618,7 +2632,7 @@ impl Machine {
             call_log: Vec::new(),
             call_at: 0,
             call_log_on: false,
-            instr_per_usec: 75,
+            instr_per_usec: CLOCK,
             idle_steps: 0,
             idle_frac: 0,
             timer_next: [0; 2],

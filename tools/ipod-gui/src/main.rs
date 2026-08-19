@@ -896,7 +896,7 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
     // being *used* rather than measured: the machine's own sense of time runs 15x fast, so every
     // wait a game asks for expires almost immediately. Brick's ball was unplayable for this
     // reason. Measurement can still ask for the accelerant by name.
-    let clock = num("--clock=", 75) as usize;
+    let clock = num("--clock=", eapp_loader::CLOCK as u64) as usize;
     let snap_at = num("--snap-at=", 1_600_000_000);
     let cache = cache_paths(&nor.cache_tag(), &disk, clock, snap_at);
     // A hand-given snapshot brings its own frozen drive, sitting beside it under the same stem.
@@ -4513,6 +4513,22 @@ mod tests {
     /// Measured before it was written, which is how `MIN_H` got its value rather than the other way
     /// round: at the previous 520 px minimum the first run wanted 550, the settings 590 and the
     /// help 484, so all three scrolled and two of them scrolled at sizes people use.
+    /// One clock, in one place. It had drifted into three -- the library's default, this window's
+    /// argument default, and two fixtures still carrying the old accelerant -- and a machine whose
+    /// speed depends on which of them you happened to read is a machine nobody can measure.
+    #[test]
+    fn the_clock_has_exactly_one_source() {
+        assert_eq!(eapp_loader::CLOCK, 75, "75 is the real PP5021C");
+        // And this window's own default, which is the other place it used to be written out.
+        let cfg = emu::Config::default();
+        let _ = &cfg;
+        // The argument parser falls back to the constant rather than to a literal of its own.
+        assert!(
+            include_str!("main.rs").contains(r#"num("--clock=", eapp_loader::CLOCK as u64)"#),
+            "the window's --clock default must read the constant, not a literal"
+        );
+    }
+
     /// **Legibility is measured, not judged.** WCAG AA wants 4.5:1 for ordinary text, and every
     /// colour this window puts words in is checked against the background it sits on.
     ///

@@ -134,6 +134,13 @@ the same discipline as R5, applied to the tool instead of to the machine.
 
 ## The baseline
 
+> **On `--clock=5` in the numbers below.** It is the research accelerant, not a default: 75 is the
+> real PP5021C, and 5 makes simulated time run fifteen times fast so the bootloader's delay loops
+> collapse. Every clock literal in the code is now [`eapp_loader::CLOCK`] and it is 75. The
+> recorded commands here keep `--clock=5` because that is what produced the numbers next to them —
+> changing the command without re-running it would make the record wrong. Re-measuring the
+> baselines at the real clock is its own exercise, and the instruction counts will not survive it.
+
 `ipod-boot retail --clock=5 --stop-when-idle=400000000`, re-measured today. Check any run you inherit
 against this before trusting it; if it does not match, find out why before measuring anything else.
 
