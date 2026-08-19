@@ -270,6 +270,47 @@ fn main() {
     // somebody's own plugin. It is the device's own answer too — on a real iPod you hold
     // SELECT+PLAY and it appears as a disk — though this mounts the image file rather than
     // emulating USB, and says so.
+    // `ipod-boot rockbox-install [DISK.img [OUT.img]]` — the whole thing, in one command.
+    //
+    // Installing Rockbox is two acts that are easy to confuse, and confusing them is how somebody
+    // ends up at `Can't load rockbox.ipod: File not found`: the bootloader goes in the firmware
+    // partition where Apple's boot ROM will run it, and the release goes on the data volume where
+    // that bootloader then looks. So this does both, in the order that works, from files it
+    // verifies by SHA-256 before touching a drive.
+    if name == "rockbox-install" {
+        let src = rest
+            .first()
+            .map(PathBuf::from)
+            .or_else(|| eapp_loader::settings::Settings::load().disk.clone());
+        let Some(src) = src else {
+            eprintln!("usage: ipod-boot rockbox-install [DISK.img [OUT.img]]");
+            std::process::exit(2);
+        };
+        let out = rest
+            .get(1)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| src.with_file_name("rockbox.img"));
+        let cache = eapp_loader::rockbox::cache_dir();
+        let r = (|| -> Result<(), String> {
+            let boot = eapp_loader::rockbox::download(eapp_loader::rockbox::FULL_INSTALL[0], &cache)?;
+            let zip = eapp_loader::rockbox::download(eapp_loader::rockbox::FULL_INSTALL[1], &cache)?;
+            println!("  verified {} and {}", boot.display(), zip.display());
+            for l in eapp_loader::install::install_os(&src, &boot, &out)? {
+                println!("{l}");
+            }
+            for l in eapp_loader::install::put_zip(&out, &zip)? {
+                println!("{l}");
+            }
+            println!("{} — cold boot it and Apple's bootloader runs Rockbox.", out.display());
+            println!("  Hold MENU while it starts and Rockbox's bootloader hands back to Apple's software.");
+            Ok(())
+        })();
+        if let Err(e) = r {
+            eprintln!("ipod-boot rockbox-install: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if name == "open-drive" {
         let disk = rest
             .first()
@@ -358,6 +399,10 @@ ipod-boot — Apple's firmware, booted under the emulator
                                      install another operating system into a COPY of the drive's
                                      firmware partition, where Apple's own bootloader finds it.
                                      Never writes to SRC. This is what `ipodpatcher` does.
+  ipod-boot rockbox-install [DISK.img [OUT.img]]
+                                     download Rockbox, verify it, and install both halves onto a
+                                     copy of the drive: the bootloader into the firmware partition
+                                     and the release onto the volume. Never writes to DISK.img.
   ipod-boot open-drive [DISK.img]
                                      mount the drive on this computer so you can put your own
                                      files on it. macOS and Linux only — Windows cannot mount a

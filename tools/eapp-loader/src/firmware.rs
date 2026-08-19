@@ -313,7 +313,7 @@ pub fn verify(rel: &Release, data: &[u8]) -> Result<(), String> {
 /// The same reasoning as the update check in the window: `curl` is on macOS, on every Linux, and on
 /// Windows since 1803. Speaking TLS ourselves would mean a dependency, and shelling out to fetch a
 /// file is a thing this project already does.
-fn http_get_to_file(url: &str, dest: &std::path::Path) -> Result<(), String> {
+pub(crate) fn http_get_to_file(url: &str, dest: &std::path::Path) -> Result<(), String> {
     use std::process::{Command, Stdio};
     let curl = Command::new("curl")
         .args([

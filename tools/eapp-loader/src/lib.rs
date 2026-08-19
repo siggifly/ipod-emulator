@@ -34,6 +34,7 @@ pub mod rsrc;
 pub mod ipsw;
 pub mod install;
 pub mod mount;
+pub mod rockbox;
 pub mod inspect;
 pub mod settings;
 
