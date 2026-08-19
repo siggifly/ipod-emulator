@@ -1151,11 +1151,52 @@ reading.
 > updates, and nothing reaches the panel. Its display driver touches the address latch 4 times
 > where the warm boot — which had to set the co-processor up itself — touches it 55.
 >
-> **So the defect is not in the scheduler, the corelock, the tick, the storage stack or the second
-> core, and it needs no per-guest branch to fix.** It is one sentence: *our BCM's state after
-> Apple's bootloader is not equivalent to a real BCM's state after Apple's bootloader.* Every
-> operating system that trusts the inheritance will hit it, and any that re-initialises will not —
-> which is exactly why warm Rockbox works and cold Rockbox does not.
+> **That is a real difference and it is not the cause — corrected an hour later, and this is the
+> second wrong root cause in a day.** The co-processor timeline shows cold Rockbox writing
+> `0x000e0000  76800 halfwords` followed by `command 0x0`, twice: the same surface, the same command,
+> the same full-frame shape the warm boot uses. Frames *do* reach the panel. They are **blank**,
+> because Rockbox has nothing to draw. Skipping `lcd_awake` on an inherited co-processor turns out
+> to cost nothing, which is what Rockbox's comment says it should cost.
+>
+> ### The actual cause: Rockbox reads an all-zero partition table
+>
+> Exact addresses out of the link map, no nearest-symbol tolerance. `init()` calls `disk_mount_all`
+> and the return lands at `0x03e80628`:
+>
+> | | `disk_mount_all()` |
+> |---|---|
+> | warm | **1** — one volume |
+> | cold | **0** — *"No partition found (0)."* |
+>
+> Rockbox then stops in `apps/main.c`'s error branch: it never calls `settings_load`,
+> `settings_apply`, `make_volume_root` or `open_stream_internal` — **0 arrivals at all four against
+> warm's 47** — so it never opens a file, and the frames it pushes are the cleared screen.
+>
+> **And the disk is not the variable, which is the control that had been missing all along.** Both
+> arms were being run on *different images*. Swapped:
+>
+> | | `disk_mount_all()` |
+> |---|---|
+> | warm entry, on the cold arm's disk | **1** |
+> | cold boot, on the warm arm's disk | **0** |
+>
+> It is the boot path. On the **same** image, at `disk_mount`'s partition loop (`0x6c6b0`, where
+> `r2` is the type byte):
+>
+> | | partition types seen |
+> |---|---|
+> | warm | `0x00`, **`0x0c`** — FAT32 with LBA, accepted |
+> | cold | `0x00`, `0x00`, `0x00`, `0x00` |
+>
+> After Apple's bootloader has finished with the drive, **Rockbox's own read of the partition table
+> comes back as zeros.** `disk_init` still returns 1 in both and `fat_mount` still returns -42 in
+> both, so nothing reports an error — the table is simply empty. That is state the bootloader leaves
+> in the storage path, and it is the same shape of bug as the co-processor one without being that
+> bug: a device our model hands over in a condition the next operating system cannot use.
+>
+> **The next measurement is Rockbox's first `ata_read_sectors` on the cold path** — which command it
+> issues, what the controller is left in (multi-sector count, DMA mode, the sector multiplier
+> `disk_set_sector_multiplier` exists to handle), and where the bytes go.
 >
 > The four things ruled out on the way, each by a control rather than by argument: `disk_init`
 > returns **1** in both · `fat_mount` returns **-42** in **both**, so it fails even on the path that
