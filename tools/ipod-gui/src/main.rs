@@ -2016,15 +2016,15 @@ impl App {
             // image, and requiring a third-party tool is not something this program will do — so
             // there the button is absent rather than present and failing.
             match eapp_loader::mount::available() {
-                Some(m) if !drive.is_empty() => {
-                    if ui
+                Some(m) if !drive.is_empty()
+                    && ui
                         .button("Open the drive…")
                         .on_hover_text(format!(
                             "{} — put your own files on it: music, plugins, a kernel. Power the                              iPod off first; two writers on one filesystem is how a volume gets                              corrupted. This mounts the image file, which is not the same thing as                              the iPod's own disk mode.",
                             m.describe()
                         ))
                         .clicked()
-                    {
+                    => {
                         match eapp_loader::mount::open(Path::new(&drive)) {
                             Ok(lines) => {
                                 for l in lines {
@@ -2034,7 +2034,6 @@ impl App {
                             Err(e) => self.say(e),
                         }
                     }
-                }
                 _ => {}
             }
         });
@@ -4605,12 +4604,63 @@ fn fmt_u64(v: u64) -> String {
     let s = v.to_string();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(' ');
         }
         out.push(c);
     }
     out
+}
+
+/// `(body, wheel, ring text, glass)` for a chassis colour.
+///
+/// A free function because **two** things draw an iPod — the running device and the at-rest one on
+/// the first-run screen — and the at-rest one had its own hardcoded white pair. So a person who
+/// chose black met a white iPod on the setup screen and a black one afterwards.
+fn palette_for(chassis: Colour) -> (Color32, Color32, Color32, Color32) {
+    if chassis == Colour::U2 {
+        (
+            // Actually black, now that the window behind it is grey.
+            Color32::from_rgb(0x0D, 0x0D, 0x0F),
+            // Apple's "Product Red" wheel. Dark enough that the white ring text still reads.
+            Color32::from_rgb(0xb8, 0x1c, 0x22),
+            Color32::from_rgb(0xf0, 0xe2, 0xe2),
+            Color32::from_rgb(0x0a, 0x0a, 0x0b),
+        )
+    } else if chassis == Colour::Black {
+        (
+            // **Black, not dark grey.** The old 0x24 existed to stay visible against a near-black
+            // window; with a grey background behind it the hardware's own colour works.
+            Color32::from_rgb(0x0D, 0x0D, 0x0F),
+            Color32::from_rgb(0x1C, 0x1C, 0x1F),
+            Color32::from_rgb(0x8E, 0x8F, 0x92),
+            Color32::from_rgb(0x04, 0x04, 0x05),
+        )
+    } else {
+        (
+            Color32::from_rgb(0xf3, 0xf3, 0xf1),
+            Color32::from_rgb(0xe6, 0xe6, 0xe3),
+            // **Darkened from 0x87.** The lettering measured 2.85:1 against the wheel it sits on,
+            // well under AA — a pre-existing fault the contrast test found on its first run, not
+            // something the background change caused. The real part's lettering is dark grey on
+            // white, so this is also the more faithful colour.
+            Color32::from_rgb(0x5E, 0x5F, 0x5D),
+            Color32::from_rgb(0x14, 0x14, 0x15),
+        )
+    }
+}
+
+
+/// Bytes, in something a person reads.
+fn human_bytes(n: u64) -> String {
+    const U: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 { format!("{n} B") } else { format!("{v:.1} {}", U[i]) }
 }
 
 #[cfg(test)]
@@ -4667,14 +4717,16 @@ mod tests {
     /// second viewpoint by moving the switch clear of the body.
     #[test]
     fn the_hold_switch_protrudes_from_the_top_edge_and_overlaps_the_body() {
-        assert!(SWITCH_PROUD > 0.0, "the switch has to stand proud of the case to be visible");
-        assert!(
-            SWITCH_PROUD < 3.0,
-            "a 5G's hold switch is a nub, not a second device; {SWITCH_PROUD} mm is too much"
-        );
-        // It sits on the top edge, inside the case's width, toward the right where the real one is.
-        assert!(SWITCH_X > CASE_W / 2.0, "the 5G's hold switch is right of centre");
-        assert!(SWITCH_X + SWITCH_W < CASE_W, "and inside the case");
+        // Every term is a constant, so these are asserted in a `const` block: the compiler refuses
+        // the build rather than this test refusing a run. Geometry that is wrong should not be able
+        // to ship just because nobody ran the suite.
+        const {
+            assert!(SWITCH_PROUD > 0.0, "the switch has to stand proud of the case to be visible");
+            assert!(SWITCH_PROUD < 3.0, "a 5G's hold switch is a nub, not a second device");
+            // On the top edge, inside the width, toward the right where the real one is.
+            assert!(SWITCH_X > CASE_W / 2.0, "the 5G's hold switch is right of centre");
+            assert!(SWITCH_X + SWITCH_W < CASE_W, "and inside the case");
+        }
     }
 
     /// The default mode is user mode, and a fresh install has nothing configured. These two
@@ -5279,55 +5331,4 @@ mod tests {
         // numbers being the same number is what makes identifying a dump by model possible at all.
         assert_eq!(IPOD_VIDEO.rom_len, eapp_loader::inspect::NOR_LEN);
     }
-}
-
-/// `(body, wheel, ring text, glass)` for a chassis colour.
-///
-/// A free function because **two** things draw an iPod — the running device and the at-rest one on
-/// the first-run screen — and the at-rest one had its own hardcoded white pair. So a person who
-/// chose black met a white iPod on the setup screen and a black one afterwards.
-fn palette_for(chassis: Colour) -> (Color32, Color32, Color32, Color32) {
-    if chassis == Colour::U2 {
-        (
-            // Actually black, now that the window behind it is grey.
-            Color32::from_rgb(0x0D, 0x0D, 0x0F),
-            // Apple's "Product Red" wheel. Dark enough that the white ring text still reads.
-            Color32::from_rgb(0xb8, 0x1c, 0x22),
-            Color32::from_rgb(0xf0, 0xe2, 0xe2),
-            Color32::from_rgb(0x0a, 0x0a, 0x0b),
-        )
-    } else if chassis == Colour::Black {
-        (
-            // **Black, not dark grey.** The old 0x24 existed to stay visible against a near-black
-            // window; with a grey background behind it the hardware's own colour works.
-            Color32::from_rgb(0x0D, 0x0D, 0x0F),
-            Color32::from_rgb(0x1C, 0x1C, 0x1F),
-            Color32::from_rgb(0x8E, 0x8F, 0x92),
-            Color32::from_rgb(0x04, 0x04, 0x05),
-        )
-    } else {
-        (
-            Color32::from_rgb(0xf3, 0xf3, 0xf1),
-            Color32::from_rgb(0xe6, 0xe6, 0xe3),
-            // **Darkened from 0x87.** The lettering measured 2.85:1 against the wheel it sits on,
-            // well under AA — a pre-existing fault the contrast test found on its first run, not
-            // something the background change caused. The real part's lettering is dark grey on
-            // white, so this is also the more faithful colour.
-            Color32::from_rgb(0x5E, 0x5F, 0x5D),
-            Color32::from_rgb(0x14, 0x14, 0x15),
-        )
-    }
-}
-
-
-/// Bytes, in something a person reads.
-fn human_bytes(n: u64) -> String {
-    const U: [&str; 4] = ["B", "KB", "MB", "GB"];
-    let mut v = n as f64;
-    let mut i = 0;
-    while v >= 1024.0 && i < U.len() - 1 {
-        v /= 1024.0;
-        i += 1;
-    }
-    if i == 0 { format!("{n} B") } else { format!("{v:.1} {}", U[i]) }
 }

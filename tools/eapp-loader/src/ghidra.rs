@@ -126,7 +126,7 @@ pub fn bridge(args: &[String]) -> Result<(), String> {
     {
         use std::os::unix::process::CommandExt;
         let e = cmd.exec(); // only returns on failure
-        return Err(format!("uv: {e}"));
+        Err(format!("uv: {e}"))
     }
     #[cfg(not(unix))]
     {

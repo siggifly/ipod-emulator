@@ -186,7 +186,7 @@ impl Fat32 {
         let mut c = first;
         loop {
             let next = self.fat_entry(c)?;
-            if next < 2 || next >= 0x0fff_fff8 {
+            if !(2..0x0fff_fff8).contains(&next) {
                 return Ok(out);
             }
             if out.len() > self.total_clusters as usize {

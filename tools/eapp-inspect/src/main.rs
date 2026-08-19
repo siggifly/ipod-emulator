@@ -642,6 +642,19 @@ fn classify(e: f64) -> &'static str {
     }
 }
 
+fn dump_hex(buf: &[u8], off: usize, len: usize) {
+    let end = (off + len).min(buf.len());
+    for row in (off..end).step_by(16) {
+        let slice = &buf[row..(row + 16).min(end)];
+        let hex: Vec<String> = slice.iter().map(|b| format!("{b:02x}")).collect();
+        let ascii: String = slice
+            .iter()
+            .map(|&c| if (0x20..0x7f).contains(&c) { c as char } else { '.' })
+            .collect();
+        println!("    {:08x}  {:<47}  |{}|", row, hex.join(" "), ascii);
+    }
+}
+
 // ---------------------------------------------------------------- tests
 
 #[cfg(test)]
@@ -753,7 +766,7 @@ mod tests {
         let atom = |id: &str, payload: usize, buf: &mut Vec<u8>| {
             buf.extend_from_slice(&((payload + 8) as u32).to_be_bytes());
             buf.extend_from_slice(id.as_bytes());
-            buf.extend(std::iter::repeat(0xAB).take(payload));
+            buf.extend(std::iter::repeat_n(0xAB, payload));
         };
         atom("frma", 8, &mut b);
         atom("schm", 12, &mut b);
@@ -801,18 +814,5 @@ mod tests {
         let r = inspect(Path::new("x.bin"), b"not an eapp file at all");
         assert!(!r.is_eapp);
         assert!(r.blocks.is_empty());
-    }
-}
-
-fn dump_hex(buf: &[u8], off: usize, len: usize) {
-    let end = (off + len).min(buf.len());
-    for row in (off..end).step_by(16) {
-        let slice = &buf[row..(row + 16).min(end)];
-        let hex: Vec<String> = slice.iter().map(|b| format!("{b:02x}")).collect();
-        let ascii: String = slice
-            .iter()
-            .map(|&c| if (0x20..0x7f).contains(&c) { c as char } else { '.' })
-            .collect();
-        println!("    {:08x}  {:<47}  |{}|", row, hex.join(" "), ascii);
     }
 }

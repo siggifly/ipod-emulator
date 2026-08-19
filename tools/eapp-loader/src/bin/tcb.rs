@@ -387,8 +387,8 @@ fn main() {
         }
     }
     println!(
-        "\n{:>3} {:<24} {:>3} {:>6} {:<10} {:>9} {:<24} {}",
-        "id", "name", "pri", "state", "entry", "tick", "blocked in", "on"
+        "\n{:>3} {:<24} {:>3} {:>6} {:<10} {:>9} {:<24} on",
+        "id", "name", "pri", "state", "entry", "tick", "blocked in"
     );
 
     let mut sems: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
@@ -479,7 +479,7 @@ fn main() {
                 let v = img.w(p);
                 let call = v > 0x1000
                     && v < 0x0040_0000
-                    && v % 4 == 0
+                    && v.is_multiple_of(4)
                     && ((img.w(v - 4) >> 24) & 0x0f == 0x0b
                         || (img.w(v - 4) & 0x0fff_fff0 == 0x012f_ff10
                             && img.w(v - 8) & 0x0fff_ffff == 0x01a0_e00f));

@@ -850,7 +850,7 @@ fn decode_ipd(d: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
 /// Headerless RGB565, dimensions inferred from the file size (square, or 2:1).
 fn decode_raw_rgb565(d: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
     let px = d.len() / 2;
-    if d.len() % 2 != 0 || px == 0 {
+    if !d.len().is_multiple_of(2) || px == 0 {
         return None;
     }
     let side = (px as f64).sqrt() as usize;
@@ -2941,7 +2941,7 @@ impl Machine {
     /// only correct for a single screen-aligned sprite filling its own quad; the games pack 8x8
     /// tiles out of a 512x512 atlas and flip them freely, which the approximation smeared.
     fn draw_arrays(&mut self, mode: u32, first: u32, count: u32) {
-        if count < 3 || count > 64 {
+        if !(3..=64).contains(&count) {
             return;
         }
         let v: Vec<Vertex> = (0..count)
@@ -3329,9 +3329,9 @@ impl Machine {
     /// that had to reach it through `run` would be measuring the scheduler instead of the device.
     pub fn service_interrupts(&mut self) {
         self.mem.internal = true;
-        let r = self.service_interrupts_inner();
+        self.service_interrupts_inner();
         self.mem.internal = false;
-        r
+        
     }
 
     /// Run whatever the two PP502x DMA controllers have been armed to do, and hold their
@@ -3638,7 +3638,7 @@ impl Machine {
             // Guarded on `second_core` so that a machine which never asks for a coprocessor does
             // not pay a compare per instruction for one — and, more importantly, so that its
             // execution is bit-for-bit what it was before this existed.
-            if self.mem.second_core && self.executed % self.mem.quantum == 0 {
+            if self.mem.second_core && self.executed.is_multiple_of(self.mem.quantum) {
                 self.run_cop(self.mem.quantum);
             }
             let pc = self.cpu.regs[15];
@@ -5514,7 +5514,7 @@ impl Nor {
             self.set_mode(NorMode::Array);
             return Some(NorOp::Program { off, val });
         }
-        let cmd = (val & 0xff) as u16;
+        let cmd = val & 0xff;
         let wa = (off >> 1) & 0x7ff;
         *self.cmds.entry(cmd).or_default() += 1;
         // Reset is accepted in any state and from any address. `0xff` is Intel's; the ROM sends
@@ -5844,7 +5844,7 @@ impl Pcf50605 {
                 _ => 0x200,                     // unknown channels
             },
         };
-        self.note_conversion(channel as u8, value);
+        self.note_conversion(channel, value);
         // Starting a conversion clears the ready bit and leaves the result registers holding the
         // PREVIOUS result. It does not publish the new one — `latch` does that, `busy` transfers
         // later. Overwriting them here and answering `ADCS1` with a synthetic zero "while busy"
@@ -6454,8 +6454,8 @@ impl Ata {
             return v;
         }
         match off {
-            0x1e0..=0x1e3 => {
-                if self.pos < self.buf.len() {
+            0x1e0..=0x1e3
+                if self.pos < self.buf.len() => {
                     let b = self.buf[self.pos];
                     self.pos += 1;
                     self.bytes_read += 1;
@@ -6468,10 +6468,7 @@ impl Ata {
                         }
                     }
                     b
-                } else {
-                    0
                 }
-            }
             0x1e4..=0x1e7 => self.error,
             0x1e8..=0x1eb => self.nsector,
             0x1ec..=0x1ef => self.sector,
@@ -6985,11 +6982,10 @@ impl Bcm {
                 };
                 self.rd_phase_high = !hi;
             }
-            0x3_0000 | 0x7_0000 => {
-                if val == 0x31 {
+            0x3_0000 | 0x7_0000
+                if val == 0x31 => {
                     self.kick();
                 }
-            }
             _ => {}
         }
     }
@@ -7496,7 +7492,7 @@ pub fn extract_symbols(image: &[u8], base: u32) -> BTreeMap<u32, String> {
         u32::from_le_bytes([image[o], image[o + 1], image[o + 2], image[o + 3]])
     };
     let prologue = |p: usize| -> bool {
-        if p + 4 > n || p % 4 != 0 || p < 0x1000 {
+        if p + 4 > n || !p.is_multiple_of(4) || p < 0x1000 {
             return false;
         }
         let w = word(p);

@@ -216,7 +216,7 @@ pub fn install_os(src: &Path, os: &Path, out: &Path) -> Result<Vec<String>, Stri
             ));
         }
     }
-    report.push(format!("  existing checksums reproduce — the layout is understood"));
+    report.push("  existing checksums reproduce — the layout is understood".to_string());
     report.push(format!(
         "  firmware partition at {part:#x}, {} image(s): {}",
         images.len(),

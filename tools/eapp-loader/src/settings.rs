@@ -413,6 +413,92 @@ fn home() -> Option<PathBuf> {
     env_dir("HOME").or_else(|| env_dir("USERPROFILE"))
 }
 
+/// This repository's root, or the working directory when there is no repository — which is what a
+/// released binary is always in.
+///
+/// Two walks, and deliberately no compile-time path. The obvious third fallback is
+/// `env!("CARGO_MANIFEST_DIR")`, and it was one here: it is the absolute path of the machine that
+/// did the build, so it is baked into every published binary (naming a stranger's home directory)
+/// and it is wrong on every machine but that one. `--remap-path-prefix` cannot reach it, because it
+/// is a cargo variable rather than a path `rustc` embeds.
+///
+/// - **Up from the executable**, which is right for `target/release/ipod-boot` in a checkout.
+/// - **Up from the working directory**, which is what catches a shared `CARGO_TARGET_DIR` — the
+///   binary is then nowhere near the source, and this is the case the compile-time path used to
+///   cover.
+/// - Otherwise the working directory, so the paths built from it are somewhere the user can see,
+///   and the "no NOR dump at …" message names a plausible place rather than a build machine.
+pub fn repo_root() -> PathBuf {
+    /// The directory that holds the recipes — present in a checkout, absent in a release archive.
+    const MARKER: &str = "tools/ipod-boot";
+
+    if let Ok(exe) = std::env::current_exe() {
+        let mut p = exe.as_path();
+        while let Some(dir) = p.parent() {
+            if dir.join(MARKER).is_dir() {
+                return dir.to_path_buf();
+            }
+            p = dir;
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut p = cwd.as_path();
+        loop {
+            if p.join(MARKER).is_dir() {
+                return p.to_path_buf();
+            }
+            match p.parent() {
+                Some(up) => p = up,
+                None => break,
+            }
+        }
+        return cwd;
+    }
+    PathBuf::from(".")
+}
+
+
+// Small helpers so a settings file can set the synthetic fields in any order, and so a `flash =`
+// line followed by `nor_model =` does the obvious thing rather than half of each.
+type Synth = (String, u64, Option<String>, Option<u64>, Option<PathBuf>);
+
+fn as_synth(src: crate::nor::Source) -> Synth {
+    match src {
+        crate::nor::Source::Synthetic { model, seed, serial, guid, splash } => {
+            (model, seed, serial, guid, splash)
+        }
+        crate::nor::Source::File(_) => match crate::nor::Source::default() {
+            crate::nor::Source::Synthetic { model, seed, serial, guid, splash } => {
+                (model, seed, serial, guid, splash)
+            }
+            crate::nor::Source::File(_) => unreachable!("the default is synthetic"),
+        },
+    }
+}
+
+fn with_model(src: crate::nor::Source, v: &str) -> crate::nor::Source {
+    let (_, seed, serial, guid, splash) = as_synth(src);
+    crate::nor::Source::Synthetic { model: v.to_string(), seed, serial, guid, splash }
+}
+fn with_seed(src: crate::nor::Source, n: u64) -> crate::nor::Source {
+    let (model, _, serial, guid, splash) = as_synth(src);
+    crate::nor::Source::Synthetic { model, seed: n, serial, guid, splash }
+}
+fn with_serial(src: crate::nor::Source, v: &str) -> crate::nor::Source {
+    let (model, seed, _, guid, splash) = as_synth(src);
+    let serial = (!v.trim().is_empty()).then(|| v.trim().to_string());
+    crate::nor::Source::Synthetic { model, seed, serial, guid, splash }
+}
+fn with_guid(src: crate::nor::Source, g: u64) -> crate::nor::Source {
+    let (model, seed, serial, _, splash) = as_synth(src);
+    crate::nor::Source::Synthetic { model, seed, serial, guid: Some(g), splash }
+}
+fn with_splash(src: crate::nor::Source, v: &str) -> crate::nor::Source {
+    let (model, seed, serial, guid, _) = as_synth(src);
+    let splash = (!v.trim().is_empty()).then(|| PathBuf::from(v.trim()));
+    crate::nor::Source::Synthetic { model, seed, serial, guid, splash }
+}
+
 #[cfg(test)]
 mod tests {
     /// A build tree is refused; a real install beside the executable is not.
@@ -585,90 +671,4 @@ mod tests {
             None => unsafe { std::env::remove_var("IPOD_EMULATOR_DATA") },
         }
     }
-}
-
-/// This repository's root, or the working directory when there is no repository — which is what a
-/// released binary is always in.
-///
-/// Two walks, and deliberately no compile-time path. The obvious third fallback is
-/// `env!("CARGO_MANIFEST_DIR")`, and it was one here: it is the absolute path of the machine that
-/// did the build, so it is baked into every published binary (naming a stranger's home directory)
-/// and it is wrong on every machine but that one. `--remap-path-prefix` cannot reach it, because it
-/// is a cargo variable rather than a path `rustc` embeds.
-///
-/// - **Up from the executable**, which is right for `target/release/ipod-boot` in a checkout.
-/// - **Up from the working directory**, which is what catches a shared `CARGO_TARGET_DIR` — the
-///   binary is then nowhere near the source, and this is the case the compile-time path used to
-///   cover.
-/// - Otherwise the working directory, so the paths built from it are somewhere the user can see,
-///   and the "no NOR dump at …" message names a plausible place rather than a build machine.
-pub fn repo_root() -> PathBuf {
-    /// The directory that holds the recipes — present in a checkout, absent in a release archive.
-    const MARKER: &str = "tools/ipod-boot";
-
-    if let Ok(exe) = std::env::current_exe() {
-        let mut p = exe.as_path();
-        while let Some(dir) = p.parent() {
-            if dir.join(MARKER).is_dir() {
-                return dir.to_path_buf();
-            }
-            p = dir;
-        }
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        let mut p = cwd.as_path();
-        loop {
-            if p.join(MARKER).is_dir() {
-                return p.to_path_buf();
-            }
-            match p.parent() {
-                Some(up) => p = up,
-                None => break,
-            }
-        }
-        return cwd;
-    }
-    PathBuf::from(".")
-}
-
-
-// Small helpers so a settings file can set the synthetic fields in any order, and so a `flash =`
-// line followed by `nor_model =` does the obvious thing rather than half of each.
-type Synth = (String, u64, Option<String>, Option<u64>, Option<PathBuf>);
-
-fn as_synth(src: crate::nor::Source) -> Synth {
-    match src {
-        crate::nor::Source::Synthetic { model, seed, serial, guid, splash } => {
-            (model, seed, serial, guid, splash)
-        }
-        crate::nor::Source::File(_) => match crate::nor::Source::default() {
-            crate::nor::Source::Synthetic { model, seed, serial, guid, splash } => {
-                (model, seed, serial, guid, splash)
-            }
-            crate::nor::Source::File(_) => unreachable!("the default is synthetic"),
-        },
-    }
-}
-
-fn with_model(src: crate::nor::Source, v: &str) -> crate::nor::Source {
-    let (_, seed, serial, guid, splash) = as_synth(src);
-    crate::nor::Source::Synthetic { model: v.to_string(), seed, serial, guid, splash }
-}
-fn with_seed(src: crate::nor::Source, n: u64) -> crate::nor::Source {
-    let (model, _, serial, guid, splash) = as_synth(src);
-    crate::nor::Source::Synthetic { model, seed: n, serial, guid, splash }
-}
-fn with_serial(src: crate::nor::Source, v: &str) -> crate::nor::Source {
-    let (model, seed, _, guid, splash) = as_synth(src);
-    let serial = (!v.trim().is_empty()).then(|| v.trim().to_string());
-    crate::nor::Source::Synthetic { model, seed, serial, guid, splash }
-}
-fn with_guid(src: crate::nor::Source, g: u64) -> crate::nor::Source {
-    let (model, seed, serial, _, splash) = as_synth(src);
-    crate::nor::Source::Synthetic { model, seed, serial, guid: Some(g), splash }
-}
-fn with_splash(src: crate::nor::Source, v: &str) -> crate::nor::Source {
-    let (model, seed, serial, guid, _) = as_synth(src);
-    let splash = (!v.trim().is_empty()).then(|| PathBuf::from(v.trim()));
-    crate::nor::Source::Synthetic { model, seed, serial, guid, splash }
 }

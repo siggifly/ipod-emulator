@@ -177,12 +177,12 @@ fn main() {
     m.breakpoints = args
         .iter()
         .filter_map(|a| a.strip_prefix("--break="))
-        .filter_map(|s| parse_addr(s))
+        .filter_map(&parse_addr)
         .collect();
     m.watch = args
         .iter()
         .find_map(|a| a.strip_prefix("--watch="))
-        .and_then(|s| parse_addr(s));
+        .and_then(&parse_addr);
     // --stop-at=ADDR[:N] : halt on the Nth arrival at ADDR (default the 1st), so --history
     // describes the first fault rather than whichever repeat the budget ended in.
     for spec in args.iter().filter_map(|a| a.strip_prefix("--stop-at=")) {
@@ -206,7 +206,7 @@ fn main() {
     m.retwatch = args
         .iter()
         .find_map(|a| a.strip_prefix("--retwatch="))
-        .and_then(|s| parse_addr(s));
+        .and_then(&parse_addr);
     // --storelog=PC[,PC…] and --enterlog=PC[,PC…]: two views of one function, keyed on the code
     // rather than on an address. Heap addresses move between runs; the instruction that writes them
     // does not.

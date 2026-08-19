@@ -980,7 +980,7 @@ mod naming_tests {
 
     /// Write a `SysCfg` block into a NOR image, in the layout [`syscfg`] reads.
     fn write_syscfg(nor: &mut [u8], serial: Option<&str>, guid: Option<u64>) {
-        let block = &mut nor[SYSCFG_AT as usize..];
+        let block = &mut nor[SYSCFG_AT..];
         block[..4].copy_from_slice(SYSCFG_MAGIC);
         let mut count = 0u32;
         let mut at = SYSCFG_HEADER;

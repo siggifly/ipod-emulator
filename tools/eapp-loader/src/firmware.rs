@@ -539,10 +539,10 @@ mod tests {
         );
         // Exactly one block, and one byte over — the boundary the padding branch turns on.
         assert_eq!(
-            sha256(&vec![b'x'; 64]),
-            sha256(&vec![b'x'; 64]),
+            sha256(&[b'x'; 64]),
+            sha256(&[b'x'; 64]),
         );
-        assert_ne!(sha256(&vec![b'x'; 55]), sha256(&vec![b'x'; 56]));
+        assert_ne!(sha256(&[b'x'; 55]), sha256(&[b'x'; 56]));
     }
 
     /// The catalogue is generated, so what is worth testing is that it is *coherent*.

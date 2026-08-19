@@ -324,7 +324,7 @@ fn the_wheel_answers_the_command_retailos_sends_and_refuses_ones_it_does_not() {
     use eapp_loader::*;
     let mut m = wheel_machine();
     // Deliver a reply that is due: the sender's ack runs first, then the caller polls.
-    let mut settle = |m: &mut Machine| {
+    let settle = |m: &mut Machine| {
         m.mem.usec = m.mem.usec.wrapping_add(OPTO_REPLY_USEC);
         m.service_interrupts();
     };
@@ -864,7 +864,7 @@ fn a_request_written_into_the_ring_is_answered_only_once_the_doorbell_is_rung() 
     let rx_lo = bcm_get16(&mut m) as u32;
 
     // Header + a 0x20-byte payload for opcode 8: 320x240, pitch 640, address 0 = allocate.
-    let mut msg = vec![0u8; 0x30];
+    let mut msg = [0u8; 0x30];
     msg[0..4].copy_from_slice(&0xf1a5_5a1fu32.to_le_bytes());
     msg[4..8].copy_from_slice(&7u32.to_le_bytes()); // sequence
     msg[8..12].copy_from_slice(&8u32.to_le_bytes()); // opcode

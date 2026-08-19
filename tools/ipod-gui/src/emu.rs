@@ -1501,7 +1501,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                 break;
             }
         }
-        if cfg.selftest && !want_snapshot && test.tick(&m, &link, started, cfg.selftest_control) {
+        if cfg.selftest && !want_snapshot && test.tick(&m, link, started, cfg.selftest_control) {
             link.quit.store(true, Ordering::Relaxed);
             break;
         }
@@ -1556,7 +1556,6 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                             .watch_range_log
                             .drain()
                             .into_iter()
-                            .map(|(pc, addr, v, us)| (pc, addr, v, us))
                             .collect();
                         Some(out.bus_log.len() as u32)
                     } else if a == crate::control::WRITES_SENTINEL {
@@ -2481,12 +2480,16 @@ mod tests {
         // itself: 75 instructions per simulated microsecond is 75 000 per millisecond.
         assert_eq!(instructions_for_ms(1), 75_000, "CLOCK is {} — has the part changed?", eapp_loader::CLOCK);
         assert_eq!(MIN_BUTTON_HOLD, 22_500_000, "300 ms at 75 000 instructions per ms");
-        // Apple's diagnostics polls at 150 ms; the hold has to clear that with room.
+        // Apple's diagnostics polls at 150 ms; the hold has to clear that with room. Asserted in a
+        // `const` block so it is the *compiler* that refuses, not this test: both sides are
+        // constants, so a regression here should not be able to wait for someone to run the suite.
         const DIAG_POLL: u64 = instructions_for_ms(150);
-        assert!(
-            MIN_BUTTON_HOLD > DIAG_POLL,
-            "a hold of {MIN_BUTTON_HOLD} cannot be seen by a reader polling every {DIAG_POLL}"
-        );
+        const {
+            assert!(
+                MIN_BUTTON_HOLD > DIAG_POLL,
+                "a button hold shorter than Apple's 150 ms diag poll cannot be seen at all"
+            )
+        };
 
         let down = WheelStep::instr(1_000, WheelEvent::Button(eapp_loader::WHEEL_MENU, true));
         let script = vec![down];
@@ -2515,8 +2518,6 @@ mod tests {
             vec![WheelStep::instr(1_000, WheelEvent::Button(eapp_loader::WHEEL_PLAY, true))];
         assert_eq!(schedule_at(&other, up, 1_300), 1_300);
     }
-
-    use super::*;
 
     /// A snapshot without its frozen drive is **not** restorable — the copy-mode half of the rule.
     ///

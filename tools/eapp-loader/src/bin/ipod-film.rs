@@ -337,7 +337,7 @@ fn final_delay(dir: &Path) -> Result<String, String> {
     let d = t
         .lines()
         .filter_map(|l| l.strip_prefix("duration "))
-        .last()
+        .next_back()
         .and_then(|s| s.trim().parse::<f64>().ok())
         .unwrap_or(0.0);
     Ok(format!("{}", (d * 100.0 + 0.5) as i64))

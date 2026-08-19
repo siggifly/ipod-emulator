@@ -179,7 +179,7 @@ pub fn parse_version(tag: &str) -> Option<(u32, u32, u32)> {
     let s = tag.trim();
     // Take everything after the last `v` that is followed by a digit, so `clickwheel-v1.2.3` and
     // `v1.2.3` and `1.2.3` all land on the same three numbers.
-    let s = match s.rfind(|c| c == 'v' || c == 'V') {
+    let s = match s.rfind(['v', 'V']) {
         Some(i) if s[i + 1..].starts_with(|c: char| c.is_ascii_digit()) => &s[i + 1..],
         _ => s,
     };

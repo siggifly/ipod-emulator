@@ -624,7 +624,7 @@ pub fn mark_aupd_applied(fw: &mut [u8]) -> bool {
 /// The file is created **sparse** — `set_len` then seek-and-write — so an 8 GiB image costs about
 /// 14 MB on any filesystem that has holes, which is all three of ext4, APFS and NTFS.
 pub fn build_disk(fw: &[u8], out: &Path, sectors: u64) -> Result<(), String> {
-    if fw.len() % 512 != 0 {
+    if !fw.len().is_multiple_of(512) {
         return Err(format!(
             "the firmware partition is {} bytes, which is not a whole number of 512-byte sectors",
             fw.len()
@@ -710,7 +710,7 @@ fn fat32(sectors: u64) -> Result<Vec<(u64, Vec<u8>)>, String> {
     // describe the clusters that remain once the FAT itself is subtracted.
     let tmp1 = sectors - reserved as u64;
     let tmp2 = (256 * spc as u64 + nfats as u64) / 2;
-    let fat_sectors = ((tmp1 + tmp2 - 1) / tmp2) as u32;
+    let fat_sectors = tmp1.div_ceil(tmp2) as u32;
     let data_sectors = sectors - reserved as u64 - (nfats as u64 * fat_sectors as u64);
     let clusters = data_sectors / spc as u64;
     if clusters < 65_525 {
