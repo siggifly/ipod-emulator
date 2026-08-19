@@ -32,6 +32,7 @@ pub mod rsrc;
 /// Building a drive image from an IPSW, so nobody has to be handed 8 GB of somebody else's iPod.
 /// A zip reader, an inflate, and an MBR + FAT32 writer — none of which touches the machine.
 pub mod ipsw;
+pub mod install;
 pub mod inspect;
 pub mod settings;
 
