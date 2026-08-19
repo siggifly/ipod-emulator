@@ -740,14 +740,24 @@ fn main() {
                 }
             }
         }
-        // --second-core : run the PP5021's coprocessor as well as its CPU.
+        // The PP5021's coprocessor runs alongside its CPU.
         //
-        // **Off by default, and that default is the control.** With it off this is the single-core
-        // machine every number in research/ was measured on. With it on, `PROC_ID` answers per
+        // **ON by default since 2026-08-19, because the part has two cores.** `PROC_ID` answers per
         // core, `COP_CTL` is a real sleep/wake register rather than ledger #7's fixed answer, and
         // the two cores interleave in fixed quanta so a dual-core run is as reproducible as a
-        // single-core one.
-        if args.iter().any(|a| a == "--second-core") {
+        // single-core one. A wake ends the running core's turn, which is what makes Apple's
+        // two-instruction hand-off through the entry vector at `0x40000050` observable.
+        //
+        // **The default was flipped on evidence, not on principle**: at the moment of flipping,
+        // every recipe measured here is identical with one core and two — retail 599 ATA commands
+        // and 2 916 non-black pixels, cold-booted Rockbox 10 304 and 74 057, in **both** arms. So
+        // the flip re-baselines nothing, and `research/`'s existing numbers stand unchanged.
+        //
+        // `--no-second-core` is arm B and is why this can still be A/B'd. It is not a bypass — it
+        // is a smaller machine than the part, which is a different and honest thing to be able to
+        // ask for. Note that asking for it puts ledger #7's `COP_STATUS` override back, because a
+        // machine with no coprocessor has to answer that register somehow.
+        if !args.iter().any(|a| a == "--no-second-core") {
             m.mem.second_core = true;
             if let Some(q) = args.iter().find_map(|a| a.strip_prefix("--quantum=")) {
                 m.mem.quantum = q.parse().unwrap_or(eapp_loader::Machine::QUANTUM).max(1);
