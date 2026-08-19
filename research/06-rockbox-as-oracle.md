@@ -1866,3 +1866,40 @@ whose length does not have to be exact.
 **It is not an emulator defect and there is nothing to fix in the machine.** It is a property of the
 guest that any scripted-input recipe here has to be built around, and the earlier Doom films that
 did reach the plugin got there by an acceleration curve nobody had noticed they were depending on.
+
+
+## Doom runs, and the way to reach it is a shortcut rather than a calibrated descent
+
+**2026-08-19.** `Starting Graphics engine` was never a stall. The run that stopped on it had a budget
+that ended one message short — given room, Doom initialises and renders, and the next frame is
+**Freedoom Phase 2's title screen**, drawn by Doom on the emulated panel.
+
+Reaching it reliably needed the acceleration problem above designing around rather than calibrating
+against. The trick is to make the target reachable by a gesture whose length does not have to be
+exact:
+
+```
+/.rockbox/shortcuts.txt
+    [shortcut]
+    type: file
+    data: /.rockbox/rocks/games/doom.rock
+    name: DOOM
+```
+
+`Shortcuts` is the **last** item of Rockbox's main menu, so **one small backward step from `Files`
+wraps straight onto it** — a short spin, too short to accelerate, and its landing place does not
+depend on how far it travelled. Two selects then launch the plugin. Inside Doom's own menu the same
+trick applies: `Play Game` is index 4 of 6, so it is **two backward steps** from `Game`, not four
+forward ones.
+
+```
+@25s:touch,+600ms:rotate=-6,+2s:release,          → Shortcuts (wrapped)
++1s:down=select,+300ms:up=select,                 → the shortcut list
++4s:down=select,+300ms:up=select,                 → doom.rock launches
++50s:touch,+600ms:rotate=-6,+2s:release,          → Quit
++2s:touch,+600ms:rotate=-6,+2s:release,           → Play Game
++2s:down=select,+300ms:up=select                  → and it starts
+```
+
+Two runs of the forward descent landed on `Shortcuts` and on `Settings` with 24 and 18 clicks; this
+one lands where it means to every time, because nothing in it depends on a click-to-item ratio.
