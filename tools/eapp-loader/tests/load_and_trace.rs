@@ -1431,3 +1431,57 @@ fn the_mailbox_is_thirty_two_bits_wide_not_eight() {
     m.mem.write32(Mbx::BASE + Mbx::CLR, 0x0040_0010);
     assert_eq!(m.mem.read32(Mbx::BASE), 0x8000_2000);
 }
+
+/// **The two registers that belong to a core rather than to memory must answer at both widths.**
+///
+/// This is a regression test for a bug that hid behind a plausible-looking implementation. The
+/// hook answering `PROC_ID` lived only on the byte path, because Rockbox's `crt0-pp.S` reads it
+/// with `ldrb`. Apple's bootloader reads it with `ldr` and masks — `0x873c` in the retail NOR — and
+/// `Memory::read32` has a fast path that never reaches `read8`.
+///
+/// So the coprocessor read `0x55`, concluded it was the CPU, and ran Apple's bootloader
+/// concurrently with the real one. From outside that looked like six `Running 'osos'` lines in one
+/// cold boot and no ATA commands at all — a symptom nobody would trace back to an access width.
+#[test]
+fn the_core_registers_answer_at_both_widths() {
+    use arm7tdmi::Bus;
+    use eapp_loader::{Core, PROC_ID};
+    let app = EApp::parse(synth_eapp()).expect("parse");
+    let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
+    eapp_loader::map_hardware(&mut m, false);
+
+    // Single-core, which is what every measurement in research/ was taken on: the CPU's value,
+    // whoever asks, and no second-core register at all.
+    assert_eq!(m.mem.read8(PROC_ID), Core::Cpu.proc_id());
+    assert_eq!(m.mem.read32(PROC_ID) & 0xff, Core::Cpu.proc_id() as u32);
+
+    m.mem.second_core = true;
+
+    // The CPU still reads what it always did — the byte AND the word.
+    m.mem.asking = Core::Cpu;
+    assert_eq!(m.mem.read8(PROC_ID), 0x55);
+    assert_eq!(m.mem.read32(PROC_ID) & 0xff, 0x55, "Apple reads this as a word");
+
+    // And the coprocessor reads its own id, the byte AND the word. The word is the one that broke.
+    m.mem.asking = Core::Cop;
+    assert_eq!(m.mem.read8(PROC_ID), 0xaa, "Rockbox reads this as a byte");
+    assert_eq!(m.mem.read32(PROC_ID) & 0xff, 0xaa, "Apple reads this as a word");
+    m.mem.asking = Core::Cpu;
+
+    // `COP_CTRL` and `COP_STATUS` are one address: written to park the core, read to see it parked.
+    // `crt0-pp.S` polls it with `ldr`, so the word path matters here too.
+    let ctl = Core::Cop.ctrl();
+    m.mem.cop_asleep = false;
+    assert_eq!(m.mem.read32(ctl), 0, "awake");
+    m.mem.write32(ctl, 0x8000_0000); // PROC_SLEEP, as Apple's COP path does at 0x805c
+    assert!(m.mem.cop_asleep);
+    assert_eq!(m.mem.read32(ctl), 0x8000_0000, "the CPU waits for exactly this");
+    assert_eq!(m.mem.read8(ctl + 3), 0x80, "and the same value one byte at a time");
+    m.mem.write32(ctl, 0); // PROC_WAKE, as Rockbox's `wake_core` does
+    assert!(!m.mem.cop_asleep);
+    assert_eq!(m.mem.read32(ctl), 0);
+
+    // Both transitions are counted, because "the COP ran N instructions" says nothing on its own.
+    assert_eq!(m.mem.cop_sleeps, 1);
+    assert_eq!(m.mem.cop_wakes, 1);
+}
