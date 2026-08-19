@@ -263,6 +263,13 @@ after *time*, a click wheel that only delivers input to firmware speaking Apple'
 chip-id register whose answer nothing had ever had to be right about until a third bootloader
 asked. None of the four is findable with one operating system.
 
+**And it cold-boots to that menu too**, through Apple's own bootloader and Rockbox's, off a drive
+this project installed — `ipod-18-rockbox-cold.png` above. That took a memory-system fix rather than
+anything Rockbox-shaped: a byte store below 1 MB was being swallowed by the flash model after the
+firmware remaps SDRAM over address 0, so `disk_init` wrote the partition table's `.start` with a
+word store (landed) and its `.type` with a byte store (dropped), every partition read as type 0, and
+Rockbox sat on *"No partition found."* `disk_mount_all()` 0 → 1, ATA 113 → 10 304.
+
 Not finished: **nothing past the menu is verified**, there is no sound, and it is not yet something
 the window can start for you — that is [on the roadmap](ROADMAP.md). The picture of the wheel moving
 Rockbox's selection that used to sit here has been withdrawn: it was drawn in Rockbox's fallback

@@ -56,7 +56,7 @@ with six devices that all half-work.
 | | state |
 |---|---|
 | RetailOS | **boots** cold from the reset vector, menus, formats its own volume, Brick plays. No sound. ~300 s of simulated time to the menu |
-| Rockbox 4.0 | **boots to its main menu and takes wheel input** (2026-08-18). Beyond the menu: unverified. No sound |
+| Rockbox 4.0 | **boots to its main menu and takes wheel input** (2026-08-18), and **cold-boots to it** through Apple's bootloader and its own (2026-08-19) — same 10 304 ATA commands and 74 057 lit pixels with one core or two. Doom loads a level and stops at `Starting Graphics engine`. Beyond that: unverified. No sound |
 | iPodLinux | `ipodloader2` **builds and cold-boots** (2026-08-18) — Apple's bootloader enters it, and it misdetects the chip and addresses a 1G iPod's registers until `0x70000000` bit 23:16 answers `'2'`; with that forced it gets past detection and stalls before the drive. [research/16](research/16-the-third-bootloader.md). No kernel. The "located" claim in this file has **no recorded source** and is unsourced until re-established |
 | Installing an OS | **done** — `install-os` for the firmware partition, `put-files` for the FAT32 volume; the whole chain cold-boots |
 | Our own bootloader / OS | not started, and deliberately not designed for yet |
