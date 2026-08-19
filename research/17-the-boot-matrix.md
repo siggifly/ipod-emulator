@@ -37,6 +37,27 @@ built for a fixed target and does not read the generation out of the handoff, so
 500 000 fewer instructions. Both reach the same budget without faulting. It is recorded here
 because an unexplained difference that nobody wrote down is one that gets rediscovered.
 
+## `ipodloader2` — the row this file did not have
+
+**Measured 2026-08-19**, `ipod-boot loader` against the same drive on all three ROMs:
+
+| boot ROM | ATA commands | unmapped |
+|---|---|---|
+| real 5G dump (`MA146`) | **3 196** | none |
+| synthetic 5G (`MA146`) | **3 196** | none |
+| synthetic 5.5G (`MA446`) | **3 196** | none |
+
+**Identical, to the command.** The loader reads the drive, walks the FAT32 volume, loads
+`/boot/vmlinux` and jumps, and it does not care which of the three it booted through — which is the
+useful result, because it says the generation fields the synthesiser writes are not something this
+bootloader consults. The Linux kernel then boots in full and panics; that is
+[research/16](16-the-third-bootloader.md) and is not a property of the ROM.
+
+**One real dump exists.** `ipod-resources/roms/` holds exactly one file — `retail_5g_MA146`, a real
+5G — and it is what every recipe here uses by default. The 5G and 5.5G rows above are built by
+`ipod-boot make-nor --model MA146|MA446`, so "we are testing a 5.5G" is true only of the synthetic
+row: **the default machine is a real 5G.**
+
 ## What a synthesised ROM cannot do
 
 **The four NOR modes are not in it, and cannot be.**
