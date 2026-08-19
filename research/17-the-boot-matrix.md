@@ -58,6 +58,49 @@ bootloader consults. The Linux kernel then boots in full and panics; that is
 `ipod-boot make-nor --model MA146|MA446`, so "we are testing a 5.5G" is true only of the synthetic
 row: **the default machine is a real 5G.**
 
+## Where the four NOR modes actually ship — and why a synthetic ROM still cannot run them
+
+**Asked and answered 2026-08-19, because the obvious guess is that `diag` and friends come down in
+the IPSW and could therefore be given to any ROM.** They do come down in the IPSW. It does not help.
+
+**The IPSW's firmware directory holds three images and none of them is a mode.** Parsed out of
+`iPod_20.1.3`'s `Firmware-20.6.3` at `0x4200`:
+
+| image | devOffset | length |
+|---|---|---|
+| `osos` | `0x00004400` | 7 559 680 |
+| `rsrc` | `0x0073a000` | 5 242 880 |
+| `aupd` | `0x00c3a200` | 1 074 176 |
+
+The `diag`, `disk`, `logo` and `scan` strings that appear elsewhere in the file are constants inside
+code — including an `hslf` at `0x71c754` whose neighbours disassemble to `push {r2-r6,lr}` and
+`ldr r0,[r1,#0x10]`, i.e. the routine that *searches* for a flash directory rather than one.
+
+**But `aupd` is 1 074 176 bytes, which is a 1 MB flash image plus a header, and it is encrypted.**
+Entropy is **8.00 bits/byte** over the whole image and 7.99 in every 16 KB window sampled, with the
+byte histogram flat (4 266 `0xff`, 4 309 `0x00`, against 4 196 expected for uniform). So the flash
+content almost certainly *does* ship in the IPSW — inside the updater, which is Apple's own code and
+would decrypt it itself. That is a better answer than "the modes are only in the NOR", and it is the
+answer to the question people will actually ask.
+
+**It still cannot be used, and the reason is not the payloads.** A synthesised ROM is an identity
+card, not a ROM:
+
+| | non-zero bytes |
+|---|---|
+| real 5G dump | **908 246** — 86.6 % of a megabyte: a bootloader and four self-contained payloads |
+| synthetic 5G | **101** — 0.0 % |
+
+Word 0 is a branch in both (`0xea001ffe`, to `0x8000`) because `inspect::flash` checks for one, but
+on the synthetic image there is nothing at `0x8000` to branch to. Booted cold it fetches straight
+off the end of the chip — 188 reads at `0x00100000`, one megabyte in, from 43 consecutive PCs. **It
+has no bootloader, so it cannot run `aupd`, so it cannot be given the modes by the updater either.**
+
+Which is why the synthetic rows in this file are all high-level boots: they enter an operating
+system directly and skip the bootloader that does not exist. **Diagnostics, disk mode, the scanner
+and the boot logo require a real dump** — not because the bytes are unobtainable, but because the
+program that would install them needs a ROM to run in.
+
 ## What a synthesised ROM cannot do
 
 **The four NOR modes are not in it, and cannot be.**
