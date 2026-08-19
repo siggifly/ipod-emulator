@@ -739,6 +739,14 @@ fn main() {
             if let Some(q) = args.iter().find_map(|a| a.strip_prefix("--quantum=")) {
                 m.mem.quantum = q.parse().unwrap_or(eapp_loader::Machine::QUANTUM).max(1);
             }
+            // `--cop-trace` gives the coprocessor the eyes the CPU has had all along: a novelty map
+            // over its own instruction count, and a park/wake ledger carrying both cores' clocks
+            // and the PC at each edge. Opt-in because the map costs a hash probe per COP
+            // instruction, and a coprocessor that runs half the budget would pay it half the run.
+            if args.iter().any(|a| a == "--cop-trace") {
+                m.cop_novelty = Some(Default::default());
+                println!("  cop-trace: novelty map + park/wake ledger");
+            }
             println!(
                 "  second core: on — interleaving {} instructions each",
                 m.mem.quantum
@@ -1127,6 +1135,37 @@ fn main() {
                 m.mem.cop_sleeps,
                 m.mem.cop_wakes
             );
+            // The park/wake ledger. "slept 4x, woken 4x" cannot tell a coprocessor doing four
+            // pieces of work from one that woke, got lost, and was woken again — the PCs can.
+            if !m.cop_events.is_empty() {
+                println!("  cop park/wake ledger ({} edges):", m.cop_events.len());
+                for &(cpu_n, cop_n, pc, awake) in m.cop_events.iter().take(24) {
+                    let name = m.symbolise(pc).unwrap_or_default();
+                    println!(
+                        "    {:>5} @cpu {:>12}  @cop {:>12}  pc {pc:#010x}  {name}",
+                        if awake { "WAKE" } else { "park" },
+                        cpu_n,
+                        cop_n
+                    );
+                }
+                if m.cop_events.len() > 24 {
+                    println!("    … {} more", m.cop_events.len() - 24);
+                }
+            }
+            if let Some(nov) = &m.cop_novelty {
+                let mut rows: Vec<_> = nov.iter().map(|(a, t)| (*t, *a)).collect();
+                rows.sort_unstable();
+                println!("\n  cop: {} code buckets executed, first 16 in order:", rows.len());
+                for (t, a) in rows.iter().take(16) {
+                    let name = m.symbolise(*a).unwrap_or_default();
+                    println!("    at {t:>12} cop-instructions  {a:#010x}  {name}");
+                }
+                // Where it SPENT the run, which is a different question from where it went first.
+                let last = rows.last().map(|(t, a)| (*t, *a));
+                if let Some((t, a)) = last {
+                    println!("    last new bucket at {t} — {a:#010x}");
+                }
+            }
         }
         // The drive's line specifically. "Interrupts are being taken" is a statement about the
         // timers; whether the disk's completion ever reaches the CPU is a different question and

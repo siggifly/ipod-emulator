@@ -718,6 +718,9 @@ pub struct Memory {
     /// and both produce a large N.
     pub cop_sleeps: u64,
     pub cop_wakes: u64,
+    /// Set when a wake is written to `COP_CTL`, so the running core's quantum ends at once and the
+    /// coprocessor starts on the next turn rather than up to a quantum later. See the write path.
+    pub yield_to_cop: bool,
     /// Which core is currently executing, so `PROC_ID` can answer it.
     ///
     /// Set by the scheduler around each core's quantum. Defaults to the CPU, which is what every
@@ -1546,6 +1549,32 @@ impl Bus for Memory {
             let now = val & 0x8000_0000 != 0;
             if now != self.cop_asleep {
                 if now { self.cop_sleeps += 1 } else { self.cop_wakes += 1 }
+                // **A wake ends the running core's turn immediately**, and this is a statement
+                // about concurrency rather than a scheduling tweak.
+                //
+                // Two cores on real silicon start within a few cycles of each other. Ours take
+                // turns in quanta, and a quantum is a claim that nothing observable happens
+                // between them — which is false across exactly this edge. Apple's bootloader sets
+                // the coprocessor's entry vector at `0x40000050` and wakes it **two instructions
+                // later**:
+                //
+                //     0x400089f0  str <os entry>, [0x40000050]
+                //     0x400089f8  str PROC_WAKE,  [COP_CTL]
+                //
+                // Both cores are then meant to enter the OS at that address and let its own crt0
+                // branch on `PROC_ID`. With a 1000-instruction quantum the CPU instead ran on into
+                // the OS, and on the Rockbox path its startup overwrote `0x40000050` with a word
+                // of its own code **90 instructions after the wake** — so when the coprocessor
+                // finally got a turn it read `0xe59f027c`, an instruction word, jumped to it as an
+                // address, and wandered 27 660 256 code buckets. Measured on the retail path too:
+                // the vector is `0x10000000`, overwritten at +1182 instructions.
+                //
+                // Yielding here is what makes the handshake observable in the order the hardware
+                // performs it. It is not "wake the COP sooner because Rockbox needs it" — the same
+                // race is in RetailOS's boot and was simply landing on the lucky side of it.
+                if !now {
+                    self.yield_to_cop = true;
+                }
             }
             self.cop_asleep = now;
         }
@@ -2276,6 +2305,22 @@ pub struct Machine {
     /// Instructions the COP has executed. **Deliberately not added to `executed`**, which is the
     /// fingerprint every recipe compares — one core's work must not silently inflate the other's.
     pub cop_executed: u64,
+    /// `--cop-trace` — the coprocessor's own novelty map: the instruction count at which each
+    /// 16-byte code bucket it ran FIRST executed.
+    ///
+    /// The CPU has had this since early on and the COP has had a single counter, which is why every
+    /// question about the second core so far has been answered by squinting at its final PC. A
+    /// final PC says where a core stopped and nothing whatever about how it got there — the same
+    /// distinction between a sample and a census this project keeps re-learning.
+    pub cop_novelty: Option<HashMap<u32, u64>>,
+    /// `(cpu_icount, cop_icount, pc, awake)` at every park and every wake.
+    ///
+    /// Both counts, because the two cores' clocks are the question: "slept 4x, woken 4x" has been
+    /// the entire readout, and it cannot distinguish a coprocessor doing four pieces of work from
+    /// one that woke, got lost, and was woken again. The PC is where it was parked *from* and where
+    /// it resumes *to*, which is what makes Apple's `0x40000050` entry vector checkable rather than
+    /// inferred.
+    pub cop_events: Vec<(u64, u64, u32, bool)>,
     pub mem: Memory,
     pub trace: Vec<Call>,
     /// Trap address -> (framework index, function index).
@@ -2542,6 +2587,7 @@ impl Machine {
             quantum: Machine::QUANTUM,
             cop_sleeps: 0,
             cop_wakes: 0,
+            yield_to_cop: false,
             asking: Core::Cpu,
             regs_at: None,
             regs_seen: Vec::new(),
@@ -2659,6 +2705,8 @@ impl Machine {
             // Reset state. Nothing runs on it until firmware writes PROC_WAKE to `COP_CTL`.
             cop: Cpu::new(),
             cop_executed: 0,
+            cop_novelty: None,
+            cop_events: Vec::new(),
             mem,
             trace: Vec::new(),
             trap_lo: traps.keys().copied().min().unwrap_or(u32::MAX),
@@ -3601,6 +3649,13 @@ impl Machine {
         if !self.mem.second_core || self.mem.cop_asleep {
             return 0;
         }
+        // A wake is the first turn after a park, and it is recorded with the PC the core is about
+        // to resume at — which on Apple's path is whatever the CPU left in the entry vector at
+        // 0x40000050, and is therefore the one number that says whether the handshake worked.
+        if self.cop_events.last().is_none_or(|e| !e.3) {
+            let pc = self.cop.regs[15];
+            self.cop_events.push((self.executed as u64, self.cop_executed, pc, true));
+        }
         self.mem.asking = Core::Cop;
         let mut ran = 0;
         for _ in 0..budget {
@@ -3608,9 +3663,17 @@ impl Machine {
             // than only on entry — otherwise it would run out its whole quantum after asking to
             // stop.
             if self.mem.cop_asleep {
+                // Record the park where it happens, with the PC it parked FROM. Apple's
+                // coprocessor path is seven instructions and the park is one of them; a run that
+                // parks somewhere else is running something else.
+                let pc = self.cop.regs[15];
+                self.cop_events.push((self.executed as u64, self.cop_executed, pc, false));
                 break;
             }
             self.mem.pc = self.cop.regs[15];
+            if let Some(n) = &mut self.cop_novelty {
+                n.entry(self.cop.regs[15] & !0xf).or_insert(self.cop_executed);
+            }
             self.cop.step(&mut self.mem);
             self.cop_executed += 1;
             ran += 1;
@@ -3638,7 +3701,14 @@ impl Machine {
             // Guarded on `second_core` so that a machine which never asks for a coprocessor does
             // not pay a compare per instruction for one — and, more importantly, so that its
             // execution is bit-for-bit what it was before this existed.
-            if self.mem.second_core && self.executed.is_multiple_of(self.mem.quantum) {
+            // `yield_to_cop` is the wake edge: a core that has just been started runs *now*, not up
+            // to a quantum from now. Without it the quantum is a claim that nothing observable
+            // happens between turns, and across this particular edge that claim is false — see the
+            // `COP_CTL` write path for the two-instruction window it was losing.
+            if self.mem.second_core
+                && (self.mem.yield_to_cop || self.executed.is_multiple_of(self.mem.quantum))
+            {
+                self.mem.yield_to_cop = false;
                 self.run_cop(self.mem.quantum);
             }
             let pc = self.cpu.regs[15];

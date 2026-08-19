@@ -1544,3 +1544,43 @@ fn identify_does_not_advertise_fields_it_leaves_empty() {
     assert_eq!(lba, 16_777_216, "the true size still lives in words 60/61");
     assert!(chs < lba, "an 8 GiB disk is larger than CHS can address; that is the point");
 }
+
+/// **A wake ends the running core's turn — because two cores are concurrent, not alternating.**
+///
+/// Apple's bootloader writes the coprocessor's entry vector at `0x40000050` and wakes it two
+/// instructions later, and both cores are then meant to enter the OS and let its own crt0 branch on
+/// `PROC_ID`. With a plain 1000-instruction quantum the CPU ran on into that OS first, and on the
+/// Rockbox path its startup overwrote the vector 90 instructions after the wake — so the
+/// coprocessor read an instruction word, jumped to it as an address, and wandered 27 660 256 code
+/// buckets. The quantum was asserting that nothing observable happens between turns, and across
+/// this edge that is false.
+#[test]
+fn waking_the_coprocessor_yields_to_it_immediately() {
+    use arm7tdmi::Bus;
+    let app = EApp::parse(synth_eapp()).expect("parse");
+    let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
+    eapp_loader::map_hardware(&mut m, false);
+    m.mem.second_core = true;
+
+    // Park it, the way the coprocessor parks itself: PROC_SLEEP into COP_CTL.
+    m.mem.write32(eapp_loader::Core::Cop.ctrl(), 0x8000_0000);
+    assert!(m.mem.cop_asleep, "PROC_SLEEP should park it");
+    assert!(!m.mem.yield_to_cop, "parking is not a reason to yield");
+
+    // And wake it, the way Apple's bootloader does: PROC_WAKE is zero.
+    m.mem.write32(eapp_loader::Core::Cop.ctrl(), 0);
+    assert!(!m.mem.cop_asleep, "PROC_WAKE should start it");
+    assert!(m.mem.yield_to_cop, "a wake must end the running core's turn at once");
+
+    // Re-writing the same state is not an edge and must not yield: firmware polls this register,
+    // and a yield per poll would hand the coprocessor a turn thousands of times for nothing.
+    m.mem.yield_to_cop = false;
+    m.mem.write32(eapp_loader::Core::Cop.ctrl(), 0);
+    assert!(!m.mem.yield_to_cop, "only the transition is an edge");
+
+    // A single-core machine must be untouched by any of this.
+    let mut solo = Machine::new(&EApp::parse(synth_eapp()).unwrap(), RAM_BASE, RAM_SIZE);
+    eapp_loader::map_hardware(&mut solo, false);
+    solo.mem.write32(eapp_loader::Core::Cop.ctrl(), 0);
+    assert!(!solo.mem.yield_to_cop, "no second core, no yield");
+}

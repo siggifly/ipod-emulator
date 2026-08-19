@@ -956,6 +956,57 @@ reading.
 > stack is not something this project has yet established — that is the next measurement, and it is
 > the same open question as ledger #7's default.
 >
+> ### Resolved the same day: the quantum was the bug, and it was never a Rockbox bug
+>
+> Giving the coprocessor the instruments the CPU has had all along (`--cop-trace`: a novelty map over
+> its own instruction count, and a park/wake ledger carrying both clocks and the PC at each edge)
+> made this legible in one run. Apple's coprocessor path, read out of the ROM at `0x8054`:
+>
+> ```
+> 0x8744  cmp r1, #0x55        ; am I the CPU?
+> 0x8748  bne 0x8054           ; no -> the coprocessor path
+> 0x8054  ldr r4, =0x60007004  ; COP_CTL
+> 0x8058  mov r3, #0x80000000  ; PROC_SLEEP
+> 0x805c  str r3, [r4]         ; park
+> 0x8060  nop / nop
+> 0x8068  ldr r0, =0x40000050
+> 0x806c  ldr pc, [r0]         ; jump through the entry vector
+> ```
+>
+> And the bootloader's side of it, `--storeaddr=0x40000050` on both paths:
+>
+> | | writes the vector | value | then |
+> |---|---|---|---|
+> | retail | `0x400089f0` @101 260 697 | **`0x10000000`** | wakes at `0x400089f8` |
+> | cold Rockbox | `0x400089f0` @101 520 797 | **`0x10735a00`** | wakes at `0x400089f8` |
+>
+> **Both cores are meant to enter the OS at its own entry** and let its crt0 branch on `PROC_ID` —
+> which is exactly what `crt0-pp.S` is written to expect (`moveq r3, #WAKE` / `movne r3, #SLEEP`,
+> then `ldrne pc, =cop_init`). Two instructions separate the vector write from the wake.
+>
+> **Our quantum was 1000 instructions**, so the CPU ran on into the OS first, and Rockbox's own
+> startup overwrote `0x40000050` **90 instructions after the wake** — `0x10735a18` storing
+> `0xe59f027c`, a word of its own code. The coprocessor finally got a turn, read that instruction
+> word, jumped to it as an address, and wandered **27 660 256 code buckets**. The retail path has
+> the identical race (`0x00084394` clobbers the vector at +1182) and was simply landing on the
+> lucky side of it.
+>
+> The fix is one line of concurrency and no per-guest special case: **a wake ends the running core's
+> turn.** A quantum is a claim that nothing observable happens between turns, and across this edge
+> that claim is false. With it, the coprocessor parks in **Rockbox's own crt0 at `0x40000040`**, then
+> works through `0x10000130`, `0x000001d8` and `0x0008632c` — the core-lock — over **107 park/wake
+> edges** where there were 5.
+>
+> | | ADC `reg 0x2f` last value |
+> |---|---|
+> | cold Rockbox, `--second-core`, 1000-instruction quantum | `0x89` — channel 68, not a channel |
+> | cold Rockbox, `--second-core`, yield on wake | **`0x05`** — channel 2, correct |
+>
+> So the second core no longer corrupts anything, and the retail path is unmoved: **599 ATA commands
+> and 2 916 non-black pixels in both arms.** What cold Rockbox still does not do is draw — 113 ATA
+> commands, which is far too few to have loaded `rockbox.ipod`, and that is now the whole of the
+> remaining question.
+>
 > **One measurement toward it, taken the same day.** On a cold boot with `--second-core`, the
 > coprocessor ends 400 M instructions at **`pc 0x00000734`**, having run 291 612 061 of its own and
 > slept and woken four times. `0x734` is in **Apple's boot ROM**, not in Rockbox — so on the cold
