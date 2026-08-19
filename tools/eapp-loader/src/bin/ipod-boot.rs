@@ -380,6 +380,9 @@ ipod-boot — Apple's firmware, booted under the emulator
                                      at run time: IMG=diag|disk|logo|vmcs (a prototype ROM also
                                      carries `scan`; a retail one does not)
   ipod-boot rockbox       [flags…]   Rockbox as a source-available oracle
+  ipod-boot loader        [flags…]   ipodloader2 out of the drive's own firmware partition — the
+                                     iPodLinux path. DISK= must be an image with it installed
+                                     (`ipod-boot install-os`). Aliased as `ipodlinux`.
   ipod-boot flash-update  [flags…]   Apple's `aupd` updater, then the boot that proves it took
   ipod-boot from-idle     [flags…]   restore a cached 1.6 G snapshot: 3 s instead of 110 s
 
@@ -445,6 +448,7 @@ enum Recipe {
     Warm,
     Flsh,
     Rockbox,
+    Loader,
     FlashUpdate,
     FromIdle,
 }
@@ -456,6 +460,7 @@ impl Recipe {
             "warm" | "warm-boot" => Recipe::Warm,
             "flsh" => Recipe::Flsh,
             "rockbox" => Recipe::Rockbox,
+            "loader" | "ipodlinux" => Recipe::Loader,
             "flash-update" => Recipe::FlashUpdate,
             "from-idle" => Recipe::FromIdle,
             _ => return None,
@@ -875,6 +880,51 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             a.push("--pmu".into());
             a.extend(user.iter().cloned());
             Ok(Plan { trace, sources: vec![("NOR dump", flash.clone(), flash_from), ("drive", src.clone(), disk_from)], runs: vec![a], cleanup })
+        }
+
+        // **`ipodloader2`, out of the drive's own firmware partition — the iPodLinux path.**
+        //
+        // This existed only as a command line nobody had written down, and reconstructing it cost a
+        // day chasing a regression that was not one: run without these flags the loader reaches 71
+        // ATA commands and spins 184 million times on `0xcf00101c`, which looks exactly like a
+        // broken emulator and is in fact a correctly-emulated loader that has decided it is on a 1G
+        // iPod. Three flags are load-bearing and each fails differently without the others:
+        //
+        // - `--osos-from-disk` — the loader is *appended after* RetailOS in the same `osos` image,
+        //   at entry offset `0x735a00`. Read the image without honouring that and you boot the OS
+        //   sitting behind the loader instead of the loader.
+        // - `--rdval=0x70000000=0x3232432D` — `ipod_is_pp5022()` is
+        //   `(inl(0x70000000) << 8) >> 24 == '2'` (`ipodhw.c:27`), so it reads byte 2 of `PP_VER1`.
+        //   The value spells `-C22`, bytes 4..8 of `PP5022C-`. **Still a supplied value** — sourced
+        //   from Rockbox's `debug-pp.c` decoding, not measured off a 5.5G, and it cannot go in a
+        //   cold boot because Apple's bootloader reads the same register 23 times and hangs on it.
+        // - `--sysinfo` — and this is the one whose absence produces the 1G symptom. With the chip
+        //   identified, `ipod_set_sysinfo` dereferences the **PP5022** pointer at `0x4001ff1c`; with
+        //   no `IsyS` block there, `ipod.hw_rev` stays 0, `ipod.hw_ver` is 0, and every register
+        //   access goes to a 1G iPod's `0xcf00xxxx`. Adding it takes the run from 184 283 902
+        //   unmapped reads to **none at all**, and from 0 ATA commands to 3 196.
+        //
+        // A high-level boot, deliberately: it never runs Apple's bootloader, which is what lets
+        // `PP_VER1` be answered for `ipodloader2` without anything else reading it.
+        Recipe::Loader => {
+            let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
+            let (disk, disk_from) = resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
+            let budget = env_u64("BUDGET", 4_000_000_000);
+            if !dry {
+                require(&flash, "NOR dump (FLASH=)")?;
+                require(&disk, "disk image with ipodloader2 installed (DISK=)")?;
+            }
+            let mut a = head(budget);
+            a.push("--osos-from-disk".into());
+            a.push(opt("--disk=", &disk));
+            a.push("--boot-osos".into());
+            a.push(opt("--flash=", &flash));
+            a.push("--sysinfo".into());
+            a.push("--rdval=0x70000000=0x3232432D".into());
+            a.push("--bcm".into());
+            a.push("--pmu".into());
+            a.extend(user.iter().cloned());
+            Ok(Plan { trace, sources: vec![("NOR dump", flash.clone(), flash_from), ("drive", disk.clone(), disk_from)], runs: vec![a], cleanup: None })
         }
 
         // Two boots of the same argv, against a disk whose firmware partition was written from the

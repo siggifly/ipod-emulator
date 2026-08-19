@@ -590,6 +590,30 @@ not ipodloader2's own headers. Two PCs a few instructions apart, inside the inte
 reading it four million times. That is the next question, and it is a much better one than the one
 this note started with.
 
+### The recipe, which was the actual blocker — 2026-08-19
+
+This file recorded the numbers and not the command that produced them, and the cost of that was a
+day spent chasing a regression that did not exist. Cold-booting the same image gives **71 ATA
+commands** and 184 283 902 reads of `0xcf00101c`; the binary built from the very commit that
+recorded 3 194 gives the identical figures, to the read. Nothing had broken. The invocation was
+simply not written down, and it is now `ipod-boot loader` (aliased `ipodlinux`).
+
+Three flags are load-bearing, and each fails differently:
+
+| flag | why | without it |
+|---|---|---|
+| `--osos-from-disk` | the loader is **appended after** RetailOS in the same `osos` image, at entry offset `0x735a00` | boots the OS sitting behind the loader |
+| `--rdval=0x70000000=0x3232432D` | `ipod_is_pp5022()` is `(inl(0x70000000) << 8) >> 24 == '2'` — `ipodhw.c:27`, byte 2 of `PP_VER1`, spelling `-C22` | takes the not-PP5022 branch |
+| `--sysinfo` | **the one that produces the symptom.** With the chip identified, `ipod_set_sysinfo` dereferences the *PP5022* pointer at `0x4001ff1c` | no `IsyS` there → `hw_rev` 0 → `hw_ver` 0 → every register access goes to a **1G iPod's** `0xcf00xxxx`, forever |
+
+`--sysinfo` alone is the difference between **184 283 902 unmapped reads and none at all**, and
+between **0 ATA commands and 3 196**. A loader spinning on a 1G's registers looks exactly like a
+broken emulator and is in fact a correctly-emulated loader that was never told what it is running on.
+
+It stays a high-level boot deliberately: it never runs Apple's bootloader, which is what allows
+`PP_VER1` to be answered for `ipodloader2` without anything else reading it. Apple's own bootloader
+reads that register 23 times and hangs at `0x400038cc` when it is forced.
+
 ### `0x64004000` is the interrupt controller, and the kernel's own code says so — 2026-08-19
 
 The address is not absent from the map; it is the map, plus one bit. `vmlinux` is a raw ARM image,
