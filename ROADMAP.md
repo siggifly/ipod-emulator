@@ -96,28 +96,36 @@ a picture of a GIF-palette bug. Regenerating before those land bakes both into t
 
 ## The machine's other modes
 
-The NOR carries four bootable images besides the OS, and Apple's updater is a fifth mode on the
-drive. They are what a real iPod does when you hold a chord at power-on, and they belong here
-rather than in a footnote. Measured 2026-08-18 with `ipod-boot flsh` (`IMG=diag|disk|scan|logo`)
-and `ipod-boot flash-update`:
+The NOR carries other images besides the OS, and Apple's updater is a further mode on the drive.
+They are what a real iPod does when you hold a chord at power-on, and they belong here rather than
+in a footnote. **Re-measured 2026-08-19 against the retail ROM's own images** — the previous
+measurement was taken with the *prototype's*, which is a different set of different programs
+([research/07](research/07-the-flash-images.md)):
 
 | mode | what it is | state |
 |---|---|---|
 | **`aupd`** — flash updater | Apple's firmware updater, run from the drive on first boot | **works.** It runs, it takes, and it retired bypass #12 by itself ([research/07](research/07-the-flash-images.md)) |
-| **`diag`** — diagnostics | the hold-`SELECT`+`REW` service menu | **executes** a full 200 M budget without faulting. [research/07](research/07-the-flash-images.md) records it booting and then waiting to be talked to |
-| **`scan`** | disk scan | executes to budget, no fault |
-| **`logo`** | the boot logo image | executes to budget, no fault |
+| **`diag`** — diagnostics | the hold-`SELECT`+`REW` service menu | **executes and stalls.** 200 M instructions with no fault, parked on bit 0 of `0xb0020000` — an undocumented device it resets and streams 184 320 bytes into before it will draw anything. Nothing else in Apple's software touches that aperture |
 | **`disk`** — target disk mode | the "do not disconnect" USB mass-storage mode | **broken.** `Lost(0xe19b0000) after 127 952 instructions` — it runs off into data at `0x18` with registers full of instruction words |
+| **`logo`** | the boot logo bitmap | **not a mode.** It opens with the characters `LoGo`; it is data other code reads |
+| **`vmcs`** | the video co-processor's firmware | **not a mode.** Data, uploaded to the BCM2722 |
+| **`scan`** — disk scan | — | **not in a retail ROM.** Only the prototype dump carries it |
 
-**None of the four draws anything at `0x000e0000`**, and that is reported as a measurement rather
-than a verdict: it is the surface RetailOS and Rockbox use, and these images may not use it. An
-absence at one address is not an absence.
+Two rows here used to say *"executes to budget, no fault"*, and that was an artefact: entering data
+is not something the interpreter can fail at — it decodes whatever is in front of it, wanders, and
+runs out of budget. `ipod-boot flsh` now refuses to enter an image whose word 0 is not an ARM branch
+and says what the image actually is.
+
+**Neither of the two real modes draws anything at `0x000e0000`.** For `diag` that is now explained
+rather than merely observed: it contains **no reference to `0x30000000` at all**, in either dump, as
+a literal or an immediate — while `disk` and `scan` both do. Apple's diagnostics does not draw
+through the co-processor aperture every other program here uses.
 
 **`disk` is the one that matters and the one that is broken.** Target disk mode is what a person
 actually does with an iPod — it is how the drive gets mounted on a computer — so it is the natural
 companion to **M9 (USB)** and is scheduled with it — not worked early because it happens to be one
-of the NOR's modes. The other three are cheap to re-check whenever the co-processor or the boot
-path moves.
+of the NOR's modes. `diag` is cheap to re-check whenever the co-processor or the boot path moves,
+and is blocked on one unknown device rather than on anything this emulator has got wrong.
 
 ## The two modes
 

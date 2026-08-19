@@ -660,6 +660,34 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
                         )
                     }
                 })?;
+                // Entering data is not an error the interpreter can see: it decodes whatever is
+                // there, wanders, and exhausts the budget. `logo` and `vmcs` are payloads, not
+                // programs, and running them reported "executes to budget, no fault" for years.
+                if !eapp_loader::inspect::is_bootable(&bytes) {
+                    let head = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    let what: String = bytes[..4]
+                        .iter()
+                        .rev()
+                        .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' })
+                        .collect();
+                    return Err(format!(
+                        "`{img}` is data, not a program: word 0 is {head:#010x} (\"{what}\"), not \
+                         an ARM branch. `logo` is the boot logo bitmap and `vmcs` is the video \
+                         co-processor's firmware — both are read by other code. Entering one runs \
+                         the interpreter through data and reports a full budget and no fault.\n\
+                         Bootable images in this dump: {}",
+                        eapp_loader::inspect::nor_images(&nor)
+                            .iter()
+                            .filter(|e| {
+                                let at = e.offset as usize;
+                                nor.get(at..at + 4)
+                                    .is_some_and(eapp_loader::inspect::is_bootable)
+                            })
+                            .map(|e| e.tag.clone())
+                            .collect::<Vec<_>>()
+                            .join(" · ")
+                    ));
+                }
                 std::fs::write(&osos, &bytes)
                     .map_err(|e| format!("{}: {e}", osos.display()))?;
                 println!(

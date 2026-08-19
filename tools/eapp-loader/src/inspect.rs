@@ -130,6 +130,23 @@ pub fn nor_image(nor: &[u8], tag: &str) -> Option<Vec<u8>> {
     nor.get(at..at.checked_add(e.len as usize)?).map(<[u8]>::to_vec)
 }
 
+/// Whether an image the firmware directory indexes is **code** — something the machine can be
+/// entered at — or data some other code reads.
+///
+/// Word 0 of a bootable image is an unconditional ARM branch, because that word *is* the reset
+/// vector: `osos` opens `0xea00007a`, `diag` and `disk` both open `0xea000006`. `logo` opens with
+/// the characters `LoGo` and `vmcs` with zeros.
+///
+/// This exists because entering data does not fail in any visible way. The interpreter decodes
+/// whatever is there, wanders, and exhausts its budget — so a run of `logo` reports a completed
+/// budget and no fault, which reads exactly like a mode that works, and `ROADMAP.md` said so about
+/// two images that are not programs.
+pub fn is_bootable(image: &[u8]) -> bool {
+    image.len() >= 4
+        && u32::from_le_bytes([image[0], image[1], image[2], image[3]]) & 0xff00_0000
+            == 0xea00_0000
+}
+
 fn read_at(path: &Path, at: u64, n: usize) -> std::io::Result<Vec<u8>> {
     let mut f = std::fs::File::open(path)?;
     f.seek(SeekFrom::Start(at))?;
@@ -1257,6 +1274,21 @@ mod tests {
         // A retail ROM has no `scan`, and saying so is the point — the old path would have handed
         // back a prototype's.
         assert_eq!(nor_image(&rom, "scan"), None);
+    }
+
+    /// Data does not announce itself by failing, which is why this test names the four real
+    /// images rather than a synthetic pair.
+    #[test]
+    fn logo_and_vmcs_are_data_and_diag_and_disk_are_programs() {
+        // Word 0 of each, as dumped from the retail ROM.
+        assert!(is_bootable(&0xea00_0006u32.to_le_bytes()), "diag / disk — b +0x20");
+        assert!(is_bootable(&0xea00_007au32.to_le_bytes()), "osos");
+        assert!(!is_bootable(b"LoGo"), "the boot logo bitmap");
+        assert!(!is_bootable(&[0, 0, 0, 0]), "the co-processor's firmware");
+        assert!(!is_bootable(&[0xea, 0x00]), "and a truncated file is not a program either");
+        // A *conditional* branch is not a reset vector: 0x1a is `bne`, and a vector table opens
+        // with the unconditional form.
+        assert!(!is_bootable(&0x1a00_0006u32.to_le_bytes()));
     }
 
     /// A record that points past the end of the file yields nothing rather than a panic or a
