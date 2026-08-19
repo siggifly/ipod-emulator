@@ -313,8 +313,22 @@ pub fn boot_screen(colour: crate::identity::Colour, w: usize, h: usize) -> Vec<u
 /// The same screen, with a supplied image in place of the click wheel.
 ///
 /// The image is fitted to the 62×78 rectangle Apple's own logo occupies — aspect preserved, box
-/// filtered — and composited onto the case's background colour. Pixels the image does not cover
-/// stay background, so a portrait image does not paint bars across the screen.
+/// filtered — and then **painted as a mask rather than pasted as a picture**.
+///
+/// ## Why a mask
+///
+/// The boot logo on this hardware is monochrome, and it is monochrome *per case colour*: a black
+/// iPod shows white on black, a white one shows dark on white. The tile extracted from a real boot
+/// is therefore the black iPod's — white artwork — and pasting it onto a white case would put white
+/// on white.
+///
+/// So the image's **luminance becomes coverage** and the case's own foreground supplies the colour.
+/// One source image is then correct on every case, which is what the hardware does and what a
+/// person supplying "a logo" means. It also means the extracted Apple tile works on a white iPod
+/// without anyone having to invert it first.
+///
+/// The cost is that a colour image renders monochrome. That is the panel's own behaviour for this
+/// image and not a limitation worth working around — the boot logo was never in colour.
 ///
 /// **What somebody supplies is their business.** If they have extracted Apple's logo from a dump
 /// they own and want to use it, that is a decision about their own files.
@@ -325,10 +339,14 @@ pub fn boot_screen_with(
     img: &crate::splash::Image,
 ) -> Vec<u16> {
     use crate::identity::Colour;
-    let bg = match colour {
-        Colour::White => 0xffffu16,
-        _ => 0x0000u16,
+    const WHITE: u16 = 0xffff;
+    const BLACK: u16 = 0x0000;
+    const INK_DARK: u16 = 0x2104;
+    let (bg, fg) = match colour {
+        Colour::White => (WHITE, INK_DARK),
+        _ => (BLACK, WHITE),
     };
+
     let mut fb = vec![bg; w * h];
     let (px, mask) = crate::splash::fit(img, 62, 78);
     let (ox, oy) = (w / 2 - 31, h / 2 - 39);
@@ -337,9 +355,22 @@ pub fn boot_screen_with(
             if !mask[y * 62 + x] {
                 continue;
             }
+            let p = px[y * 62 + x];
+            // Luminance of the RGB565 sample, 0..1. Rec. 601 weights, which is what a person reads
+            // as "how bright is this pixel".
+            let r = ((p >> 11) & 0x1f) as f32 / 31.0;
+            let g = ((p >> 5) & 0x3f) as f32 / 63.0;
+            let b = (p & 0x1f) as f32 / 31.0;
+            let cover = (0.299 * r + 0.587 * g + 0.114 * b).clamp(0.0, 1.0);
+
+            let ch = |v: u16, sh: u16, m: u16| ((v >> sh) & m) as f32;
+            let mix = |x: f32, y: f32| (x + (y - x) * cover).round();
+            let out = ((mix(ch(bg, 11, 0x1f), ch(fg, 11, 0x1f)) as u16) << 11)
+                | ((mix(ch(bg, 5, 0x3f), ch(fg, 5, 0x3f)) as u16) << 5)
+                | (mix(ch(bg, 0, 0x1f), ch(fg, 0, 0x1f)) as u16);
             let (dx, dy) = (ox + x, oy + y);
             if dx < w && dy < h {
-                fb[dy * w + dx] = px[y * 62 + x];
+                fb[dy * w + dx] = out;
             }
         }
     }
@@ -647,6 +678,42 @@ mod tests {
         // It is a RING, not a disc: the centre is background on both.
         assert_eq!(white[(h / 2) * w + w / 2], 0xffff, "the middle must be empty");
         assert_eq!(black[(h / 2) * w + w / 2], 0x0000, "the middle must be empty");
+    }
+
+    /// **One source image, correct on both cases.** The extracted Apple tile is the BLACK iPod's —
+    /// white artwork — and pasting it onto a white case would be white on white. Painted as a mask
+    /// it comes out dark on white there, which is what a white iPod actually boots to.
+    #[test]
+    fn a_supplied_logo_inverts_itself_for_a_white_case() {
+        use crate::identity::Colour;
+        // A white blob on black, which is the shape of the real tile.
+        let (iw, ih) = (62usize, 78usize);
+        let mut rgb = vec![0u8; iw * ih * 3];
+        for y in 20..60 {
+            for x in 15..45 {
+                for c in 0..3 {
+                    rgb[(y * iw + x) * 3 + c] = 255;
+                }
+            }
+        }
+        let img = crate::splash::Image { w: iw, h: ih, rgb };
+        let (w, h) = (320usize, 240usize);
+        let on_black = boot_screen_with(Colour::Black, w, h, &img);
+        let on_white = boot_screen_with(Colour::White, w, h, &img);
+
+        // Backgrounds are the case's, opposite each other.
+        assert_eq!(on_black[0], 0x0000);
+        assert_eq!(on_white[0], 0xffff);
+
+        // The centre of the blob: bright on the black case, DARK on the white one. Pasting instead
+        // of masking would have made both of them white.
+        let c = (h / 2) * w + w / 2;
+        let lum = |p: u16| ((p >> 11) & 0x1f) as u32 + ((p >> 5) & 0x3f) as u32 + (p & 0x1f) as u32;
+        assert!(lum(on_black[c]) > 80, "the mark should be bright on a black case");
+        assert!(lum(on_white[c]) < 30, "the mark should be DARK on a white case, not white on white");
+        // And it must differ from its own background on both, which is the whole point.
+        assert_ne!(on_white[c], on_white[0], "invisible on white");
+        assert_ne!(on_black[c], on_black[0], "invisible on black");
     }
 
     /// A generated ROM must be recognisable as generated, and a real one must not trip the check.

@@ -206,17 +206,22 @@ place these rows*.
 The tile can be lifted straight out of a boot, and the recipe in §7 is what makes it possible. Two
 things have to be right and both were got wrong first:
 
-- **`--clock=5`.** The recipes now default to 75, and at 75 the logo is not on the panel anywhere in
-  a 90 M budget — a sweep at 8, 15, 25, 40, 60 and 90 M found the same 27 902 stable non-black
-  pixels every time, which turned out to be *uninitialised co-processor memory at base 0* and not a
-  picture at all.
+- **A big enough budget — *not* `--clock=5`.** §7's recipe uses the accelerant and this was copied
+  without asking why, which was wrong. 75 is the real PP5021C and 5 makes the machine's sense of
+  time run 15× fast, so a delay loop costs a fifteenth of the instructions. The logo that is up
+  around 10 M at clock 5 therefore lands past 150 M at clock 75, and a sweep to 90 M found nothing —
+  the same 27 902 stable pixels every time, which were *uninitialised co-processor memory at base 0*
+  rather than a picture. **At the real clock with `BUDGET=400000000` the tile is there**, and the
+  62×78 crop is **byte-identical** to the one taken at clock 5. There is no reason to run the
+  accelerant for this.
 - **`0xE0000`, and the placed rect rather than the staged tile.** §2 is explicit that `0xE0000` is
   `BCMA_CMDPARAM` and not the panel, and the run writes the tile there linearly at a 62-halfword
   pitch. After the blit — which §4 implements — the same buffer holds the *placed* image at a 320
   pitch, and the pixels sit at rows 81..155, exactly the `(129,81)-(190,158)` §5 measures.
 
 ```sh
-DISK=… BUDGET=60000000 ipod-boot retail --clock=5 --bcm-ppm=out.ppm:e0000
+# at the real clock; the accelerant is not needed and the result is byte-identical
+DISK=… BUDGET=400000000 ipod-boot retail --bcm-ppm=out.ppm:e0000
 # then crop 62x78 at (129,81) — 2 916 non-black pixels of 4 836
 ```
 
