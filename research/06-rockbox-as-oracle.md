@@ -1194,9 +1194,51 @@ reading.
 > in the storage path, and it is the same shape of bug as the co-processor one without being that
 > bug: a device our model hands over in a condition the next operating system cannot use.
 >
-> **The next measurement is Rockbox's first `ata_read_sectors` on the cold path** — which command it
-> issues, what the controller is left in (multi-sector count, DMA mode, the sector multiplier
-> `disk_set_sector_multiplier` exists to handle), and where the bytes go.
+> ### It draws its own splash, and the storage path is right up to one contradiction
+>
+> **Cold Rockbox is not blank** — that reading came from an end-of-run dump. Filmed, it puts up the
+> Rockbox logo. The display path is entirely fine, which retires the co-processor theory for good.
+> What it does after the splash is Rockbox's documented dead end, `apps/main.c`:
+>
+> ```c
+> rc = disk_mount_all();
+> if (rc <= 0) {
+>     lcd_putsf(0, line++, "No partition found (%d).", rc);
+>     lcd_puts(0, line++, "Insert USB cable");
+>     ...
+>     disk_set_sector_multiplier(DEFAULT_VIRT_SECTOR_SIZE/SECTOR_SIZE);
+>     usb_start_monitoring();
+>     while(button_get(true) != SYS_USB_CONNECTED) {};      /* forever */
+> }
+> ```
+>
+> Every function in cold's tail — `usb_start_monitoring`, `button_get`, `button_get_w_tmo`,
+> `usb_inserted`, and `disk_set_sector_multiplier(4)` at `@124 621 553`, *after* the mount — is on
+> that branch. It is waiting for a USB cable that will never arrive.
+>
+> ### The contradiction, and it is one line wide
+>
+> Run against the **same disk image** on both paths, every step of the mount agrees:
+>
+> | | cold | warm |
+> |---|---|---|
+> | `ata_read_sectors(0, 0, 1, 0x127d10)` | same args | same args |
+> | MBR buffer sum after the read | `0xe5f` | `0xe5f` |
+> | partition-table sum (`+0x1be`, 64 bytes) | `0xcc0` | `0xcc0` |
+> | boot signature at `disk_init+0x64` | `0xaa55` | `0xaa55` |
+> | value written to `partinfo[1].type` by `0x6be18` | **`0x0c`** | **`0x0c`** |
+> | type byte read at `disk_mount+0x100` (`0x6c6b0`) | **`0x00` × 4** | `0x00`, then **`0x0c`** |
+> | `disk_mount_all()` | **0** | **1** |
+>
+> **The parse writes `0x0c` and the loop that reads it back sees `0x00`, on the cold path only** —
+> and `--storeaddr` over `0x000e7308` records exactly two writes in the whole run, the BSS memset at
+> `@108 197 001` and the parse at `@124 542 344`, with the loop reading at `@124 544 932`. Nothing
+> overwrote it. So the loop is not reading `0x000e7308`: `disk_mount`'s pool at `0x6c7b8` holds
+> `0x000e72e0`, the same array `disk_init` fills, and `r5` starts at `+16` — so the question is what
+> `r5` advances by, and why four reads on the cold path never land on entry 1 when two on the warm
+> path do.
+>
+> That is the next thing to read, and it is a register rather than a hypothesis.
 >
 > The four things ruled out on the way, each by a control rather than by argument: `disk_init`
 > returns **1** in both · `fat_mount` returns **-42** in **both**, so it fails even on the path that
