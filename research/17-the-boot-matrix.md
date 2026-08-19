@@ -65,3 +65,63 @@ anyone reading this table should not take "the 5.5G boots" as "the constant is c
 
 Every other constant in the handoff is measured: `len = 0xf8`, `BoardHwName = "iPod M25"`, the 5G's
 Gestalt, the model number, and the `SysCfg` copied in after the struct.
+
+## All three revisions
+
+There are **three** firmware revisions of this iPod, not two, and the middle one had been skipped:
+
+| updater family | revision | RetailOS, high-level boot |
+|---|---|---|
+| **13** | 5G Initial (Oct 2005) | **boots** — 597 M instructions, 7 ATA |
+| **20** | 5G Rev A | **boots** — 597 M instructions, 7 ATA |
+| **25** | 5.5G, Late 2006 | **boots** — 597 M instructions, 7 ATA |
+
+13 and 20 are both 5G and share Gestalt `0x000B0005`, so both take the synthetic `MA146`. Our own
+reference drive reports `updaterFamily: 13`, so it is an Initial.
+
+## `HwVr` for the 5.5G — upgraded from "a comment" to "published, uncited"
+
+Searched for deliberately. What exists:
+
+- **theapplewiki's *iPod with video* page** assigns `0x000B0010` to Rev B / Late 2006, update family
+  25 — which matches `iPod_25.1.3.ipsw`'s own manifest. Published, and **uncited**.
+- **Apple's own binary contains the constant.** `ipod-usb`'s reverse engineering of
+  `CIpodDevice::GetDeviceType()` records a switch with `0x000B0005 → type 17` and
+  `0x000B0010 → type 23`, both inside the iPod-with-Video family. So the value is Apple-recognised
+  rather than invented — though that does not by itself say which revision it belongs to.
+- **The iPodLinux wiki lists both values as "5G"** without splitting them by revision, and is the
+  likeliest origin of the comment this project carried.
+- **No measurement exists anywhere.** No retail 5.5G NOR `HwVr`, no 5.5G `SysInfo`. Rockbox and
+  `ipodloader2` both compare only the high halfword (`0xB`), so neither can distinguish, and no
+  aligned occurrence of any of these words appears in any Apple firmware image — consistent with
+  RetailOS switching on the high half only.
+
+**Keeping `0x000B0010` is defensible. Calling it measured is not.**
+
+## Two blockers found while testing the bootloaders
+
+**`install-os` refuses every drive `make-disk` builds**, and for a different image on each revision:
+
+```
+5G   (20.1.3)   `aupd`: directory says 0x0b19db1c, bytes sum to 0x08299587
+5.5G (25.1.3)   `osos`: directory says 0x2c7c48f3, bytes sum to 0x2c7f4045
+```
+
+That check is deliberate — it reproduces the existing checksums before writing new ones, so a wrong
+idea of the layout fails on an unmodified file rather than producing an image the bootloader rejects
+seventy ATA commands in. It is working; what it is telling us is that we have two layout problems.
+
+1. **The 5.5G case is the header again.** `FW_SECTOR` is a fixed `512`, which is right for the 5G's
+   bundle and wrong for the 5.5G's `0x800`. That is the **third** place this constant is assumed —
+   `osos_from_drive` was the second, and `research/02` §Provenance records the first two.
+2. **The 5G's `aupd` case is not explained.** Its extent — `dev_offset 0xc3a200` plus `len 0x106400`
+   — ends at `0xD40600`, past the `0xD40000` end of Apple's own firmware file, with or without a
+   header offset. So the sum reads beyond what was written. Whether the directory is describing
+   something the extracted file does not contain, or `dev_offset` means something else for `aupd`,
+   is **open**.
+
+**The Rockbox bootloader test was run the wrong way.** `bootloader-ipodvideo.ipod` was warm-booted
+through `--osos=`, and burned its whole 200 M budget with **zero** ATA commands on all three ROMs.
+That is not evidence about the bootloader: it expects to be *installed in the firmware partition and
+entered by Apple's bootloader*, which is a cold boot. The run says nothing until it is redone that
+way — and redoing it needs `install-os`, which is blocked above.
