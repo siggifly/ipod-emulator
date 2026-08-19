@@ -522,3 +522,75 @@ What this does **not** settle: whether a real 5.5G answers `'2'` there. Our refe
 5G whose `BoardHwName` is `PP5021C-2`, and a PP5021C answering `'1'` is why `ipod_is_pp5022()`
 correctly returns false on it. The register is being *supplied* here, as the emulator supplies every
 register — the value is sourced from Rockbox's `debug-pp.c` decoding, not measured off a 5.5G.
+
+---
+
+## The two bugs were upstream's, and fixing them boots a Linux kernel
+
+**2026-08-19.** This note ends with the loader misidentifying the chip and stalling before the
+drive. With `0x70000000` bits 23:16 answered `'2'` it gets past that — and then prints its own
+console, which this note records as never having been observed:
+
+```
+iPL 2.9.0d
+iPod: 000b0005
+HDD identify OK (no checksum)
+HDD Model: Emulated iPod Di
+Detected WinPod MBR
+[0]: Bad iPod FW entry
+[1]: Unknown 0xC2
+No valid paritions found!
+```
+
+Both of those lines are **ipodloader2's own bugs**, read out of the source it is built from, and
+neither belongs to this emulator.
+
+**1 — the firmware-partition test is inverted.** `vfs.c:193`:
+
+```c
+if( mlc_strncmp((void*)(fs_header->fwfsmagic),"]ih[", 4) ) { validoffset = 1; }
+```
+
+`mlc_strncmp` returns **0 on a match** — `minilibc.c:452`, `if(!length || (*s1 == 0 && *s2 == 0)) return(0);`.
+So the partition is accepted only when the magic does *not* match. The bytes at `0x100` of the
+partition's first sector are `5d 69 68 5b` — `]ih[` — which is correct, and the loader rejects it.
+
+**2 — there is no case for FAT32-LBA.** `vfs.c` handles `case 0x00`, `case 0x83` and `case 0xB`.
+The MBR here says partition 1 is type **`0x0C`**, FAT32 with LBA addressing, which is what iTunes
+on Windows produces and what this project's own `make-disk` writes. It falls to `default:`.
+(`0xC2` in the output is the format string: `"Unknown 0x%X2"`, with a literal `2`.)
+
+`tools/patches/ipodloader2-vfs.patch` fixes all three. Rebuilt and installed with
+`ipod-boot install-os`, into a drive carrying the ZeroSlackr `vmlinux` and a `loader.cfg` pointing
+at it:
+
+| | before | after |
+|---|---|---|
+| ATA commands | **3** — `IDENTIFY`, the MBR, one probe | **3 194** |
+| frame updates | 8 | **97** |
+| non-black pixels | 7 538 | 74 419 |
+
+![ipodloader2 loading a Linux kernel](../docs/media/ipod-26-ipodlinux-loaded.png)
+
+> `Load succeeded` · `Jmp to 10000000`
+
+**And the kernel executes.** Not "is loaded" — runs: the machine ends inside
+`ldmia sp, {r0-pc}^`, an ARM exception return restoring user-mode registers, having taken
+interrupts. That is a Linux kernel servicing its own traps.
+
+**Where it stops is named.** It polls an address nothing here models:
+
+```
+unmapped: 8 385 336 reads across 1 page
+  0x64004000..0x64004103   8 385 336 reads   from 0x000177b4 and 0x000177d4
+```
+
+`0x64004000` appears in **no** register map available to this project — not Rockbox's `pp5020.h`,
+not ipodloader2's own headers. Two PCs a few instructions apart, inside the interrupt path, each
+reading it four million times. That is the next question, and it is a much better one than the one
+this note started with.
+
+**What is NOT established:** that this kernel is right for this iPod. It is the ZeroSlackr
+`vmlinux` dated 2008, and a kernel built for a different generation would also load and then poll a
+register that generation has. The polled address being absent from the 5G's map is consistent with
+either.
