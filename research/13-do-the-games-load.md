@@ -422,6 +422,24 @@ timing is the machine's timing" has to mean to be worth saying.
 
 ## 9. Reproducing every screen in this file
 
+> ⚠️ **Stale since the clock change, and measured to be — 2026-08-19.** The commands below are
+> written against `tools/ipod-boot/*.sh` with `--clock=5`. Both are gone: the recipes are
+> `ipod-boot <name>` subcommands, and **`--clock=5` is retired** — every recipe now runs at the
+> real part's rate of 75 instructions per simulated microsecond.
+>
+> That is not a cosmetic translation, and the anchors below do **not** survive it. They are counted
+> in instructions, but what they are timing is a firmware whose behaviour is in *seconds*:
+> `@1500M` was 300 s of simulated time at `--clock=5` and is **20 s** at `--clock=75`. Re-run
+> today, the descent lands nowhere — 830 ATA commands, `FUN_00131874` never entered, the film
+> ending on the Language list it started on. **The single-core and `--second-core` arms fail
+> identically**, which is the useful part: it says the navigation is stale, not that the second
+> core broke anything.
+>
+> The gestures themselves are still right — `ROW` is still four clicks per row, `SEL` is still a
+> press — and §10's `--wheel` supports simulated-time anchors (`@12s`, `+250ms`) which do not move
+> when the clock does. Recalibrating this descent onto those is the fix, and it has not been done.
+
+
 Three commands. Each takes a few minutes and writes a PNG sequence, a manifest and an `.mp4` into
 `_out/film/`. `resources/` must be present; see `tools/ipod-boot/README.md`.
 
