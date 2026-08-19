@@ -1234,6 +1234,44 @@ fn main() {
             "  ide irq: raised {} times, DELIVERED to a handler {} times, acked by status read {} times; enabled={} pending={}",
             raised, deliv, acked, en, pend,
         );
+        // Those three are totals, and on any run with `ipodloader2` in it the loader's polling
+        // contributes thousands while the operating system contributes dozens — so they cannot say
+        // whether a *particular* completion arrived. The tail can.
+        if !m.mem.ide_events.is_empty() {
+            use eapp_loader::{IDE_EV_ARMED, IDE_EV_ASSERTED, IDE_EV_DELIVERED, IDE_EV_NAMES};
+            println!(
+                "  ide completion timeline — last {} events, oldest first (µs, what):",
+                m.mem.ide_events.len()
+            );
+            let ev: Vec<(u32, u8)> = m.mem.ide_events.iter().copied().collect();
+            for row in ev.chunks(6) {
+                let cells: Vec<String> = row
+                    .iter()
+                    .map(|(t, w)| format!("{t:>9} {}", IDE_EV_NAMES[*w as usize]))
+                    .collect();
+                println!("    {}", cells.join("  ·  "));
+            }
+            // What the eye is looking for: an `armed` or `asserted` with no `delivered` after it
+            // and before the next `armed`. That is a completion the driver waited for and did not
+            // get, which is what `lost interrupt` means.
+            let mut lost = 0usize;
+            let mut open = false;
+            for (_, w) in &ev {
+                match *w {
+                    IDE_EV_ARMED | IDE_EV_ASSERTED => {
+                        if open {
+                            lost += 1;
+                        }
+                        open = true;
+                    }
+                    IDE_EV_DELIVERED => open = false,
+                    _ => {}
+                }
+            }
+            println!(
+                "    -> {lost} completion(s) in this window were superseded before any delivery"
+            );
+        }
         // The PP502x DMA controllers. Separate from the ATA engine above — different hardware,
         // different register block, and the only interesting thing about it is *where* it was
         // pointed, which is a handful of lines rather than a histogram.

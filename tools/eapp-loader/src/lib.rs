@@ -567,6 +567,13 @@ pub struct Memory {
     /// The report's per-region breakdown used to be a tally of the capped log.
     pub write_log_regions: BTreeMap<&'static str, u64>,
     /// Times the drive's IRQ line was raised, and times it was cleared by a status read.
+    /// The last `IDE_TIMELINE` completion events, as `(usec, what)`.
+    ///
+    /// The three counters below are totals, and on any run with `ipodloader2` in it the loader's
+    /// polling contributes several thousand while the kernel contributes a few dozen — so a total
+    /// cannot answer "did *this* completion arrive". A ring keeps the tail, which is the part with
+    /// the operating system in it. `what` is one of the `IDE_EV_*` constants.
+    pub ide_events: std::collections::VecDeque<(u32, u8)>,
     pub ide_irq_raised: u64,
     pub ide_irq_acked: u64,
     /// Times an IRQ was actually delivered to the CPU with the drive's bit set and enabled.
@@ -1738,6 +1745,7 @@ impl Memory {
                 if (0x1fc..0x200).contains(&off) {
                     if self.int_pending & (1 << IDE_IRQ) != 0 {
                         self.ide_irq_acked += 1;
+                        self.note_ide_event(IDE_EV_ACKED);
                     }
                     self.int_pending &= !(1 << IDE_IRQ);
                 }
@@ -1842,6 +1850,13 @@ impl Memory {
         }
     }
 
+    fn note_ide_event(&mut self, what: u8) {
+        if self.ide_events.len() == IDE_TIMELINE {
+            self.ide_events.pop_front();
+        }
+        self.ide_events.push_back((self.usec, what));
+    }
+
     /// Arm the drive's completion for `IDE_COMPLETION_USEC` from now, rather than raising it here.
     ///
     /// The delay is load-bearing, not cosmetic. This model finishes a transfer inside the store to
@@ -1866,11 +1881,13 @@ impl Memory {
         }
         self.ide_irq_due = Some(self.usec.wrapping_add(IDE_COMPLETION_USEC));
         self.ide_irq_raised += 1;
+        self.note_ide_event(IDE_EV_ARMED);
     }
 
     /// Assert the drive's completion: the controller latch the driver reads back, plus both
     /// interrupt-controller lines it enabled for the drive.
     pub fn fire_ide_irq(&mut self) {
+        self.note_ide_event(IDE_EV_ASSERTED);
         self.ide_irq_due = None;
         self.int_pending |= 1 << IDE_IRQ;
         self.int_pending_hi |= 1 << IDE_DMA_IRQ_HI;
@@ -2709,6 +2726,7 @@ impl Machine {
             write_log: None,
             write_log_entries: Capped::new(8192),
             write_log_regions: BTreeMap::new(),
+            ide_events: std::collections::VecDeque::new(),
             ide_irq_raised: 0,
             ide_irq_acked: 0,
             ide_irq_delivered: 0,
@@ -3660,6 +3678,7 @@ impl Machine {
                 // (`write8_inner`), and both drop the line.
                 if pending & enabled & (1 << IDE_IRQ) != 0 {
                     self.mem.ide_irq_delivered += 1;
+                    self.mem.note_ide_event(IDE_EV_DELIVERED);
                 }
             }
         }
@@ -6134,6 +6153,14 @@ pub struct Ata {
 /// drive takes milliseconds; this is the smallest delay that is still unambiguously "later than
 /// the driver's own arming sequence", which is the only property the model needs.
 pub const IDE_COMPLETION_USEC: u32 = 50;
+
+/// How many IDE completion events to keep. The tail is what matters — see `Memory::ide_events`.
+pub const IDE_TIMELINE: usize = 96;
+pub const IDE_EV_ARMED: u8 = 0;
+pub const IDE_EV_ASSERTED: u8 = 1;
+pub const IDE_EV_DELIVERED: u8 = 2;
+pub const IDE_EV_ACKED: u8 = 3;
+pub const IDE_EV_NAMES: [&str; 4] = ["armed", "asserted", "delivered", "acked"];
 
 /// The DMA engine's completion line, as a bit in the controller's *second* bank — IRQ 55.
 /// Read off RetailOS rather than a header: its ATA driver enables this bit at 0x00233768.
