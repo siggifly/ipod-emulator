@@ -62,11 +62,15 @@ pub struct Settings {
     /// Which iPod this is, cosmetically. Not an instrument — it is which iPod you had, so it lives
     /// in user mode and is remembered like the rest of the setup.
     ///
-    /// **Defaulted from the NOR when one is chosen**, because the dump states it: `SysCfg`'s `Mod#`
-    /// resolves through [`crate::identity::Model`] to a colour. A person can still override it —
-    /// they know what was in their hand — but the first answer comes from the hardware rather than
-    /// from a constant.
-    pub chassis: crate::identity::Colour,
+    /// **`None` means "whatever the ROM says", and that is the default.** `SysCfg`'s `Mod#`
+    /// resolves through [`crate::identity::Model`] to a colour, so a dump states which iPod it came
+    /// off and the window shows that one without being told.
+    ///
+    /// `Some` is a person overruling it, and is obeyed. They know what was in their hand — a case
+    /// swapped at some point in twenty years, a model table that disagrees, or simply a preference
+    /// — and this is cosmetic. It is the *window's* iPod, not the machine's identity: nothing the
+    /// firmware reads changes with it.
+    pub chassis: Option<crate::identity::Colour>,
     /// **Off unless asked for.** An emulator that phones home on launch is a bad first impression
     /// for no benefit, and this audience notices. The menu item works either way — this only
     /// decides whether the check happens on its own.
@@ -120,14 +124,13 @@ impl Settings {
                     }
                 }
                 "disk" if !v.is_empty() => s.disk = Some(PathBuf::from(v)),
-                "chassis" => {
-                    if let Some(c) = crate::identity::Colour::parse(v) {
-                        s.chassis = c;
-                    }
-                }
+                // `auto` — and anything unrecognised — leaves it `None`, which is "ask the ROM".
+                "chassis" => s.chassis = crate::identity::Colour::parse(v),
                 // The key this replaced. Honoured so that anyone who had already chosen black does
                 // not silently get a white iPod back on the next launch.
-                "black_device" if v == "true" => s.chassis = crate::identity::Colour::Black,
+                "black_device" if v == "true" => {
+                    s.chassis = Some(crate::identity::Colour::Black)
+                }
                 "check_updates_on_start" => s.check_updates_on_start = v == "true",
                 "work_on_copy" => s.work_on_copy = Some(v == "true"),
                 _ => {}
@@ -174,7 +177,9 @@ impl Settings {
         format!(
             "# ipod-gui settings. Hand-editable; unknown keys are ignored.\n\
              mode = {}\n\
-             # white, black, or u2. Defaulted from the NOR's Mod# when one is chosen.\n\
+             # auto, white, black, or u2. `auto` reads it out of the NOR's Mod#, which is\n\
+             # what the dump says the iPod was; the rest overrule that. Cosmetic either way —\n\
+             # the firmware is handed the same identity whatever this says.\n\
              chassis = {}\n\
 {}\
              disk = {}\n\
@@ -186,7 +191,7 @@ impl Settings {
              # one you supplied is copied. Set it to true or false to answer for both.\n\
              {}",
             self.mode.as_str(),
-            self.chassis.as_str(),
+            self.chassis.map(|c| c.as_str()).unwrap_or("auto"),
             self.render_nor(),
             p(&self.disk),
             self.check_updates_on_start,
@@ -452,18 +457,26 @@ mod tests {
         assert!(!s.check_updates_on_start);
     }
 
-    /// All three colours survive the file, and **the key this replaced is still honoured** — a
-    /// person who had already chosen black must not meet a white iPod after an update.
+    /// All three colours survive the file, **`auto` is the default and round-trips as itself**,
+    /// and the key this replaced is still honoured — a person who had already chosen black must
+    /// not meet a white iPod after an update.
     #[test]
     fn the_chassis_colour_round_trips_and_the_old_key_still_works() {
         use crate::identity::Colour;
         for c in [Colour::White, Colour::Black, Colour::U2] {
-            let s = Settings { chassis: c, ..Settings::default() };
-            assert_eq!(Settings::parse(&s.render()).chassis, c, "{c:?}");
+            let s = Settings { chassis: Some(c), ..Settings::default() };
+            assert_eq!(Settings::parse(&s.render()).chassis, Some(c), "{c:?}");
         }
-        assert_eq!(Settings::parse("black_device = true").chassis, Colour::Black);
-        // An unreadable value falls back rather than picking a colour at random.
-        assert_eq!(Settings::parse("chassis = chartreuse").chassis, Colour::default());
+        // The default is "ask the ROM", and it survives a write-then-read rather than collapsing
+        // into whichever colour happens to be first in the enum.
+        assert_eq!(Settings::default().chassis, None);
+        assert!(Settings::default().render().contains("chassis = auto"));
+        assert_eq!(Settings::parse(&Settings::default().render()).chassis, None);
+        assert_eq!(Settings::parse("chassis = auto").chassis, None);
+
+        assert_eq!(Settings::parse("black_device = true").chassis, Some(Colour::Black));
+        // An unreadable value falls back to the ROM rather than picking a colour at random.
+        assert_eq!(Settings::parse("chassis = chartreuse").chassis, None);
     }
 
     /// A synthesised ROM is stored as its recipe, and the recipe has to survive the file.
@@ -517,7 +530,7 @@ mod tests {
     fn settings_round_trip_through_the_file_format() {
         let s = Settings {
             mode: Mode::Debug,
-            chassis: crate::identity::Colour::Black,
+            chassis: Some(crate::identity::Colour::Black),
             nor: crate::nor::Source::File(PathBuf::from("/a/b/rom.bin")),
             disk: Some(PathBuf::from("/a/b/disk.img")),
             check_updates_on_start: true,

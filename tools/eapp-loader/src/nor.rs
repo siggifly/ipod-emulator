@@ -236,26 +236,20 @@ pub fn handoff(identity: &Identity, model: &Model, syscfg: &[u8]) -> Vec<u8> {
 /// generated ROM redistributing it. So this draws the project's own mark instead — a click wheel
 /// outline, which is the iPod's most recognisable shape and is not a trademark.
 ///
-/// ## The colours are the hardware's, not a choice
+/// ## The colours are the hardware's, not a choice — and they do not follow the case
 ///
-/// A white iPod boots to a **dark logo on white**; a black one and the U2 boot to a **white logo on
-/// black**. So the screen follows the model number, like everything else about the case — the same
-/// `Mod#` that decides the colour of the plastic decides the colour of this.
-pub fn boot_screen(colour: crate::identity::Colour, w: usize, h: usize) -> Vec<u16> {
-    use crate::identity::Colour;
+/// **Every iPod with video boots a white logo on black, whatever colour its case is.**
+///
+/// This took the case colour as an argument until 2026-08-19 and inverted for a white one, on the
+/// belief that a white 5G booted a dark logo on a white screen. It does not — corrected by the
+/// operator, who owned one. The boot screen belongs to the *firmware*, and Apple shipped one
+/// firmware for both cases; the U2's red is the wheel, not the case and not this. So there is no
+/// colour parameter, because there was never a colour decision.
+pub fn boot_screen(w: usize, h: usize) -> Vec<u16> {
     // RGB565. The panel is 16-bit, and 0 is black, so a white background has to be written.
     const WHITE: u16 = 0xffff;
     const BLACK: u16 = 0x0000;
-    // Not pure black on white: the real logo is a dark grey-black shape, and pure 0 on 0xffff
-    // rings harshly on an LCD this small.
-    const INK_DARK: u16 = 0x2104;
-
-    let (bg, fg) = match colour {
-        Colour::White => (WHITE, INK_DARK),
-        // Black and the U2 both boot white-on-black. The U2's red is the WHEEL, not the case, and
-        // not the boot screen.
-        _ => (BLACK, WHITE),
-    };
+    let (bg, fg) = (BLACK, WHITE);
 
     let mut fb = vec![bg; w * h];
 
@@ -332,20 +326,14 @@ pub fn boot_screen(colour: crate::identity::Colour, w: usize, h: usize) -> Vec<u
 ///
 /// **What somebody supplies is their business.** If they have extracted Apple's logo from a dump
 /// they own and want to use it, that is a decision about their own files.
-pub fn boot_screen_with(
-    colour: crate::identity::Colour,
-    w: usize,
-    h: usize,
-    img: &crate::splash::Image,
-) -> Vec<u16> {
-    use crate::identity::Colour;
+pub fn boot_screen_with(w: usize, h: usize, img: &crate::splash::Image) -> Vec<u16> {
     const WHITE: u16 = 0xffff;
     const BLACK: u16 = 0x0000;
-    const INK_DARK: u16 = 0x2104;
-    let (bg, fg) = match colour {
-        Colour::White => (WHITE, INK_DARK),
-        _ => (BLACK, WHITE),
-    };
+    // White on black, like [`boot_screen`] and for the same reason: the case colour never decided
+    // this on real hardware. The mask below is still what makes a supplied image work — a bright
+    // pixel is ink, a dark one is background — so the extracted Apple tile, which is white
+    // artwork, lands as white artwork.
+    let (bg, fg) = (BLACK, WHITE);
 
     let mut fb = vec![bg; w * h];
     let (px, mask) = crate::splash::fit(img, 62, 78);
@@ -504,18 +492,17 @@ impl Source {
     /// A splash that cannot be read **falls back to the mark and says why** rather than refusing to
     /// boot. A picture is decoration; failing to start an iPod over it would be the wrong trade.
     pub fn boot_screen(&self, w: usize, h: usize) -> Vec<u16> {
-        let colour = self.model().map(|m| m.colour()).unwrap_or_default();
         let path = match self {
             Source::Synthetic { splash: Some(p), .. } => Some(p.clone()),
             _ => None,
         };
         match path {
-            None => boot_screen(colour, w, h),
+            None => boot_screen(w, h),
             Some(p) => match std::fs::read(&p).map_err(|e| e.to_string()).and_then(|b| crate::splash::decode(&b)) {
-                Ok(img) => boot_screen_with(colour, w, h, &img),
+                Ok(img) => boot_screen_with(w, h, &img),
                 Err(e) => {
                     eprintln!("{}: {e} — using the built-in mark", p.display());
-                    boot_screen(colour, w, h)
+                    boot_screen(w, h)
                 }
             },
         }
@@ -648,44 +635,40 @@ mod tests {
         }
     }
 
-    /// **The colour rule is the hardware's.** A white iPod boots dark-on-white; a black one and
-    /// the U2 boot white-on-black. Getting this backwards would be visible in the first frame.
+    /// **The boot screen is the firmware's, not the case's.** Every iPod with video boots a white
+    /// logo on black — a white 5G included.
+    ///
+    /// This test used to assert the opposite, and both it and the code it checked were written from
+    /// the same wrong belief, which is why the test passed. Corrected 2026-08-19 by the operator,
+    /// who owned a white one. A test agreeing with its subject is not evidence about hardware.
     #[test]
-    fn the_boot_screen_follows_the_case_colour() {
-        use crate::identity::Colour;
+    fn every_case_boots_the_same_screen() {
         let (w, h) = (320usize, 240usize);
+        let fb = boot_screen(w, h);
+        assert_eq!(fb.len(), w * h);
 
-        let white = boot_screen(Colour::White, w, h);
-        let black = boot_screen(Colour::Black, w, h);
-        let u2 = boot_screen(Colour::U2, w, h);
-        assert_eq!(white.len(), w * h);
+        // The background is black, at a corner.
+        assert_eq!(fb[0], 0x0000, "an iPod with video boots to a black screen");
 
-        // A corner is background, and the two backgrounds are opposites.
-        assert_eq!(white[0], 0xffff, "a white iPod boots to a white screen");
-        assert_eq!(black[0], 0x0000, "a black iPod boots to a black screen");
-        // The U2 is a black case with a red WHEEL -- its boot screen is the black one, not a red
-        // one, and not the white one.
-        assert_eq!(u2, black, "the U2 boots exactly as the black iPod does");
+        // The mark is drawn, in white.
+        let ink = fb.iter().filter(|&&p| p != 0x0000).count();
+        assert!(ink > 200, "nothing was drawn: {ink}");
 
-        // The mark is drawn, and in the foreground colour.
-        let ink_white_case = white.iter().filter(|&&p| p != 0xffff).count();
-        let ink_black_case = black.iter().filter(|&&p| p != 0x0000).count();
-        assert!(ink_white_case > 200, "nothing was drawn on the white case: {ink_white_case}");
-        assert!(ink_black_case > 200, "nothing was drawn on the black case: {ink_black_case}");
-        // Two rings of the same geometry, so the same number of pixels either way.
-        assert_eq!(ink_white_case, ink_black_case);
-
-        // It is a RING, not a disc: the centre is background on both.
-        assert_eq!(white[(h / 2) * w + w / 2], 0xffff, "the middle must be empty");
-        assert_eq!(black[(h / 2) * w + w / 2], 0x0000, "the middle must be empty");
+        // It is a RING, not a disc: the centre is background.
+        assert_eq!(fb[(h / 2) * w + w / 2], 0x0000, "the middle must be empty");
     }
 
-    /// **One source image, correct on both cases.** The extracted Apple tile is the BLACK iPod's —
-    /// white artwork — and pasting it onto a white case would be white on white. Painted as a mask
-    /// it comes out dark on white there, which is what a white iPod actually boots to.
+    /// **A supplied image is painted as a mask, not pasted.**
+    ///
+    /// Its brightness is coverage and the firmware's own colours supply the ink, so the extracted
+    /// Apple tile — white artwork on black — lands as white artwork on black, and a dark-on-light
+    /// picture of the same shape lands identically. That is what makes "supply any logo" work at
+    /// all: nobody has to know which polarity their file is in.
+    ///
+    /// *(This test used to assert that the same image inverted itself for a white case. That was
+    /// the wrong belief about the hardware — see `every_case_boots_the_same_screen`.)*
     #[test]
-    fn a_supplied_logo_inverts_itself_for_a_white_case() {
-        use crate::identity::Colour;
+    fn a_supplied_logo_is_painted_as_a_mask() {
         // A white blob on black, which is the shape of the real tile.
         let (iw, ih) = (62usize, 78usize);
         let mut rgb = vec![0u8; iw * ih * 3];
@@ -696,24 +679,22 @@ mod tests {
                 }
             }
         }
-        let img = crate::splash::Image { w: iw, h: ih, rgb };
+        let img = crate::splash::Image { w: iw, h: ih, rgb: rgb.clone() };
         let (w, h) = (320usize, 240usize);
-        let on_black = boot_screen_with(Colour::Black, w, h, &img);
-        let on_white = boot_screen_with(Colour::White, w, h, &img);
+        let fb = boot_screen_with(w, h, &img);
 
-        // Backgrounds are the case's, opposite each other.
-        assert_eq!(on_black[0], 0x0000);
-        assert_eq!(on_white[0], 0xffff);
-
-        // The centre of the blob: bright on the black case, DARK on the white one. Pasting instead
-        // of masking would have made both of them white.
+        assert_eq!(fb[0], 0x0000, "the background is the firmware's black");
         let c = (h / 2) * w + w / 2;
         let lum = |p: u16| ((p >> 11) & 0x1f) as u32 + ((p >> 5) & 0x3f) as u32 + (p & 0x1f) as u32;
-        assert!(lum(on_black[c]) > 80, "the mark should be bright on a black case");
-        assert!(lum(on_white[c]) < 30, "the mark should be DARK on a white case, not white on white");
-        // And it must differ from its own background on both, which is the whole point.
-        assert_ne!(on_white[c], on_white[0], "invisible on white");
-        assert_ne!(on_black[c], on_black[0], "invisible on black");
+        assert!(lum(fb[c]) > 80, "the mark should be bright");
+        assert_ne!(fb[c], fb[0], "the mark is invisible against its own background");
+
+        // The polarity of the source does not matter, because it is a mask: inverting the image
+        // inverts which pixels are ink, and the blob's centre goes dark while the corner lights up.
+        let inverted: Vec<u8> = rgb.iter().map(|v| 255 - v).collect();
+        let img2 = crate::splash::Image { w: iw, h: ih, rgb: inverted };
+        let fb2 = boot_screen_with(w, h, &img2);
+        assert!(lum(fb2[c]) < 30, "an inverted source should leave the centre dark");
     }
 
     /// A generated ROM must be recognisable as generated, and a real one must not trip the check.

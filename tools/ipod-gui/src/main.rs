@@ -240,6 +240,9 @@ const UI_TEXT_DIM: Color32 = Color32::from_rgb(0xC9, 0xCC, 0xD1);
 const UI_TEXT_FAINT: Color32 = Color32::from_rgb(0xB2, 0xB6, 0xBD);
 /// Section headings.
 const UI_HEADING: Color32 = Color32::from_rgb(0xB6, 0xBA, 0xC1);
+/// The one colour in the window that is not a shade: something needs attention. It was written
+/// twice, as two slightly different ambers at two call sites, and neither was contrast-checked.
+const UI_WARN: Color32 = Color32::from_rgb(0xE0, 0xA0, 0x40);
 
 /// WCAG relative luminance of an sRGB colour.
 fn luminance(c: Color32) -> f32 {
@@ -1009,6 +1012,9 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         selftest: args.iter().any(|a| a == "--selftest" || a == "--selftest-control"),
         selftest_control: args.iter().any(|a| a == "--selftest-control"),
         shots: root.join("_out"),
+        boot_image: get("--boot-image="),
+        window_shot: get("--window-shot=").map(PathBuf::from),
+        shot_after: get("--shot-after=").and_then(|v| v.parse().ok()).unwrap_or(25.0),
         probe: match get("--probe=").as_deref() {
             None => None,
             Some("menu") => Some(emu::Probe::Menu),
@@ -1121,6 +1127,15 @@ struct App {
     log: VecDeque<String>,
     shot_dir: PathBuf,
     last_shot: Option<String>,
+    /// What the ROM's `Mod#` says the case colour is — the answer `Settings::chassis == None`
+    /// resolves to. Re-derived on every launch and on every settings close, so it cannot go stale
+    /// the way a remembered colour can.
+    derived_chassis: Colour,
+    /// `--window-shot=FILE`: when the window opened, and whether the grab has been asked for yet.
+    /// The grab is asynchronous — the picture arrives as an event a frame or two later — so this
+    /// is a two-step state and not a boolean.
+    shot_opened: Instant,
+    shot_asked: bool,
     scale: u32,
     /// Where `hold_switch` drew the switch this frame, so the pointer test is against the thing on
     /// screen rather than against an offset guessed from the wheel's radius. The first version
@@ -1602,6 +1617,9 @@ impl App {
             log: VecDeque::new(),
             shot_dir,
             last_shot: None,
+            derived_chassis: Colour::default(),
+            shot_opened: Instant::now(),
+            shot_asked: false,
             scale: 1,
             hold_slot: Rect::NOTHING,
             dev_area: Rect::NOTHING,
@@ -1817,6 +1835,51 @@ impl App {
         }
     }
 
+    /// `--window-shot=FILE`: ask for one picture of the whole window, write it, quit.
+    ///
+    /// The two window pictures in `docs/media/` were taken with the operating system's screen
+    /// grabber. That made them unreproducible — nobody could regenerate them without sitting at
+    /// the machine — and it is why they were still showing a black window and a three-step setup
+    /// screen after both had been replaced. A picture of the program that only a person can take
+    /// is a picture that goes stale silently.
+    ///
+    /// The grab is asynchronous: `ViewportCommand::Screenshot` is a request, and the image arrives
+    /// as `Event::Screenshot` on a later frame. So this runs every frame and does one of three
+    /// things — wait, ask, or collect.
+    fn window_shot_step(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.cfg.window_shot.clone() else { return };
+
+        // Collect first: if the picture has arrived, this frame's job is to write it.
+        let shot = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
+        if let Some(img) = shot {
+            let (w, h) = (img.width(), img.height());
+            let mut rgb = Vec::with_capacity(w * h * 3);
+            for p in img.pixels.iter() {
+                rgb.extend_from_slice(&[p.r(), p.g(), p.b()]);
+            }
+            match std::fs::write(&path, png::encode(&rgb, w, h)) {
+                Ok(()) => println!("window shot -> {} ({w}x{h})", path.display()),
+                Err(e) => eprintln!("{}: {e}", path.display()),
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+
+        // Otherwise: keep the window repainting until the machine has run for long enough, then
+        // ask once. Without the repaint request an idle window simply never draws another frame
+        // and the shot is never taken.
+        ctx.request_repaint_after(Duration::from_millis(50));
+        if !self.shot_asked && self.shot_opened.elapsed().as_secs_f32() >= self.cfg.shot_after {
+            self.shot_asked = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        }
+    }
+
     fn screenshot(&mut self, rgb: &[u8], addr: u32) {
         let _ = std::fs::create_dir_all(&self.shot_dir);
         let stamp = std::time::SystemTime::now()
@@ -1920,8 +1983,25 @@ fn device_at_rest(
 }
 
 impl eframe::App for App {
+    /// What the window is cleared to before anything is drawn on it.
+    ///
+    /// **Setting the visuals was not enough, and the difference was invisible from the code.**
+    /// `theme()` sets `panel_fill = UI_BG`, and every panel with a frame does come out charcoal —
+    /// the button strip at the bottom of this window is the proof. But the device sits on the
+    /// central area, which is transparent, so what shows through is eframe's *default* clear
+    /// colour: `from_rgba_unmultiplied(12, 12, 12, 180)`, which composites to `#080808`.
+    ///
+    /// So the change that exists to let a black iPod be black had a `#0D0D0F` case on a `#080808`
+    /// background — a contrast ratio of 1.05:1, which is to say the iPod was invisible. Measured
+    /// out of a `--window-shot` PNG, which is the only reason it was caught: the two shipped
+    /// window pictures predate the change, and nothing in the code says which colour wins.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        UI_BG.to_normalized_gamma_f32()
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_update();
+        self.window_shot_step(ui.ctx());
         // Anywhere on the window, on every screen. A drop target that is a rectangle inside the
         // window is a rectangle somebody has to find; the window itself is the thing they are
         // already aiming at. Read once here, because `dropped_files` is reported to every widget
@@ -2057,7 +2137,7 @@ impl App {
             let dev = IPOD_VIDEO;
             let (rect, _) =
                 ui.allocate_exact_size(Vec2::new(ui.available_width(), 118.0), egui::Sense::hover());
-            device_at_rest(ui.painter(), &dev, rect.center(), 108.0, app.settings.chassis);
+            device_at_rest(ui.painter(), &dev, rect.center(), 108.0, app.chassis());
             ui.add_space(6.0);
 
             ui.vertical_centered(|ui| {
@@ -2176,8 +2256,9 @@ impl App {
             guid,
             splash,
         };
-        // The case follows the model number, because that is the only thing that decides it.
-        self.settings.chassis = m.colour();
+        // The chosen model is what `auto` resolves to from here on. A person's explicit override,
+        // if they made one, is left alone — picking a different iPod is not un-picking a colour.
+        self.derived_chassis = m.colour();
         // And the pair check is judged against the same iPod.
         self.images.model = m;
         self.images.recheck_pair();
@@ -2434,7 +2515,7 @@ impl App {
                         ui.label(
                             egui::RichText::new(v.text())
                                 .small()
-                                .color(Color32::from_rgb(0xE0, 0xA0, 0x40)),
+                                .color(UI_WARN),
                         );
                     }
                 }
@@ -2474,7 +2555,7 @@ impl App {
                         ui.label(
                             egui::RichText::new("These are not the same iPod —")
                                 .strong()
-                                .color(Color32::from_rgb(0xE0, 0xA0, 0x40)),
+                                .color(UI_WARN),
                         );
                         ui.label(egui::RichText::new(m).color(UI_TEXT_DIM));
                     })
@@ -2791,21 +2872,42 @@ impl App {
 
             ui.add_space(20.0);
             app.section(ui, "APPEARANCE");
-            // **No case-colour switch.** The colour is not a setting — it is stated by the model
-            // number, and no `SysCfg` on any iPod carries one. A supplied dump's `Mod#` decides it;
-            // a synthesised one is whatever model was chosen. A switch here could disagree with the
-            // machine's own identity, and then the window would be showing an iPod that does not
-            // exist.
-            ui.label(
-                egui::RichText::new(format!(
-                    "Case: {} — from the model number ({}). Change it on the setup screen by \
-                     choosing a different iPod.",
-                    app.settings.chassis.label(),
-                    app.synthetic_model().apple_number()
-                ))
-                .small()
-                .color(UI_TEXT_FAINT),
-            );
+            // **The model number answers first, and a person can overrule it.**
+            //
+            // The colour is stated by the hardware — a dump's `Mod#` resolves to it, and no
+            // `SysCfg` on any iPod carries a colour field — so `From the iPod` is the default and
+            // is right without being asked. But this is the *window's* iPod, not the machine's
+            // identity: nothing the firmware reads changes with it, so overruling it costs
+            // nothing and a case swapped at some point in twenty years is an ordinary thing.
+            let derived = app.derived_chassis;
+            let mut pick = app.settings.chassis;
+            let from_ipod = format!("From the iPod — {}", derived.label());
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Case").color(UI_TEXT_DIM));
+                let label = match pick {
+                    None => from_ipod.clone(),
+                    Some(c) => c.label().to_string(),
+                };
+                egui::ComboBox::from_id_salt("case-colour")
+                    .selected_text(label)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut pick, None, &from_ipod);
+                        for c in [Colour::White, Colour::Black, Colour::U2] {
+                            ui.selectable_value(&mut pick, Some(c), c.label());
+                        }
+                    })
+                    .response
+                    .on_hover_text(format!(
+                        "The model number ({}) says {}. This is only what the window draws — the \
+                         iPod is handed the same identity either way.",
+                        app.synthetic_model().apple_number(),
+                        derived.label()
+                    ));
+            });
+            if pick != app.settings.chassis {
+                app.settings.chassis = pick;
+                app.settings.save();
+            }
             ui.add_space(4.0);
             let mut debug = app.settings.mode == Mode::Debug;
             if ui
@@ -2907,13 +3009,22 @@ impl App {
     /// **Only on a change of dump.** Doing it on every launch would overwrite a deliberate choice
     /// in Appearance, and a setting that will not stay set is worse than no setting. A dump whose
     /// `Mod#` is absent or unknown changes nothing — silence is not an instruction to go white.
+    /// Take the case colour from the ROM's own `Mod#`, every time.
+    ///
+    /// **This used to return early when the ROM was the one already remembered**, on the reasoning
+    /// that a colour once adopted needs no re-adopting. It does: the remembered colour then outlives
+    /// the thing that decides it. A `chassis =` left in the settings file — by hand, by the legacy
+    /// `black_device = true` key, or by an older build with a different model table — then survives
+    /// every launch of a ROM that disagrees with it, and the settings screen's promise that *"the
+    /// colour is not a setting — it is stated by the model number"* quietly stops being true.
+    ///
+    /// No such disagreement has been *observed*; this is a latent one closed on principle. So the
+    /// ROM decides, on every launch and on every settings close. The cost is one read of a 1 MiB
+    /// file at two moments a person is already waiting through.
     fn adopt_chassis_from_nor(&mut self, nor: &std::path::Path) {
-        if self.settings.flash().as_deref() == Some(nor) {
-            return;
-        }
         let Ok(bytes) = std::fs::read(nor) else { return };
         if let Some(m) = eapp_loader::inspect::syscfg(&bytes).and_then(|c| c.model_info()) {
-            self.settings.chassis = m.colour();
+            self.derived_chassis = m.colour();
         }
     }
 
@@ -3153,10 +3264,12 @@ impl App {
         let line = 17.0;
         let mut y = area.center().y - (KEYS.len() as f32 * line) / 2.0;
         let font = egui::FontId::proportional(11.0);
-        // Deliberately low contrast. It is a reference, not a thing to read every time — the wheel,
-        // the buttons and the switch all take clicks, so nobody has to use these at all.
-        let dim = Color32::from_gray(96);
-        let dimmer = Color32::from_gray(72);
+        // Quiet, not invisible. These were `from_gray(96)` and `from_gray(72)`, chosen against the
+        // near-black window this used to have; against the charcoal one they measure **1.73:1 and
+        // 1.11:1**, which is not low contrast, it is unreadable. Raw greys are how they escaped
+        // `every_text_colour_is_legible`, which only knew about the named constants.
+        let dim = UI_TEXT_DIM;
+        let dimmer = UI_TEXT_FAINT;
         for (k, what) in KEYS {
             p.text(Pos2::new(x, y), egui::Align2::LEFT_TOP, k, font.clone(), dim);
             p.text(Pos2::new(x + 92.0, y), egui::Align2::LEFT_TOP, what, font.clone(), dimmer);
@@ -3220,14 +3333,14 @@ impl App {
                     egui::Align2::CENTER_TOP,
                     n,
                     egui::FontId::proportional(12.0),
-                    Color32::from_rgb(214, 158, 74),
+                    UI_WARN,
                 );
                 p.text(
                     Pos2::new(area.center().x, below + 12.0 + 15.0),
                     egui::Align2::CENTER_TOP,
                     "press D for the log",
                     egui::FontId::proportional(11.0),
-                    Color32::from_gray(96),
+                    UI_TEXT_FAINT,
                 );
             }
         }
@@ -3534,8 +3647,14 @@ impl App {
         }
     }
 
+    /// The case colour the window draws: the person's choice if they made one, otherwise the
+    /// colour the ROM's `Mod#` resolves to.
+    fn chassis(&self) -> Colour {
+        self.settings.chassis.unwrap_or(self.derived_chassis)
+    }
+
     fn palette(&self) -> (Color32, Color32, Color32, Color32) {
-        palette_for(self.settings.chassis)
+        palette_for(self.chassis())
     }
 
     /// The hold switch, as a control **protruding from the top edge of the front view**.
@@ -3729,34 +3848,38 @@ impl App {
                     }
                 }
                 ui.separator();
-                // Two-thumb gestures, which a single pointer cannot make. Latched rather than
-                // momentary for that reason, and shown latched so a forgotten one is visible.
-                let combo = [Button::Menu, Button::Select];
-                let held = combo.iter().all(|b| self.down.contains(b));
+                // **Apple's service diagnostics**, which on the real device is reached by holding
+                // SELECT+REW at power-on. So it is a power cycle into a different program in the
+                // boot ROM, not a mode — and the same button brings the iPod back.
+                //
+                // This replaces two latched chord buttons, `hold MENU+SELECT` (the hard reset) and
+                // `hold PLAY` (sleep). Both were reachable from the keyboard and from the wheel
+                // already, and neither did anything a person could see.
+                let in_diag = self.cfg.boot_image.is_some();
+                let label = if in_diag { "leave diagnostics" } else { "diagnostics" };
                 if ui
-                    .selectable_label(held, "hold MENU+SELECT")
-                    .on_hover_text("The hard reset, on the real device.")
-                    .clicked()
-                {
-                    for b in combo {
-                        if held {
-                            self.release(b);
-                        } else {
-                            self.press(b);
-                        }
-                    }
-                }
-                let play_held = self.down.contains(&Button::Play);
-                if ui
-                    .selectable_label(play_held, "hold PLAY")
-                    .on_hover_text("Sleep, on the real device.")
-                    .clicked()
-                {
-                    if play_held {
-                        self.release(Button::Play);
+                    .selectable_label(in_diag, label)
+                    .on_hover_text(if in_diag {
+                        "Power-cycle back into the operating system."
                     } else {
-                        self.press(Button::Play);
+                        "Power-cycle into the boot ROM's own `diag` image — SELECT+REW at power-on \
+                         on the real device. Needs a real dump: a synthesised ROM has no images in \
+                         it."
+                    })
+                    .clicked()
+                {
+                    self.down.clear();
+                    self.touching = false;
+                    let target = if in_diag { None } else { Some("diag".to_string()) };
+                    self.cfg.boot_image = target.clone();
+                    if let Some(l) = &self.link {
+                        l.command(emu::Cmd::BootImage(target));
                     }
+                    self.say(if in_diag {
+                        "power cycle: back into the operating system".into()
+                    } else {
+                        "power cycle: into Apple's diagnostics".to_string()
+                    });
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("screenshot").on_hover_text("Also the S key.").clicked() {
@@ -4544,6 +4667,7 @@ mod tests {
             ("UI_TEXT_DIM", UI_TEXT_DIM),
             ("UI_TEXT_FAINT", UI_TEXT_FAINT),
             ("UI_HEADING", UI_HEADING),
+            ("UI_WARN", UI_WARN),
         ] {
             let r = contrast(c, UI_BG);
             assert!(r >= AA, "{name} on the background is {r:.2}:1, below AA's {AA}");
@@ -4570,6 +4694,44 @@ mod tests {
         let (black_body, _, _, _) = palette_for(Colour::Black);
         assert!(luminance(black_body) < 0.01, "the black iPod is not black");
         assert!(luminance(UI_BG) > luminance(black_body) * 3.0, "the window is not lighter than it");
+    }
+
+    /// **No text colour is a raw grey**, because the test above can only check colours it is told
+    /// about — and the two least readable strings in the window were `Color32::from_gray(96)` and
+    /// `Color32::from_gray(72)`, written inline at their call sites. Against the background this
+    /// window has now they measure 1.73:1 and 1.11:1; the second is invisible. They passed every
+    /// test in this file because no test had ever heard of them.
+    ///
+    /// Greys are fine for *shapes* — the wheel, the glass, the hold switch are all greys. This
+    /// only forbids one at a `text(` call site, where the named constants exist precisely so the
+    /// contrast test can reach them.
+    #[test]
+    fn no_text_is_drawn_in_a_colour_the_contrast_test_cannot_see() {
+        let src = include_str!("main.rs");
+        // A `.text(` call spans several lines, so track whether we are inside one.
+        let mut open = 0usize;
+        let mut offenders = Vec::new();
+        for (n, line) in src.lines().enumerate() {
+            if line.contains(".text(") {
+                open = 6; // the call's arguments, generously
+            }
+            if open > 0 {
+                // `line.contains` skips this test's own source, which of course names the very
+                // strings it is looking for.
+                let is_this_test = line.contains("line.contains");
+                if !is_this_test
+                    && (line.contains("Color32::from_gray(") || line.contains("Color32::from_rgb("))
+                {
+                    offenders.push(format!("{}: {}", n + 1, line.trim()));
+                }
+                open -= 1;
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "text drawn in a colour no contrast test knows about:\n  {}",
+            offenders.join("\n  ")
+        );
     }
 
     #[test]

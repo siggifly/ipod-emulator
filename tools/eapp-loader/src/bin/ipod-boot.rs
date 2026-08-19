@@ -2161,12 +2161,11 @@ fn make_nor_cmd(args: &[String]) -> Result<(), String> {
     });
     println!("  {} bytes, marked as synthetic", image.len());
 
-    // --preview=PATH.png : what this iPod shows while it boots. A white case boots dark-on-white,
-    // a black one and the U2 white-on-black -- the model number decides that, like it decides the
-    // colour of the plastic.
+    // --preview=PATH.png : what this iPod shows while it boots. The same picture on every case --
+    // an iPod with video boots a white logo on black whether its plastic is white or black.
     if let Some(png_path) = flag("--preview") {
         let (w, h) = (320usize, 240usize);
-        let px = nor::boot_screen(model.colour(), w, h);
+        let px = nor::boot_screen(w, h);
         let mut rgb = vec![0u8; w * h * 3];
         for (i, p) in px.iter().enumerate() {
             let (r, g, b) = ((p >> 11) & 0x1f, (p >> 5) & 0x3f, p & 0x1f);
