@@ -696,9 +696,27 @@ Kernel panic: …
 cannot do is mount a root filesystem, and there are two separate reasons, one of which is ours and
 one of which is not:
 
-1. **Not ours.** `loader.cfg` on this image says `console=ttyS0 quiet` and **contains no `root=` at
-   all**, so `Please append a correct "root=" boot option` is a literally accurate report about a
-   file this project wrote. There is also no Linux root filesystem on the drive to name.
+1. **Not ours** — and much bigger than a missing `root=`, which is what this line used to say.
+   *(Corrected 2026-08-20. `ipodloader.conf` on this image carries the ZeroSlackr line in full —
+   `root=/dev/hda2 rootfstype=vfat rw quiet` — so "contains no `root=` at all" was false when
+   written. The real defect is one level up, and it is the whole reason this firmware cannot boot
+   here:)*
+
+   **We installed one file out of a five-directory distribution.** `IPOD_LINUX_INSTALL.md` — which
+   has been sitting in `resources/vendor/ipodloader2/docs/` throughout — says to copy `/etc/`,
+   `/ZeroSlackr/`, `/bin/`, `/boot/` and `/dev/` from the ZeroSlackr archive to the FAT32 root. The
+   drive has **`/boot/vmlinux` and nothing else**: no `/bin/sh`, no `/sbin/init`, no `/etc/inittab`.
+
+   So `root=/dev/hda2 rootfstype=vfat` names a partition that really is there and really does mount
+   — and then the kernel has nothing to execute. **No emulator fix can make this disk boot**, and
+   every hour spent below this line looking for one was spent against a target that was not on the
+   drive. The archive (`ZeroSlackr-SVN-snapshot-2008-08-11.7z`, 101 146 859 bytes, sha256 of its
+   `boot/vmlinux` recorded in ROADMAP.md) was downloaded once, one file was taken out of it, and it
+   was not kept.
+
+   **The rule.** Before treating "OS X does not boot" as an emulator question, check that OS X is
+   *installed* — against its own install document, which for every firmware here is already in the
+   repo. That check costs one partition-table dump and one directory listing.
 2. **Ours, and open.** The eight `I/O error`s are on **sectors 0, 2, 4 and 6** — the MBR, in 1 KB
    blocks — which Apple's bootloader, Rockbox and `ipodloader2` all read off the same model without
    complaint. Linux's `ide` driver is being refused something they do not ask for.
