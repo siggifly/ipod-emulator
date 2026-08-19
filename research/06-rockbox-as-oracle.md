@@ -1409,27 +1409,55 @@ So Doom is blocked on **content this project does not have**, having been blocke
 processor an hour earlier. Those are very different kinds of blocked, and the difference is the
 whole point of writing it down.
 
-### And it plays — the base WAD was the only thing left
+### The base WAD — and a retraction, because the first attempt was a picture of a failure
 
 `rockdoom.wad` is a **PWAD**, and `Dbuild_base` only asks whether the file opens
-(`rockdoom.c:294`, `fileexists` returning 0 on success). A valid empty one — twelve bytes, the
-magic plus a zero lump count and a directory offset — satisfies it, and Doom then runs on the game
-WAD's own graphics:
+(`rockdoom.c:294`, `fileexists` returning 0 on success). A twelve-byte empty PWAD satisfies that
+check and gets as far as Doom's own menu — `Game · Addons · Demos · Options · Play Game · Quit`.
+
+**That was written up here as "and it plays". It does not, and the correction is the finding.**
+Pressing `Play Game` on the empty PWAD produces:
 
 ```
-Doom Menu
-> Game
-  Addons
-  Demos
-  Options
-  Play Game
-  Quit
+W_GetNumForName: TANGTABL not found
+R_LoadTrigTables: Invalid TANGTABL
+W_ReadLump: only read 12 of 3143200 on lump -1
 ```
 
-That is not a workaround for anything emulated; it is the archive Rockbox's manual describes,
-supplied empty because the two published copies of the real one are gone. What it demonstrates is
-that nothing else was missing.
+A menu is not a game. `rockdoom.wad` is not a formality that the loader merely stats — it carries
+lumps the renderer reads at level start, and `tables.c:2150-2170` names three of them with their
+exact sizes:
 
-**The coprocessor is doing the work.** On the run that reaches this menu it parked and was woken
+| lump | bytes | what it is |
+|---|---|---|
+| `SINETABL` | 40 960 | `finesine`, 10 240 × `fixed_t` |
+| `TANGTABL` | 16 384 | `finetangent`, 4 096 × `fixed_t` |
+| `TANTOANG` | 8 196 | `tantoangle`, 2 049 × `angle_t` |
+
+Each is checked with `W_LumpLength(lump) != N` and `I_Error`s on mismatch, so nothing approximate
+gets past it.
+
+**And "both published copies are gone" was also wrong.** The URL in Rockbox's own source
+(`i_video.c:70`, `m_menu.c:31` — `alamode.mines.edu/~kkurbjun/rockdoom.wad`) is dead, and so is
+`download.rockbox.org/useful/`. The **wiki attachment is live**:
+`rockbox.org/wiki/pub/Main/PluginDoom/rockdoom.wad` — 285 048 bytes, `PWAD`, **186 lumps**, all
+three tables present at exactly the sizes above. Two dead links were reported as a census of the
+internet; a third URL was all it took.
+
+### What Doom actually needs, from Rockbox's own manual
+
+Two files in `/.rockbox/doom/`, and they do different jobs:
+
+| file | what it is | where it came from here |
+|---|---|---|
+| `rockdoom.wad` | the base PWAD, *"based on `prboom.wad` from prboom-2.2.6"* | the Rockbox wiki attachment, sha256 `303f5ea5…` |
+| a game IWAD | one of `doom1` · `doom` · `doomu` · `doom2` · `doomf` · `plutonia` · `tnt` (`rockdoom.c:207-213`) | **Freedoom 0.13.0** `freedoom2.wad` installed as `doom2.wad` |
+
+Freedoom is not a substitute anybody here invented: `manual/plugins/doom.tex` says *"A free
+alternative for Doom 2 is FreeDoom … This can be used in place of `doom2.wad`"*. It is a real
+`IWAD` (28 787 748 bytes, magic checked at `d_main.c:546`) under a BSD licence, which is what makes
+it the one that can be named in a public repository's documentation.
+
+**The coprocessor is doing the work.** On the run that reaches the menu it parked and was woken
 **18 554 times** — Doom hands it work constantly, which is exactly the traffic the core-lock spin
 was standing in for when there was no second core to hand anything to.
