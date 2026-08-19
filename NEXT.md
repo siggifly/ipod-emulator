@@ -285,8 +285,46 @@ every "iPodLinux never…" in [research/16](research/16-the-third-bootloader.md)
 [research/17](research/17-the-boot-matrix.md) is a claim measured on a machine that no longer exists.
 Two are already corrected there; the rest have not been re-run.
 
-**Still open:** whether it mounts a root filesystem. `loader.cfg` on this image carries no `root=`
-at all, which is a separate and non-emulator problem — see research/16.
+### What it uncovered next, and where it stands
+
+The width fix let iPodLinux reach code no firmware here had ever exercised, and it found three more
+inaccuracies immediately. All three are fixed, and **retail is unmoved across all of them**:
+
+- **We were presenting a phantom slave drive.** A 5G iPod has one ATA device; we answered every
+  taskfile register whatever the DEV bit said, so the kernel attached *two* disks of the same size
+  and interleaved their commands through one state machine. An absent device drives nothing onto the
+  bus and reads back zero, which is the signature `ide_probe` uses. Two `ATA DISK drive` lines → one.
+- **A multi-sector PIO read interrupts once per block, not once per command.** We armed the
+  interrupt controller only on a *write* to the ATA window, so the second and later sectors of a
+  transfer — loaded while the guest is *reading* the data port — completed silently.
+- **RECALIBRATE (`0x10`) is a legal command**, and we were aborting it. Linux issues it while
+  recovering from a timeout, so we answered an error-recovery attempt with a fresh error.
+
+**Where it stops now — `hda: lost interrupt` during the partition scan.** The kernel's own commands,
+read off the uncapped log:
+
+```
+[3207] cmd 0xec IDENTIFY
+[3208] cmd 0x91  nsector 0x3f      INITIALIZE DEVICE PARAMETERS — 16 heads, 63 sectors
+[3209] cmd 0x10                    RECALIBRATE
+[3210] cmd 0x20  nsector 0x08  lba 0
+[3211] cmd 0x20  nsector 0x08  lba 131072
+[3212] cmd 0x20  nsector 0x08  lba 65536
+```
+
+Three 8-sector PIO reads, of which **15 of the 24 sectors are drained** — so it is not that the
+transfer never starts, it is that it stops partway. The suspect is interrupt *timing*, not delivery:
+the counters say `raised 6450, DELIVERED to a handler 16, acked by status read 6426`, and a
+completion that a status read clears before the CPU takes it is indistinguishable, to the kernel,
+from one that never came.
+
+**What would settle it:** an instrument that records, for each IDE completion in the kernel phase,
+the instruction count at which it was raised, delivered, or acked — the three counters above are
+totals and the loader's polling dominates them. Do not reason about this one further without it;
+four wrong answers in this file were produced by exactly that.
+
+**Also still open:** whether it mounts a root filesystem. `loader.cfg` on this image carries no
+`root=` at all, which is a separate and non-emulator problem — see research/16.
 
 ## 0b — ~~The retail fingerprint moved to 102 and nobody knows why~~ · **SETTLED 2026-08-18 — the disk had been written to**
 
