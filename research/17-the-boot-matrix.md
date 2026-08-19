@@ -58,6 +58,31 @@ bootloader consults. The Linux kernel then boots in full and panics; that is
 `ipod-boot make-nor --model MA146|MA446`, so "we are testing a 5.5G" is true only of the synthetic
 row: **the default machine is a real 5G.**
 
+## The whole matrix, measured 2026-08-19
+
+Every cell is a run. `—` is not "untested", it is "cannot, and the row below says why".
+
+| | real 5G dump | synthetic 5G | synthetic 5.5G |
+|---|---|---|---|
+| **RetailOS**, cold | boots — 599 ATA, full framebuffer | — | — |
+| **RetailOS**, high-level | boots — 597 M instructions | **boots** — 7 ATA | **boots** — 7 ATA |
+| **Rockbox**, warm | menu — 72 ATA | 90 ATA | 90 ATA |
+| **Rockbox**, cold | **menu — 10 304 ATA, 74 057 lit pixels** | **0 ATA, 0 pixels** | **0 ATA, 0 pixels** |
+| **ipodloader2** → Linux | 3 196 ATA, no unmapped | **3 196** | **3 196** |
+| `diag` | **draws — 70 669 lit pixels** | — | — |
+| `disk` | faults after 128 K instructions (USB unmodelled) | — | — |
+| `logo`, `vmcs` | not bootable images — payloads, refused by `is_bootable` | — | — |
+
+**Two rows are worth reading twice.**
+
+`ipodloader2` is **identical on all three** — 3 196 ATA commands and no unmapped accesses — so it
+consults nothing the synthesiser writes, and the Linux failure downstream of it is not a
+generation mismatch. That was a live hypothesis and this kills it.
+
+**Cold Rockbox is 10 304 against 0.** Anything that has to run Apple's bootloader needs a real dump,
+because a synthetic ROM has none — see below. The synthetic rows exist only through the high-level
+boot, which enters an operating system directly.
+
 ## Where the four NOR modes actually ship — and why a synthetic ROM still cannot run them
 
 **Asked and answered 2026-08-19, because the obvious guess is that `diag` and friends come down in
