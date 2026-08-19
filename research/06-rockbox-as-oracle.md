@@ -917,7 +917,45 @@ the spill interleave, which one `--storeaddr` on the buffer address, ordered, wi
 model the mailbox on the strength of this paragraph.
 
 **Settled when** the cold path writes `0x05` to `ADCC1` and the boot survives its own battery
-reading. Everything measured on the cold path before this is fixed is measured through it — R4.
+reading.
+
+> ### The first half of that is now true, and the second half is not — 2026-08-19
+>
+> **The cold path writes `0x05`.** Same recipe, `retail DISK=rockbox-cold.img`, 1.2 G:
+>
+> ```
+> pcf50605 ADC conversions by channel (11 total):
+>     reg 0x2f  x5  last value 0x05
+> ```
+>
+> `0x05` is `(2 << 1) | 1` — channel 2, correct, where this section recorded 9 240 writes of `0x00`.
+> The stack-local clobber is gone; the I²C and PMU work since then closed it. **Every measurement in
+> the sections above was taken through that bug and should be re-read with that in mind.**
+>
+> **The boot still does not survive.** 113 ATA commands, and the panel holds Apple's logo — 4 frames
+> in a 2 G film, none of them Rockbox's. So the ADC was one cause and not the only one, and the
+> conditional this section closes with has to be split: the channel byte is settled, the cold boot
+> is not.
+>
+> ### And the second core makes it worse, which is a finding rather than a setback
+>
+> The hypothesis this section ends on — *"a second face of the unmodelled co-processor"*, because
+> the cold-only clobbering PCs are `set_cpu_frequency__lock` / `__unlock`, Rockbox's CPU↔COP
+> corelock — is now testable, and the answer is not the one it predicted:
+>
+> | | ADC `reg 0x2f` last value | non-black pixels |
+> |---|---|---|
+> | cold, single core | **`0x05`** — correct | 0 |
+> | cold, `--second-core` | **`0x89`** | 2 916 |
+>
+> `0x89` is `(0x44 << 1) | 1` — channel 68, which is not a channel. So running a real coprocessor
+> **reintroduces** a clobber of the same byte, with a different value, on the same path; and the
+> panel keeps Apple's logo instead of being blanked. The corelock reading was pointing at the right
+> subsystem and the wrong direction: it is not that the COP's silence corrupts the byte, it is that
+> our COP's *presence* does. The coprocessor entered here at the same reset vector as the CPU and its
+> stack is not something this project has yet established — that is the next measurement, and it is
+> the same open question as ledger #7's default.
+ Everything measured on the cold path before this is fixed is measured through it — R4.
 ## 2026-08-18, later still: the menu's font was never on the volume the recipe mounts
 
 The shipped screenshot of Rockbox's menu renders in the compiled-in 8 px sysfont, not in the
