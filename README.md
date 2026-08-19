@@ -230,9 +230,23 @@ within a day.*
 **Rockbox 4.0 boots here, to its main menu** — its own logo through the same co-processor
 transport, then `Scanning disk…`, then the menu, over 3 953 ATA commands of it reading the volume.
 
-<img src="docs/media/ipod-13-rockbox-boot.gif" width="320" alt="Rockbox booting: its logo, then Nothing to resume, then the main menu">
+<img src="docs/media/ipod-13-rockbox-boot.gif" width="320" alt="Rockbox booting to its main menu, then being driven by the wheel into Plugins, Games, Doom, and a level loading">
 
 <img src="docs/media/ipod-14-rockbox-menu.png" width="320" alt="Rockbox 4.0's main menu running on this emulator">
+
+That film is one run: the logo, the menu, and then the wheel driving it four levels deep into
+`Plugins → Games → Doom`, where Doom reads its WADs off the volume and initialises a level. Doom's
+own menu is a still below. **It does not reach gameplay** — after `Starting Graphics engine` the
+panel stops changing, and `I_InitGraphics` sets `noprintf=1` on the line below that message, so the
+silence is by design and tells you nothing. The coprocessor slept and woke **34 554 times** across
+that run, so the machine is working; what it is not doing is putting a frame where we can see it.
+
+<img src="docs/media/ipod-27-doom-menu.png" width="320" alt="Doom's own menu on the emulator: Game, Addons, Demos, Options, Play Game, Quit">
+
+Doom needs two files in `/.rockbox/doom/`, and Rockbox's manual names both: `rockdoom.wad` (the
+base WAD, 186 lumps, carrying the `SINETABL`/`TANGTABL`/`TANTOANG` trig tables the renderer reads at
+level start) and a game IWAD. The IWAD here is **Freedoom 0.13.0** installed as `doom2.wad` — free,
+BSD-licensed, and the substitution Rockbox's own manual recommends.
 
 That is a volume **this project's own installer wrote** — `ipod-boot put-files`, 381 files — so the
 theme, the icons and the 15 px font are all being read back off the emulated disk. It used to be a
