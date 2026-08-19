@@ -232,18 +232,23 @@ fn run(args: &[String]) -> Result<(), String> {
         );
         return Ok(());
     }
+    // **A GIF, and no video.** Both were written for years and the three MP4s in `docs/media/`
+    // were referenced by nothing — 723 KB of files no reader ever reached, because a GIF plays
+    // inline in a README and a video does not. The PNG sequence is still the archival form and
+    // `frames.concat` is still written, so anyone who wants a video has the inputs.
     let vf = if scale == 1 {
         format!("fps={fps}")
     } else {
         format!("scale=iw*{scale}:ih*{scale}:flags=neighbor,fps={fps}")
     };
-    let mp4 = out.join("film.mp4");
+    let gif = out.join("film.gif");
     ffmpeg(&[
         "-f", "concat", "-safe", "0", "-i", &out.join("frames.concat").display().to_string(),
-        "-t", &format!("{total:.4}"), "-vf", &vf, "-c:v", "libx264", "-preset", "veryslow",
-        "-crf", "18", "-pix_fmt", "yuv420p", &mp4.display().to_string(),
+        "-t", &format!("{total:.4}"), "-vf",
+        &format!("{vf},split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none"),
+        "-loop", "0", &gif.display().to_string(),
     ])?;
-    println!("video -> {} ({total:.2}s)", mp4.display());
+    println!("film -> {} ({total:.2}s)", gif.display());
     Ok(())
 }
 
@@ -268,7 +273,7 @@ enum Palette {
     Resampled,
 }
 
-/// Publish a film directory as a gif and an mp4, both upscaled 2x nearest-neighbour.
+/// Publish a film directory as a gif, upscaled 2x nearest-neighbour.
 ///
 /// **The palette.** `stats_mode=single` is one palette per frame. This used to be
 /// `stats_mode=full` — one palette for the whole film — and that is wrong by a measured margin: the
@@ -300,7 +305,6 @@ fn publish(dir: &Path, name: &str, fps: u32, mode: Palette, post: &Path) -> Resu
     std::fs::create_dir_all(post).map_err(|e| e.to_string())?;
     let cp = concat_path.display().to_string();
     let gif = post.join(format!("{name}.gif")).display().to_string();
-    let mp4 = post.join(format!("{name}.mp4")).display().to_string();
 
     // `dither=none`: a 16-bit UI of flat fills and one-pixel rules; dithering adds noise that was
     // never on the panel.
@@ -323,12 +327,7 @@ fn publish(dir: &Path, name: &str, fps: u32, mode: Palette, post: &Path) -> Resu
             ffmpeg(&["-f", "concat", "-safe", "0", "-i", &cp, "-t", &total, "-vf", &vf, "-loop", "0", &gif])?;
         }
     }
-    let vf = format!("scale=iw*2:ih*2:flags=neighbor,fps={fps}");
-    ffmpeg(&[
-        "-f", "concat", "-safe", "0", "-i", &cp, "-t", &total, "-vf", &vf,
-        "-c:v", "libx264", "-preset", "veryslow", "-crf", "18", "-pix_fmt", "yuv420p", &mp4,
-    ])?;
-    println!("  -> {gif} and .mp4   (640x480, {total}s, {fps} fps)");
+    println!("  -> {gif}   (640x480, {total}s, {fps} fps)");
     Ok(())
 }
 

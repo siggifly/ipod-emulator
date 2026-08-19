@@ -228,7 +228,9 @@ within a day.*
 ### It is not only Apple's software
 
 **Rockbox 4.0 boots here, to its main menu** — its own logo through the same co-processor
-transport, then `Scanning disk…`, then the menu, over 2 393 ATA commands of it reading the volume.
+transport, then `Scanning disk…`, then the menu, over 3 953 ATA commands of it reading the volume.
+
+<img src="docs/media/ipod-13-rockbox-boot.gif" width="320" alt="Rockbox booting: its logo, then Nothing to resume, then the main menu">
 
 <img src="docs/media/ipod-14-rockbox-menu.png" width="320" alt="Rockbox 4.0's main menu running on this emulator">
 
@@ -247,12 +249,35 @@ after *time*, a click wheel that only delivers input to firmware speaking Apple'
 chip-id register whose answer nothing had ever had to be right about until a third bootloader
 asked. None of the four is findable with one operating system.
 
-**And the wheel drives it** — the third bug above is fixed, so the menu selection moves:
+Not finished: **nothing past the menu is verified**, there is no sound, and it is not yet something
+the window can start for you — that is [on the roadmap](ROADMAP.md). The picture of the wheel moving
+Rockbox's selection that used to sit here has been withdrawn: it was drawn in Rockbox's fallback
+font rather than the volume's, and re-measured on 2026-08-19 the wheel script did not reach the
+machine at all — `script: 0 of 20 steps fired`. The click-wheel fix it illustrated is real and
+[research/06](research/06-rockbox-as-oracle.md) records it; the picture was not evidence of it.
 
-<img src="docs/media/ipod-15-rockbox-wheel.gif" width="320" alt="Rockbox's menu selection moving under wheel input">
+### A third bootloader, and a Linux kernel
 
-Not finished: nothing past the menu is verified, there is no sound, and it is not yet something the
-window can start for you — that is [on the roadmap](ROADMAP.md).
+`ipodloader2` is what iPodLinux boots through, and it prints a console of its own:
+
+| | |
+|---|---|
+| ![](docs/media/ipod-24-ipodloader2.png) | ![](docs/media/ipod-26-ipodlinux-loaded.png) |
+
+The left is where it stopped for a long time — `No valid paritions found!` — and **both reasons were
+bugs in its own source**, not in this emulator. It tests the firmware partition with
+`if (mlc_strncmp(magic, "]ih[", 4))` while `mlc_strncmp` returns zero on a match, so it accepts a
+partition only when the magic does *not* match; and it has no case for partition type `0x0C`, FAT32
+with LBA, which is what iTunes on Windows writes and what this project's own `make-disk` writes.
+`tools/patches/ipodloader2-vfs.patch` carries the fix.
+
+With it, ATA commands go from **3 to 3 194**, and the loader reads `loader.cfg`, loads the kernel and
+jumps — the right-hand picture. **The kernel then executes**: the machine ends inside
+`ldmia sp, {r0-pc}^`, an exception return restoring user-mode registers, having taken interrupts.
+
+It stops on an address nothing here models — 8 385 336 reads of `0x64004000` from two program
+counters inside the interrupt path — and that address appears in no register map this project has.
+Nothing is drawn by Linux itself. See [research/16](research/16-the-third-bootloader.md).
 
 ### And it is not only the operating system
 
