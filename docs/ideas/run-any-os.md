@@ -86,12 +86,119 @@ a symptom.
 **builds and cold-boots**, and immediately misidentifies the chip; see
 [research/16](../../research/16-the-third-bootloader.md).
 
+## The plan, in full
+
+**Written out 2026-08-19, after four things were measured that this document was guessing about.**
+The shape below is the same one it always argued for — *the way in is the way the device has* — and
+every part of it now has a measurement behind it rather than an expectation.
+
+### The two layers, and why they are different
+
+| | how a person gets there | what it is |
+|---|---|---|
+| **Another operating system** | **install it onto the drive**, then cold boot | Rockbox, iPodLinux. They live in the firmware partition, exactly as on hardware |
+| **The boot ROM's own modes** | **hold the chord at power-on** | `diag`, `disk`. They are in the ROM, not on the drive; nothing is installed |
+
+They are not variations on one mechanism, and collapsing them would lose what is honest about each.
+
+### Layer 1 — installing, which is what a person actually does
+
+Both halves already exist as commands, and together they are what Rockbox Utility does:
+
+| command | writes | Rockbox Utility's equivalent |
+|---|---|---|
+| `ipod-boot install-os SRC.img OS.ipod OUT.img` | the image into the firmware partition's `osos` entry, checksum fixed | `ipodpatcher` |
+| `ipod-boot put-files` | `.rockbox/` — or `loader.cfg` and a kernel — onto the FAT32 volume | its file copy |
+
+Then the machine cold-boots it from the reset vector. Nothing new boots; Apple's own bootloader
+finds it where it already looks, so a divergence afterwards belongs to the OS.
+
+**Three things stand between that and a window a person can use:**
+
+1. **Content routing for `.ipod` files.** The window already sorts dropped files by what is *in*
+   them. A `.ipod` is an 8-byte header — big-endian checksum, then four ASCII characters — over a
+   raw ARM image, and the checksum is **verifiable**, so this is identification and not a guess.
+   Drop `rockbox.ipod` on the window and it offers to build a new drive with Rockbox installed.
+
+2. **A drive library that says what each drive holds.** RetailOS and Rockbox are two drives, not
+   one drive in two moods. Each row states its firmware-partition contents and whether the volume
+   carries `.rockbox` or a `loader.cfg`, so the thing a person picks is a *machine*, described.
+   This is also what protects Apple's `osos`: 7.21 MiB nobody can re-download, and installing never
+   edits the source.
+
+3. **Somewhere to get the files.** The same shape as the Apple firmware work already shipped: a
+   small catalogue of Rockbox releases and its bootloader, each recorded by SHA-256, fetched on
+   demand, cached, deduplicated and clearable. `firmware.rs` is that machinery and generalises.
+
+### Layer 2 — the chord, which is now measured rather than proposed
+
+This document argued for the chord on principle. **It works.** Apple's boot ROM queries the click
+wheel three times before it loads anything — `0x8000023a` at 2.8 M, 18.1 M and 57.4 M instructions —
+and holding `SELECT`+`REW` across them makes it choose diagnostics itself:
+
+```
+Running 'diag' 0 from 0x10000000
+```
+
+with nothing placed by us, and it draws to the same 70 669 non-black pixels a directly-entered
+`diag` produces. See [research/07](../../research/07-the-flash-images.md).
+
+**One thing blocks it from being the only way in:** releasing the chord afterwards storms the
+interrupt controller — 7 812 499 asserted, 1 taken — where a directly-entered `diag` handles the
+same release cleanly. Until that is understood there has to be a second door, and the second door
+should be honest about being an instrument.
+
+### The boot picker is an instrument, not a feature
+
+A picker was added to the window on 2026-08-19, and **this document had already argued against
+one** — correctly. It belongs in debug mode beside the readout and the framebuffer inspector, as
+the window's equivalent of `ipod-boot flsh`: a way to enter an image directly, for looking at it,
+which skips the bootloader and says so. It is not how a person runs another operating system, and
+when the chord's release storm is fixed it stops being how anybody reaches diagnostics either.
+
+### Where each destination actually is
+
+**Measured 2026-08-19.** This is the part that decides what is worth building next.
+
+| | state | the blocker, named |
+|---|---|---|
+| **Rockbox** | **main menu, legible**, on a volume `put-files` wrote — 3 953 ATA commands, 23 frame updates, 74 057 non-black pixels | none; it works |
+| **Rockbox bootloader, cold** | **chain completes** — Apple's bootloader → Rockbox's → Rockbox main, 113 ATA commands — and then draws **nothing at all**, 0 non-black pixels at 1.5 G | why the same binary that draws a menu from one drive draws nothing from another. The difference is the disk and it has not been isolated |
+| **ipodloader2** | **its console draws, legible**, past everything research/16 had ever seen | two bugs in its own source, below |
+| **iPodLinux** | the kernel **is here** — `_out/ipl/boot/vmlinux`, 1 531 200 bytes, and `loader.cfg` points at it | ipodloader2 never reads it: 3 ATA commands total, which is `IDENTIFY` + the MBR + one probe |
+
+### The two bugs standing between us and a third operating system
+
+Both are in `ipodloader2`'s own `vfs.c`, both read out of the source it was built from, and neither
+is this emulator's:
+
+**The firmware-partition test is inverted.** `vfs.c:193`:
+
+```c
+if( mlc_strncmp((void*)(fs_header->fwfsmagic),"]ih[", 4) ) { validoffset = 1; }
+```
+
+`mlc_strncmp` returns **0 on a match** (`minilibc.c:452`). So the partition is accepted only when
+the magic does **not** match. Both drives here carry `5d 69 68 5b` — `]ih[`, correct — at byte
+`0x100` of the partition's first sector, and the loader rejects them and prints
+`[0]: Bad iPod FW entry`.
+
+**There is no case for FAT32-LBA.** `vfs.c` handles `case 0x00`, `case 0x83` and `case 0xB`. The
+MBR here says partition 1 is type **`0x0C`** — FAT32 LBA — so it falls to `default:` and prints
+`[1]: Unknown 0xC2`. (The trailing `2` is a literal in the format string, `vfs.c:274`.)
+
+Two independent reasons a correct drive is invisible to it, and `No valid paritions found!` is the
+consequence of both.
+
 ## Order
 
-1. ~~Find out why a shutdown is requested after the disk scan.~~ **Done** — it was the clock, not
-   the battery, and not Rockbox.
+1. ~~Find out why a shutdown is requested after the disk scan.~~ **Done** — it was the clock.
 2. ~~`osos` installation into a **new** drive image, with the `ipvd` checksum verified.~~ **Done** —
-   `ipod-boot install-os`, which refuses unless the checksums already in the directory reproduce
-   first, and `ipod-boot put-files` for the volume beside it.
-3. **Content routing for `.ipod` files, and the machine list showing what each drive holds.** The
-   open one, and now the only thing between a person and a second operating system.
+   `ipod-boot install-os` and `ipod-boot put-files`.
+3. **Content routing for `.ipod` files, and a drive library showing what each drive holds.** Still
+   the only thing between a person and a second operating system.
+4. **A Rockbox catalogue**, so the files come from inside the program like Apple's already do.
+5. **Move the boot picker into debug mode**, where an instrument belongs.
+6. **Patch ipodloader2's two `vfs.c` bugs** and see whether iPodLinux boots. The diagnosis is done;
+   what is left is a carried patch and a run.
+7. **Isolate the Rockbox bootloader's black panel** — same binary, two drives, one draws.
