@@ -757,27 +757,46 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         }
 
         // trace BUDGET --osos=$RB/$IMG --boot-osos --flash= --disk= --sysinfo --bcm --pmu "$@"
+        // **On a writable clone, like `retail`.** Rockbox writes to the disk — its cache writes
+        // back, and a read-only drive aborts the write. Given one it panics outright:
+        //
+        //     *PANIC* (4.0)
+        //     dc_writeback_callback() - Could not write sector 65795 (error -53)
+        //
+        // which for a long time looked like navigating its menus was broken. A real iPod's disk is
+        // writable, so this recipe's was not modelling anything; it was a missing flag. The clone
+        // is per run and removed afterwards, so the source is never touched.
         Recipe::Rockbox => {
             let img = std::env::var("IMG").unwrap_or_else(|_| "rb-main.raw".into());
             let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
-            let (disk, disk_from) = resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
+            let (src, disk_from) = resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
             let osos = res.join("vendor/rockbox/bin").join(&img);
             let budget = env_u64("BUDGET", 200_000_000);
+            let (work, cleanup) = match env_path("WORKDISK") {
+                Some(w) => (w, None),
+                None => {
+                    let w = std::env::temp_dir()
+                        .join(format!("ipod-rockbox-{}.img", std::process::id()));
+                    (w.clone(), Some(w))
+                }
+            };
             if !dry {
                 require(&flash, "NOR dump (FLASH=)")?;
-                require(&disk, "disk image (DISK=)")?;
+                require(&src, "disk image (DISK=)")?;
                 require(&osos, "Rockbox image (IMG=)")?;
+                clone_file(&src, &work)?;
             }
             let mut a = head(budget);
             a.push(opt("--osos=", &osos));
             a.push("--boot-osos".into());
             a.push(opt("--flash=", &flash));
-            a.push(opt("--disk=", &disk));
+            a.push(opt("--disk=", &work));
+            a.push("--disk-writable".into());
             a.push("--sysinfo".into());
             a.push("--bcm".into());
             a.push("--pmu".into());
             a.extend(user.iter().cloned());
-            Ok(Plan { trace, sources: vec![("NOR dump", flash.clone(), flash_from), ("drive", disk.clone(), disk_from)], runs: vec![a], cleanup: None })
+            Ok(Plan { trace, sources: vec![("NOR dump", flash.clone(), flash_from), ("drive", src.clone(), disk_from)], runs: vec![a], cleanup })
         }
 
         // Two boots of the same argv, against a disk whose firmware partition was written from the
