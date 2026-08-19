@@ -1229,6 +1229,11 @@ enum Screen {
     Help,
     /// Everything found inside one of the two chosen files. Which one is [`App::details_row`].
     Details,
+    /// Other people's software, and the door to the drive. **A page and not a settings section**:
+    /// added inline it pushed the settings screen 109 px past the smallest window this program
+    /// supports, and the guard that caught it says what to do — lose a section, not gain a
+    /// scrollbar. Help and the file facts are pages for the same reason.
+    Software,
     /// Apple's firmware: fetch it, see what is held, clear it out. **A page rather than a section
     /// in Settings**, because Settings is already the tallest page this program has and the height
     /// test exists to stop it growing a scrollbar.
@@ -1942,6 +1947,122 @@ impl App {
         out
     }
 
+    /// **Putting other people's software on the iPod, and getting at the drive.**
+    ///
+    /// Two actions, and they are the two halves of what a person does with a device like this. One
+    /// is the install this program can do end to end because it can verify every byte of it; the
+    /// other is the escape hatch for everything it cannot identify — music, WADs, somebody's own
+    /// plugin — which is the door the device itself has.
+    fn software_screen(&mut self, ui: &mut egui::Ui) {
+        if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.screen = self.back_to;
+            return;
+        }
+        self.column(ui, |app, ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Software").heading());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("  Back  ").clicked() {
+                        app.screen = app.back_to;
+                    }
+                });
+            });
+            ui.add_space(6.0);
+            app.software_rows(ui);
+        });
+    }
+
+    fn software_rows(&mut self, ui: &mut egui::Ui) {
+        let drive = self.images.disk.trim().to_string();
+        ui.label(
+            egui::RichText::new(
+                "Rockbox is a second operating system for this iPod. Installing it does not take                  the iPod away from you: hold MENU while it starts and its bootloader hands back                  to Apple's software.",
+            )
+            .small()
+            .color(UI_TEXT_FAINT),
+        );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let can = !drive.is_empty() && !self.install_busy;
+            if ui
+                .add_enabled(can, egui::Button::new("Install Rockbox…"))
+                .on_hover_text(
+                    "Downloads Rockbox and its bootloader, checks both against a recorded                      SHA-256, and installs them onto a COPY of your drive — the bootloader into                      the firmware partition, the release onto the volume.",
+                )
+                .clicked()
+            {
+                let src = PathBuf::from(&drive);
+                let out = drives_dir().join("rockbox.img");
+                let slot = self.install_slot.clone();
+                self.install_busy = true;
+                self.say("fetching Rockbox …".to_string());
+                std::thread::spawn(move || {
+                    let r = (|| -> Result<(PathBuf, Vec<String>), String> {
+                        let cache = eapp_loader::rockbox::cache_dir();
+                        let boot =
+                            eapp_loader::rockbox::download(eapp_loader::rockbox::FULL_INSTALL[0], &cache)?;
+                        let zip =
+                            eapp_loader::rockbox::download(eapp_loader::rockbox::FULL_INSTALL[1], &cache)?;
+                        let mut report = eapp_loader::install::install_os(&src, &boot, &out)?;
+                        report.extend(eapp_loader::install::put_zip(&out, &zip)?);
+                        Ok((out, report))
+                    })();
+                    *slot.lock().unwrap() = Some(r);
+                });
+            }
+
+            // **Only where the host can actually do it.** Windows mounts ISO and VHD, not a raw
+            // image, and requiring a third-party tool is not something this program will do — so
+            // there the button is absent rather than present and failing.
+            match eapp_loader::mount::available() {
+                Some(m) if !drive.is_empty() => {
+                    if ui
+                        .button("Open the drive…")
+                        .on_hover_text(format!(
+                            "{} — put your own files on it: music, plugins, a kernel. Power the                              iPod off first; two writers on one filesystem is how a volume gets                              corrupted. This mounts the image file, which is not the same thing as                              the iPod's own disk mode.",
+                            m.describe()
+                        ))
+                        .clicked()
+                    {
+                        match eapp_loader::mount::open(Path::new(&drive)) {
+                            Ok(lines) => {
+                                for l in lines {
+                                    self.say(l);
+                                }
+                            }
+                            Err(e) => self.say(e),
+                        }
+                    }
+                }
+                _ => {}
+            }
+        });
+        if self.install_busy {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(egui::RichText::new("working …").color(UI_TEXT_DIM));
+            });
+            ui.ctx().request_repaint_after(Duration::from_millis(200));
+        }
+        // The same collector the setup screen's install row uses, so a job started here finishes
+        // here too rather than only when that screen happens to be open.
+        let done = self.install_slot.lock().unwrap().take();
+        if let Some(done) = done {
+            self.install_busy = false;
+            match done {
+                Ok((drive, report)) => {
+                    for line in report {
+                        self.say(line);
+                    }
+                    self.images.disk = drive.to_string_lossy().into_owned();
+                    self.images.revalidate();
+                    self.say(format!("installed — {} is the drive now", drive.display()));
+                }
+                Err(e) => self.say(format!("install failed: {e}")),
+            }
+        }
+    }
+
     fn window_shot_step(&mut self, ctx: &egui::Context) {
         let Some(path) = self.cfg.window_shot.clone() else { return };
 
@@ -2128,6 +2249,7 @@ impl eframe::App for App {
             Screen::Settings => return self.settings_screen(ui),
             Screen::Firmware => return self.firmware_screen(ui),
             Screen::Help => return self.help_screen(ui),
+            Screen::Software => return self.software_screen(ui),
             Screen::Details => return self.details_screen(ui),
             Screen::Device => {}
         }
@@ -3366,6 +3488,24 @@ impl App {
                         .clicked()
                     {
                         self.open_settings();
+                    }
+                    // **Here and not in the settings, because the settings screen is full.** It was
+                    // tried three ways there — its own section (+72 px), a line of its own (+58),
+                    // and a link on a heading's row (+22) — against a screen already within 700 px
+                    // of the smallest window this program supports, and the guard says lose a
+                    // section rather than gain a scrollbar. This strip has horizontal room and
+                    // costs nothing vertically. It is also arguably the better home: installing an
+                    // operating system is something you do to the machine, not a preference.
+                    if ui
+                        .button("software…")
+                        .on_hover_text(
+                            "Install Rockbox onto a copy of this drive, or open the drive on this \
+                             computer and put your own files on it.",
+                        )
+                        .clicked()
+                    {
+                        self.back_to = self.screen;
+                        self.screen = Screen::Software;
                     }
                     if let Some(line) = self.update_line.clone() {
                         ui.separator();
@@ -4904,6 +5044,7 @@ mod tests {
                     Screen::Settings => app.settings_screen(ui),
                     Screen::Firmware => app.firmware_screen(ui),
                     Screen::Help => app.help_screen(ui),
+                    Screen::Software => app.software_screen(ui),
                     Screen::Details => app.details_screen(ui),
                     Screen::Device => {}
                 }
