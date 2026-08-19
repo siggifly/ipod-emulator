@@ -1156,6 +1156,14 @@ struct App {
     dev_area: Rect,
     /// `None` = no check has finished. `Some(None)` = a check ran and found nothing, which is what
     /// offline looks like and is never shown.
+    /// An install running on another thread. `None` = nothing started; `Some(None)` = running;
+    /// `Some(Some(..))` = finished, with the new drive and its report or the reason it failed.
+    ///
+    /// **On a thread, because it copies eight gigabytes.** The window has to keep drawing while it
+    /// happens, and a frozen window during a thirty-second operation is indistinguishable from a
+    /// crashed one.
+    install_slot: Arc<Mutex<Option<Result<(PathBuf, Vec<String>), String>>>>,
+    install_busy: bool,
     update_slot: Arc<Mutex<Option<Option<update::Found>>>>,
     update_line: Option<String>,
     update_asked: bool,
@@ -1636,6 +1644,8 @@ impl App {
             dev_area: Rect::NOTHING,
             notice: None,
             update_slot,
+            install_slot: Arc::new(Mutex::new(None)),
+            install_busy: false,
             update_line: None,
             update_asked: false,
             fw_cache: None,
@@ -2505,6 +2515,7 @@ impl App {
         if want_own_software {
             self.take(&pick_files("Software", &["img", "bin", "dmg", "iso", "ipsw", "zip"]));
         }
+        self.install_row(ui);
         if want_firmware {
             self.back_to = self.screen;
             self.screen = Screen::Firmware;
@@ -2518,6 +2529,133 @@ impl App {
     /// nobody asked for — and those sentences are the ones that save an evening: an `iPod_24`
     /// bundle against a family 20 ROM, a 2 MiB dump that is somebody else's iPod, an Apple
     /// Partition Map where an MBR was expected.
+    /// **What to do with an operating system somebody dropped on the window.**
+    ///
+    /// `Images::accept` identifies `rockbox.ipod` by its own checksum and a Rockbox release by
+    /// being a zip that is not an `.ipsw`, and it used to stop there: the verdict said "ready to
+    /// install" and nothing could act on it. This is the thing that acts on it.
+    ///
+    /// **It installs onto a copy and never the source.** Apple's `osos` is 7.21 MiB of software
+    /// that can no longer be downloaded; an installer that edits in place is one mistake away from
+    /// destroying the only copy somebody has. So the result is a new drive, named for what is in
+    /// it, and switching operating systems is switching drives — which is what the machine is
+    /// actually doing.
+    fn install_row(&mut self, ui: &mut egui::Ui) {
+        // Collect a finished install first, so the button below is drawn in the right state.
+        let done = self.install_slot.lock().unwrap().take();
+        if let Some(done) = done {
+            self.install_busy = false;
+            match done {
+                Ok((drive, report)) => {
+                    for line in report {
+                        self.say(line);
+                    }
+                    self.images.pending_os = None;
+                    self.images.pending_bundle = None;
+                    self.images.disk = drive.to_string_lossy().into_owned();
+                    self.images.revalidate();
+                    self.say(format!("installed — {} is the drive now", drive.display()));
+                }
+                Err(e) => self.say(format!("install failed: {e}")),
+            }
+        }
+        if self.images.pending_os.is_none() && self.images.pending_bundle.is_none() {
+            return;
+        }
+        let drive = self.images.disk.trim().to_string();
+        ui.add_space(8.0);
+        egui::Frame::NONE
+            .fill(UI_BG_DEEP)
+            .inner_margin(8.0)
+            .corner_radius(4.0)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let os = self.images.pending_os.clone();
+                let bundle = self.images.pending_bundle.clone();
+                let what = match (&os, &bundle) {
+                    (Some(_), Some(_)) => "an operating system and its files",
+                    (Some(_), None) => "an operating system",
+                    _ => "files for the volume",
+                };
+                if drive.is_empty() {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Ready to install {what} — but there is no drive yet. Add one above,                              or build one from an .ipsw."
+                        ))
+                        .color(UI_TEXT_DIM),
+                    );
+                    return;
+                }
+                ui.label(
+                    egui::RichText::new(format!("Ready to install {what}."))
+                        .strong()
+                        .color(UI_TEXT),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Onto a copy of the drive — the original is not touched. Apple's own                          bootloader finds it in the firmware partition and runs it, so nothing new                          boots and nothing is bypassed.",
+                    )
+                    .small()
+                    .color(UI_TEXT_FAINT),
+                );
+                ui.add_space(6.0);
+                if self.install_busy {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(
+                            egui::RichText::new("installing — copying eight gigabytes")
+                                .color(UI_TEXT_DIM),
+                        );
+                    });
+                    ui.ctx().request_repaint_after(Duration::from_millis(200));
+                    return;
+                }
+                if ui.button("Install onto a new drive").clicked() {
+                    let src = PathBuf::from(&drive);
+                    // Named for what goes into it, so the drive list reads as a list of machines.
+                    let stem = os
+                        .as_deref()
+                        .or(bundle.as_deref())
+                        .map(|p| {
+                            Path::new(p)
+                                .file_stem()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| "installed".into())
+                        })
+                        .unwrap_or_else(|| "installed".into());
+                    let out = drives_dir().join(format!("{stem}.img"));
+                    let slot = self.install_slot.clone();
+                    self.install_busy = true;
+                    self.say(format!("installing into {} …", out.display()));
+                    std::thread::spawn(move || {
+                        let r = (|| -> Result<(PathBuf, Vec<String>), String> {
+                            let mut report = Vec::new();
+                            match &os {
+                                // An OS goes into a NEW file, which is also what makes the copy.
+                                Some(p) => report.extend(eapp_loader::install::install_os(
+                                    &src,
+                                    Path::new(p),
+                                    &out,
+                                )?),
+                                // Files only: still a copy, because the drive they land on is the
+                                // one the person is running and this modifies it in place.
+                                None => {
+                                    std::fs::copy(&src, &out)
+                                        .map_err(|e| format!("copying the drive: {e}"))?;
+                                    report.push(format!("  copied {} -> {}", src.display(), out.display()));
+                                }
+                            }
+                            if let Some(b) = &bundle {
+                                report.extend(eapp_loader::install::put_zip(&out, Path::new(b))?);
+                            }
+                            Ok((out, report))
+                        })();
+                        *slot.lock().unwrap() = Some(r);
+                    });
+                }
+            });
+    }
+
     fn file_rows(&mut self, ui: &mut egui::Ui) {
         let rows: [(&str, &str, &[&str]); 2] = [
             ("Boot ROM", "flash", &["bin"]),
