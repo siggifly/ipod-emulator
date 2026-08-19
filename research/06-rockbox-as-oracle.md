@@ -1242,3 +1242,38 @@ every cold run tried, which makes it a good place to put a `--enterlog` next.
 co-processor at a second address nobody had mapped, as `diag` does at `0xb0000000` — is wrong:
 `rb-bootloader.raw` references `0x30000000` twelve times and `rb-main.raw` nine, and **neither
 mentions `0xb0000000` at all**. Cheap to check, and it saved chasing the wrong thing.
+
+### Doom stops in the same place, and the two problems are one
+
+**Measured 2026-08-19.** Rockbox's Doom launches: the wheel navigates four levels down —
+`Plugins` → `Games` → `doom` — the plugin starts, and it reads the drive hard. **4 023 ATA
+commands, 82 frame updates, and `Loading…` on screen.** Then, at 7.83 G executed instructions and
+**320 seconds of simulated time**, it is sitting on:
+
+```asm
+000845dc  mov  r1, #0x60000000
+000845e0  ldrb r1, [r1, #0x0]        ; PROC_ID
+000845e8  strb r2, [r0, r1, lsr #7]  ; the two-entry per-core array
+00086300  cmp  r4, #0x0
+00086304  bne  0x00086374            ; spin
+```
+
+Byte for byte the address a cold-booted Rockbox halts at. **So the cold-boot black panel and Doom's
+unfinished load are not two problems.** They are one, and it is named in this emulator's own source:
+
+> *"The PP5021 is dual-core (CPU + COP) … Report CPU, and report the COP already asleep."*
+
+`map_hardware` seeds `PROC_ID` with `0x55` and reports the coprocessor permanently asleep, because
+there is one interpreter. That is exactly right for RetailOS, which uses the mailbox and never
+dispatches to a second core here — and it is a dead end for **any firmware that hands work to the
+COP and waits for it**. Rockbox's stock build is a dual-core build. Its core-lock is waiting for a
+processor that does not exist, and 320 seconds of simulated time is long enough to be certain it is
+spinning rather than slow.
+
+**What that costs, stated plainly:** cold-booted Rockbox, and Doom past its load. Warm-entered
+Rockbox is unaffected — it reaches its menu, takes wheel input and navigates — so this is a specific
+path rather than a general failure.
+
+**What it would take:** a second interpreter over the same bus, with `CPU_CTRL`/`COP_CTRL` sleep and
+wake and the `0x60001000` mailbox already modelled (research/15) doing real work. That is a feature,
+not a fix, and it belongs with the other 1.0 items rather than being attempted in passing.
