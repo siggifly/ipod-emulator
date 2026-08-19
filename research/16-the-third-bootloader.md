@@ -800,6 +800,48 @@ is where the kernel's `ide` probe stops: its own `probe_for_drive` never reaches
 we own, and finding out what it drives instead is one `--watch-range` over the window it should be
 using once the base is known.
 
+### The kernel reads our IDENTIFY six bytes out of step — measured, not inferred
+
+`drive->head` is the byte at `drive + 0x107`; the check at `0x000ebfc4` accepts 1..16 and complains
+otherwise, and it holds **63**. 63 is our `sectors per track`, which is IDENTIFY **word 6**, sitting
+where the kernel expects **word 3**.
+
+That could be a coincidence of two identical numbers, so it was tested rather than argued. Four
+fields were given distinct probe values in one build — `w[3] = 13` (heads), `w[6] = 61` (sectors),
+`w[55] = 9` (current heads), `w[56] = 7` (current sectors) — and the kernel came back with
+
+```
+r3 = 0x0000003d      = 61
+```
+
+**`w[6]`.** Not 13, not 9, not 7. The kernel's `id->heads` is our `id->sectors`, so its copy of the
+response is our copy **shifted left by three 16-bit words — six bytes.** Everything downstream
+follows from that one displacement: a geometry that fails its own sanity check, a drive the driver
+will not accept, and `unable to read partition table` from a disk whose MBR reads back byte-perfect
+for every other guest.
+
+**What that rules out.** It is not the `field_valid` words — `w[53]`'s bit 0 is set and `w[54..56]`
+carry the current geometry, and the probe shows the kernel reading none of them. It is not a stale
+buffer: `0xec` sets `buf = identify()` and `pos = 0` together. It is not a missing IDENTIFY —
+**three** are issued, the loader's and two of the kernel's, per the uncapped census.
+
+**What it leaves.** Six bytes is three halfword reads of the data port that our model serves and
+hardware would not, or that the kernel makes before its transfer loop and our model answers from the
+buffer instead of from a register. `Ata::read` maps `0x1e0..=0x1e3` to the buffer and pops one byte
+per byte-read, so any read in that window advances it — including one the real controller would
+answer from somewhere else. That is the next thing to instrument: log the first byte-reads of the
+data port after each `0xec`, with their values, and see whether the kernel's first read is handed
+byte 0 or byte 6.
+
+**And the command line is not the problem, which the doc settles.** `ipodloader2`'s own
+`IPOD_LINUX_INSTALL.md` gives ZeroSlackr's line as
+`root=/dev/hda2 rootfstype=vfat rw quiet` — the root is the **FAT32 data partition** and the ext2
+tree is a file loop-mounted out of it, so **no third partition is wanted** and this project's
+two-partition drive is the right shape. Supplied as `/ipodloader.conf` (which `config.c:41` checks
+*before* `loader.cfg`, so nothing had to be overwritten) the boot is unchanged: same panic, same
+3 196 ATA commands. The kernel's compiled-in `root=/dev/hda3` at `0x12efa` is a default that
+ZeroSlackr overrides and is not what it is failing on.
+
 **What is NOT established:** that this kernel is right for this iPod. It is the ZeroSlackr
 `vmlinux` dated 2008, and a kernel built for a different generation would also load and then poll a
 register that generation has. The polled address being absent from the 5G's map is consistent with
