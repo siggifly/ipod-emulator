@@ -339,19 +339,27 @@ fn main() {
     // separate file. This is what a high-level boot does, and it is the difference between
     // "supply three files" and "supply one" -- the drive already carries the OS.
     let mut osos_entry: Option<u32> = None;
-    if args.iter().any(|a| a == "--osos-from-disk") {
+    // `--osos-from-disk[=TAG]` — TAG defaults to `osos`. The one worth naming is **`aupd`**, Apple's
+    // flash updater: it is the program that writes the NOR, and entering it directly is the only way
+    // to ask what it would do on a machine whose ROM cannot launch it.
+    let fw_tag = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--osos-from-disk="))
+        .unwrap_or("osos")
+        .to_string();
+    if args.iter().any(|a| a == "--osos-from-disk" || a.starts_with("--osos-from-disk=")) {
         match args.iter().find_map(|a| a.strip_prefix("--disk=")) {
             None => {
                 eprintln!("--osos-from-disk needs --disk=PATH to read it out of");
                 std::process::exit(1);
             }
-            Some(disk) => match eapp_loader::ipsw::osos_from_drive(std::path::Path::new(disk)) {
+            Some(disk) => match eapp_loader::ipsw::image_from_drive(std::path::Path::new(disk), &fw_tag) {
                 Ok((d, at, entry)) => {
                     let n = d.len();
                     m.symbols = eapp_loader::extract_symbols(&d, 0);
                     match m.map_osos(d) {
                         Ok(()) => {
-                            println!("mapped OSOS from the drive: {n} bytes at {at:#010x}");
+                            println!("mapped `{fw_tag}` from the drive: {n} bytes at {at:#010x}");
                             // **Honour the entry offset.** Zero for a stock image, non-zero once a
                             // bootloader has been appended -- and ignoring it boots the OS sitting
                             // behind the loader instead of the loader.

@@ -126,6 +126,33 @@ system directly and skip the bootloader that does not exist. **Diagnostics, disk
 and the boot logo require a real dump** — not because the bytes are unobtainable, but because the
 program that would install them needs a ROM to run in.
 
+### Could Apple's own updater install them? No, and the refusal is circular
+
+The obvious follow-up: `aupd` is the program that writes the NOR, so **enter it directly** and let
+Apple's code decrypt its own payload onto a synthetic chip. `--osos-from-disk=TAG` exists now for
+exactly this — the firmware directory's images are all firmware images and nothing about the entry
+path was `osos`-specific.
+
+It refuses, and the refusal is the confirmation:
+
+```
+upd-armed.img: no ARM vector table within 0x4000 of `aupd` at 0xc3a200.
+An image entered at its base opens with two branch instructions and this one does not,
+so either it is not a 5G/5.5G OS image or it is not stored in the clear.
+```
+
+**It is not stored in the clear** — which is what 8.00 bits/byte already said, now confirmed by a
+reader that was not looking for encryption. So:
+
+1. the four modes ship in the IPSW, inside `aupd`;
+2. `aupd` is encrypted;
+3. the thing that decrypts it is Apple's bootloader;
+4. Apple's bootloader is in the NOR we are trying to synthesise.
+
+**The requirement is circular by construction**, and no amount of work on this side breaks it. A
+synthetic ROM can boot an operating system, and that is the whole of what it can do. `diag`, `disk`,
+`scan` and `logo` need a dump from an iPod somebody owns.
+
 ## What a synthesised ROM cannot do
 
 **The four NOR modes are not in it, and cannot be.**

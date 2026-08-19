@@ -493,6 +493,20 @@ pub fn image_header(window: &[u8]) -> Option<usize> {
 ///
 /// Returns the image and the address it loads at.
 pub fn osos_from_drive(path: &std::path::Path) -> Result<(Vec<u8>, u32, u32), String> {
+    image_from_drive(path, "osos")
+}
+
+/// The same, for any image the firmware directory lists.
+///
+/// `osos` is the OS and is what a boot normally wants, but the directory also carries `rsrc` and —
+/// the interesting one — **`aupd`, Apple's flash updater**, which is the program that writes the
+/// NOR. Being able to enter it directly is the only way to ask what it would do on a machine whose
+/// ROM cannot launch it, and a firmware image is a firmware image; nothing here is `osos`-specific
+/// except which tag was looked up.
+pub fn image_from_drive(
+    path: &std::path::Path,
+    tag: &str,
+) -> Result<(Vec<u8>, u32, u32), String> {
     // **The header this project has now got wrong twice, in two sizes.**
     //
     // `devOffset` in the `!ATA` directory is relative to the firmware PARTITION, but what is
@@ -537,15 +551,15 @@ pub fn osos_from_drive(path: &std::path::Path) -> Result<(Vec<u8>, u32, u32), St
             path.display()
         ));
     }
-    let osos = dir_images.iter().find(|i| i.tag == "osos").ok_or_else(|| {
+    let osos = dir_images.iter().find(|i| i.tag == tag).ok_or_else(|| {
         format!(
-            "{}: the firmware directory lists {} but no `osos`, so there is no OS to boot.",
+            "{}: the firmware directory lists {} but no `{tag}`, so there is nothing to enter.",
             path.display(),
             dir_images.iter().map(|i| i.tag.as_str()).collect::<Vec<_>>().join(", ")
         )
     })?;
     if osos.len == 0 || osos.len > 64 * 1024 * 1024 {
-        return Err(format!("{}: `osos` claims {} bytes, which is not a size an OS image has", path.display(), osos.len));
+        return Err(format!("{}: `{tag}` claims {} bytes, which is not a size a firmware image has", path.display(), osos.len));
     }
 
     // Locate the image start: the first 4-byte-aligned position at or after `devOffset` whose two
@@ -559,7 +573,7 @@ pub fn osos_from_drive(path: &std::path::Path) -> Result<(Vec<u8>, u32, u32), St
         .map(|h| h as u64)
         .ok_or_else(|| {
             format!(
-                "{}: no ARM vector table within {MAX_HEADER:#x} of `osos` at {:#x}. An image \
+                "{}: no ARM vector table within {MAX_HEADER:#x} of `{tag}` at {:#x}. An image \
                  entered at its base opens with two branch instructions and this one does not, so \
                  either it is not a 5G/5.5G OS image or it is not stored in the clear.",
                 path.display(),
