@@ -1069,11 +1069,49 @@ reading.
 > | warm — reaches the menu | **156** | `0x10002` |
 > | cold | **81 718** | `0x10000` |
 >
-> Five hundred times the latch traffic, and the high half of the address register going to the
-> **same offset as the low half** instead of the one beside it. That is one bug or two, it is in the
-> display path rather than the scheduler, and it is the whole of the remaining question. It is also
-> the right *kind* of question: the only thing that differs between these two arms is what Apple's
-> bootloader left in the co-processor before Rockbox took it over.
+> **That comparison was also bad, and the uncapped instrument says so.** `--watch-range` over the
+> whole `0x30010000` window gives the census `--storeaddr` did not: **81 686 writes each from
+> `0x4000eb80` and `0x4000eb88`, which are Apple's bootloader**, and 16 byte-writes from Rockbox's
+> `0x00083d74`. The 81 718-against-156 gap is a full cold boot compared against a warm entry — it
+> is Apple's bootloader existing on one path and not the other, and attributing it to a defect was
+> comparing two arms that differ in more than the variable. Twice in one day.
+>
+> The controlled version of that measurement, same PC in both arms: **`0x00083d74` writes the latch
+> 220 bytes warm and 16 cold.** Rockbox's display driver runs 55 times on the path that reaches the
+> menu and 4 times on the one that does not.
+>
+> ### The fork, found by set difference: `lcd_awake` is never called
+>
+> Symbolising every executed bucket and walking warm's novelty in order, the two runs agree
+> instruction for instruction through `switch_thread`, `semaphore_release` and `sleep`, and then:
+>
+> ```
+>  shared     @  24542935  0x00086d60  sleep
+>  WARM-ONLY  @  24542941  0x00084290  lcd_awake+0x68
+> ```
+>
+> `lcd_awake` (`0x84228`) is what takes the panel out of sleep, and cold never calls it. Its three
+> call sites are `0x668d0`, `0x66a34` and a conditional at `0x837f0`; the first is in
+> `backlight_update_state`, and the guard is not a display test at all:
+>
+> ```
+> 668b4:  bl   backlight_get_current_timeout
+> 668b8:  cmp  r0, #0
+> 668c4:  bge  668d8          ; timeout >= 0 -> skip
+> 668cc:  bl   backlight_setup_fade_down
+> 668d0:  bl   lcd_awake      ; only on a NEGATIVE timeout
+> ```
+>
+> A negative timeout is Rockbox's "backlight always on". `backlight_get_current_timeout` chooses
+> between the plugged and unplugged settings on `power_input_present()` — and **both arms measure
+> `r0 = 0` there**, no charger, so that is not the difference either, and neither disk carries a
+> `config.cfg` to differ in.
+>
+> **What is left, and it is one question rather than a family:** warm enters
+> `backlight_update_state` **three or more times** (`@16 713 981`, `@17 091 289`, `@19 636 760` —
+> the third from a different context, `r1 = 0x55`), and cold enters it **exactly once**
+> (`@124 522 984`) and never again. The value the guard reads is the same in both; the number of
+> times anything asks is not. Find what drives the later calls on the warm path and this closes.
 >
 > **One measurement toward it, taken the same day.** On a cold boot with `--second-core`, the
 > coprocessor ends 400 M instructions at **`pc 0x00000734`**, having run 291 612 061 of its own and
