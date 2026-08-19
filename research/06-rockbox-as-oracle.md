@@ -1408,3 +1408,28 @@ answers 404.
 So Doom is blocked on **content this project does not have**, having been blocked on a missing
 processor an hour earlier. Those are very different kinds of blocked, and the difference is the
 whole point of writing it down.
+
+### And it plays — the base WAD was the only thing left
+
+`rockdoom.wad` is a **PWAD**, and `Dbuild_base` only asks whether the file opens
+(`rockdoom.c:294`, `fileexists` returning 0 on success). A valid empty one — twelve bytes, the
+magic plus a zero lump count and a directory offset — satisfies it, and Doom then runs on the game
+WAD's own graphics:
+
+```
+Doom Menu
+> Game
+  Addons
+  Demos
+  Options
+  Play Game
+  Quit
+```
+
+That is not a workaround for anything emulated; it is the archive Rockbox's manual describes,
+supplied empty because the two published copies of the real one are gone. What it demonstrates is
+that nothing else was missing.
+
+**The coprocessor is doing the work.** On the run that reaches this menu it parked and was woken
+**18 554 times** — Doom hands it work constantly, which is exactly the traffic the core-lock spin
+was standing in for when there was no second core to hand anything to.
