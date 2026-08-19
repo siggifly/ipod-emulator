@@ -323,8 +323,40 @@ the instruction count at which it was raised, delivered, or acked — the three 
 totals and the loader's polling dominates them. Do not reason about this one further without it;
 four wrong answers in this file were produced by exactly that.
 
-**Also still open:** whether it mounts a root filesystem. `loader.cfg` on this image carries no
-`root=` at all, which is a separate and non-emulator problem — see research/16.
+**The per-block completion is load-bearing, and this was nearly thrown away on a broken control.**
+An A/B appeared to show it moving RetailOS from 611 READ DMA / 4 WRITE DMA to 416 / 86, so it was
+reverted. That comparison was confounded: the two arms resolved different settings files and cloned
+different source disks, so it compared two machines as well as two builds. With `FLASH=`, `DISK=`,
+`BUDGET=` and `WORKDISK=` pinned in both arms, RetailOS is **identical** with it and without it —
+`4 · 611 · 4 · 3 · 11`. And for Linux it is the difference between working and not:
+
+| | per-block completion | kernel data drained | IDE completions delivered |
+|---|---|---|---|
+| with | on | **16 sectors** | **16** |
+| without | off | 6 sectors | **0** |
+
+Zero. Without it the kernel's multi-sector reads raise no interrupt after the first block, which is
+`lost interrupt` exactly as reported. **A control with two variables in it is not a control** — and
+every "retail unmoved" measured before the pinning was after-vs-after and proved nothing.
+
+### The other half was never an emulator problem: we had installed one file out of 1 805
+
+`resources/vendor/ipodloader2/docs/IPOD_LINUX_INSTALL.md` — vendored here throughout — says to copy
+**five** directories from the ZeroSlackr archive to the iPod's FAT32 root: `/etc/`, `/ZeroSlackr/`,
+`/bin/`, `/boot/`, `/dev/`. The drive had **`/boot/vmlinux` and nothing else**. The archive had been
+downloaded once, one file taken out of it, and the rest discarded.
+
+So even a perfect emulator would have booted that kernel, mounted `/dev/hda2`, and found nothing to
+execute. **Check that an OS is installed — against its own install document — before treating "it
+does not boot" as an emulator question.** That check is one partition-table dump and one directory
+listing.
+
+The archive is now kept: `resources/vendor/zeroslackr/` holds the `.7z`, its extracted `tree/`, and a
+`PROVENANCE.txt`. `tree/boot/vmlinux` matches the sha256 ROADMAP.md recorded, byte for byte. A drive
+built from it (`bin/`, `boot/`, `dev/`, `etc/` via `ipod-boot put-files`) carries `busybox`, `init`,
+`sh`, `inittab`, `pre-rc` and the 8 MB `boot/userland.ext3` that `pre-rc` loop-mounts before
+`pivot_root`. It reaches the same `lost interrupt`, which is how we know the two problems were
+genuinely separate.
 
 ## 0b — ~~The retail fingerprint moved to 102 and nobody knows why~~ · **SETTLED 2026-08-18 — the disk had been written to**
 
