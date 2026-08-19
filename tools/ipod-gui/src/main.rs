@@ -1012,7 +1012,7 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         selftest: args.iter().any(|a| a == "--selftest" || a == "--selftest-control"),
         selftest_control: args.iter().any(|a| a == "--selftest-control"),
         shots: root.join("_out"),
-        boot_image: get("--boot-image="),
+        boot: get("--boot=").map(|v| emu::BootTarget::parse(&v)).unwrap_or_default(),
         presses: args
             .iter()
             .filter_map(|a| a.strip_prefix("--press="))
@@ -1882,6 +1882,49 @@ impl App {
                 None => eprintln!("--press: no button called `{name}`"),
             }
         }
+    }
+
+    /// What this iPod can be asked to boot, with a sentence about each.
+    ///
+    /// **Only what is actually here.** The NOR's images are listed from the dump in use, so a ROM
+    /// without `disk` does not offer it and a synthesised ROM — which carries no images and could
+    /// not carry Apple's — offers none. The alternative firmwares appear only if their files are
+    /// on this machine; they are not shipped, and a menu entry that fails when clicked is worse
+    /// than one that is absent.
+    fn boot_targets(&self) -> Vec<(emu::BootTarget, &'static str)> {
+        let mut out = vec![(
+            emu::BootTarget::Os,
+            "The operating system on the drive, from the reset vector.",
+        )];
+        if let Ok(flash) = std::fs::read(&self.cfg.flash) {
+            for e in eapp_loader::inspect::nor_images(&flash) {
+                let at = e.offset as usize;
+                if !flash.get(at..at + 4).is_some_and(eapp_loader::inspect::is_bootable) {
+                    continue; // `logo` and `vmcs` are data.
+                }
+                let hint = match e.tag.as_str() {
+                    "diag" => "Apple's service diagnostics — SELECT+REW at power-on on the real device.",
+                    "disk" => "Target disk mode — SELECT+PLAY. USB is not modelled, so this will not get far.",
+                    _ => "One of the boot ROM's own images.",
+                };
+                out.push((emu::BootTarget::Nor(e.tag), hint));
+            }
+        }
+        let root = settings::repo_root();
+        for (path, hint) in [
+            ("resources/vendor/rockbox/bin/rb-main.raw", "Rockbox 4.0 itself."),
+            (
+                "resources/vendor/rockbox/bin/bootloader-ipodvideo.ipod",
+                "Rockbox's bootloader. It expects to be installed in the firmware partition and \
+                 entered by Apple's bootloader, so entering it directly is not how it runs.",
+            ),
+        ] {
+            let p = root.join(path);
+            if p.exists() {
+                out.push((emu::BootTarget::Image(p), hint));
+            }
+        }
+        out
     }
 
     fn window_shot_step(&mut self, ctx: &egui::Context) {
@@ -3894,31 +3937,45 @@ impl App {
                 // This replaces two latched chord buttons, `hold MENU+SELECT` (the hard reset) and
                 // `hold PLAY` (sleep). Both were reachable from the keyboard and from the wheel
                 // already, and neither did anything a person could see.
-                let in_diag = self.cfg.boot_image.is_some();
-                let label = if in_diag { "leave diagnostics" } else { "diagnostics" };
-                if ui
-                    .selectable_label(in_diag, label)
-                    .on_hover_text(if in_diag {
-                        "Power-cycle back into the operating system."
-                    } else {
-                        "Power-cycle into the boot ROM's own `diag` image — SELECT+REW at power-on \
-                         on the real device. Needs a real dump: a synthesised ROM has no images in \
-                         it."
-                    })
-                    .clicked()
-                {
+                // **What this iPod boots.** Not modes of the emulator — programs this machine
+                // runs, each entered the way that program is entered. Changing it is a power
+                // cycle, because on the real device the chords that reach the boot ROM's own
+                // images are held at power-on.
+                let mut want = self.cfg.boot.clone();
+                let boots = self.boot_targets();
+                ui.label(egui::RichText::new("boots").color(UI_TEXT_DIM));
+                egui::ComboBox::from_id_salt("boot-target")
+                    .selected_text(want.label())
+                    .show_ui(ui, |ui| {
+                        for (t, hint) in &boots {
+                            ui.selectable_value(&mut want, t.clone(), t.label()).on_hover_text(*hint);
+                        }
+                        if ui
+                            .selectable_label(false, "Choose an image…")
+                            .on_hover_text(
+                                "Any raw ARM image that expects to be loaded at 0x10000000 — \
+                                 Rockbox, its bootloader, ipodloader2, an iPodLinux kernel.",
+                            )
+                            .clicked()
+                        {
+                            if let Some(p) = pick_files(
+                                "An ARM image this iPod can enter at 0x10000000",
+                                &["raw", "ipod", "bin", "img", "elf"],
+                            )
+                            .first()
+                            {
+                                want = emu::BootTarget::Image(PathBuf::from(p));
+                            }
+                        }
+                    });
+                if want != self.cfg.boot {
                     self.down.clear();
                     self.touching = false;
-                    let target = if in_diag { None } else { Some("diag".to_string()) };
-                    self.cfg.boot_image = target.clone();
+                    self.cfg.boot = want.clone();
+                    self.say(format!("power cycle: into {}", want.label()));
                     if let Some(l) = &self.link {
-                        l.command(emu::Cmd::BootImage(target));
+                        l.command(emu::Cmd::Boot(want));
                     }
-                    self.say(if in_diag {
-                        "power cycle: back into the operating system".into()
-                    } else {
-                        "power cycle: into Apple's diagnostics".to_string()
-                    });
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("screenshot").on_hover_text("Also the S key.").clicked() {

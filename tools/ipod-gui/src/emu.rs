@@ -138,9 +138,8 @@ pub struct Config {
     pub selftest_control: bool,
     /// Where screenshots go — the self-test's panel samples, and the window's `S` key.
     pub shots: PathBuf,
-    /// Boot one of the boot ROM's own images instead of the operating system — `diag` for Apple's
-    /// service diagnostics. `None` is the ordinary boot.
-    pub boot_image: Option<String>,
+    /// What this machine boots. [`BootTarget::Os`] is the ordinary one.
+    pub boot: BootTarget,
     /// `--press=BUTTON@SECONDS`, repeatable — press a button through the window's own input path,
     /// at a moment measured from when the window opened.
     ///
@@ -279,10 +278,64 @@ enum Outcome {
     PoweredOff,
     /// Start again from the reset vector, with a machine built from nothing.
     ColdBoot,
-    /// The same, but into a different boot target — `Some("diag")` for the ROM's diagnostics,
-    /// `None` for the operating system. Carried out here rather than set on the config directly
-    /// because the emulator thread owns the config and the UI thread does not.
-    ColdBootInto(Option<String>),
+    /// The same, but into a different boot target. Carried out here rather than set on the config
+    /// directly because the emulator thread owns the config and the UI thread does not.
+    ColdBootInto(BootTarget),
+}
+
+/// What the machine is asked to boot.
+///
+/// **They differ only in where the first instruction comes from.** Everything else — the drive, the
+/// co-processor, the wheel, the identity out of the NOR — is the same machine, which is the point:
+/// Rockbox and Apple's diagnostics are not modes of this program, they are programs this iPod runs.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub enum BootTarget {
+    /// The operating system on the drive, entered the way the machine enters it — from the reset
+    /// vector on a real dump, or through the high-level boot on a synthesised one.
+    #[default]
+    Os,
+    /// One of the boot ROM's own self-contained images, by tag: `diag` for Apple's service
+    /// diagnostics, `disk` for target disk mode. Cut out of the dump in use.
+    ///
+    /// On real hardware these are reached by a key chord held at power-on, and the boot ROM does
+    /// the loading — see research/07, where that is measured and works. It is done here instead
+    /// because releasing the chord afterwards currently storms the interrupt controller, and a
+    /// diagnostics screen you cannot press a button on is not much of one.
+    Nor(String),
+    /// Any raw ARM image that expects to be loaded at 0x10000000 and entered there — Rockbox's
+    /// `rb-main.raw`, its bootloader, `ipodloader2`. The same contract Apple's own `flsh` images
+    /// have, which is why one code path serves both.
+    Image(PathBuf),
+}
+
+impl BootTarget {
+    /// Whether this is the ordinary boot. The machine is built differently for everything else:
+    /// no low mirror, the non-cold memory map, and the CPU placed where the image is.
+    pub fn is_os(&self) -> bool {
+        *self == BootTarget::Os
+    }
+
+    /// One line for a person, and for the window's picker.
+    pub fn label(&self) -> String {
+        match self {
+            BootTarget::Os => "iPod software".into(),
+            BootTarget::Nor(t) if t == "diag" => "Diagnostics".into(),
+            BootTarget::Nor(t) if t == "disk" => "Disk mode".into(),
+            BootTarget::Nor(t) => t.clone(),
+            BootTarget::Image(p) => {
+                p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+            }
+        }
+    }
+
+    /// `os`, a NOR tag, or a path — the one spelling the command line and the settings file share.
+    pub fn parse(s: &str) -> BootTarget {
+        match s.trim() {
+            "" | "os" => BootTarget::Os,
+            t if t.contains('/') || t.contains('\\') => BootTarget::Image(PathBuf::from(t)),
+            t => BootTarget::Nor(t.to_string()),
+        }
+    }
 }
 
 /// UI -> emulator, the commands that are not buttons.
@@ -298,10 +351,9 @@ pub enum Cmd {
     PowerOn,
     /// Power off and straight back on.
     PowerCycle,
-    /// Power-cycle into one of the boot ROM's own images — `Some("diag")` — or back into the
-    /// operating system with `None`. The real device reaches diagnostics by a key chord held at
-    /// power-on, so this is a power cycle and not a mode switch.
-    BootImage(Option<String>),
+    /// Power-cycle into a different boot target. The real device reaches diagnostics by a key
+    /// chord held at power-on, so this is a power cycle and not a mode switch.
+    Boot(BootTarget),
 }
 
 /// What the emulator thread publishes. Read by the UI once per repaint; never held across a frame.
@@ -695,7 +747,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // Without this the wheel's IRQ 40 fetched from an unmapped 0x18 and the machine reported
     // `Lost(24)` the instant a button was pressed. `ipod-boot flsh` never passes `--cold-boot`,
     // which is why the same image driven from the command line always worked.
-    eapp_loader::map_hardware(&mut m, cfg.boot_image.is_none());
+    eapp_loader::map_hardware(&mut m, cfg.boot.is_os());
     // Hardware revision probe: boot reads 0x70000000, takes bits 16..23 and compares to 0x36.
     {
         use arm7tdmi::Bus as _;
@@ -727,9 +779,9 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // there, needing no drive and no filesystem, so it takes exactly the same high-level path a
     // synthesised ROM takes: place the image, leave the handoff block a real boot ROM would have
     // left, and start. See `ipod-boot flsh`, which is the same boot on the command line.
-    let boot_image = match cfg.boot_image.as_deref() {
-        None => None,
-        Some(tag) => {
+    let boot_image = match &cfg.boot {
+        BootTarget::Os => None,
+        BootTarget::Nor(tag) => {
             let img = eapp_loader::inspect::nor_image(&flash, tag).ok_or_else(|| {
                 let have: Vec<String> =
                     eapp_loader::inspect::nor_images(&flash).iter().map(|e| e.tag.clone()).collect();
@@ -739,22 +791,28 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
                     format!("this boot ROM has no `{tag}` image. It has: {}", have.join(" · "))
                 }
             })?;
-            // `logo` and `vmcs` are data, and entering data does not fail visibly — the
-            // interpreter decodes whatever is there and runs out of budget looking busy.
-            if !eapp_loader::inspect::is_bootable(&img) {
-                return Err(format!("`{tag}` is data, not a program — it cannot be booted"));
-            }
-            Some(img)
+            Some((tag.clone(), img))
+        }
+        BootTarget::Image(p) => {
+            let img = std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
+            Some((p.display().to_string(), img))
         }
     };
+    // `logo` and `vmcs` are data, and entering data does not fail visibly — the interpreter decodes
+    // whatever is there and runs out of budget looking busy. The same is true of any file somebody
+    // points this at, which is why the check is here and not only on the NOR's own images.
+    if let Some((name, img)) = &boot_image {
+        if !eapp_loader::inspect::is_bootable(img) {
+            return Err(format!(
+                "`{name}` is data, not a program: word 0 is not an ARM branch, so there is no \
+                 reset vector to enter."
+            ));
+        }
+    }
     if synthetic || boot_image.is_some() {
         let (osos, load_at, entry) = match boot_image {
-            Some(img) => {
-                println!(
-                    "  booting the ROM's own `{}` image: {} bytes -> 0x10000000",
-                    cfg.boot_image.as_deref().unwrap_or("?"),
-                    img.len()
-                );
+            Some((name, img)) => {
+                println!("  booting `{name}`: {} bytes -> 0x10000000", img.len());
                 (img, 0x1000_0000u32, 0u32)
             }
             None => {
@@ -782,7 +840,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         // is linked to run at 0x10000000 and is *placed in SDRAM*, which starts there — mirroring
         // it at 0 as well would shadow the low window it expects to be memory, and the command
         // line's `ipod-boot flsh` does not do it either.
-        if cfg.boot_image.is_none() {
+        if cfg.boot.is_os() {
             m.mem.regions.push(Region { name: "osos-low", base: 0, data: osos.clone() });
         }
         // **A boot image is inserted at the front; the OS is pushed.** Region lookup is
@@ -795,7 +853,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         // keeps the old order deliberately: putting a 7.5 MB image in front of 64 MB of SDRAM
         // changes what every address in that span reads, and that is a change to measure on its
         // own rather than to make in passing.
-        if cfg.boot_image.is_some() {
+        if !cfg.boot.is_os() {
             // **Written into memory, not registered as a region.** With the non-cold map SDRAM's
             // storage is at 0 and 0x10000000 is an *alias* of it, resolved before the region list
             // is consulted — so a region at 0x10000000 is never read, however early it is inserted.
@@ -878,7 +936,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // mean two things twelve lines apart, and the boot-screen paint below — which asks "is there
     // an Apple logo in this ROM?" and not "does the flash answer at 0?" — read the wrong one and
     // put this project's mark over Apple's own boot screen.
-    let flash_answers_low = !synthetic && cfg.boot_image.is_none();
+    let flash_answers_low = !synthetic && cfg.boot.is_os();
     // Cold boot: the flash also answers at 0, where the CPU fetches out of reset. Inserted at the
     // front so it wins the first-match lookup for low addresses.
     if flash_answers_low {
@@ -1197,7 +1255,7 @@ pub fn run(cfg: Config, link: Arc<Link>) {
             // Changing the boot target is a power cycle, and a session reached by one never
             // restores or writes a snapshot — the machine it would restore is a different program.
             Outcome::ColdBootInto(t) => {
-                cfg.boot_image = t;
+                cfg.boot = t;
                 first = false;
             }
             Outcome::PoweredOff => {
@@ -1229,7 +1287,7 @@ fn wait_for_power(link: &Arc<Link>) -> bool {
         }
         let cmd = link.inbox.lock().unwrap().cmds.pop_front();
         match cmd {
-            Some(Cmd::PowerOn) | Some(Cmd::PowerCycle) | Some(Cmd::BootImage(_)) => return true,
+            Some(Cmd::PowerOn) | Some(Cmd::PowerCycle) | Some(Cmd::Boot(_)) => return true,
             // Already off. A queued power-off is not an error, and not a second one either.
             Some(Cmd::PowerOff) | None => {}
         }
@@ -1379,7 +1437,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
             match c {
                 Cmd::PowerOff => return Outcome::PoweredOff,
                 Cmd::PowerCycle => return Outcome::ColdBoot,
-                Cmd::BootImage(t) => return Outcome::ColdBootInto(t),
+                Cmd::Boot(t) => return Outcome::ColdBootInto(t),
                 Cmd::PowerOn => {}
             }
         }
@@ -1395,7 +1453,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
             // A boot image is entered where it is loaded — it is not mirrored low and its code
             // addresses itself at 0x10000000. Everything else enters at 0, where the CPU fetches
             // out of reset.
-            let pc = if cfg.boot_image.is_some() { 0x1000_0000 } else { 0 };
+            let pc = if cfg.boot.is_os() { 0 } else { 0x1000_0000 };
             m.call_with(pc, &[0, 0, 0, 0], SLICE)
         };
         let executed = m.executed as u64;
@@ -1714,7 +1772,7 @@ fn wait_after_stop(link: &Arc<Link>) -> Outcome {
         }
         match link.inbox.lock().unwrap().cmds.pop_front() {
             Some(Cmd::PowerOff) => return Outcome::PoweredOff,
-            Some(Cmd::BootImage(t)) => return Outcome::ColdBootInto(t),
+            Some(Cmd::Boot(t)) => return Outcome::ColdBootInto(t),
             Some(Cmd::PowerOn) | Some(Cmd::PowerCycle) => return Outcome::ColdBoot,
             None => {}
         }
