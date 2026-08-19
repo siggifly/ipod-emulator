@@ -2161,17 +2161,20 @@ impl App {
     /// Point the synthesised ROM at a different model, keeping the seed so the same person keeps
     /// the same machine when they only change its colour.
     fn set_synthetic_model(&mut self, m: &'static eapp_loader::identity::Model) {
-        let (seed, serial, guid) = match &self.settings.nor {
-            eapp_loader::nor::Source::Synthetic { seed, serial, guid, .. } => {
-                (*seed, serial.clone(), *guid)
+        // Everything but the model is carried, so changing an iPod's colour keeps its identity and
+        // its splash rather than quietly resetting them.
+        let (seed, serial, guid, splash) = match &self.settings.nor {
+            eapp_loader::nor::Source::Synthetic { seed, serial, guid, splash, .. } => {
+                (*seed, serial.clone(), *guid, splash.clone())
             }
-            eapp_loader::nor::Source::File(_) => (0, None, None),
+            eapp_loader::nor::Source::File(_) => (0, None, None, None),
         };
         self.settings.nor = eapp_loader::nor::Source::Synthetic {
             model: m.number.to_string(),
             seed,
             serial,
             guid,
+            splash,
         };
         // The case follows the model number, because that is the only thing that decides it.
         self.settings.chassis = m.colour();

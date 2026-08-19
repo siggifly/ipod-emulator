@@ -200,3 +200,32 @@ picture is present, the picture is wrong, and nothing downstream can say which. 
 here was to stop looking at the panel in screen order and look at it in address order — one
 autocorrelation over the non-black mask, which said 62 and meant *somebody else was supposed to
 place these rows*.
+
+## 9. Extracting it — 2026-08-19
+
+The tile can be lifted straight out of a boot, and the recipe in §7 is what makes it possible. Two
+things have to be right and both were got wrong first:
+
+- **`--clock=5`.** The recipes now default to 75, and at 75 the logo is not on the panel anywhere in
+  a 90 M budget — a sweep at 8, 15, 25, 40, 60 and 90 M found the same 27 902 stable non-black
+  pixels every time, which turned out to be *uninitialised co-processor memory at base 0* and not a
+  picture at all.
+- **`0xE0000`, and the placed rect rather than the staged tile.** §2 is explicit that `0xE0000` is
+  `BCMA_CMDPARAM` and not the panel, and the run writes the tile there linearly at a 62-halfword
+  pitch. After the blit — which §4 implements — the same buffer holds the *placed* image at a 320
+  pitch, and the pixels sit at rows 81..155, exactly the `(129,81)-(190,158)` §5 measures.
+
+```sh
+DISK=… BUDGET=60000000 ipod-boot retail --clock=5 --bcm-ppm=out.ppm:e0000
+# then crop 62x78 at (129,81) — 2 916 non-black pixels of 4 836
+```
+
+Kept at `resources/derived/logo/apple-logo-62x78.ppm`, **gitignored** with the rest of `resources/`.
+It is Apple's artwork, extracted from a dump this project's owner owns, and it stays out of the
+repository for the same reason every other byte of Apple's does.
+
+**What it changed about our own mark.** Seen side by side at the same scale, Apple's logo is a
+solid, shaded shape lit from above; the click wheel this project draws was a two-pixel outline. Same
+silhouette, none of the weight — which is what "too crisp" meant. `nor::boot_screen` now fills
+between the two radii, anti-aliases both edges by coverage, and shades top-to-bottom in the same
+direction. That comparison is the whole reason the extraction was worth doing.

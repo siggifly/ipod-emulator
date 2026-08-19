@@ -269,17 +269,77 @@ pub fn boot_screen(colour: crate::identity::Colour, w: usize, h: usize) -> Vec<u
     // The same proportion the window draws the real wheel at: the centre button is 0.34 of the
     // wheel's radius.
     let inner = outer * 0.34;
-    let stroke = 2.0;
+
+    // **A filled ring with a sheen, not an outline.**
+    //
+    // Apple's logo — extracted from a real boot and kept at `resources/derived/logo/` — is a solid,
+    // shaded shape. A two-pixel stroke next to it reads as a wireframe: the right silhouette with
+    // none of the weight. So the wheel is filled between its two radii and lit from above, which is
+    // also what the physical part looks like.
+    //
+    // Both edges are anti-aliased by coverage. A hard `d <= r` test stair-steps, and at 62 pixels
+    // across those steps are a third of the mark's apparent line weight.
+    let blend = |a: u16, b: u16, t: f32| -> u16 {
+        let t = t.clamp(0.0, 1.0);
+        let ch = |v: u16, sh: u16, m: u16| ((v >> sh) & m) as f32;
+        let (ar, ag, ab) = (ch(a, 11, 0x1f), ch(a, 5, 0x3f), ch(a, 0, 0x1f));
+        let (br, bg2, bb) = (ch(b, 11, 0x1f), ch(b, 5, 0x3f), ch(b, 0, 0x1f));
+        let mix = |x: f32, y: f32| (x + (y - x) * t).round();
+        ((mix(ar, br) as u16) << 11) | ((mix(ag, bg2) as u16) << 5) | (mix(ab, bb) as u16)
+    };
+    // Dim the foreground towards the background, for the gradient.
+    let shade = |c: u16, k: f32| blend(bg, c, k);
 
     for y in 0..h {
         for x in 0..w {
             let dx = x as f32 + 0.5 - cx;
             let dy = y as f32 + 0.5 - cy;
             let d = (dx * dx + dy * dy).sqrt();
-            let on_outer = (d - outer).abs() <= stroke / 2.0;
-            let on_inner = (d - inner).abs() <= stroke / 2.0;
-            if on_outer || on_inner {
-                fb[y * w + x] = fg;
+            // Inside the outer edge, outside the inner one — each with a one-pixel soft band.
+            let cover = ((outer + 0.5 - d).clamp(0.0, 1.0)) * ((d - inner + 0.5).clamp(0.0, 1.0));
+            if cover <= 0.0 {
+                continue;
+            }
+            // Lit from above: full strength at the top of the wheel, easing to about half at the
+            // bottom. The same direction Apple's logo is lit.
+            let t = ((dy + outer) / (2.0 * outer)).clamp(0.0, 1.0);
+            let lit = shade(fg, 1.0 - 0.45 * t);
+            fb[y * w + x] = blend(fb[y * w + x], lit, cover);
+        }
+    }
+    fb
+}
+
+/// The same screen, with a supplied image in place of the click wheel.
+///
+/// The image is fitted to the 62×78 rectangle Apple's own logo occupies — aspect preserved, box
+/// filtered — and composited onto the case's background colour. Pixels the image does not cover
+/// stay background, so a portrait image does not paint bars across the screen.
+///
+/// **What somebody supplies is their business.** If they have extracted Apple's logo from a dump
+/// they own and want to use it, that is a decision about their own files.
+pub fn boot_screen_with(
+    colour: crate::identity::Colour,
+    w: usize,
+    h: usize,
+    img: &crate::splash::Image,
+) -> Vec<u16> {
+    use crate::identity::Colour;
+    let bg = match colour {
+        Colour::White => 0xffffu16,
+        _ => 0x0000u16,
+    };
+    let mut fb = vec![bg; w * h];
+    let (px, mask) = crate::splash::fit(img, 62, 78);
+    let (ox, oy) = (w / 2 - 31, h / 2 - 39);
+    for y in 0..78 {
+        for x in 0..62 {
+            if !mask[y * 62 + x] {
+                continue;
+            }
+            let (dx, dy) = (ox + x, oy + y);
+            if dx < w && dy < h {
+                fb[dy * w + dx] = px[y * 62 + x];
             }
         }
     }
@@ -316,6 +376,12 @@ pub enum Source {
         /// An identity typed or edited by the user, overriding what the seed would produce.
         serial: Option<String>,
         guid: Option<u64>,
+        /// An image to show while booting, in place of the click wheel.
+        ///
+        /// A path rather than the pixels, for the same reason the identity is a recipe: it is a few
+        /// bytes in the settings file, it re-reads if the user edits the picture, and there is
+        /// nothing to go stale. Absent means the built-in mark.
+        splash: Option<std::path::PathBuf>,
     },
 }
 
@@ -331,7 +397,13 @@ impl Default for Source {
     /// (`A146`), and a checkout that has the dump still boots it — see the source resolution in
     /// the window's argument parsing.
     fn default() -> Source {
-        Source::Synthetic { model: "A446".into(), seed: 0, serial: None, guid: None }
+        Source::Synthetic {
+            model: "A446".into(),
+            seed: 0,
+            serial: None,
+            guid: None,
+            splash: None,
+        }
     }
 }
 
@@ -340,7 +412,7 @@ impl Source {
     pub fn bytes(&self) -> Result<Vec<u8>, String> {
         match self {
             Source::File(p) => std::fs::read(p).map_err(|e| format!("{}: {e}", p.display())),
-            Source::Synthetic { model, seed, serial, guid } => {
+            Source::Synthetic { model, seed, serial, guid, .. } => {
                 let m = Model::lookup(model)
                     .ok_or_else(|| format!("{model} is not a model number this program knows"))?;
                 let identity = match guid {
@@ -358,7 +430,7 @@ impl Source {
     pub fn identity(&self) -> Result<Identity, String> {
         match self {
             Source::File(p) => Identity::from_nor(p),
-            Source::Synthetic { model, seed, serial, guid } => {
+            Source::Synthetic { model, seed, serial, guid, .. } => {
                 let m = Model::lookup(model)
                     .ok_or_else(|| format!("{model} is not a model number this program knows"))?;
                 match guid {
@@ -388,11 +460,33 @@ impl Source {
     pub fn cache_tag(&self) -> String {
         match self {
             Source::File(p) => p.to_string_lossy().into_owned(),
-            Source::Synthetic { model, seed, serial, guid } => format!(
+            Source::Synthetic { model, seed, serial, guid, .. } => format!(
                 "synthetic:{model}:{seed}:{}:{}",
                 serial.as_deref().unwrap_or("-"),
                 guid.map(|g| format!("{g:016X}")).unwrap_or_else(|| "-".into())
             ),
+        }
+    }
+
+    /// The boot screen this source shows: the user's image if they chose one, else the mark.
+    ///
+    /// A splash that cannot be read **falls back to the mark and says why** rather than refusing to
+    /// boot. A picture is decoration; failing to start an iPod over it would be the wrong trade.
+    pub fn boot_screen(&self, w: usize, h: usize) -> Vec<u16> {
+        let colour = self.model().map(|m| m.colour()).unwrap_or_default();
+        let path = match self {
+            Source::Synthetic { splash: Some(p), .. } => Some(p.clone()),
+            _ => None,
+        };
+        match path {
+            None => boot_screen(colour, w, h),
+            Some(p) => match std::fs::read(&p).map_err(|e| e.to_string()).and_then(|b| crate::splash::decode(&b)) {
+                Ok(img) => boot_screen_with(colour, w, h, &img),
+                Err(e) => {
+                    eprintln!("{}: {e} — using the built-in mark", p.display());
+                    boot_screen(colour, w, h)
+                }
+            },
         }
     }
 

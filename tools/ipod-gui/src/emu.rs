@@ -786,11 +786,10 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // project's own mark goes up instead, in the colours the model boots in — white iPods dark on
     // white, black and U2 white on black.
     if synthetic {
-        if let Some(model) = cfg.nor.model() {
-            let px = eapp_loader::nor::boot_screen(model.colour(), FB_W, FB_H);
-            for (i, v) in px.iter().enumerate() {
-                bcm.mem.insert(FB_FRONT + (i as u32) * 2, *v);
-            }
+        // Whatever the source says to show — the built-in mark, or an image somebody chose.
+        let px = cfg.nor.boot_screen(FB_W, FB_H);
+        for (i, v) in px.iter().enumerate() {
+            bcm.mem.insert(FB_FRONT + (i as u32) * 2, *v);
         }
     }
     m.mem.bcm = Some(bcm);

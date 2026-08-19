@@ -113,6 +113,7 @@ impl Settings {
                     }
                 }
                 "nor_serial" => s.nor = with_serial(s.nor.clone(), v),
+                "nor_splash" => s.nor = with_splash(s.nor.clone(), v),
                 "nor_guid" => {
                     if let Ok(g) = u64::from_str_radix(v.trim_start_matches("0x"), 16) {
                         s.nor = with_guid(s.nor.clone(), g);
@@ -150,8 +151,11 @@ impl Settings {
     fn render_nor(&self) -> String {
         match &self.nor {
             crate::nor::Source::File(p) => format!("flash = {}\n", p.display()),
-            crate::nor::Source::Synthetic { model, seed, serial, guid } => {
+            crate::nor::Source::Synthetic { model, seed, serial, guid, splash } => {
                 let mut out = format!("nor_model = {model}\nnor_seed = {seed}\n");
+                if let Some(p) = splash {
+                    out.push_str(&format!("nor_splash = {}\n", p.display()));
+                }
                 if let Some(s) = serial {
                     out.push_str(&format!("nor_serial = {s}\n"));
                 }
@@ -472,6 +476,7 @@ mod tests {
                 seed: 987654321,
                 serial: Some("AB1234XYZQR".into()),
                 guid: Some(0x000A_2700_1122_3344),
+                splash: None,
             },
             ..Settings::default()
         };
@@ -616,12 +621,16 @@ pub fn repo_root() -> PathBuf {
 
 // Small helpers so a settings file can set the synthetic fields in any order, and so a `flash =`
 // line followed by `nor_model =` does the obvious thing rather than half of each.
-fn as_synth(src: crate::nor::Source) -> (String, u64, Option<String>, Option<u64>) {
+type Synth = (String, u64, Option<String>, Option<u64>, Option<PathBuf>);
+
+fn as_synth(src: crate::nor::Source) -> Synth {
     match src {
-        crate::nor::Source::Synthetic { model, seed, serial, guid } => (model, seed, serial, guid),
+        crate::nor::Source::Synthetic { model, seed, serial, guid, splash } => {
+            (model, seed, serial, guid, splash)
+        }
         crate::nor::Source::File(_) => match crate::nor::Source::default() {
-            crate::nor::Source::Synthetic { model, seed, serial, guid } => {
-                (model, seed, serial, guid)
+            crate::nor::Source::Synthetic { model, seed, serial, guid, splash } => {
+                (model, seed, serial, guid, splash)
             }
             crate::nor::Source::File(_) => unreachable!("the default is synthetic"),
         },
@@ -629,19 +638,24 @@ fn as_synth(src: crate::nor::Source) -> (String, u64, Option<String>, Option<u64
 }
 
 fn with_model(src: crate::nor::Source, v: &str) -> crate::nor::Source {
-    let (_, seed, serial, guid) = as_synth(src);
-    crate::nor::Source::Synthetic { model: v.to_string(), seed, serial, guid }
+    let (_, seed, serial, guid, splash) = as_synth(src);
+    crate::nor::Source::Synthetic { model: v.to_string(), seed, serial, guid, splash }
 }
 fn with_seed(src: crate::nor::Source, n: u64) -> crate::nor::Source {
-    let (model, _, serial, guid) = as_synth(src);
-    crate::nor::Source::Synthetic { model, seed: n, serial, guid }
+    let (model, _, serial, guid, splash) = as_synth(src);
+    crate::nor::Source::Synthetic { model, seed: n, serial, guid, splash }
 }
 fn with_serial(src: crate::nor::Source, v: &str) -> crate::nor::Source {
-    let (model, seed, _, guid) = as_synth(src);
+    let (model, seed, _, guid, splash) = as_synth(src);
     let serial = (!v.trim().is_empty()).then(|| v.trim().to_string());
-    crate::nor::Source::Synthetic { model, seed, serial, guid }
+    crate::nor::Source::Synthetic { model, seed, serial, guid, splash }
 }
 fn with_guid(src: crate::nor::Source, g: u64) -> crate::nor::Source {
-    let (model, seed, serial, _) = as_synth(src);
-    crate::nor::Source::Synthetic { model, seed, serial, guid: Some(g) }
+    let (model, seed, serial, _, splash) = as_synth(src);
+    crate::nor::Source::Synthetic { model, seed, serial, guid: Some(g), splash }
+}
+fn with_splash(src: crate::nor::Source, v: &str) -> crate::nor::Source {
+    let (model, seed, serial, guid, _) = as_synth(src);
+    let splash = (!v.trim().is_empty()).then(|| PathBuf::from(v.trim()));
+    crate::nor::Source::Synthetic { model, seed, serial, guid, splash }
 }

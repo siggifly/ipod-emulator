@@ -25,6 +25,7 @@ pub mod ghidra;
 pub mod firmware;
 pub mod identity;
 pub mod nor;
+pub mod splash;
 pub mod models;
 pub mod rsrc;
 
