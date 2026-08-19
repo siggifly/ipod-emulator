@@ -556,3 +556,51 @@ pressed, ending on `KEY PASS`.
 **One screen is deliberately not filmed: `SysCfg`.** It prints the identity block out of the boot
 ROM, which on a real dump is a real person's serial number and FireWire GUID. Every other screen
 here is Apple's own text.
+
+### The chord works — Apple's bootloader chooses `diag` itself
+
+**The way a person reaches diagnostics on real hardware is by holding SELECT+REW at power-on**, and
+the boot ROM reads it. Measured: a retail cold boot **queries the click wheel three times** before
+it loads anything, with `0x8000023a` — the one wheel command that has a reply:
+
+```
+@2 834 687     0x8000023a  query  buttons 0x00
+@18 108 095    0x8000023a  query  buttons 0x00
+@57 422 783    0x8000023a  query  buttons 0x00
+```
+
+Hold the chord across them and the ROM does the rest, with nothing placed by hand:
+
+```
+$ ipod-boot retail --clickwheel --wheel="@0:touch,+100k:down=select,+100k:down=left"
+(C) Copyright 2000-2006
+Apple Computer, Inc.
+Running 'diag' 0 from 0x10000000
+```
+
+That is the honest mechanism — no image copied into SDRAM by us, no special memory map, no entry
+address chosen — and it should also reach disk mode (SELECT+PLAY) for free.
+
+**And it draws.** Held rather than released, the chord-booted `diag` reaches its splash with
+**70 669 non-black pixels** — the same figure to the pixel as a directly-entered one — over 12
+commands and 10 frame updates. So Apple's boot ROM does the whole job: reads the wheel, chooses the
+image, copies it into SDRAM, and enters it.
+
+The first attempt at this said it did not draw, and that was **my own doing**: the script released
+the chord at 120 M instructions, right as `diag` started, and the wheel interrupt that release
+generated landed in the boot ROM's unhandled-interrupt halt at `0x40000018`. Held to the end, there
+are `0 asserted, 0 taken` and it draws.
+
+**What is still open is the release.** Letting the buttons up at *any* point produces
+`irqs: 7 812 499 asserted, 1 taken` — the wheel's line goes high, one interrupt is taken, nothing
+acks it, and it stays high. A directly-entered `diag` handles the same release cleanly (8 asserted,
+4 taken), so this is a property of the bootloader path and not of `diag`.
+
+One explanation was tested and is **wrong**: that `diag` cannot install its own vector table because
+address 0 is read-only NOR on a cold boot. `--watch-range=0:0x40` counts **24 byte-writes across
+one word, both from `0x40009fd0`/`0x40009fd8`** — the bootloader's own CFI unlock sequence — on the
+failing run *and* on the drawing one. `diag` writes nothing there at all.
+
+So until the storm is understood, there are two ways in and they are good at different things: the
+chord is the faithful boot and the one to keep measuring against, and direct entry
+(`ipod-boot flsh`, and the window's diagnostics button) is the one that currently takes input.
