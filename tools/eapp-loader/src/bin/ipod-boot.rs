@@ -264,6 +264,35 @@ fn main() {
         }
         return;
     }
+    // `ipod-boot open-drive [DISK.img]` — mount the drive on this computer.
+    //
+    // The escape hatch for everything content routing cannot identify: music, WADs, a `loader.cfg`,
+    // somebody's own plugin. It is the device's own answer too — on a real iPod you hold
+    // SELECT+PLAY and it appears as a disk — though this mounts the image file rather than
+    // emulating USB, and says so.
+    if name == "open-drive" {
+        let disk = rest
+            .first()
+            .map(PathBuf::from)
+            .or_else(|| eapp_loader::settings::Settings::load().disk.clone());
+        let Some(disk) = disk else {
+            eprintln!("usage: ipod-boot open-drive [DISK.img]   (defaults to the configured drive)");
+            std::process::exit(2);
+        };
+        println!("  {}", disk.display());
+        match eapp_loader::mount::open(&disk) {
+            Ok(lines) => {
+                for l in lines {
+                    println!("  {l}");
+                }
+            }
+            Err(e) => {
+                eprintln!("ipod-boot open-drive: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if name == "put-zip" {
         match put_zip(&rest) {
             Ok(()) => return,
@@ -329,6 +358,10 @@ ipod-boot — Apple's firmware, booted under the emulator
                                      install another operating system into a COPY of the drive's
                                      firmware partition, where Apple's own bootloader finds it.
                                      Never writes to SRC. This is what `ipodpatcher` does.
+  ipod-boot open-drive [DISK.img]
+                                     mount the drive on this computer so you can put your own
+                                     files on it. macOS and Linux only — Windows cannot mount a
+                                     raw image without third-party tools. Power the iPod off first.
   ipod-boot facts     FILE       what is in a boot ROM or a drive image, in one screen
   ipod-boot put-zip   DISK.img ARCHIVE.zip
                                      unpack an archive straight into the drive's FAT32 volume —

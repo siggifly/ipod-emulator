@@ -33,6 +33,7 @@ pub mod rsrc;
 /// A zip reader, an inflate, and an MBR + FAT32 writer — none of which touches the machine.
 pub mod ipsw;
 pub mod install;
+pub mod mount;
 pub mod inspect;
 pub mod settings;
 
