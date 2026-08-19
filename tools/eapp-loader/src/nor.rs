@@ -67,6 +67,13 @@ pub struct Spec {
     pub region: [u8; 16],
     /// `DrmV`. The reference unit reads `6`.
     pub drm_version: u32,
+    /// Force `HwVr` instead of taking it from the generation.
+    ///
+    /// **A bisect control, not a setting.** The 5G's Gestalt is measured; the 5.5G's `0x000B0010`
+    /// is the one value in this whole system that came from a comment rather than from hardware,
+    /// and the 5.5G does not boot. Being able to vary exactly that, with nothing else moving, is
+    /// how it gets isolated.
+    pub hw_vr: Option<u32>,
 }
 
 impl Spec {
@@ -75,7 +82,7 @@ impl Spec {
     pub fn new(model: &'static Model, identity: Identity) -> Spec {
         let mut region = [0u8; 16];
         region[..8].copy_from_slice(&[0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x02, 0x00]);
-        Spec { identity, model, hw_id: 0, region, drm_version: 6 }
+        Spec { identity, model, hw_id: 0, region, drm_version: 6, hw_vr: None }
     }
 
     /// Take the unexplained records from a real dump, so a ROM synthesised alongside real hardware
@@ -117,7 +124,7 @@ pub fn synthesise(spec: &Spec) -> Vec<u8> {
     // `HwVr` is the generation's Gestalt ID. `None` for a generation whose constant we have not
     // sourced, and in that case the record is left out rather than filled with a guess — an absent
     // record is readable as "unknown", a wrong one is not.
-    if let Some(hw_vr) = spec.model.generation.gestalt() {
+    if let Some(hw_vr) = spec.hw_vr.or_else(|| spec.model.generation.gestalt()) {
         b = b.word_at4("HwVr", hw_vr);
     }
     b = b.raw("Regn", spec.region);

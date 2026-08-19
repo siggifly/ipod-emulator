@@ -2024,6 +2024,12 @@ fn make_nor_cmd(args: &[String]) -> Result<(), String> {
     };
 
     let mut spec = nor::Spec::new(model, identity.clone());
+    if let Some(v) = flag("--hwvr") {
+        let n = u32::from_str_radix(v.trim_start_matches("0x"), 16)
+            .map_err(|_| format!("--hwvr wants hex, got {v}"))?;
+        spec.hw_vr = Some(n);
+        println!("  (HwVr forced to {n:#010x})");
+    }
     if let Some(c) = &source {
         spec = spec.carry_from(c);
     }

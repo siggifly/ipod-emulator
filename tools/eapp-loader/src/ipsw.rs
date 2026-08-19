@@ -461,6 +461,18 @@ pub fn images(fw: &[u8]) -> Vec<Image> {
     out
 }
 
+/// Where an OS image starts inside the bytes at its `devOffset`.
+///
+/// An ARM image entered at its base opens with the exception vector table, so its first two words
+/// are branches (`0xEA……`). That is a property of the thing being looked for rather than a number
+/// that has to be right for every bundle Apple shipped — and it has to be, because the header is
+/// `0x200` on the 5G's bundle and `0x800` on the 5.5G's.
+pub fn image_header(window: &[u8]) -> Option<usize> {
+    (0..window.len().saturating_sub(8))
+        .step_by(4)
+        .find(|&o| window[o + 3] == 0xEA && window[o + 7] == 0xEA)
+}
+
 /// Pull the OS image out of a drive's own firmware partition.
 ///
 /// **This is what a high-level boot needs and a warm boot did not.** `--osos=` takes the image as a
@@ -471,18 +483,29 @@ pub fn images(fw: &[u8]) -> Vec<Image> {
 ///
 /// Returns the image and the address it loads at.
 pub fn osos_from_drive(path: &std::path::Path) -> Result<(Vec<u8>, u32), String> {
-    // **The 0x200 that this project has got wrong before.**
+    // **The header this project has now got wrong twice, in two sizes.**
     //
     // `devOffset` in the `!ATA` directory is relative to the firmware PARTITION, but what is
-    // written at LBA 63 is Apple's extracted `Firmware-…` file, which carries its own 0x200 header
-    // on top. So a byte position inside the drive is `devOffset + 0x200`, and taking devOffset
-    // literally lands one sector early -- which is precisely the `OSOS.bin` vs `OSOS_correct.bin`
-    // mistake recorded in `research/02` §Provenance, and which this reproduced on its first run.
+    // written at LBA 63 is Apple's extracted `Firmware-…` file, which carries a header on top. So
+    // the byte position inside the drive is `devOffset + header`.
     //
-    // The proof needs no specification: an ARM image entered at its base begins with the exception
-    // vector table, so the first word is a branch. Read one sector early it is data, and the CPU
-    // spins in the vectors executing it -- which is exactly what happened.
-    const FILE_HEADER: u64 = 0x200;
+    // The header is **not a constant**. Measured, by finding where the ARM vector table actually
+    // begins in each bundle:
+    //
+    // | bundle | devOffset | vector table | header |
+    // |---|---|---|---|
+    // | `iPod_20.1.3` (5G) | `0x4400` | `0x4600` | `0x200` |
+    // | `iPod_25.1.3` (5.5G) | `0x4800` | `0x5000` | **`0x800`** |
+    //
+    // Taking devOffset literally lands short by a header and the CPU spins in the exception
+    // vectors executing data -- the `OSOS.bin` vs `OSOS_correct.bin` mistake in `research/02`
+    // §Provenance. Assuming `0x200` lands short by 0x600 on a 5.5G, which is what made the 5.5G
+    // fail to boot at all.
+    //
+    // So it is FOUND rather than assumed: an ARM image entered at its base begins with the
+    // exception vector table, whose first two words are branches. That is a property of the thing
+    // being looked for, not a number that has to be right for every bundle Apple ever shipped.
+    const MAX_HEADER: u64 = 0x4000;
     use std::io::{Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let base = FIRMWARE_LBA as u64 * 512;
@@ -515,8 +538,27 @@ pub fn osos_from_drive(path: &std::path::Path) -> Result<(Vec<u8>, u32), String>
         return Err(format!("{}: `osos` claims {} bytes, which is not a size an OS image has", path.display(), osos.len));
     }
 
+    // Locate the image start: the first 4-byte-aligned position at or after `devOffset` whose two
+    // opening words are both ARM branches.
+    let mut window = vec![0u8; MAX_HEADER as usize];
+    f.seek(SeekFrom::Start(base + osos.offset as u64))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let got = f.read(&mut window).map_err(|e| format!("{}: {e}", path.display()))?;
+    window.truncate(got);
+    let header = image_header(&window)
+        .map(|h| h as u64)
+        .ok_or_else(|| {
+            format!(
+                "{}: no ARM vector table within {MAX_HEADER:#x} of `osos` at {:#x}. An image \
+                 entered at its base opens with two branch instructions and this one does not, so \
+                 either it is not a 5G/5.5G OS image or it is not stored in the clear.",
+                path.display(),
+                osos.offset
+            )
+        })?;
+
     let mut image = vec![0u8; osos.len as usize];
-    f.seek(SeekFrom::Start(base + FILE_HEADER + osos.offset as u64))
+    f.seek(SeekFrom::Start(base + osos.offset as u64 + header))
         .map_err(|e| format!("{}: {e}", path.display()))?;
     f.read_exact(&mut image).map_err(|e| {
         format!("{}: `osos` runs past the end of the image: {e}", path.display())
@@ -844,6 +886,27 @@ mod tests {
         let entry = super::images(&dir).into_iter().find(|i| i.tag == "osos").expect("osos");
         assert_eq!(img.len() as u32, entry.len);
         assert_eq!(addr, entry.addr);
+    }
+
+    /// **The header is found, not assumed** — it is 0x200 on the 5G's bundle and 0x800 on the
+    /// 5.5G's, and assuming the smaller one is what stopped the 5.5G booting at all.
+    #[test]
+    fn the_image_header_is_located_by_the_vector_table() {
+        // Two branches is what an ARM image opens with.
+        let vectors = [0x7a, 0x00, 0x00, 0xEA, 0x67, 0x00, 0x00, 0xEA];
+        for header in [0usize, 0x200, 0x800, 0x1000] {
+            let mut w = vec![0u8; header];
+            w.extend_from_slice(&vectors);
+            w.resize(header + 64, 0);
+            assert_eq!(super::image_header(&w), Some(header), "header {header:#x}");
+        }
+        // A single branch is not a vector table -- one `0xEA` byte turns up in ordinary data.
+        let mut lone = vec![0u8; 16];
+        lone[3] = 0xEA;
+        assert_eq!(super::image_header(&lone), None, "one branch is not a vector table");
+        // And nothing at all is None rather than a panic or a zero.
+        assert_eq!(super::image_header(&[]), None);
+        assert_eq!(super::image_header(&[0u8; 4096]), None);
     }
 
     /// A drive with no firmware partition says so, rather than reading megabytes of nothing.
