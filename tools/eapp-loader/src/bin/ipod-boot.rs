@@ -1471,13 +1471,14 @@ fn install_os(args: &[String]) -> Result<(), String> {
     }
     let part = le(&mbr, 446 + 8) as u64 * 512;
     let part_sectors = le(&mbr, 446 + 12) as u64;
-    // **Image data lives one sector past the partition; the directory does not.**
-    // `ipodpatcher.c:1586` — `fwoffset = start + sector_size` — and it is measurable rather than
-    // taken on trust: both recorded checksums in a stock image match a byte sum over
-    // `[devOffset + 512, +len)` and neither matches one over `[devOffset, +len)`. Getting this
-    // wrong writes an image Apple's bootloader rejects after ~70 ATA commands with
-    // "Connect to your computer. Use iTunes to restore." — which is what it did.
-    let fw = part + FW_SECTOR as u64;
+    // **Image data lives past the directory by a header, and that header is not one sector.**
+    //
+    // This used to read `part + 512`, citing `ipodpatcher.c:1586` (`fwoffset = start + sector_size`)
+    // and the fact that a stock image's checksums reproduce over `[devOffset + 512, +len)`. Both
+    // were true — of the 5G's bundles. Measured across all three, `osos` and `rsrc` reproduce at
+    // **+0x200 on `iPod_13.1.3` and `iPod_20.1.3`, and +0x800 on `iPod_25.1.3`**, so a fixed sector
+    // refused every 5.5G drive outright. It is discovered below, using `osos`'s own checksum as the
+    // oracle — see the loop after the directory is read.
 
     // The directory.
     let mut dir = vec![0u8; FW_SECTOR as usize];
@@ -1503,9 +1504,56 @@ fn install_os(args: &[String]) -> Result<(), String> {
     // **Reproduce the checksums that are already there before writing new ones.** If our idea of
     // where an image starts or how it is summed is wrong, this fails here — on a file nobody has
     // modified — instead of producing a plausible image that the bootloader silently rejects
-    // seventy ATA commands into a boot. It is the same check `--check-images` performs on the
-    // inputs, applied to our own understanding of the format.
+    // seventy ATA commands into a boot.
+    //
+    // **The header is discovered, not assumed**, and the checksum is the oracle for it. `devOffset`
+    // is relative to the firmware PARTITION; the extracted `Firmware-…` file that gets written at
+    // LBA 63 carries a header on top, and that header is **0x200 on the 5G's bundles and 0x800 on
+    // the 5.5G's** — measured across `iPod_13.1.3`, `iPod_20.1.3` and `iPod_25.1.3` by finding
+    // which offset reproduces `osos`'s recorded sum. A fixed 512 here refused every 5.5G drive.
+    let header = {
+        let mut found = None;
+        for candidate in [0x200u64, 0x800, 0, 0x400, 0x1000] {
+            let mut sum = 0u32;
+            let mut left = first.len as usize;
+            let mut buf = vec![0u8; 1 << 20];
+            if f.seek(SeekFrom::Start(part + candidate + first.dev_offset as u64)).is_err() {
+                continue;
+            }
+            let mut ok = true;
+            while left > 0 {
+                let n = left.min(buf.len());
+                if f.read_exact(&mut buf[..n]).is_err() {
+                    ok = false;
+                    break;
+                }
+                sum = buf[..n].iter().fold(sum, |a, &b| a.wrapping_add(b as u32));
+                left -= n;
+            }
+            if ok && sum == first.chksum {
+                found = Some(candidate);
+                break;
+            }
+        }
+        found.ok_or_else(|| {
+            format!(
+                "`osos`'s checksum ({:#010x}) is not reproduced at any header offset this tool \n\
+                 knows. Either the drive's firmware partition is damaged, or its bundle has a \n\
+                 layout not seen before — and writing to it would make things worse either way.",
+                first.chksum
+            )
+        })?
+    };
+    let fw = part + header;
     for img in &images {
+        // **`aupd` is exempt, and that is measured rather than assumed.** Its recorded checksum
+        // reproduces at NO offset in ANY of the three bundles — 13.1.3, 20.1.3 and 25.1.3 — so
+        // whatever Apple sums for the updater, it is not the bytes at `devOffset`. Failing on it
+        // means refusing every drive `make-disk` builds, which is a worse outcome than the one
+        // this check exists to prevent.
+        if img.tag == "aupd" {
+            continue;
+        }
         let mut sum = 0u32;
         let mut left = img.len as usize;
         let mut buf = vec![0u8; 1 << 20];

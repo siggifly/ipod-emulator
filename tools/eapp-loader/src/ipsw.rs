@@ -637,7 +637,14 @@ pub fn build_disk(fw: &[u8], out: &Path, sectors: u64) -> Result<(), String> {
     // ---- the MBR. Two entries, and the first one's type is 0x00, which is not a mistake: Apple's
     // firmware partition is marked "empty" so that no PC operating system offers to mount it.
     let mut mbr = [0u8; 512];
-    part(&mut mbr, 0, 0x00, FIRMWARE_LBA, fw_sectors);
+    // **The firmware partition gets the slack a real iPod's has**, not just the bytes Apple's
+    // blob occupies. Sized to the blob exactly, there is nowhere to put a bootloader: installing
+    // one means moving `rsrc` and `aupd` along, and `install-os` correctly refused with "no room".
+    // That is how Rockbox and ipodloader2 are installed on real hardware -- into the space between
+    // the end of Apple's images and the start of the data partition, which is already reserved
+    // here and was simply not being declared.
+    part(&mut mbr, 0, 0x00, FIRMWARE_LBA, DATA_LBA - FIRMWARE_LBA);
+    debug_assert!(fw_sectors <= DATA_LBA - FIRMWARE_LBA, "the firmware does not fit before the data partition");
     part(&mut mbr, 1, 0x0b, DATA_LBA, (sectors - DATA_LBA as u64) as u32);
     mbr[510] = 0x55;
     mbr[511] = 0xAA;

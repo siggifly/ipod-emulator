@@ -111,14 +111,31 @@ That check is deliberate — it reproduces the existing checksums before writing
 idea of the layout fails on an unmodified file rather than producing an image the bootloader rejects
 seventy ATA commands in. It is working; what it is telling us is that we have two layout problems.
 
-1. **The 5.5G case is the header again.** `FW_SECTOR` is a fixed `512`, which is right for the 5G's
-   bundle and wrong for the 5.5G's `0x800`. That is the **third** place this constant is assumed —
-   `osos_from_drive` was the second, and `research/02` §Provenance records the first two.
-2. **The 5G's `aupd` case is not explained.** Its extent — `dev_offset 0xc3a200` plus `len 0x106400`
-   — ends at `0xD40600`, past the `0xD40000` end of Apple's own firmware file, with or without a
-   header offset. So the sum reads beyond what was written. Whether the directory is describing
-   something the extracted file does not contain, or `dev_offset` means something else for `aupd`,
-   is **open**.
+Both are now settled, and by a **second independent method**: which offset reproduces each image's
+recorded checksum. That agrees with the vector-table method and is stronger, because a checksum over
+seven megabytes cannot match by coincidence.
+
+| bundle | `osos` / `rsrc` | `aupd` |
+|---|---|---|
+| `iPod_13.1.3` (5G Initial) | reproduce at **`+0x200`** | matches at **no** offset |
+| `iPod_20.1.3` (5G Rev A) | reproduce at **`+0x200`** | matches at **no** offset |
+| `iPod_25.1.3` (5.5G) | reproduce at **`+0x800`** | matches at **no** offset |
+
+1. **The header is per-bundle**, and `FW_SECTOR`'s fixed 512 was right for the 5G and wrong for the
+   5.5G. It is now *discovered* — `osos`'s own checksum is the oracle — so the tool no longer has to
+   be told, and a bundle with a header nobody has seen resolves itself.
+2. **`aupd`'s checksum reproduces at no offset in any bundle.** My earlier note here said its extent
+   ran past the end of the firmware file; **that was wrong arithmetic** — the file is `0xD40800`,
+   not `0xD40000`, and `aupd` fits inside it. The real finding is that whatever Apple sums for the
+   updater image, it is not the bytes at `devOffset`. It is systematic across all three bundles, so
+   it is a property of the format rather than damage, and `install-os` now exempts it by name and
+   says why. Failing on it meant refusing every drive `make-disk` builds.
+
+**And the firmware partition was sized with no slack.** `build_disk` declared partition 0 as exactly
+`fw_sectors`, so installing a bootloader — which moves `rsrc` and `aupd` along — had nowhere to go,
+and `install-os` refused with "no room". A real iPod's firmware partition carries slack; that is how
+Rockbox and `ipodloader2` are installed at all. The space between Apple's images and `DATA_LBA` was
+already reserved here and simply was not being declared. With it declared, both install.
 
 **The Rockbox bootloader test was run the wrong way.** `bootloader-ipodvideo.ipod` was warm-booted
 through `--osos=`, and burned its whole 200 M budget with **zero** ATA commands on all three ROMs.
