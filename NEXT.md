@@ -680,8 +680,6 @@ throughout; mixing is refused rather than resolved by a rule nobody would rememb
   content of R6.
 - **`0x0000133c` / `IDE_BASE+0x410`** — a 0.6 s periodic poke from low-vector code that lands one
   byte outside the modelled DMA window and is never read. Unexplained.
-- **Delete `--force-vc-upload` / `--force-vc-retire`.** Ledger #17's ablation is redundant since the
-  DMA controller was modelled; it is in no recipe and kept only for re-running one comparison.
 
 ---
 
@@ -702,8 +700,8 @@ but not where the flag still lives cannot catch that.
 #7 (`COP_STATUS` sticky) and #8 (`PLL_STATUS` locked) are pushed unconditionally by `trace.rs`;
 #9 (`IDE0_CFG` bit 3) is ORed in by `Ata::read`. A reader who greps the recipe for "which bypasses
 am I running" finds one of the four. #4 `--sysinfo` is **not** on the retail path at all — verified
-today, `cold-boot.sh` and `ipod-boot retail` pass none. #17 is in no recipe (`grep -l force-vc
-tools/ipod-boot/*.sh` → empty).
+today, `cold-boot.sh` and `ipod-boot retail` pass none. **#17 is gone** — both its flags were
+deleted 2026-08-19 once `0x60009000` was modelled and its ring was shown to drain unaided.
 
 ### ~~0b — Model the transfer engine at `0x60009000`~~ · **DONE 2026-08-13 — a second DMA controller**
 
@@ -816,7 +814,7 @@ for a measurement by someone reading in a hurry, which is what R6 was written ab
 | `--symbols` / the profile's labels | names recovered from the image | **the six boot tasks are mislabelled, one record late.** `extract_symbols`'s pattern A assumes *name then pointer*; that pool is *pointer then name*. In `OSOS_correct.bin` at file offset 867616: `t_power\0`, `0x002844e0`, `APPLEBOOT\0`, `0x00284ea0`, `t_graphicsManager\0` — so the profile calls `0x002844e0` "t_power" when it is **APPLEBOOT**, and `0x00284ea0` "APPLEBOOT" when it is **t_graphicsManager**. Pattern A cannot simply be reversed: in the device registry at `0x0025d63c` the word before each name is the *previous* entry's pointer, so a blind reversal renames `OptoTask` to `SerialOptoTask`. Read the creation code at `0x000d3b60` instead |
 | `ata commands: N` in the run report | how many ATA commands the boot issued | **was a capped log length** — `commands` stops recording at 256, and "256 ATA commands" served as this project's baseline fingerprint while being the cap; the true figure is 770. The count is now uncapped and the line prints `(log below shows the first 256 — SAMPLE, NOT A CENSUS)`. **That wording is now the shared one**: every capped instrument in the report speaks it. Any pre-2026-08-14 document saying 256 is saying "at least 256". One absence claim died with it: LBA 22169 *is* read, at command #342 |
 | `--wheel=SCRIPT` | inject click-wheel input — `@N:touch,+2M:rotate=+12,+2M:release,@100M:press=menu` | anchored in **instructions**, because simulated µs is dominated by idle sleeps and is not comparable across runs. The parser expands `rotate`/`press` and the run prints the expanded schedule, so a log reproduces itself. `--clickwheel` models the device with nothing injected; `--wheel-no-irq` ablates IRQ 40 — the control that separates "the firmware read a frame" from "the firmware was interrupted into reading one". **Snapshots do not carry the wheel**: `--restore` plus `--wheel` fires every step at once. **And `press=` is too short for firmware that polls**: it expands to a down/up pair `--wheel-click-instr` apart, 20 000 by default, which at the real clock is **0.27 ms**. Apple's `diag` reads its button byte once per **150 ms** — 11.25 M instructions — so every `press=` fell between two polls. The tell is that it does not look like a missed press: the interrupt handler records the button at `0x1001aa9c` and the next poll reads a *later* value, so `--storeaddr` shows the press arriving and the firmware shows no reaction. Use explicit `down=`/`up=` pairs held across the poll interval |
-| `--force-vc-upload`, `--force-vc-retire` | ablation only, ledger #17 — fakes the VideoCore transfer completion | **never in a recipe.** A recipe that carries an ablation stops being a measurement of the machine |
+| ~~`--force-vc-upload`, `--force-vc-retire`~~ | **DELETED 2026-08-19.** They faked the VideoCore transfer's two completion signals; `0x60009000` now moves all 201 216 bytes and the in-use ring drains without help, so both reproduced a run the machine can do unaided | `--force-sem=ID` survives as the general form — make any RTXC pend return. Still an ablation, still in no recipe |
 | `--nor` | a real AMD/JEDEC NOR — unlock, autoselect, CFI query, sector/chip erase, program | — |
 | `--no-cfg-ack` | ablates the IDE0_CFG acknowledgement, reproducing the historic interrupt storm on demand | — |
 | `--bcm-ppm=FILE` | render the co-processor's framebuffer to a PPM | proves *readout geometry*, never *authorship*. Addendum 12 was retracted for reading it as the latter. Pair it with a dump at `--stop-at=0x10000000:1` — if the two files are identical, RetailOS drew nothing |

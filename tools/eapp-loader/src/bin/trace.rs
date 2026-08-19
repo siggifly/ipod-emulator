@@ -243,14 +243,14 @@ fn main() {
     for spec in args.iter().filter_map(|a| a.strip_prefix("--enterlog=")) {
         m.enter_pcs.extend(spec.split(',').filter_map(parse_addr));
     }
-    // --force-vc-upload / --force-sem=ID[,ID…] : ledger bypass #17, an ablation.
+    // --force-sem=ID[,ID…] : return success from an RTXC pend instead of blocking.
     //
-    // Two spellings because the experiment has two halves. `--force-vc-upload` names the one
-    // semaphore we have evidence for; `--force-sem` exists because the predicted outcome of the
-    // first half is *another* wait on another id, and testing that should not need a rebuild.
-    if args.iter().any(|a| a == "--force-vc-upload") {
-        m.force_sems.push(0xe0);
-    }
+    // A general instrument, and what remains of ledger bypass #17. The two VideoCore-specific
+    // spellings it used to carry — `--force-vc-upload` (an alias for `--force-sem=0xe0`) and
+    // `--force-vc-retire` — are gone: the transfer engine at `0x60009000` is modelled, moves all
+    // 201 216 bytes itself, and its in-use ring drains without help, so both ablations now
+    // reproduce a run the machine can do unaided. This one stays because "make a pend return" is
+    // useful against any semaphore, and it prints what it ate.
     for spec in args.iter().filter_map(|a| a.strip_prefix("--force-sem=")) {
         m.force_sems.extend(spec.split(',').filter_map(parse_addr));
     }
@@ -258,7 +258,6 @@ fn main() {
     {
         m.force_sem_pend_pc = pc;
     }
-    m.force_vc_retire = args.iter().any(|a| a == "--force-vc-retire");
     m.force_sems.sort_unstable();
     m.force_sems.dedup();
     if !m.force_sems.is_empty() {
@@ -2581,20 +2580,8 @@ fn report_break_watch(m: &mut eapp_loader::Machine) {
             top.iter().take(6).map(|(d, n)| format!("{d:+#x} x{n}")).collect();
         println!("  strides: {}", s.join("  "));
     }
-    if m.force_vc_retire {
-        println!(
-            "\n--- bypass #17 stage 2: descriptor rings drained on the spin edge: {} ---",
-            m.force_retire_log.census()
-        );
-        for &(ch, n) in m.force_retire_log.iter().take(16) {
-            println!("  channel={ch:#010x}  @{n}");
-        }
-        if let Some(x) = m.force_retire_log.more_line(16) {
-            println!("{x}");
-        }
-    }
     if !m.force_sem_log.is_empty() {
-        println!("\n--- bypass #17: pends satisfied without a producer: {} ---", m.force_sem_log.len());
+        println!("\n--- pends satisfied without a producer: {} ---", m.force_sem_log.len());
         for &(lr, sem, n) in m.force_sem_log.iter().take(64) {
             println!("  sem={sem:#04x}  returned to lr={lr:#010x}  @{n}");
         }

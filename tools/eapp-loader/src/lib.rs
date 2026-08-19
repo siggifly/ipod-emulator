@@ -2358,15 +2358,13 @@ pub struct Machine {
     /// 65 536-entry cap, because it was tallied from the log. It is now tallied on arrival, so the
     /// claim in that row is true unconditionally.
     pub enter_callers: BTreeMap<(u32, u32), u64>,
-    /// `--force-sem=ID[,ID…]` (and its alias `--force-vc-upload`) — RTXC semaphore ids whose
-    /// `KS_pend` returns success instead of blocking. **An ablation, not a fix** — ledger bypass
-    /// #17. It exists because `APPLEBOOT` waits on `0xe0` for a 64 KB VideoCore-firmware chunk that
-    /// nothing in the machine can deliver: RetailOS programs the transfer engine at `0x60009000`
-    /// and no completion ever comes back, because nothing is executing on the other side. Off by
-    /// default; retire it when `0x60009000` moves bytes and raises its completion.
+    /// `--force-sem=ID[,ID…]` — RTXC semaphore ids whose `KS_pend` returns success instead of
+    /// blocking. **An ablation, not a fix.**
     ///
-    /// On its own it is **not** sufficient, and that is the measured result rather than a caveat —
-    /// see `force_vc_retire` and research/10 Addendum 8.
+    /// It exists because `APPLEBOOT` waited on `0xe0` for a 64 KB VideoCore-firmware chunk nothing
+    /// could deliver. That is no longer true — `0x60009000` is modelled and moves the whole
+    /// 201 216 bytes, and the retirement condition this carried is met (research/10 Addendum 9) —
+    /// so the flag survives as a general instrument rather than as one experiment's switch.
     ///
     /// Keyed on the pend itself rather than on a memory value because the wait is reached by a
     /// *tail* branch from the counting acquire at `0x000a0ebc` — there is no call frame to patch,
@@ -2378,18 +2376,6 @@ pub struct Machine {
     /// `(lr, sem, icount)` per satisfied pend. The count is the flag's own positive control: the
     /// unablated run pends on `0xe0` exactly once, at `@51_764_626`.
     pub force_sem_log: Vec<(u32, u32, u64)>,
-    /// `--force-vc-retire` — the second half of bypass #17. Satisfying `0xe0` is not enough: the
-    /// buffer allocator at `0x00159b88` then busy-waits at `0x00159ba0` until all four in-use
-    /// bytes at `channel+0x18` read zero, and only the engine's completion path clears them. This
-    /// zeroes them on the retry edge (`0x00159bc8` with `r2 != 0` — the branch that would spin),
-    /// which is the narrowest possible statement of "the engine retired what was outstanding".
-    ///
-    /// Deliberately keyed on the retry rather than the loop head: on the fast path — a genuinely
-    /// free ring — it changes nothing, so a run that never spins is bit-identical to one without
-    /// the flag.
-    pub force_vc_retire: bool,
-    /// `(channel, icount)` per modelled retire.
-    pub force_retire_log: Capped<(u32, u64)>,
     /// `--sum-at=PC:ADDR:LEN` — byte-sum a memory range the moment execution reaches PC.
     ///
     /// A post-run `--dump` shows memory as it is when the budget runs out, which is a *later*
@@ -2704,8 +2690,6 @@ impl Machine {
             force_sems: Vec::new(),
             force_sem_pend_pc: 0x000a_6924,
             force_sem_log: Vec::new(),
-            force_vc_retire: false,
-            force_retire_log: Capped::new(4096),
             sum_at: Vec::new(),
             sum_at_log: Vec::new(),
             break_log: Vec::new(),
@@ -4073,15 +4057,6 @@ impl Machine {
                 self.cpu.regs[0] = 0;
                 self.cpu.regs[15] = lr;
                 continue;
-            }
-            // Bypass #17 stage 2. `r2 != 0` is the loop's own "some buffer is still in use" flag,
-            // so this fires only where the code was about to spin — never on a free ring.
-            if self.force_vc_retire && pc == 0x0015_9bc8 && self.cpu.regs[2] != 0 {
-                let ch = self.cpu.regs[0];
-                for i in 0..4 {
-                    self.mem.write8(ch.wrapping_add(0x18 + i), 0);
-                }
-                self.force_retire_log.push((ch, self.executed as u64));
             }
             // Call history. The instruction ring shows only the innermost loop, so "what did the
             // firmware *do* before it got stuck" has been unanswerable — the single biggest gap in
