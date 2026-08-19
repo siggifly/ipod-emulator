@@ -835,6 +835,39 @@ what it cost was a fork of a guest, and a claim in this file that two upstream b
 when one was cosmetic and the other was our fixture. **Nothing in this project now patches any
 operating system it runs.**
 
+### `'6'` is not a preference — it steers the bootloader away from hardware we do not model
+
+**Measured 2026-08-20, with only the value changed** (the register left writable, so this is one
+variable rather than the two the first attempt moved). Seed `PP5022C-` — `'2'` where Apple looks —
+and the retail boot goes from 599 ATA commands to **0**, ending:
+
+```
+last instructions:
+  400038cc  ldr r0, [r4, #0x28]
+  400038d0  tst r0, #0x80
+  400038d4  beq 0x400038cc          <- forever
+
+unmapped: 8 reads, 4 writes across 1 pages
+  0xc5000140..0xc5000143   8 reads  4 writes   first pc 0x400011dc
+```
+
+**`0xc5000140` is a controller this project does not model**, and Apple's bootloader touches it
+*only* on the `'2'` path — our ATA is at `0xc3000000` and nothing else has ever gone near
+`0xc5000000`. So the byte does not express a preference between two readers. It selects between two
+hardware paths inside Apple's bootloader, and `'6'` is the one whose hardware we have.
+
+That makes the value a **bypass in the ledger's sense** — steering firmware away from a device we
+have not built — with a retirement condition that is now a specific address rather than an argument:
+**model the controller at `0xc5000140`.**
+
+**And it inverts the likely reading of which part this is.** Apple's own ROM writes its `IsyS`
+pointer to `0x4001ff18`/`0x4001ff1c` — the slot `ipod_set_sysinfo` selects **when
+`ipod_is_pp5022()` is true** — and never to `0x40017f18`. A machine whose ROM parks sysinfo in the
+PP5022 slot is most likely a PP5022, in which case `'2'` is the true answer, the `'2'` path is what
+a real 5G takes, and what stops us is the missing controller rather than the chip id. The `'6'` this
+project reports is then the workaround and `--rdval` is a second workaround layered on the first.
+Neither is established, and both now have one experiment between them and being settled.
+
 ### The two guests are not asking about different chips — they are testing the same byte
 
 **Read out of Apple's own ROM at `0x9258`, which is better evidence than the comment that stood
