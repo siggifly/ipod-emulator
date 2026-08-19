@@ -586,6 +586,44 @@ ones it demonstrably prints, and its checksum is over the plaintext. And the cho
 (SST `0xbf`/`0x273f`, uniform 4 KiB sectors) is **a choice among the eight the ROM accepts, not a
 measurement** — neither dump records what the hardware carried.
 
+## 4b — Do the hardware chords do anything? · **one negative, and it is not enough to conclude from**
+
+**The input side is real.** The window's keys map to a genuine press and release, so holding `M`
+and `space` holds `MENU`+`SELECT` for as long as your fingers do, and `--wheel`'s `down=`/`up=`
+pairs do the same on the command line. Nothing had to be added for that; what was missing is that
+nobody could know the chords existed, and the key legend now lists them.
+
+**What the firmware does with them is measured once, and the answer was no.** `PLAY` held for
+300 M instructions — 4 s of simulated time — on a retail boot:
+
+```
+ipod-boot retail --bcm-registry --clickwheel \
+  --wheel="@1800M:touch,+10M:down=play,+300M:up=play,+10M:release"
+  -> 2 244 489 794 instructions, 933 ATA commands, the Language picker still on screen
+```
+
+RetailOS is alive and did not sleep. **That is one negative on the first screen the firmware ever
+draws**, which is the screen least likely to handle a power chord, so it does not establish that the
+chord is unmodelled — only that it does nothing *there*. The same test from the main menu has not
+been run.
+
+*(The first attempt at this measured nothing at all: without `--bcm-registry` RetailOS never gets an
+answer to its service lookup and never draws — ledger #6 — so the panel showed Apple's boot logo and
+the run said nothing about sleep. A recipe missing the flag that makes the machine draw is a recipe
+that cannot answer a question about the screen.)*
+
+Until it is measured, the window's `power off` and `restart` stay what they are and **say** what
+they are: dropping the machine is the equivalent of pulling the battery, not the sleep chord, and
+the hover text now says so and points at the key that is.
+
+## 4c — `--wheel` scripts do not fire under `ipod-film`
+
+Measured 2026-08-19 on a Rockbox run: `script: 0 of 20 steps fired`, on a 2 G budget with the first
+step at `@1600M`. The same mechanism works under `ipod-film` for `diag`, where the tour's four steps
+fired and drove the whole menu — so it is not "the film ignores the wheel", and the difference has
+not been isolated. **Any claim that Rockbox does or does not take input is untested until this is**,
+including the picture of it that used to be in the README and has been withdrawn.
+
 ## 5 — Standing, unblocked, small
 
 - **Is `0x70000030` bit 27 ever *not* ready?** Nothing in the ROM image ever finds it clear — its own

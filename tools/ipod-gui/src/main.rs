@@ -2604,6 +2604,20 @@ impl App {
                     .color(UI_TEXT_FAINT),
                 );
                 ui.add_space(6.0);
+                // **Adding to a drive is not the same act as installing an operating system, and
+                // it should not cost eight gigabytes.**
+                //
+                // Rockbox plugins, themes, games and fonts all ship as zips that go onto the
+                // volume beside an install that is already there — which is what somebody doing
+                // this actually wants, and copying the whole drive for every one of them is what
+                // `put_files` calls "its own kind of hostile". So a bundle with no operating
+                // system beside it, landing on a drive this program built, goes on in place.
+                //
+                // A drive the *user* supplied never does: it might be the only image of an iPod
+                // they own. That is the same rule `write_target` already applies to the machine's
+                // own writes, and it is applied here for the same reason.
+                let bundle_only = os.is_none() && bundle.is_some();
+                let ours = Path::new(&drive).parent().is_some_and(|p| p == drives_dir());
                 if self.install_busy {
                     ui.horizontal(|ui| {
                         ui.spinner();
@@ -2615,7 +2629,17 @@ impl App {
                     ui.ctx().request_repaint_after(Duration::from_millis(200));
                     return;
                 }
-                if ui.button("Install onto a new drive").clicked() {
+                let mut in_place = false;
+                if bundle_only && ours {
+                    in_place = ui
+                        .button("Add to this drive")
+                        .on_hover_text(
+                            "Writes onto the drive you are running, which this program built. \
+                             Rockbox plugins, themes and games go on this way.",
+                        )
+                        .clicked();
+                }
+                if ui.button("Install onto a new drive").clicked() || in_place {
                     let src = PathBuf::from(&drive);
                     // Named for what goes into it, so the drive list reads as a list of machines.
                     let stem = os
@@ -2628,7 +2652,8 @@ impl App {
                                 .unwrap_or_else(|| "installed".into())
                         })
                         .unwrap_or_else(|| "installed".into());
-                    let out = drives_dir().join(format!("{stem}.img"));
+                    let out =
+                        if in_place { src.clone() } else { drives_dir().join(format!("{stem}.img")) };
                     let slot = self.install_slot.clone();
                     self.install_busy = true;
                     self.say(format!("installing into {} …", out.display()));
@@ -2642,13 +2667,14 @@ impl App {
                                     Path::new(p),
                                     &out,
                                 )?),
-                                // Files only: still a copy, because the drive they land on is the
-                                // one the person is running and this modifies it in place.
-                                None => {
+                                // Files only. `out == src` when the person asked to add to the
+                                // drive they are running; otherwise this is the copy.
+                                None if out != src => {
                                     std::fs::copy(&src, &out)
                                         .map_err(|e| format!("copying the drive: {e}"))?;
                                     report.push(format!("  copied {} -> {}", src.display(), out.display()));
                                 }
+                                None => {}
                             }
                             if let Some(b) = &bundle {
                                 report.extend(eapp_loader::install::put_zip(&out, Path::new(b))?);
@@ -3466,11 +3492,21 @@ impl App {
     /// `left_edge` is where the case starts, in points. Everything from the panel's left edge to
     /// there is space nothing else wants.
     fn keys_in_margin(&self, p: &egui::Painter, area: Rect, left_edge: f32) {
+        // **The chords are the device's, and holding a key really holds the button.**
+        //
+        // `key_pressed` and `key_released` map to a real press and release, so a six-second hold is
+        // a six-second button — which is what a chord is on hardware. Nothing else is needed to
+        // make them work; what was missing is that nobody could know they were there.
+        //
+        // They are listed as what the hardware does, not as what this emulator promises: the
+        // firmware decides what a held button means, and whether ours answers is a measurement.
         const KEYS: &[(&str, &str)] = &[
             ("arrows", "scroll the wheel"),
             ("enter / space", "select"),
             ("M P , .", "menu · play · prev · next"),
             ("H", "hold switch"),
+            ("hold M+space", "reset, on the real device"),
+            ("hold P", "sleep, on the real device"),
             ("S", "save a PNG into _out/"),
             ("D", "user / debug"),
         ];
@@ -4045,7 +4081,14 @@ impl App {
                         self.say("power on: cold boot from the reset vector");
                     }
                 } else {
-                    if ui.button("power off").clicked() {
+                    if ui
+                        .button("power off")
+                        .on_hover_text(
+                            "Drops the machine — the equivalent of pulling the battery out, not \
+                             the sleep chord. Hold P for that, which is what the real device does.",
+                        )
+                        .clicked()
+                    {
                         self.down.clear();
                         self.touching = false;
                         if let Some(l) = &self.link {
@@ -4055,7 +4098,10 @@ impl App {
                     }
                     if ui
                         .button("restart")
-                        .on_hover_text("A cold boot from the reset vector — about 75 seconds.")
+                        .on_hover_text(
+                            "A cold boot from the reset vector — about 75 seconds. Not the reset \
+                             chord: hold M+space for that, which is what the real device does.",
+                        )
                         .clicked()
                     {
                         self.down.clear();
