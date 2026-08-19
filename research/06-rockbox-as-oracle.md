@@ -1840,3 +1840,29 @@ it the one that can be named in a public repository's documentation.
 **The coprocessor is doing the work.** On the run that reaches the menu it parked and was woken
 **18 554 times** — Doom hands it work constantly, which is exactly the traffic the core-lock spin
 was standing in for when there was no second core to hand anything to.
+
+
+## Scripted wheel navigation is not reproducible, and the reason is acceleration
+
+**2026-08-19.** A `--wheel` descent that reaches Doom once will not reach it again, and the cause is
+not the emulator drifting. Two runs on the same image, same build, same starting menu:
+
+| rotate steps | spacing | clicks | items moved | apparent ratio |
+|---|---|---|---|---|
+| 12 × `rotate=+2` | 400 ms | 24 | **8** — `Files` → `Shortcuts` | 3 clicks/item |
+| 9 × `rotate=+2` | 400 ms | 18 | **3** — `Files` → `Settings` | 6 clicks/item |
+
+Half the clicks moved *less than half* as far. Rockbox accelerates the wheel: a longer spin moves
+more list items per detent, so **the mapping from clicks to items depends on the whole gesture**,
+not on the count. Any script that says "24 clicks reaches Plugins" is recording one gesture's
+acceleration curve and calling it a calibration — which is why the figure "4 clicks per menu item"
+in earlier notes is not wrong so much as not a constant.
+
+What this means for filming: a fixed click count cannot target a menu item reliably, and a descent
+several menus deep multiplies the error. Either drive one detent at a time with enough quiet between
+that acceleration never engages — which has not been measured yet — or reach the target by a route
+whose length does not have to be exact.
+
+**It is not an emulator defect and there is nothing to fix in the machine.** It is a property of the
+guest that any scripted-input recipe here has to be built around, and the earlier Doom films that
+did reach the plugin got there by an acceleration curve nobody had noticed they were depending on.
