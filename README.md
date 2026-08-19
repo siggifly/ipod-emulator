@@ -278,8 +278,9 @@ machine at all — `script: 0 of 20 steps fired`. The click-wheel fix it illustr
 |---|---|
 | ![](docs/media/ipod-24-ipodloader2.png) | ![](docs/media/ipod-26-ipodlinux-loaded.png) |
 
-The left is where it stopped for a long time — `No valid paritions found!` — and **both reasons were
-bugs in its own source**, not in this emulator. It tests the firmware partition with
+It reads the drive, finds both partitions, walks the FAT32 volume looking for a kernel, and jumps to
+it. For a long time it did not: it printed `No valid paritions found!`, and **both reasons were bugs
+in its own source**, not in this emulator. It tests the firmware partition with
 `if (mlc_strncmp(magic, "]ih[", 4))` while `mlc_strncmp` returns zero on a match, so it accepts a
 partition only when the magic does *not* match; and it has no case for partition type `0x0C`, FAT32
 with LBA, which is what iTunes on Windows writes and what this project's own `make-disk` writes.
