@@ -647,14 +647,16 @@ pub fn build_disk(fw: &[u8], out: &Path, sectors: u64) -> Result<(), String> {
     // ---- the MBR. Two entries, and the first one's type is 0x00, which is not a mistake: Apple's
     // firmware partition is marked "empty" so that no PC operating system offers to mount it.
     let mut mbr = [0u8; 512];
-    // **The firmware partition gets the slack a real iPod's has**, not just the bytes Apple's
-    // blob occupies. Sized to the blob exactly, there is nowhere to put a bootloader: installing
-    // one means moving `rsrc` and `aupd` along, and `install-os` correctly refused with "no room".
-    // That is how Rockbox and ipodloader2 are installed on real hardware -- into the space between
-    // the end of Apple's images and the start of the data partition, which is already reserved
-    // here and was simply not being declared.
-    part(&mut mbr, 0, 0x00, FIRMWARE_LBA, DATA_LBA - FIRMWARE_LBA);
-    debug_assert!(fw_sectors <= DATA_LBA - FIRMWARE_LBA, "the firmware does not fit before the data partition");
+    // **Sized to Apple's firmware exactly, because that is what a real iPod has.** Measured on the
+    // reference drive: partition 0 is 27 140 sectors, which is `Firmware-20.6.3` to the byte.
+    //
+    // This briefly grew to `DATA_LBA - FIRMWARE_LBA` so that a bootloader would fit, because
+    // `install-os` refuses with "no room" on a drive built here. That was the wrong fix: it made
+    // our drives differ from real hardware to work around something that is not a defect. A real
+    // post-update iPod has **no `aupd`** — the reference drive carries only `osos` and `rsrc` — and
+    // the megabyte the updater occupies here is exactly the room a bootloader goes in. So the drive
+    // to install onto is one whose updater has been consumed, not one with a wider partition.
+    part(&mut mbr, 0, 0x00, FIRMWARE_LBA, fw_sectors);
     part(&mut mbr, 1, 0x0b, DATA_LBA, (sectors - DATA_LBA as u64) as u32);
     mbr[510] = 0x55;
     mbr[511] = 0xAA;
@@ -885,7 +887,9 @@ mod tests {
             println!("SKIPPED: {} is not here (gitignored)", p.display());
             return;
         }
-        let (img, addr) = super::osos_from_drive(p).expect("a retail drive has an OS");
+        let (img, addr, entry) = super::osos_from_drive(p).expect("a retail drive has an OS");
+        // A stock drive is entered at the image's base; only an installed bootloader moves it.
+        assert_eq!(entry, 0, "a drive with no bootloader installed has no entry offset");
         assert_eq!(addr, super::LOAD_ADDR_5G, "the 5G loads its OS at 0x10000000");
         assert!(img.len() > 1_000_000, "an OS image is megabytes, got {}", img.len());
         // **The check research/02 gives**: an ARM image entered at its base begins with the

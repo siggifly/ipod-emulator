@@ -131,11 +131,18 @@ seven megabytes cannot match by coincidence.
    it is a property of the format rather than damage, and `install-os` now exempts it by name and
    says why. Failing on it meant refusing every drive `make-disk` builds.
 
-**And the firmware partition was sized with no slack.** `build_disk` declared partition 0 as exactly
-`fw_sectors`, so installing a bootloader — which moves `rsrc` and `aupd` along — had nowhere to go,
-and `install-os` refused with "no room". A real iPod's firmware partition carries slack; that is how
-Rockbox and `ipodloader2` are installed at all. The space between Apple's images and `DATA_LBA` was
-already reserved here and simply was not being declared. With it declared, both install.
+**And "no room" is not a defect — it is a faithful drive with an armed updater.** `install-os`
+refuses to install a bootloader on a drive `make-disk` builds, because Apple's three images fill the
+partition. The obvious fix was to widen partition 0 to `DATA_LBA - FIRMWARE_LBA`, and that was
+**wrong and has been reverted**: measured on the reference drive, a real iPod's firmware partition is
+**27 140 sectors — Apple's firmware to the byte, with no slack at all**. Widening it made our drives
+differ from real hardware to work around something that is not a fault. The layout test said so, and
+I had been about to update the test to match the code.
+
+What a real post-update iPod has instead is **no `aupd`**: the reference drive carries only `osos`
+and `rsrc`, and the megabyte the updater occupies is exactly the room a bootloader goes into. So the
+drive to install onto is one whose updater has been consumed — which is what the reference drive is,
+and `install-os` works on it first time.
 
 **The Rockbox bootloader test was run the wrong way.** `bootloader-ipodvideo.ipod` was warm-booted
 through `--osos=`, and burned its whole 200 M budget with **zero** ATA commands on all three ROMs.
