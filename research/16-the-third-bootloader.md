@@ -756,6 +756,33 @@ branch — with the arms identical. So there are now two open questions where th
 second is the more urgent: **what regressed, or which image the 3 194 was measured on.** The mirror
 is kept because its evidence is the kernel's own instructions, not because it was seen to help.
 
+### It is not a missing `root=`, and the kernel never asks the drive who it is — 2026-08-19
+
+The panic reads like a configuration problem — `loader.cfg` on this image really does say only
+`console=ttyS0 quiet` — but that is not what stops it. Two lines above the panic the kernel says
+
+```
+ unable to read partition table
+…: INVALID GEOMETRY: 63 PHYSICAL HEADS?
+```
+
+so there is no `/dev/hda2` for a `root=` to name even if one were supplied. And the kernel has
+`ext2`, `ext3`, `vfat` and `msdos` all compiled in — 21, 88, 2 and 43 string hits in the image — so
+it is not short of a filesystem either.
+
+**The uncapped ATA census is the finding: `cmd 0xec` appears exactly once in the whole run, and it
+is `ipodloader2`'s.** The kernel never issues IDENTIFY DEVICE at all, which is why its geometry is
+garbage rather than merely wrong — it is not reading a mis-shaped answer, it is reading no answer.
+Nor is it driving an address we do not model: the run reports **zero unmapped accesses**, and the
+image holds **no pool reference** to `0xc30001e0`, `0xc3000000` or `0xc0003000`, so its IDE base is
+computed rather than a literal and cannot be found by looking.
+
+So this is the same family as the two bugs that turned out to be ours — a device the guest cannot
+get into a usable state — and **not** the content problem it was written up as. The next measurement
+is where the kernel's `ide` probe stops: its own `probe_for_drive` never reaches a command register
+we own, and finding out what it drives instead is one `--watch-range` over the window it should be
+using once the base is known.
+
 **What is NOT established:** that this kernel is right for this iPod. It is the ZeroSlackr
 `vmlinux` dated 2008, and a kernel built for a different generation would also load and then poll a
 register that generation has. The polled address being absent from the 5G's map is consistent with
