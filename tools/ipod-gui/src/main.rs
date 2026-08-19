@@ -214,6 +214,49 @@ const HARDWARE_MIPS: f64 = 72e6;
 /// which is the room a different font or a translated string would want, and still fits a 1366x768
 /// laptop once the menu bar and the title bar are counted. The previous minimum was 520 — under
 /// every one of these numbers.
+/// The window's own colours.
+///
+/// **The background is a cool charcoal, not near-black.** It used to be `0x12`, which meant a
+/// *black* iPod had to be drawn dark grey to be visible against it — the one colour the hardware
+/// actually came in was the one colour the window could not show. Lifting the background lets black
+/// be black.
+///
+/// It is tinted rather than neutral, and slightly: the iPod is white, black and chrome, and its
+/// panel glass is bluish, so a cool cast sits with all of them where a warm one fights the white
+/// plastic. Two points of blue over red is enough to read as deliberate without reading as a colour.
+///
+/// Every value here that carries text is checked against [`UI_BG`] by
+/// `every_text_colour_is_legible`, which is what stops "make it a bit dimmer" from quietly
+/// producing a sentence nobody can read.
+const UI_BG: Color32 = Color32::from_rgb(0x3A, 0x3E, 0x44);
+/// Insets and wells — a step below the background, not a hole in it.
+const UI_BG_DEEP: Color32 = Color32::from_rgb(0x2A, 0x2D, 0x32);
+/// Primary text.
+const UI_TEXT: Color32 = Color32::from_rgb(0xF2, 0xF3, 0xF5);
+/// Secondary text: still ordinary reading, one step back.
+const UI_TEXT_DIM: Color32 = Color32::from_rgb(0xC9, 0xCC, 0xD1);
+/// The faintest text this window uses. **Nothing dimmer is allowed** — it is the value the contrast
+/// test is pinned against.
+const UI_TEXT_FAINT: Color32 = Color32::from_rgb(0xB2, 0xB6, 0xBD);
+/// Section headings.
+const UI_HEADING: Color32 = Color32::from_rgb(0xB6, 0xBA, 0xC1);
+
+/// WCAG relative luminance of an sRGB colour.
+fn luminance(c: Color32) -> f32 {
+    let f = |v: u8| {
+        let s = v as f32 / 255.0;
+        if s <= 0.03928 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * f(c.r()) + 0.7152 * f(c.g()) + 0.0722 * f(c.b())
+}
+
+/// WCAG contrast ratio between two colours, 1.0 (identical) to 21.0 (black on white).
+fn contrast(a: Color32, b: Color32) -> f32 {
+    let (x, y) = (luminance(a), luminance(b));
+    let (hi, lo) = if x > y { (x, y) } else { (y, x) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
 const MIN_W: f32 = 720.0;
 const MIN_H: f32 = 700.0;
 /// What the window opens at. Comfortably above the minimum, and the device gets the difference.
@@ -433,17 +476,18 @@ fn theme(ctx: &egui::Context) {
     // user's operating system. That is precisely how this shipped unreadable.
     ctx.set_theme(egui::ThemePreference::Dark);
     let mut v = egui::Visuals::dark();
-    v.override_text_color = Some(Color32::from_gray(0xE6));
-    v.panel_fill = Color32::from_gray(0x12);
-    v.window_fill = Color32::from_gray(0x12);
-    v.extreme_bg_color = Color32::from_gray(0x08);
-    // Controls need to be visible as controls, not guessed at.
-    v.widgets.inactive.bg_fill = Color32::from_gray(0x2A);
-    v.widgets.inactive.weak_bg_fill = Color32::from_gray(0x2A);
-    v.widgets.hovered.bg_fill = Color32::from_gray(0x3A);
-    v.widgets.active.bg_fill = Color32::from_gray(0x45);
-    v.widgets.noninteractive.fg_stroke.color = Color32::from_gray(0xC8);
-    v.widgets.inactive.fg_stroke.color = Color32::from_gray(0xE6);
+    v.override_text_color = Some(UI_TEXT);
+    v.panel_fill = UI_BG;
+    v.window_fill = UI_BG;
+    v.extreme_bg_color = UI_BG_DEEP;
+    // Controls need to be visible as controls, not guessed at — and they are now sitting on a
+    // lighter background, so they had to come up with it or they would have vanished into it.
+    v.widgets.inactive.bg_fill = Color32::from_gray(0x48);
+    v.widgets.inactive.weak_bg_fill = Color32::from_gray(0x48);
+    v.widgets.hovered.bg_fill = Color32::from_gray(0x58);
+    v.widgets.active.bg_fill = Color32::from_gray(0x66);
+    v.widgets.noninteractive.fg_stroke.color = UI_TEXT_DIM;
+    v.widgets.inactive.fg_stroke.color = UI_TEXT;
     ctx.set_visuals(v);
 
     // egui's defaults are sized for a dense tool panel. This screen is prose somebody reads once,
@@ -674,14 +718,14 @@ impl App {
             ui.label(
                 egui::RichText::new(format!("{} in ", human(cache_size())))
                     .small()
-                    .color(Color32::from_gray(0x9A)),
+                    .color(UI_TEXT_FAINT),
             )
             .on_hover_text(settings::data_dir().display().to_string());
             ui.label(
                 egui::RichText::new(settings::data_dir().display().to_string())
                     .small()
                     .monospace()
-                    .color(Color32::from_gray(0x78)),
+                    .color(UI_TEXT_FAINT),
             );
             if stale > 0 {
                 if ui
@@ -704,7 +748,7 @@ impl App {
                 ui.label(
                     egui::RichText::new("nothing to reclaim")
                         .small()
-                        .color(Color32::from_gray(0x78)),
+                        .color(UI_TEXT_FAINT),
                 );
             }
         });
@@ -2020,7 +2064,7 @@ impl App {
                 ui.label(egui::RichText::new("ipod-emulator").heading());
                 ui.label(
                     egui::RichText::new("Apple's own iPod software, on a machine that is not one.")
-                        .color(Color32::from_gray(0x9A)),
+                        .color(UI_TEXT_FAINT),
                 );
             });
             ui.add_space(16.0);
@@ -2040,7 +2084,7 @@ impl App {
                          this window.",
                     )
                     .small()
-                    .color(Color32::from_gray(0x78)),
+                    .color(UI_TEXT_FAINT),
                 );
                 ui.add_space(2.0);
                 if ui.link("What are these, and where do I get them?").clicked() {
@@ -2066,7 +2110,7 @@ impl App {
                              file you have.",
                         )
                         .small()
-                        .color(Color32::from_gray(0x78)),
+                        .color(UI_TEXT_FAINT),
                     );
                 }
             });
@@ -2230,7 +2274,7 @@ impl App {
             ui.label(
                 egui::RichText::new(self.settings.nor.describe())
                     .small()
-                    .color(Color32::from_gray(0xC8)),
+                    .color(UI_TEXT_DIM),
             );
             if generating {
                 ui.label(
@@ -2239,7 +2283,7 @@ impl App {
                          purchased titles cannot authorise against them, on any machine.",
                     )
                     .small()
-                    .color(Color32::from_gray(0x78)),
+                    .color(UI_TEXT_FAINT),
                 );
             }
 
@@ -2272,7 +2316,7 @@ impl App {
                     .clone()
                     .unwrap_or_else(|| self.images.disk.trim().to_string())
             };
-            ui.label(egui::RichText::new(line).small().color(Color32::from_gray(0xC8)));
+            ui.label(egui::RichText::new(line).small().color(UI_TEXT_DIM));
             // Whose firmware it is, whenever we can say — and the warning when we cannot vouch
             // for it, which is allowed and only needs mentioning.
             if let Some(p) = &self.images.ipsw_provenance {
@@ -2348,7 +2392,7 @@ impl App {
                 let (mark, colour) = match verdict {
                     Some(v) if v.ok() => ("✓", Color32::from_rgb(0x6C, 0xC6, 0x88)),
                     Some(_) => ("!", Color32::from_rgb(0xE0, 0xA0, 0x40)),
-                    None => ("○", Color32::from_gray(0x70)),
+                    None => ("○", UI_TEXT_FAINT),
                 };
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(mark).color(colour).monospace());
@@ -2372,7 +2416,7 @@ impl App {
                             ui.label(
                                 egui::RichText::new("waiting")
                                     .small()
-                                    .color(Color32::from_gray(0x70)),
+                                    .color(UI_TEXT_FAINT),
                             );
                         } else {
                             ui.label(egui::RichText::new(name).small())
@@ -2429,7 +2473,7 @@ impl App {
                                 .strong()
                                 .color(Color32::from_rgb(0xE0, 0xA0, 0x40)),
                         );
-                        ui.label(egui::RichText::new(m).color(Color32::from_gray(0xC8)));
+                        ui.label(egui::RichText::new(m).color(UI_TEXT_DIM));
                     })
                     .response
                     .on_hover_text(inspect::WHY_FAMILY_MATTERS);
@@ -2513,7 +2557,7 @@ impl App {
                     "Two things: the boot ROM, and something to make a drive from. Apple wrote \
                      both, this project ships neither, and an iPod you own has both on it.",
                 )
-                .color(Color32::from_gray(0x9A)),
+                .color(UI_TEXT_FAINT),
             );
             ui.add_space(18.0);
             app.where_from(ui);
@@ -2562,12 +2606,12 @@ impl App {
                 });
             });
             if let Some(d) = described {
-                ui.label(egui::RichText::new(d).color(Color32::from_gray(0x9A)));
+                ui.label(egui::RichText::new(d).color(UI_TEXT_FAINT));
             }
             ui.add_space(14.0);
             for (k, v) in &facts {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(*k).color(Color32::from_gray(0x88)));
+                    ui.label(egui::RichText::new(*k).color(UI_HEADING));
                     ui.label(egui::RichText::new(v).monospace());
                 });
                 ui.add_space(2.0);
@@ -2578,7 +2622,7 @@ impl App {
             // Last, small, and selectable: the path is the least interesting true thing about a
             // file and the one people occasionally need to copy.
             ui.label(
-                egui::RichText::new("Where it is").small().color(Color32::from_gray(0x88)),
+                egui::RichText::new("Where it is").small().color(UI_HEADING),
             );
             ui.label(egui::RichText::new(path).small().monospace());
         });
@@ -2696,7 +2740,7 @@ impl App {
                         ui.label(
                             egui::RichText::new("both files are needed")
                                 .small()
-                                .color(Color32::from_gray(0x78)),
+                                .color(UI_TEXT_FAINT),
                         );
                     }
                 });
@@ -2757,7 +2801,7 @@ impl App {
                     app.synthetic_model().apple_number()
                 ))
                 .small()
-                .color(Color32::from_gray(0x9A)),
+                .color(UI_TEXT_FAINT),
             );
             ui.add_space(4.0);
             let mut debug = app.settings.mode == Mode::Debug;
@@ -2778,7 +2822,7 @@ impl App {
             // that was ever real is this one, and it is the one a person needs to see before the
             // machine starts rather than after.
             let target = write_target(Path::new(app.images.disk.trim()), app.settings.work_on_copy);
-            ui.label(egui::RichText::new(target.line()).small().color(Color32::from_gray(0xC8)));
+            ui.label(egui::RichText::new(target.line()).small().color(UI_TEXT_DIM));
             ui.add_space(4.0);
             if target == WriteTo::ReadOnly {
                 ui.label(
@@ -2787,7 +2831,7 @@ impl App {
                          writing is refused by the operating system.",
                     )
                     .small()
-                    .color(Color32::from_gray(0x9A)),
+                    .color(UI_TEXT_FAINT),
                 );
             } else {
                 let mut copy = target.copies();
@@ -2835,7 +2879,7 @@ impl App {
                 });
             });
             if let Some(l) = app.update_line.clone() {
-                ui.label(egui::RichText::new(l).small().color(Color32::from_gray(0x9A)));
+                ui.label(egui::RichText::new(l).small().color(UI_TEXT_FAINT));
             }
         });
     }
@@ -2843,7 +2887,7 @@ impl App {
     /// A section heading: the one piece of chrome that makes a long page scannable.
     fn section(&mut self, ui: &mut egui::Ui, title: &str) {
         ui.label(
-            egui::RichText::new(title).small().strong().color(Color32::from_gray(0x88)),
+            egui::RichText::new(title).small().strong().color(UI_HEADING),
         );
         ui.add_space(2.0);
         ui.separator();
@@ -3309,7 +3353,7 @@ impl App {
                      kept. You never have to use this: your own .ipsw works exactly as before.",
                 )
                 .small()
-                .color(Color32::from_gray(0x9A)),
+                .color(UI_TEXT_FAINT),
             );
             ui.add_space(12.0);
             app.firmware_controls(ui);
@@ -3425,7 +3469,7 @@ impl App {
                 dir.display()
             ))
             .small()
-            .color(Color32::from_gray(0x9A)),
+            .color(UI_TEXT_FAINT),
         );
         if corrupt > 0 {
             ui.label(
@@ -3483,7 +3527,7 @@ impl App {
 
         if let Some(note) = &self.fw_note {
             ui.add_space(4.0);
-            ui.label(egui::RichText::new(note).small().color(Color32::from_gray(0xC8)));
+            ui.label(egui::RichText::new(note).small().color(UI_TEXT_DIM));
         }
     }
 
@@ -3728,7 +3772,7 @@ impl App {
                 ui.label(egui::RichText::new(n).small().color(Color32::from_rgb(0xE0, 0xA0, 0x40)));
             }
             if let Some(l) = self.log.front() {
-                ui.label(egui::RichText::new(l.as_str()).small().color(Color32::from_gray(0x78)));
+                ui.label(egui::RichText::new(l.as_str()).small().color(UI_TEXT_FAINT));
             }
             ui.add_space(4.0);
         });
@@ -3816,7 +3860,7 @@ impl App {
                         ui.set_width(200.0);
                         for l in lines {
                             ui.label(
-                                egui::RichText::new(l).monospace().size(10.5).color(Color32::from_gray(0xC8)),
+                                egui::RichText::new(l).monospace().size(10.5).color(UI_TEXT_DIM),
                             );
                         }
                         ui.add_space(4.0);
@@ -3835,7 +3879,7 @@ impl App {
                         ui.label(
                             egui::RichText::new("D hides this")
                                 .size(9.5)
-                                .color(Color32::from_gray(0x70)),
+                                .color(UI_TEXT_FAINT),
                         );
                     });
             });
@@ -4466,6 +4510,49 @@ mod tests {
     /// Measured before it was written, which is how `MIN_H` got its value rather than the other way
     /// round: at the previous 520 px minimum the first run wanted 550, the settings 590 and the
     /// help 484, so all three scrolled and two of them scrolled at sizes people use.
+    /// **Legibility is measured, not judged.** WCAG AA wants 4.5:1 for ordinary text, and every
+    /// colour this window puts words in is checked against the background it sits on.
+    ///
+    /// The reason this exists: the background moved from near-black to a charcoal so a BLACK iPod
+    /// could be black, and every dim grey that was comfortable on `0x12` lost most of its contrast
+    /// in the process. Without a test that is the sort of change that ships as "some of the small
+    /// print went faint".
+    #[test]
+    fn every_text_colour_is_legible() {
+        const AA: f32 = 4.5;
+        for (name, c) in [
+            ("UI_TEXT", UI_TEXT),
+            ("UI_TEXT_DIM", UI_TEXT_DIM),
+            ("UI_TEXT_FAINT", UI_TEXT_FAINT),
+            ("UI_HEADING", UI_HEADING),
+        ] {
+            let r = contrast(c, UI_BG);
+            assert!(r >= AA, "{name} on the background is {r:.2}:1, below AA's {AA}");
+            // And on the deeper wells, which are darker still — so this cannot regress either.
+            let r = contrast(c, UI_BG_DEEP);
+            assert!(r >= AA, "{name} on a well is {r:.2}:1, below AA's {AA}");
+        }
+
+        // The click wheel's own lettering, on each case colour. MENU is small text on the wheel,
+        // so it is held to the same bar.
+        for chassis in [Colour::White, Colour::Black, Colour::U2] {
+            let (body, wheel, ring_text, _glass) = palette_for(chassis);
+            let r = contrast(ring_text, wheel);
+            assert!(r >= AA, "{chassis:?}: wheel lettering is {r:.2}:1, below AA's {AA}");
+            // And the case has to be visible against the window, or the device vanishes into it.
+            let r = contrast(body, UI_BG);
+            // A filled shape, not text, so not the 4.5 bar — but it still has to be a shape you
+            // can see. This is the constraint that decides how light the background can be: too
+            // dark and a black iPod vanishes into it, which is the whole reason it moved.
+            assert!(r >= 1.75, "{chassis:?}: the case is {r:.2}:1 against the window — too close");
+        }
+
+        // The point of the whole change: black is BLACK, and clearly darker than the window.
+        let (black_body, _, _, _) = palette_for(Colour::Black);
+        assert!(luminance(black_body) < 0.01, "the black iPod is not black");
+        assert!(luminance(UI_BG) > luminance(black_body) * 3.0, "the window is not lighter than it");
+    }
+
     #[test]
     fn every_screen_fits_the_smallest_window() {
         for (screen, files) in [
@@ -4589,7 +4676,8 @@ mod tests {
 fn palette_for(chassis: Colour) -> (Color32, Color32, Color32, Color32) {
     if chassis == Colour::U2 {
         (
-            Color32::from_rgb(0x24, 0x25, 0x27),
+            // Actually black, now that the window behind it is grey.
+            Color32::from_rgb(0x0D, 0x0D, 0x0F),
             // Apple's "Product Red" wheel. Dark enough that the white ring text still reads.
             Color32::from_rgb(0xb8, 0x1c, 0x22),
             Color32::from_rgb(0xf0, 0xe2, 0xe2),
@@ -4597,16 +4685,22 @@ fn palette_for(chassis: Colour) -> (Color32, Color32, Color32, Color32) {
         )
     } else if chassis == Colour::Black {
         (
-            Color32::from_rgb(0x24, 0x25, 0x27),
-            Color32::from_rgb(0x33, 0x34, 0x36),
-            Color32::from_rgb(0x9a, 0x9b, 0x9d),
-            Color32::from_rgb(0x0a, 0x0a, 0x0b),
+            // **Black, not dark grey.** The old 0x24 existed to stay visible against a near-black
+            // window; with a grey background behind it the hardware's own colour works.
+            Color32::from_rgb(0x0D, 0x0D, 0x0F),
+            Color32::from_rgb(0x1C, 0x1C, 0x1F),
+            Color32::from_rgb(0x8E, 0x8F, 0x92),
+            Color32::from_rgb(0x04, 0x04, 0x05),
         )
     } else {
         (
             Color32::from_rgb(0xf3, 0xf3, 0xf1),
             Color32::from_rgb(0xe6, 0xe6, 0xe3),
-            Color32::from_rgb(0x87, 0x88, 0x86),
+            // **Darkened from 0x87.** The lettering measured 2.85:1 against the wheel it sits on,
+            // well under AA — a pre-existing fault the contrast test found on its first run, not
+            // something the background change caused. The real part's lettering is dark grey on
+            // white, so this is also the more faithful colour.
+            Color32::from_rgb(0x5E, 0x5F, 0x5D),
             Color32::from_rgb(0x14, 0x14, 0x15),
         )
     }
