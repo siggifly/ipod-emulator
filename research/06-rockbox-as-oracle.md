@@ -1193,3 +1193,52 @@ nothing reports it.
 **Settled when** the cold path reaches the menu the warm path reaches. The next question is no
 longer "whose code" but **where the PC leaves real code**, which is one `--callgraph` or a watch on
 the last `.iram` address before the walk begins.
+
+---
+
+## Cold-booted, Rockbox spins in its core-lock — and it is not the disk
+
+**Measured 2026-08-19.** Rockbox warm-entered through `--osos=rb-main.raw` reaches its main menu,
+takes wheel input and navigates four levels deep. Cold-booted — Apple's boot ROM running Rockbox's
+own bootloader out of the firmware partition — it draws **nothing at all**:
+
+```
+Running 'osos' 0 from 0x10735A00
+bcm: 6 commands kicked, 4 frame updates
+320x240 from 0x000e0000, 0 non-black pixels
+ata commands: 99
+```
+
+**The disk was the suspicion, and it is ruled out.** That run is on a drive this project's own
+installer had just built from a plain Apple image — `ipod-boot rockbox-install`, bootloader into the
+firmware partition and 381 verified files onto the volume — and it behaves exactly like the older
+`rockbox-cold.img`. Two independently built drives, same result. The difference is **cold versus
+warm**, not the volume.
+
+**Where it stops is specific.** The halt is a two-instruction spin at `0x00086300`, reached from
+`0x000845dc`:
+
+```asm
+000845dc  mov  r1, #0x60000000
+000845e0  ldrb r1, [r1, #0x0]        ; PROC_ID — 0x55 on the CPU, 0xAA on the COP
+000845e4  mov  r2, #0x0
+000845e8  strb r2, [r0, r1, lsr #7]  ; a per-core slot: 0x55>>7 = 0, 0xAA>>7 = 1
+...
+00086300  cmp  r4, #0x0
+00086304  bne  0x00086374            ; spin
+```
+
+Indexing a two-entry array by `PROC_ID >> 7` is Rockbox's **core-lock**, and this note already
+records `corelock` as one of the two cold-only stack writers. So cold-booted Rockbox is waiting on
+the second core, and 99 ATA commands is the bootloader's reading and almost none of Rockbox's own —
+it never gets as far as scanning the volume.
+
+**What this does not say.** Whether the COP is under-modelled, whether the bootloader hands over in
+a state the warm path fakes, or whether `--sysinfo`'s handoff is doing the work in the warm case, is
+not established. All three are consistent with what is above, and the same spin address appears on
+every cold run tried, which makes it a good place to put a `--enterlog` next.
+
+**And the aperture theory is dead.** The obvious guess after diagnostics — that Rockbox drives the
+co-processor at a second address nobody had mapped, as `diag` does at `0xb0000000` — is wrong:
+`rb-bootloader.raw` references `0x30000000` twelve times and `rb-main.raw` nine, and **neither
+mentions `0xb0000000` at all**. Cheap to check, and it saved chasing the wrong thing.
