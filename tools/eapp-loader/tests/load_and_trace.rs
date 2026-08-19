@@ -1584,3 +1584,46 @@ fn waking_the_coprocessor_yields_to_it_immediately() {
     solo.mem.write32(eapp_loader::Core::Cop.ctrl(), 0);
     assert!(!solo.mem.yield_to_cop, "no second core, no yield");
 }
+
+/// **A byte store and a word store must reach the same memory.**
+///
+/// The NOR is aliased over address 0 out of reset and the boot ROM fetches from it, but firmware
+/// then programs the MMAP unit to put SDRAM there. `write8_inner` tested the flash windows on the
+/// **raw** address, so after that remap it kept handing low stores to the chip, which swallowed
+/// them and returned — while `write32`'s fast path resolved through `translate` and landed in RAM.
+///
+/// Cold-booted Rockbox is what found it: `disk_init` writes `partinfo[].start` with an `stm` and
+/// `.type` with a `strb`, so the start survived and the type did not, every partition read as type
+/// 0, `disk_mount_all()` returned 0, and it sat on "No partition found (0)." forever.
+#[test]
+fn a_byte_store_lands_where_a_word_store_does() {
+    use arm7tdmi::Bus;
+    let app = EApp::parse(synth_eapp()).expect("parse");
+    let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
+    eapp_loader::map_hardware(&mut m, true); // cold: NOR over 0, SDRAM at 0x10000000
+
+    // **The flash model has to be present or this test proves nothing** — with `nor` unset the
+    // branch that swallowed the store is never entered and the assertion passes against the bug.
+    // Confirmed: without this line the test is green either way.
+    m.mem.nor = Some(eapp_loader::Nor::sst39wf800a(vec![(0, 0x10_0000)], vec!["flash-low"]));
+
+    // Stand in for the MMAP remap the firmware performs: low addresses become SDRAM.
+    m.mem.aliases.push((0x0000_0000, 0x0400_0000, 0x1000_0000));
+    m.mem.invalidate_fast();
+
+    // Two adjacent fields of one struct, exactly as `disk_init` writes them.
+    let (start, ty) = (0x000e_72f8u32, 0x000e_7308u32);
+    m.mem.write32(start, 0x0000_8000);
+    m.mem.write8(ty, 0x0c);
+
+    assert_eq!(m.mem.read32(start), 0x0000_8000, "the word store");
+    assert_eq!(m.mem.read8(ty), 0x0c, "the byte store was swallowed by the flash");
+
+    // And the flash must still be reachable where it really is, or this trades one bug for another:
+    // the updater writes the chip at 0x20000000 and the reset-time view at 0 must still fetch.
+    assert_eq!(
+        m.mem.translate(0x2000_0000),
+        0x2000_0000,
+        "the flash aperture is not remapped and must still reach the chip"
+    );
+}

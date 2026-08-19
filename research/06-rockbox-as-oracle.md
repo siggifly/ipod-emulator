@@ -1238,7 +1238,49 @@ reading.
 > `r5` advances by, and why four reads on the cold path never land on entry 1 when two on the warm
 > path do.
 >
-> That is the next thing to read, and it is a register rather than a hypothesis.
+> ### FIXED: a byte store below 1 MB was being swallowed by the flash
+>
+> `--regs-at` — wired up for this, because `Memory::regs_at` and `regs_seen` had existed in `lib.rs`
+> with **no flag to set them and no printer to show them**, a mechanism nobody could ask for — puts
+> the whole register file at each arrival. The loop walks correctly: `r5` = `0xe72f0`, `0xe7308`,
+> `0xe7320`, `0xe7338`, stride 24, entries 0-3. At `r5 = 0x000e7308`, the address the parse wrote
+> `0x0c` to, the loaded byte is `0x00`. A third instrument agrees the memory really holds zero.
+>
+> **So the store never landed, and the discriminator is its width.** Same struct, same page, same
+> instant:
+>
+> | `partinfo[1]` | written by | value when read back |
+> |---|---|---|
+> | `.start` | `stm` — a **word** store | **`0x80`** — landed, LBA `0x8000` |
+> | `.type` | `strb` — a **byte** store | **`0x00`** — dropped |
+>
+> `write8_inner` tests the flash windows on the **raw** address:
+>
+> ```rust
+> let nor = match &mut self.nor { Some(n) => n.hit(addr)... };
+> if let Some(..) = nor { …; return; }      // swallows the store
+> ```
+>
+> The NOR is aliased over address 0 out of reset and the ROM fetches from it — but firmware then
+> programs the MMAP unit to put SDRAM there, and after that a store below 1 MB belongs to RAM.
+> `write32` resolves through `translate` and landed in SDRAM; this did not, so **every byte store
+> under 1 MB on a cold boot went into the flash model and returned.** Testing `n.hit(translate(addr))`
+> is the whole fix: before the remap `translate` is the identity, so the reset-time aliasing and the
+> updater's writes to `0x20000000` are untouched.
+>
+> | cold Rockbox | before | after |
+> |---|---|---|
+> | `disk_mount_all()` | 0 | **1** |
+> | ATA commands | 113 | **10 304** |
+> | non-black pixels | 0 | **74 057** |
+>
+> ![Rockbox, cold-booted to its main menu](../docs/media/ipod-18-rockbox-cold.png)
+>
+> **Cold-booted Rockbox reaches its main menu**, themed, in the volume's own 15 px font. Unmoved:
+> retail 599 ATA and 2 916 pixels, warm Rockbox 3 953 ATA, `flash-update` byte-identical to its
+> baseline. 303 tests, and `a_byte_store_lands_where_a_word_store_does` was confirmed to fail
+> against the un-fixed build — **after** a first version of it passed against the bug, because with
+> no `nor` installed the swallowing branch is never entered and the assertion proved nothing.
 >
 > The four things ruled out on the way, each by a control rather than by argument: `disk_init`
 > returns **1** in both · `fat_mount` returns **-42** in **both**, so it fails even on the path that

@@ -183,6 +183,19 @@ fn main() {
         .iter()
         .find_map(|a| a.strip_prefix("--watch="))
         .and_then(&parse_addr);
+    // --regs-at=ADDR[:N] : the whole register file at the first N arrivals at ADDR.
+    //
+    // `Memory::regs_at` and `regs_seen` have existed in `lib.rs` for some time with **no flag to
+    // set them** — a mechanism nobody could ask for, which is the same defect shape as a flag with
+    // no mechanism and just as invisible. `--enterlog` prints r0-r3, which is right for arguments
+    // and useless the moment the question is about a pointer the compiler put in r5.
+    for spec in args.iter().filter_map(|a| a.strip_prefix("--regs-at=")) {
+        let (a, n) = spec.split_once(':').unwrap_or((spec, "8"));
+        if let Some(addr) = parse_addr(a) {
+            m.mem.regs_at = Some((addr, n.parse().unwrap_or(8)));
+            println!("  regs-at {addr:#010x}, first {} arrivals", n.parse().unwrap_or(8));
+        }
+    }
     // --stop-at=ADDR[:N] : halt on the Nth arrival at ADDR (default the 1st), so --history
     // describes the first fault rather than whichever repeat the budget ended in.
     for spec in args.iter().filter_map(|a| a.strip_prefix("--stop-at=")) {
@@ -2618,6 +2631,19 @@ fn report_break_watch(m: &mut eapp_loader::Machine) {
         let s: Vec<String> =
             top.iter().take(6).map(|(d, n)| format!("{d:+#x} x{n}")).collect();
         println!("  strides: {}", s.join("  "));
+    }
+    // The other half of `--regs-at`, and it was missing too: the collector existed, the printer did
+    // not, so even a caller who set the field by hand would have seen nothing.
+    if !m.mem.regs_seen.is_empty() {
+        println!("\n--- registers at the watched pc: {} arrivals ---", m.mem.regs_seen.len());
+        for (at, r) in &m.mem.regs_seen {
+            println!("  @{at}");
+            for row in 0..4 {
+                let cells: Vec<String> =
+                    (0..4).map(|c| format!("r{:<2}={:#010x}", row * 4 + c, r[row * 4 + c])).collect();
+                println!("    {}", cells.join("  "));
+            }
+        }
     }
     if !m.force_sem_log.is_empty() {
         println!("\n--- pends satisfied without a producer: {} ---", m.force_sem_log.len());

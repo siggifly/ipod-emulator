@@ -1877,9 +1877,23 @@ impl Memory {
         }
         // Ahead of `locate_write`, which would otherwise report the store as unmapped — the flash
         // regions are read-only and nothing else answers at address 0.
+        //
+        // **On the TRANSLATED address, because address 0 stops being the flash.** The NOR is
+        // aliased over 0 out of reset and the ROM fetches from it, but firmware then programs the
+        // MMAP unit to put SDRAM there, and after that a store below 1 MB belongs to RAM. Testing
+        // the raw address kept handing those stores to the chip, which swallowed them and returned
+        // — so on a cold boot **byte stores under 1 MB were dropped while word stores landed**,
+        // because `write32`'s fast path resolves through `translate` and this did not.
+        //
+        // Rockbox is where that surfaced: `disk_init` parses the partition table into `partinfo`,
+        // writing `.start` with an `stm` (landed, 0x8000) and `.type` with a `strb` (dropped), so
+        // `disk_mount` read type 0 for every entry, `disk_mount_all` returned 0, and it sat on
+        // "No partition found (0). Insert USB cable" forever. Before the remap `translate` is the
+        // identity, so the reset-time aliasing and the flash updater are unaffected.
+        let nor_addr = self.translate(addr);
         let nor = match &mut self.nor {
             Some(n) => n
-                .hit(addr)
+                .hit(nor_addr)
                 .map(|off| (n.write(off, val), n.take_mode_change())),
             None => None,
         };
