@@ -1485,3 +1485,35 @@ fn the_core_registers_answer_at_both_widths() {
     assert_eq!(m.mem.cop_sleeps, 1);
     assert_eq!(m.mem.cop_wakes, 1);
 }
+
+/// **The device window's uncached mirror answers, at both widths and through both paths.**
+///
+/// iPodLinux drives the interrupt controller at `0x64004000` — 8 385 336 reads that landed in the
+/// unmapped report for days — and its own constant pool is what identifies the address: the word is
+/// loaded, dereferenced, and bit-tested against a source scan whose bit 8 is IRQ 40, the click wheel
+/// this emulator already delivers at `0x60004000`.
+///
+/// Two paths have to agree, and they are reached differently. `read32` takes the `fast_region`
+/// route, which translates a whole page; `read8` goes through `locate`. A mirror wired into one and
+/// not the other is this project's most-repeated bug — `read_or_masks` shipped exactly that way and
+/// left the bootrom spinning at instruction 23 — so both are asserted here.
+#[test]
+fn the_device_window_is_mirrored_where_the_kernel_reads_it() {
+    use arm7tdmi::Bus;
+    let app = EApp::parse(synth_eapp()).expect("parse");
+    let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
+    eapp_loader::map_hardware(&mut m, false);
+
+    // CPU_INT_STAT and its high bank — the two the kernel actually holds in its pool.
+    for (real, mirror) in [(0x6000_4000u32, 0x6400_4000u32), (0x6000_4100, 0x6400_4100)] {
+        m.mem.write32(real, 0xdead_beef);
+        assert_eq!(m.mem.read32(mirror), 0xdead_beef, "{mirror:#x} is not a view of {real:#x}");
+        assert_eq!(m.mem.read8(mirror), 0xef, "{mirror:#x} disagrees on the byte path");
+        // A mirror is the same storage, not a copy: a write through it is visible at the original.
+        m.mem.write32(mirror, 0x0000_0100);
+        assert_eq!(m.mem.read32(real), 0x0000_0100, "the mirror kept its own buffer");
+    }
+    // And it is bounded — the mirror is the 1 MB device window, not the whole 64 MB above it.
+    assert_eq!(m.mem.translate(0x6400_0000), 0x6000_0000);
+    assert_eq!(m.mem.translate(0x6410_0000), 0x6410_0000, "past the window, no translation");
+}

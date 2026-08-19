@@ -7768,7 +7768,37 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
         m.mem.int_ack_on_read.push((0x6000_500c, 1 << 1)); // TIMER2_VAL -> TIMER2_IRQ
     }
 
+    // **The device window has an uncached mirror too, at the same +0x04000000 the SDRAM one uses,
+    // and it was iPodLinux that named it.**
+    //
+    // The ZeroSlackr kernel polls `0x64004000` and `0x64004100` — 8 385 336 reads from two PCs a few
+    // instructions apart, and for a long time the answer to "what is that" was "an address in no
+    // register map this project has" (research/16). It is the interrupt controller, and the kernel's
+    // own code says so. Its constant pool at file offset `0x17b50` holds `0x64004000`, `0x17b54`
+    // holds `0x64004100`, and each is loaded, dereferenced once, and then bit-tested:
+    //
+    //     ldr r5, [pc,#920]        ; = 0x64004000
+    //     ldr r6, [r5,#0]
+    //     tst r6, #0x1     movne r0, #0
+    //     tst r6, #0x10    movne r0, #4
+    //     tst r6, #0x800   movne r0, #11
+    //     tst r6, #0x800000  movne r0, #23
+    //     tst r6, #0x100   movne r0, #40
+    //
+    // That is a source scan over `CPU_INT_STAT`, bit for bit — and bit 8 mapping to IRQ **40** is the
+    // click wheel this emulator already delivers at `0x60004000`. Two independent firmwares, the same
+    // register, 0x04000000 apart; the second bank at `+0x100` matches too.
+    //
+    // Registered as an alias rather than a second region for the reason the SDRAM comment gives: a
+    // separate buffer works until something crosses between the views, and then looks like
+    // corruption. Nothing else in this project reads `0x64xxxxxx` — it was in the unmapped report,
+    // which is how it was found — so this cannot move a number measured before it existed.
+    //
+    // Pushed inside the same guard as the rest, and *before* `mmap_alias_floor` is set: an alias
+    // registered past that floor is treated as MMAP-derived and gets truncated the next time the
+    // firmware programs a window.
     if m.mem.aliases.is_empty() {
+        m.mem.aliases.push((0x6400_0000, 0x0010_0000, 0x6000_0000));
         if cold_boot {
             // Storage is at 0x10000000; only the uncached window aliases onto it. Address 0 is
             // NOR, so it must NOT be aliased here — `translate` runs before the region lookup, and

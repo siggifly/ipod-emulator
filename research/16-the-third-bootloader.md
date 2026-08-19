@@ -590,6 +590,44 @@ not ipodloader2's own headers. Two PCs a few instructions apart, inside the inte
 reading it four million times. That is the next question, and it is a much better one than the one
 this note started with.
 
+### `0x64004000` is the interrupt controller, and the kernel's own code says so — 2026-08-19
+
+The address is not absent from the map; it is the map, plus one bit. `vmlinux` is a raw ARM image,
+so file offsets are addresses, and the constant pool for those two PCs sits at `0x17b50`:
+
+```
+0x000177b0  ldr r5, [pc,#920]      ; = 0x64004000   (pool 0x17b50)
+0x000177b4  ldr r6, [r5,#0]
+0x000177b8  tst r6, #0x1           movne r0, #0
+0x00017794  tst r6, #0x10          movne r0, #4
+0x000177a0  tst r6, #0x800         movne r0, #11
+0x000177d0  ldr r5, [pc,#892]      ; = 0x64004100   (pool 0x17b54)
+0x000177d4  ldr r6, [r5,#0]
+0x000177c4  tst r6, #0x800000      movne r0, #23
+0x000177fc  tst r6, #0x100         movne r0, #40
+```
+
+Load, dereference once, then a bit-by-bit source scan. **Bit 8 maps to IRQ 40** — the click wheel
+this emulator already delivers at `0x60004000` — and the second load is the high bank at `+0x100`,
+which is where this project's own notes put it. Two firmwares written by different people, the same
+register, the same bit assignments, `0x04000000` apart.
+
+That offset is not new here either: SDRAM's uncached view is `0x14000000` over `0x10000000`, and the
+ROM computes it itself (`bic #0xfc000000` / `orr #0x14000000`). Bit 26 is the uncached mirror on this
+part, and a kernel reaching MMIO through the uncached alias is a kernel doing the ordinary thing.
+`map_hardware` now registers `0x64000000..0x64100000` as a view of the device window, with
+`the_device_window_is_mirrored_where_the_kernel_reads_it` as the regression — confirmed to fail
+against the un-aliased build before it was kept.
+
+**It changes nothing yet, and that is stated rather than buried.** A/B'd on the retail boot to 1.8 G
+it is inert to the pixel: 599 ATA commands and **2 916 non-black pixels in both arms**. And on the
+iPodLinux path it cannot be evaluated, because *this file's own measurement no longer reproduces*:
+`ipl-patched.img` cold-booted today reaches **71 ATA commands**, not the 3 194 recorded above, and
+spins 891 499 514 times on `0xcf00101c` — the **PP5002** I/O base, which is the wrong-chip-family
+branch — with the arms identical. So there are now two open questions where there was one, and the
+second is the more urgent: **what regressed, or which image the 3 194 was measured on.** The mirror
+is kept because its evidence is the kernel's own instructions, not because it was seen to help.
+
 **What is NOT established:** that this kernel is right for this iPod. It is the ZeroSlackr
 `vmlinux` dated 2008, and a kernel built for a different generation would also load and then poll a
 register that generation has. The polled address being absent from the 5G's map is consistent with
