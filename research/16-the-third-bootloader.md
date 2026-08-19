@@ -800,6 +800,44 @@ is where the kernel's `ide` probe stops: its own `probe_for_drive` never reaches
 we own, and finding out what it drives instead is one `--watch-range` over the window it should be
 using once the base is known.
 
+### The two guests are not asking about different chips — they are testing the same byte
+
+**Read out of Apple's own ROM at `0x9258`, which is better evidence than the comment that stood
+here:**
+
+```
+9258:  mov r0, #0x70000000
+925c:  ldr r0, [r0]
+9260:  mov r0, r0, lsl #8
+9264:  mov r0, r0, lsr #24        <- bits 16..23
+9268:  cmp r0, #0x36              <- '6'
+926c:  movne r0, #0
+9270:  moveq r0, #1
+```
+
+`(v << 8) >> 24` is **character for character `ipod_is_pp5022()`** (`ipodhw.c:27`). One predicate,
+one byte, two different letters wanted: Apple's ROM asks *is it `'6'`*, `ipodloader2` asks *is it
+`'2'`*. There is one chip in an iPod and both are asking it the same question.
+
+**And we were answering with something that is not a chip id at all.** `trace.rs` seeded
+`0x00360000` — one byte in the position Apple reads and zeroes everywhere else. It passes Apple's
+test and spells nothing: `debug-pp.c` renders an eight-character part name out of `PP_VER2` then
+`PP_VER1`, and out of that value it renders four NULs, a `6`, and two more NULs. So the register had
+no answer for the second reader to get right, and the `--rdval` in the `loader` recipe is what was
+standing in for one.
+
+It now carries a whole string — `PP_VER1 = 0x3236432d`, `PP_VER2 = 0x50503530`, spelling
+`PP5026C-` — which keeps `'6'` exactly where Apple looks (**retail unmoved at 599 ATA commands and
+2 916 non-black pixels**) and gives every other reader something coherent.
+
+**What is still not established, and should not be dressed up:** whether a real 5G reports `'6'`.
+This project has never measured that register on hardware. What is known is that *our* ROM contains a
+predicate for `'6'`, that the ROM's name table at `0x10ae4` lists `PP5020`, `PP5022` and `PP5026`
+and no `PP5021`, and that the community documentation calls this part a **PP5021C** — whose byte
+would be `'1'` and would make **both** predicates false. The `26` in the string above is therefore
+**constructed around Apple's comparison, not read off a part**, and the honest reading is that
+`0x70000000` is one of the few registers here whose true value nobody in this project has seen.
+
 ### The kernel reads our IDENTIFY six bytes out of step — measured, not inferred
 
 `drive->head` is the byte at `drive + 0x107`; the check at `0x000ebfc4` accepts 1..16 and complains

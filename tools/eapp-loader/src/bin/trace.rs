@@ -530,9 +530,25 @@ fn main() {
             }
         }
         map_hardware(&mut m, args.iter().any(|a| a == "--cold-boot"));
-        // Hardware revision probe: boot reads 0x70000000, takes bits 16..23 and compares to
-        // 0x36. Seed it so the PP5021C-specific path is taken rather than the fallback.
-        m.mem.write32(0x7000_0000, 0x0036_0000);
+        // **The part's own name, at the register Rockbox calls `PP_VER1`/`PP_VER2`.**
+        //
+        // This used to be `0x00360000` — one byte in the right place and zeroes around it, shaped to
+        // pass Apple's bootloader's single test (it takes bits 16..23 of `0x70000000` and compares
+        // to `0x36`) and nothing else. That is not a chip id, and it is why the second reader of
+        // this register could not work: `debug-pp.c` spells an eight-character part name out of
+        // `PP_VER2` then `PP_VER1`, and out of `0x00360000` it spells `"\0\0\0\0\0006\0\0"`.
+        //
+        // The full string keeps Apple's byte exactly where Apple looks — `'6'` is the third
+        // character of `PP5026C-` — so the boot is unmoved, and everything else about the register
+        // stops being a hole. **The generation is inferred from Apple's own comparison, not from a
+        // datasheet**: the ROM's name table at `0x10ae4` lists `PP5020`, `PP5022` and `PP5026` and
+        // no `PP5021`, and its bootloader tests for `'6'`.
+        for (i, b) in 0x3236_432Du32.to_le_bytes().iter().enumerate() {  // '2','6','C','-'
+            m.mem.write8(0x7000_0000 + i as u32, *b);
+        }
+        for (i, b) in 0x5050_3530u32.to_le_bytes().iter().enumerate() {  // 'P','P','5','0'
+            m.mem.write8(0x7000_0004 + i as u32, *b);
+        }
         for (base, size) in &maps {
             m.mem.regions.push(eapp_loader::Region {
                 name: "extra", base: *base, data: vec![0; *size],
