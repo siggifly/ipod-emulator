@@ -6183,9 +6183,18 @@ impl Ata {
         })
     }
 
+    /// The 512-byte IDENTIFY DEVICE response for this drive.
+    fn identify(&self) -> Vec<u8> {
+        Ata::identify_sector(self.sectors, self.mwdma_selected, self.udma_selected)
+    }
+
     /// The 512-byte IDENTIFY DEVICE response. Only the fields a driver actually consults are
     /// filled; everything else stays zero, which is legal and keeps the intent readable.
-    fn identify(&self) -> Vec<u8> {
+    ///
+    /// Takes its three inputs rather than `self` because that is all it depends on, and a method on
+    /// a struct that owns an open file cannot be asserted about without conjuring a disk. This is
+    /// the first thing every driver reads and the last thing anyone thinks to check.
+    pub fn identify_sector(sectors: u64, mwdma_selected: u8, udma_selected: u8) -> Vec<u8> {
         let mut w = [0u16; 256];
         w[0] = 0x0040; // non-removable, fixed device
         w[1] = 16383; // logical cylinders (legacy CHS, ignored once LBA is on)
@@ -6198,8 +6207,29 @@ impl Ata {
         w[49] = 0x0200; // LBA supported
         w[51] = 0x0200;
         w[53] = 0x0007; // words 54-58, 64-70, 88 are valid
-        w[60] = (self.sectors & 0xffff) as u16; // LBA28 capacity, low
-        w[61] = ((self.sectors >> 16) & 0xffff) as u16; // ...and high
+        // **And they have to actually be there, because bit 0 of word 53 says they are.**
+        //
+        // These were left zero while word 53 advertised them, which is the same defect shape as a
+        // config option with no mechanism behind it: a driver that believes the validity bit reads
+        // a geometry of nothing. Linux's `ide` driver is the one that does — 2.4.32-ipod2 prints
+        // `INVALID GEOMETRY: 63 PHYSICAL HEADS?` and then fails every read of sectors 0, 2, 4 and 6,
+        // which is the MBR, which is why it cannot find a partition table on a disk whose partition
+        // table three other firmwares here read without complaint.
+        //
+        // The current geometry is the default geometry: nothing ever issues INITIALIZE DEVICE
+        // PARAMETERS to this drive, so there is no second answer to keep in step.
+        w[54] = w[1]; // current cylinders
+        w[55] = w[3]; // current heads
+        w[56] = w[6]; // current sectors per track
+        // Current capacity in sectors, and it is NOT the disk's size: CHS addressing tops out at
+        // 16383*16*63, so a drive larger than that reports the ceiling here and the true figure in
+        // words 60/61. Reporting the LBA size in a CHS field is how you get a geometry that
+        // multiplies out to more sectors than the heads/sectors fields can reach.
+        let chs_capacity = w[1] as u32 * w[3] as u32 * w[6] as u32;
+        w[57] = (chs_capacity & 0xffff) as u16;
+        w[58] = (chs_capacity >> 16) as u16;
+        w[60] = (sectors & 0xffff) as u16; // LBA28 capacity, low
+        w[61] = ((sectors >> 16) & 0xffff) as u16; // ...and high
         // Transfer modes. Word 53 above claims words 64-70 and 88 are valid, so leaving them zero
         // was a drive that advertises no DMA capability at all while answering SET FEATURES
         // "transfer mode = Multiword DMA 2" with success — which is not a drive that exists.
@@ -6207,13 +6237,13 @@ impl Ata {
         // Low byte = modes supported, high byte = mode currently selected. The selected bits are
         // the standard way a driver confirms the mode it just asked for actually took.
         w[62] = 0x0000; // single-word DMA: obsolete since ATA-3, correctly absent
-        w[63] = 0x0007 | ((self.mwdma_selected as u16) << 8); // multiword DMA 0-2 supported
+        w[63] = 0x0007 | ((mwdma_selected as u16) << 8); // multiword DMA 0-2 supported
         w[64] = 0x0003; // PIO modes 3 and 4
         w[65] = 120; // minimum multiword DMA cycle time, ns
         w[66] = 120; // recommended
         w[67] = 120; // minimum PIO cycle time without IORDY
         w[68] = 120; // ...with IORDY
-        w[88] = 0x001f | ((self.udma_selected as u16) << 8); // ultra DMA 0-4 supported
+        w[88] = 0x001f | ((udma_selected as u16) << 8); // ultra DMA 0-4 supported
         w[80] = 0x0070; // ATA/ATAPI-4,5,6
         w[82] = 0x0000;
         w[83] = 0x4000; // word 83 valid

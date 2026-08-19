@@ -1517,3 +1517,30 @@ fn the_device_window_is_mirrored_where_the_kernel_reads_it() {
     assert_eq!(m.mem.translate(0x6400_0000), 0x6000_0000);
     assert_eq!(m.mem.translate(0x6410_0000), 0x6410_0000, "past the window, no translation");
 }
+
+/// **A validity bit has to be backed by the fields it validates.**
+///
+/// Word 53 bit 0 of IDENTIFY DEVICE says "words 54-58 are valid". Those words held zero, which is
+/// the same defect shape as a config option with no mechanism behind it: a driver that believes the
+/// bit reads a geometry of nothing. This asserts the two halves agree, and that the CHS capacity is
+/// the CHS *ceiling* rather than the disk's real size — reporting an LBA48-sized figure in a field
+/// three CHS fields cannot address is how a geometry ends up multiplying out to more sectors than
+/// its own heads and sectors can reach.
+#[test]
+fn identify_does_not_advertise_fields_it_leaves_empty() {
+    let id = eapp_loader::Ata::identify_sector(16_777_216, 0, 0);
+    let w = |n: usize| u16::from_le_bytes([id[n * 2], id[n * 2 + 1]]);
+
+    assert_eq!(id.len(), 512, "IDENTIFY DEVICE is one sector");
+    assert_eq!(w(53) & 1, 1, "this test is about the bit being set");
+    assert_eq!(w(54), w(1), "current cylinders");
+    assert_eq!(w(55), w(3), "current heads");
+    assert_eq!(w(56), w(6), "current sectors per track");
+    assert!(w(55) <= 16, "more than 16 heads is what Linux rejects outright");
+
+    let chs = w(54) as u32 * w(55) as u32 * w(56) as u32;
+    assert_eq!(w(57) as u32 | ((w(58) as u32) << 16), chs, "current capacity is C*H*S");
+    let lba = w(60) as u32 | ((w(61) as u32) << 16);
+    assert_eq!(lba, 16_777_216, "the true size still lives in words 60/61");
+    assert!(chs < lba, "an 8 GiB disk is larger than CHS can address; that is the point");
+}

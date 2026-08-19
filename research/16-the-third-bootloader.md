@@ -614,6 +614,68 @@ It stays a high-level boot deliberately: it never runs Apple's bootloader, which
 `PP_VER1` to be answered for `ipodloader2` without anything else reading it. Apple's own bootloader
 reads that register 23 times and hangs at `0x400038cc` when it is forced.
 
+### The kernel boots, and it says so — its own console, read out of `printk`
+
+With the mirror in place the unmapped report is **empty** on a 12 G run, where this file recorded
+8 385 336 reads of `0x64004000`. The kernel no longer spins on anything. It ends at
+
+```
+00024cb8  b  0x00024cb8
+```
+
+which is not a hang on hardware: `0x00024c78` loads `"<0>In idle task - not syncing"` and calls
+`0x000255e4`, and the three instructions before the self-branch are `mrs r3, cpsr` /
+`bic r3, r3, #0x80` / `msr cpsr_c, r3`. That is the tail of Linux's **`panic()`**.
+
+`0x000255e4` is therefore `printk`, and `--enterlog` on it turns `r0` into a console, because
+`vmlinux` is a raw image loaded at 0 and the format string's address *is* its file offset. 163 calls,
+decoded:
+
+```
+Linux version 2.4.32-ipod2 (Keripo@tehhomebase) (gcc version 3.4.3) #1 Sun Apr 27 11:44:04 EDT 2008
+Architecture: iPod
+Memory: 30128KB available
+Calibrating delay loop... 74.xx BogoMIPS
+ipodaudio: (c) Copyright 2003-2005 Bernard Leach   ·  codec WM8758
+devfs: v… Richard Gooch          ·  fb0: … frame buffer device
+pty: 256 Unix98 ptys configured  ·  loop: loaded (max 8 devices)
+Uniform Multi-Platform E-IDE driver Revision: 7.00beta4-2.4
+…
+end_request: I/O error, dev …, sector 0     (and 2, 4, 6 — twice each)
+ unable to read partition table
+…: INVALID GEOMETRY: 63 PHYSICAL HEADS?
+NET4: Linux TCP/IP 1.0 for NET4.0
+VFS: Cannot open root device … 
+Please append a correct "root=" boot option
+Kernel panic: …
+```
+
+**The whole kernel comes up.** Memory, the framebuffer, ptys, the E-IDE driver, TCP/IP. What it
+cannot do is mount a root filesystem, and there are two separate reasons, one of which is ours and
+one of which is not:
+
+1. **Not ours.** `loader.cfg` on this image says `console=ttyS0 quiet` and **contains no `root=` at
+   all**, so `Please append a correct "root=" boot option` is a literally accurate report about a
+   file this project wrote. There is also no Linux root filesystem on the drive to name.
+2. **Ours, and open.** The eight `I/O error`s are on **sectors 0, 2, 4 and 6** — the MBR, in 1 KB
+   blocks — which Apple's bootloader, Rockbox and `ipodloader2` all read off the same model without
+   complaint. Linux's `ide` driver is being refused something they do not ask for.
+
+**One IDENTIFY defect was found and fixed on the way, and it did not turn out to be the cause.**
+Word 53 bit 0 advertised words 54-58 as valid while they were left zero — a validity bit with
+nothing behind it. They now carry the current geometry (`w[54..56] = w[1]/w[3]/w[6]`) and the CHS
+capacity ceiling in `w[57..58]`, with `identify_does_not_advertise_fields_it_leaves_empty` as the
+regression, confirmed failable. **The kernel log is byte-identical either way** — same 163 printks,
+same eight I/O errors, same `INVALID GEOMETRY: 63` — and the retail boot is unmoved at 599 ATA
+commands and 2 916 non-black pixels. So it is a real defect corrected on its own terms, and it is
+**not** the thing Linux is tripping on. Said plainly rather than filed as a fix for a bug it did
+not fix.
+
+**63 is the number to chase.** Nothing in our IDENTIFY reports 63 heads: `w[3]` is 16, `w[6]` is 63,
+and `w[55]` is now 16. Linux ending up with `drive->head == 63` means it is reading a field one slot
+from where we put it — and `ipodloader2`, reading the same sector through its own PIO path, prints
+`CHS: 16383/16/63` correctly. Two readers of one buffer disagreeing is the next measurement.
+
 ### `0x64004000` is the interrupt controller, and the kernel's own code says so — 2026-08-19
 
 The address is not absent from the map; it is the map, plus one bit. `vmlinux` is a raw ARM image,
