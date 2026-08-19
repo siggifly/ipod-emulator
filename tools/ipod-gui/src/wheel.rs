@@ -73,6 +73,13 @@ impl Button {
     pub const ALL: [Button; 5] =
         [Button::Menu, Button::Next, Button::Prev, Button::Play, Button::Select];
 
+    /// A button by name, using the same spellings the command line's `--wheel` scripts accept —
+    /// `eapp_loader::wheel_button` is the one place those live, so the two cannot drift.
+    pub fn parse(name: &str) -> Option<Button> {
+        let mask = eapp_loader::wheel_button(name.trim())?;
+        Button::ALL.into_iter().find(|b| b.mask() == mask)
+    }
+
     pub fn mask(self) -> u8 {
         match self {
             Button::Menu => WHEEL_MENU,

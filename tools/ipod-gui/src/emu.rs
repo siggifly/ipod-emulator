@@ -141,6 +141,14 @@ pub struct Config {
     /// Boot one of the boot ROM's own images instead of the operating system — `diag` for Apple's
     /// service diagnostics. `None` is the ordinary boot.
     pub boot_image: Option<String>,
+    /// `--press=BUTTON@SECONDS`, repeatable — press a button through the window's own input path,
+    /// at a moment measured from when the window opened.
+    ///
+    /// It exists to make the window's input testable from a command line: a screenshot of Apple's
+    /// diagnostics with its menu open is otherwise something only a person with a mouse can take,
+    /// and "the wheel does not reach diagnostics" is otherwise something only a person with a
+    /// mouse can discover.
+    pub presses: Vec<(String, f32)>,
     /// `--window-shot=FILE` — write a PNG of **the whole window** and quit.
     ///
     /// Not the same picture as the `S` key, which captures the 320x240 panel. The two shipped
@@ -676,7 +684,18 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         m.mem.read_addrs.dedup();
         m.mem.set_store_addr_bounds();
     }
-    eapp_loader::map_hardware(&mut m, true);
+    // **`cold_boot` decides where SDRAM's storage lives, and a boot image is not a cold boot.**
+    //
+    // With it true, SDRAM is a region at 0x10000000 and address 0 belongs to the NOR — the map a
+    // machine has out of reset. With it false, the storage is at 0 and 0x10000000 is an alias, and
+    // low memory is ordinary writable RAM. A `flsh` image needs the second: it is entered at
+    // 0x10000000 with the CPU already running, and the first thing an interrupt does is vector to
+    // 0x18, which has to be memory the image can install a handler into.
+    //
+    // Without this the wheel's IRQ 40 fetched from an unmapped 0x18 and the machine reported
+    // `Lost(24)` the instant a button was pressed. `ipod-boot flsh` never passes `--cold-boot`,
+    // which is why the same image driven from the command line always worked.
+    eapp_loader::map_hardware(&mut m, cfg.boot_image.is_none());
     // Hardware revision probe: boot reads 0x70000000, takes bits 16..23 and compares to 0x36.
     {
         use arm7tdmi::Bus as _;
@@ -777,7 +796,16 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         // changes what every address in that span reads, and that is a change to measure on its
         // own rather than to make in passing.
         if cfg.boot_image.is_some() {
-            m.mem.regions.insert(0, Region { name: "osos", base: load_at, data: osos });
+            // **Written into memory, not registered as a region.** With the non-cold map SDRAM's
+            // storage is at 0 and 0x10000000 is an *alias* of it, resolved before the region list
+            // is consulted — so a region at 0x10000000 is never read, however early it is inserted.
+            // Copying the bytes in is also what actually happens: Apple's boot ROM copies the
+            // image it is about to run into SDRAM.
+            for (i, chunk) in osos.chunks(4).enumerate() {
+                let mut w = [0u8; 4];
+                w[..chunk.len()].copy_from_slice(chunk);
+                m.mem.write32(load_at + (i as u32) * 4, u32::from_le_bytes(w));
+            }
         } else {
             m.mem.regions.push(Region { name: "osos", base: load_at, data: osos });
         }
@@ -841,13 +869,19 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         );
     }
     let size = flash.len() as u32;
-    // A boot image is not a cold boot: the CPU is placed at 0x10000000, not at the reset vector,
-    // so the flash must NOT shadow low memory — `ipod-boot flsh` maps it only at 0x20000000 and
-    // that is the configuration every measurement of `diag` was taken on.
-    let synthetic = synthetic || cfg.boot_image.is_some();
+    // **Whether the flash also answers at 0**, which is true only of a cold boot from the reset
+    // vector. A synthesised ROM has no code to run there, and a boot image is entered where it is
+    // loaded — `ipod-boot flsh` maps the flash only at 0x20000000, and that is the configuration
+    // every measurement of `diag` was taken on.
+    //
+    // Deliberately a second name rather than a re-`let` on `synthetic`: shadowing it made one word
+    // mean two things twelve lines apart, and the boot-screen paint below — which asks "is there
+    // an Apple logo in this ROM?" and not "does the flash answer at 0?" — read the wrong one and
+    // put this project's mark over Apple's own boot screen.
+    let flash_answers_low = !synthetic && cfg.boot_image.is_none();
     // Cold boot: the flash also answers at 0, where the CPU fetches out of reset. Inserted at the
     // front so it wins the first-match lookup for low addresses.
-    if !synthetic {
+    if flash_answers_low {
         m.mem.readonly.push("flash-low");
         m.mem
             .regions
@@ -855,8 +889,8 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     }
     m.mem.readonly.push("flash");
     m.mem.regions.push(Region { name: "flash", base: 0x2000_0000, data: flash });
-    m.mem.nor = Some(if synthetic {
-        // No low mirror on a high-level boot: address 0 is the OS.
+    m.mem.nor = Some(if !flash_answers_low {
+        // No low mirror on a high-level boot: address 0 is the OS, or the image's own memory.
         Nor::sst39wf800a(vec![(0x2000_0000, size)], vec!["flash"])
     } else {
         Nor::sst39wf800a(vec![(0x2000_0000, size), (0, size)], vec!["flash", "flash-low"])
@@ -1036,21 +1070,73 @@ pub fn read_framebuffer(bcm: &Bcm, addr: u32, out: &mut [u8]) -> u32 {
 /// `next_at` is carried across calls: it is the instruction count at which the next appended step
 /// is allowed to fire. Steps are appended with non-decreasing `at`, which is what keeps the script
 /// sorted — `service_clickwheel` walks it in order and would otherwise fire them out of sequence.
+/// The shortest a button may be held, in **instructions**, which is what makes it a duration in
+/// the machine's own time rather than in the operator's.
+///
+/// A click of a mouse lasts about a tenth of a second of *your* time. This emulator runs at about
+/// a third of the real part, so that tenth is thirty milliseconds to the firmware — and firmware
+/// that reads its buttons on a timer can miss it entirely. **Apple's `diag` polls once per 150 ms**
+/// (`0x10009e7c`: read the button byte, sleep `0x249f0` microseconds, repeat), so every press the
+/// window sent it landed between two polls and diagnostics looked like it ignored the wheel. It
+/// did not: the interrupt handler recorded each press perfectly and the poll read the release that
+/// had already overwritten it.
+///
+/// 300 ms, which clears two of `diag`'s polls and is still shorter than a deliberate human press.
+/// It bounds only the *release*: the press is delivered immediately, so nothing feels slower, and
+/// RetailOS — which polls fast enough that this never mattered — sees the same press it always
+/// did, held a little longer.
+///
+/// **The unit is instructions**, and `CLOCK` is instructions per simulated *microsecond*, so a
+/// duration in milliseconds is `ms * 1_000 * CLOCK`. The first version of this divided by 1 000
+/// instead of multiplying and produced a 0.3 ms hold — and the test beside it computed `diag`'s
+/// poll rate with the same mistake, so the two agreed and the assertion passed. Hence
+/// [`instructions_for_ms`], which both now use, and which is checked against a figure worked out
+/// by hand.
+const MIN_BUTTON_HOLD: u64 = instructions_for_ms(300);
+
+/// Instructions in `ms` milliseconds of simulated time.
+///
+/// `CLOCK` is instructions per simulated microsecond — the definition of `--clock` — so this is
+/// `ms * 1_000 * CLOCK`. At the real part's 75 that is 75 000 instructions per millisecond.
+pub const fn instructions_for_ms(ms: u64) -> u64 {
+    ms * 1_000 * eapp_loader::CLOCK as u64
+}
+
+/// When an event may fire, given what is already scheduled and the earliest slot free.
+///
+/// Everything fires at `earliest` except a button's **release**, which waits until the button has
+/// been held for [`MIN_BUTTON_HOLD`]. The hold is measured from the button's own down event in the
+/// script, so the two cannot disagree the way a separate ledger could.
+fn schedule_at(script: &[WheelStep], ev: eapp_loader::WheelEvent, earliest: u64) -> u64 {
+    let eapp_loader::WheelEvent::Button(mask, false) = ev else { return earliest };
+    match script
+        .iter()
+        .rev()
+        .find(|s| matches!(s.event, eapp_loader::WheelEvent::Button(m2, true) if m2 == mask))
+    {
+        Some(down) => earliest.max(down.at + MIN_BUTTON_HOLD),
+        None => earliest,
+    }
+}
+
 fn drain(m: &mut Machine, inbox: &Mutex<Inbox>, next_at: &mut u64, gap: u64) -> usize {
     let now = m.executed as u64;
     let Some(w) = m.mem.clickwheel.as_mut() else { return 0 };
     let mut inbox = inbox.lock().unwrap();
     while let Some(&ev) = inbox.events.front() {
-        let at = (*next_at).max(now);
+        let at = schedule_at(&w.script, ev, (*next_at).max(now));
         // Only schedule what will fire soon. Letting the whole queue onto the script at once is
         // harmless for the model but makes the depth invisible, and the depth is what tells a
         // person their drag is outrunning the emulator.
-        if at > now + gap * 8 {
+        //
+        // A held button is exempt: its release is deliberately far in the future, and deferring it
+        // here would stall every event behind it — including the release itself, for ever.
+        if at > now + gap * 8 && !matches!(ev, eapp_loader::WheelEvent::Button(_, false)) {
             break;
         }
         inbox.events.pop_front();
         w.script.push(WheelStep { at, event: ev });
-        *next_at = at + gap;
+        *next_at = at.max(*next_at) + gap;
     }
     inbox.events.len()
 }
@@ -2303,6 +2389,57 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use eapp_loader::{WheelEvent, WheelStep};
+
+
+    /// **A press has a duration, and the duration is the machine's, not the operator's.**
+    ///
+    /// The window used to schedule a release 4 ms of simulated time after its press, which is what
+    /// RetailOS's own poll rate made feel right. Apple's `diag` reads its buttons once per 150 ms
+    /// and saw none of them. Nothing failed: the interrupt handler recorded every press and the
+    /// poll read the release that had overwritten it.
+    #[test]
+    fn a_button_is_held_long_enough_for_a_polling_reader() {
+        // Worked out by hand, so that the conversion is checked against something other than
+        // itself: 75 instructions per simulated microsecond is 75 000 per millisecond.
+        assert_eq!(instructions_for_ms(1), 75_000, "CLOCK is {} — has the part changed?", eapp_loader::CLOCK);
+        assert_eq!(MIN_BUTTON_HOLD, 22_500_000, "300 ms at 75 000 instructions per ms");
+        // Apple's diagnostics polls at 150 ms; the hold has to clear that with room.
+        const DIAG_POLL: u64 = instructions_for_ms(150);
+        assert!(
+            MIN_BUTTON_HOLD > DIAG_POLL,
+            "a hold of {MIN_BUTTON_HOLD} cannot be seen by a reader polling every {DIAG_POLL}"
+        );
+
+        let down = WheelStep { at: 1_000, event: WheelEvent::Button(eapp_loader::WHEEL_MENU, true) };
+        let script = vec![down];
+        let up = WheelEvent::Button(eapp_loader::WHEEL_MENU, false);
+
+        // The release is pushed back to the end of the hold, however soon it was asked for.
+        assert_eq!(schedule_at(&script, up, 1_300), 1_000 + MIN_BUTTON_HOLD);
+        // And never pulled forward: a release asked for later than that happens later.
+        let late = 1_000 + MIN_BUTTON_HOLD * 3;
+        assert_eq!(schedule_at(&script, up, late), late);
+
+        // Only the release. A press, a rotation and a touch all fire when asked.
+        for ev in [
+            WheelEvent::Button(eapp_loader::WHEEL_MENU, true),
+            WheelEvent::Step(1),
+            WheelEvent::Touch,
+            WheelEvent::Release,
+        ] {
+            assert_eq!(schedule_at(&script, ev, 1_300), 1_300, "{ev:?} should not be delayed");
+        }
+
+        // A release with no press in the script is not delayed either — there is nothing to hold.
+        assert_eq!(schedule_at(&[], up, 1_300), 1_300);
+        // And it is *this* button's press that counts, not any press.
+        let other =
+            vec![WheelStep { at: 1_000, event: WheelEvent::Button(eapp_loader::WHEEL_PLAY, true) }];
+        assert_eq!(schedule_at(&other, up, 1_300), 1_300);
+    }
+
     use super::*;
 
     /// A snapshot without its frozen drive is **not** restorable — the copy-mode half of the rule.

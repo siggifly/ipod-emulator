@@ -1013,6 +1013,14 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         selftest_control: args.iter().any(|a| a == "--selftest-control"),
         shots: root.join("_out"),
         boot_image: get("--boot-image="),
+        presses: args
+            .iter()
+            .filter_map(|a| a.strip_prefix("--press="))
+            .filter_map(|v| {
+                let (b, t) = v.split_once('@')?;
+                Some((b.to_string(), t.parse().ok()?))
+            })
+            .collect(),
         window_shot: get("--window-shot=").map(PathBuf::from),
         shot_after: get("--shot-after=").and_then(|v| v.parse().ok()).unwrap_or(25.0),
         probe: match get("--probe=").as_deref() {
@@ -1136,6 +1144,8 @@ struct App {
     /// is a two-step state and not a boolean.
     shot_opened: Instant,
     shot_asked: bool,
+    /// How many of `Config::presses` have been delivered.
+    pressed: usize,
     scale: u32,
     /// Where `hold_switch` drew the switch this frame, so the pointer test is against the thing on
     /// screen rather than against an offset guessed from the wheel's radius. The first version
@@ -1620,6 +1630,7 @@ impl App {
             derived_chassis: Colour::default(),
             shot_opened: Instant::now(),
             shot_asked: false,
+            pressed: 0,
             scale: 1,
             hold_slot: Rect::NOTHING,
             dev_area: Rect::NOTHING,
@@ -1846,6 +1857,33 @@ impl App {
     /// The grab is asynchronous: `ViewportCommand::Screenshot` is a request, and the image arrives
     /// as `Event::Screenshot` on a later frame. So this runs every frame and does one of three
     /// things — wait, ask, or collect.
+    /// `--press=BUTTON@SECONDS`: deliver scripted presses through the window's own input path.
+    ///
+    /// The press goes through `press`/`release`, not around them, so what this exercises is what a
+    /// mouse exercises — including the hold that `emu::MIN_BUTTON_HOLD` gives the release. A press
+    /// scripted through some private back door would prove nothing about the button.
+    fn scripted_presses(&mut self, ctx: &egui::Context) {
+        if self.pressed >= self.cfg.presses.len() {
+            return;
+        }
+        ctx.request_repaint_after(Duration::from_millis(50));
+        let elapsed = self.shot_opened.elapsed().as_secs_f32();
+        while let Some((name, at)) = self.cfg.presses.get(self.pressed).cloned() {
+            if elapsed < at {
+                break;
+            }
+            self.pressed += 1;
+            match Button::parse(&name) {
+                Some(b) => {
+                    self.touch();
+                    self.press(b);
+                    self.release(b);
+                }
+                None => eprintln!("--press: no button called `{name}`"),
+            }
+        }
+    }
+
     fn window_shot_step(&mut self, ctx: &egui::Context) {
         let Some(path) = self.cfg.window_shot.clone() else { return };
 
@@ -2001,6 +2039,7 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_update();
+        self.scripted_presses(ui.ctx());
         self.window_shot_step(ui.ctx());
         // Anywhere on the window, on every screen. A drop target that is a rectangle inside the
         // window is a rectangle somebody has to find; the window itself is the thing they are
