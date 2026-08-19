@@ -6616,11 +6616,30 @@ impl Ata {
             return v;
         }
         match off {
-            0x1e0..=0x1e3
+            // **The data register is SIXTEEN bits wide, sitting in a four-byte slot.**
+            //
+            // Every register in this block is four bytes apart, so a 32-bit access to `+0x1e0`
+            // touches lanes 0..3 — but only lanes 0 and 1 are the register. Lanes 2 and 3 are the
+            // upper half of a slot whose hardware is 16 bits, and they carry nothing.
+            //
+            // Serving them as *more sector data* was a real defect, and iPodLinux is the firmware
+            // that showed it. Its identify path reads the port with 32-bit loads and keeps the low
+            // halfword — correct for a 16-bit register — so with two words per access it kept our
+            // words 0, 2, 4, 6 … and dropped every other one. Its `struct hd_driveid` then read
+            // `cyls` out of our word 2 and `heads` out of our word 6, which is how a drive
+            // reporting 16 heads was diagnosed as having 63 and every read of the partition table
+            // failed before a single command reached the bus. Rockbox and Apple's firmware never
+            // saw it: both read this port 16 bits at a time and never touch lanes 2 and 3.
+            //
+            // The arithmetic is the proof. iPodLinux does 256 32-bit reads per IDENTIFY. One word
+            // each is 512 bytes — exactly one sector. Two words each is 1024, which is twice the
+            // response it asked for.
+            0x1e2..=0x1e3 => 0,
+            0x1e0..=0x1e1
                 if self.pos < self.buf.len() => {
                     let b = self.buf[self.pos];
                     if self.id_watch && self.id_handover.len() < 24 {
-                        self.id_handover.push((off, b));
+                        self.id_handover.push((self.pos as u32, b));
                     }
                     self.pos += 1;
                     self.bytes_read += 1;
@@ -6668,7 +6687,10 @@ impl Ata {
             //
             // The iPod Video matters here specifically: its target defines MAX_PHYS_SECTOR_SIZE
             // 1024, so Rockbox does read-modify-write through PIO rather than DMA.
-            0x1e0..=0x1e3 if self.status & ATA_DRQ != 0 && self.write_pio => {
+            // The write side of the same 16-bit register: lanes 2 and 3 are not a second word,
+            // so a 32-bit store puts one word in and discards its upper half.
+            0x1e2..=0x1e3 if self.status & ATA_DRQ != 0 && self.write_pio => {}
+            0x1e0..=0x1e1 if self.status & ATA_DRQ != 0 && self.write_pio => {
                 self.buf[self.pos] = val;
                 self.pos += 1;
                 if self.pos == self.buf.len() {

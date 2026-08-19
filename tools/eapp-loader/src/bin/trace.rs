@@ -1522,7 +1522,7 @@ fn main() {
             }
             if !d.id_handover.is_empty() {
                 let want = eapp_loader::Ata::identify_sector(16_777_216, 0, 0);
-                println!("\nIDENTIFY hand-over — the first bytes the guest actually received:");
+                println!("\nIDENTIFY hand-over — the first bytes the guest received, by buffer position:");
                 let got: Vec<String> = d
                     .id_handover
                     .iter()

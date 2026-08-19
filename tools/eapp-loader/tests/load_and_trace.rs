@@ -1627,3 +1627,51 @@ fn a_byte_store_lands_where_a_word_store_does() {
         "the flash aperture is not remapped and must still reach the chip"
     );
 }
+
+/// **The IDE data register is 16 bits wide, and a 32-bit read of it must not swallow two words.**
+///
+/// Every register in the PP502x IDE block is four bytes apart, so a 32-bit access to `IDE_BASE+0x1e0`
+/// touches four byte lanes — but the register underneath is 16 bits, and lanes 2 and 3 are its empty
+/// upper half. Serving them as more sector data cost us iPodLinux for a long time: its identify path
+/// reads this port with 32-bit loads and keeps the low halfword, which is correct for a 16-bit
+/// register, so a model handing over two words per access gave it words 0, 2, 4, 6 … and dropped
+/// every other one. `struct hd_driveid` then read `cyls` out of our word 2 and `heads` out of our
+/// word 6, and a drive reporting 16 heads was diagnosed as having 63.
+///
+/// Rockbox and Apple's firmware never saw it — both read this port 16 bits at a time.
+#[test]
+fn a_32_bit_read_of_the_data_register_yields_one_ata_word() {
+    use arm7tdmi::Bus;
+    let dir = std::env::temp_dir().join("ipod-emu-ata-width");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let img = dir.join("disk.img");
+    std::fs::write(&img, vec![0u8; 512 * 64]).expect("write image");
+
+    let app = EApp::parse(synth_eapp()).expect("parse");
+    let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
+    eapp_loader::map_hardware(&mut m, false);
+    let drive = eapp_loader::Ata::open(&img, false).expect("open image");
+    let sectors = drive.sectors;
+    m.mem.ata = Some((0xc300_0000, drive));
+
+    const DATA: u32 = 0xc300_01e0;
+    m.mem.write8(0xc300_01fc, 0xec); // IDENTIFY DEVICE
+
+    // Read it the way iPodLinux does: 256 32-bit loads, keeping the low halfword of each. One word
+    // per access is exactly one 512-byte sector; two words per access would be twice what a drive
+    // has to give.
+    let mut got = Vec::with_capacity(512);
+    for _ in 0..256 {
+        let w = m.mem.read32(DATA);
+        got.extend_from_slice(&(w as u16).to_le_bytes());
+    }
+
+    let want = eapp_loader::Ata::identify_sector(sectors, 0, 0);
+    assert_eq!(got.len(), want.len(), "256 32-bit reads have to cover one sector");
+    assert_eq!(
+        &got[..16],
+        &want[..16],
+        "the first eight words the guest keeps must be our first eight words, in order"
+    );
+    assert_eq!(got, want, "the whole IDENTIFY response, not every second word of it");
+}
