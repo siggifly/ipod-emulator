@@ -990,7 +990,9 @@ impl Memory {
             // them off the fast path costs nothing measurable.
             || PP_DMA.iter().any(|c| hits(c.chans, 0x1000))
             || self.usec_timer.is_some_and(|b| hits(b, 4))
-            || self.bcm.as_ref().is_some_and(|b| hits(b.base, 0x8_0000))
+            || self.bcm.as_ref().is_some_and(|b| {
+                hits(b.base, Bcm::WINDOW) || b.alias.is_some_and(|a| hits(a, Bcm::WINDOW))
+            })
             || self.ata.as_ref().is_some_and(|(b, _)| hits(*b, 0x410))
             || self.i2c_base.is_some_and(|b| hits(b, 0x40))
             // The click wheel's four registers sit at +0x100..+0x140 of the same block. With
@@ -1591,8 +1593,7 @@ impl Memory {
             }
         }
         if let Some(b) = &mut self.bcm {
-            let off = addr.wrapping_sub(b.base);
-            if off < 0x8_0000 {
+            if let Some(off) = b.window(addr) {
                 return b.read8(off);
             }
         }
@@ -1755,8 +1756,7 @@ impl Memory {
         self.note_store_pc(addr, val as u32);
         self.count(addr, true, val);
         if let Some(b) = &mut self.bcm {
-            let off = addr.wrapping_sub(b.base);
-            if off < 0x8_0000 {
+            if let Some(off) = b.window(addr) {
                 b.write8(off, val);
                 return;
             }
@@ -6289,6 +6289,23 @@ fn put_ata_str(dst: &mut [u16], s: &str) {
 /// Apple's bootloader to upload the `vmcs` firmware and get the acknowledgement it waits for.
 pub struct Bcm {
     pub base: u32,
+    /// A second address the **same chip** answers at.
+    ///
+    /// The VideoCore is one part with one register file, and it appears in this machine's memory
+    /// map twice. RetailOS, Rockbox and disk mode drive it at `0x30000000`, which is the address
+    /// Rockbox's `lcd-video.c` documents. **Apple's diagnostics drives it at `0xb0000000`** — the
+    /// same seven registers at the same `0x10000` stride, the same `BCM_CMD(x) = (~x << 16) | x`
+    /// encoding, and the same eight bootstrap bytes `a1 81 91 02 12 22 72 62`. Its own assert
+    /// strings name the driver: `…\service diag\drivers\vchost.c`, and the file it uploads
+    /// through the port is `VMCS    BIN`.
+    ///
+    /// So this is an **alias, not a second device**: a write through either window lands in the
+    /// same co-processor. Whether the hardware decodes both permanently or `diag` switches the
+    /// decode (it writes `0x98016460` to `0x70000030`, in the external-bus block, immediately
+    /// before its first access) is **not measured**. It makes no difference to anything that runs
+    /// here, because `diag` is the only program in Apple's software that touches the second
+    /// window and it never touches the first.
+    pub alias: Option<u32>,
     /// Internal address space, halfword-granular and sparse — the firmware upload alone is 101 728
     /// bytes and the framebuffer would be far larger, so a flat allocation is the wrong shape.
     pub mem: BTreeMap<u32, u16>,
@@ -6420,9 +6437,33 @@ fn ring_used(lo: u32, hi: u32, rd: u32, wr: u32) -> u32 {
 }
 
 impl Bcm {
+    /// How wide each of the chip's two windows is: seven registers at a `0x10000` stride, so the
+    /// eighth slot closes it.
+    pub const WINDOW: u32 = 0x8_0000;
+    /// Where RetailOS, Rockbox and disk mode drive the co-processor — the address Rockbox's
+    /// `lcd-video.c` documents as `BCM_DATA`.
+    pub const HOST_BASE: u32 = 0x3000_0000;
+    /// Where Apple's diagnostics drives the same chip. See [`Bcm::alias`].
+    pub const DIAG_BASE: u32 = 0xb000_0000;
+
+    /// The offset into the register window, if this address falls in either window the chip is
+    /// decoded at.
+    pub fn window(&self, addr: u32) -> Option<u32> {
+        let hit = |base: u32| {
+            let off = addr.wrapping_sub(base);
+            (off < Self::WINDOW).then_some(off)
+        };
+        hit(self.base).or_else(|| self.alias.and_then(hit))
+    }
+
     pub fn new(base: u32) -> Self {
         Bcm {
             base,
+            // Not a flag, because it is not a choice: the iPod's co-processor is decoded at both
+            // addresses, and a `Bcm` at `HOST_BASE` *is* the iPod's co-processor. Doing it here
+            // rather than at each construction site is also what keeps a restored snapshot right —
+            // the saved state carries one base, and the pair is written down in exactly one place.
+            alias: (base == Self::HOST_BASE).then_some(Self::DIAG_BASE),
             mem: BTreeMap::new(),
             wr_addr: 0,
             rd_addr: 0,
@@ -7567,9 +7608,33 @@ mod bcm_command_tests {
         bcm: Bcm,
     }
 
+    /// The co-processor answers at both addresses it is decoded at, and they are one chip.
+    ///
+    /// Apple's `diag` drives it at `0xb0000000` and everything else at `0x30000000`. Getting this
+    /// wrong is not visible as a fault: the second window simply reads as unmapped zeroes, and
+    /// `diag` sits forever on `tst r0, #1` waiting for a bootstrap that has nowhere to land —
+    /// which is what it did, and what got written up as an undocumented device.
+    #[test]
+    fn the_co_processor_answers_at_both_of_its_addresses() {
+        let b = Bcm::new(Bcm::HOST_BASE);
+        assert_eq!(b.window(Bcm::HOST_BASE), Some(0), "the address Rockbox documents");
+        assert_eq!(b.window(Bcm::DIAG_BASE), Some(0), "the address Apple's diagnostics uses");
+        // `CONTROL` and `ALT_CONTROL`, through the second window.
+        assert_eq!(b.window(Bcm::DIAG_BASE + 0x3_0000), Some(0x3_0000));
+        assert_eq!(b.window(Bcm::DIAG_BASE + 0x7_0000), Some(0x7_0000));
+        // And it is one chip: both windows resolve to the same register file, so a write through
+        // either lands in the same place.
+        assert_eq!(b.window(Bcm::HOST_BASE + 0x3_0000), b.window(Bcm::DIAG_BASE + 0x3_0000));
+        // Nothing outside them.
+        assert_eq!(b.window(Bcm::HOST_BASE - 1), None);
+        assert_eq!(b.window(Bcm::DIAG_BASE + Bcm::WINDOW), None);
+        // A co-processor mapped somewhere else is not the iPod's, and gets no second window.
+        assert_eq!(Bcm::new(0x4000_0000).window(Bcm::DIAG_BASE), None);
+    }
+
     impl Host {
         fn new() -> Self {
-            Host { bcm: Bcm::new(0x3000_0000) }
+            Host { bcm: Bcm::new(Bcm::HOST_BASE) }
         }
         fn addr(&mut self, a: u32) {
             self.bcm.write16(0x1_0000, a as u16, false);

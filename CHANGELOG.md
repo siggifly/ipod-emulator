@@ -14,9 +14,101 @@ behind. Anything published from here gets a new number.
 
 ## 0.5.0
 
-**Your iPod remembers, the settings no longer reboot it — and it is not only Apple's iPod any
-more. A second operating system boots here, from a disk this program wrote, started by Apple's own
-bootloader.**
+**You do not need anybody's iPod to start one any more.** Pick a model, press a button, and the
+emulator builds the boot ROM and fetches Apple's firmware itself. Your iPod remembers, the settings
+no longer reboot it, and it is not only Apple's iPod that runs here: a second operating system
+boots too, from a disk this program wrote, started by Apple's own bootloader.
+
+### Start with nothing: pick an iPod and press a button
+
+Until now this program needed **a dump of a real iPod's boot ROM** — a 1 MiB file you could only get
+off hardware you owned, with a soldering iron or a bootrom exploit. That was the wall in front of
+everyone who did not already have one.
+
+**There is a list of iPods now, and you choose from it.** 198 models, from the 2001 original to the
+last iPod classic, transcribed mechanically from libgpod's table rather than typed. Choose one and
+the emulator **synthesises its boot ROM**: the identity block a real iPod carries — serial number,
+model number, hardware id and version, region — built to the same layout, with a serial that looks
+like the real thing because it is assembled the way Apple assembled them (factory code, year and
+week, a production code from the range that model actually shipped in).
+
+**And the case colour is not a switch.** It is read out of the model number, the way the iPod itself
+reads it, so a `MA146` is white and a `MA446` is black and a U2 special edition is black with a red
+wheel — because that is what those part numbers *are*. Nothing to set, and nothing to get wrong.
+
+If you *do* have a dump, nothing changes: it is still the more faithful machine, and pointing at one
+still wins. If you have a real iPod's **drive**, the identity found on it is used in preference to
+generating a new one — your iPod stays your iPod.
+
+### Apple's firmware, fetched from Apple
+
+The other file you needed was an `.ipsw`. The emulator now offers to **download it from Apple**, off
+Apple's own servers, and the ones it offers are the 66 releases Apple still serves — every one of
+them downloaded once and recorded by SHA-256, so a download that comes back wrong is refused rather
+than booted.
+
+Providing your own still works, and it is checked **by content, not by filename**: a renamed bundle
+is recognised, and a *modified* one is called out and then allowed, because running a patched
+firmware is a legitimate thing to want and being told what you have is not the same as being stopped.
+
+Downloads are cached, deduplicated, and yours to remove — the cache states what is in it and how
+large it is, and clearing it is one button.
+
+### It boots without a dump, on all three revisions
+
+A synthesised ROM is not a copy of Apple's bootloader — nobody can distribute that — so it does not
+run one. It reproduces the **effects** of the boot: the handoff block Apple's bootloader leaves for
+the OS, measured out of a real cold boot rather than guessed, with this iPod's identity in it, and
+then hands control to the operating system on the drive.
+
+All three firmware revisions boot this way — 5G Initial, 5G Rev A and the 5.5G — each with the
+firmware bundle that belongs to it, and each reaching the same place the real ROM does.
+
+What a synthesised ROM **cannot** do is stated rather than left to be discovered: diagnostics, disk
+mode and the boot logo are self-contained programs Apple ships inside the flash, and a generated ROM
+has none of them. Those need a real dump, and the program says so.
+
+### A boot screen, and it can be yours
+
+The synthesised boot draws a screen in the colours that model actually booted in — white iPods dark
+on light, black and U2 iPods light on dark — with a click wheel outline where Apple's logo goes,
+drawn filled, shaded and anti-aliased rather than stamped.
+
+**You can supply your own image.** PNG or PPM, any size: it is resized to exactly the size Apple's
+own boot image occupies, aspect preserved, averaged rather than sampled so a large picture does not
+come back speckled. Its brightness is taken as coverage and the case supplies the colour, so **one
+image is correct on both a white and a black iPod** without anybody inverting anything.
+
+### A window a black iPod can be black in
+
+The window was black, so a black iPod had to be drawn grey to be visible at all. It is charcoal now,
+and the black iPod is black. Every piece of text on it is checked against its own background for
+contrast at build time — which found one caption that had been below the readable threshold since
+before this change.
+
+### Apple's diagnostics runs
+
+The service diagnostic — the one a real iPod shows when you hold **Select+Rewind** at power-on —
+boots, draws and can be driven. `SRV Diag Boot`, then its manual-test menu, then down through
+Memory, IO, Wheel and Display into the individual tests. It is Apple's own program out of the boot
+ROM, on Apple's own video co-processor protocol.
+
+It had never run. Two things were in the way, and neither looked like a fault:
+
+**The wrong program was being loaded.** The images the emulator ran came from a directory extracted
+once, off a *prototype* iPod's ROM, and were handed to every run whatever ROM was configured. The
+prototype's diagnostics is a 200 KB factory build; the retail one is a different 98 KB program.
+Images now come out of the ROM under test, every run.
+
+**And the co-processor is at two addresses.** Everything else in this machine drives it at
+`0x30000000`; Apple's diagnostics drives the same chip at `0xb0000000`, and that window was not
+mapped — so the diagnostics uploaded its firmware into nothing and waited forever for a chip that
+could not answer. It is mapped at both now. Nothing else moved: a retail boot never touches the
+second window, and its numbers are unchanged.
+
+`ipod-boot flsh` also refuses to *enter* an image that is not a program. `logo` is a bitmap and
+`vmcs` is the co-processor's firmware; running them looked like it worked, because an interpreter
+pointed at data does not fail — it decodes what is there and runs out of budget.
 
 ### The drive is yours, and it is written to
 
@@ -206,6 +298,18 @@ composing the same command line, kept equal by a test that read the scripts off 
 flag lists — and that test was the tell. The scripts are gone; `ipod-boot retail | warm | flsh |
 rockbox | flash-update | from-idle` is what they were, and `--print` still shows the command line it
 composes without running it.
+
+**`ipod-film` films more than the boot.** `RECIPE=` picks which machine is filmed, `--realtime`
+paces the film at the machine's own clock instead of one second per sample, `--cap=` stops a final
+frame that holds until the budget from dominating the film, and `ipod-film asset diag` is the whole
+diagnostics tour as one command. `trace --bcm-png=` writes the co-processor's framebuffer as a PNG
+beside the existing `--bcm-ppm`, so a screenshot no longer needs a converter.
+
+**One calibration worth knowing before you script input.** `--wheel`'s `press=` expands to a
+down/up pair 20 000 instructions apart — 0.27 ms at the real clock. Firmware that polls its buttons
+on a timer will not see it: Apple's diagnostics reads them once per 150 ms, so every press fell
+between two polls while the interrupt handler recorded each one perfectly. Hold buttons with
+explicit `down=`/`up=` pairs when the reader is a poll rather than an interrupt.
 
 **Two new subcommands, and no Python left in the project.** `ipod-boot fat` reads the FAT32 volume
 out of a drive image — `tree`, `find`, `cat`, and `lba`, which turns the absolute sector numbers in

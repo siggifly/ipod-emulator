@@ -44,13 +44,18 @@ Supplying bit 0 of `0xb0020000` clears the first gate and it advances to the sec
 `0xb0060000`. That is a **two-register handshake**, and the shape — a ready bit, a second status, a
 write port — is a UART.
 
-> *Superseded 2026-08-19 — see "What the device at `0xb0000000` actually looks like" at the foot of
-> this page. It is not a UART: it is two units of four registers each, with a bulk data FIFO, and a
-> 184 320-byte stream goes out through it at startup. Everything above is also measured on the
-> **prototype's** `diag`, which is a factory build; the retail ROM carries a different, smaller
-> program.*
+> *Superseded 2026-08-19 — see "The device at `0xb0000000` is the VideoCore" at the foot of this
+> page. It is not a UART and it is not a host waiting to talk: it is the **BCM2722**, at a second
+> address, and the 184 320 bytes going out through it are the co-processor's own firmware. Mapping
+> the chip there makes diagnostics draw. Everything above is also measured on the **prototype's**
+> `diag`, which is a factory build; the retail ROM carries a different, smaller program.*
 
 ### Which makes it less useful than it first looked
+
+> *Wrong, and wrong in an instructive way — retracted 2026-08-19. It is not waiting for a host, and
+> the protocol was not unknown: it is the co-processor's own, already implemented in this
+> repository, and the "other end of the conversation" was a decode we had not mapped. The hope
+> below was right; it was reachable the whole time.*
 
 The hope was that diagnostics would be Apple's own hardware test suite: same codebase family as
 RetailOS, written to report what the hardware is doing, and small enough to read. It may still be
@@ -402,42 +407,75 @@ $ IMG=scan ipod-boot flsh
 ipod-boot flsh: …retail_5g_MA146….bin carries no `scan` image. It has: disk · diag · logo · vmcs
 ```
 
-## What the device at `0xb0000000` actually looks like
+## The device at `0xb0000000` is the VideoCore, and diagnostics now draws
 
-The reading above — *"the shape is a UART"* — was a guess from two registers. With both `diag`
-images disassembled it is a **two-unit device with four registers each**, selected by address bits
-16–18, all halfword-wide. Unit 0 is based at `0xb0000000`, unit 1 at `0xb0040000`:
+The reading above — *"the shape is a UART"* — was a guess from two registers. It is the **BCM2722
+VideoCore**: the same co-processor this emulator has modelled since the beginning, at a second
+address.
 
-| offset | role | how it is used |
+**Apple's own code names it.** Both `diag` images carry the assert-path string of the driver:
+
+```
+retail    0x10016384   D:\workspace\may\RMA\M25B_Intro_RMA\service diag\drivers\vchost.c
+prototype 0x1000c344   D:\RMA\M25B_Intro_RMA\intro-07-06-15\Drivers\vchost.c
+```
+
+`vchost` — VideoCore host port — and the file it pushes through that port is named a few hundred
+bytes away, in 8.3 form: **`VMCS    BIN`**, which is `flsh/vmcs.bin`, the co-processor's firmware.
+
+Set beside Rockbox's `firmware/target/arm/ipod/video/lcd-video.c`, the register map is not similar,
+it is **the same map at a different base**:
+
+| Rockbox, at `0x30000000` | `diag`, at `0xb0000000` | role |
 |---|---|---|
-| `+0x00000` | data FIFO | bulk read *and* bulk write, eight halfwords per status check |
-| `+0x10000` | a read whose result is discarded | drained once after the handshake |
-| `+0x20000` | command / address | bit 0 = accepts a command; a 32-bit command is written as two halfwords into this one address |
-| `+0x30000` | status | bit 1 = space to write · bit 4 = data available · bit 6 = ready · bit 7 = busy |
+| `BCM_DATA` `+0x00000` | `+0x00000` | data FIFO |
+| `BCM_WR_ADDR` `+0x10000` | `+0x10000` | write address — the "discarded read" is Rockbox's own `(void)BCM_WR_ADDR` |
+| `BCM_RD_ADDR` `+0x20000` | `+0x20000` | read address. Not a command port: the 32-bit value is a **VideoCore-internal address**, written as two halfwords |
+| `BCM_CONTROL` `+0x30000` | `+0x30000` | status/control |
+| `BCM_ALT_*` `+0x40000…` | `+0x40000…` | the second host **channel**, not a second device |
 
-The init (retail `0x1000e748`, prototype `0x1000c5fc`, byte-identical logic) writes the halfword
-sequence `a1 81 91 02 12 22 72 62` to unit 0's command register and `02 12 22 72 62` to unit 1's,
-then waits on bit 0 of both status ports.
+Rockbox's own comment explains the stride: *"the 3 BCM address bits are mapped to address bits
+16..18 of the PP5022"*. And the eight bytes `diag` writes to `CONTROL` —
+`a1 81 91 02 12 22 72 62` — are `bcm_bootstrapdata[]` in `lcd-video.c:533`, byte for byte, followed
+by the same five to `ALT_CONTROL`. The command encoding matches too: `1000ebe0 mvn r0, r4` /
+`1000ebe4 orr r0, r4, r0, lsl #16` is `BCM_CMD(x) = (~x << 16) | x`.
 
-Its caller (retail `0x1000f558`, reached unconditionally from diag's startup at `0x100005fc`) is a
-**hardware reset with a long settle**: `0x70000030 = 0x98016460`, clear bit `0x200000` of
-`0x70000084`, clear bit `0x80` of `0x6000d008`, pulse two GPIO bits with **500 ms** between edges,
-enable bit `0x40000` of `0x60004124` — then the init, then a stream of **184 320 bytes** out of
-SDRAM `0x11000000` through the data port.
+So the 184 320-byte stream out of `0x11000000` is the **VMCS firmware upload**, and what follows it
+is the co-processor's boot handshake — `bcm_write32(BCMA_COMMAND, 0)`, poke `0x10000C00`, poll bit 0,
+write `0xA5A50002` to `0x10000400`, wait for `COMMAND` to go non-zero. That is `lcd-video.c:583-595`,
+step for step. (`0x2d000` is a fixed over-read: it exceeds both `vmcs.bin` sizes, and harmlessly,
+because the chip loads linearly from its SRAM address 0 and only needs the leading image.)
 
-Nothing else in Apple's software touches `0xb00x0000`: not RetailOS, not `disk`, not `scan`.
-Verified by searching each image for the literal and for the `mov rN,#0xb00x0000` immediate form.
+### So it was never a missing device — it was a missing decode
 
-**What it is remains unknown, and it is the one gate between us and a drawn diagnostics screen.**
-Answering bit 0 unblocks the handshake; the run then advances register by register through the
-polls, and modelling the whole aperture as an unconnected bus that reads all-ones gets past it
-entirely — 1.4 M halfwords written into the void — after which diag spins down the drive
-(`STANDBY IMMEDIATE`) and sits in a delay loop having drawn nothing. So all-ones is *not* the
-device's behaviour either; something real is on the other end.
+The model needed no new protocol. `Bcm` already answers every one of those registers correctly;
+it was simply mapped at one address and Apple's diagnostics drives it at the other. `Bcm::alias`
+maps the same chip at both, and **`diag` draws**:
 
-### And `diag` does not draw through the co-processor
+```
+bcm: 8 commands kicked, 8 frame updates
+bcm framebuffer -> 320x240 from 0x000e0000, 70 669 non-black pixels
+unmapped: 0 reads, 4 writes across 1 page
+```
 
-The measurement that reframes the problem:
+![Apple's iPod Diagnostics](../docs/media/ipod-19-diagnostics.png)
+
+> `SRV Diag Boot` · `SRV Sep 09 2006` · `Menu : Manual Test` · `Previous: Auto Test`
+
+**What is measured and what is not.** Measured: the driver strings, the identical register map, the
+identical bootstrap bytes, the identical command encoding, the identical boot handshake, and the run
+above. **Not measured:** *why* the chip answers at two addresses. `diag` writes `0x98016460` to
+`0x70000030` — a register inside the PP502x external-bus block, and one this project has never been
+able to name ([research/04](04-bypass-ledger.md) #1) — immediately before its first access, so it
+may be switching the decode rather than using a permanent alias. It makes no difference to anything
+that runs here: `diag` is the only program in Apple's software that touches the second window, and
+it never touches the first.
+
+The control for the alias is that it cannot move an existing number. A retail cold boot reports
+**zero** accesses anywhere in `0xb0000000..0xb0080000`, and its fingerprint is unchanged — `Retail
+mode`, `Running 'osos' 0 from 0x10000000`, 102 ATA commands, 20 127 code buckets.
+
+### Which also settles what `diag` does *not* reference
 
 | image | references `0x30000000` |
 |---|---|
@@ -445,18 +483,17 @@ The measurement that reframes the problem:
 | `scan` (prototype) | **yes** |
 | `diag` (**both** dumps) | **no** — not as a literal, not as an immediate |
 
-Apple's diagnostics contains no reference to the address Rockbox, RetailOS and disk mode all use for
-the BCM2722. Whatever draws the diagnostics menu, it is not that aperture — which makes the device
-at `0xb0000000` the leading candidate for it, on the strength of *what is left*, and that is
-inference rather than measurement.
+That was the measurement that found the second window: `diag` obviously draws, and it demonstrably
+does not draw through the address everything else uses.
 
 It also has a consequence for [research/03](03-rtxc-and-the-video-coprocessor.md) §10, which
 publishes a 320×240 frame of Apple's four-language *"Connect to your computer. Use iTunes to
 restore."* screen under the heading *"Apple's firmware rendering through Apple's video
-co-processor"* and attributes it to `diag`. **`diag` cannot have drawn it.** The message is disk
-mode's, `disk` does reference the co-processor, and §12 of that same note disassembles the halt it
-found at `0x400015b4` — an address in the NOR bootloader, not in an image loaded at `0x10000000`.
-The frame is real and the decode is right; the attribution is wrong.
+co-processor"* and attributes it to `diag`. **`diag` cannot have drawn it**, because at the time
+that frame was captured the co-processor was mapped only at `0x30000000` and `diag` never writes
+there. The message is disk mode's, `disk` does reference that address, and §12 of the same note
+disassembles the halt it found at `0x400015b4` — an address in the NOR bootloader, not in an image
+loaded at `0x10000000`. The frame is real and the decode is right; the attribution is wrong.
 
 ### Apple's diagnostics switches on `HwVr`, and `0x000B0010` is one of its three cases
 
@@ -480,3 +517,42 @@ value is Apple-recognised.
 It still does not measure *which revision* it belongs to — no retail 5.5G NOR has been read. But the
 three-way split matches the three hardware revisions exactly, and the prototype is the one we can
 check: its own `HwVr` is `0x000B0011`, and it is the third case.
+
+### And it can be driven — the press has to outlast Apple's poll
+
+Drawing was half of it. `diag`'s main loop is:
+
+```asm
+10009e7c  bl 0x10008914      ; read the button byte at 0x1001aa9c, clear it
+10009e88  ldr r0, =0x249f0   ; 150 000 us
+10009e8c  bl 0x100038e4      ; sleep
+```
+
+**One button read every 150 ms**, which at the real clock is 11.25 M instructions. `--wheel`'s
+`press=` expands to a down/up pair `--wheel-click-instr` apart — 20 000 by default, **0.27 ms** —
+so every press this project sent fell between two polls.
+
+And it did not look like a missed press. `--storeaddr=0x1001aa9c` shows the interrupt handler
+recording it perfectly:
+
+```
+0x000085f8 -> [0x1001aa9c] = 0x00000010   @422000160    <- MENU down
+0x00008668 -> [0x1001aa9c] = 0x00000030   @422000173    <- MENU + wheel touched
+0x00008668 -> [0x1001aa9c] = 0x00000020   @422020131    <- MENU up, 20 000 later
+0x10008928 -> [0x1001aa9c] = 0x00000000   @432502227    <- the poll, 10 M later, reads 0x20
+```
+
+The button arrived, was overwritten by its own release, and the poll read the release. Held for
+25 M instructions instead, the same press opens the menu.
+
+So the tour is a script of explicit `down=`/`up=` pairs, and it walks: `SRV Diag Boot` → the
+manual-test menu (`NTF · Memory · IO · Power · Accessories Test · SysCfg · Reset`) → `Memory`
+(`SDRAM · Flash`) → `IO` (`Comms · Wheel · Display · HeadphoneDetect · HardDrive`) → `Wheel`
+(`KeyTest · WheelTest`) → **Key Test**, which lists the five keys and blacks each one out as it is
+pressed, ending on `KEY PASS`.
+
+`ipod-film asset diag` is that tour, and the calibration lives in the code beside it.
+
+**One screen is deliberately not filmed: `SysCfg`.** It prints the identity block out of the boot
+ROM, which on a real dump is a real person's serial number and FireWire GUID. Every other screen
+here is Apple's own text.

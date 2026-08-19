@@ -39,9 +39,19 @@ fn main() {
 
 const USAGE: &str = "\
 usage:
-  ipod-film run   --out=DIR [--every=N] [--rate=N] [--fps=N] [--from=N] [-- trace flags…]
-  ipod-film asset boot | gameplay | all
-  ipod-film concat DIR";
+  ipod-film run   --out=DIR [--every=N] [--fps=N] [--from=N] [--scale=N]
+                  [--realtime] [--cap=SECONDS] [-- trace flags…]
+  ipod-film asset boot | gameplay | diag | all
+  ipod-film concat DIR
+
+  RECIPE=retail|flsh|rockbox|warm   which machine to film (default retail)
+  IMG=diag|disk                     which NOR image, when RECIPE=flsh
+  BUDGET=N                          run length for every recipe but retail
+  --realtime                        one sample lasts `--every`/75 microseconds, so the film runs
+                                    at the machine's own speed instead of one second per sample
+  --cap=SECONDS                     longest any one frame may hold. Opt-in, because a cap is a
+                                    lie about duration — but the last frame of a run holds until
+                                    the budget ends, which is a fact about the budget";
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf()
@@ -76,6 +86,42 @@ fn arg<'a>(args: &'a [String], key: &str) -> Option<&'a str> {
     args.iter().find_map(|a| a.strip_prefix(&format!("{key}=")))
 }
 
+/// How long each frame is on screen, and in whose time.
+#[derive(Clone, Copy)]
+struct Pace {
+    /// Play at the **machine's** speed: one sample lasts `every / CLOCK` microseconds, so a screen
+    /// that the firmware held for a second is on screen for a second.
+    ///
+    /// The default is one second per sample, which is not a time at all — it is a count wearing
+    /// seconds' clothing, and it is only watchable because the boot films happen to have short
+    /// holds. A tour of a menu does not: `diag` sits on its splash for 39 samples and on its last
+    /// screen for 461, which at a second each is eight minutes of a still picture.
+    realtime: bool,
+    /// Longest any single frame may hold, in seconds. `None` for no cap.
+    ///
+    /// A cap is a **lie about duration**, so it is opt-in and never the default: the last frame of
+    /// a film usually holds until the budget runs out, which says how long the run was and nothing
+    /// about the machine.
+    cap: Option<f64>,
+}
+
+impl Pace {
+    const NATURAL: Pace = Pace { realtime: false, cap: None };
+
+    /// Seconds on screen for a frame the firmware held for `held_instr` instructions, in a film
+    /// sampled every `rate` instructions.
+    fn of(&self, held_instr: f64, rate: f64) -> f64 {
+        let d = if self.realtime {
+            // `held_instr / CLOCK` is microseconds of simulated time, by the definition of
+            // `--clock`: instructions per simulated microsecond.
+            held_instr / eapp_loader::CLOCK as f64 / 1_000_000.0
+        } else {
+            held_instr / rate
+        };
+        self.cap.map_or(d, |c| d.min(c))
+    }
+}
+
 /// Build `frames.concat` and `frames.total` from the manifest the emulator wrote.
 ///
 /// Two things about the last entry, both learned by measuring the output rather than trusting it.
@@ -83,6 +129,10 @@ fn arg<'a>(args: &'a [String], key: &str) -> Option<&'a str> {
 /// so the last file is listed twice; the repeat then plays for that duration a second time, which
 /// is what the caller's `-t TOTAL` trims back off.
 fn concat(dir: &Path) -> Result<f64, String> {
+    concat_paced(dir, Pace::NATURAL)
+}
+
+fn concat_paced(dir: &Path, pace: Pace) -> Result<f64, String> {
     let tsv = dir.join("frames.tsv");
     let text = std::fs::read_to_string(&tsv).map_err(|e| format!("{}: {e}", tsv.display()))?;
     // `# film of …, sampled every N instructions` — the rate the durations are expressed against.
@@ -105,7 +155,7 @@ fn concat(dir: &Path) -> Result<f64, String> {
             continue;
         }
         let held: f64 = f[6].trim().parse().map_err(|_| format!("bad held_instr: {}", f[6]))?;
-        let d = held / rate;
+        let d = pace.of(held, rate);
         out.push_str(&format!("file '{}'\nduration {d:.4}\n", f[1]));
         total += d;
         last = Some(f[1].to_string());
@@ -125,6 +175,10 @@ fn run(args: &[String]) -> Result<(), String> {
     let fps = arg(args, "--fps").unwrap_or("30");
     let from = arg(args, "--from").map(count).transpose()?.unwrap_or(0);
     let scale: u32 = arg(args, "--scale").unwrap_or("1").parse().map_err(|_| "--scale wants a number")?;
+    let pace = Pace {
+        realtime: args.iter().any(|a| a == "--realtime"),
+        cap: arg(args, "--cap").map(|s| s.parse::<f64>()).transpose().map_err(|_| "--cap wants seconds")?,
+    };
     let pass: Vec<String> =
         args.iter().skip_while(|a| *a != "--").skip(1).cloned().collect();
 
@@ -137,12 +191,24 @@ fn run(args: &[String]) -> Result<(), String> {
         }
     }
 
+    // RECIPE picks which machine is filmed. `retail` is the default and carries two flags that
+    // belong to it and to nothing else:
+    //
+    //   --stop-when-idle  ends the run once RetailOS stops reaching new code. On a NOR image it
+    //                     would end the film during the boot, because `diag` idles in a 150 ms
+    //                     delay loop over code it has already run — busy, and novel to nothing.
+    //   --bcm-registry    ledger #6, and off by default everywhere else for the reason recorded
+    //                     there: it changes every number in the run.
+    //
+    // Anything else takes its length from BUDGET, which `ipod-boot` already reads.
+    let recipe = std::env::var("RECIPE").unwrap_or_else(|_| "retail".into());
     let idle = std::env::var("IDLE").unwrap_or_else(|_| "400000000".into());
     let mut c = Command::new(ipod_boot());
-    c.arg("retail")
-        .arg(format!("--stop-when-idle={idle}"))
-        .arg("--bcm-registry")
-        .arg(format!("--bcm-film=0xE0000:140:F0:{every}:{}", out.display()))
+    c.arg(&recipe);
+    if recipe == "retail" {
+        c.arg(format!("--stop-when-idle={idle}")).arg("--bcm-registry");
+    }
+    c.arg(format!("--bcm-film=0xE0000:140:F0:{every}:{}", out.display()))
         .arg(format!("--bcm-film-from={from}"))
         .args(&pass);
     let st = c.status().map_err(|e| format!("{}: {e}", ipod_boot().display()))?;
@@ -150,7 +216,7 @@ fn run(args: &[String]) -> Result<(), String> {
         return Err("the run failed; no film written".into());
     }
 
-    let total = concat(&out)?;
+    let total = concat_paced(&out, pace)?;
     let pngs = std::fs::read_dir(&out)
         .map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().starts_with("frame-")).count())
         .unwrap_or(0);
@@ -302,6 +368,71 @@ fn asset(args: &[String]) -> Result<(), String> {
     }
     if which == "gameplay" || which == "all" {
         do_gameplay(&film, &post)?;
+    }
+    if which == "diag" || which == "all" {
+        do_diag(&film, &post)?;
+    }
+    Ok(())
+}
+
+/// The tour through Apple's service diagnostics, as one wheel script.
+///
+/// **The holds are the whole calibration.** `diag`'s main loop is `read the button byte, sleep
+/// 150 ms`, and 150 ms is 11.25 M instructions at the real clock — so a press shorter than that
+/// falls between two polls and is never seen. `press=` expands to a down/up pair 20 000
+/// instructions apart, which is 0.27 ms, and using it here produced a run where the interrupt
+/// handler demonstrably recorded MENU and the firmware demonstrably ignored it. Every button below
+/// is therefore an explicit `down=`/`up=` pair **25 M apart**, with 35 M of quiet after it for the
+/// screen to settle.
+fn diag_tour() -> String {
+    // One press: hold it across at least two of the firmware's polls, then let the screen settle.
+    let press = |b: &str| format!(",+35M:down={b},+25M:up={b}");
+    let scroll = ",+35M:rotate=+8";
+    let mut w = String::from("@200M:touch,+20M:down=menu,+25M:up=menu"); // -> the manual-test menu
+    w.push_str(scroll); // Memory -> IO
+    w.push_str(&press("select")); // -> Comms / Wheel / Display / HeadphoneDetect / HardDrive
+    w.push_str(scroll); // Comms -> Wheel
+    w.push_str(&press("select")); // -> KeyTest / WheelTest
+    w.push_str(&press("select")); // -> Key Test, which asks for all five keys
+    for b in ["play", "left", "right", "menu"] {
+        w.push_str(&press(b));
+    }
+    // `select` last: Key Test takes MENU as "exit" only once the other four are done, so pressing
+    // the action key last is what leaves KEY PASS on screen instead of leaving the test.
+    w.push_str(&press("select"));
+    w.push_str(",+60M:release");
+    w
+}
+
+fn do_diag(film: &Path, post: &Path) -> Result<(), String> {
+    println!("== Apple's diagnostics, driven ==");
+    let dir = film.join("diagnostics");
+    // 1.5 G is the tour plus a tail: the last screen holds until the budget ends, and `--cap`
+    // trims that back to something watchable rather than pretending the run was shorter.
+    std::env::set_var("RECIPE", "flsh");
+    std::env::set_var("IMG", "diag");
+    std::env::set_var("BUDGET", "1500000000");
+    run(&[
+        format!("--out={}", dir.display()),
+        "--every=2M".into(),
+        "--fps=30".into(),
+        "--realtime".into(),
+        "--cap=2.5".into(),
+        "--".into(),
+        "--clickwheel".into(),
+        format!("--wheel={}", diag_tour()),
+    ])?;
+    publish(&dir, "ipod-22-diagnostics", 30, Palette::Held, post)?;
+    // Frame indices, not instruction counts, because the film's dedup assigns them. `frames.tsv`
+    // is the check: the non-black counts are 70669 / 68428 / 67959 / 69429, and a still whose
+    // count does not match is a still of the wrong screen — which has happened here before.
+    for (f, n) in [
+        ("frame-00004.png", "ipod-19-diagnostics"),
+        ("frame-00007.png", "ipod-20-diagnostics-menu"),
+        ("frame-00010.png", "ipod-21-diagnostics-io"),
+        ("frame-00021.png", "ipod-23-diagnostics-keytest"),
+    ] {
+        still(&dir, f, n, post)?;
     }
     Ok(())
 }

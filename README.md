@@ -254,6 +254,28 @@ asked. None of the four is findable with one operating system.
 Not finished: nothing past the menu is verified, there is no sound, and it is not yet something the
 window can start for you — that is [on the roadmap](ROADMAP.md).
 
+### And it is not only the operating system
+
+The boot ROM carries more than a bootloader. **Apple's service diagnostics runs** — the program a
+real iPod shows when you hold `SELECT`+`REW` at power-on — and it can be driven:
+
+<img src="docs/media/ipod-22-diagnostics.gif" width="320" alt="Apple's iPod diagnostics: the SRV Diag Boot screen, its manual-test menu, IO, Wheel, and the Key Test passing">
+
+`SRV Diag Boot` → the manual-test menu → `IO` → `Wheel` → **Key Test**, which asks for all five
+keys and blacks each one out as our emulated click wheel reports it, ending on `KEY PASS`. That is
+Apple's own test program grading Apple's own input protocol, and it is running at the machine's
+real speed — the film is 13 seconds because the machine took 13 seconds.
+
+|  |  |
+|---|---|
+| ![](docs/media/ipod-19-diagnostics.png) | ![](docs/media/ipod-20-diagnostics-menu.png) |
+| ![](docs/media/ipod-21-diagnostics-io.png) | ![](docs/media/ipod-23-diagnostics-keytest.png) |
+
+`ipod-film asset diag` is the whole thing, one command, and
+[research/07](research/07-the-flash-images.md) records the two reasons it had never run before:
+the emulator was loading a *different iPod's* diagnostics, and the video co-processor answers at
+**two** addresses of which only one was mapped.
+
 ## What does not
 
 The three you would notice first:

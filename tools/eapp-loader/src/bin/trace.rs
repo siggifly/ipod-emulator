@@ -1206,27 +1206,40 @@ fn main() {
             }
             runs.sort_by_key(|(_, _, n)| std::cmp::Reverse(*n));
             // --bcm-ppm=FILE[:BASE] — render the co-processor's framebuffer.
+            // --bcm-png=FILE[:BASE] — the same picture, encoded, so a documentation screenshot is
+            //   one flag rather than a PPM and whatever converter the machine happens to have.
             //
             // The BCM's internal space is sparse, so the framebuffer is wherever the host chose to
             // put it; the write-run report names it. Rockbox lands a full 320x240 RGB565 frame at
             // 0x000e0000, which is the default.
-            if let Some(spec) = args.iter().find_map(|a| a.strip_prefix("--bcm-ppm=")) {
+            for (flag, png) in [("--bcm-ppm=", false), ("--bcm-png=", true)] {
+                let Some(spec) = args.iter().find_map(|a| a.strip_prefix(flag)) else { continue };
+                // `rsplit_once(':')` and not `split_once`: a Windows path carries a colon after
+                // the drive letter, and splitting at the first one takes `C` as the whole path.
                 let (path, base) = match spec.rsplit_once(':') {
-                    Some((p, b)) => (p, u32::from_str_radix(b.trim_start_matches("0x"), 16).unwrap_or(0x000e_0000)),
-                    None => (spec, 0x000e_0000),
+                    Some((p, b)) if !b.is_empty() && b.chars().all(|c| c.is_ascii_hexdigit() || c == 'x') =>
+                        (p, u32::from_str_radix(b.trim_start_matches("0x"), 16).unwrap_or(0x000e_0000)),
+                    _ => (spec, 0x000e_0000),
                 };
                 let (w, h) = (320usize, 240usize);
-                let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+                let mut rgb = Vec::with_capacity(w * h * 3);
                 let mut nonzero = 0u32;
                 for i in 0..w * h {
                     let px = *b.mem.get(&(base + (i as u32) * 2)).unwrap_or(&0);
                     if px != 0 { nonzero += 1; }
                     // RGB565 -> RGB888, replicating high bits into the low ones so white is 0xff.
                     let (r, g, bl) = ((px >> 11) & 0x1f, (px >> 5) & 0x3f, px & 0x1f);
-                    out.push(((r << 3) | (r >> 2)) as u8);
-                    out.push(((g << 2) | (g >> 4)) as u8);
-                    out.push(((bl << 3) | (bl >> 2)) as u8);
+                    rgb.push(((r << 3) | (r >> 2)) as u8);
+                    rgb.push(((g << 2) | (g >> 4)) as u8);
+                    rgb.push(((bl << 3) | (bl >> 2)) as u8);
                 }
+                let out = if png {
+                    eapp_loader::png::encode(&rgb, w, h)
+                } else {
+                    let mut v = format!("P6\n{w} {h}\n255\n").into_bytes();
+                    v.extend_from_slice(&rgb);
+                    v
+                };
                 match std::fs::write(path, &out) {
                     Ok(()) => println!("  bcm framebuffer -> {path} ({w}x{h} from {base:#010x}, {nonzero} non-black pixels)"),
                     Err(e) => println!("  {path}: {e}"),

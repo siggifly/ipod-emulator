@@ -105,7 +105,7 @@ measurement was taken with the *prototype's*, which is a different set of differ
 | mode | what it is | state |
 |---|---|---|
 | **`aupd`** — flash updater | Apple's firmware updater, run from the drive on first boot | **works.** It runs, it takes, and it retired bypass #12 by itself ([research/07](research/07-the-flash-images.md)) |
-| **`diag`** — diagnostics | the hold-`SELECT`+`REW` service menu | **executes and stalls.** 200 M instructions with no fault, parked on bit 0 of `0xb0020000` — an undocumented device it resets and streams 184 320 bytes into before it will draw anything. Nothing else in Apple's software touches that aperture |
+| **`diag`** — diagnostics | the hold-`SELECT`+`REW` service menu | **works.** It boots to `SRV Diag Boot`, opens its manual-test menu on `MENU`, and navigates: Memory → SDRAM/Flash, IO → Comms/Wheel/Display/HeadphoneDetect/HardDrive, Wheel → KeyTest/WheelTest, Display → Backlight/Color/TVOUT |
 | **`disk`** — target disk mode | the "do not disconnect" USB mass-storage mode | **broken.** `Lost(0xe19b0000) after 127 952 instructions` — it runs off into data at `0x18` with registers full of instruction words |
 | **`logo`** | the boot logo bitmap | **not a mode.** It opens with the characters `LoGo`; it is data other code reads |
 | **`vmcs`** | the video co-processor's firmware | **not a mode.** Data, uploaded to the BCM2722 |
@@ -116,16 +116,17 @@ is not something the interpreter can fail at — it decodes whatever is in front
 runs out of budget. `ipod-boot flsh` now refuses to enter an image whose word 0 is not an ARM branch
 and says what the image actually is.
 
-**Neither of the two real modes draws anything at `0x000e0000`.** For `diag` that is now explained
-rather than merely observed: it contains **no reference to `0x30000000` at all**, in either dump, as
-a literal or an immediate — while `disk` and `scan` both do. Apple's diagnostics does not draw
-through the co-processor aperture every other program here uses.
+**`diag` was the one that looked broken and was not.** It contains **no reference to `0x30000000`
+at all**, in either dump — while `disk` and `scan` both do — because it drives the same BCM2722 at
+a **second address, `0xb0000000`**. Its own driver strings name it (`…\drivers\vchost.c`), and its
+bootstrap bytes are Rockbox's `bcm_bootstrapdata[]` verbatim. The chip is now mapped at both
+windows; nothing else in the machine changed, and a retail cold boot never touches the second one.
+See [research/07](research/07-the-flash-images.md).
 
 **`disk` is the one that matters and the one that is broken.** Target disk mode is what a person
 actually does with an iPod — it is how the drive gets mounted on a computer — so it is the natural
 companion to **M9 (USB)** and is scheduled with it — not worked early because it happens to be one
-of the NOR's modes. `diag` is cheap to re-check whenever the co-processor or the boot path moves,
-and is blocked on one unknown device rather than on anything this emulator has got wrong.
+of the NOR's modes.
 
 ## The two modes
 
