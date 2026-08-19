@@ -938,9 +938,63 @@ would be `'1'` and would make **both** predicates false. The `26` in the string 
 **constructed around Apple's comparison, not read off a part**, and the honest reading is that
 `0x70000000` is one of the few registers here whose true value nobody in this project has seen.
 
-### RETRACTED: our IDENTIFY hand-over is byte-perfect, and the shift is not on the wire
+### SOLVED: the IDE data register is 16 bits wide, and we were serving two words per 32-bit read
 
-**2026-08-20.** The section below concluded from a field probe that the kernel's copy of IDENTIFY is
+**2026-08-20.** iPodLinux reads its partition table. The cause was ours, it was one line, and the
+three days of wrong answers above all came from measuring the right thing at the wrong place.
+
+**The defect.** Every register in the PP502x IDE block is four bytes apart, so a 32-bit access to
+`IDE_BASE+0x1e0` touches four byte lanes — but the register underneath is **sixteen bits**, and
+lanes 2 and 3 are its empty upper half. We were serving them as more sector data.
+
+Nothing else here ever noticed. Rockbox declares the port `volatile unsigned short` and Apple's
+firmware moves bulk data by DMA; both read it 16 bits at a time and never touch lanes 2 and 3. The
+lane census makes the asymmetry visible in one glance:
+
+```
+IDE_BASE+0x1e0  x820736     IDE_BASE+0x1e2  x512
+IDE_BASE+0x1e1  x820736     IDE_BASE+0x1e3  x512
+```
+
+**Why it broke Linux and only Linux.** iPodLinux's identify path reads the port with 32-bit loads
+and keeps the low halfword — which is exactly right for a 16-bit register. Handing it two words per
+access meant it kept our words 0, 2, 4, 6 … and dropped every other one. Read out of the kernel's
+own `drive->id` buffer at `0x002b3c00`, beside ours:
+
+```
+ours:   40 00 ff 3f 00 00 10 00 00 00 00 00 3f 00 00 00 00 00 00 00 45 56
+kernel: 40 00 00 00 00 00 3f 00 00 00 45 56
+```
+
+`struct hd_driveid` then read `cyls` out of our word 2 and `heads` out of our word 6, so a drive
+reporting **16 heads was diagnosed as having 63**, `INVALID GEOMETRY` fired, and every read of the
+partition table failed — *before a single command reached the bus*, which is why the ATA census
+showed the kernel issuing two IDENTIFYs and then no reads at all.
+
+**The arithmetic was the tell, and it was in the census the whole time.** iPodLinux does 256 32-bit
+reads per IDENTIFY. At one word each that is 512 bytes — exactly one sector. At two words each it is
+1024, twice the response it asked for. A drive being asked for twice what it has is not a subtle
+signal.
+
+**What it fixed.** No `INVALID GEOMETRY`, no `I/O error`, no `unable to read partition table`. The
+kernel reports the drive at its true size, issues INITIALIZE DEVICE PARAMETERS — a command we had
+been accepting and ignoring under a comment saying nothing ever sends it — and reaches
+`Partition check: /dev/hda`.
+
+**The rule this earns.** Every wrong answer below was a measurement of the *kernel's* state. The one
+that worked measured **the wire**, and it was twenty lines. Four times now a claim about a data path
+has been made without watching the data path; the census that would have shown this was printed in
+every log for weeks, and reading it required nothing but noticing that two of four byte lanes were
+1600× colder than the others.
+
+### RETRACTED, and then re-established with the right cause: the six-byte shift
+
+**The shift was real.** What was wrong was where I put it. This section concluded from a field probe
+that the kernel's copy is ours shifted by three words; I then disproved that with an instrument that
+watched the wrong 24 bytes, and the retraction below is itself mistaken. A shift of every second
+word *looks* aligned in the first four bytes, which is exactly what that instrument sampled.
+
+The section below concluded from a field probe that the kernel's copy of IDENTIFY is
 ours shifted left by three words. A better instrument disproves it. `Ata` now records the first
 bytes handed over the data port after each `0xec`, with their offsets, and prints them beside our own
 buffer:
@@ -955,17 +1009,18 @@ IDENTIFY hand-over — the first bytes the guest actually received:
 Byte for byte, in order, through 32-bit reads: `w0 = 0x0040`, `w1 = 16383` cylinders, `w3 = 16`
 heads, `w6 = 63` sectors. **Nothing is displaced between the buffer and the guest.**
 
-Both measurements stand and they are only consistent one way: the probe's `61` really did arrive in
-the field the kernel prints as `PHYSICAL HEADS`, and our delivery really is aligned, so **the kernel
-is putting its own `id->sectors` there.** That is its logic, not our wire — and a real iPod would
-hand it the same bytes and get the same result. `INVALID GEOMETRY` is therefore not evidence of an
-emulator defect, and the eight `I/O error`s on sectors 0/2/4/6 need a cause of their own.
+~~Both measurements stand and they are only consistent one way: the kernel is putting its own
+`id->sectors` there — its logic, not our wire, and a real iPod would hand it the same bytes.~~
+**False.** It was our wire. A real iPod hands the kernel every word.
 
-**What this cost, and the rule it earns.** The probe was a good experiment that answered a narrower
-question than the one asked of it: it proved *which field the value came from*, and was read as
-proving *where the displacement happened*. The instrument that settled it took twenty lines and
-should have come first — this is the fourth time in this work that a claim about a data path was
-made without watching the data path.
+**Wrong, and instructive about how.** The instrument recorded only the first 24 bytes, and under the
+real defect the first four bytes of every access still line up — our word 0 is the kernel's word 0.
+An instrument that samples the head of a stream cannot see a defect that drops every second element,
+and "aligned: the guest got byte 0 first" was a true statement about a sample being read as a claim
+about the whole. It also printed *register* offsets while I read them as *buffer* offsets.
+
+The probe it dismissed was right all along: `61` really did arrive in the field the kernel prints as
+`PHYSICAL HEADS`, because the kernel's word 3 really was our word 6.
 
 ### Superseded: the field probe that read as a six-byte shift
 
