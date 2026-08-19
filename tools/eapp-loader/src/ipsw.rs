@@ -430,6 +430,15 @@ pub struct Image {
     pub offset: u32,
     pub len: u32,
     pub addr: u32,
+    /// Where execution begins, **relative to `addr`**.
+    ///
+    /// Zero for a stock `osos` — Apple's own image is entered at its base. It is **not** zero once
+    /// a bootloader has been installed: `install-os` appends the loader to the end of `osos` and
+    /// records its position here, which is how Apple's bootloader knows to run the loader rather
+    /// than the OS it is sitting behind (`Running 'osos' 0 from 0x10735A00`).
+    ///
+    /// Ignoring it is why the high-level boot ran RetailOS on a drive with `ipodloader2` installed.
+    pub entry: u32,
 }
 
 /// Where the `!ATA` directory sits inside a firmware partition.
@@ -456,6 +465,7 @@ pub fn images(fw: &[u8]) -> Vec<Image> {
             offset: le32(e, 0x0c),
             len: le32(e, 0x10),
             addr: le32(e, 0x14),
+            entry: le32(e, 0x18),
         });
     }
     out
@@ -482,7 +492,7 @@ pub fn image_header(window: &[u8]) -> Option<usize> {
 /// "supply one".
 ///
 /// Returns the image and the address it loads at.
-pub fn osos_from_drive(path: &std::path::Path) -> Result<(Vec<u8>, u32), String> {
+pub fn osos_from_drive(path: &std::path::Path) -> Result<(Vec<u8>, u32, u32), String> {
     // **The header this project has now got wrong twice, in two sizes.**
     //
     // `devOffset` in the `!ATA` directory is relative to the firmware PARTITION, but what is
@@ -563,7 +573,7 @@ pub fn osos_from_drive(path: &std::path::Path) -> Result<(Vec<u8>, u32), String>
     f.read_exact(&mut image).map_err(|e| {
         format!("{}: `osos` runs past the end of the image: {e}", path.display())
     })?;
-    Ok((image, osos.addr))
+    Ok((image, osos.addr, osos.entry))
 }
 
 // ---------------------------------------------------------------- building the drive

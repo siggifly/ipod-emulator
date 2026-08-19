@@ -491,3 +491,34 @@ against the 5G's 13 895 680) — the thing an earlier session went looking for a
 | `0x100` | Nano 2G | 62 | `nn2x` |
 
 That is the checksum seed and magic for nine model families, from the code that writes them.
+
+## The experiment the retraction said was blocked — run, 2026-08-19
+
+§"Confirmed by forcing it" was retracted because forcing `PP_VER1` does not touch only
+`ipodloader2`: **Apple's bootloader reads that register 23 times a boot**, and with the value forced
+it hangs at `0x400038cc` before `ipodloader2` runs at all. The retraction's closing line was that the
+fix "has to satisfy Apple's bootloader *and* `ipodloader2` at once".
+
+**The high-level boot removes that constraint entirely.** It never runs Apple's bootloader — it maps
+the OS out of the drive's firmware partition and enters it directly — so `PP_VER1` can be answered
+for `ipodloader2` without anything else reading it.
+
+Measured, with `ipodloader2` installed via `install-os` and entered at the directory's own entry
+offset (`0x10736000`), both runs identical but for the one register:
+
+| | ATA commands | unmapped |
+|---|---|---|
+| as-is | **0** | **30 437 746 reads, 99 755 writes across 14 pages** |
+| `--rdval=0x70000000=0x3232432D` | **1** — `IDENTIFY DEVICE` | **none at all** |
+
+`0x3232432D` is `'2','2','C','-'` — bytes 4..8 of the eight-character `PP5022C-` that `PP_VER2` and
+`PP_VER1` spell together, and its byte 16 is the `'2'` that `ipod_is_pp5022()` tests for.
+
+**So the loader was never broken, and neither was our model.** With the chip identified it stops
+addressing a 1G iPod's registers at `0xcf00xxxx`, relocates into IRAM, and issues `IDENTIFY DEVICE`
+to the drive. Thirty million wrong reads become none.
+
+What this does **not** settle: whether a real 5.5G answers `'2'` there. Our reference hardware is a
+5G whose `BoardHwName` is `PP5021C-2`, and a PP5021C answering `'1'` is why `ipod_is_pp5022()`
+correctly returns false on it. The register is being *supplied* here, as the emulator supplies every
+register — the value is sourced from Rockbox's `debug-pp.c` decoding, not measured off a 5.5G.

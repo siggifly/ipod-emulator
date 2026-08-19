@@ -326,6 +326,7 @@ fn main() {
     // --osos-from-disk : take the OS out of the drive's own firmware partition instead of a
     // separate file. This is what a high-level boot does, and it is the difference between
     // "supply three files" and "supply one" -- the drive already carries the OS.
+    let mut osos_entry: Option<u32> = None;
     if args.iter().any(|a| a == "--osos-from-disk") {
         match args.iter().find_map(|a| a.strip_prefix("--disk=")) {
             None => {
@@ -333,11 +334,20 @@ fn main() {
                 std::process::exit(1);
             }
             Some(disk) => match eapp_loader::ipsw::osos_from_drive(std::path::Path::new(disk)) {
-                Ok((d, at)) => {
+                Ok((d, at, entry)) => {
                     let n = d.len();
                     m.symbols = eapp_loader::extract_symbols(&d, 0);
                     match m.map_osos(d) {
-                        Ok(()) => println!("mapped OSOS from the drive: {n} bytes at {at:#010x}"),
+                        Ok(()) => {
+                            println!("mapped OSOS from the drive: {n} bytes at {at:#010x}");
+                            // **Honour the entry offset.** Zero for a stock image, non-zero once a
+                            // bootloader has been appended -- and ignoring it boots the OS sitting
+                            // behind the loader instead of the loader.
+                            if entry != 0 {
+                                println!("  entry offset {entry:#x} -> starting at {:#010x}", at + entry);
+                                osos_entry = Some(at + entry);
+                            }
+                        }
                         Err(e) => {
                             eprintln!("cannot map OSOS: {e}");
                             std::process::exit(1);
@@ -904,7 +914,13 @@ fn main() {
         // — the sysinfo block, the Gestalt ID, the memory-bank sizes — instead of us reconstructing
         // that state by hand. It then loads OSOS off the firmware partition itself.
         let cold = args.iter().any(|a| a == "--cold-boot");
-        let entry = flash_entry.unwrap_or(if cold { 0x0000_0000 } else { 0x1000_0000 });
+        // **The image's own entry offset wins.** Zero for a stock `osos`, which is why this used
+        // to be a constant — but `install-os` appends a bootloader to the end of `osos` and records
+        // its position there, and Apple's bootloader honours it (`Running 'osos' 0 from
+        // 0x10735A00`). Starting at the load address instead runs the OS sitting behind the loader.
+        let entry = flash_entry
+            .or(osos_entry)
+            .unwrap_or(if cold { 0x0000_0000 } else { 0x1000_0000 });
         // A restored machine continues from where it was; only a fresh one enters at `entry`.
         let restored = args.iter().any(|a| a.starts_with("--restore="));
         // What `--boot-osos` actually requires is an image at the entry — which is NOT the same as

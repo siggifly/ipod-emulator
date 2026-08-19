@@ -681,7 +681,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     use arm7tdmi::Bus as _;
     let synthetic = eapp_loader::nor::is_synthetic(&flash);
     if synthetic {
-        let (osos, load_at) = eapp_loader::ipsw::osos_from_drive(&cfg.disk)?;
+        let (osos, load_at, entry) = eapp_loader::ipsw::osos_from_drive(&cfg.disk)?;
         println!(
             "  high-level boot: {} bytes of OS from {} -> {load_at:#010x}",
             osos.len(),
@@ -690,6 +690,13 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         // Apple's boot code jumps to physical 0x23c, so the image has to answer at 0 as well —
         // the usual ARM arrangement where the vector table is mirrored low. This is also where the
         // CPU begins, which is why no reset vector has to be synthesised for it to execute.
+        // The image also answers at 0, the usual ARM arrangement where the vector table is
+        // mirrored low, and that is where the CPU begins. **Unless the directory records an entry
+        // offset** — non-zero once a bootloader has been appended to `osos`, and mirroring low
+        // would then start the OS behind the loader rather than the loader.
+        if entry != 0 {
+            println!("  entry offset {entry:#x} — starting at {:#010x}", load_at + entry);
+        }
         m.mem.regions.push(Region { name: "osos-low", base: 0, data: osos.clone() });
         m.mem.regions.push(Region { name: "osos", base: load_at, data: osos });
 
