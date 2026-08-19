@@ -938,7 +938,36 @@ would be `'1'` and would make **both** predicates false. The `26` in the string 
 **constructed around Apple's comparison, not read off a part**, and the honest reading is that
 `0x70000000` is one of the few registers here whose true value nobody in this project has seen.
 
-### The kernel reads our IDENTIFY six bytes out of step — measured, not inferred
+### RETRACTED: our IDENTIFY hand-over is byte-perfect, and the shift is not on the wire
+
+**2026-08-20.** The section below concluded from a field probe that the kernel's copy of IDENTIFY is
+ours shifted left by three words. A better instrument disproves it. `Ata` now records the first
+bytes handed over the data port after each `0xec`, with their offsets, and prints them beside our own
+buffer:
+
+```
+IDENTIFY hand-over — the first bytes the guest actually received:
+  +0x1e0=40 +0x1e1=00 +0x1e2=ff +0x1e3=3f +0x1e0=00 +0x1e1=00 +0x1e2=10 +0x1e3=00 …
+  ours, in order:  40    00    ff    3f    00    00    10    00 …
+  -> aligned: the guest got byte 0 first
+```
+
+Byte for byte, in order, through 32-bit reads: `w0 = 0x0040`, `w1 = 16383` cylinders, `w3 = 16`
+heads, `w6 = 63` sectors. **Nothing is displaced between the buffer and the guest.**
+
+Both measurements stand and they are only consistent one way: the probe's `61` really did arrive in
+the field the kernel prints as `PHYSICAL HEADS`, and our delivery really is aligned, so **the kernel
+is putting its own `id->sectors` there.** That is its logic, not our wire — and a real iPod would
+hand it the same bytes and get the same result. `INVALID GEOMETRY` is therefore not evidence of an
+emulator defect, and the eight `I/O error`s on sectors 0/2/4/6 need a cause of their own.
+
+**What this cost, and the rule it earns.** The probe was a good experiment that answered a narrower
+question than the one asked of it: it proved *which field the value came from*, and was read as
+proving *where the displacement happened*. The instrument that settled it took twenty lines and
+should have come first — this is the fourth time in this work that a claim about a data path was
+made without watching the data path.
+
+### Superseded: the field probe that read as a six-byte shift
 
 `drive->head` is the byte at `drive + 0x107`; the check at `0x000ebfc4` accepts 1..16 and complains
 otherwise, and it holds **63**. 63 is our `sectors per track`, which is IDENTIFY **word 6**, sitting

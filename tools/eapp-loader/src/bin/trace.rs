@@ -1520,6 +1520,26 @@ fn main() {
                 }
                 println!("    {line}");
             }
+            if !d.id_handover.is_empty() {
+                let want = eapp_loader::Ata::identify_sector(16_777_216, 0, 0);
+                println!("\nIDENTIFY hand-over — the first bytes the guest actually received:");
+                let got: Vec<String> = d
+                    .id_handover
+                    .iter()
+                    .map(|(o, b)| format!("+{:#05x}={b:02x}", o))
+                    .collect();
+                println!("  {}", got.join(" "));
+                // And the same bytes as WE laid them out, so a shift is visible rather than inferred.
+                let mine: Vec<String> =
+                    want.iter().take(d.id_handover.len()).map(|b| format!("{b:02x}")).collect();
+                println!("  ours, in order:  {}", mine.join("    "));
+                let delivered: Vec<u8> = d.id_handover.iter().map(|(_, b)| *b).collect();
+                match (0..16).find(|k| want.get(*k..*k + delivered.len()) == Some(&delivered[..])) {
+                    Some(0) => println!("  -> aligned: the guest got byte 0 first"),
+                    Some(k) => println!("  -> SHIFTED: the guest's first byte is OUR byte {k}"),
+                    None => println!("  -> does not match our buffer at any offset in 0..16"),
+                }
+            }
             if !d.reads_log.is_empty() {
                 use std::collections::BTreeMap;
                 let per: BTreeMap<u32, u64> = BTreeMap::new();

@@ -6052,6 +6052,14 @@ pub struct Ata {
     /// reported "50 reads of ATA_DATA" when it had simply filled up, which is the same saturation
     /// trap the unmapped log once had.
     pub reads_log: BTreeMap<u32, u64>,
+    /// `(offset, byte)` for the first reads of the data window after the most recent IDENTIFY.
+    ///
+    /// The question this answers cannot be answered any other way: a guest that gets its IDENTIFY
+    /// six bytes out of step looks identical, from every other instrument, to one that got it
+    /// right — same command count, same byte total, same buffer. What differs is *which* byte came
+    /// back first, and nothing was recording that.
+    pub id_handover: Vec<(u32, u8)>,
+    id_watch: bool,
     /// Bytes actually handed over through the data register.
     pub bytes_read: u64,
     /// The controller's own interrupt-pending latch, reported in `IDE0_CFG`.
@@ -6286,6 +6294,8 @@ impl Ata {
             cfg_writes: Capped::new(512),
             cfg_writes_by_reg: BTreeMap::new(),
             reads_log: BTreeMap::new(),
+            id_handover: Vec::new(),
+            id_watch: false,
             bytes_read: 0,
             irq_pending: false,
             dma: [0; 0x10],
@@ -6492,6 +6502,9 @@ impl Ata {
                 // IDENTIFY DEVICE
                 self.buf = self.identify();
                 self.pos = 0;
+                // Watch the hand-over of THIS response; the last one issued is the one that matters.
+                self.id_handover.clear();
+                self.id_watch = true;
                 self.remaining = 0;
                 self.status = ATA_DRDY | ATA_DSC | ATA_DRQ;
                 self.irq_pending = true;
@@ -6606,6 +6619,9 @@ impl Ata {
             0x1e0..=0x1e3
                 if self.pos < self.buf.len() => {
                     let b = self.buf[self.pos];
+                    if self.id_watch && self.id_handover.len() < 24 {
+                        self.id_handover.push((off, b));
+                    }
                     self.pos += 1;
                     self.bytes_read += 1;
                     if self.pos == self.buf.len() {
