@@ -1547,6 +1547,30 @@ fn main() {
             // the sample below it is truncated. `Capped::census` is now the shared wording, and
             // every other saturating instrument in this report was taught to speak it.
             println!("\nata commands: {}", d.commands.census());
+            // The census FIRST, because the list under it is a sample and the question people
+            // actually ask — "did it ever issue X?" — cannot be answered from a sample.
+            if !d.cmd_census.is_empty() {
+                let by: Vec<String> = d
+                    .cmd_census
+                    .iter()
+                    .map(|(c, n)| {
+                        let name = match c {
+                            0x20 => " READ SECTORS",
+                            0x30 => " WRITE SECTORS",
+                            0xc8 => " READ DMA",
+                            0xca => " WRITE DMA",
+                            0xec => " IDENTIFY",
+                            0xe0 => " STANDBY IMMEDIATE",
+                            0xe7 => " FLUSH CACHE",
+                            0xef => " SET FEATURES",
+                            0xc6 => " SET MULTIPLE",
+                            _ => "",
+                        };
+                        format!("{c:#04x}{name} x{n}")
+                    })
+                    .collect();
+                println!("  by command (uncapped census): {}", by.join("  ·  "));
+            }
             for (i, (c, f, n, lba)) in d.commands.iter().enumerate() {
                 println!("  [{i:>3}] cmd {c:#04x}  features {f:#04x}  nsector {n:#04x}  lba {lba}");
             }

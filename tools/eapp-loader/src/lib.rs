@@ -5993,7 +5993,10 @@ pub struct Ata {
     /// This was the first instrument taught to announce its own saturation, and its report line is
     /// the wording every other one now copies.
     pub commands: Capped<(u8, u8, u8, u64)>,
-    /// Every opcode issued, with its count. See the note on `commands` for why this is separate.
+    /// `command byte -> count`, **uncapped**. The list above is a sample and says so; this is the
+    /// census. Without it "did the guest ever issue IDENTIFY?" is answerable only by grepping the
+    /// first 256 entries, which is how this project briefly published that a Linux kernel never
+    /// issues one — from a log that announces itself as a sample on the line above.
     pub cmd_census: BTreeMap<u8, u64>,
     /// Bitmask of the multiword / ultra DMA mode SET FEATURES last selected, for IDENTIFY words
     /// 63 and 88 to report back.

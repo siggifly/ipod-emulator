@@ -770,12 +770,29 @@ so there is no `/dev/hda2` for a `root=` to name even if one were supplied. And 
 `ext2`, `ext3`, `vfat` and `msdos` all compiled in — 21, 88, 2 and 43 string hits in the image — so
 it is not short of a filesystem either.
 
-**The uncapped ATA census is the finding: `cmd 0xec` appears exactly once in the whole run, and it
-is `ipodloader2`'s.** The kernel never issues IDENTIFY DEVICE at all, which is why its geometry is
-garbage rather than merely wrong — it is not reading a mis-shaped answer, it is reading no answer.
-Nor is it driving an address we do not model: the run reports **zero unmapped accesses**, and the
-image holds **no pool reference** to `0xc30001e0`, `0xc3000000` or `0xc0003000`, so its IDE base is
-computed rather than a literal and cannot be found by looking.
+> ~~**The uncapped ATA census is the finding: `cmd 0xec` appears exactly once in the whole run.** The
+> kernel never issues IDENTIFY DEVICE at all~~ — **wrong, and wrong in the way this project keeps
+> warning about.** That count came from grepping the command *list*, whose own heading says
+> `SAMPLE, NOT A CENSUS` on the line above it. There was an uncapped `cmd_census` in `Ata` the whole
+> time with **no printer**, so the honest number was collected and never shown. Printed, it reads:
+>
+> ```
+> ata commands: 3196  (log below shows the first 256 — SAMPLE, NOT A CENSUS)
+>   by command (uncapped census): 0x20 READ SECTORS x3190 · 0xe0 STANDBY IMMEDIATE x3 · 0xec IDENTIFY x3
+> ```
+>
+> **Three IDENTIFYs** — the loader's, and two more. The kernel does ask the drive who it is, and gets
+> an answer; what it does with that answer is the open question, not whether it asked.
+
+What is established: the run reports **zero unmapped accesses**, so the kernel is not driving an
+address we fail to model, and the image holds **no pool reference** to `0xc30001e0`, `0xc3000000` or
+`0xc0003000`, so its IDE base is computed rather than a literal.
+
+**And the root device is named in the kernel, not missing from it.** `root=/dev/hda3` sits at
+`0x12efa` as the compiled-in default command line — so `Please append a correct "root=" boot option`
+is the generic message for *a named device that could not be opened*, and what iPodLinux wants is the
+classic **third partition** with an ext2/ext3 filesystem. This drive has two. Fixing the partition
+read is necessary but not sufficient; a working iPodLinux drive also needs an `hda3` to mount.
 
 So this is the same family as the two bugs that turned out to be ours — a device the guest cannot
 get into a usable state — and **not** the content problem it was written up as. The next measurement
