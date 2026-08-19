@@ -800,6 +800,41 @@ is where the kernel's `ide` probe stops: its own `probe_for_drive` never reaches
 we own, and finding out what it drives instead is one `--watch-range` over the window it should be
 using once the base is known.
 
+### The patch was compensating for our test disk, and is deleted
+
+**The sharpest question asked of this work: why are we patching software that runs on real hardware?**
+The answer is that we were not fixing `ipodloader2`; we were papering over the drive we handed it.
+
+`vfs.c` handles partition types `0x00`, `0x83` and `0xB` — and `0x0C` falls to `default:` and is not
+counted, so `foundpartcount` reaches zero and it prints `No valid paritions found!`. Every loader
+disk in `_out/` is `0x0C`, because they descend from `ipod8g-retail.img`. **This project's own
+`make-disk` writes `0x0B`** — `ipsw.rs:674`, with a test asserting it — which is the type upstream
+expects.
+
+Built clean from `crozone/ipodloader2` at `a41ec49` with **no patch at all**, and pointed at a drive
+whose data partition is `0x0B`:
+
+```
+Detected WinPod MBR
+[0]: Bad iPod FW entry
+[1]: FAT
+FAT32 detected.
+…
+Load succeeded
+Jmp to 10000000
+```
+
+**3 209 ATA commands**, the kernel loaded and entered. `[0]: Bad iPod FW entry` is the inverted
+`mlc_strncmp` this file describes — `mlc_strncmp` really does return 0 on a match
+(`minilibc.c`), so the firmware partition really is rejected — and it is **cosmetic**: the loader
+boots from the FAT32 volume and never needed partition 0. A real defect, upstream's to fix, and not
+one that stops anything.
+
+So `tools/patches/ipodloader2-vfs.patch` is **deleted**. What it bought was a `0x0C` drive booting;
+what it cost was a fork of a guest, and a claim in this file that two upstream bugs were blocking us
+when one was cosmetic and the other was our fixture. **Nothing in this project now patches any
+operating system it runs.**
+
 ### The two guests are not asking about different chips — they are testing the same byte
 
 **Read out of Apple's own ROM at `0x9258`, which is better evidence than the comment that stood

@@ -285,15 +285,16 @@ machine at all — `script: 0 of 20 steps fired`. The click-wheel fix it illustr
 | ![](docs/media/ipod-24-ipodloader2.png) | ![](docs/media/ipod-26-ipodlinux-loaded.png) |
 
 It reads the drive, finds both partitions, walks the FAT32 volume looking for a kernel, and jumps to
-it. For a long time it did not: it printed `No valid paritions found!`, and **both reasons were bugs
-in its own source**, not in this emulator. It tests the firmware partition with
-`if (mlc_strncmp(magic, "]ih[", 4))` while `mlc_strncmp` returns zero on a match, so it accepts a
-partition only when the magic does *not* match; and it has no case for partition type `0x0C`, FAT32
-with LBA, which is what iTunes on Windows writes and what this project's own `make-disk` writes.
-`tools/patches/ipodloader2-vfs.patch` carries the fix.
+it — **unmodified, straight from upstream.** For a while it printed `No valid paritions found!` here
+and this project carried a patch for it, which was the wrong conclusion. `ipodloader2` handles
+partition type **`0x0B`** and not `0x0C`, and the drive it was being tested against was a `0x0C` one
+— while this project's own `make-disk` writes `0x0B`, the type upstream expects. The patch was
+compensating for the test fixture, not for a bug, and is deleted: on a `0x0B` drive the unmodified
+loader reaches **3 209 ATA commands**, prints `[1]: FAT` and `FAT32 detected`, and jumps to the
+kernel.
 
-With it, ATA commands go from **3 to 3 194**, and the loader reads `loader.cfg`, loads the kernel and
-jumps — the right-hand picture. **The kernel then executes**: the machine ends inside
+The loader reads its config, loads the kernel and jumps — the right-hand picture. **The kernel then
+executes**: the machine ends inside
 `ldmia sp, {r0-pc}^`, an exception return restoring user-mode registers, having taken interrupts.
 
 It stops on an address nothing here models — 8 385 336 reads of `0x64004000` from two program
