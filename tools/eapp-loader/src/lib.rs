@@ -1741,6 +1741,14 @@ impl Memory {
                     }
                     self.int_pending &= !(1 << IDE_IRQ);
                 }
+                // Draining one block of a multi-sector PIO read makes the next one available, and
+                // that is a completion like any other. Arming it here rather than in `Ata` keeps
+                // the same delay every other completion gets — the drive does not finish inside the
+                // instruction that asked. The latch itself is left alone, because the polling
+                // firmware reads it through this very path.
+                if self.ata.as_mut().is_some_and(|(_, d)| std::mem::take(&mut d.pio_block_ready)) {
+                    self.arm_ide_irq();
+                }
                 return v;
             }
         }
@@ -1925,6 +1933,7 @@ impl Memory {
                 // plausibly finished yet. The PIO read path in `read8_inner` is left alone: Apple's
                 // bootloader drives it by polling with interrupts masked, and nothing there races.
                 let latched = std::mem::replace(&mut dev.irq_pending, false);
+                dev.pio_block_ready = false; // `latched` is this same edge, from the command itself
                 Some((dev.dma_ready.take(), latched))
             }
             _ => None,
@@ -6058,6 +6067,15 @@ pub struct Ata {
     /// six bytes out of step looks identical, from every other instrument, to one that got it
     /// right — same command count, same byte total, same buffer. What differs is *which* byte came
     /// back first, and nothing was recording that.
+    /// A completion raised from inside a data-port READ, which the write path cannot see.
+    ///
+    /// ATA asserts INTRQ at the start of every data block of a PIO-in transfer, not only the first.
+    /// A multi-sector read loads its second and later sectors while the guest is *reading* the data
+    /// port, and this machine only ever armed the interrupt controller on a *write* to the ATA
+    /// window — so every block after the first completed silently. Apple's bootloader never noticed
+    /// because it polls the latch with interrupts masked; Linux waits on the interrupt, and reports
+    /// exactly what happened: `hda: lost interrupt`.
+    pub(crate) pio_block_ready: bool,
     /// What INITIALIZE DEVICE PARAMETERS last set, as (heads, sectors per track).
     current_geometry: Option<(u16, u16)>,
     pub id_handover: Vec<(u32, u8)>,
@@ -6292,6 +6310,7 @@ impl Ata {
             cmd_census: BTreeMap::new(),
             mwdma_selected: 0,
             udma_selected: 0,
+            pio_block_ready: false,
             current_geometry: None,
             cfg: [0; 0x100],
             cfg_writes: Capped::new(512),
@@ -6509,6 +6528,7 @@ impl Ata {
             self.pos = 0;
             self.status = ATA_DRDY | ATA_DSC | ATA_DRQ;
             self.irq_pending = true;
+            self.pio_block_ready = true;
             self.next_lba += 1;
         } else {
             // A read past the end of the image is a real error, and reporting it as one is what
@@ -6528,6 +6548,10 @@ impl Ata {
         // once published "LBA 22169 is never read" about a sector read at command #342. Whether the
         // firmware ever WRITES is exactly the kind of question a truncated sample answers wrongly
         // and confidently.
+        // Device 1 is absent: nothing latches the command, nothing completes, nothing interrupts.
+        if self.select & 0x10 != 0 {
+            return;
+        }
         *self.cmd_census.entry(cmd).or_default() += 1;
         self.error = 0;
         match cmd {
@@ -6618,6 +6642,13 @@ impl Ata {
                 self.status = ATA_DRDY | ATA_DSC;
                 self.irq_pending = true;
             }
+            // RECALIBRATE — obsolete since ATA-4 and still what Linux issues when it is trying to
+            // recover a drive after a timeout. Aborting it turns a recoverable stall into
+            // `DriveStatusError`, which is a worse report than the one the drive should have given.
+            0x10 => {
+                self.status = ATA_DRDY | ATA_DSC;
+                self.irq_pending = true;
+            }
             0xe7 | 0xea | 0xef | 0x00 => {
                 // SET FEATURES subcommand 0x03 is "set transfer mode", and the mode is in the
                 // sector-count register: bits 7:3 select the family, bits 2:0 the mode number.
@@ -6656,6 +6687,20 @@ impl Ata {
                 v |= 0x08;
             }
             return v;
+        }
+        // **There is one drive on this bus, and device 1 is not it.**
+        //
+        // A 5G iPod has a single ATA device. This model answered every taskfile register whatever
+        // the DEV bit said, so a driver that probes the slave found a second drive sharing one set
+        // of registers with the first — iPodLinux attached *two* disks of the same size and then
+        // interleaved their commands through one state machine, which reads as `hda: lost
+        // interrupt`. Apple's firmware and Rockbox never probe for a slave, which is why an empty
+        // bus position stayed convincing for so long.
+        //
+        // An absent device drives nothing onto the bus and the host reads zero — that all-zero
+        // status is exactly the signature `ide_probe` uses to conclude there is no drive there.
+        if self.select & 0x10 != 0 && off >= 0x1e0 {
+            return 0;
         }
         match off {
             // **The data register is SIXTEEN bits wide, sitting in a four-byte slot.**
