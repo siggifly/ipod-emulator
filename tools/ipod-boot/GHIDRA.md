@@ -1,16 +1,32 @@
 # Ghidra MCP — headless
 
-`ghidra-mcp-headless.sh` runs [bethington/ghidra-mcp](https://github.com/bethington/ghidra-mcp)
-v7.0.0 as a background daemon. **No GUI, no window.** 226 REST endpoints.
-
-`python -m tools.setup deploy` starts the *GUI* and hosts the endpoint inside it — killing the
-window kills the server. This script is the standalone path, taken from the project's own
-`docker/entrypoint.sh`.
+> **`ghidra-mcp-headless.sh` does not exist and is in no commit.** This file told you to run it for
+> long enough that a session went looking for it on disk. What replaced it is `ipod-boot ghidra`,
+> and what actually runs today is the **GUI-hosted** plugin — `ipod-boot ghidra serve` launches
+> `ghidraRun` on a project and opens a program inside it. The headless daemon's extra endpoints,
+> `/load_program` among them, are **not** available that way: they 404.
 
 ```sh
-./tools/ipod-boot/ghidra-mcp-headless.sh &          # ~20 s to initialise
-curl -s http://127.0.0.1:8089/health                 # NOT /mcp/health — that is the GUI plugin's
+ipod-boot ghidra serve --status     # metadata, or "up but NO PROGRAM LOADED", or nothing listening
+ipod-boot ghidra q fn 0x8054        # what is at an address
 ```
+
+## Importing a second program — the boot ROM, for instance
+
+`serve` takes `PROJECT=` and `PROGRAM=` overrides, so a ROM gets its own project. `analyzeHeadless`
+does the import, and **it needs `JAVA_HOME` set or it fails with `Unable to prompt user for JDK
+path, no TTY detected`** — the GUI finds a JDK by other means, so this bites only here:
+
+```sh
+export JAVA_HOME=/opt/homebrew/opt/openjdk@21
+/opt/homebrew/Cellar/ghidra/12.1.2/libexec/support/analyzeHeadless \
+    <resources>/derived/ghidra bootrom \
+    -import <resources>/roms/<nor>.bin \
+    -processor ARM:LE:32:v4t -loader BinaryLoader -loader-baseAddr 0x0
+```
+
+Base 0 because a cold boot maps the NOR there, so Ghidra's addresses match the emulator's — the
+coprocessor handshake at `0x8054` and the `PROC_ID` branch at `0x8738` are those addresses in both.
 
 ## Loading our images
 

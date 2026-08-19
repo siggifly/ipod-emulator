@@ -10,9 +10,20 @@ static reference, of type `DATA`, and reads as "unreachable" right up until you 
 
 | | |
 |---|---|
-| `serve.sh` | launch the headless server (no GUI). Listens on `127.0.0.1:8089` |
-| `bridge.sh` | the stdio MCP bridge — the stable path Claude Code registers against |
-| `q.sh` | query the REST API from a shell, no MCP client needed |
+**The three shell scripts this table used to list — `serve.sh`, `bridge.sh`, `q.sh` — no longer
+exist; they were rewritten into `arfi`-style subcommands and the table was not updated.** A document
+naming a file that is in no commit is the same defect class as a flag with no mechanism behind it,
+so it is spelled out rather than quietly corrected.
+
+| | |
+|---|---|
+| `ipod-boot ghidra serve [--status]` | open the project and check a program is actually loaded |
+| `ipod-boot ghidra bridge` | the stdio MCP bridge — what Claude Code registers against |
+| `ipod-boot ghidra q xref\|fn\|dec\|raw` | query from a shell, no MCP client needed |
+
+**`--status` is the one worth running first.** It distinguishes *nothing listening* from *listening
+with no program open*, and the second reads as success to everything else: `/list_functions`
+answers, the port is up, and every query returns nothing at all.
 
 ## Setup
 

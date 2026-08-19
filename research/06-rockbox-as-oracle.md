@@ -1007,6 +1007,34 @@ reading.
 > commands, which is far too few to have loaded `rockbox.ipod`, and that is now the whole of the
 > remaining question.
 >
+> ### Where it stops now: both cores inside the core-lock
+>
+> It is no longer the battery shutdown. The run ends with the CPU at **`0x00086300`** —
+>
+> ```
+> 00086300  cmp  r4, #0x0
+> 00086304  bne  0x00086374
+> 00086308  mov  r0, r7
+> 0008630c  bl   0x000845dc      ; ldrb r1, [0x60000000]  -- PROC_ID
+> ```
+>
+> — which is Rockbox's **corelock**, the CPU↔COP mutual exclusion, indexing a two-entry array by
+> the core id. And the coprocessor is in the same function: `pc 0x00086340`, parking and being woken
+> **182 times** at `0x0008632c`, with its last *new* code bucket at cop-instruction 54 895 out of
+> 240 620 — so the final 185 000 instructions are all ground it has already covered.
+>
+> **It is not our interleave.** Three quanta, same wall:
+>
+> | `--quantum` | ATA | non-black pixels |
+> |---|---|---|
+> | 1 | 113 | 0 |
+> | 16 | 113 | 0 |
+> | 1000 | 113 | 0 |
+>
+> That is worth having: the wake edge *was* a granularity bug and this is not one, so the whole
+> class is ruled out rather than suspected. Two cores are now genuinely running Rockbox's own
+> synchronisation primitive and one of them is not getting what it waits for.
+>
 > **One measurement toward it, taken the same day.** On a cold boot with `--second-core`, the
 > coprocessor ends 400 M instructions at **`pc 0x00000734`**, having run 291 612 061 of its own and
 > slept and woken four times. `0x734` is in **Apple's boot ROM**, not in Rockbox — so on the cold
