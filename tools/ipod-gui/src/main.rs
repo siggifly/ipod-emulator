@@ -1018,6 +1018,7 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         selftest_control: args.iter().any(|a| a == "--selftest-control"),
         shots: root.join("_out"),
         boot: get("--boot=").map(|v| emu::BootTarget::parse(&v)).unwrap_or_default(),
+        second_core: args.iter().any(|a| a == "--second-core"),
         presses: args
             .iter()
             .filter_map(|a| a.strip_prefix("--press="))

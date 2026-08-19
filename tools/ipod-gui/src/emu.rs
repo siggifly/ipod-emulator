@@ -138,6 +138,15 @@ pub struct Config {
     pub selftest_control: bool,
     /// Where screenshots go — the self-test's panel samples, and the window's `S` key.
     pub shots: PathBuf,
+    /// **Run the PP5021's second ARM core.**
+    ///
+    /// Off by default, and the default is a measurement decision rather than a doubt about the
+    /// feature: every number in `research/` was taken on a single-core machine, and turning this on
+    /// changes some of them — a retail cold boot goes from 102 ATA commands to 99, because the
+    /// coprocessor is now doing part of the work. RetailOS genuinely uses it (it parks and
+    /// dispatches to it twice during a boot, then runs 111 M instructions there), so with this on
+    /// the machine is *more* faithful and *less* comparable to what is already written down.
+    pub second_core: bool,
     /// What this machine boots. [`BootTarget::Os`] is the ordinary one.
     pub boot: BootTarget,
     /// `--press=BUTTON@SECONDS`, repeatable — press a button through the window's own input path,
@@ -747,6 +756,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // Without this the wheel's IRQ 40 fetched from an unmapped 0x18 and the machine reported
     // `Lost(24)` the instant a button was pressed. `ipod-boot flsh` never passes `--cold-boot`,
     // which is why the same image driven from the command line always worked.
+    m.mem.second_core = cfg.second_core;
     eapp_loader::map_hardware(&mut m, cfg.boot.is_os());
     // Hardware revision probe: boot reads 0x70000000, takes bits 16..23 and compares to 0x36.
     {
@@ -1456,6 +1466,12 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
             // addresses itself at 0x10000000. Everything else enters at 0, where the CPU fetches
             // out of reset.
             let pc = if cfg.boot.is_os() { 0 } else { 0x1000_0000 };
+            // The coprocessor comes out of reset running the same code and decides for itself, on
+            // `PROC_ID`, that it is not the CPU — Apple's bootloader branches on it at 0x8738 and
+            // parks it three instructions later.
+            if cfg.second_core {
+                m.cop.regs[15] = pc;
+            }
             m.call_with(pc, &[0, 0, 0, 0], SLICE)
         };
         let executed = m.executed as u64;
