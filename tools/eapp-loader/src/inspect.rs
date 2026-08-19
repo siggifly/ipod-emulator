@@ -301,7 +301,53 @@ pub fn drive_facts(path: &Path) -> Vec<Fact> {
     if let Some(f) = drive_family(path) {
         out.push(("Updater family", f.to_string()));
     }
+    if let Some(v) = volume_software(path) {
+        out.push(("On the volume", v));
+    }
     out
+}
+
+/// What alternative software, if any, is installed on the drive's **data volume**.
+///
+/// The firmware partition says what *boots*; this says what it will find. They are separate
+/// installs and either can be there without the other — Rockbox's bootloader in the firmware
+/// partition with no `.rockbox` on the volume is a real state, and it is the one that prints
+/// `Can't load rockbox.ipod: File not found`.
+///
+/// This is what makes a list of drives a list of *machines* rather than a list of filenames: an
+/// 8 GB image called `disk.img` says nothing, and "Rockbox 4.0" says everything.
+pub fn volume_software(path: &Path) -> Option<String> {
+    // Read-only, and failure is silence: a drive with no FAT32 volume yet is the ordinary state of
+    // one Apple's firmware has not booted on, not something to complain about.
+    let mut vol = crate::fat::Fat32::open_ro(path).ok()?;
+    let entries = vol.walk().ok()?;
+    let mut found = Vec::new();
+    // The version, when the file that carries it is there. `rockbox-info.txt` opens with
+    // `Target: ipodvideo` and carries `Version:` a few lines down.
+    if let Some(e) = entries.iter().find(|e| e.path.eq_ignore_ascii_case("/.rockbox/rockbox-info.txt")) {
+        let (first, size) = (e.first, e.size);
+        let version = vol
+            .read_file(first, size)
+            .ok()
+            .and_then(|b| String::from_utf8(b).ok())
+            .and_then(|t| {
+                t.lines()
+                    .find_map(|l| l.strip_prefix("Version:").map(|v| v.trim().to_string()))
+            });
+        found.push(match version {
+            Some(v) => format!("Rockbox {v}"),
+            None => "Rockbox".into(),
+        });
+    } else if entries.iter().any(|e| e.path.eq_ignore_ascii_case("/.rockbox")) {
+        found.push("Rockbox".into());
+    }
+    if entries.iter().any(|e| e.path.eq_ignore_ascii_case("/loader.cfg")) {
+        found.push("ipodloader2 menu".into());
+    }
+    if entries.iter().any(|e| e.path.eq_ignore_ascii_case("/boot/vmlinux")) {
+        found.push("a Linux kernel".into());
+    }
+    (!found.is_empty()).then(|| found.join(" · "))
 }
 
 /// What an Apple software bundle turned out to contain.

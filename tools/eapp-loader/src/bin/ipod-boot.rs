@@ -237,6 +237,33 @@ fn main() {
             }
         }
     }
+    // `ipod-boot facts FILE` — everything the window's "what's in it" page shows, in a terminal.
+    //
+    // The parse already happened; this is what it found. It exists because the facts were only
+    // reachable by clicking through a window, which makes them impossible to check in a test, in a
+    // shell, or in a report — and `volume_software` in particular is the difference between a list
+    // of filenames and a list of machines.
+    if name == "facts" {
+        let Some(p) = rest.first() else {
+            eprintln!("usage: ipod-boot facts FILE");
+            std::process::exit(2);
+        };
+        let p = Path::new(p);
+        let is_rom =
+            std::fs::metadata(p).map(|m| m.len()).unwrap_or(0) == eapp_loader::inspect::NOR_LEN;
+        let facts = if is_rom {
+            eapp_loader::inspect::rom_facts(p)
+        } else {
+            eapp_loader::inspect::drive_facts(p)
+        };
+        if facts.is_empty() {
+            println!("{}: nothing recognised", p.display());
+        }
+        for (k, v) in facts {
+            println!("{k:<18} {v}");
+        }
+        return;
+    }
     if name == "put-zip" {
         match put_zip(&rest) {
             Ok(()) => return,
@@ -302,6 +329,7 @@ ipod-boot — Apple's firmware, booted under the emulator
                                      install another operating system into a COPY of the drive's
                                      firmware partition, where Apple's own bootloader finds it.
                                      Never writes to SRC. This is what `ipodpatcher` does.
+  ipod-boot facts     FILE       what is in a boot ROM or a drive image, in one screen
   ipod-boot put-zip   DISK.img ARCHIVE.zip
                                      unpack an archive straight into the drive's FAT32 volume —
                                      a Rockbox release is exactly this. Modifies DISK.img.

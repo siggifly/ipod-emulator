@@ -245,6 +245,10 @@ const UI_HEADING: Color32 = Color32::from_rgb(0xB6, 0xBA, 0xC1);
 const UI_WARN: Color32 = Color32::from_rgb(0xE0, 0xA0, 0x40);
 
 /// WCAG relative luminance of an sRGB colour.
+/// Used by [`tests::every_text_colour_is_legible`] and by nothing that runs at run time — the
+/// palette is a set of constants, so the check belongs at build time. Marked rather than deleted:
+/// deleting it would delete the only thing that catches a colour nobody can read.
+#[cfg_attr(not(test), allow(dead_code))]
 fn luminance(c: Color32) -> f32 {
     let f = |v: u8| {
         let s = v as f32 / 255.0;
@@ -254,6 +258,7 @@ fn luminance(c: Color32) -> f32 {
 }
 
 /// WCAG contrast ratio between two colours, 1.0 (identical) to 21.0 (black on white).
+#[cfg_attr(not(test), allow(dead_code))]
 fn contrast(a: Color32, b: Color32) -> f32 {
     let (x, y) = (luminance(a), luminance(b));
     let (hi, lo) = if x > y { (x, y) } else { (y, x) };
@@ -2990,12 +2995,6 @@ impl App {
     /// **Plural, and it has to be**: the window wants two, it sorts them itself, and a dialog that
     /// takes one selection makes somebody open it twice for a job that is one job. Select both and
     /// press Open.
-    fn choose_files(&mut self) {
-        let exts = ["bin", "ipsw", "zip", "img", "dmg", "iso"];
-        let picked = pick_files("iPod boot ROM, software update, or drive image", &exts);
-        self.take(&picked);
-    }
-
     // ------------------------------------------------------------ settings
 
     /// Open the settings without touching the machine.
@@ -4070,17 +4069,27 @@ impl App {
                 ui.separator();
                 // **Apple's service diagnostics**, which on the real device is reached by holding
                 // SELECT+REW at power-on. So it is a power cycle into a different program in the
-                // boot ROM, not a mode — and the same button brings the iPod back.
+                // **An instrument, and only in debug mode.** `docs/ideas/run-any-os.md` argued
+                // against a boot picker before one existed, and it was right: entering an image
+                // directly means the machine's own bootloader never chose it, so any divergence
+                // afterwards is un-attributable between "the OS does this" and "we started it a
+                // way nothing starts it". The honest ways in are to **install** an operating
+                // system onto the drive, which the row on the setup screen now does, and to hold
+                // the **chord** at power-on for the boot ROM's own images, which research/07
+                // measures working.
                 //
-                // This replaces two latched chord buttons, `hold MENU+SELECT` (the hard reset) and
-                // `hold PLAY` (sleep). Both were reachable from the keyboard and from the wheel
-                // already, and neither did anything a person could see.
-                // **What this iPod boots.** Not modes of the emulator — programs this machine
-                // runs, each entered the way that program is entered. Changing it is a power
-                // cycle, because on the real device the chords that reach the boot ROM's own
-                // images are held at power-on.
+                // So this lives beside the readout and the framebuffer inspector as the window's
+                // `ipod-boot flsh`: a way to enter an image directly, for looking at it. It is
+                // still how diagnostics is reached today, because releasing the chord afterwards
+                // storms the interrupt controller — and when that is fixed this stops being how
+                // anybody reaches diagnostics either.
+                //
+                // It replaced two latched chord buttons, `hold MENU+SELECT` and `hold PLAY`. Both
+                // were reachable from the keyboard and the wheel already, and neither did anything
+                // a person could see.
                 let mut want = self.cfg.boot.clone();
                 let boots = self.boot_targets();
+                if self.settings.mode == Mode::Debug {
                 ui.label(egui::RichText::new("boots").color(UI_TEXT_DIM));
                 egui::ComboBox::from_id_salt("boot-target")
                     .selected_text(want.label())
@@ -4106,6 +4115,7 @@ impl App {
                             }
                         }
                     });
+                }
                 if want != self.cfg.boot {
                     self.down.clear();
                     self.touching = false;
