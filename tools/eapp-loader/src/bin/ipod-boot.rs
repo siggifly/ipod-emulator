@@ -270,7 +270,9 @@ ipod-boot — Apple's firmware, booted under the emulator
   ipod-boot retail        [flags…]   Apple's shipping 5G bootloader + the image it accepts.
                                      Every current number in research/ is measured on this one.
   ipod-boot warm          [flags…]   RetailOS entered directly at 0x10000000, handoff faked
-  ipod-boot flsh          [flags…]   one of the NOR's own images: IMG=diag|disk|scan|logo|vmcs
+  ipod-boot flsh          [flags…]   one of the NOR's own images, cut out of the configured dump
+                                     at run time: IMG=diag|disk|logo|vmcs (a prototype ROM also
+                                     carries `scan`; a retail one does not)
   ipod-boot rockbox       [flags…]   Rockbox as a source-available oracle
   ipod-boot flash-update  [flags…]   Apple's `aupd` updater, then the boot that proves it took
   ipod-boot from-idle     [flags…]   restore a cached 1.6 G snapshot: 3 s instead of 110 s
@@ -622,18 +624,49 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             Ok(Plan { trace, sources: vec![("NOR dump", flash.clone(), flash_from), ("drive", disk.clone(), disk_from)], runs: vec![a], cleanup: None })
         }
 
-        // trace BUDGET --osos=.../flsh/$IMG.bin --boot-osos --flash= --disk= --sysinfo
+        // trace BUDGET --osos=<IMG cut out of FLASH> --boot-osos --flash= --disk= --sysinfo
         //       --bcm --pmu --nor "$@"
+        //
+        // **The image comes out of the dump under test, every run.** It used to be read from
+        // `resources/derived/fw/flsh/$IMG.bin` — files extracted once, from a *prototype* ROM, and
+        // then handed to every `flsh` run whatever `FLASH=` pointed at. That is not a caching
+        // detail: the prototype's `diag` is a 200 472-byte factory build and the retail ROM's is a
+        // 97 832-byte service diagnostic, so the recipe was running one iPod's diagnostics against
+        // another iPod's boot ROM and reporting the result as a measurement of the configured
+        // machine. See `inspect::nor_images`.
         Recipe::Flsh => {
             let img = std::env::var("IMG").unwrap_or_else(|_| "diag".into());
             let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
             let (disk, disk_from) = resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
-            let osos = res.join(format!("derived/fw/flsh/{img}.bin"));
+            let osos = std::env::temp_dir()
+                .join(format!("ipod-flsh-{}-{img}.bin", std::process::id()));
             let budget = env_u64("BUDGET", 200_000_000);
             if !dry {
                 require(&flash, "NOR dump (FLASH=)")?;
                 require(&disk, "disk image (DISK=)")?;
-                require(&osos, "flash image (IMG=)")?;
+                let nor = std::fs::read(&flash).map_err(|e| format!("{}: {e}", flash.display()))?;
+                let bytes = eapp_loader::inspect::nor_image(&nor, &img).ok_or_else(|| {
+                    let have = eapp_loader::inspect::nor_images(&nor)
+                        .iter()
+                        .map(|e| e.tag.clone())
+                        .collect::<Vec<_>>();
+                    if have.is_empty() {
+                        format!("{} has no `flsh` image directory at all", flash.display())
+                    } else {
+                        format!(
+                            "{} carries no `{img}` image. It has: {}",
+                            flash.display(),
+                            have.join(" · ")
+                        )
+                    }
+                })?;
+                std::fs::write(&osos, &bytes)
+                    .map_err(|e| format!("{}: {e}", osos.display()))?;
+                println!(
+                    "  {img}: {} bytes cut out of {}",
+                    bytes.len(),
+                    flash.display()
+                );
             }
             let mut a = head(budget);
             a.push(opt("--osos=", &osos));
@@ -645,7 +678,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             a.push("--pmu".into());
             a.push("--nor".into());
             a.extend(user.iter().cloned());
-            Ok(Plan { trace, sources: vec![("NOR dump", flash.clone(), flash_from), ("drive", disk.clone(), disk_from)], runs: vec![a], cleanup: None })
+            Ok(Plan { trace, sources: vec![("NOR dump", flash.clone(), flash_from), ("drive", disk.clone(), disk_from)], runs: vec![a], cleanup: Some(osos) })
         }
 
         // trace BUDGET --osos=$RB/$IMG --boot-osos --flash= --disk= --sysinfo --bcm --pmu "$@"

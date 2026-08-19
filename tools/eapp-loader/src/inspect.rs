@@ -105,6 +105,31 @@ fn parse_entries(buf: &[u8], magic: &[u8; 4]) -> Vec<Entry> {
     out
 }
 
+/// Every self-contained image the NOR's `flsh` directory indexes.
+///
+/// The set is **not the same on every dump**, and that difference is load-bearing rather than
+/// trivia. The retail 5G ROM carries four — `disk`, `diag`, `logo`, `vmcs`. The prototype dump
+/// carries five, adding `scan`, and its `diag` is 200 472 bytes against the retail one's 97 832,
+/// because the two are *different programs*: the retail image is the service diagnostic anyone
+/// can reach from the boot key combination, and the prototype's is a factory build with an
+/// audio-test suite, an `M25 pin Test` and a twelve-hour SDRAM soak in it.
+///
+/// So an image extracted once into a directory and reused against whatever ROM is configured is
+/// not a shortcut, it is a different machine. Take the images from the dump under test.
+pub fn nor_images(nor: &[u8]) -> Vec<Entry> {
+    nor.get(NOR_DIRECTORY as usize..).map(|d| parse_entries(d, b"hslf")).unwrap_or_default()
+}
+
+/// One image's bytes, cut out of the NOR where its own directory record says they are.
+///
+/// `None` when this dump has no image by that name — which is the honest answer for `scan` on a
+/// retail ROM, and a better one than handing back somebody else's `scan`.
+pub fn nor_image(nor: &[u8], tag: &str) -> Option<Vec<u8>> {
+    let e = nor_images(nor).into_iter().find(|e| e.tag == tag)?;
+    let at = e.offset as usize;
+    nor.get(at..at.checked_add(e.len as usize)?).map(<[u8]>::to_vec)
+}
+
 fn read_at(path: &Path, at: u64, n: usize) -> std::io::Result<Vec<u8>> {
     let mut f = std::fs::File::open(path)?;
     f.seek(SeekFrom::Start(at))?;
@@ -1203,6 +1228,47 @@ mod tests {
         assert!(v.text().contains("disk"), "{v:?}");
         assert!(v.text().contains("diag"), "{v:?}");
         let _ = std::fs::remove_file(p);
+    }
+
+    /// The images come out of *this* dump, at the offsets *this* dump's directory gives, or not
+    /// at all.
+    ///
+    /// The bug this is written against did not look like a bug: `ipod-boot flsh` read the image
+    /// from a directory of files extracted once, so it ran happily and produced a full report. It
+    /// was running the prototype ROM's 200 472-byte factory `diag` against whatever boot ROM was
+    /// configured, and the retail ROM's own `diag` — a different program, 97 832 bytes — was never
+    /// executed by anything.
+    #[test]
+    fn an_image_is_cut_from_the_dump_it_was_asked_for() {
+        let mut rom = vec![0u8; NOR_LEN as usize];
+        rom[0..4].copy_from_slice(&0xea00_1ffeu32.to_le_bytes());
+        // Two images at known offsets, with bytes that say which is which.
+        rom[0x1000..0x1010].copy_from_slice(b"this is the diag");
+        rom[0x2000..0x2010].copy_from_slice(b"this is the disk");
+        let mut dir = entry(b"hslf", "diag", 0, 0x1000, 0x10, LOAD_ADDR_5G);
+        dir.extend(entry(b"hslf", "disk", 0, 0x2000, 0x10, LOAD_ADDR_5G));
+        let at = NOR_DIRECTORY as usize;
+        rom[at..at + dir.len()].copy_from_slice(&dir);
+
+        let names: Vec<String> = nor_images(&rom).iter().map(|e| e.tag.clone()).collect();
+        assert_eq!(names, ["diag", "disk"]);
+        assert_eq!(nor_image(&rom, "diag").as_deref(), Some(&b"this is the diag"[..]));
+        assert_eq!(nor_image(&rom, "disk").as_deref(), Some(&b"this is the disk"[..]));
+        // A retail ROM has no `scan`, and saying so is the point — the old path would have handed
+        // back a prototype's.
+        assert_eq!(nor_image(&rom, "scan"), None);
+    }
+
+    /// A record that points past the end of the file yields nothing rather than a panic or a
+    /// short image that would boot into rubbish.
+    #[test]
+    fn an_image_that_runs_off_the_end_is_refused() {
+        let mut rom = vec![0u8; NOR_LEN as usize];
+        let dir = entry(b"hslf", "diag", 0, 0xff000, 0x8000, LOAD_ADDR_5G);
+        let at = NOR_DIRECTORY as usize;
+        rom[at..at + dir.len()].copy_from_slice(&dir);
+        assert_eq!(nor_images(&rom).len(), 1, "the record parses");
+        assert_eq!(nor_image(&rom, "diag"), None, "and the bytes are refused");
     }
 
     /// The 2 MiB case is the one worth a sentence: it is somebody else's iPod, dumped correctly.

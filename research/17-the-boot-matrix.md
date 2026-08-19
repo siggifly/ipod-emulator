@@ -98,6 +98,12 @@ Searched for deliberately. What exists:
 
 **Keeping `0x000B0010` is defensible. Calling it measured is not.**
 
+> *Strengthened 2026-08-19.* A third occurrence, and the first in code that runs **on the iPod**:
+> Apple's `diag` image dispatches on the hardware version with exactly three cases —
+> `0x000B0005`, `0x000B0010`, `0x000B0011` — each with its own handler, at prototype `diag`
+> `0x10003c28`. See [research/07](07-the-flash-images.md). The value is Apple's, not a wiki's.
+> Which revision it names is still unmeasured, because no retail 5.5G NOR has been read.
+
 ## Two blockers found while testing the bootloaders
 
 **`install-os` refuses every drive `make-disk` builds**, and for a different image on each revision:

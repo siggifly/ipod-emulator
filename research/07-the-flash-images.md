@@ -44,6 +44,12 @@ Supplying bit 0 of `0xb0020000` clears the first gate and it advances to the sec
 `0xb0060000`. That is a **two-register handshake**, and the shape — a ready bit, a second status, a
 write port — is a UART.
 
+> *Superseded 2026-08-19 — see "What the device at `0xb0000000` actually looks like" at the foot of
+> this page. It is not a UART: it is two units of four registers each, with a bulk data FIFO, and a
+> 184 320-byte stream goes out through it at startup. Everything above is also measured on the
+> **prototype's** `diag`, which is a factory build; the retail ROM carries a different, smaller
+> program.*
+
 ### Which makes it less useful than it first looked
 
 The hope was that diagnostics would be Apple's own hardware test suite: same codebase family as
@@ -348,3 +354,129 @@ with `: "${VAR:=...}"` and `exec`'d the cold recipe. Plain shell assignment is n
 `exec` passed neither, and the wrapper **silently ran the prototype configuration it exists to
 avoid** — printing a plausible, entirely wrong 77-command run. Caught only by diffing its output
 against the manual invocation. A recipe is an instrument, and instruments get verified.
+
+---
+
+## The same failure again, in the recipe below it: `flsh` was running the prototype's images
+
+**Measured 2026-08-19.** The caution that closes the section above — *a recipe is an instrument, and
+instruments get verified* — applies to the recipe on this page, and it had not been.
+
+`ipod-boot flsh` read its image from `resources/derived/fw/flsh/$IMG.bin`: files extracted **once**,
+from the prototype dump, and then handed to every run whatever `FLASH=` pointed at. So the retail
+recipe ran the retail boot ROM with the *prototype's* diagnostics, reported it as a measurement of
+the configured machine, and never once executed the diagnostics that is actually in the retail ROM.
+
+It is not the same program. The two directories do not even hold the same set:
+
+| tag | prototype dump | retail dump |
+|---|---|---|
+| `disk` | 180 784 | 180 784 |
+| `diag` | **200 472** | **97 832** |
+| `scan` | 101 596 | **absent** |
+| `logo` | 9 700 | 9 700 |
+| `vmcs` | 101 728 | 96 384 |
+
+The prototype's `diag` is a **factory** build — `New Audio Test`, `Line In RecordM`, `M25 pin Test`,
+`VC02 self Test`, `SDRAM 12 Hours Test`, `GotoFA`. The retail one is the **service diagnostic** any
+owner can reach from the boot key combination, built `Sep 09 2006`, and it opens by printing its own
+banner:
+
+```
+iPod Diagnostics
+Diag %s %s
+SRV Diag Boot
+----------------------------
+Menu    : Manual Test
+Previous: Auto Test
+```
+
+with the menu tree under it: `AutoTest`, `Memory` → `SDRAM` / `Flash`, `Comms` → `Wheel` / `Display`
+/ `TVOUT`, `HardDrive` → `HDSpecs` / `HDSMARTData`, `Power` → `A2DTests` / `Sleep`, `SysCfg`.
+
+`inspect::nor_images` / `inspect::nor_image` now cut the image out of the dump under test on every
+run, and `IMG=scan` against a retail ROM says so instead of quietly substituting somebody else's:
+
+```
+$ IMG=scan ipod-boot flsh
+ipod-boot flsh: …retail_5g_MA146….bin carries no `scan` image. It has: disk · diag · logo · vmcs
+```
+
+## What the device at `0xb0000000` actually looks like
+
+The reading above — *"the shape is a UART"* — was a guess from two registers. With both `diag`
+images disassembled it is a **two-unit device with four registers each**, selected by address bits
+16–18, all halfword-wide. Unit 0 is based at `0xb0000000`, unit 1 at `0xb0040000`:
+
+| offset | role | how it is used |
+|---|---|---|
+| `+0x00000` | data FIFO | bulk read *and* bulk write, eight halfwords per status check |
+| `+0x10000` | a read whose result is discarded | drained once after the handshake |
+| `+0x20000` | command / address | bit 0 = accepts a command; a 32-bit command is written as two halfwords into this one address |
+| `+0x30000` | status | bit 1 = space to write · bit 4 = data available · bit 6 = ready · bit 7 = busy |
+
+The init (retail `0x1000e748`, prototype `0x1000c5fc`, byte-identical logic) writes the halfword
+sequence `a1 81 91 02 12 22 72 62` to unit 0's command register and `02 12 22 72 62` to unit 1's,
+then waits on bit 0 of both status ports.
+
+Its caller (retail `0x1000f558`, reached unconditionally from diag's startup at `0x100005fc`) is a
+**hardware reset with a long settle**: `0x70000030 = 0x98016460`, clear bit `0x200000` of
+`0x70000084`, clear bit `0x80` of `0x6000d008`, pulse two GPIO bits with **500 ms** between edges,
+enable bit `0x40000` of `0x60004124` — then the init, then a stream of **184 320 bytes** out of
+SDRAM `0x11000000` through the data port.
+
+Nothing else in Apple's software touches `0xb00x0000`: not RetailOS, not `disk`, not `scan`.
+Verified by searching each image for the literal and for the `mov rN,#0xb00x0000` immediate form.
+
+**What it is remains unknown, and it is the one gate between us and a drawn diagnostics screen.**
+Answering bit 0 unblocks the handshake; the run then advances register by register through the
+polls, and modelling the whole aperture as an unconnected bus that reads all-ones gets past it
+entirely — 1.4 M halfwords written into the void — after which diag spins down the drive
+(`STANDBY IMMEDIATE`) and sits in a delay loop having drawn nothing. So all-ones is *not* the
+device's behaviour either; something real is on the other end.
+
+### And `diag` does not draw through the co-processor
+
+The measurement that reframes the problem:
+
+| image | references `0x30000000` |
+|---|---|
+| `disk` (both dumps) | **yes** |
+| `scan` (prototype) | **yes** |
+| `diag` (**both** dumps) | **no** — not as a literal, not as an immediate |
+
+Apple's diagnostics contains no reference to the address Rockbox, RetailOS and disk mode all use for
+the BCM2722. Whatever draws the diagnostics menu, it is not that aperture — which makes the device
+at `0xb0000000` the leading candidate for it, on the strength of *what is left*, and that is
+inference rather than measurement.
+
+It also has a consequence for [research/03](03-rtxc-and-the-video-coprocessor.md) §10, which
+publishes a 320×240 frame of Apple's four-language *"Connect to your computer. Use iTunes to
+restore."* screen under the heading *"Apple's firmware rendering through Apple's video
+co-processor"* and attributes it to `diag`. **`diag` cannot have drawn it.** The message is disk
+mode's, `disk` does reference the co-processor, and §12 of that same note disassembles the halt it
+found at `0x400015b4` — an address in the NOR bootloader, not in an image loaded at `0x10000000`.
+The frame is real and the decode is right; the attribution is wrong.
+
+### Apple's diagnostics switches on `HwVr`, and `0x000B0010` is one of its three cases
+
+At prototype `diag` `0x10003c28`, three cases in a row, each reading the hardware version through a
+pointer and comparing a full word:
+
+```asm
+10003c28  sub  r12, r0, #0xb0000
+10003c2c  subs r12, r12, #0x5      ; 0x000B0005 -> bl 0x10016888
+10003c44  subs r12, r12, #0x10     ; 0x000B0010 -> bl 0x10015e74
+10003c60  subs r12, r12, #0x11     ; 0x000B0011 -> bl 0x100158b4
+```
+
+[research/17](17-the-boot-matrix.md) records `0x000B0010` as *published, uncited, never measured* —
+the 5.5G value this project carries on the strength of a wiki page and a comment. It is now also
+**a first-class case in Apple's own on-device code**, beside the 5G's `0x000B0005` and the
+prototype's `0x000B0011`, each with its own handler. That is a second independent occurrence in
+Apple software (the first being `CIpodDevice::GetDeviceType()` in iTunes), and it settles that the
+value is Apple-recognised.
+
+It still does not measure *which revision* it belongs to — no retail 5.5G NOR has been read. But the
+three-way split matches the three hardware revisions exactly, and the prototype is the one we can
+check: its own `HwVr` is `0x000B0011`, and it is the third case.
