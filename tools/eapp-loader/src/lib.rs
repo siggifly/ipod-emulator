@@ -6058,6 +6058,8 @@ pub struct Ata {
     /// six bytes out of step looks identical, from every other instrument, to one that got it
     /// right — same command count, same byte total, same buffer. What differs is *which* byte came
     /// back first, and nothing was recording that.
+    /// What INITIALIZE DEVICE PARAMETERS last set, as (heads, sectors per track).
+    current_geometry: Option<(u16, u16)>,
     pub id_handover: Vec<(u32, u8)>,
     id_watch: bool,
     /// Bytes actually handed over through the data register.
@@ -6290,6 +6292,7 @@ impl Ata {
             cmd_census: BTreeMap::new(),
             mwdma_selected: 0,
             udma_selected: 0,
+            current_geometry: None,
             cfg: [0; 0x100],
             cfg_writes: Capped::new(512),
             cfg_writes_by_reg: BTreeMap::new(),
@@ -6314,7 +6317,12 @@ impl Ata {
 
     /// The 512-byte IDENTIFY DEVICE response for this drive.
     fn identify(&self) -> Vec<u8> {
-        Ata::identify_sector(self.sectors, self.mwdma_selected, self.udma_selected)
+        Ata::identify_sector_with(
+            self.sectors,
+            self.mwdma_selected,
+            self.udma_selected,
+            self.current_geometry,
+        )
     }
 
     /// The 512-byte IDENTIFY DEVICE response. Only the fields a driver actually consults are
@@ -6324,6 +6332,16 @@ impl Ata {
     /// a struct that owns an open file cannot be asserted about without conjuring a disk. This is
     /// the first thing every driver reads and the last thing anyone thinks to check.
     pub fn identify_sector(sectors: u64, mwdma_selected: u8, udma_selected: u8) -> Vec<u8> {
+        Ata::identify_sector_with(sectors, mwdma_selected, udma_selected, None)
+    }
+
+    /// `current` is the geometry INITIALIZE DEVICE PARAMETERS last set, as (heads, sectors).
+    pub fn identify_sector_with(
+        sectors: u64,
+        mwdma_selected: u8,
+        udma_selected: u8,
+        current: Option<(u16, u16)>,
+    ) -> Vec<u8> {
         let mut w = [0u16; 256];
         w[0] = 0x0040; // non-removable, fixed device
         w[1] = 16383; // logical cylinders (legacy CHS, ignored once LBA is on)
@@ -6345,16 +6363,31 @@ impl Ata {
         // which is the MBR, which is why it cannot find a partition table on a disk whose partition
         // table three other firmwares here read without complaint.
         //
-        // The current geometry is the default geometry: nothing ever issues INITIALIZE DEVICE
-        // PARAMETERS to this drive, so there is no second answer to keep in step.
-        w[54] = w[1]; // current cylinders
-        w[55] = w[3]; // current heads
-        w[56] = w[6]; // current sectors per track
+        // **The current geometry is whatever INITIALIZE DEVICE PARAMETERS last set.**
+        //
+        // This used to read "nothing ever issues INITIALIZE DEVICE PARAMETERS to this drive, so
+        // there is no second answer to keep in step" — true only for as long as the one firmware
+        // that sends it could not get far enough to send it. iPodLinux issues `0x91` as soon as it
+        // can read its own IDENTIFY, and a drive that answers the command and then reports the old
+        // geometry back is contradicting itself.
+        // With no such command issued the current geometry IS the default one, cylinder count
+        // included — 16383 is the legacy ceiling word 1 reports, not a figure derived from capacity.
+        let (cur_heads, cur_sectors) = current.unwrap_or((w[3], w[6]));
+        // Once the host has chosen heads and sectors, cylinders follow from them: the drive divides
+        // its capacity by the translation it was given. Keeping the default cylinder count against
+        // host-chosen heads and sectors would describe a disk of a different size.
+        let cur_cyls = match current {
+            None => w[1],
+            Some(_) => (sectors / (cur_heads.max(1) as u64 * cur_sectors.max(1) as u64)).min(65535) as u16,
+        };
+        w[54] = cur_cyls; // current cylinders
+        w[55] = cur_heads; // current heads
+        w[56] = cur_sectors; // current sectors per track
         // Current capacity in sectors, and it is NOT the disk's size: CHS addressing tops out at
         // 16383*16*63, so a drive larger than that reports the ceiling here and the true figure in
         // words 60/61. Reporting the LBA size in a CHS field is how you get a geometry that
         // multiplies out to more sectors than the heads/sectors fields can reach.
-        let chs_capacity = w[1] as u32 * w[3] as u32 * w[6] as u32;
+        let chs_capacity = w[54] as u32 * w[55] as u32 * w[56] as u32;
         w[57] = (chs_capacity & 0xffff) as u16;
         w[58] = (chs_capacity >> 16) as u16;
         w[60] = (sectors & 0xffff) as u16; // LBA28 capacity, low
@@ -6576,7 +6609,16 @@ impl Ata {
                     self.irq_pending = true; // same as WRITE DMA above — an abort still interrupts
                 }
             }
-            0xe7 | 0xea | 0x91 | 0xef | 0x00 => {
+            // INITIALIZE DEVICE PARAMETERS. The host picks a CHS translation: heads come from
+            // the low nibble of the drive/head register as a zero-based count, sectors per track
+            // from the sector-count register. Accepting it and then reporting the old geometry in
+            // IDENTIFY is a drive disagreeing with itself, so the answer moves with the command.
+            0x91 => {
+                self.current_geometry = Some(((self.select & 0x0f) as u16 + 1, self.nsector as u16));
+                self.status = ATA_DRDY | ATA_DSC;
+                self.irq_pending = true;
+            }
+            0xe7 | 0xea | 0xef | 0x00 => {
                 // SET FEATURES subcommand 0x03 is "set transfer mode", and the mode is in the
                 // sector-count register: bits 7:3 select the family, bits 2:0 the mode number.
                 // Remembering it is what lets IDENTIFY report back which mode is actually in

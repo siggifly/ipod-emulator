@@ -1675,3 +1675,54 @@ fn a_32_bit_read_of_the_data_register_yields_one_ata_word() {
     );
     assert_eq!(got, want, "the whole IDENTIFY response, not every second word of it");
 }
+
+/// **A drive that accepts INITIALIZE DEVICE PARAMETERS has to answer with the geometry it accepted.**
+///
+/// `0x91` was lumped in with the commands we succeed at silently, under a comment claiming nothing
+/// ever sends it. That was true only while the one firmware that sends it — iPodLinux — could not
+/// read its own IDENTIFY well enough to get there. Now it does, and a drive that acknowledges the
+/// host's translation and then reports the old one back is contradicting itself.
+#[test]
+fn initialize_device_parameters_moves_the_current_geometry() {
+    use arm7tdmi::Bus;
+    let dir = std::env::temp_dir().join("ipod-emu-ata-initdev");
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    let img = dir.join("disk.img");
+    std::fs::write(&img, vec![0u8; 512 * 2048]).expect("write image");
+
+    let app = EApp::parse(synth_eapp()).expect("parse");
+    let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
+    eapp_loader::map_hardware(&mut m, false);
+    let drive = eapp_loader::Ata::open(&img, false).expect("open image");
+    let sectors = drive.sectors;
+    m.mem.ata = Some((0xc300_0000, drive));
+
+    let word = |m: &mut Machine, n: u32| -> u16 {
+        m.mem.write8(0xc300_01fc, 0xec);
+        let mut last = 0;
+        for i in 0..=n {
+            last = m.mem.read32(0xc300_01e0) as u16;
+            let _ = i;
+        }
+        last
+    };
+
+    // Before the command: the current geometry is the default one, cylinders included.
+    assert_eq!(word(&mut m, 54), word(&mut m, 1), "default current cylinders");
+    assert_eq!(word(&mut m, 55), 16, "default current heads");
+    assert_eq!(word(&mut m, 56), 63, "default current sectors");
+
+    // Heads are a zero-based count in the low nibble of the drive/head register; sectors per track
+    // come from the sector-count register.
+    m.mem.write8(0xc300_01f8, 0xa0 | 7); // 8 heads
+    m.mem.write8(0xc300_01e8, 32); // 32 sectors per track
+    m.mem.write8(0xc300_01fc, 0x91);
+
+    assert_eq!(word(&mut m, 55), 8, "the heads the host chose");
+    assert_eq!(word(&mut m, 56), 32, "the sectors the host chose");
+    assert_eq!(
+        word(&mut m, 54) as u64,
+        sectors / (8 * 32),
+        "and cylinders follow from them, or the drive describes a disk of another size"
+    );
+}
