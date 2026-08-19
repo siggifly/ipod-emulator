@@ -249,6 +249,45 @@ films' 72 M/s is the CPU's rate and makes a rally unwatchable, because at `--clo
 
 **Still open, and small:** `Parachute`, `Music Quiz` and `Solitaire` have never been launched.
 
+## 0a — ~~iPodLinux cannot read its partition table~~ · **SETTLED 2026-08-20 — our IDE data register was 32 bits wide and should be 16**
+
+**The whole iPodLinux blocker was one line of ours.** Every register in the PP502x IDE block is four
+bytes apart, so a 32-bit access to `IDE_BASE+0x1e0` touches four byte lanes — but the register under
+it is **sixteen bits**, and lanes 2 and 3 are its empty upper half. We served them as more sector
+data, so a 32-bit read consumed two ATA words instead of one.
+
+Only iPodLinux ever noticed. Its identify path reads the port with 32-bit loads and keeps the low
+halfword — correct for a 16-bit register — so it kept our words 0, 2, 4, 6 … and dropped every other
+one. `struct hd_driveid` then read `cyls` out of our word 2 and `heads` out of our word 6, and a
+drive reporting 16 heads was diagnosed as having 63. Rockbox declares the port `unsigned short` and
+Apple's firmware moves bulk data by DMA; **measured, both read lanes 0x1e0/0x1e1 only and never touch
+0x1e2/0x1e3**, which is why the fix cannot move them — the branch is unreachable for them.
+
+Before → after, `ipod-boot loader`:
+
+| | before | after |
+|---|---|---|
+| `INVALID GEOMETRY: 63 PHYSICAL HEADS?` | yes | **gone** |
+| `end_request: I/O error` on sectors 0/2/4/6 | 8 | **0** |
+| `unable to read partition table` | yes | **gone** |
+| reported drive size | — | **8590 MB**, correct |
+| `0x91` INITIALIZE DEVICE PARAMETERS | never sent | **sent, and now modelled** |
+| furthest line | `Kernel panic` | **`Partition check: /dev/hda`** |
+
+**The arithmetic was in every log for weeks.** iPodLinux does 256 32-bit reads per IDENTIFY: one
+word each is 512 bytes, exactly one sector; two words each is 1024, twice what it asked for. And the
+lane census printed the asymmetry in one glance — `+0x1e0` and `+0x1e1` at 820 736, `+0x1e2` and
+`+0x1e3` at 512. Reading it required nothing but noticing that two of four byte lanes were 1600×
+colder than the others.
+
+**R4 applies to this in full**: the machine now gets further with this firmware than it ever has, so
+every "iPodLinux never…" in [research/16](research/16-the-third-bootloader.md) and
+[research/17](research/17-the-boot-matrix.md) is a claim measured on a machine that no longer exists.
+Two are already corrected there; the rest have not been re-run.
+
+**Still open:** whether it mounts a root filesystem. `loader.cfg` on this image carries no `root=`
+at all, which is a separate and non-emulator problem — see research/16.
+
 ## 0b — ~~The retail fingerprint moved to 102 and nobody knows why~~ · **SETTLED 2026-08-18 — the disk had been written to**
 
 **Not a regression, and not the code.** On a genuinely pristine disk the fingerprint is:
