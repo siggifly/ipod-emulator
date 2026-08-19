@@ -1335,3 +1335,76 @@ the second core on, a cold boot resets six times and the COP ends in the vector 
 stops issuing ATA commands entirely. Apple's bootloader has its own `PROC_ID` branch and this
 project has never disassembled it. Rockbox's COP path is open source and was read; Apple's is not,
 and inventing it is exactly what this note exists to avoid.
+
+### Apple's own coprocessor handshake, disassembled
+
+**The second core was half-guessed until this was read.** Apple's bootloader does branch on
+`PROC_ID`, at file offset `0x8738` in the retail NOR — found by scanning for `cmp rN, #0x55` rather
+than for the address, because the address is built with `mov` rather than loaded from a pool:
+
+```asm
+00008738  mov  r0, #0x60000000      ; PROC_ID
+0000873c  ldr  r1, [r0, #0x0]       ; a WORD read, masked — not `ldrb`
+00008740  and  r1, r1, #0xff
+00008744  cmp  r1, #0x55
+00008748  bne  0x00008054           ; not the CPU: the coprocessor's path
+```
+
+and the coprocessor's path is seven instructions:
+
+```asm
+00008054  ldr  r4, =0x60007004      ; COP_CTRL
+00008058  mov  r3, #0x80000000      ; PROC_SLEEP
+0000805c  str  r3, [r4, #0x0]       ; park myself
+00008060  nop
+00008064  nop
+00008068  ldr  r0, =0x40000050      ; on wake, take my entry point from IRAM
+0000806c  ldr  pc, [r0, #0x0]
+```
+
+So **both cores run from the reset vector**, the COP parks itself three instructions after the
+branch, and when the CPU wakes it, it jumps to whatever address the CPU has left at **`0x40000050`**.
+That is the mechanism, and none of it had to be guessed.
+
+**It also found a real bug in this emulator, which the guess had hidden.** Apple reads `PROC_ID`
+with `ldr` and masks; Rockbox reads it with `ldrb`. The hook answering it lived only on the byte
+path — and `Memory::read32` has a fast path that never reaches `read8`. So the coprocessor read
+`0x55`, concluded it was the CPU, and ran Apple's bootloader concurrently with the real one.
+
+That is exactly what the first cold-boot attempt looked like from outside: **six `Running 'osos'`
+lines in one boot** and the CPU issuing no ATA commands at all. `Memory::core_register` now answers
+both registers at both widths, and the same cold boot is a single clean boot:
+
+```
+Retail mode
+Running 'osos' 0 from 0x10000000
+second core: 111 501 639 instructions, pc 0x4001d8f0, awake — slept 2x, woken 2x
+ata commands: 99            (102 single-core)
+```
+
+**Slept twice, woken twice** is the number that matters: not a wake storm from a mask we got wrong,
+but RetailOS parking and dispatching to a coprocessor deliberately, twice, and running 111 M
+instructions of real work on it. **RetailOS uses the second core, and now it has one.**
+
+### Doom runs, and stops on a file rather than a feature
+
+With the coprocessor, Rockbox's Doom gets past the core-lock and starts:
+
+```
+Z_Init: Init zone memory allocation daemon...
+Z_Init: Allocated 61254kb zone memory.
+M_LoadDefaults: Load system defaults.
+              Missing Base WAD!
+```
+
+That is not an emulator limit. `rockdoom.c:294` needs `/.rockbox/doom/rockdoom.wad` beside the game
+WAD, and `fileexists` there returns **0 on success**, so a missing file makes `Dbuild_base` return 0
+and the caller splash. Our drive has `doomf.wad`, which *is* one of the seven the plugin accepts —
+it is Freedoom, `wads_builtin[4]`. Only the base WAD is absent, and it is a prebuilt asset rather
+than something the source tree generates: the URL in `i_video.c`'s comment
+(`alamode.mines.edu/~kkurbjun/rockdoom.wad`) is long dead and `download.rockbox.org/useful_files/`
+answers 404.
+
+So Doom is blocked on **content this project does not have**, having been blocked on a missing
+processor an hour earlier. Those are very different kinds of blocked, and the difference is the
+whole point of writing it down.

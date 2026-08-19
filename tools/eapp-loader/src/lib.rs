@@ -712,6 +712,12 @@ pub struct Memory {
     /// Instructions each core runs before the other gets a turn. See [`Machine::QUANTUM`] — this
     /// is a knob so the choice can be tested rather than believed.
     pub quantum: usize,
+    /// How often the coprocessor has parked itself and been woken. **Counted because "the COP ran
+    /// N instructions" says nothing on its own** — a core that sleeps once and is woken once is a
+    /// different machine from one being woken thousands of times by an interrupt mask we got wrong,
+    /// and both produce a large N.
+    pub cop_sleeps: u64,
+    pub cop_wakes: u64,
     /// Which core is currently executing, so `PROC_ID` can answer it.
     ///
     /// Set by the scheduler around each core's quantum. Defaults to the CPU, which is what every
@@ -1454,6 +1460,27 @@ impl Memory {
     }
 }
 
+impl Memory {
+    /// The two registers whose value belongs to a *core* rather than to memory, as a whole word.
+    ///
+    /// **Both are read as words by the firmware that matters, and `read32` has a fast path that
+    /// never reaches `read8`.** Apple's bootloader reads `PROC_ID` with `ldr` + `and #0xff` at
+    /// `0x873c`, and Rockbox's `crt0-pp.S` polls `COP_STATUS` with `ldr`. A hook that lived only on
+    /// the byte path was therefore invisible to both: the coprocessor read `0x55`, decided it was
+    /// the CPU, and ran Apple's bootloader concurrently with the real one — which is what six
+    /// resets in a cold boot looked like from the outside.
+    pub(crate) fn core_register(&self, addr: u32) -> Option<u32> {
+        if addr == PROC_ID && self.asking == Core::Cop {
+            return Some(Core::Cop.proc_id() as u32);
+        }
+        if self.second_core && addr == Core::Cop.ctrl() {
+            return Some(if self.cop_asleep { 0x8000_0000 } else { 0 });
+        }
+        None
+    }
+
+}
+
 impl Bus for Memory {
     /// A 32-bit load resolved once instead of four times.
     ///
@@ -1467,6 +1494,9 @@ impl Bus for Memory {
     /// ever produced. The saving here is address resolution, not accounting.
     fn read32(&mut self, addr: u32) -> u32 {
         let a = addr & !3;
+        if let Some(v) = self.core_register(a) {
+            return v;
+        }
         if let Some((idx, off)) = self.fast_region(a, false) {
             // `count` is a no-op unless something asked for accounting, so hoist that test out of
             // the four calls rather than making them and returning immediately from each.
@@ -1513,7 +1543,11 @@ impl Bus for Memory {
         // polls the same address for the sleep bit to come back, which is why a seeded value could
         // never work — the code that waits for it is the code that just cleared it.
         if self.second_core && addr & !3 == Core::Cop.ctrl() {
-            self.cop_asleep = val & 0x8000_0000 != 0;
+            let now = val & 0x8000_0000 != 0;
+            if now != self.cop_asleep {
+                if now { self.cop_sleeps += 1 } else { self.cop_wakes += 1 }
+            }
+            self.cop_asleep = now;
         }
         let a = addr & !3;
         // The mailbox strobes must not take the fast path: it copies straight into the region and
@@ -1600,18 +1634,10 @@ impl Memory {
         // `map_hardware` still seeds `0x55` at this address for the single-core case; this
         // overrides it only while the COP is the one executing, so a machine that never wakes the
         // second core reads exactly what it always did.
-        if addr == PROC_ID && self.asking == Core::Cop {
-            return Core::Cop.proc_id();
-        }
-        // `COP_STATUS` and `COP_CTL` are the same address. With a real second core its sleep bit is
-        // state rather than the fixed answer ledger #7 installs, so it is served here and the
-        // override is not installed at all — see `map_hardware`.
-        if self.second_core {
-            let off = addr.wrapping_sub(Core::Cop.ctrl());
-            if off < 4 {
-                let word: u32 = if self.cop_asleep { 0x8000_0000 } else { 0 };
-                return (word >> (off * 8)) as u8;
-            }
+        // The same two registers on the byte path — Rockbox reads `PROC_ID` with `ldrb`, Apple with
+        // `ldr`, so both widths have to agree. See `core_register`.
+        if let Some(word) = self.core_register(addr & !3) {
+            return (word >> ((addr & 3) * 8)) as u8;
         }
         // Ahead of `locate`, or the zeroed MMIO region would answer first and the clock would
         // still read as stopped.
@@ -2528,6 +2554,8 @@ impl Machine {
             second_core: false,
             cop_asleep: false,
             quantum: Machine::QUANTUM,
+            cop_sleeps: 0,
+            cop_wakes: 0,
             asking: Core::Cpu,
             regs_at: None,
             regs_seen: Vec::new(),
@@ -3523,7 +3551,10 @@ impl Machine {
             if pending & cop_enabled != 0 || pending_hi & cop_enabled_hi != 0 {
                 // A sleeping core wakes on an interrupt — that is what `PROC_SLEEP` means, and it
                 // is the whole mechanism by which the CPU hands it work.
-                self.mem.cop_asleep = false;
+                if self.mem.cop_asleep {
+                    self.mem.cop_asleep = false;
+                    self.mem.cop_wakes += 1;
+                }
                 self.cop.irq();
             }
         }

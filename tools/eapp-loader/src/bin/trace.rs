@@ -1121,10 +1121,12 @@ fn main() {
         // other's, because `executed` is the fingerprint every recipe here is compared on.
         if m.mem.second_core {
             println!(
-                "  second core: {} instructions, pc {:#010x}, {}",
+                "  second core: {} instructions, pc {:#010x}, {} — slept {}x, woken {}x",
                 m.cop_executed,
                 m.cop.regs[15],
-                if m.mem.cop_asleep { "asleep" } else { "awake" }
+                if m.mem.cop_asleep { "asleep" } else { "awake" },
+                m.mem.cop_sleeps,
+                m.mem.cop_wakes
             );
         }
         // The drive's line specifically. "Interrupts are being taken" is a statement about the
