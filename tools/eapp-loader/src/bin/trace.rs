@@ -543,7 +543,7 @@ fn main() {
         // stops being a hole. **The generation is inferred from Apple's own comparison, not from a
         // datasheet**: the ROM's name table at `0x10ae4` lists `PP5020`, `PP5022` and `PP5026` and
         // no `PP5021`, and its bootloader tests for `'6'`.
-        for (i, b) in 0x3236_432Du32.to_le_bytes().iter().enumerate() {  // '2','6','C','-'
+        for (i, b) in 0x3232_432Du32.to_le_bytes().iter().enumerate() {  // PROBE
             m.mem.write8(0x7000_0000 + i as u32, *b);
         }
         for (i, b) in 0x5050_3530u32.to_le_bytes().iter().enumerate() {  // 'P','P','5','0'

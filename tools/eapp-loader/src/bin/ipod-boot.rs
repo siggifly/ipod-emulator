@@ -893,11 +893,11 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         // - `--osos-from-disk` — the loader is *appended after* RetailOS in the same `osos` image,
         //   at entry offset `0x735a00`. Read the image without honouring that and you boot the OS
         //   sitting behind the loader instead of the loader.
-        // - `--rdval=0x70000000=0x3232432D` — `ipod_is_pp5022()` is
-        //   `(inl(0x70000000) << 8) >> 24 == '2'` (`ipodhw.c:27`), so it reads byte 2 of `PP_VER1`.
-        //   The value spells `-C22`, bytes 4..8 of `PP5022C-`. **Still a supplied value** — sourced
-        //   from Rockbox's `debug-pp.c` decoding, not measured off a 5.5G, and it cannot go in a
-        //   cold boot because Apple's bootloader reads the same register 23 times and hangs on it.
+        // - ~~`--rdval=0x70000000=0x3232432D`~~ **deleted 2026-08-20.** The machine now reports
+        //   `PP5022C-` at `PP_VER1`/`PP_VER2` for everybody, so `ipod_is_pp5022()` gets a true
+        //   answer with nothing supplied. Apple's bootloader takes the same path and still reaches
+        //   599 ATA commands, because the thing that used to stop it — a USB clock it starts through
+        //   `USB_BASE + 0x140` — is modelled now instead of avoided.
         // - `--sysinfo` — and this is the one whose absence produces the 1G symptom. With the chip
         //   identified, `ipod_set_sysinfo` dereferences the **PP5022** pointer at `0x4001ff1c`; with
         //   no `IsyS` block there, `ipod.hw_rev` stays 0, `ipod.hw_ver` is 0, and every register
@@ -920,7 +920,6 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             a.push("--boot-osos".into());
             a.push(opt("--flash=", &flash));
             a.push("--sysinfo".into());
-            a.push("--rdval=0x70000000=0x3232432D".into());
             a.push("--bcm".into());
             a.push("--pmu".into());
             a.extend(user.iter().cloned());

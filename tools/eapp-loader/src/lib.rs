@@ -1042,6 +1042,11 @@ impl Memory {
             || self.clickwheel.as_ref().is_some_and(|w| hits(w.base + ClickWheel::CTRL, ClickWheel::WINDOW - ClickWheel::CTRL))
             || self.mmap_base.is_some_and(|b| hits(b, 0x40))
             || self.xmb.as_ref().is_some_and(|x| hits(x.base, 0x40))
+            // The USB controller's clock/reset register at `+0x140` filters the bit the firmware
+            // polls, and a filter the fast path never consults is a filter that does not exist.
+            // **Fifth time this list has been the bug** — `read_or_masks`, `--watch-range`,
+            // `--input-regs`, the part-identity words, and now this.
+            || hits(0xc500_0000, 0x1000)
             // Only while the chip is answering something other than its own bytes. The NOR is a
             // megabyte the CPU fetches instructions out of at address 0, so disqualifying its pages
             // unconditionally would take the whole cold boot off the fast path to model a handful
@@ -2093,6 +2098,15 @@ impl Memory {
             let idx = self.locate_idx(addr);
             self.note_write(addr, val as u32, idx);
         }
+        // **`USB_BASE + 0x140` bit 1 is a self-clearing reset.** The firmware writes `2` and then
+        // polls at `0x400011e8` — `ldr / tst #2 / bne` — waiting for it to go away, so a register
+        // that keeps the bit spins the boot for ever. Filtered rather than overridden on the read,
+        // for the same reason the memory-bus bits are: the state stays in the region and a snapshot
+        // carries it without knowing this device exists.
+        // Captured BEFORE the filter below eats the bit, because the reset is also what starts the
+        // clock: the firmware writes 2, waits for the bit to clear, then waits for clock-ready.
+        let usb_reset = addr == 0xc500_0140 && val & 0x02 != 0;
+        let val = if addr == 0xc500_0140 { val & !0x02 } else { val };
         // The external memory bus filters what it keeps: a ready bit the firmware cannot clear, and
         // a completion bit that follows the command bit written beside it.
         let val = match self.xmb.as_ref().map(|x| x.owns(addr)) {
@@ -2110,7 +2124,25 @@ impl Memory {
         let usb = match self.xmb.as_mut() {
             Some(x) => x.usb_clock(addr, val),
             None => None,
-        };
+        }
+        // **The USB controller's own enable, at `USB_BASE + 0x140`.**
+        //
+        // `usb_clock` above watches `DEV_INIT2`, which is how the firmware turns this clock on when
+        // it believes it is on a PP5021-class part. On the PP5022 path it does not touch that
+        // register at all — measured: `0x70000020` is written once, with **zero** — and instead
+        // writes `2` here and then spins at `0x400038cc` on bit 7 of `0x70000028`, which is the same
+        // ready bit `usb_clock` raises. Two ways to start one clock; we modelled one of them, so the
+        // other path waited for ever and this project reported the chip as something else to avoid
+        // walking down it.
+        //
+        // `USB_BASE` is `0xc5000000` — Rockbox's `pp5020.h:580`. The value written is not decoded
+        // beyond "non-zero", because the firmware only ever writes `2` and inventing a meaning for
+        // the other bits would be a guess with nothing behind it.
+        .or_else(|| {
+            let usb_base = 0xc500_0000u32;
+            let _ = usb_base;
+            usb_reset.then_some((0x7000_0000 + Xmb::USB_STATUS, Xmb::USB_CLOCK_READY))
+        });
         if let Some((at, bit)) = usb {
             if let Some((buf, i)) = self.locate_write(at) {
                 buf[i] |= bit;
@@ -4364,8 +4396,8 @@ impl Xmb {
     const DEV_INIT2_HI: u32 = 0x23;
     const INIT_USB_HI: u8 = 0x80;
     /// `+0x28`, whose bit 7 the USB clock reports itself ready in.
-    const USB_STATUS: u32 = 0x28;
-    const USB_CLOCK_READY: u8 = 0x80;
+    pub const USB_STATUS: u32 = 0x28;
+    pub const USB_CLOCK_READY: u8 = 0x80;
 
     /// The USB clock reporting ready, once something has switched it on.
     ///
@@ -7739,6 +7771,11 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
         ("mmio-7", 0x7000_0000, 0x0010_0000),
         ("mmio-6", 0x6000_0000, 0x0010_0000),
         ("mmio-c", 0xc000_0000, 0x0010_0000),
+        // The USB controller — `USB_BASE` in Rockbox's `pp5020.h:580`. Backing store only; the one
+        // register with behaviour is `+0x140`, the clock enable, handled in the write path. Mapped
+        // because an unmapped write is a write that never happened, and Apple's bootloader starts
+        // its USB clock through here on the PP5022 path.
+        ("usb", 0xc500_0000, 0x0001_0000),
         // The ATA controller. Rockbox `pp5020.h`: `IDE_BASE 0xc3000000`. This sat *outside* the
         // `mmio-c` region above, which covers only 0xc0000000..0xc00fffff — so every disk access
         // the firmware made landed in unmapped space and silently read back zero.

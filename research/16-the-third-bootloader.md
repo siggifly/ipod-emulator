@@ -835,7 +835,39 @@ what it cost was a fork of a guest, and a claim in this file that two upstream b
 when one was cosmetic and the other was our fixture. **Nothing in this project now patches any
 operating system it runs.**
 
-### `'6'` is not a preference — it steers the bootloader away from hardware we do not model
+### RESOLVED: the part is a PP5022, and what was missing was a USB clock
+
+**2026-08-20.** The chip-id bypass is **gone**, and so is `--rdval`. The register reports
+`PP5022C-` — `PP_VER1 = 0x3232432d`, `PP_VER2 = 0x50503530` — to every guest, with nothing
+supplied and no per-operating-system flag anywhere.
+
+The chain, each step measured:
+
+| | |
+|---|---|
+| seed `'2'`, watch where the boot dies | spin at `0x400038cc`, `ldr [r4,#0x28] / tst #0x80 / beq` — and **8 reads, 4 writes at `0xc5000140`, unmapped** |
+| what is `0xc5000000` | **`USB_BASE`**, Rockbox `pp5020.h:580` |
+| what the firmware writes there | `2`, from `0x400011e4` |
+| what it waits on next | `0x400011e8` — `ldr [r1,#0x140] / tst #2 / bne`, i.e. **bit 1 is a self-clearing reset** |
+| what it waits on after that | bit 7 of `0x70000028` — the clock-ready bit `Xmb::usb_clock` already raises, from the wrong trigger |
+
+So the model had the *effect* and not the *cause*: `usb_clock` watched `DEV_INIT2`, which is how this
+clock is started on the other path — and on this one the firmware never touches that register
+(`0x70000020` is written once, with zero). Three small pieces closed it: map `USB_BASE`, filter bit 1
+of `+0x140` as self-clearing, and raise the ready bit from that write instead. **Retail: 599 ATA
+commands and 2 916 non-black pixels, unchanged.**
+
+**`'6'` was never a fact about the part.** It was the value that kept Apple's bootloader on the
+half of its own code whose hardware we had built, and once the other half had its hardware, the
+truthful answer boots. The evidence now agrees with itself: the ROM parks its `IsyS` pointer at
+`0x4001ff1c`, which is the slot `ipod_set_sysinfo` picks **when `ipod_is_pp5022()` is true** — and it
+is true.
+
+**Everything guest-specific about iPodLinux is now gone.** No patch, no `--rdval`. The loader recipe
+passes `--osos-from-disk` and `--sysinfo`, which are how a high-level boot works and are not about
+iPodLinux at all.
+
+### Superseded: `'6'` steers the bootloader away from hardware we do not model
 
 **Measured 2026-08-20, with only the value changed** (the register left writable, so this is one
 variable rather than the two the first attempt moved). Seed `PP5022C-` — `'2'` where Apple looks —
