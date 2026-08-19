@@ -728,6 +728,23 @@ fn main() {
                 }
             }
         }
+        // --second-core : run the PP5021's coprocessor as well as its CPU.
+        //
+        // **Off by default, and that default is the control.** With it off this is the single-core
+        // machine every number in research/ was measured on. With it on, `PROC_ID` answers per
+        // core, `COP_CTL` is a real sleep/wake register rather than ledger #7's fixed answer, and
+        // the two cores interleave in fixed quanta so a dual-core run is as reproducible as a
+        // single-core one.
+        if args.iter().any(|a| a == "--second-core") {
+            m.mem.second_core = true;
+            if let Some(q) = args.iter().find_map(|a| a.strip_prefix("--quantum=")) {
+                m.mem.quantum = q.parse().unwrap_or(eapp_loader::Machine::QUANTUM).max(1);
+            }
+            println!(
+                "  second core: on — interleaving {} instructions each",
+                m.mem.quantum
+            );
+        }
         // --disk=PATH : attach the image as the ATA drive, so RetailOS can read its own filesystem.
         if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--disk=")) {
             match eapp_loader::Ata::open(std::path::Path::new(path), args.iter().any(|a| a == "--disk-writable")) {
@@ -935,6 +952,11 @@ fn main() {
             );
             std::process::exit(1);
         }
+        // **Both cores enter here.** The coprocessor is not started by the CPU — it comes out of
+        // reset running the same code and decides for itself, on `PROC_ID`, that it is the COP.
+        if m.mem.second_core {
+            m.cop.regs[15] = entry;
+        }
         println!(
             "booting {} at {entry:#010x} (budget {boot_budget}) …",
             if cold { "FLASH (cold)" } else { "OSOS" }
@@ -1095,6 +1117,16 @@ fn main() {
             "  irqs: {} asserted, {} taken; usec {}",
             m.irqs_asserted, m.irqs_taken, m.mem.usec
         );
+        // Counted separately from the CPU's, on purpose: one core's work must never inflate the
+        // other's, because `executed` is the fingerprint every recipe here is compared on.
+        if m.mem.second_core {
+            println!(
+                "  second core: {} instructions, pc {:#010x}, {}",
+                m.cop_executed,
+                m.cop.regs[15],
+                if m.mem.cop_asleep { "asleep" } else { "awake" }
+            );
+        }
         // The drive's line specifically. "Interrupts are being taken" is a statement about the
         // timers; whether the disk's completion ever reaches the CPU is a different question and
         // has to be counted separately.

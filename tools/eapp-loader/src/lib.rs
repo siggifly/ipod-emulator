@@ -689,6 +689,34 @@ pub struct Memory {
     /// its wake finally appears to succeed is the measurement; it may proceed, or it may wait for a
     /// partner that will never answer, and both are worth knowing before building one.
     pub cop_awake: bool,
+    /// **Run the second ARM core.** Off by default, and that default is load-bearing: with it off
+    /// this is the single-core machine every number in `research/` was measured on, and the COP is
+    /// reported permanently asleep exactly as before.
+    ///
+    /// Rockbox's stock build is a dual-core build. Its core-lock hands work to the COP and waits,
+    /// which on a machine with one core is a spin that never ends — measured at `0x86300` on both
+    /// a cold boot and on Doom's load, 320 seconds of simulated time apart. See research/06.
+    pub second_core: bool,
+    /// Whether the COP is in `PROC_SLEEP`.
+    ///
+    /// **False at reset, because both cores start at the reset vector.** That is the hardware
+    /// sequence and it is not a detail: the coprocessor runs the *same* startup code, reads
+    /// `PROC_ID`, sees `0xAA`, and writes `PROC_SLEEP` to `COP_CTL` itself. Rockbox's `crt0-pp.S`
+    /// is four instructions of exactly that.
+    ///
+    /// Starting it asleep instead — which is what the first cut of this did — leaves its register
+    /// file at reset with a program counter of zero, so the first interrupt that wakes it drops it
+    /// into the vector table rather than into the code it is supposed to have parked in. It then
+    /// wanders, and takes the machine with it: six resets in one boot.
+    pub cop_asleep: bool,
+    /// Instructions each core runs before the other gets a turn. See [`Machine::QUANTUM`] — this
+    /// is a knob so the choice can be tested rather than believed.
+    pub quantum: usize,
+    /// Which core is currently executing, so `PROC_ID` can answer it.
+    ///
+    /// Set by the scheduler around each core's quantum. Defaults to the CPU, which is what every
+    /// measurement in `research/` was taken on and what a machine with no second core is.
+    pub asking: Core,
     pub regs_at: Option<(u32, usize)>,
     pub regs_seen: Vec<(u64, [u32; 16])>,
     /// `(addr, pc) -> (reads, first icount)`, **uncapped**. The report's per-reader breakdown; the
@@ -1480,6 +1508,13 @@ impl Bus for Memory {
         if addr & !3 == CPU_CTRL && val & 0x8000_0000 != 0 {
             self.cpu_sleep = true;
         }
+        // **`COP_CTL` is how the second core is started and stopped.** `PROC_SLEEP` in bit 31 puts
+        // it to sleep; `PROC_WAKE` is zero. Firmware wakes the COP by writing 0 here and then
+        // polls the same address for the sleep bit to come back, which is why a seeded value could
+        // never work — the code that waits for it is the code that just cleared it.
+        if self.second_core && addr & !3 == Core::Cop.ctrl() {
+            self.cop_asleep = val & 0x8000_0000 != 0;
+        }
         let a = addr & !3;
         // The mailbox strobes must not take the fast path: it copies straight into the region and
         // returns, so a device whose write has an effect on a DIFFERENT address would have that
@@ -1557,6 +1592,27 @@ impl Bus for Memory {
 
 impl Memory {
     fn read8_inner(&mut self, addr: u32) -> u8 {
+        // **`PROC_ID` is the one address whose answer depends on who is asking**, and it has to be
+        // answered here rather than seeded as memory, because the two cores share the bus and a
+        // seeded byte can only say one thing. Rockbox's `crt0-pp.S` branches on it in its first
+        // four instructions, so getting it wrong makes one core run the other's startup.
+        //
+        // `map_hardware` still seeds `0x55` at this address for the single-core case; this
+        // overrides it only while the COP is the one executing, so a machine that never wakes the
+        // second core reads exactly what it always did.
+        if addr == PROC_ID && self.asking == Core::Cop {
+            return Core::Cop.proc_id();
+        }
+        // `COP_STATUS` and `COP_CTL` are the same address. With a real second core its sleep bit is
+        // state rather than the fixed answer ledger #7 installs, so it is served here and the
+        // override is not installed at all — see `map_hardware`.
+        if self.second_core {
+            let off = addr.wrapping_sub(Core::Cop.ctrl());
+            if off < 4 {
+                let word: u32 = if self.cop_asleep { 0x8000_0000 } else { 0 };
+                return (word >> (off * 8)) as u8;
+            }
+        }
         // Ahead of `locate`, or the zeroed MMIO region would answer first and the clock would
         // still read as stopped.
         for i in 0..self.read_toggle.len() {
@@ -2184,6 +2240,16 @@ pub const CLOCK: usize = 75;
 
 pub struct Machine {
     pub cpu: Cpu,
+    /// The **second ARM core**, the PP5021's coprocessor.
+    ///
+    /// A second register file over the same bus — which is what the silicon is. It runs only when
+    /// [`Memory::second_core`] is set and firmware has woken it through `COP_CTL`, so a machine
+    /// that never asks for it is byte-for-byte the machine every measurement in `research/` was
+    /// taken on.
+    pub cop: Cpu,
+    /// Instructions the COP has executed. **Deliberately not added to `executed`**, which is the
+    /// fingerprint every recipe compares — one core's work must not silently inflate the other's.
+    pub cop_executed: u64,
     pub mem: Memory,
     pub trace: Vec<Call>,
     /// Trap address -> (framework index, function index).
@@ -2459,6 +2525,10 @@ impl Machine {
             call_trace: Vec::new(),
             pc_hist: None,
             cop_awake: false,
+            second_core: false,
+            cop_asleep: false,
+            quantum: Machine::QUANTUM,
+            asking: Core::Cpu,
             regs_at: None,
             regs_seen: Vec::new(),
             read_sites: BTreeMap::new(),
@@ -2572,6 +2642,9 @@ impl Machine {
 
         Machine {
             cpu,
+            // Reset state. Nothing runs on it until firmware writes PROC_WAKE to `COP_CTL`.
+            cop: Cpu::new(),
+            cop_executed: 0,
             mem,
             trace: Vec::new(),
             trap_lo: traps.keys().copied().min().unwrap_or(u32::MAX),
@@ -3434,6 +3507,26 @@ impl Machine {
         // decoder at `0x00281350` — which returns semaphore `0x7f`, exactly what `SerialOptoTask`
         // has been pended on since tick 66 — was unreachable no matter how many frames the wheel
         // posted. See research/10 Addendum 17 §8.
+        // **The coprocessor has its own mask over the same sources.** `pp5020.h` puts its enable
+        // trio at 0x60004030..38 and its status at 0x60004004, mirrored 0x100 higher for the high
+        // bank — the same shape as the CPU's, one register file apart. That separation is the point
+        // of a second core: Rockbox arms the timer on the COP and the drive on the CPU, and a
+        // shared mask would deliver each to both.
+        if self.mem.second_core {
+            let (stat, en_stat, en, dis) = Core::Cop.int_regs();
+            let cop_enabled = consume(&mut self.mem, en_stat, en, dis);
+            let cop_enabled_hi =
+                consume(&mut self.mem, en_stat + 0x100, en + 0x100, dis + 0x100);
+            let hi_agg = if pending_hi & cop_enabled_hi != 0 { 1 << 30 } else { 0 };
+            self.mem.write32(stat, (pending & cop_enabled) | hi_agg);
+            self.mem.write32(stat + 0x100, pending_hi & cop_enabled_hi);
+            if pending & cop_enabled != 0 || pending_hi & cop_enabled_hi != 0 {
+                // A sleeping core wakes on an interrupt — that is what `PROC_SLEEP` means, and it
+                // is the whole mechanism by which the CPU hands it work.
+                self.mem.cop_asleep = false;
+                self.cop.irq();
+            }
+        }
         let hi_aggregate = if pending_hi & enabled_hi != 0 { 1 << 30 } else { 0 };
         self.mem.write32(CPU_INT_STAT, (pending & enabled) | hi_aggregate);
         self.mem.write32(HI_INT_STAT, pending_hi);
@@ -3462,6 +3555,55 @@ impl Machine {
         self.executed as u64 + self.idle_steps
     }
 
+    /// How many instructions each core runs before the other gets a turn.
+    ///
+    /// **Fixed, because determinism is the whole contract.** Every number in `research/` has to
+    /// stay comparable between runs, and a quantum that varied — with wall-clock time, with a
+    /// thread scheduler — would make two runs of the same recipe differ for reasons that have
+    /// nothing to do with the firmware.
+    ///
+    /// 1 000 is short enough that a spin-wait on the other core resolves promptly and long enough
+    /// that the switching costs nothing measurable.
+    ///
+    /// **It is the one number here that corresponds to nothing on the hardware**, where the two
+    /// cores run at once rather than in slices — so whether a workload depends on it is a question
+    /// to answer by measurement, not by assertion. `--quantum=N` exists to answer it, and
+    /// [`Memory::quantum`] is what the scheduler actually reads.
+    pub const QUANTUM: usize = 1_000;
+
+    /// Run the coprocessor for up to `budget` instructions.
+    ///
+    /// **This is a reduced loop, and that is a deliberate limitation rather than an oversight.**
+    /// The CPU's loop carries the eApp trap table, the call ring, the novelty tracker, the profile
+    /// and the store logs — machinery built for reading RetailOS and for running games, none of
+    /// which the coprocessor does here. It executes Rockbox's worker threads over the same bus.
+    ///
+    /// So the instruments do **not** see the COP: a `--calls` ring, a `--profile` or a `--storelog`
+    /// describes the CPU alone. That is worth knowing before reading one — and it is the first
+    /// thing to fix if the COP ever becomes interesting in its own right rather than something the
+    /// CPU is waiting for.
+    pub fn run_cop(&mut self, budget: usize) -> usize {
+        if !self.mem.second_core || self.mem.cop_asleep {
+            return 0;
+        }
+        self.mem.asking = Core::Cop;
+        let mut ran = 0;
+        for _ in 0..budget {
+            // Sleeping is a store the COP itself makes, so it is checked inside the loop rather
+            // than only on entry — otherwise it would run out its whole quantum after asking to
+            // stop.
+            if self.mem.cop_asleep {
+                break;
+            }
+            self.mem.pc = self.cop.regs[15];
+            self.cop.step(&mut self.mem);
+            self.cop_executed += 1;
+            ran += 1;
+        }
+        self.mem.asking = Core::Cpu;
+        ran
+    }
+
     pub fn run(&mut self, budget: usize) -> Stop {
         // Regions, aliases and device mappings are all configured before a run; clearing here means
         // a cached resolution can never outlive the layout it was computed against.
@@ -3472,6 +3614,17 @@ impl Machine {
             // past it. Rate-limited because it costs several memory accesses.
             if self.mem.usec_timer.is_some() && self.steps() & 0x3f == 0 {
                 self.service_interrupts();
+            }
+            // **The other core's turn.** Interleaved rather than threaded: one interpreter, two
+            // register files, a fixed quantum each. That makes a dual-core run as reproducible as
+            // a single-core one, which is what lets its numbers sit beside every number already in
+            // `research/`.
+            //
+            // Guarded on `second_core` so that a machine which never asks for a coprocessor does
+            // not pay a compare per instruction for one — and, more importantly, so that its
+            // execution is bit-for-bit what it was before this existed.
+            if self.mem.second_core && self.executed % self.mem.quantum == 0 {
+                self.run_cop(self.mem.quantum);
             }
             let pc = self.cpu.regs[15];
             // So an unmapped access can name the instruction that made it.
@@ -5837,6 +5990,50 @@ pub const IDE_DMA_IRQ_HI: u32 = 23;
 pub const IDE_IRQ: u32 = 23;
 
 /// `CPU_CTRL` from Rockbox `pp5020.h`. Bit 31 is SLEEP; `0x60007004` is the COP's counterpart.
+/// Which of the PP5021's two ARM cores is executing.
+///
+/// **The silicon answers one address differently depending on who asks.** `PROC_ID` at
+/// `0x60000000` reads `0x55` on the CPU and `0xAA` on the COP, and that single byte is how every
+/// firmware for this part decides which half of its startup to run — Rockbox's `crt0-pp.S` branches
+/// on it in its first four instructions. So a second core is not only a second register file: the
+/// bus has to know who is asking.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Core {
+    #[default]
+    Cpu,
+    Cop,
+}
+
+impl Core {
+    /// What `PROC_ID` reads as. From Rockbox's `pp5020.h`: `PROC_ID_CPU 0x55`, `PROC_ID_COP 0xaa`.
+    pub fn proc_id(self) -> u8 {
+        match self {
+            Core::Cpu => 0x55,
+            Core::Cop => 0xaa,
+        }
+    }
+    /// This core's sleep/wake control register — `CPU_CTL` / `COP_CTL`.
+    pub fn ctrl(self) -> u32 {
+        match self {
+            Core::Cpu => 0x6000_7000,
+            Core::Cop => 0x6000_7004,
+        }
+    }
+    /// `(status, enable_state, enable_set, enable_clear)` for the low bank, then the same 0x100
+    /// higher for the high bank. The CPU's are at `0x60004000`/`0x60004020..28`; the COP's mirror
+    /// sits at `0x60004004`/`0x60004030..38`, which is what `pp5020.h` documents and what makes
+    /// per-core interrupt masking possible at all.
+    pub fn int_regs(self) -> (u32, u32, u32, u32) {
+        match self {
+            Core::Cpu => (0x6000_4000, 0x6000_4020, 0x6000_4024, 0x6000_4028),
+            Core::Cop => (0x6000_4004, 0x6000_4030, 0x6000_4034, 0x6000_4038),
+        }
+    }
+}
+
+/// Where `PROC_ID` lives. Read as a byte by every firmware that runs here.
+pub const PROC_ID: u32 = 0x6000_0000;
+
 pub const CPU_CTRL: u32 = 0x6000_7000;
 
 /// One PP502x DMA controller: a master block, a channel array 0x1000 above it, and one
@@ -7525,7 +7722,7 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
         // core could be A/B'd, because there was no arm B. RetailOS reads this address 5 470 times
         // and runs Rockbox's `wake_cop` 10 198 times; being able to answer differently is the first
         // step to knowing whether any of that matters.
-        if !m.mem.cop_awake {
+        if !m.mem.cop_awake && !m.mem.second_core {
             m.mem.read_overrides.push((0x6000_7004, 0x8000_0000));
         } else {
             // Said out loud. A switch whose effect cannot be observed is indistinguishable from a

@@ -1277,3 +1277,61 @@ path rather than a general failure.
 **What it would take:** a second interpreter over the same bus, with `CPU_CTRL`/`COP_CTRL` sleep and
 wake and the `0x60001000` mailbox already modelled (research/15) doing real work. That is a feature,
 not a fix, and it belongs with the other 1.0 items rather than being attempted in passing.
+
+### The second core, and what it is actually built from
+
+**2026-08-19.** `--second-core` runs the PP5021's coprocessor: a second register file over the same
+bus, interleaved with the CPU in fixed quanta. Off by default, and that default is the control — a
+retail boot with it off is **146 733 702 instructions and 102 ATA commands**, byte for byte what it
+was before any of this existed.
+
+**Almost all of it is read, not guessed.** The handshake is in `crt0-pp.S`, vendored here:
+
+```asm
+    ldr    r0, =PROC_ID
+    ldrb   r0, [r0]
+    cmp    r0, #0x55
+    ldrne  r2, =COP_CTRL        ; the COP puts ITSELF to sleep
+    movne  r1, #SLEEP
+    strne  r1, [r2]
+    ldreq  r2, =COP_STATUS      ; the CPU waits for it, at the SAME address
+1:  ldreq  r1, [r2]
+    tsteq  r1, #COPSLEEPING
+    beq    1b
+```
+
+So `COP_CTRL` and `COP_STATUS` are one register, `sleep_core` writes `0x80000000` and `wake_core`
+writes `0` (`system-target.h`), and both cores enter at the reset vector and sort themselves out on
+`PROC_ID`. Values, addresses and per-core interrupt banks all come from `pp5020.h`.
+
+**Two things are modelled and one is deliberately not.** `PROC_SLEEP` and wake-on-interrupt are;
+`PROC_WAIT_CNT` and the counter-source bits are not, and that is a scoped omission rather than an
+oversight — Rockbox uses them only for timed stalls around frequency changes
+(`system-pp502x.c:338`, `:664`), which this emulator does not model either.
+
+**The one invented number is the quantum, and it was measured rather than asserted.** Nothing on
+hardware corresponds to it: the two cores run at once. So `--quantum=N`, and a sweep:
+
+| quantum | COP instructions | COP ends | panel | ATA |
+|---|---|---|---|---|
+| 50 | 26 539 | asleep at `0x8632c` | 74 057 | 3 953 |
+| 1 000 | 112 499 | asleep at `0x8632c` | 74 057 | 3 953 |
+| 20 000 | 72 480 069 | **awake at `0x2e0`** | 74 057 | 3 953 |
+
+**The visible outcome is identical across a 400× range** — same panel, same ATA count — which is
+what the default's doc comment claimed and had not shown. The COP's own trajectory is *not*
+identical: at 20 000 it runs 640 times as far and ends awake in the exception vectors, so a large
+quantum lets it past the point it should have parked at. Small is safer, and the reason is now
+recorded instead of assumed.
+
+### What it unblocks, and what it does not
+
+**Warm Rockbox: the coprocessor is a participant.** 149 323 instructions inside Rockbox's own code
+at `0x8633c`, menu intact, 3 953 ATA. Doom launched, ran, and returned to the menu with **259 frame
+updates** against 82 single-core — so the core-lock that swallowed both is no longer swallowing them.
+
+**Cold boot is worse, not better, and it is out of scope until Apple's bootloader is read.** With
+the second core on, a cold boot resets six times and the COP ends in the vector table; the CPU
+stops issuing ATA commands entirely. Apple's bootloader has its own `PROC_ID` branch and this
+project has never disassembled it. Rockbox's COP path is open source and was read; Apple's is not,
+and inventing it is exactly what this note exists to avoid.
