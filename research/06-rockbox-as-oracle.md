@@ -1107,11 +1107,60 @@ reading.
 > `r0 = 0` there**, no charger, so that is not the difference either, and neither disk carries a
 > `config.cfg` to differ in.
 >
-> **What is left, and it is one question rather than a family:** warm enters
-> `backlight_update_state` **three or more times** (`@16 713 981`, `@17 091 289`, `@19 636 760` —
-> the third from a different context, `r1 = 0x55`), and cold enters it **exactly once**
-> (`@124 522 984`) and never again. The value the guard reads is the same in both; the number of
-> times anything asks is not. Find what drives the later calls on the warm path and this closes.
+> ### Closed: Rockbox inherits a co-processor we do not hand over correctly
+>
+> **`lcd_awake` IS called on the cold path — it returns early**, which is a correction to the line
+> above. It reaches 4 of its code buckets against warm's 34, and the exit is its first guard.
+> `lcd_state` is at `0x40005d20` and, with the enum packed to a byte, offset 9 is `display_on` —
+> which `lcd-video.c:602` confirms is the first thing tested:
+>
+> ```c
+> if (!lcd_state.display_on && flash_vmcs_length != 0)
+> ```
+>
+> | at the first `lcd_awake` | warm | cold |
+> |---|---|---|
+> | `lcd_state.display_on` | **0** — proceeds | **1** — bails |
+> | `flash_vmcs_length` | `0xbc40` | `0xbc40` — identical, not the gate |
+>
+> And `lcd_init_device` says in its own comment why:
+>
+> ```c
+> if (GPO32_VAL & 0x4000) {
+>     /* BCM is powered.  Assume it is initialized. */
+>     lcd_state.display_on = true;
+>     tick_add_task(&lcd_tick);
+> } else {
+>     /* BCM is not powered, so it needs to be initialized. */
+>     lcd_state.display_on = false;
+>     lcd_awake();
+> }
+> ```
+>
+> Measured at `0x70000080`, at the first `lcd_awake` in each arm:
+>
+> | | `GPO32_VAL` bit 14 |
+> |---|---|
+> | cold | **set** — Apple's bootloader powered the BCM |
+> | warm | **clear** — nothing powered it, so Rockbox does |
+>
+> **The guest is correct in both arms, and that is the whole point.** On a real cold boot Apple's
+> bootloader has powered *and initialised* the co-processor, and Rockbox is entitled to inherit it
+> rather than redo the work. Ours reports the power bit honestly and then does not honour the
+> inheritance: Rockbox skips its own initialisation, draws 283 480 halfwords and asks for 4 frame
+> updates, and nothing reaches the panel. Its display driver touches the address latch 4 times
+> where the warm boot — which had to set the co-processor up itself — touches it 55.
+>
+> **So the defect is not in the scheduler, the corelock, the tick, the storage stack or the second
+> core, and it needs no per-guest branch to fix.** It is one sentence: *our BCM's state after
+> Apple's bootloader is not equivalent to a real BCM's state after Apple's bootloader.* Every
+> operating system that trusts the inheritance will hit it, and any that re-initialises will not —
+> which is exactly why warm Rockbox works and cold Rockbox does not.
+>
+> The four things ruled out on the way, each by a control rather than by argument: `disk_init`
+> returns **1** in both · `fat_mount` returns **-42** in **both**, so it fails even on the path that
+> reaches the menu · `disk_mount_all` and `disk_mount` are entered once each with identical
+> registers · `power_input_present()` is **0** in both.
 >
 > **One measurement toward it, taken the same day.** On a cold boot with `--second-core`, the
 > coprocessor ends 400 M instructions at **`pc 0x00000734`**, having run 291 612 061 of its own and
