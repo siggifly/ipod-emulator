@@ -295,6 +295,27 @@ fn dark_screen() -> slint::Image {
 mod tests {
     use super::*;
 
+    // The geometry as written in `ui/ipod.slint` and `ui/window.slint`.
+    //
+    // **These are hand-copied, and that is a known hole**: editing the markup leaves them green.
+    // docs/GUI.md §16.9 and §20 item 9 close it by generating both the `.slint` and a Rust `const`
+    // module from one source in `build.rs`. Until that lands, `arfi`-style discipline does not
+    // apply here and the duplication is the risk it looks like.
+    const HERO: f64 = 655.751;
+    const SCREEN_W: f64 = 0.48799;
+    const SCREEN_H: f64 = 0.36599;
+    const BODY_ASPECT: f64 = 0.5917;
+    const WHEEL_D: f64 = 0.3675;
+    const WHEEL_TOP: f64 = 0.5215;
+    const CENTRE_D: f64 = 0.1228;
+    const CORNER_R: f64 = 0.0501;
+    const SCREEN_TOP: f64 = 0.0525;
+
+    /// What the markup draws the panel at, for a given body height and pair of ratios.
+    fn panel_at(hero: f64, sw: f64, sh: f64) -> (f64, f64) {
+        (hero * sw, hero * sh)
+    }
+
     /// §10's line is never silently absent for a device that has a disk.
     #[test]
     fn a_device_with_a_disk_always_says_what_it_writes_to() {
@@ -440,44 +461,94 @@ mod tests {
         }
     }
 
-    /// The framebuffer is never downscaled, which fixes the size of the drawn device.
+    /// The panel is an exact whole number of device pixels — the check the last one could not make.
     ///
-    /// **This is the constraint that decides how big the iPod is**, and it is easy to miss. The
-    /// screen is 0.4866 of body height wide, so a 320-pixel panel at 1:1 needs a 658 px body.
-    /// Draw the device any smaller and every frame the emulator produces is thrown away on the way
-    /// to the glass — silently, and it looks fine, because a downscaled 320×240 of a menu is still
-    /// a legible picture of a menu. It sat at 560 px for a while, throwing away a quarter of every
-    /// frame, and nothing said so.
+    /// **The test this replaces asserted `drawn_w >= 320` and `drawn_h >= 240`.** That is a
+    /// *downscale* detector. It passes on a stretch, and it was passing on one: at the 658 px body
+    /// and the drawing's own `0.4866 / 0.3672` pair, the panel was drawn **320.18 × 241.62** for a
+    /// 320 × 240 buffer — 1.00057 across, 1.00674 down, non-uniform and non-integer — while its own
+    /// doc comment claimed "never smoothed and never stretched". Under nearest-neighbour that
+    /// duplicates about 1.6 rows out of 240 at fixed positions, and those land on RetailOS's own
+    /// 1 px separator rules.
     ///
-    /// Principle 8: the panel is 320×240 and it is presented at an integer scale, never smoothed
-    /// and never stretched. That is not a style rule, and it is not negotiable against layout.
+    /// That is the shape `AGENTS.md` calls an instrument that lies, and the reason the rule is now
+    /// *no prose claim about the window without a check that can fail*. This one fails against the
+    /// constants that shipped; `the_old_ratios_would_fail_this_test` proves it rather than asserting
+    /// it.
+    ///
+    /// The fix inverts the dependency, which is how MAME solves the same problem: **the drawing
+    /// governs where the screen sits, the hardware governs how big it is.** 50.8 / 104.1 and
+    /// 38.1 / 104.1 are 4:3 by construction, so the well cannot be off-ratio.
     #[test]
-    fn the_device_is_big_enough_to_show_every_pixel() {
-        const SCREEN_W: f64 = 0.4866;
-        const SCREEN_H: f64 = 0.3672;
-        // As written in `ui/window.slint`.
-        const HERO: f64 = 658.0;
-        const FB_W: f64 = 320.0;
-        const FB_H: f64 = 240.0;
-
-        let drawn_w = HERO * SCREEN_W;
-        let drawn_h = HERO * SCREEN_H;
+    fn the_panel_is_an_exact_whole_number_of_pixels() {
+        let (w, h) = panel_at(HERO, SCREEN_W, SCREEN_H);
         assert!(
-            drawn_w >= FB_W,
-            "the screen is drawn {drawn_w:.0} px wide for a {FB_W:.0} px framebuffer — \
-             {:.0}% of every frame is discarded",
-            (1.0 - drawn_w / FB_W) * 100.0
+            (w - 320.0).abs() < 0.01,
+            "the panel is drawn {w:.4} px wide for a 320 px framebuffer"
         );
         assert!(
-            drawn_h >= FB_H,
-            "the screen is drawn {drawn_h:.0} px tall for a {FB_H:.0} px framebuffer"
+            (h - 240.0).abs() < 0.01,
+            "the panel is drawn {h:.4} px tall for a 240 px framebuffer"
         );
+        // Uniform, not merely close: a scale that differs between the axes is a stretch, and a
+        // stretch is what the old pair actually did.
+        assert!(
+            ((w / 320.0) - (h / 240.0)).abs() < 1e-4,
+            "the scale is {:.5} across and {:.5} down — that is a stretch, not a scale",
+            w / 320.0,
+            h / 240.0
+        );
+    }
 
-        // And the window has to be tall enough to hold it, or the minimum size and the fidelity
-        // rule are in silent conflict and the layout wins.
+    /// The well is 4:3 by construction, not by luck.
+    #[test]
+    fn the_screen_well_is_exactly_four_thirds() {
+        let r = SCREEN_W / SCREEN_H;
+        assert!(
+            (r - 4.0 / 3.0).abs() < 1e-5,
+            "the well is {r:.5}, not 4:3 — a 320×240 buffer would be stretched in one axis only"
+        );
+        // And the ratio is the hardware's, so say so in a way that breaks if someone edits it.
+        assert!((SCREEN_W - 50.8 / 104.1).abs() < 1e-5, "SCREEN_W is not 50.8 mm / 104.1 mm");
+        assert!((SCREEN_H - 38.1 / 104.1).abs() < 1e-5, "SCREEN_H is not 38.1 mm / 104.1 mm");
+    }
+
+    /// **Proof that the test above can fail**, which is the only thing that makes it worth having.
+    ///
+    /// `AGENTS.md`: before believing a zero, run the control that makes the instrument produce a
+    /// non-zero. This is that control — it feeds the constants that shipped into the same arithmetic
+    /// and asserts they are caught. If this test ever passes trivially, the check above has stopped
+    /// checking.
+    #[test]
+    fn the_old_ratios_would_fail_this_test() {
+        const OLD_HERO: f64 = 658.0;
+        const OLD_W: f64 = 0.4866;
+        const OLD_H: f64 = 0.3672;
+
+        let (w, h) = panel_at(OLD_HERO, OLD_W, OLD_H);
+        assert!(
+            (w - 320.0).abs() >= 0.01 || (h - 240.0).abs() >= 0.01,
+            "the constants that shipped drew {w:.2} × {h:.2}; if that now passes, the check is dead"
+        );
+        assert!(
+            ((w / 320.0) - (h / 240.0)).abs() >= 1e-4,
+            "the shipped pair scaled {:.5} across and {:.5} down; a stretch has to be detectable",
+            w / 320.0,
+            h / 240.0
+        );
+        assert!(
+            (OLD_W / OLD_H - 4.0 / 3.0).abs() >= 1e-5,
+            "the drawing's own pair was 1.32516, not 4:3 — that has to be detectable too"
+        );
+    }
+
+    /// The window has to be tall enough to hold the device, or the minimum size and the fidelity
+    /// rule are in silent conflict and the layout wins.
+    #[test]
+    fn the_window_minimum_holds_the_device() {
         const CHROME: f64 = 56.0;
         const PADDING: f64 = 16.0;
-        const CAPTION: f64 = 90.0;
+        const CAPTION: f64 = 96.0;
         const MIN_WINDOW_H: f64 = 860.0;
         let needed = CHROME + PADDING + HERO + PADDING + CAPTION + PADDING;
         assert!(

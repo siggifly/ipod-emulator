@@ -3,894 +3,3064 @@
 The design of the program's interface, written **before** the interface. When the window and this
 document disagree, this document is what gets argued with first.
 
-> **Status: agreed, being built.** §19 records what was decided and what is still reversible.
+> **Status: agreed, being built.** §18 records every decision, including the ones this revision
+> overturns and the reasoning behind each, so a reversal is cheap rather than archaeological. §19
+> records what two adversarial readings broke, what changed because of them, and the four breaks
+> that are accepted as limitations rather than fixed.
 
 ---
 
-## 1. Why the old one is being thrown away
+## 1. The thesis, and what this program is
 
-The current window began as a proof of concept: one machine, one boot ROM, one drive, and a settings
-page. Everything since has been layered onto that — a library, a wizard, a compatibility engine, a
-resource manager — without the foundation ever being redrawn. `main.rs` is **8,039 lines** and its
-structure is archaeology.
+**The iPod is not a picture inside the program. It is the program.**
 
-The symptoms were all the same disease:
+One well, one device drawn at its own true size, one fixture holding it, one shelf under it that
+speaks, and one drawer beside it that holds everything else. Pressing the device's own centre button
+is what starts it. There is no chrome bar, no tab strip, no Start button, and no settings screen —
+because every one of those is a thing standing between a person and the object they came to look at.
 
-- Opening settings **rebooted the iPod**, because "no machine" was how the window knew to draw the
-  settings screen.
-- The wizard **re-opened itself** on an empty list, because an empty list was how it knew to offer
-  itself, and a cancelled build empties the list.
-- Screens **jumped** as you changed your mind, because space was drawn only when it was filled.
-- The identity fields did not agree with the model, because identity was designed before the model
-  was a choice.
-- **The one-button first run was lost.** The README still promises *"press the button and it
-  synthesises a boot ROM and downloads Apple's firmware itself"*; the program grew a three-step form
-  in front of it. Nobody decided that. It happened. See §11.
+The 320 × 240 rectangle on that device's face is the only part of the window we are forbidden to
+draw in. Everything else is ours.
 
-None of those are bugs in a screen. They are a window that has no model of itself.
+### 1.1 Why the last one is being thrown away, again
 
-**What is being kept.** The toolkit only ever touched one file. `settings.rs`, `compose.rs`,
-`identity.rs` and `nor.rs` (the device model, the compatibility rules, the serial/GUID validation,
-the ROM recipes) know nothing about any toolkit and survive intact — as do `emu.rs`, `wheel.rs`,
-`control.rs` and `png.rs`. **The nouns are nearly right. The surfaces are wrong.** This is a redesign
-of the window, not of the program.
+The window shipped on `gui/slint-rebuild` is a three-tab shell. Its two live callbacks both print to
+stderr (`start device {index} — not yet reconnected to the emulator`), `Settings::save()` is never
+called, five whole modules compile with `#[allow(dead_code)]` and no caller, and the entire
+compatibility engine — `compose.rs`, 636 lines and eight tests — has **zero call sites anywhere in
+the workspace**. `grep -rn "compose::" tools --include='*.rs'` returns nothing outside `compose.rs`
+itself.
+
+That is not the problem. That is a half-built window and it was declared as one.
+
+The problem is that the design and the window now disagree about the things a designer reads first,
+and one of the disagreements is a live defect in the rule this project calls non-negotiable:
+
+- **The framebuffer is being stretched right now.** `ipod.slint` draws the `Image` at
+  `0.4866 * h` × `0.3672 * h` with `image-fit: fill`. At `h = 658` that is **320.18 × 241.62** for a
+  320 × 240 buffer — a scale of **1.00057 horizontally and 1.00674 vertically**, non-uniform and
+  non-integer. With `image-rendering: pixelated`, nearest-neighbour resolves the 0.674 % vertical
+  excess by duplicating roughly 1.6 rows out of 240 at fixed positions, which lands on RetailOS's
+  own 1 px separator rules.
+- **The test written to catch that cannot fail.** `the_device_is_big_enough_to_show_every_pixel`
+  asserts `drawn_w >= FB_W` and `drawn_h >= FB_H`. That is a *downscale* detector. It passes on a
+  stretch while its own doc comment claims "presented at an integer scale, never smoothed and never
+  stretched". It also hand-copies every constant it is meant to police out of the `.slint` files, so
+  editing the markup leaves it green, and its `CAPTION: 90.0` is a guess against a caption stack
+  whose own fixed heights already total 96 before the 30 px heading line is measured.
+- **The old §13 describes a window that was deleted.** Master–detail with a 280 px list is still
+  written down and still recorded in the decisions table; `window.slint`'s header says the sidebar
+  was killed and the window is a carousel. The reversal's reasoning exists only in commit `05cfcc9`.
+- **Two source comments describe code that is not there.** `window.slint` says `stage-area` pins
+  `min-height` and `preferred-height` to zero; it sets neither. `ipod.slint` says the tests
+  re-derive every ratio from Rockbox's SVG; the test says in its own words that it cannot read that
+  file because `resources/` is gitignored.
+
+Every one of those is the same failure the last twelve commits kept fixing in the machine — a claim
+recorded in prose that outran its evidence — applied to the window's own documentation. This
+revision fixes the arithmetic, deletes the false prose, and adopts one mechanical rule to stop it
+recurring: **§16.9, no prose claim about the window without a check that can fail.**
+
+**What is kept.** The toolkit still touches one file. `settings.rs`, `compose.rs`, `identity.rs`
+and `nor.rs` know nothing about any toolkit and survive intact, as do `emu.rs`, `wheel.rs`,
+`control.rs`, `png.rs` and `update.rs`. `ipod.slint`'s measured proportions survive with the
+corrections in §6.6. The nouns are right. The surfaces are what change.
 
 ---
 
 ## 2. Principles
 
-Eight, and every one of them is the scar of something that actually went wrong.
+Nine. Every one is the scar of something that actually went wrong in this repository, and each names
+it.
 
-1. **The library is home.** The program opens on what you have, not on a machine. Nothing is running
-   while you are there. *(Earned: settings could only be reached by destroying the machine.)*
+1. **The device is the program, and it does not move.** The drawn iPod sits at a constant distance
+   above the shelf and at a constant **physical** size — `655.75` device pixels of body height,
+   times a whole number — on every surface, in every phase, for as long as the window stays on one
+   display at one size. Every pixel of slack the window has goes to the top margin. *(Earned twice:
+   the body sat at 560 px for a while, the screen was drawn 253 px wide, a quarter of every frame
+   was discarded, and nothing said so — because a downscaled 320 × 240 of a menu is still a legible
+   picture of a menu. And again in §6.6: a constant expressed in **logical** pixels is not a
+   constant, and on a 125 % display it silently quadrupled the black border it was supposed to
+   hold at 11 px.)*
 
 2. **Nothing moves that you did not move.** Every field, row and control reserves its space whether
-   or not it currently has content. A layout that reflows as you choose is a layout you cannot aim
-   at. *(Earned: "things should take their space even when empty so things are not jumping around".)*
+   or not it currently has content. In Slint that is a mechanical choice per element and §16.3 says
+   which. *(Earned: "things should take their space even when empty so things are not jumping
+   around".)*
 
-3. **Disable with a reason. Do not hide.** An option that cannot be used stays visible, greyed, and
-   says why when you point at it. Hiding it hides the machine's rules; showing it teaches them. See
-   §18 — this is a deliberate reversal of a rule we follow elsewhere. *(Earned: the compatibility
-   matrix. A bootloader that silently vanishes when you pick a ROM teaches nothing.)*
+3. **No UI state is ever painted on the drawn device.** Selection, focus, disabled, hover and
+   "startable" live on the **cradle** — the fixture the device sits in — never on the chassis. The
+   single exception is a control's own physical depression, and it is split: **the press edge reads
+   the pointer** (a real button moves when your finger does) and **the release edge reads the
+   *emulated* input state** when there is a machine to read one. With no machine, a press restores
+   after `tight` and nothing else happens. *(Earned: the moment the object is tinted to mean
+   something, a screenshot of this window stops being a picture of an iPod, and `research/`,
+   `docs/media/` and every bug report depend on it being one. The split is earned separately —
+   `Stats::buttons` is a wheel-frame bitmask published by a **running** machine and is 0 whenever
+   the phase is `Off`, so a rule that waited on it would leave the centre button visually stuck down
+   through a four-minute first-run build.)*
 
-4. **Nothing floats.** No modals, no dialogs, no popovers, no toasts, no tooltips carrying
-   information you need. Contextual content **pushes** the layout aside; it never covers it. The one
-   thing that may sit above content is a focus ring.
+4. **Disable with a reason. Do not hide.** An option that cannot be used stays visible, greyed, and
+   carries its reason — on **focus** as well as hover, which is a specific mechanical requirement in
+   this toolkit (§16.5). See §14.1: this is a deliberate reversal of a rule followed elsewhere.
+   *(Earned: the compatibility matrix is this program's subject. A bootloader that silently vanishes
+   when you pick a ROM teaches nothing.)*
 
-5. **One name for one thing.** A device is a device on every surface, in every message, in the
-   settings file and in the changelog. *(Earned: "running" meant "selected", and a device that had
-   never started said it was running.)*
+5. **Nothing floats.** No modals, no dialogs, no popovers, no toasts, no tooltips carrying
+   information you need. Contextual content **pushes**; it never covers. The one thing that may sit
+   above content is a focus ring. *(Earned twice: the current `D` overlay covers the thing being
+   debugged, and OpenEmu has a public issue filed against its floating HUD for exactly that.)*
 
-6. **Say what will happen, then say what happened.** Every action that touches the network, the
-   disk, or several minutes of the operator's time announces its plan first and reports its result
-   after — including which file it wrote and how big it was.
+6. **One name for one thing.** A device is a device on every surface, in every message, in the
+   settings file and in the changelog. *(Earned: `current == name` was made to mean "running", and a
+   device that had never started said it was running.)*
 
-7. **Every surface can be left.** There is always a way back, it is always in the same place, and it
-   always goes somewhere useful. *(Earned: it was possible to get stuck inside settings.)*
+7. **Say what will happen, then say what happened.** Every action that touches the network, the
+   disk, or minutes of the operator's time states its plan — with byte counts — before it starts,
+   and reports which file it wrote and how big it was after. **One number per axis, from one
+   source.** *(Earned: nobody has ever been shown what a download will cost before agreeing to it —
+   and then, in this document's own first-run screen, they were shown three different numbers for
+   one operation and refused on the wrong one. §10.1.)*
 
-8. **Fidelity is not a style choice.** The iPod's screen is 320×240. It is presented at an **integer
-   scale, nearest-neighbour, never smoothed, never stretched, never letterboxed to a wrong aspect**.
-   Everything else in the window is ours to design; that rectangle is not.
+8. **Every surface can be left, and the way out is in the same place.** *(Earned: it was possible to
+   get stuck inside settings, because settings and running were different screens and "no machine"
+   was how the window knew which to draw.)*
+
+9. **Fidelity is not a style choice.** The panel is 320 × 240 and is presented at an **exact integer
+   number of physical device pixels per framebuffer pixel**, nearest-neighbour, never smoothed,
+   never stretched, never letterboxed to a wrong aspect. The arithmetic is §6.6 and the test that
+   enforces it is §16.10, which must be proved to fail before it is trusted.
 
 ---
 
 ## 3. The nouns
 
-Nearly all of this is already implemented and correct. One change, in §3.1.
+Settled. Not redesigned here. The model changes required before any markup is written are §3.1, §3.2
+and §3.3, and §20 puts them in order.
 
-| noun | what it is |
-|---|---|
-| **iPod** *(a boot ROM)* | **an iPod's identity.** Model, capacity, serial, GUID, colour. Either **dumped** from a real device or **synthesised** from a seed |
-| **Firmware** | an Apple `.ipsw` bundle |
-| **Software** | Rockbox, and later others — a thing installed *onto* a disk |
-| **Disk** | a drive image. Knows what built it and what is installed on it |
-| **Device** | a *name for one selection*: an iPod, a disk, and how to treat them. Cheap to make, cheap to keep |
-| **Game** | a decrypted `.ipg` title. Runs with **no boot ROM and no disk** — see §16 |
-| **The machine** | one device, running. There is exactly one, and only while you are on Running |
+| noun | what it is | type |
+|---|---|---|
+| **iPod** *(a boot ROM)* | **an iPod's identity** — model, capacity, serial, GUID, colour. Either **dumped** from a real device or **synthesised** from a seed. Provenance, not category | `Resource::Firmware(nor::Source)` |
+| **Firmware** | an Apple `.ipsw`. **Makes a disk.** Not bootable itself | `Resource::Installer(PathBuf)` |
+| **Bootloader** | **Goes in the firmware partition, which holds exactly one thing.** That single constraint is what the whole of `compose.rs` is downstream of | `Resource::Bootloader(PathBuf)` |
+| **Software** | Rockbox, ZeroSlackr. **Installs onto a disk** | `Resource::Software(PathBuf)` |
+| **Disk** | a drive image that knows what built it and what went onto it, in order — so a list of disks is a list of machines rather than a list of filenames | `Disk { name, path, built_from, installed }` |
+| **Device** | a *name for one selection*: an iPod, a disk, and how to treat them. **A selection, not a copy** | `Device` |
+| **Snapshot** | a parked machine's RAM and CPU, plus the frozen drive it pairs with. **~1.6 GB, and it is a thing on disk with a size** | `Config::snapshot` + `::frozen` |
+| **Title** | a decrypted `.ipg`. Runs with **no boot ROM, no disk and no Apple OS** — §13 | 0.6 |
+| **The machine** | one device or one title, running. There is exactly one | `emu::Phase` |
 
-The single most important consequence: **a device is a selection, not a copy.** Making a second
-device does not duplicate a 60 GB image, and deleting a device does not delete anything it pointed at.
+**There are four resource kinds, not three.** The shipped window renders three and silently drops
+`Bootloader`. That is not cosmetic: *the firmware partition holds exactly one thing* is the reason
+`compose.rs` exists, and a parts list that cannot show a bootloader cannot teach the rule the
+program exists to teach.
+
+**A snapshot is a noun and not an implementation detail.** It was not one in the previous revision,
+and the consequence was a program that writes 1.6 GB per parked device, per window close, with no
+listing, no total and no way to get the space back. §11.4 gives it a Parts group.
+
+**A device refers to its parts by name.** Making a second device does not duplicate a 74 GB image
+and deleting a device deletes nothing it pointed at. This is better than UTM, which bundles disks
+inside the VM bundle so a second VM from the same base is a full copy — and for a program whose
+images are sometimes the only copy of an iPod somebody owns, that is not a nicety, it is the safety
+property. **§11 makes it visible**, because a safety property nobody can see is not one.
+
+**`work_on_copy` is tri-state, and the third state is load-bearing — but it is not the state the
+previous revision described.** `None` means *nobody has said*, and it resolves to **a copy, always**:
+`write_target()` is `d.work_on_copy.unwrap_or(true)` and nothing else. What `built_from` decides is
+something different — **whether an explicit choice to write gets the `warn` colour**. The previous
+revision wrote those two rules as one and got the sentence backwards. Four sentences, not three, and
+§7.5 spells all four.
 
 ### 3.1 A synthesised boot ROM is a resource, exactly like a dumped one
 
-Settled here, because the old model was of two minds about it.
+**Required in `settings.rs`, with its own tests, before the window is built.** This was declared
+closed in the previous revision and was never done; `Device` still carries both
+`firmware: Option<String>` **and** `nor: Source`, with the migration case described in its own doc
+comment. Collapse them into one named reference and delete the migration case with them.
 
-On real hardware **the NOR flash *is* the iPod** — model, serial and GUID all live in its SysCfg,
-and the drive is swappable. So a boot ROM is not an ingredient like a firmware bundle is; it is *an
-iPod's identity*. Whether its bytes came off a real device or out of the generator is
-**provenance, not category.** Both kinds are listed together, in one group, with the same row shape.
+Three things depend on it and none of them is cosmetic:
 
-This deletes a real inconsistency. `Device` today carries **both** `firmware: Option<String>` (a
-named resource) **and** `nor: Source` (an inline recipe), where `None` means "the inline one
-answers" — a shape the code itself describes as what a device migrated from an older settings file
-has. Unifying on *the ROM is always a named resource* removes the split and the migration case with
-it.
+- **Composition step ① becomes one question.** "Pick an iPod, or make one" — symmetric with step ②'s
+  "pick a disk, or build one" — rather than a differently-shaped radio inherited from history.
+- **A title can reference an iPod for its identity without booting it.** Apple's DRM binds to the
+  8-byte FireWire GUID in `sysinfo_t`, read from the NOR and never from the disk. So a `.ipg` needs
+  an *identity* even though it needs no bootable ROM. §13 is not expressible without this.
+- **One flow, two entrances.** Synthesising from inside the Composer and from Parts produce the same
+  named thing, rather than two code paths that agree by hand.
 
-Two consequences, both improvements:
+**Presentation follows.** A synthesised ROM has no file size, and printing `recipe` where every other
+row shows megabytes advertises it as a lesser kind of thing. Size is not the interesting fact about
+a boot ROM; *which iPod it is* is. So that is what the row says, for both kinds.
 
-- **The Sheet's two steps become symmetric.** Step 2 was already "pick a disk you have, or build
-  one". Step 1 becomes **"pick an iPod, or make one"** rather than a differently-shaped radio.
-- **One flow, two entrances.** Synthesising from inside the device Sheet and from the Resources tab
-  are the same flow producing the same named thing. Not two code paths that agree by hand.
+### 3.2 A second model change: provenance
 
-**Presentation follows from this.** A synthesised ROM has no file size, and putting the word
-"recipe" where every other row shows megabytes advertises it as a lesser kind of thing. Size is not
-the interesting fact about a boot ROM. *Which iPod it is* is — so that is what the row says, for
-both kinds.
+**Required before §11 can be honest.** The shipped window prints `fetched and verified` for every
+`Installer` and every `Software`, and `dumped from a real iPod` for every `Firmware(File)`, as
+**string literals**, regardless of where the file came from — and `Resource` carries only a path, so
+the model cannot support the claim.
+
+```rust
+pub enum Provenance {
+    Dumped,
+    Synthesised { seed: u64 },
+    Fetched { verified: Verification },
+    Provided,
+}
+pub enum Verification { Sha256, SizeOnly, None }
+```
+
+`Item` gains a `from: Provenance`. The three download outcomes render as three distinct strings and
+**`SizeOnly` is never silently upgraded to `verified`** — `firmware.rs` already keeps that
+distinction and the window must not undo it. Until the field exists the row **says nothing** rather
+than lying.
+
+### 3.3 A third: a device knows whether its parts are still on disk, and when it was parked
+
+**Required before the cradle can be honest, which is before the bench can be drawn.** §7.3's closed
+cradle set contains `cannot start — the disk is not where it was`, and the previous revision treated
+that state as reached. **Nothing computes it.** `Settings::missing()` (settings.rs:787) checks only
+whether a *name* still resolves in `self.disks` and `self.resources`; it never touches the
+filesystem. Delete an image in Finder and the entry is still in the list, so `missing()` returns
+empty, the cradle stays `accent`, the label promises `about 3 s`, and the machine starts and fails
+somewhere inside `emu`.
+
+```rust
+pub enum Absent {
+    /// The device names a part the lists no longer hold.
+    Unlisted(String),
+    /// The lists hold it and the file it points at is gone.
+    Gone(PathBuf),
+}
+pub fn missing(&self, d: &Device) -> Vec<Absent>   // stat() per resolved path
+```
+
+Two named cases rather than one boolean, because the sentences differ and the second one can name
+the path — which is the whole of the answer. **A device missing more than one part gets its own
+cradle row** (§7.3), because 24 px of centred `body` does not hold two filenames and the previous
+revision specified both the cradle *and* shelf row 2 for the same string.
+
+Two more fields, both cheap and both currently unrepresentable:
+
+- **`Device::parked_at: Option<u64>`** — a unix timestamp. §7.5's shelf renders `parked · 4 min ago`
+  and §12.4 treats "parked" as a device state, and `Device` carries no such flag and no such time.
+  Derive both from the snapshot file's existence and mtime *or* store them; either is fine and the
+  document has to say which. **It stores them**, because the snapshot path is a `Config` concern and
+  the shelf should not have to know it.
+- **`Stats::enters_by_core`** — conditional, and §17.Q10 is the question. Today `Stats::enters` is
+  `[u64; WATCHED.len()]`: one flat array of five arrival counts, with no per-core dimension anywhere
+  in `Stats` or `Out`. §12.8 draws **one** column until the model carries two, because the
+  alternative is filling a `core 1` column with an invented zero, which is exactly the conflation
+  the Gauge's three-state freshness exists to forbid.
 
 ---
 
 ## 4. The shape
 
-Three places. That is the whole navigation model.
+**Three surfaces and a menu bar.** That is the whole navigation model.
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│  ipod-emulator                          Devices  Resources    ? ⓘ   │   ← the only chrome
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│                        L I B R A R Y                                │
-│              what you have — nothing is running                     │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-         │  Start                                    ▲  Esc
-         ▼                                           │
-┌─────────────────────────────────────────────────────────────────────┐
-│   ← My 5.5G                                              ⏻  ⤓  ⌗    │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│                        R U N N I N G                                │
-│                     one device, one machine                         │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+                    ┌─────────────────────────────────────────────┐
+                    │                                             │
+                    │              T H E   B E N C H              │   the window opens here
+                    │   one well · one device · one cradle ·      │   and there is nowhere else
+                    │   one shelf.  Press ● to start.             │   it can open
+                    │                                             │
+                    └─────────────────────────────────────────────┘
+                       │  MENU / handle / ⌘\ / ⌘,      ▲
+                       ▼                               │  MENU at the root / Esc / handle
+                    ┌──────────────────────────────────────────────┐
+                    │  T H E  D R A W E R   420 px, right-anchored  │
+                    │  it PUSHES — the well AND the shelf narrow to │
+                    │  W − 420.  Full client height above the shelf.│
+                    │  Max 3 levels deep.  Devices · Parts · Games ·│
+                    │  Work · Readout · Settings · Reference        │
+                    └──────────────────────────────────────────────┘
 
-          REFERENCE  ← ? or ⓘ from anywhere, returns to wherever asked
-          help · about · the program's own settings · licences · credit
+                       │  ⌃⌘F / F11                ▲  Esc / ⌃⌘F / F11
+                       ▼                           │
+                    ┌─────────────────────────────────────────────┐
+                    │  F U L L S C R E E N — the panel alone, at  │
+                    │  the largest whole-number scale that fits    │
+                    └─────────────────────────────────────────────┘
 ```
 
-**Library** is home and the launch surface. **Running** is one device. **Reference** is reachable
-from either and returns to whichever asked — which is already how `back_to` works and is the one
-piece of the current navigation worth keeping.
+**The bench is not a place you can leave**, because there is nowhere above it. The drawer is a set of
+pages you visit. Fullscreen is a surface the machine has, not a mode the window is in.
 
-Everything else — creating a device, editing one, building a disk, inspecting a ROM — happens in a
-**Sheet** that pushes in from the right *without leaving the surface underneath*. You can always see
-where you came from, so there is never a question of how to get back.
+**`Esc` is not on that diagram and that is the point.** It has exactly one definition, in §16.8, and
+it only ever goes *outwards*. The previous revision listed it as a way *into* the drawer while also
+defining it as the way out, and also as the way out of fullscreen — three meanings for one key, of
+which the one that fired on an empty bench initiated a 1.6 GB write. There are already four routes
+in (`⌘\`, the handle, the shelf's row-3 leading slot, the menu bar); `Esc` is not a fifth.
 
-### Parking
+**The menu bar is a macOS convenience and nothing is menu-only** — every verb in it is also a drawer
+row. §16.8 has the platform caveat and §17.Q4 is the open question about Windows and Linux.
 
-Leaving Running (`Esc`, or the back arrow) **parks** the machine: it is snapshotted, the window
-returns to the Library, and pressing Start on that device again resumes in about three seconds
-rather than cold-booting for seventy-five. The device tile says `parked` and offers **Resume** and
-**Cold boot** as separate, both-visible actions.
-
-Parking is not saving and does not touch the drive image beyond what the machine already wrote.
+**There is no carousel, and no list on the bench.** Both are overruled here; §18 records why.
 
 ---
 
-## 5. The vocabulary
+## 5. The primitive vocabulary
 
-Seven primitives, closed. Anything the window shows is one of these. A new one requires changing
-this document first.
+Nine, closed. Anything the window shows is one of these. A tenth requires editing this document
+first — and note that this revision adds three (**Cradle**, **Gauge**, **Scroll**) and retires one
+(**Tile**), which is exactly the edit this rule demands.
 
-| | what it is | ARIA | used for |
+| | what it is | Slint accessibility | used for |
 |---|---|---|---|
-| **Pane** | a full surface | `region` | Library, Running, Reference |
-| **Sheet** | edge-anchored push for one focused task; the surface behind stays visible and does not dim | `dialog`, `aria-modal="false"` | new device, edit device, build a disk, inspect a file |
-| **Tile** | one thing, shown as an object — a drawn iPod, a cover | `button` / `listitem` | the device grid, later the title grid |
-| **Row** | one thing, shown as a line, with its actions at the trailing edge | `listitem` | resources, disks, firmware |
-| **Expand** | in-place detail for a Row; pushes the rows below it down | `button` + `aria-expanded` + `aria-controls` | what is inside a ROM or an `.ipsw` |
-| **Rail** | a stream of progress and results along an edge; pushes, never covers | `log` | fetching, building, installing, the debug readout |
-| **Field** | a labelled input, which may be **locked** and states why | native | identity, names, paths |
+| **Pane** | a full surface | `Main` (bench) / `Complementary` (drawer) | the bench, the drawer, fullscreen |
+| **Cradle** | the fixture the device sits in. **Carries every piece of UI state the device is forbidden to carry**: startable, running, refused, focused | `Button` + `accessible-label` + `accessible-description` | the bench, and only there |
+| **Row** | one thing, on a line, 44 px, label leading / value at 232 px / chevron trailing | `ListItem` inside a `List` | every drawer page |
+| **Expand** | in-place detail for a Row; pushes the rows below it down | `accessible-expandable` + `-expanded` + `accessible-action-expand` | a refusal's paragraph, what is inside a ROM |
+| **Field** | a labelled input, which may be **locked** and states why. Reserves a 34 px two-line reason slot whether or not it is filled | `TextInput` / `Combobox` | identity, names, paths |
+| **Gauge** | one measured number: label leading, value trailing in tabular mono, with a **three-state freshness** — live / stale / not measured | `Text` | the Readout, and nothing else |
+| **Rail** | a stream of plan, progress and results | `Region` + `accessible-live-region: polite` | the drawer's Work page |
+| **Scroll** | the **body** of a drawer page, between its fixed header and any pinned footer row. Never the bench, never the shelf, never the well | `Flickable`, `accessible-*` on its children | Readout, Parts, Composer, Games |
+| **Screen** | the framebuffer, 320 × 240, exact integer physical scale, nearest neighbour. **Obeys different laws** | `Image` | the bench's glass, fullscreen, a ROM's boot-screen preview |
 
-And one thing that is not a primitive because it obeys different laws:
+**Scroll is the ninth and it was missing, which was fatal.** §16.2's whole finding is that a Slint
+layout smaller than the sum of its children's minimums neither shrinks an item pinned by an explicit
+`height:` nor clips the surplus — the trailing children are simply positioned past the container's
+bottom edge and drawn there. With no scroll container, §12.8's Readout (36 Row-shaped items, 7
+headings, six inter-group gaps and a four-line paragraph — about 1 970 px) draws roughly 1 100 px of
+itself over the well and off the bottom of the window, silently. §11.4's Parts and §11.2's Composer
+are the same shape. That is the exact failure §16.2 names: *it looks fine and it is wrong.*
 
-| **Screen** | the iPod's framebuffer, 320×240, integer scale, nearest neighbour | `img` | Running, and each device Tile's thumbnail |
+**Scroll's two costs are real and are accepted with their numbers** (§16.11): a pressable inside a
+`Flickable` gets a **100 ms** press-forward delay and an **8 px** drag threshold
+(`i-slint-core-1.17.1/items/flickable.rs:366-370`), and a `Flickable` that has scrolled captures
+further wheel events for **800 ms** (`:376`). The first collides with `tight`'s 140 ms press
+feedback and is the reason §11.2 is re-cut into three depth levels so that the page that gets
+pressed most does not usually need to scroll at all.
 
----
+**Retired: Tile and Sheet.** Tile went with the device grid (rejected) and the carousel (§18). Sheet
+went because the drawer *is* the pushed surface, and having both would be two mechanisms for one
+job.
 
-## 6. The window itself
-
-Unspecified last time, which is how the current program got both *the tiny iPod* and *the device
-that resizes itself*.
-
-- **Minimum size: 900 × 860**, and the height is not a taste. Principle 8 says the framebuffer is
-  presented at an integer scale; the drawn screen is 0.4866 of body height wide (§7); so a 320-pixel
-  panel at 1:1 needs a **658 px device**, and 56 chrome + 658 + a caption + padding is 852. Below
-  that the choice is a smaller window or a downscaled screen, and principle 8 settles which.
-  2× would need a 1315 px body, which does not fit on a laptop, so 1:1 is the scale.
-- **Default on first launch: 1100 × 880**, centred. Remembered afterwards.
-- **The device is a constant, never a function of the window.** A size derived from a height it can
-  itself influence oscillates — that is the self-resizing device of §6 wearing a different hat, and
-  Slint reports it as a binding loop and warns it may panic.
-- **The Screen's scale is a floored integer**, recomputed from the space available, and it **never
-  feeds back into the window size.** The device does not resize the window; the window sizes the
-  device. A layout that can grow its own container will oscillate, and this one did.
-- **Resizing is continuous and never rearranges.** The grid reflows its columns; nothing moves
-  between surfaces, nothing collapses into a different control at a breakpoint. There is one layout.
-- **Fullscreen** is available on Running only, where it means the Screen at the largest integer
-  scale that fits, centred on `bg-sunken`, chrome hidden until the pointer moves. It is not
-  available on the Library, because a full-screen list is not a thing anyone wants.
+**Slint's `AccessibleRole` has no `dialog` and no `log`** — verified against
+`i-slint-common-1.17.1/enums.rs`. The previous revision assigned both. The roles above are what
+exists. And note §16.7: **the `accessibility` feature is not compiled into this program today**
+(`default-features = false`, and `grep -c accesskit Cargo.lock` returns 0), so every one of these is
+aspirational until it is turned on. Turning it on is a prerequisite, not a polish item.
 
 ---
 
-## 7. The visual system
+## 6. The visual system
 
-### Nostalgia: borrow the language, never the resolution
+### 6.1 Nostalgia: borrow the language, never the resolution — enforced by geometry
 
-**The window should feel like the iPod's world.** This is an emulator for a 2005 object and the
-nostalgia is the point — it is why anyone comes.
+The window should feel like the iPod's world. That is why anyone comes. But the emulated screen
+lives *inside* our window, and if our chrome also looks like RetailOS nobody can tell which layer a
+screenshot is of — which `research/`, `docs/media/` and every bug report depend on.
 
-But there is one hazard, and it is not aesthetic. **The emulated screen lives inside our window.**
-If our chrome also looks like RetailOS, nobody can tell what is emulated and what is ours — and that
-breaks things this project depends on: the screenshots in `research/`, the films in `docs/media/`,
-and every bug report where somebody sends a picture and the first question is whether the defect is
-in Apple's code or in ours. Knowing which layer you are looking at is this project's whole
-discipline.
+So the rule is not a taste. It is three independent geometric tells, **any one of which is
+sufficient**:
 
-So the rule is a line, not a dial:
+1. **The picture's long edge is an exact integer multiple of 320 device pixels.** Ours never is.
+2. **Our type is the system UI face at 12 / 13 / 14 / 18 / 20 px.** RetailOS's is a 2005 face with
+   visibly square pixels at any scale above 1×.
+3. **10.5 physical pixels of `#08080a` glass surround the picture on all four sides**, and nothing
+   of ours is ever drawn inside that rectangle. Not an error, not "no disk", not a hint, not a
+   welcome.
+
+**Tell 3 is stated in *physical* pixels and that is the correction that mattered most in this
+revision.** It used to say "~11 px" and be computed from a logical constant, which meant that on a
+125 % Windows display it was 43 px and on a 150 % display 97 px — four and nine times the number a
+ruler was supposed to be able to check. At that point the drawn object stops being an iPod and
+becomes an iPod-shaped frame around a small picture, which is the operator's already-recorded
+rejection (*"it doesnt look like a proper ipod"*) reached by arithmetic rather than by bad drawing.
+§6.6 is the fix; **10.49 physical px, four sides, every display, every scale factor** is the
+invariant, and §16.10 asserts it.
 
 | borrow | never borrow |
 |---|---|
-| the **palette**, sampled (above) | pixel fonts, faux-LCD, scanlines, screen glass |
-| the **material** — dark rule, bright band, falloff | type sizes derived from a 320×240 grid |
-| the **row grammar** — big left-aligned type, generous rows, full-width selection, trailing chevron | skeuomorphic plastic or brushed-metal textures |
-| the **motion** — deeper slides in, back slides out | any chrome outside the device body that could be mistaken for the device's screen |
+| the **palette**, sampled off a frame this emulator drew | pixel fonts, faux-LCD, scanlines, screen glass |
+| the **material** — dark rule, bright band, falloff | type sizes derived from a 320 × 240 grid |
+| the **row grammar** — label leading, value at a fixed column, trailing chevron, full-width selection | skeuomorphic plastic or brushed-metal texture |
+| the **motion** — deeper slides in from the right, back slides out | any chrome outside the device body that could be mistaken for the device's screen |
 
-Everything in the left column is the design *language*, rendered at native desktop resolution, where
-it cannot be confused with a 320×240 framebuffer. Everything in the right column imitates the
-*pixel grid*, which is exactly what makes chrome mistakable for content — and is also what makes a
-serious instrument read as a toy.
+**And every borrowed thing is placed somewhere a framebuffer physically cannot be** — the drawer is
+420 px at desktop resolution and runs to the window's own top edge; the accent is on the cradle,
+which is outside the body; the material is on drawer rows. That is what makes the borrow safe, and
+it is checkable with a ruler.
 
-The drawn iPod body with a hard-edged 320×240 rectangle at integer scale inside it is already an
-unmistakable boundary. Keep that, and the rest is safe.
+**Brushed metal is the one texture Apple's own 2005 HIG would have licensed here** — it was reserved
+for "programs that mimic the operation or interface of common real world devices", iTunes and iSync
+being the cited cases. It is refused, and recorded as a considered refusal rather than an omission,
+because somebody will propose it. It is a pixel-grid borrowing wearing a texture.
 
-**One thing already true by accident.** Principle 4 says nothing floats and everything pushes. That
-is exactly how iPod menus move — deeper slides in from the right, back slides out. It was arrived at
-from the no-floating-UI rule, not from the iPod, and it turns out to be the same grammar. Where the
-iPod's grammar is good, this design already agrees with it.
+**No shadows anywhere.** Slint offers `drop-shadow-*` and `inner-shadow-*` on every element; a shadow
+is the visual grammar of floating, and nothing here floats. Separation is a 1 px `line` rule. The
+drawn iPod's own edge is a hairline.
 
-### Type
-
-One family. The system UI font, because it is the only one that is right on three platforms and this
-program should not ship a webfont to draw a settings page. One monospace, for paths, hashes,
-instruction counts and anything a reader might need to compare character by character.
+### 6.2 Type — six roles, and the seventh was costing the panel 10 px
 
 | role | size / line | weight | used for |
 |---|---|---|---|
-| `display` | 28 / 34 | 600 | the Library's own title, empty states |
-| `title` | 20 / 26 | 600 | Sheet headings, device names on Tiles |
+| `title` | 20 / 26 | 600 | the shelf's name row, drawer page headings |
+| `readout` | 18 / 22 mono, **tabular figures** | 500 | every Gauge value, and nothing else |
 | `body` | 14 / 20 | 400 | everything |
-| `strong` | 14 / 20 | 600 | the one word in a sentence that matters |
-| `label` | 12 / 16 | 500 | field labels, tile subtitles, table headers. Sentence case, never uppercase |
-| `mono` | 13 / 18 | 400 | paths, hashes, serials, GUIDs, instruction counts |
+| `strong` | 14 / 20 | 600 | row names, the one word in a sentence that matters |
+| `label` | 12 / 16 | 500 | field labels, provenance, group headings. Sentence case, never uppercase |
+| `mono` | 13 / 18 | 400 | paths, hashes, serials, GUIDs, addresses, instruction counts |
 
-Six roles. If a seventh is needed, one of these is wrong.
+**`display` is retired.** A 28–30 px device name floating over a 656 px rendering of that same
+device is redundant, and its line box was eating 36 px of a vertical budget with none to spare
+(§9.6). The shelf's name row is `title`.
 
-### Space
+**`readout` earns the seventh slot the sixth vacated**, because 25 live numbers want tabular figures
+— without them a value that changes from `1 612 004 992` to `1 612 500 112` reflows its own digits,
+which reads as motion and is not.
 
-A 4px base, and a closed set of steps: **4, 8, 12, 16, 24, 32, 48**. Nothing between them, nothing
-above 48 except deliberate page margins.
+One family: the system UI font, because it is the only one right on three platforms and this program
+should not ship a webfont to draw a settings page. One monospace, chosen per platform in Rust and
+pushed in as a global string, because **Slint takes one `font-family` per element and has no
+fallback list** (§16.6).
+
+`font-weight: 600` is a role, never inlined. It is currently inlined in six places in
+`window.slint`; that is corrected at the token file, not per call site.
+
+### 6.3 Space — 4, 8, 12, 16, 24, 32, 48, and nothing between
 
 - Inside a control: 8 vertical, 12 horizontal.
-- Between related things (a label and its field): 4.
-- Between fields in a group: 12.
-- Between groups: 24.
-- Page margin: 32.
+- Label to its field: 4. Between fields: 12. Between groups: 24. Page margin: 24 (the drawer) / 32
+  (a wide page).
 
-### Colour — sampled from RetailOS, not chosen
+Five numbers on this surface are **geometry, not spacing**, and are declared as such so they do not
+look like scale violations: the device's **`hero`** (a derived length, §6.6), the drawer's **420**,
+the shelf's **88**, the cradle label's **24**, and the cradle's **10 px outward offset plus a 6 px
+focus gap** — which §9.6 has to pay for **on both sides**, and did not. Every other hard-coded
+length in `window.slint` today — 36, 44, 56, 60, 30, 20, 16, 7, 6, 2 — either resolves onto the
+scale or is deleted.
 
-The light palette is **measured off the artifact**, the same way every number in `research/` is:
-sampled from `docs/media/ipod-03-main-menu.png`, a frame our own emulator drew.
+### 6.4 Colour — measured, dark derived by a stated rule, and contrast computed against the surface each thing is actually on
+
+The light palette is sampled from `docs/media/ipod-03-main-menu.png`, a frame this emulator drew.
+The dark palette has nothing to sample — RetailOS has no dark mode — so it is **derived** from the
+light values by one stated rule rather than invented: *preserve hue, invert lightness, and keep the
+well a recess in both schemes.* Inventing values is the exact mistake the iPod's proportions already
+made once.
 
 | role | light | dark | used for |
 |---|---|---|---|
-| `bg` | `#ffffff` | near-black | the page |
-| `bg-raised` | `#f7f7ff` | one step up | Sheets, rows, the list |
-| `bg-band` | `#eff3f7` → `#c6cbce` | one step down | header bands, the title strip |
-| `bg-sunken` | `#c6cfd6` | one step down | the well the iPod sits in |
-| `fg` | `#000000` | near-white | body text |
-| `fg-dim` | `#5a616b` | 60% | labels, subtitles, secondary detail |
-| `fg-disabled` | 38% | 38% | a control that cannot be used |
-| `line` | `#848ea5` | subtle | the only borders that exist |
-| **`accent`** | **`#2969d6`** | **`#5292e7`** | focus rings, the primary action, progress |
-| `warn` | amber | amber | "this will write to your image" |
-| `danger` | red | red | destructive confirmation only |
+| `bg` | `#ffffff` | `#121212` | drawer pages |
+| `bg-raised` | `#f7f7ff` | `#1b1c1f` | the drawer body, an expanded row |
+| `bg-band-top` → `-bottom` | `#eff3f7` → `#c6cbce` | `#24262b` → `#15171a` | the shelf, the drawer header |
+| `bg-sunken` | `#c6cfd6` | `#0e1013` | **the well the iPod sits in**, and fullscreen |
+| `fg` | `#000000` | `#f2f2f2` | body text, **and the cradle's focus ring** |
+| `fg-dim` | `#5a616b` | `#9aa1ab` | labels, provenance, secondary detail, **and the cradle's inactive ring** |
+| `fg-disabled` | `#9aa0a8` | `#61666e` | a control that cannot be used — **on `bg` and `bg-raised` only** |
+| `line` | `#848ea5` | `#3a4050` | the only borders that exist |
+| **`accent`** | **`#2969d6`** | **`#5292e7`** | focus ring · progress · the cradle when startable |
+| material rule / top / bottom | `#2969d6` / `#5a9aef` / `#4a86de` | `#2a5fbf` / `#3f7fd6` / `#2f66b8` | see §6.5 |
+| `warn` | `#9a6700` | `#d9a441` | `writes to <your>.img`, and `input_dropped > 0` |
+| `danger` | `#b3261e` | `#e0564f` | `Remove`, and a `Stopped` machine |
 
-**The accent is RetailOS's own selection blue** — the colour the iPod itself uses to say *this one*.
-Contrast, computed: `#2969d6` is **5.14:1** on white, `#5292e7` is **5.91:1** on `#121212`. Both
-clear 3:1 for non-text UI with room to spare, and white text on the light-mode fill clears AA.
+The accent is **RetailOS's own selection blue** — the colour the iPod itself uses to say *this one*.
 
-**The accent is used for three things and no others**: the focus ring, the primary action on the
-current surface, and progress. A window where four things are blue has no primary action.
+**Contrast is computed against the surface each thing is drawn on, which is the correction.** The
+previous revision computed the accent on `#ffffff` and on `#121212` and never once against
+`bg-sunken` — which is the **only** surface the cradle is ever drawn on, and the cradle is the sole
+carrier of machine state under principle 3. Measured:
 
-### The material
+| on `bg-sunken` | light `#c6cfd6` | dark `#0e1013` | verdict |
+|---|---|---|---|
+| `line` at 30 % *(the previous inactive ring)* | **1.23 : 1** | **1.14 : 1** | **invisible.** Five of twelve cradle states |
+| `line` at 100 % | 2.08 : 1 | 1.84 : 1 | still fails 3 : 1 |
+| `fg-disabled` *(the previous "cannot start" ring)* | **1.67 : 1** | 3.30 : 1 | **fails in light.** The one state whose job is to teach |
+| **`fg-dim`** | **3.96 : 1** | **7.31 : 1** | ✓ — the inactive and refused ring |
+| **`accent`** | **3.25 : 1** | **6.01 : 1** | ✓ — startable |
+| **`danger`** | **4.14 : 1** | **5.09 : 1** | ✓ — stopped |
+| **`fg`** | **13.30 : 1** | **17.02 : 1** | ✓ — the cradle's focus ring |
 
-2005 interfaces were made of *materials*, not flat fills, and RetailOS's selection is a material
-with a precise structure. Sampled down a vertical strip:
+On `bg` / `bg-raised` the older numbers stand and are kept: `#2969d6` is **5.14 : 1** on white,
+`#5292e7` is **5.91 : 1** on `#121212`, white on the accent fill is **5.14 : 1**, and `fg-dim` is
+**6.26 : 1** on white.
 
-| | |
-|---|---|
-| a **1 px darker top rule** | `#2969d6` |
-| an immediate **bright band** under it | `#5a9aef` |
-| a **gentle fall** to the bottom edge | `#4a86de` |
+**So the cradle uses three colours and one shape, not four colours** (§7.3): `accent` when startable,
+`fg-dim` otherwise, `danger` when stopped, and **a broken ring** — four arcs with gaps at the
+corners — when the device cannot start. A refusal that cannot be seen is a hidden option, and
+principle 4 forbids hidden options; but there is no fourth colour on this surface that clears 3 : 1
+and does not already mean something else, and `Path` has no dash array (§16.6). A gap is a shape,
+and a cradle that cannot hold the device having gaps in it is the drawing saying the thing.
 
-Dark edge, highlight beneath, falloff. That is the whole of the era's vocabulary, and it is what
-makes a surface read as *of a time* rather than as a flat rectangle with a period colour on it.
+**The cradle's focus ring is `fg`, and it is the one exception to "the focus ring is `accent`."**
+Everywhere else the focus ring sits on `bg` or `bg-raised` where the accent clears 5 : 1. On the
+cradle, a 2 px accent ring 4 px outside a 2 px accent state ring is a ring around a ring in one
+colour, which is not a focus indicator. `fg` at 13.3 : 1 collides with no state.
 
-**Used for exactly two things**: the primary action, and the selected row in a list. Everywhere else
-is flat. A window where everything is glossy is a 2005 pastiche; a window where the *one thing you
-are about to press* is glossy is a 2005 idea applied with judgement.
+**The accent is used for three things and no others**: the focus ring (except on the cradle),
+progress, and the cradle when the device can be started. A window where four things are blue has no
+primary action. The shipped window spends its entire accent budget on carousel page dots — the one
+element the design never mentions — and puts no accent on the centre button at all.
 
-### Icons are drawn, never typed
+The scheme comes from `SlintInternal.color-scheme`, a backend-provided reactive expression usable
+directly in markup with no Rust round trip (verified at `i-slint-compiler-1.17.1/lookup.rs:824`). It
+is an internal namespace and therefore outside the 1.x stability promise; that is a risk worth naming
+and there is no supported alternative — it is what Slint's own styles use.
 
-**No icon is a font glyph.** Every one is a vector drawn by us, from a small named set, sized in the
-space scale.
+### 6.5 The material, and where it is allowed
 
-This is not aesthetics. The current window shipped **twelve missing glyphs** to the operator — `ⓘ`,
-arrows, and others rendering as empty squares — and the test written to catch it caught two more of
-my own within the hour. A glyph is a bet that three operating systems all have that codepoint in
-some font they will actually choose. We lost that bet, visibly, twice.
+Sampled down a vertical strip of RetailOS's own selection: a **1 px darker top rule** `#2969d6`, an
+immediate **bright band** `#5a9aef`, a **gentle fall** to `#4a86de`. Dark edge, highlight beneath,
+falloff — the whole of the era's vocabulary, and what makes a surface read as *of a time* rather than
+as a flat rectangle with a period colour on it.
 
-The set, and it is closed: `back`, `close`, `add`, `remove`, `expand`, `collapse`, `power`,
-`camera`, `readout`, `info`, `help`, `check`, `warning`, `folder`, `download`. Fifteen. Anything
-else is a word.
+**Used for exactly three things:**
 
-**The glyph test survives the port** and is widened: no source file may contain a non-ASCII
-character that is rendered as UI text unless the font in use is proven to have it.
+1. **The selected row in a drawer list.**
+2. **The one primary row on a drawer page** — `Create`, `Resume`, a `Fix` (at 60 % opacity, because a
+   fix is offered rather than urged). One per page, never two.
+3. **The one primary row on the too-short bench** (§9.5) — which is the *same* row as the cradle's
+   own label and callback, wearing the material because on that display the cradle is not drawn and
+   the program's single interactive element has to survive.
 
-### The iPod
+The shipped window gives the material to the selected **tab** and gives the selected device row a
+flat `bg-raised` fill — the rule was rewritten in a source comment rather than in the document it
+contradicts. That is corrected here, in the document.
 
-The drawn device is this program's best asset and the current window wastes it in a list. It appears
-at three sizes, all of them the same drawing:
+**And it does not go on the centre button.** An earlier draft of this design put it there, on the
+argument that a surface treatment on a moulded disc reads as the disc being lit rather than as a
+widget stuck to a photograph. That argument is good and it loses to principle 3: a glossy blue disc
+is UI state painted on the object, and a screenshot of it is no longer a picture of an iPod. **The
+cradle carries "press this" instead** — the accent annotates the fixture, never the object.
 
-- **thumbnail** (~48 px tall) — on a device Tile, in the right chassis colour, screen dark.
-- **hero** (fills the Library's empty state) — at rest, the click-wheel outline showing.
-- **full** (Running) — the live Screen at integer scale, the wheel and buttons live.
+### 6.6 The drawn iPod, and the fidelity arithmetic — twice corrected
 
-The chassis colour comes from the ROM unless the operator overrides it, which is already how
-`Settings::chassis` works and is right.
+Every dimension is a fraction of `body-height` and nothing else. That is what makes the device unable
+to resize itself, and it means one number takes it from a drawer thumbnail to the hero.
+
+**The ratios are measured from Rockbox's own scale drawing of this device**
+(`manual/rockbox_interface/images/ipodvideo-front.svg`, a vector front elevation shipped with the
+Rockbox manual). The parse is self-checking: on a 104.1 mm body the extracted display comes out
+50.7 × 38.2 mm against the 50.8 × 38.1 mm a 2.5-inch 4:3 panel must be.
+
+#### Correction one: the drawing's 0.2 % is not small
+
+`0.4866 / 0.3672 = 1.32516`, and 4:3 is `1.33333`. The drawing's own error is 0.61 % — small on paper
+and fatal in the one rule this project will not bend, because a screen well that is not 4:3 stretches
+a 320 × 240 buffer *in one axis only*.
+
+**Invert the dependency.** MAME solves exactly this by making the screen an explicitly bounded item
+that the artwork is positioned *around*, rather than a fraction of the artwork. Here that means: the
+SVG governs **where** the screen sits; the hardware governs **how big** it is.
+
+| ratio | was | is | why |
+|---|---|---|---|
+| `SCREEN_W` | 0.4866 | **0.48799** | 50.8 mm / 104.1 mm |
+| `SCREEN_H` | 0.3672 | **0.36599** | 38.1 mm / 104.1 mm |
+| `SCREEN_W / SCREEN_H` | 1.32516 | **1.33333** | exactly 4:3, by construction |
+
+The cost of the correction is one number and it is below the drawing's own error: the symmetric left
+inset moves from `(0.5917 − 0.4866)/2 = 0.05255` to `0.05186`, a difference of `0.00065` of body
+height — **0.43 px at hero, 0.07 mm on a real device.** The test's symmetry assertion (tolerance
+0.002) still holds.
+
+#### Correction two: `hero` is a physical constant, and the glass is sized from the panel
+
+The previous revision fixed `hero: 658px` as a constant in **logical** pixels and then computed the
+panel in **physical** ones. Those are the same number only when the display scale factor is 1. At
+sf = 1.25 the body is drawn 822 physical px tall, `k` still floors to 1, and the panel sits 320 × 240
+inside a glass well 427 × 327 physical — **43 px of black each side and 35 top and bottom**, against
+the 11 that §6.1 declares as a checkable invariant. At 150 % the panel fills 62 % of the glass's
+width. Nothing in the previous revision's tables could see it, because all three tabulated rows
+(1.00, 2.00, 1.25) treated the 1.25 remainder as acceptable rather than as the tell failing.
+
+Two changes, and together they make the whole computation one number on one axis:
+
+**(a) The body's height is `k × 655.751` *physical* pixels.** `320 / 0.48799 = 655.751`, and
+`240 / 0.36599 = 655.756` — the same number to four figures, because the well is now exactly 4:3.
+That is the body height at which one framebuffer pixel is one device pixel. `k` is a whole number and
+the logical length pushed into markup is `k × 655.751 / sf`.
+
+**(b) The glass is sized from the panel, not the panel from the glass.** The previous revision
+computed `k` from `0.51999 h × 0.39799 h`, whose ratio is **1.3066** — not 4:3 — so the two ratios the
+section exists to correct governed nothing except where the glass sits, and the section's headline
+claim described a computation the code did not perform. It was harmless only because the glass
+happened to be width-limited at every tabulated scale factor, which is a coincidence of the 0.032 h
+bezel rather than a construction. The bezel is what is actually measured, and it is **the same on all
+four sides**: `0.51999 − 0.48799 = 0.032` and `0.39799 − 0.36599 = 0.032`, so `0.016 h` per side.
+
+```
+BEZEL_PHYS  = 0.016 × 655.751 = 10.49 physical px, four sides, every k, every sf
+GLASS_PHYS  = (k×320 + 20.98) × (k×240 + 20.98)
+```
+
+At k = 1 that is 341.0 × 261.0 physical, which is where the old 342.2 × 261.9 came from — and now it
+is an *output*, so a future re-measurement of the bezel cannot silently flip which axis bounds `k`.
+§16.10 asserts it anyway.
+
+```rust
+// One source of truth, in physical pixels, because that is the unit fidelity is defined in.
+const HERO_PHYS_1X: f64 = 320.0 / 0.48799;   // 655.751
+const CHROME_MIN:   f64 = 154.0;             // §9.6, logical: everything that is not the body
+const BEZEL_RATIO:  f64 = 0.016;
+
+let sf    = window.window().scale_factor() as f64;
+let avail = client_height_logical();          // MEASURED (§9.6), not predicted from the screen
+let k     = (((avail - CHROME_MIN) * sf) / HERO_PHYS_1X).floor().max(1.0);
+
+let hero  = k * HERO_PHYS_1X / sf;            // logical length -> .slint
+let pw    = next_up_until(k * 320.0, sf);     // logical; see "the f32 tail" below
+let ph    = next_up_until(k * 240.0, sf);
+window.set_hero(hero as f32);
+window.set_screen_w(pw as f32);
+window.set_screen_h(ph as f32);
+window.set_screen_scale(k as i32);            // the shelf prints it
+window.set_too_short(hero + CHROME_MIN > avail);   // with hysteresis, §16.1
+```
+
+**This is not a binding loop.** `scale_factor()` and `size()` are window properties set by the
+platform and by the user, not sizes the layout decides — provided the Window's own `min-height` and
+`preferred-height` are plain constants that never read `hero`. §16.1 states that condition as a rule
+because it is the only thing keeping the arrow pointing one way.
+
+| display scale | k on the operator's machine | body, physical | body, logical | glass remainder, physical |
+|---|---|---|---|---|
+| 1.00 | 1 | 655.75 | 655.75 | **10.49** each side |
+| 1.25 | 1 | 655.75 | 524.60 | **10.49** each side |
+| 1.50 | 1 | 655.75 | 437.17 | **10.49** each side |
+| 1.75 | 2 *(if it fits)* | 1311.50 | 749.43 | **10.49** each side |
+| 2.00 | 2 | 1311.50 | 655.75 | **10.49** each side |
+
+One physical size everywhere, one remainder everywhere, and every tell in §6.1 holds. On the
+operator's own 2× machine `hero` is 655.75 logical and `k` is 2 — which is what the window already
+does today, so the correction costs that machine nothing and buys every fractional-scale machine the
+drawing back.
+
+**`k` is decided when the window is shown, and again on `ScaleFactorChanged` and on `Moved` to a
+different display. A plain resize never changes it** — only the top margin, and past the floor the
+too-short boolean. That is principle 1: dragging a window edge is not a request to redraw the iPod
+at a different size. The cost is that a window dragged large enough for a higher `k` does not take it
+until the next launch; the shelf's fidelity slot says which `k` is in force so it is never a mystery,
+and §17.Q11 puts the trade in front of the operator.
+
+**The f32 tail, and a finding that was wrong in its arithmetic and right in its class.** A reading of
+this design held that `k × 320 / sf` stored as f32 and multiplied back by `sf` lands at
+319.99999 physical at sf = 1.5, so Skia antialiases the edge columns even under `FilterMode::Nearest`
+— because the Skia renderer rounds an image's destination **origin** to whole device pixels only when
+the transform is a pure translation and **never rounds the destination size**
+(`i-slint-renderer-skia-1.17.1/itemrenderer.rs:434, :530-546`). The renderer fact is correct. The
+arithmetic is not: `Coord = f32` (`i-slint-core-1.17.1/lib.rs:104`) and euclid's `Scale<f32>`
+multiply is a single correctly-rounded f32 operation, so `f32(320.0/1.5) × 1.5` is **exactly 320.0**.
+Swept over `sf ∈ {1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.5}` and `k ∈ 1..8`, the
+round-trip is exact in **79 of 80** cases.
+
+The one that is not is **`sf = 2.75, k = 7`**, and arbitrary fractional scale factors of the kind
+Wayland and X11 hand out (1.09, 1.12, 1.13 …) fail routinely — 327 of 1 204 sampled combinations. So
+the defence is adopted anyway and it costs one function: **`next_up_until` walks the logical size up
+by ULPs until `(w × sf) ≥ k × 320`**, and the sub-ULP excess falls inside the black glass where
+nobody can see it. §16.10's test runs at all ten scale factors and `k` up to 8, **and it goes red
+today at 2.75 / 7** — which satisfies the prove-it-can-fail obligation with a case that is real
+rather than one that was assumed.
+
+#### Everything else, unchanged and correct
+
+| | ratio of body height | at `hero_phys = 655.75` | check |
+|---|---|---|---|
+| body width | 0.5917 | 388.0 px | |
+| screen | 0.48799 × 0.36599 | **320.0 × 240.0 px** | 50.8 × 38.1 mm, exactly 4:3 |
+| glass well | panel + 2 × 10.49 | **341.0 × 261.0 px** | an output, not an input |
+| screen top inset | 0.05186 | 34.0 px | = the left inset, ± 0.00065 |
+| wheel | 0.3675 | 241.0 px | 38.3 mm |
+| wheel top | 0.5215 | 342.0 px | |
+| centre button | 0.1228 | 80.5 px | 12.8 mm |
+| corner radius | 0.0501 | 32.8 px | |
+| **hold switch** | **0.100 × 0.024**, right edge inset 0.055 | 65.6 × 15.7 px | 11 × 2.5 mm, 5.5 mm inset — **published dimensions, a placeholder; §17.Q6** |
+
+**2× in a window would need a 1311 px body and ~1466 px of client height, which fits on no laptop** —
+so on a 1× display `k = 1` is the windowed scale and every higher one lives in fullscreen (§12.6).
+On a 2× display `k = 2` *is* the windowed scale, for free, because the logical size is the same.
+
+**The drawn iPod appears at three sizes, all the same drawing:** **hero** on the bench; **row** 40 px
+in the drawer's Devices list, screen dark, chassis correct; **thumbnail** 24 px on a Parts row for an
+iPod resource. `body-height` is the only input, and the two small ones are not framebuffers so they
+have no `k`.
+
+### 6.7 Icons are drawn, never typed
+
+**No icon is a font glyph.** Every one is a vector `Path`, from a closed set, sized on the space
+scale. This is not aesthetics: the previous window shipped **twelve missing glyphs** to the operator
+as empty squares, and the test written to catch it caught two more within the hour.
+
+The set, sixteen: `back` · `close` · `add` · `remove` · `expand` · `collapse` · `power` · `camera` ·
+`readout` · `info` · `help` · `check` · `warning` · `folder` · `download` · **`fullscreen`**.
+Anything else is a word.
+
+`fullscreen` is the one addition and §12.6 is why. Note also that **`Path` has no dash array** in
+Slint — so there are no dashed rules and no draw-on stroke animations in this design, and §7.3's
+refused cradle is a **broken** ring (arcs with gaps) rather than a dashed one.
+
+**The glyph test survives and widens**: no source file may contain a non-ASCII character rendered as
+UI text unless the font in use is proven to have it. It catches something today — the shipped window
+builds ` · ` (U+00B7) into UI strings with no coverage gate at all, which is precisely the class of
+thing the rule was written after.
+
+---
+
+## 7. The bench
+
+The only surface the program can open on, because there is nowhere else.
+
+```
+  1180 × 846 client   ·   1 char ≈ 11 px   ·   1 line ≈ 22 px
+ ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │                                                                                                         │ ▏ top margin, 24 px, the
+ │                                  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐                                  │ ▏ only elastic term
+ │                                  ╭───────────────────────────────────╮                                  │ ▏ the CRADLE — 2 px, 10 px
+ │                                  │                        ▭▬▬        │                                  │ ▏ outside the body, accent
+ │                                  │  ┌───────────────────────────────┐│                                  │ ▏ when startable. Focus
+ │                                  │  │                               ││                                  │ ▏ ring 4 px outside that,
+ │                                  │  │                               ││                                  │ ▏ in `fg`, so 16 px above
+ │                                  │  │                               ││   the glass:  341.0 × 261.0 phys  │ ▏ the body is spoken for
+ │                                  │  │        320 × 240, dark        ││   the Image:   k×320 × k×240 phys │
+ │                                  │  │        exactly k device       ││   the black:  10.49 px, 4 sides   │
+ │                                  │  │        pixels per frame-      ││                                   │
+ │                                  ┤  │        buffer pixel           ││├                                  │ ▏ clamp marks, 3 × 28 px
+ │                                  │  │                               ││                                  │
+ │                                  │  │                               ││                                  │
+ │                                  │  └───────────────────────────────┘│                                  │
+ │                                  │                                   │                                  │
+ │                                  │                                   │                                  │
+ │                                  │          ╭─────────────╮          │                                  │
+ │                                  │       ╭──╯    MENU     ╰──╮       │                                  │
+ │                                  │      │                     │      │   the wheel: 241.0 px            │
+ │                                  │      │       ╭─────╮       │      │   96 detents, five buttons,      │
+ │                                  │     │   ◀◀   │  ●  │  ▶▶   │     │   all of them the MACHINE's      │
+ │                                  │      │       ╰─────╯       │      │   centre drawn 80.5 px; its      │
+ │                                  │      │                     │      │   hit region is WheelRing::      │
+ │                                  │       ╰──╮      ▶‖     ╭──╯       │   select, already 39 % wider     │
+ │                                  │          ╰─────────────╯          │                                  │
+ │                                  │                                   │                                  │
+ │                                  ╰───────────────────────────────────╯                                  │
+ │                                  └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘                                  │
+ │                                        press ● to start · cold boot, about 75 s                         │ ▏ the cradle label, 24 px
+ │                                                                                                         │ ▏ gap, 16 px
+ ├─────────────────────────────────────────────────────────────────────────────────────────────────────────┤ ▏ 1 px line + the 3 px
+ │  My 5.5G                                                                          parked · 4 min ago    │ ▏ progress bar, when there
+ │  5.5G · 30 GB · black · Apple 25.1.3 · Rockbox 4.0             panel 1× · 320×240 · nearest neighbour   │ ▏ is one
+ │  works on a copy of my-5.5g.img                        MENU ›  Devices · Parts · Games · Work · Readout │ ▏ THE SHELF, 88 px,
+ └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘ ▏ flush to the bottom
+                                                                                                          ▲
+                                                                                            the drawer handle, 12 × 96 px
+```
+
+### 7.1 The well
+
+Full bleed, `bg-sunken`. It is a recess in both schemes, which is the rule that generates the dark
+value rather than a taste. It holds one device and nothing else, ever.
+
+### 7.2 The device, and where it is
+
+**Pinned by its distance above the shelf, not centred in the well.** All vertical slack goes to the
+top margin. Consequences, and they are the reason for the choice:
+
+- Growing the window moves nothing.
+- Shrinking the window eats the top margin first; when that is gone the layout is at its minimum and
+  §9.5 takes over.
+- Anything that pushes from the top costs the well its air, not the device its place.
+
+**The bench shows the machine whenever there is one.** That sentence settles a question the previous
+revision left open and which reproduced the disease this whole design is a cure for. "One device on
+screen" plus a `←`/`→` that switched devices meant that looking at a second iPod either destroyed the
+first or left an ARM7 executing behind a panel that was no longer drawn — and §12's opening claim,
+*"Running is a state of the bench, not a place"*, is precisely what makes that visible, because a
+state of the bench cannot survive the bench showing something else.
+
+So:
+
+- **While there is a machine, the bench draws it and only it.** There is no cradle state for
+  "another device is the machine", because there is no way to reach one.
+- **Other devices are inspected on the Devices drawer page**, whose rows carry the 40 px drawing, the
+  parts list, and `Start` — disabled while a machine exists, with the machine-rule reason
+  `My 5.5G is running. Stop it first.` You can read everything about a second device without touching
+  the first.
+- **`←`/`→` on the bench are therefore unambiguous.** They are the wheel while there is a machine, and
+  previous/next device when there is not — because when there is not, there is nothing else for them
+  to mean.
+
+**Changing device** (only possible with no machine) cross-dissolves `chassis` and the wheel-markings
+colour over `tight` (140 ms) and moves nothing; `hero` is a pushed constant and is **never** animated
+(§8.2). The Screen is unbound for the duration of the dissolve, gated on a plain `settling: bool`
+that Rust sets true on a change and false 140 ms later.
+
+`Colour::Unspecified` is drawn `#E4E4E2` and never black — drawing an unknown chassis black would
+invent a fact about somebody's iPod, and the model already refuses to.
+
+### 7.3 The cradle — where every piece of UI state lives
+
+A **2 px rounded outline** tracing the body's footprint offset outward by 10 px (408.0 × 675.8 px at
+`hero_logical = 655.75`, radius 42.8 px), plus two **3 × 28 px clamp marks** at the body's mid-height
+on either side. Its geometry is constant. Only its colour and its continuity change.
+
+| state | ring | label (24 px, `body` 14/20, centred) |
+|---|---|---|
+| startable, never booted | `accent` | `press ● to start · cold boot, about 75 s` |
+| startable, parked | `accent` | `press ● to resume · about 3 s` |
+| **parked, pair broken** | `fg-dim` | `press ● to cold boot · the parked snapshot no longer matches this drive` |
+| a title | `accent` | `press ● to play · there is no boot` |
+| first run | `accent` | `press ● to make an iPod · 6.5 MB to download, about 240 MB on disk` |
+| **first run, partly done** | `accent` | `press ● to finish making My 5.5G` |
+| **booting** | `fg-dim` | `booting · 62 %` — or `booting · 412 M instructions` with no denominator — **and always** ` · press ● to stop` |
+| running | `fg-dim` | `running` — or `running · wheel 41 queued` — or, where fullscreen is available and the strip is not drawable, `running · ⌃⌘F for 7× · Esc to come back` |
+| working | `fg-dim` | `building · 41 % · fetching Rockbox 4.0` |
+| parking | `fg-dim` | `parking · 0.7 of 1.6 GB` |
+| stopped | `danger` | `stopped — Lost(0xe19b0000)` |
+| **cannot start, one part gone** | `fg-dim`, **broken ring** | `cannot start — my-5.5g.img is not where it was` |
+| **cannot start, more than one** | `fg-dim`, **broken ring** | `cannot start — two of its parts are missing · MENU › Devices ›` |
+| **cannot start, not a 5.5G** | `fg-dim`, **broken ring** | `cannot start — that boot ROM is a nano-class device` |
+| **a control was pressed and there is no machine** | unchanged | `the wheel and the buttons belong to the machine, and there is no machine` — held while the pointer is down |
+| nothing mounted | `fg-dim` | `nothing is mounted` |
+| focused | +2 px **`fg`** ring, 4 px outside, **instant** | unchanged |
+
+That is the closed set. The label is the one place on the bench that says **what pressing will
+cost**, before you press — and the cost is the whole reason it exists: the same gesture is 3 seconds
+for a parked machine, 75 seconds for a cold boot, four minutes for a first run, and instant for a
+title.
+
+**Six of those rows are new and each one closes a hole.**
+
+- **`parked, pair broken`.** §12.4 is precise about why a broken pair is dangerous — *"pairing
+  restored RAM with a drive that kept moving is what produced the intermittent 'connect to computer'
+  screen"* — and names `Config::pair_is_whole` as the single place that knows. It then never routed
+  that knowledge anywhere, so a device whose image was modified by `ipod-boot put-files` between
+  sessions promised `about 3 s` and delivered the failure mode the section was written to describe.
+  `pair_is_whole()` is a stat and a one-line string compare; the cradle reads it before it draws.
+  **The snapshot is kept, not deleted** — principle: never discard the operator's data without
+  asking — and a `Discard the snapshot` row sits on the device's drawer page.
+- **`booting … press ● to stop`.** There was no stop control on the bench at all. A user two minutes
+  into a 21.5 G iPodLinux boot had an inert object in front of them for the next twenty-one minutes,
+  `Esc` would have written a 1.6 GB snapshot of a half-booted machine, and `Cmd::PowerOff` was three
+  navigations away on a page the drawer's root row list did not even include. The centre button is
+  live during `Booting` and sends `Cmd::PowerOff`.
+- **`first run, partly done`** — §10.3, and it is the difference between one iPod and three.
+- **the two `cannot start` rows** — §3.3, and the reason there are two is that 24 px of centred
+  `body` does not hold two filenames.
+- **`not a 5.5G`** — §11.4, and it exists because `inspect::flash()` passes a 1 MiB nano-class dump.
+
+**Accessibility.** The cradle is the `Button`. `accessible-label` is the device's name;
+`accessible-description` is the label line; `accessible-enabled` follows startability. The drawn
+device itself is `AccessibleRole::Image` with the panel's own description, and announces nothing
+about the program.
+
+### 7.4 The wheel, the buttons and the hold switch — all of them the machine's
+
+**Every drawn control goes to the machine, always, and to nothing else.** With no machine the only
+one that does anything is the **centre button, which powers on** — `Cmd::PowerOn`, which on a real
+iPod is what a button press on a dead device does. MENU, Prev, Next, Play and the wheel do nothing
+until there is a machine.
+
+**Pressing one of the inert controls puts its sentence on the cradle label, held while the pointer is
+down and released on pointer-up.** The previous revision put it in shelf row 2 *"for four seconds"* —
+which is a self-dismissing timed message that replaces content, i.e. a toast, which principle 5 bans
+by name; which made row 2 a fourth tenant beyond the facts line, the Rail line and a bench refusal;
+and which meant a refusal like `the disk is not where it was` could be silently overwritten because
+somebody brushed the wheel. The cradle already owns a closed set of transient machine-state sentences
+and nothing else competes for that line. No timer, no fourth tenant, and row 2's precedence stays
+unambiguous: facts, then the Rail line, then a refusal, never a notice.
+
+That inertness is a deliberate deletion. An earlier draft had the wheel drive the drawer when nothing
+was running. It is a mode whose meaning flips on a state the user did not set, and it disappears at
+exactly the moment a new user has finished learning it. **The drawn controls are the hardware's and
+they are never repurposed** — lying about a piece of hardware in a program whose subject is that
+hardware is not a trade worth making.
+
+- **96 detents**, `wheel::WheelRing::hit(x, y)` across outer / inner / select radii.
+- **Five buttons** by quadrant, `wheel::quadrant(pos)`.
+- **The centre button's hit region is `WheelRing::select`, which is what `hit()` already uses.** The
+  previous revision also said "12 px larger than its drawing on every side", and the two rules
+  disagree with each other and with the model. At hero the wheel's outer radius is 120.5 px, so
+  `select` is `120.5 × 0.465 = 56.0` and `inner` is `120.5 × 0.52 = 62.7` (`wheel.rs:158-162`); the
+  drawn button is `0.1228 h = 80.5` across, radius 40.3. So `hit()` already treats a region **39 %
+  wider than the drawing** as Select — Delta's `extendedEdges` idea, arrived at from the hardware
+  rather than borrowed — and "+12 px on the drawing" (52.3) would *shrink* the target it claimed to
+  widen, while "+12 px on `select`" (68.0) would swallow `inner` and destroy the 6.7 px moulding dead
+  band that `wheel.rs:152-155` documents as deliberate: *"a press landing in it is a press on neither
+  — which is the honest answer, since on the hardware it is the moulding."* One rule, and it is the
+  one the machine's own hit test uses.
+- **The hold switch is drawn, on the top edge**, and it is a first-class concept and not a button:
+  it has its own command (`holdsw on|off`), its own field (`Stats::hold`) and its own key (`H`).
+  With no machine it sits in the off position, inert, with the reason `the hold switch belongs to
+  the machine, and there is no machine`.
+
+**The two real latencies are visible rather than hidden**, because the machine runs at ~24 % of real
+time and pretending otherwise makes the drawing lie:
+
+- A press's **release** is held for `MIN_BUTTON_HOLD` = 22 500 000 instructions ≈ **1.6 s of wall
+  time** at the window's ~14 M instr/s. So the button depresses on pointer-down — a real button moves
+  when your finger does — and, **when there is a machine**, stays depressed until `Stats::buttons`
+  clears, which is when the machine actually saw the release. You can watch your click take a second
+  and a half to reach Apple's firmware, which is a true and interesting fact about this emulator.
+  **With no machine there is nothing to read**: `Stats::buttons` is published by a running machine and
+  is 0 while the phase is `Off`, so a power command or a first-run build depresses the button for
+  `tight` and restores it. Principle 3's exception says both halves for exactly this reason.
+- The wheel drains one event per `click_gap` = 300 000 instructions ≈ 21 ms wall ≈ **47 clicks a
+  second**, so a full 96-detent rotation takes about two seconds to deliver, and `MAX_QUEUE` is 96.
+  **Momentum scrolling is therefore not viable and is not offered.** The backlog is shown on the
+  **cradle label** — `running · wheel 41 queued` — and never on the wheel itself, and
+  `input_dropped > 0` turns that clause `warn`, because a refused step is a lie about what you did.
+
+### 7.5 The shelf — 88 px, three rows, flush to the bottom, full width
+
+`bg-band` gradient over a 1 px `line` top rule. Padding 24 left and right, 12 top and bottom. The
+3 px linear `accent` progress bar draws **on** the top rule when there is progress, and therefore
+costs no height.
+
+**The shelf narrows with the drawer, and the drawer runs above it.** The drawer occupies the full
+client height *minus the shelf*, right-anchored, and the well and the shelf both narrow to
+`W − 420`. The previous revision described the drawer only in terms of the well, and both readings of
+the gap broke something: a full-height drawer covers the shelf's right 420 px, which is covering
+rather than pushing and principle 5 forbids it; a drawer sitting above a full-width shelf leaves row 3
+with 412 usable px to hold *both* a ~72-character write-target sentence **and** the 47-character menu
+list, which do not both fit and one of which "never goes away".
+
+The resolution is one line: **while the drawer is open, row 3's trailing slot is empty** —
+`visible: false`, so §16.3 keeps its cell and nothing moves — because the menu list is a route into a
+drawer you are already inside. Row 3's leading slot then keeps the full narrowed measure.
+
+| row | h | leading | trailing |
+|---|---|---|---|
+| 1 | 26 | the name of the thing on the bench (`title`) | the state, and time since (`label`, `fg-dim`) |
+| 2 | 20 | the facts, **or the reason**, or the current Rail line (`body`) | the fidelity fact (`mono` 13) |
+| 3 | 16 | **the write target, permanently** (`label`) | `MENU ›  Devices · Parts · Games · Work · Readout` — **empty while the drawer is open** |
+
+**Row 3 never goes away.** It is `write_target()` and it is the one line standing between an
+afternoon and somebody's only image of an iPod they own. **Four sentences, not three**, because
+`work_on_copy`'s `None` and `built_from`'s `Some`/`None` are two different questions and the previous
+revision's prose fused them into one and got it backwards:
+
+```
+works on a copy of my-5.5g.img                                             ← Some(true)
+works on a copy of my-5.5g.img — nobody has said, so a copy it is          ← None, always a copy
+writes to my-5.5g.img — we built it from iPod_25.1.3, so it is regenerable ← Some(false), built_from Some
+writes to rockbox-test.img — you chose this, and we did not build it       ← Some(false), built_from None · warn
+```
+
+`write_target()` is `d.work_on_copy.unwrap_or(true)` and nothing else; `built_from` decides only
+whether the `warn` colour appears on the explicit-write case. Three tests hold that behaviour and the
+sentences now agree with them.
+
+**Row 3 has a long and a short form, and the verb is never what goes.** At the narrowed measure the
+qualifier after the em-dash is dropped and lives on the device's drawer page instead. `works on a
+copy of` and `writes to` are the first words on the line, so even a hard truncation preserves the
+dangerous one.
+
+The right-hand slot of row 2 always carries a number a bug report can quote:
+`panel 1× · 320×240 · nearest neighbour`, or where `k` and the display scale differ,
+`panel 1× · 320×240 physical · display scale 125 %`.
+
+The left slot of row 3 is the program's entire discoverability and is also a control: clicking it
+opens the drawer. That, the 12 px handle, `⌘\`, `⌘,` and the menu bar are the four routes in — `Esc`
+is not one of them (§4).
+
+### 7.6 The shelf states, the drawer explains
+
+Row 2 is where a bench-level refusal goes, in `fg` rather than `fg-dim`, as **one elided line** with
+a `why ›` control at the trailing edge that opens the drawer at the page owning the refusal — where
+the full `Verdict::No.why` paragraph and its `Fix` live, under the control that caused them.
+
+**This is a compromise and it is worth naming as one.** Principle 4 wants the reason next to the
+control. `Verdict::No.why` runs 2–4 sentences (~55 words), which is three lines at the shelf's
+measure. A shelf tall enough to hold that is 134 px. §17.Q1 puts the trade in front of the operator
+with numbers that the §6.6 correction has already moved once.
 
 ---
 
 ## 8. Motion
 
-**Springs only.** No `ease-in-out`, no fixed-duration curves, with one exception noted below.
+**Slint 1.17 has no spring easing.** It has 32 named curves plus an authorable
+`cubic-bezier(a, b, c, d)`, and overshoot is genuinely available — `ease-out-back` *is*
+`cubic-bezier(0.34, 1.56, 0.64, 1.0)`, and `ease-out-elastic` and `ease-out-bounce` are computed in
+Rust. So "no springs" does not mean "no overshoot", and the spring vocabulary is **retired outright
+rather than kept as a fiction**. Four names, written into `tokens.slint` so nobody ever picks a raw
+bezier:
 
-| transition | motion |
-|---|---|
-| Sheet in / out | slide from the trailing edge, `gentle` |
-| tab change | 4 px rise + crossfade, `tight` |
-| Expand open / close | height, `gentle`; content fades in after the height settles |
-| Rail appears | push from the edge, `gentle` |
-| press | `scale(0.98)`, `tight`, restored on release |
-| focus ring | appears instantly. A focus ring that animates is a focus ring you lose |
-| **Library → Running** | **the showpiece.** The hero iPod is already the right size in the right place, so it does not grow — it **wakes up**: the screen lights, the chrome recedes, the list slides out, `lively`. Going back reverses it |
-| progress | **linear, not sprung.** It is data. A progress bar that overshoots is lying |
+| name | duration | curve | used for |
+|---|---|---|---|
+| `tight` | 140 ms | `ease-out-quad` | press, hover, cradle colour, device cross-dissolve, drop-band content |
+| `gentle` | 320 ms | `ease-out-quart` | drawer in and out, the device's `x`, Expand height, scroll-into-view |
+| `lively` | 260 ms | `ease-out-back` | **drawer page depth only** — nothing else, ever |
+| `linear` | data-driven | `linear` | progress. It is data; a bar that overshoots is lying |
 
-`prefers-reduced-motion` collapses every one of these to an instant state change. The structural
-change still happens; only its animation does not.
+### 8.1 The complete transition list
+
+1. **Drawer in / out.** The well and the shelf narrow to `W − 420`; the device's `x` animates to the
+   new centre, `gentle`. **Only `x` animates.**
+2. **Drawer page depth.** The current page slides left, the new one in from the right, `lively`. This
+   is the borrowed iPod motion, and it is inside a 420 px panel where no framebuffer can be.
+3. **Expand.** Height `gentle`; content fades in **after** the height settles, so text never slides.
+   Inside a Scroll, an Expand that opens below the fold **scrolls its own top edge into view**
+   (`gentle`) rather than letting the rows below travel under a stationary cursor — §11.3, and it is
+   principle 2 arrived at through a mechanism §16.3 alone does not cover.
+4. **Device change.** `chassis` and the markings colour cross-dissolve, `tight`. The Screen is
+   unbound for the duration. Only reachable with no machine (§7.2).
+5. **Cradle state.** Colour and ring continuity only, `tight`.
+6. **Wake, Off → Booting — and it is the showpiece precisely because it has no geometry in it.** The
+   glass's `Image` becomes visible and its opacity ramps 0 → 1 over 220 ms `ease-out-quad`: a
+   backlight coming up, not a window opening. The cradle's `accent` fades to `fg-dim`. The label
+   crossfades. The shelf's rows change text. **Nothing is tweened between two geometries, because
+   there is only one geometry** — the device was already the right size in the right place. Reversed
+   on park.
+7. **Press.** The drawn control depresses on pointer-down, `tight`; with a machine it restores when
+   `Stats::buttons` clears, up to 1.6 s later, and without one it restores after `tight` (§7.4).
+8. **Gauge value change.** The row's background flashes `accent` at 12 % for 140 ms, `linear`, and
+   ends. **The digits never tween.** A number that animates is a lying instrument.
+9. **Focus ring.** Instant, always. A focus ring that animates is a focus ring you lose.
+10. **Drop band.** The shelf's rows 1 and 2 crossfade to the identification, `tight`. **Nothing
+    moves** — §11.4.
+
+### 8.2 Two rules with teeth, both earned from measured defects
+
+1. **Nothing that animates may feed the Screen's geometry.** The shipped carousel animates
+   `body-height` from `hero * 0.55` to `hero` over 320 ms on every selection change, and every
+   dimension in `ipod.slint` is a fraction of it — so the live framebuffer is drawn at a
+   continuously varying non-integer scale for the whole animation. Here `hero` is a length pushed in
+   from Rust and changed only on a display change, the Screen's size is two more pushed lengths, and
+   none of the three is ever the target of an `animate` block.
+2. **No overshooting curve may touch a property the Screen's geometry reads.** Overshoot momentarily
+   *over*scales the panel. `lively` is confined to drawer page depth, which is inside the drawer and
+   reads nothing of the device.
+
+### 8.3 Never propose an animation that does not end
+
+The winit event loop idles at `ControlFlow::Wait` and costs nothing — but `about_to_wait` calls
+`request_redraw()` for **every window with an active animation**, and partial rendering is off by
+default with the Skia renderer. So one perpetual spinner, pulse, shimmer or breathing highlight pins
+the main thread at display refresh with **full-window** repaints, indefinitely, while an ARM7 is
+being emulated at 24 % of real time.
+
+That is the mechanical reason there is no spinner in this program. Working is a Rail line with a byte
+counter; progress is a value that moves when data moves; a boot with no denominator is an
+instruction count that moves.
+
+### 8.4 Reduced motion
+
+**Slint has none** — a grep for `reduced.motion` across `i-slint-core`, `i-slint-common` and
+`builtins.slint` returns nothing. It is read per platform in Rust — macOS
+`NSWorkspace.accessibilityDisplayShouldReduceMotion` (`objc2-app-kit 0.3.2` is already in the tree),
+Windows `SPI_GETCLIENTAREAANIMATION`, otherwise false — into a single global `Motion.scale: float`,
+1.0 or 0.0. Every duration is written `Metric.gentle * Motion.scale`. One global, one multiplication,
+no duplicated markup. **The structural change still happens; only its animation does not** — including
+scroll-into-view, which jumps rather than glides.
 
 ---
 
-## 9. Four states, everywhere
+## 9. The five states, everywhere
 
-Every surface that can show a list, run a task, or take input specifies all four. A surface that
-only specifies the happy one is not designed.
+Every surface specifies all of them. A surface that only specifies the happy one is not designed.
 
-**Empty** — never a bare "nothing here". It says what this is for, and offers the one action that
-fills it. The Library's empty state is §11.
+### 9.1 Empty
 
-**Working** — an inline Rail entry naming what is happening and against what: `Fetching
-iPod_25.1.3.ipsw from Apple — 6.5 MB`. Never a spinner alone. Long tasks are cancellable, and §10
-says what cancelling costs.
+Never a bare "nothing here". It says what the surface is for and offers the one action that fills it.
 
-**Failed** — stays on screen until dismissed. Says what was being attempted, what happened in the
-program's own words, and **what to do next**. A failure that leaves the surface unchanged and shows
-nothing is the bug that sent the wizard back to step one with no explanation. Five classes, each
-with a different next step:
+| surface | empty |
+|---|---|
+| bench | §10 first run, once; thereafter the ghost iPod, `No devices yet`, cradle label `press ● to make an iPod`, no welcome copy |
+| Devices | one non-interactive `fg-disabled` row `No devices yet.` above the always-present `+ New device ›` |
+| Parts | **all six groups present**, each with its heading, its count `0`, its verbs, and one `fg-disabled` line naming what belongs there |
+| Games | `No titles. A title is a .ipg file — drop one anywhere on this window.` **and**, when no `Installer` is filed, `A title's imports are matched against RetailOS's framework table, so inspecting one also needs Apple's firmware. Fetch… ›` |
+| Work | `Nothing is happening. Fetches, builds and installs report here.` |
+| Readout | **every heading and every row present, each value `—`**, plus `No machine is running. These are the counters a running one publishes.` |
+| Settings | never empty; three rows, always |
 
-| class | example | next step offered |
+### 9.2 Working
+
+An inline Rail entry naming what is happening and **against what**, with real bytes:
+`fetch  Apple's firmware — iPod_25.1.3.ipsw  ████████░░  4.1 MB of 6.5 MB`. Never a spinner (§8.3).
+Long tasks are cancellable and §12.7 says what cancelling costs.
+
+The bench mirrors it in one line: the cradle label carries `building · 41 % · fetching Rockbox 4.0`
+and the shelf's top rule carries the bar.
+
+### 9.3 Failed
+
+**Stays until dismissed.** Says what was attempted, what happened in the program's own words, and
+what to do next — with the next step as a **real pressable control**, never prose. Seven classes:
+
+| class | example wording | next step |
 |---|---|---|
-| **network** | Apple's server did not answer | Retry · Provide the file yourself |
-| **verification** | the download's SHA-256 does not match the recorded one | Retry · Report it — a mismatch is interesting and should not be shrugged off |
-| **incompatible** | this bootloader cannot carry this OS on this drive | the reason, and the option that does work, pre-selected |
-| **space** | 74 GB needed, 31 GB free | the two numbers, and where it would have been written |
-| **permission** | the image is read-only, or the directory is not writable | the path, and what to change |
+| **network** | `Apple's server did not answer.` | `Retry` · `Provide the file yourself…` |
+| **not served** | `Apple no longer serves this release (403). Five of the 71 are refused; that is a fact about Apple's servers, not about your network.` | `Provide the file yourself…` |
+| **verification** | `The SHA-256 does not match the one on record. That is interesting and should not be shrugged off.` | `Retry` · **`Copy the details`** |
+| **incompatible** | `Verdict::No.why`, verbatim | the `Fix` — one press, or two where it detaches a resource (§11.3) |
+| **space, pre-flight** | `8.02 GB needed · 4.1 GB free on /Volumes/Work. Nothing has been written.` | `Choose somewhere else…` |
+| **space, mid-write** | `Stopped at 41.2 GB. my-5.5g.img.part is 41.2 GB and cancelling deletes it.` | `Choose somewhere else…` · `Cancel` |
+| **volume** | `That folder is on a FAT32 volume. FAT32 cannot hold a file larger than 4 GiB and has no sparse files, so an 8 GiB drive image would be written in full and would stop at exactly 4 294 967 296 bytes.` | `Choose somewhere else…` |
+| **permission** | the path, and what to change | `Reveal` |
+| **tool missing** | `Install p7zip (brew install p7zip, apt install p7zip-full), or unpack it yourself into <path>.` | — |
 
-**Disabled** — visible, `fg-disabled`, non-interactive, and **carries its reason on focus and on
-hover**. Note for implementation: in the current toolkit `.clicked()` is never true on a disabled
-widget and a normal hover-text call is silently dropped on one; whatever replaces it must be checked
-the same way.
+**`volume` is a class because free bytes are not the only thing a filesystem can refuse.** Unpack the
+release zip onto a FAT32 USB stick — which is what a stick that also has to work in a car is — and
+`settings.rs`'s first data-directory branch puts `data/` beside the executable, on FAT32. Then two
+independent things go wrong that a free-space check cannot see: the 16 777 216-sector image is written
+in full rather than "about 240 MB on disk", and the write dies at 4 GiB with an OS error that is none
+of the other classes. **Query the target filesystem before the plan is drawn**, not after.
+
+**`space` is split because a mid-write failure has a number and a consequence and the pre-flight one
+has neither.** `Nothing has been written.` is true before the first byte and false 41 GB in, and
+§12.7's cancellation contract needs to say which file it is about to delete and how big it is.
+
+**`Copy the details` replaced `Report it`.** There is no network reporting path in this program, no
+issue URL in this design, and a visible control that does nothing is the same class of defect this
+document indicts twice — two dead tabs and twelve missing glyphs. `Copy the details` puts the release
+name, the URL, the recorded size and SHA-256, the computed size and SHA-256, and the platform string
+on the clipboard, which is what a bug report needs and is the same mechanism §12.8 already uses.
+**`Retry` counts**: after the second mismatch it is replaced by `Provide the file yourself…` with
+`two downloads of this release have failed the same check; that points at the file, not the
+connection.` — because `firmware.rs`'s present-but-wrong path prints "already here but does not
+verify — downloading again" and will loop for as long as a mirror serves the wrong bytes.
+
+Three external tools each gate a different capability and each gets a **named remedy**: `curl` (every
+download), `7z` (ZeroSlackr only), `ffmpeg` (GIFs only).
+
+**Failures accumulate on the Work page and are dismissed individually**, which is what stops one
+scrolling away unread. The bench shows a one-line summary and never has to hold two.
+
+### 9.4 Disabled
+
+Visible, `fg-disabled`, non-interactive, and **carrying its reason on focus as well as hover**. §16.5
+is the construction; it is not optional, because Slint forcibly clears `has_hover` on a disabled
+`TouchArea` and a disabled `FocusScope` refuses focus *even programmatically*.
+
+**Two kinds, worded differently**, because greying them identically makes both ambiguous and defeats
+the entire justification for principle 4:
+
+| | says | example |
+|---|---|---|
+| **a machine rule** | *this cannot work, ever.* State the rule; teaching it is the point | `That image's data partition is FAT32 type 0x0C, the LBA form, and ipodloader2 reads only 0x0B — it will report "No valid paritions found!". Both are legitimate FAT32; drives off real iPods are 0x0C and drives built here are 0x0B.` |
+| **a project state** | *this is not finished, by us.* Say what does work, and **always name the escape hatch** | `iPodLinux boots — both partitions found, the root mounted, /bin/init run, no ATA error anywhere — and then ZeroLauncher stalls at "Finishing Up…".` `ipod-boot install-linux` **builds that drive if you want to look at it.** |
+
+A machine rule carries a **`Fix` button**; a project state carries a **command in `mono`**. No new
+colour, and you can tell them apart at a glance.
+
+**A `Fix` that names a value the picker disables is itself disabled**, wearing the same reason and the
+same escape hatch — §11.3, and it exists because the two surfaces contradicted each other on the first
+refusal a curious user hits.
+
+### 9.5 And a fifth, because the alternative is the 560 px bug again
+
+**The display is too short to show the panel at 1:1.** This is a designed state, not an overflow, and
+it is reachable on real hardware people own — 1280 × 800 and 1366 × 768 can never satisfy it at any
+scale factor, because the body alone needs 656 physical pixels and neither display has 810 of usable
+window height.
+
+The threshold is `hero_logical + 154 > client_logical`, evaluated in Rust from the **measured**
+window (§9.6, §16.1) with hysteresis, and re-evaluated on `Resized`, `Moved` and
+`ScaleFactorChanged`. When it is short, the well is replaced by:
+
+```
+ ┌─────────────────────────────────────────────────────────────────────────────────────┐
+ │                                                                                     │
+ │        This display gives 735 pixels of window. The iPod at 1:1 needs 810.           │
+ │                                                                                     │
+ │        Drawing it here would throw away part of every frame the emulator             │
+ │        produced, so it is not drawn — but it still runs, and you start it            │
+ │        from here. Nothing is wrong with your files.                                  │
+ │                                                                                     │
+ │      ▓▓▓▓▓  press ● to make an iPod · 6.5 MB to download, about 240 MB on disk  ▓▓▓▓ │  ← 44 px, the material,
+ │                                                                                     │     the cradle's own
+ │        Fullscreen shows the panel at 3× — 960 × 720, exact.  [ Fullscreen  ⌃⌘F ]     │     label and callback
+ │                                                                                     │
+ └─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**The primary row is the whole point of this state and the previous revision did not have it.** The
+well is the only thing that contains the drawn iPod, and the drawn iPod's centre button is the only
+start affordance in the entire program. Replace the well with a paragraph and shelf row 2 still
+reads *"The centre button makes one: a 5.5G, 30 GB, black"* — pointing at a control that is not
+drawn — while the only offered control was `[ Fullscreen ]`, which §12.6 disabled on any phase but
+Running with the reason *"there is no machine running, so there is nothing to show."* The advertised
+route was a phantom and the offered route was dead, on the one display class this document
+explicitly designs a state for. So:
+
+- **The panel carries a real 44 px primary Row** wearing the material, whose label is exactly the
+  cradle label for the current state and whose callback is exactly the centre button's — `press ● to
+  make an iPod`, `press ● to start`, `press ● to resume`, `press ● to stop`. One source, so they
+  cannot disagree, and `Space` / `Enter` reach it because it is the pane's primary action.
+- **`Fullscreen` is offered only when there is something on the glass** — Booting, Running, Stopped,
+  or parked with a frame. Otherwise it is absent from this panel rather than present and dead, and
+  §12.6's rule is restated to match.
+- **The scale in the sentence is interpolated from the same function §12.6 uses**, never a constant.
+  On the operator's own machine it says 7×, not 3× (§12.6).
+
+The shelf and the drawer are unaffected, so the machine can still be composed, built and run — it is
+only the drawn body that is withheld.
+
+### 9.6 The vertical budget, and it is the argument for the whole layout
+
+All logical pixels except the body, which is `k × 655.751` **physical**.
+
+| | preferred | minimum | note |
+|---|---|---|---|
+| top margin | 24 | **0** | the only elastic term; absorbs all slack |
+| **cradle overhang + focus ring, above** | **16** | **16** | 10 px outward offset + 6 px focus gap. **This term was missing** |
+| **the device** | `k × 655.751 / sf` | same | fixed; contributes zero to Slint's shrink adjuster (§16.2) |
+| **cradle overhang + focus ring, below** | **16** | **16** | |
+| gap | 6 | 2 | |
+| cradle label | 24 | 24 | |
+| gap | 16 | 8 | |
+| **the shelf** | **88** | **88** | flush to the bottom edge |
+| **total** | body + **190** | body + **154** | at k = 1, sf = 1: **846** and **810** |
+
+**The top term was the one that was missing, and it is the topmost thing on the bench.** The cradle
+is an outline offset *outward* by 10 px and the focused state adds 2 px more, 4 px outside that — so
+16 px above the body is spoken for, on both sides, and the previous revision's budget listed
+`cradle overhang 10` exactly once. With the top margin's minimum declared 0, the cradle's top edge
+and its focus ring had nowhere to go at minimum size and were positioned above the pane, where
+§16.2's own finding says Slint neither shrinks nor clips them. Principle 3 makes the cradle the sole
+carrier of UI state, and its top edge and its focus indicator were the first two things off the
+screen.
+
+**The client height is measured, not predicted.** The previous revision computed it as
+`screen − 33 (menu bar) − 32 (title bar)` on macOS. That 33 was measured on this machine with
+`com.apple.dock autohide = 1` — **still 1, verified** — which is why `visibleFrame` came out 923 of
+956 with nothing else removed. With the Dock at its default visible size the client loses a further
+70–90 px, so the design's headline answer to *"which displays can show the panel at 1:1"* was true
+only for the one machine configuration it was measured on, and the document never said so. Two
+changes:
+
+- **Read the ceiling at runtime.** On macOS from `NSScreen.visibleFrame` (`objc2-app-kit 0.3.2` is
+  already in the tree) and on Windows from `SPI_GETWORKAREA`. **winit's `MonitorHandle` has no
+  work-area API** — only `size()` and `position()` (`winit-0.30.13/src/monitor.rs`) — so this is a
+  per-platform call, not a portable one, and **on Wayland there is no work area at all**. That makes
+  it the same shape as `set_outer_position`: a two-platform fact, stated in Reference rather than
+  pretended.
+- **Then stop relying on the prediction entirely.** The too-short boolean is computed from
+  `Window::size()` — the window we actually got — and re-computed on `Resized`, `Moved` and
+  `ScaleFactorChanged`. The table below becomes documentation of what to expect, not a mechanism.
+
+| display | sf | client, Dock hidden | k | body, logical | needs | verdict |
+|---|---|---|---|---|---|---|
+| 1280 × 800 | 1.0 | 735 | 1 | 655.8 | 809.8 | ✗ **75 short** — §9.5, at every scale factor |
+| **1366 × 768** Windows | 1.0 | 689 | 1 | 655.8 | 809.8 | ✗ **121 short** — §9.5, at every scale factor |
+| 1440 × 900 | 1.0 | 835 | 1 | 655.8 | 809.8 | ✓ 25 spare — **✗ with the Dock shown** |
+| **1470 × 956** (the operator's) | 2.0 | 891 | **2** | 655.8 | 809.8 | ✓ 81 spare — ✓ by 1 px with the Dock shown |
+| 1512 × 982 (14″ MBP, notch bar ≈ 37) | 2.0 | 913 | 2 | 655.8 | 809.8 | ✓ 103 spare |
+| 1920 × 1080 Windows @ 100 % | 1.0 | 1001 | 1 | 655.8 | 809.8 | ✓ 191 spare |
+| 1920 × 1080 Windows @ 125 % → 1536 × 864 | 1.25 | 801 | 1 | **524.6** | **678.6** | ✓ **122 spare** |
+| 1920 × 1080 Windows @ 150 % → 1280 × 720 | 1.5 | 667 | 1 | **437.2** | **591.2** | ✓ 76 spare |
+| 2560 × 1440 @ 100 % | 1.0 | 1375 | 1 | 655.8 | 809.8 | ✓ (k = 2 would need 1465.5) |
+
+**The physical-hero correction made the fractional-scale displays easier, not harder.** At 125 % the
+previous revision's budget had 11 px of slack and a panel filling 56 % of its glass; this one has
+122 px of slack and a panel filling all of it. Note also that the 125 % row was internally
+inconsistent before — it subtracted 79 logical px of chrome at 100 % and only 63 at 125 %, which made
+it ✗ by 5 px on its own arithmetic before any correction. It is computed with the same 79 here.
+
+**The general rule, in one line a ruler can check**: a display needs
+**`655.751 + 154 × sf` physical pixels of window height**. 810 at 100 %, 848 at 125 %, 887 at 150 %,
+964 at 200 %. A 768-pixel-tall panel can never reach it, and saying so is more useful than a table.
+
+**This budget is why the chrome bar is deleted and the caption is a shelf.** The shipped column wants
+56 (chrome) + 16 + 658 + 16 + ~132 (caption stack) + 16 ≈ **894 px** against the operator's own
+891 — three pixels short of its own fidelity rule, on the machine this program is developed on, with
+a guard test that cannot see it because it hard-codes the caption at 90.
+
+**`min-width: 880`**, and the derivation is one line rather than two disagreeing ones. The previous
+revision's parenthetical — *"12 handle + 24 + 389.3 + 24"* — sums to 449.3, not 880, and stood beside
+the real derivation as a second source of truth for a load-bearing constant, in the document whose
+§16.9 rule is that constants live in one place. The real one:
+
+```
+420 (the drawer)
++ 388.0 (the body at k=1, sf=1: 0.5917 × 655.751)
++ 20    (the cradle, 10 each side)
++ 12    (the focus ring, 6 each side)
++ 40    (well air, 20 each side)
+= 880.0
+```
+
+With the drawer open the well is `880 − 420 = 460` against a cradle-plus-ring of 420, so **the drawer
+never widens the window** — unlike a design where opening a panel resizes the window under you. On a
+fractional scale factor the body is narrower and the air is more generous; 880 is declared at the
+widest logical case because a markup constant cannot vary.
+
+**`min-height: 400`, and it is a floor rather than the mechanism.** A minimum tall enough to
+guarantee the 1:1 panel would have to vary with `k` and `sf`, and a window `min-height` is a
+constant. 400 is the height below which even §9.5's replacement pane cannot be laid out. Everything
+above that is the too-short boolean's job, with hysteresis (drop below the threshold, restore 20 px
+above it) so the boundary does not flutter under a drag. **`preferred: 1180 × 846`.**
 
 ---
 
-## 10. Long work, and what cancelling costs
+## 10. First run, in full
 
-Building a drive for an 80 GB iPod writes tens of gigabytes and takes minutes. Three rules.
+A person who has just unpacked this has no boot ROM, no `.ipsw`, and no vocabulary. **They meet no
+form.**
 
-**Check before starting.** Free space is checked against the estimate before a byte is written, and
-a shortfall is a *space* failure per §9 with both numbers — not a crash forty gigabytes in.
+### 10.1 What is on screen
 
-**Build to a temporary name; rename on success.** This is already the rule for fetched firmware —
-*nothing is renamed into place until it verifies* — and it extends to disks unchanged. A cancelled
-or failed build leaves **no partial file with a real name**, so there is nothing to mistake for a
-working drive later.
+The bench, at 1180 × 846, centred (macOS, Windows and X11; **Wayland cannot place a window** —
+`set_outer_position` is documented Unsupported — so "centred on first launch, remembered afterwards"
+is a three-platform promise and Reference says so rather than pretending).
 
-**Cancelling deletes only our own temporary file.** Never the source image, never anything the
-operator supplied, never anything that was already named. That rule has no exception and no
-"unless".
+- **A ghost iPod**: the full drawing in `Colour::Unspecified` `#E4E4E2` at 45 % opacity. Not black.
+  An iPod at 45 % reads as *an iPod that has not been decided yet*, which is what it is.
+- **The glass is dark and completely empty.** No welcome, no logo, no "press start". §6.1 has no
+  first-run exemption.
+- **The cradle is `accent`** and its label reads
+  `press ● to make an iPod · 6.5 MB to download, about 240 MB on disk`.
+- **The shelf**:
 
-### Whose file is about to be written to
+```
+ ├─────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+ │  No iPod yet                                                                            nothing mounted  │
+ │  You do not need an iPod, or any files off one. The centre button makes one: a 5.5G, 30 GB, black —      │
+ │  6.5 MB to download, about 240 MB on disk.     MENU ›  Parts, if you have files  ·  or drop them here    │
+ └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
-The current program has a surface that says this out loud before the machine starts, and my first
-draft of this document lost it. It is the thing standing between an afternoon and somebody's only
-image of an iPod they own.
+**One number per axis, and both come from `Recipe::steps()`.** The previous revision put three
+different sizes for one operation on the one screen principle 7 was written for: the shelf said
+`about 300 MB, and four minutes`, the plan said `8 GiB sparse` / `about 240 MB on disk today`, and
+the ledger said `8.02 GB needed`. The actual download is a single 6 500 352-byte `.ipsw` — **6.5 MB,
+not 300** — and the actual disk cost is about 240 MB. Worse, the free-space gate was written against
+the *apparent* size of a sparse file, so a person with 4.1 GB free was refused with the `space` class
+on a machine with sixteen times the room the build needs, and the refusal was wrong.
 
-It appears in **two** places, saying the same sentence:
+So: **`6.5 MB to download · about 240 MB on disk` everywhere**, the gate is against the
+**materialised** estimate, and 8 GiB appears exactly once — in the `build` step's own sub-line, as
+the volume's apparent size, where it is a fact about the drive rather than a bill. Where sparse files
+are not available (§9.3's `volume` class) the number *is* 8.02 GB and the sub-line says why.
 
-- on the device Tile, as one dim line — `writes to my-5.5g.img` or `works on a copy`;
-- in Running's chrome bar for the first few seconds after start, and permanently in the readout Rail.
+- **The drawer is open, on Work, showing the plan — before anything is pressed.** This is principle 7
+  taken literally, and it costs one call to `Recipe::steps()` that already exists:
 
-When the target is the operator's own supplied image and `work_on_copy` is off, the line is `warn`
-coloured. That is the only routine use of `warn` in the program.
+```
+ ┌──────────────────────────────────────┐
+ │ ‹ Close              Work            │
+ │══════════════════════════════════════│
+ │ This is what pressing ● does         │
+ │                                      │
+ │ ○ synthesise  a boot ROM             │
+ │      5.5G, 30 GB, black · A446       │
+ │      instant, nothing downloaded     │
+ │ ○ fetch       Apple's firmware       │
+ │      iPod_25.1.3.ipsw · 6 500 352 B  │
+ │      from Apple, SHA-256 checked     │
+ │ ○ build       a drive                │
+ │      8 GiB volume, about 240 MB on   │
+ │      disk — the file is sparse       │
+ │ ○ install     Apple's software       │
+ │      from the bundle above           │
+ │ ○ start       cold boot, about 75 s  │
+ │                                      │
+ │ ──────────────────────────────────── │
+ │ 6.5 MB to download                   │
+ │ about 240 MB on disk · 312 GB free   │
+ │ on /Users/…/Application Support      │
+ │                                      │
+ │ Nothing has been downloaded yet.     │
+ └──────────────────────────────────────┘
+```
+
+**Nobody has ever been given that list before agreeing to a download.**
+
+### 10.2 What the press does
+
+**One press.** With the mouse, with `Space`, with `Enter`, by pressing centre on the wheel, or — on a
+display too short to draw the wheel — on §9.5's primary row, which carries the same label and the
+same callback. There is one interactive element on the bench and it is the centre button of the
+object you came to look at. There is no Start button anywhere in this program, because the operator's
+own instruction was *"just pressing on a button would start it so no need for any buttons"* and this
+design takes it literally: **the button is on the iPod.**
+
+In order, narrated in the Work Rail, as a `Recipe` with ticked `Step`s:
+
+1. **The identity is minted and written.** `nor::Source::Synthetic { model: "A446", seed: <random>, .. }`
+   is created, filed in Parts under `Black 5.5G`, and **`Settings::save()` is called here** — the
+   first write the program makes. The body cross-dissolves from 45 % `Unspecified` to solid black the
+   moment `Source::identity()` answers, which is before a single byte is fetched, and **nothing else
+   moves**. **This step is idempotent**: if an in-flight first run already has a synthesised ROM, it is
+   reused rather than re-minted.
+2. **The target volume is checked, then free space.** The volume check is §9.3's `volume` class — can
+   this filesystem hold the file at all, and does it do sparse — and it runs *before the plan is
+   drawn*, not after. Free space is then checked against the **materialised** estimate (about 240 MB,
+   or 8.02 GB where sparse is unavailable). A shortfall is the *space, pre-flight* class with both
+   numbers and the path.
+3. `iPod_25.1.3.ipsw` is fetched to `<file>.part`, verified against the recorded size and SHA-256,
+   and renamed into place **only then**.
+4. An 8 GiB sparse image is built, with `aupd` marked applied so the first boot runs the OS rather
+   than the updater.
+5. The device is named `My 5.5G`. `Settings::save()` again — and after every completed step, which is
+   what makes §10.3's resume real rather than aspirational.
+6. It starts. The cradle label reads `booting · 412 M instructions · press ● to stop` with **no
+   percentage**, because `Device::boot_instructions` is `None` and inventing a fraction would be lying
+   about a number the program does not have. About 75 seconds later RetailOS draws its language
+   picker inside the glass, at exactly `k`.
+7. `record_boot()` writes the denominator. Every subsequent boot of this device shows a real
+   percentage — until the recipe changes, and §12.3 says what happens then.
+
+**Everything it made is a named, editable resource.** `MENU › Parts` afterwards shows the synthesised
+iPod under `Black 5.5G · synthesised · seed 8f21c4`, the `.ipsw` under its filename with
+`fetched · SHA-256 verified`, and the drive under `my-5.5g.img · 8.0 GB · FAT32 0x0B · from
+iPod_25.1.3`. Nothing was magic.
+
+### 10.3 Failure, retry, and the flag that stops the wizard coming back
+
+If a step fails, the Work page keeps the failure block with its class and its next step, the
+completed steps stay ticked, **nothing is re-downloaded**, and the cradle reads
+**`press ● to finish making My 5.5G`**. The surface never went anywhere, so it cannot return to step
+one.
+
+**The press resumes the existing `Recipe` from the first unticked `Step`, and that is not a nicety.**
+The previous revision made step 1 unconditional, so a hotel wifi that drops three times left
+`Black 5.5G`, `Black 5.5G (2)` and `Black 5.5G (3)` in Parts — three distinct FireWire GUIDs, each
+`TitleAuth::Never`, each recoverable only from its own seed. §10.3's whole argument was that a
+boolean stops the wizard re-running; the boolean stopped the *welcome copy* returning, not the
+*identity* being re-minted. **Identity is the one decision this document calls permanent, and the
+retry path was minting a fresh one per press.** Step 1 is idempotent and `Settings::save()` moved to
+it, so the identity survives a crash as well as a retry.
+
+**`Settings` gains `welcomed: bool`, written the first time the bench is drawn.** The welcome copy
+never returns; a later empty bench is the same ghost iPod with `No devices yet` and both routes
+offered equally, visibly the lesser of the two.
+
+That flag exists specifically because **the old wizard inferred "offer me" from "the list is
+empty", and a cancelled build empties the list** — so it re-opened itself forever. Inferring
+first-run from emptiness is the bug, and a boolean is the fix.
+
+### 10.4 The escape hatches, and the one that had to be built
+
+`MENU › Parts` for someone who already has files, and **the whole window is a drop target** (§11.4).
+Both lead to the same bench. `Make me an iPod` is disabled with a named remedy when `curl` is absent
+— `Every download in this program goes through curl, and it is not on this computer. Install curl,
+or set one up yourself from files you already have.` — and the second route still works, which is
+what makes it a remedy rather than a dead end.
+
+**Neither of those helps the person §10 is actually written for**, because both require files they do
+not have. On a 1280 × 800 or 1366 × 768 laptop — the two most common display classes that fail
+§9.6 — the previous revision left first run with no pressable route to a device at all: the well
+replaced by a paragraph, the cradle undrawn, and the paragraph's one control disabled by §12.6 in
+exactly the state it was offered in. That is the operator's rejected pattern in a worse form: not a
+wizard that returns to step one, but a bench with no step one. **§9.5's primary row is the third
+escape hatch and it is the one that matters**, because it is the only one that works with nothing on
+disk.
 
 ---
 
-## 11. First run, and the one button
+## 11. Composing a device, and Parts
 
-The README's promise is the product's whole first impression:
+### 11.1 The ROM comes first, and that is not a layout preference
 
-> **Press the button.** It synthesises a boot ROM and downloads Apple's firmware itself — then
-> builds a drive from it and boots.
+On real hardware **the NOR flash *is* the iPod**: model, capacity, serial, GUID and colour all live
+in its SysCfg, and the drive is swappable. So an iPod *states* five facts, and those five decide
+which firmware bundle can follow, which bootloader can carry which systems, and whether a purchased
+title could ever be authorised.
 
-**That is restored and it is the design.** A person who has just downloaded this does not have a
-boot ROM, does not have an `.ipsw`, does not know what either is, and should not meet a form.
+Until an iPod is chosen, levels ② and ③ are `fg-disabled` with:
 
-```
-┌───────────────────────────────────────────────────────────────────────┐
-│  ipod-emulator                                                  ? ⓘ   │
-├───────────────────────────────────────────────────────────────────────┤
-│                                                                       │
-│                              ▟▙▙▙▙▙▛                                  │
-│                            ▐          ▌                               │
-│                            ▐  ┌────┐  ▌            ← the hero iPod,   │
-│                            ▐  │    │  ▌              at rest          │
-│                            ▐  └────┘  ▌                               │
-│                            ▐   ( ● )  ▌                               │
-│                            ▜▙▙▙▙▙▙▙▙▙▛                                │
-│                                                                       │
-│                    You do not need an iPod,                           │
-│                    or any files off one.                              │
-│                                                                       │
-│                    ┌───────────────────────┐                          │
-│                    │   Make me an iPod     │                          │
-│                    └───────────────────────┘                          │
-│                                                                       │
-│         Already have files?  Set one up yourself  ·  or drop them here │
-└───────────────────────────────────────────────────────────────────────┘
-```
+> An iPod states its model, capacity, serial and GUID, and those decide which firmware can follow.
+> Choose one first.
 
-**One button.** It synthesises a 5.5G boot ROM, fetches and verifies the matching firmware, builds
-the drive, names the device, and starts it — narrating each step in the Rail as it goes, and leaving
-every artifact it made in Resources under a name, so nothing is magic and everything is editable
-afterwards.
+### 11.2 The Composer — three levels, not three groups
 
-**It is not a mode.** It produces exactly the objects the Sheet produces. Someone who presses it and
-later wants to change the model opens the device and changes it.
+A drawer page. **Three numbered levels, each one row deep from the root**, then the verdict, the plan,
+and `Create`.
 
-The two smaller links are the escape hatches: the full Sheet for someone who knows what they want,
-and §12 for someone holding files.
+The previous revision drew all three groups open on one page and it does not fit. Counted from its
+own drawing: ~14 rows at 44 px = 616, six Fields each reserving a 34 px two-line reason slot = 204,
+the verdict region 54, the plan ≈ 110, `Create` 44, plus group rules and the page header ≈ 60 —
+about **1 090 px** inside a drawer that is at most 803 px tall on the operator's own machine and 722
+at the minimum. It had to scroll, and no surface in that revision had a scroll model. Now that Scroll
+exists (§5, §16.11) it *could* scroll — and it still should not, because a `Flickable` costs every
+control inside it 100 ms of press latency, and this is the page that gets pressed most.
 
-**After the first device exists, this screen is never seen again.** The Library's empty state
-thereafter — reached by deleting every device — is the same hero iPod with `No devices yet` and both
-paths offered equally, without the welcome copy.
-
----
-
-## 12. Dropping files
-
-The best thing the current program does, and it was missing from the first draft of this document
-entirely.
-
-**Drop anything, anywhere on the window, in any order.** A file is identified by **what it
-contains**, not by which control you dropped it on. A 1 MB NOR dump is a boot ROM whether you meant
-it to be; an `.ipsw` is firmware; a `.ipod` is software; a large image is a drive. There is no
-"choose file type" step and there is no wrong target.
-
-- **The whole window is the target.** While a drag is over it, the window shows one line naming
-  what it thinks the file is — `boot ROM · 5.5G` — before you let go. Identification happens on
-  hover, so a wrong guess is visible before it is committed.
-- **Several at once, in any order.** Dropping a ROM and an `.ipsw` together produces one device.
-  Order never matters. There is a test asserting exactly this and it comes across.
-- **Nothing is moved or copied without saying so.** The drop reports where the file was filed and
-  whether it was copied in or referenced in place.
-- **Unrecognised files are named, not swallowed.** `That does not look like anything this program
-  can use — 4.2 MB, no recognisable header.` Silence would leave you wondering whether it worked.
-
-Dropping onto Running is the same: it files the resource and says so. It does not disturb the
-machine.
-
----
-
-## 13. Library — Devices
-
-The default tab, and the program's front door once §11 has been through once.
-
-**Master–detail, not a grid.** The list carries the borrowed row grammar from §7; the detail pane is
-ours, and is where the drawn iPod lives at hero size.
+So the three groups become three **depth levels**, which is what §11.2's own promise — *"the surface
+never changes shape as you decide"* — already implied:
 
 ```
-┌────────────────────────┬──────────────────────────────────────────────────┐
-│ ██ My 5.5G          ›  │                                                  │
-│    Rockbox test     ›  │                    ▟▙▙▙▙▙▛                       │
-│    Retail dump      ›  │                  ▐          ▌                    │
-│                        │                  ▐  ┌────┐  ▌                    │
-│                        │                  ▐  │    │  ▌                    │
-│                        │                  ▐  └────┘  ▌                    │
-│                        │                  ▐   ( ● )  ▌                    │
-│                        │                  ▜▙▙▙▙▙▙▙▙▙▛                     │
-│                        │                                                  │
-│                        │                   My 5.5G                        │
-│                        │        80 GB · Apple 25.1.3 · Rockbox 4.0        │
-│                        │              parked · works on a copy            │
-│                        │                                                  │
-│                        │            ┏━━━━━━━━━━━━━━━━━━━━━┓               │
-│                        │            ┃  Resume    Cold boot ┃              │
-│ [ + New device ]       │            ┗━━━━━━━━━━━━━━━━━━━━━┛               │
-└────────────────────────┴──────────────────────────────────────────────────┘
-   the selected row wears        the iPod is always at hero size — this is
-   the §7 material               the object the program is about
+ ┌──────────────────────────────────────┐   420 px · 38 chars · rows 44 px
+ │ ‹ Devices        New device          │
+ │══════════════════════════════════════│
+ │ ① Which iPod     Black 5.5G        › │
+ │ ② What it runs   Apple + Rockbox   › │
+ │ ③ Name it        My 5.5G           › │
+ │══════════════════════════════════════│
+ │ THE VERDICT — 54 px, always reserved │
+ │ Starts Rockbox. Hold MENU at         │
+ │ power-on for Apple's software.       │
+ │══════════════════════════════════════│
+ │ WILL DO, IN ORDER                    │
+ │  fetch    Apple's firmware   6.5 MB  │
+ │  build    a drive, 8 GiB volume      │
+ │  fetch    Rockbox 4.0        9.1 MB  │
+ │  install  Rockbox and its bootloader │
+ │  6.5 MB to download                  │
+ │  about 240 MB on disk · 312 GB free  │
+ │▓▓▓▓▓▓▓▓▓▓▓▓ Create ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ │   ← the material, one per page
+ └──────────────────────────────────────┘
 ```
 
-**Why this beat the grid.** Four reasons, and the fourth is the one that decided it:
+Three rows, a verdict, a plan and a button: **420 × 738 with room to spare, and no Flickable on the
+path to `Create`.** Each `›` slides one level deeper, `lively`, and comes straight back. The verdict
+and the plan are live at the root and update as you come back from a level, so you never lose sight
+of what you are building.
 
-- The drawn iPod is at **hero size always**, instead of a 48 px thumbnail on a tile.
-- It **scales to any number of devices**, which retires the question of how many you will have.
-- The detail pane has **room for the facts** a tile could not hold — provenance, what is installed,
-  the write target from §10, the last boot.
-- **The showpiece transition gets simpler and better.** The hero iPod does not grow into the running
-  one; it is already the right size and in the right place. It *wakes up* — the screen lights, the
-  chrome recedes, the list slides out. Nothing has to be tweened between two geometries.
-
-**The list.** One row per device: the name, a trailing chevron, and nothing else — density is the
-point. The selected row is full-width and wears the §7 material. Rows are `title` sized and
-generously spaced, which is the borrowed grammar and is also just a good list.
-
-**The detail pane** holds everything about the selected device and every action on it — Start,
-Edit, Duplicate, Reveal disk, Remove. **This deletes a mechanism**: the earlier draft needed
-right-click to morph a tile's action area into an inline strip, with its own way back out. A detail
-pane simply has room, so there is no morph, no mode, and no way to get stuck in one.
-
-**Remove asks**, names what will and will not be deleted (`Removes the device. The iPod and the disk
-stay in Resources.`), and is the only place `danger` appears.
-
-**Empty** is §11 on first run. Thereafter — reached by deleting every device — the list is empty,
-the detail pane holds the hero iPod at rest with `No devices yet`, and both paths are offered.
-
----
-
-## 14. Library — Resources
-
-Everything a device is made from. Rows here, not Tiles: these are files, and files compare by name,
-size and date, which is what a row is for.
+**Level ② is the one that is long, and it is the one that may scroll** — the systems list, the
+bootloader picker, and up to two refusal paragraphs with their `Fix` rows. §16.11's rules apply
+there.
 
 ```
-┌───────────────────────────────────────────────────────────────────────┐
-│  ipod-emulator                        Devices [Resources]       ? ⓘ   │
-├───────────────────────────────────────────────────────────────────────┤
-│   iPods                                 [ Add a dump… ][ Synthesise… ]│
-│   ▸ From my 30 GB       5G   · 30 GB · white · dumped from a real iPod │
-│   ▸ Black 5.5G          5.5G · 80 GB · black · synthesised · seed 4f2a│
-│                                                                       │
-│   Apple firmware                             [ Fetch… ][ Provide… ]   │
-│   ▸ iPod_25.1.3.ipsw        6.5 MB   5.5G · fetched and verified      │
-│   ▸ iPod_20.1.3.ipsw        6.5 MB   5G   · fetched and verified      │
-│                                                                       │
-│   Software                                            [ Fetch… ]      │
-│   ▸ Rockbox 4.0             8.1 MB   5G/5.5G · fetched and verified   │
-│                                                                       │
-│   Disks                                    [ Build… ][ Provide… ]     │
-│   ▸ my-5.5g.img            74.5 GB   from iPod_25.1.3 · Rockbox 4.0   │
-│   ▸ rockbox-test.img       55.9 GB   from iPod_20.1.3 · Rockbox 4.0   │
-└───────────────────────────────────────────────────────────────────────┘
+ ┌──────────────────────────────────────┐   ← level ①
+ │ ‹ New device     Which iPod          │
+ │══════════════════════════════════════│
+ │  iPod            Make one          › │
+ │  Model           5.5G, 30 GB       › │
+ │  Colour          Black             › │
+ │  Serial          7B4••••••X3N   Show │   masked by default — a screenshot
+ │  GUID            000A27••••••••  Show│   of this page must not carry
+ │                                      │   somebody's identifiers
+ │  Generated from a seed, so the same  │
+ │  iPod comes back next launch. It can │
+ │  never authorise a purchased title — │   ← TitleAuth::Never, said where
+ │  invented values match no purchase   │     the decision is made, not in
+ │  ever made, on any machine.          │     a footnote
+ └──────────────────────────────────────┘
+
+ ┌──────────────────────────────────────┐   ← level ②
+ │ ‹ New device     What it runs        │
+ │══════════════════════════════════════│
+ │  Disk            Build one         › │
+ │  From            iPod_25.1.3       › │
+ │                  iPod_20.1.3         │   ← fg-disabled, MACHINE RULE
+ │                  the 5G's software;  │
+ │                  this iPod is a 5.5G │
+ │  Systems      ✓  Apple's software    │
+ │               ✓  Rockbox 4.0         │
+ │               ☐  iPodLinux           │   ← fg-disabled, PROJECT STATE
+ │                  boots, then         │
+ │                  ZeroLauncher stalls │
+ │                  at "Finishing Up…". │
+ │                  ipod-boot           │     ← the escape hatch, in mono
+ │                  install-linux       │
+ │                  builds that drive.  │
+ │  Bootloader      Rockbox's         › │
+ └──────────────────────────────────────┘
 ```
 
-Four groups, fixed order, **always all four present even when empty** — an empty group shows its
-name, its actions, and one dim line saying what belongs there. A page whose sections come and go is
-a page you have to re-learn every visit.
+**Existing and new look identical.** *One I have* fills Model / Colour / Serial / GUID and **locks**
+them, `fg-dim`, with `Read from the dump; a device's identity is the ROM's, not ours.` A locked
+picker **stays a picker** rather than collapsing to a line of text — that is the only way the page
+does not jump when you switch between the two.
 
-**`iPods` holds both kinds** per §3.1, in one list, in the same row shape. The trailing column is
-provenance — `dumped from a real iPod` or `synthesised · seed …` — where the other three groups put
-`fetched and verified` or `provided by you`. **Every row states where it came from**, because in
-this program that is the interesting fact.
+**The iPod becomes a filed resource the moment it is made**, under `<model>, seed <n>`, not on
+`Create`. Cancelling the device keeps the identity you just tuned.
 
-**`▸` expands in place** to show what is *inside* that file — the ROM's image directory and the
-identity it declares; the `.ipsw` firmware versions and their checksums; the disk's partitions and
-what is installed. This replaces the current separate Details and Firmware pages, both of which
-exist only because there was nowhere to put this.
+**Validation returns the model's own sentences, verbatim**, into a **34 px two-line slot reserved
+whether or not it is filled** — and that reservation is what sets the Field's height, which is what
+makes principle 2 mechanical rather than aspirational:
 
-**Removing** a resource that a device depends on says which devices, by name, and offers to remove
-it anyway or cancel. It never silently breaks a device. Removing a **synthesised** iPod warns that
-the identity is regenerable only from its seed, and shows the seed so it can be written down.
+- `The shape is LLYWWUUUCCC` — eleven characters.
+- `O` would be read as a zero. Apple does not use it.
+- `000A270014EFE726 is the shape. This one starts 001B63, so it belongs to some other maker's
+  hardware.`
 
----
+**With one carve-out, and it is a masking hole rather than a wording preference.** `identity.rs:386`
+renders *"the 5.5G was made in 2006 or 2007, so its serial's third character is one of those — not
+`3`"* — which quotes the offending character back, and therefore defeats the masking on this page the
+moment a validation sentence fires. **While a field is masked, the reason renders the position rather
+than the character**: *"the third character is the year, and 2006 or 2007 are the only ones this
+generation was made in."* Press `Show` and the model's own sentence returns verbatim, because at that
+point the identifier is already on screen and there is nothing left to protect.
 
-## 15. The device Sheet
+Three behaviours in `identity.rs` differ and **the UI must not flatten them**: a typed non-Apple OUI
+is **refused**; one read out of a real file **warns**, because a real dump is evidence and a typed
+field is a claim; and `--serial` without `--guid` is refused outright, because *the GUID is the field
+with teeth*.
 
-One Sheet, two modes: **new** (steps) and **edit** (all of it at once). Same layout, same fields,
-same order — so what you learn making one you keep when changing one.
+**The identity consequence is permanent on the page**, because it is the one UI decision with an
+irreversible consequence and `Identity::title_auth()` computes it today while nothing shows it:
 
-```
-                            ┌────────────────────────────────────────┐
-   Library stays visible    │  New device                    ✕ Close │
-   and does not dim         ├────────────────────────────────────────┤
-                            │  ① Which iPod                          │
-                            │     ◉ One I have                       │
-                            │       [ Black 5.5G               ▾]    │
-                            │     ○ Make one                         │
-                            │                                        │
-                            │       Model  [ 5.5G ▾][ Black ▾]       │
-                            │              [ 80 GB ▾]                │
-                            │       Serial [ 7B4••••••X3N         ]  │
-                            │       GUID   [ 000A27••••••••       ]  │
-                            │         ⓘ Generated from the seed, so  │
-                            │           the same iPod comes back.    │
-                            ├────────────────────────────────────────┤
-                            │  ② What it runs                        │
-                            │     ◉ A disk I have                    │
-                            │       [ my-5.5g.img              ▾]    │
-                            │     ○ Build one                        │
-                            │       from [ iPod_25.1.3.ipsw     ▾]   │
-                            │       plus [✓] Rockbox 4.0             │
-                            │            [ ] iPodLinux — experimental│
-                            ├────────────────────────────────────────┤
-                            │  ③ Name it                             │
-                            │     [ My 5.5G                       ]  │
-                            │     [✓] Work on a copy                 │
-                            │       writes to my-5.5g-copy.img       │
-                            ├────────────────────────────────────────┤
-                            │              [ Cancel ] [ Create ]     │
-                            └────────────────────────────────────────┘
-```
-
-**The two steps are symmetric** per §3.1: *have one, or make one*, in both. That symmetry is the
-point — the previous draft had a differently-shaped question in each step for no reason but history.
-
-**The iPod comes first and decides everything after it.** That ordering is settled and is not a
-layout preference: an iPod *states* its model, capacity, serial and GUID, so choosing an existing
-one fills those in and **locks** them; making one turns them into a choice, and the choice
-constrains which firmware and which software can follow.
-
-**Existing and new look identical.** Same controls, same positions, same heights — the existing case
-simply has them locked with a reason attached. This is the only way the surface does not jump when
-you switch between them, and it is why a locked dropdown is a dropdown and not a line of text.
-
-**Changing the model regenerates the serial and the GUID**, and both are validated against the model
-that is actually selected — a 5G serial is not a 5.5G serial, and the program knows the difference.
-A typed serial is validated the same way and says specifically what is wrong.
-
-**Impossible combinations are disabled with their reason attached**, and the best available option is
-selected by default. Nothing disappears.
-
-**Making an iPod here creates the resource.** It appears in §14 under its name the moment it is made
-— not on completion of the whole device — so a cancelled device does not throw away the identity you
-just tuned.
-
-**In `edit` mode** the three numbered groups become three plain groups, all open, no step counter,
-`Save` and `Cancel`. Changing the iPod of an existing device warns before it invalidates anything.
-
-**Build failures land in this Sheet**, in the Rail, with the surface intact and the inputs still
-filled. They do not close it, and they do not return you to step one.
-
----
-
-## 16. Running — and the console
-
-### Running a device
-
-```
-┌───────────────────────────────────────────────────────────────────────┐
-│  ←  My 5.5G                     booting · 62%              ⏻  ⤓  ⌗    │
-├───────────────────────────────────────────────────────────────────────┤
-│                              ▟▙▙▙▙▙▛                                  │
-│                            ▐          ▌                               │
-│                            ▐  ┌────┐  ▌     ← Screen: 320×240,        │
-│                            ▐  │    │  ▌       integer scale,          │
-│                            ▐  └────┘  ▌       nearest neighbour       │
-│                            ▐   ( ● )  ▌                               │
-│                            ▜▙▙▙▙▙▙▙▙▙▛                                │
-└───────────────────────────────────────────────────────────────────────┘
-```
-
-The iPod is the subject; the chrome is one bar — power, screenshot, readout, all drawn icons per §7.
-The readout is a **Rail that pushes the iPod aside**, not an overlay; the current `D` overlay covers
-the thing you are debugging.
-
-**Progress is honest**: the denominator is this device's own last completed cold boot, which is why
-it works for Rockbox (~100 M instructions) and iPodLinux (~21.5 G) without knowing which is on the
-drive. Before a device has ever booted it says `booting` with no fraction rather than inventing one.
-
-### Games — the console (0.6, designed now)
-
-The older goal, and the reason the project exists: a purchased title runs directly, **with no boot
-ROM, no disk and no Apple OS in the loop**. Designed in now so it is not bolted onto a finished
-window later. Called **Games** in the window; `research/` keeps saying *title*.
-
-**What is already known, so the design rests on facts rather than hope:**
-
-- A `.ipg` is a **zip archive**; its executable is an eApp container — `eapp` magic, block table,
-  load base `0x18000000`, named imports as `ldr pc,[pc,#N]` thunks. **20 decrypted titles are on
-  hand**, plaintext, verified by their header.
-- RetailOS **publishes** its framework surface: **8 frameworks, 433 functions**, each with a 16-byte
-  interface hash. Those hashes are byte-identical to the ones `eapp-inspect` reads out of a title's
-  own import blocks — the ABI confirmed independently from both sides. Pac-Man declares **98** of
-  the 433.
-- **`eapp_loader::Machine::bind_native()` already exists.** It matches each framework by interface
-  hash and rewrites every import thunk to the real export, returning `(framework, bound, total)`.
-  Unbound imports stay pointed at trap space on purpose, so a call that lands there is unambiguous.
-
-**A game needs a framework, and that has the same grammar as a boot ROM.** *Apple's, out of an
-`.ipsw`* or *ours, native Rust* — exactly retail-versus-synthesised, one layer up. So §15's Sheet
-shape is reused. But the choice **surfaces only when it is the answer to a problem**: default to
-whatever works and never make anyone learn the word "framework" to play Pac-Man.
-
-**The readiness readout is this mode's compatibility matrix, and `bind_native`'s return value is
-already it.** Not *"will this boot?"* but *"this title declares 98 functions; we can serve 98"* — or
-*"…we can serve 61, and here are the 37 missing, by name."* **The trap table is the missing-function
-list.** That is §2's third principle at its best.
-
-**The UI barely moves.** Games is a third tab with the same master–detail as §13: list on the left,
-the title's own cover art where the hero iPod goes, its readiness underneath, and Play. Same Running
-surface, same Screen, same integer scale, same transition. A game is a thing you run, exactly like a
-device, and making it feel like a different program would be a mistake.
-
-**Two things it needs that a device does not:**
-
-- **A cover.** It is in the zip. Drawn from the title's name if there is none — never a blank
-  rectangle.
-- **An identity without a boot ROM.** The DRM binds to the 8-byte **FireWire GUID in `sysinfo_t`,
-  read from the NOR, never from the disk** — measured, down to the function. So an encrypted title
-  needs an *identity* even though it needs no bootable ROM, and §3.1 is what makes that expressible:
-  a game can reference an iPod for its identity without booting it.
-
-**The keystore is unsolved and that work is not in this repository**, so this program takes
-**decrypted** titles. The refusal must therefore be first-class and honest — the same one RetailOS
-itself draws, in our own words, saying what it binds to and why we cannot help.
-
-**And there is no boot.** No 2.4 G instructions, no seventy-five seconds. Press Play and the game is
-there. That is the best demo this program will ever have.
-
-**One thing not to promise.** With Apple's framework the calls are still emulated ARM at ~24 % of
-real time, which may not be playable. With native implementations the 179 `OpenGLES` functions
-become Rust and the emulated work collapses to the game's own logic — plausibly the first mode that
-runs at real speed. That is a hypothesis with an obvious measurement, not a claim.
-
-**What it must not grow**: a shader pipeline. The screen is 76,800 pixels. Any presentation effect
-worth having costs nothing on the CPU, and rendering above 320×240 would change the machine rather
-than the presentation, which principle 8 forbids.
-
----
-
-## 17. The rest
-
-### Keyboard
-
-Every interaction has a keyboard route. Unspecified last time, and the current program's map grew by
-accretion.
-
-| | |
+| source | sentence |
 |---|---|
-| `Tab` / `Shift-Tab` | focus, in document order. Never a positive `tabindex` |
-| `Esc` | leave: closes a Sheet, exits an action strip, parks a running machine and returns |
-| `Enter` | the primary action of the focused surface |
-| `Space` | activate the focused control; on Running, the centre button |
-| arrows | move within a grid, a list, or a group of fields; on Running, the wheel and buttons |
-| `⌘,` / `Ctrl,` | Reference |
-| `?` | Reference, on help |
-| `⌘F` / `Ctrl F` | fullscreen, Running only |
-| `S` | screenshot, Running only |
-| `D` | the readout Rail, Running only |
+| `Generated` → `TitleAuth::Never` | It can never authorise a purchased title — invented values match no purchase ever made, on any machine. |
+| `Provided` → `IfGenuine` | Only if these are really this device's; we cannot tell by looking. |
+| `RealDevice` → `Yes` | Yes, for the titles bought for this device. |
 
-**Running is a mode and says so**: while the machine has focus, letter keys drive the iPod rather
-than the window, and the chrome bar shows which. This is the one place the program is modal, it is
-unavoidable, and the way out is the same `Esc` as everywhere else.
+### 11.3 Impossible combinations, and the four rules a `Fix` obeys
 
-### Where the program's own settings live
+**Every box ticks.** `compose.rs`'s own doctrine is that a checkbox you cannot tick is a question you
+cannot ask: it tells you *that* something is impossible and never *why*, and the why is the whole of
+what somebody learning this hardware wants. `Os::ALL` is 3 and `Loader::ALL` is 3, and all six are
+offered — the two that are not in `OFFERED` appear **disabled with a project-state reason**, never
+absent.
 
-There is no Settings surface, because there are only three settings and they are not worth a place:
+A refused value gets three things, all permanent, all in the flow:
 
-- **check for updates on start** — off unless asked for, and it stays that way.
-- **default for *work on a copy*** — the per-device answer overrides it.
-- **theme** — system, light, dark.
+1. **The value stays**, in place, at its own height, in `fg-disabled`.
+2. **The reason is a paragraph under it**, `body` 14/20, `fg`, verbatim from `Verdict::No.why`,
+   reserved via an `Expand` — 2–4 sentences, 4–6 lines at 388 px of measure.
+3. **At most one `Fix` row**, wearing a 60 %-opacity material, carrying `Fix::label()`.
 
-All three live in **Reference**, under the help and above the credits. Everything else that used to
-be a setting is a property of a device and lives on the device.
+**And the `Fix` obeys four rules, because "one press applies it and the reason collapses" was not
+enough.** A test already asserts that every refusal carries a fix and that applying it resolves the
+*`Verdict`* — `every_refusal_carries_a_fix_and_applying_it_resolves` — and that test says nothing
+about what the fix discards or whether the value it names is one the user is allowed to choose.
 
-### Screen readers
+| shape | presses | rule |
+|---|---|---|
+| `UseLoader` · `AddOs` · `RemoveOs` | **one** | it changes the recipe and nothing else |
+| **`BuildFromIpsw`** | **two** | it changes which resource the device points at, and **says so in its own reason line before it is pressed** |
+| **any `Fix` naming a value the picker disables** | **none — it is disabled too**, wearing the same project-state reason and the same `mono` escape hatch | |
 
-Slint carries AccessKit, so the roles in §5 are real rather than aspirational. The target is that
-the Library, the Sheet and Reference are fully navigable and announced. **Running is not** — a live
-framebuffer has nothing to announce — and it says so once, rather than pretending.
+**`BuildFromIpsw` needed the second press because it detaches an image.** `Fix::BuildFromIpsw`
+replaces `Start::FromImage` with `Start::FromIpsw` (`compose.rs:127`). Pick a 55.9 GB image dumped
+off your own 5.5G, tick iPodLinux out of curiosity, watch `best_loader()` move to ipodloader2, get
+the 0x0C paragraph, press the button — and the device silently stops pointing at the only copy of
+your iPod and starts pointing at a drive that does not exist yet. §11.4 spends a paragraph on
+`Remove` naming its dependents before it acts; this control detached a 55.9 GB reference with no
+sentence at all. So the button reads its consequence: **`builds a new drive; rockbox-test.img stays
+in Parts and this device stops using it`**, and the second press is the confirmation.
+
+**The disabled-`Fix` rule exists because the two surfaces contradicted each other on the first
+refusal a curious user hits.** Un-tick iPodLinux, re-tick it, and `check()`'s rule (1) offers
+`use ipodloader2` — while the picker four rows above shows `ipodloader2` `fg-disabled` with
+`has not been built. `make` in resources/vendor/ipodloader2`. The picker refuses the value and a
+button below it sets it in one press; and if the press is honoured, `install_linux` then wants
+`resources/vendor/ipodloader2/loader.bin` and errors out. The promise *"applying it resolves rather
+than moving you from one dead end to another"* was false. §20 has the deeper fix — **`install-linux`
+uses the fetched `ipodlinux::LOADER` (v2.8.1, 56 912 B, SHA-256 on record) instead of the `make`d
+vendor binary**, which deletes the project state rather than papering over it. Until that lands, the
+two surfaces at least agree.
+
+`best_loader()` runs on every change, so the bootloader **follows** rather than complaining — ticking
+iPodLinux moves the loader to ipodloader2 rather than telling you the one you had is wrong. The
+verdict is still there for combinations somebody drives into deliberately.
+
+**The verdict region is 54 px, always reserved, and it has four renderings, not three.**
+
+| verdict | rendering |
+|---|---|
+| `Verdict::Ok` | `Recipe::describe()` in `fg-dim`, in the order `install::loader_menu` actually writes it — `A boot menu: ZeroSlackr, Apple OS, Rockbox, Disk Mode, Sleep.` |
+| `Verdict::No` | `why`, in `fg`, with the `Fix` below |
+| **nothing chosen yet** | `nothing chosen yet` in `fg-dim` |
+| **still reading** | `reading rockbox-test.img…` in `fg-dim` |
+
+**The last two are the correction, and both were false claims in the always-reserved region.**
+`Recipe::default()` is `Start::FromIpsw(String::new())` with `Loader::Apple` and `{Os::Apple}`, and
+`check()` has no arm for an empty name — so before a firmware has been chosen at all the verdict read
+`Starts Apple's software, the way the iPod shipped.` And `Start::FromImage { fat_type: None }` means
+*"has not been looked at yet"*, while rule (2) only fires on `Some(0x0c)` — so picking a 55.9 GB image
+on a slow external drive read `Ok` for several seconds and then flipped to the 0x0C refusal, which is
+content moving under the user, which principle 2 forbids. §11.3's whole argument is that the verdict
+is a teaching instrument; it was teaching two things that are not true. `Recipe::check()` gains a
+`Start::FromIpsw(name) if name.is_empty()` arm returning `Verdict::No` — a model change, so it is in
+§20 — and the reserved 54 px absorbs both new strings at no layout cost.
+
+**The plan is one list rendered twice**: `Recipe::steps()` as *this is what will be downloaded* here,
+and as a ticking checklist on the Work page while it runs. One source, so they cannot disagree.
+
+**On `Create`**: the settings file is written immediately, the drawer switches to Work, the Composer's
+values lock with `building — this recipe is in use`, and **the device appears on the bench at once**,
+in the `building` state with its progress on the cradle label. You can leave and start something
+else. A five-minute, five-ways-to-fail operation must not own a screen — that is the structural
+answer to *"a wizard that re-opens itself"*.
+
+**And `Create` clears `Device::boot_instructions` whenever `oses` or `loader` changed** — §12.3.
+
+### 11.4 Parts
+
+**Six groups, fixed order, always all six present even when empty.** A page whose sections come and
+go is a page you re-learn every visit.
+
+| group | model | verb (from `Resource::verb()`) | actions |
+|---|---|---|---|
+| iPods | `Resource::Firmware(nor::Source)` | chosen by a device | `Add a dump…` `Synthesise…` |
+| Apple firmware | `Resource::Installer` | makes a disk | `Fetch…` `Provide…` |
+| **Bootloaders** | `Resource::Bootloader` | **goes in the firmware partition, which holds exactly one thing** | `Fetch…` `Provide…` |
+| Software | `Resource::Software` | installs onto a disk | `Fetch…` `Provide…` |
+| Disks | `Settings::disks` | what a device runs | `Build…` `Provide…` |
+| **Snapshots** | the parked machines | **what `press ● to resume` resumes** | `Discard` |
+
+**Snapshots is the sixth group and it is here because 1.6 GB per park was invisible.** Close the
+window rather than quitting — which §12.4 says parks — four times across four devices, and 6.4 GB of
+snapshots exist that the user never asked for, cannot see, cannot total and cannot delete, on a
+machine that might have 18 GB free. Parts is where every other byte this program spends is visible;
+these belong in it, with sizes, with the device each pairs with, and with a `Discard` verb.
+
+```
+ ┌──────────────────────────────────────┐
+ │ ‹ MENU             Parts             │   the page body is a Scroll (§16.11);
+ │══════════════════════════════════════│   the header above it does not move
+ │ iPods                            2   │
+ │  No iPod is plugged in               │  ← reserved, always. fg-disabled
+ │▓▓Black 5.5G▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓› │  ← the material: the selected row
+ │▓▓synthesised · seed 4f2a · used by 2▓│
+ │  From my 30 GB                     › │
+ │  dumped from a real iPod · used by 1 │
+ │  Add a dump…      Synthesise…        │
+ │──────────────────────────────────────│
+ │ Apple firmware                   2   │
+ │  iPod_25.1.3.ipsw                  ▾ │
+ │  6.5 MB · fetched · SHA-256 verified │
+ │  ┌────────────────────────────────┐  │
+ │  │ osos  7 559 680  checksum ok   │  │
+ │  │ rsrc  5 242 880  checksum ok   │  │
+ │  │ aupd    262 144  checksum ok   │  │
+ │  │ identified by contents:        │  │  ← firmware::identify(), by hash
+ │  │ Apple iPod_25.1.3              │  │     not by filename
+ │  │ used by: My 5.5G               │  │
+ │  │ Reveal   Copy path   Remove    │  │
+ │  └────────────────────────────────┘  │
+ │  iPod_20.1.3.ipsw                  › │
+ │  6.5 MB · fetched · size only, no    │  ← NEVER renders as "verified"
+ │  hash on record for this release yet │
+ │  Fetch…           Provide…           │
+ │──────────────────────────────────────│
+ │ Bootloaders                      1   │  ← the fourth kind the shipped
+ │  Rockbox's bootloader              › │     window drops entirely
+ │  51 996 B · fetched · SHA-256        │
+ │  ipodloader2                         │  ← fg-disabled, PROJECT STATE
+ │  has not been built. `make` in       │
+ │  resources/vendor/ipodloader2        │
+ │  Fetch…           Provide…           │
+ │──────────────────────────────────────│
+ │ Software                         1   │
+ │  Rockbox 4.0                       › │
+ │  9 090 335 B · SHA-256 verified      │
+ │  Fetch…           Provide…           │
+ │──────────────────────────────────────│
+ │ Disks                            2   │
+ │  my-5.5g.img                       › │
+ │  74.5 GB · FAT32 0x0B · from         │  ← the FAT type is a first-class
+ │  iPod_25.1.3 · Rockbox 4.0           │     fact: it is the byte compose.rs
+ │  rockbox-test.img                  › │     reasons about
+ │  55.9 GB · FAT32 0x0C · provided     │
+ │  Build…           Provide…           │
+ │──────────────────────────────────────│
+ │ Snapshots                        1   │
+ │  My 5.5G · parked 4 min ago        › │
+ │  1.61 GB + 1.61 GB frozen drive      │
+ │  Discard                             │
+ └──────────────────────────────────────┘
+```
+
+**`used by N` is the reference-not-copy property made visible**, and it is the whole reason this
+model beats UTM's. An expanded row names the devices; `Remove` names them before it acts and offers
+`Remove anyway` in `danger` or `Cancel`. Removing a **synthesised** iPod additionally shows the seed,
+because the identity is regenerable only from it. Removing a resource never deletes the file it
+points at; removing a **disk** asks separately and explicitly about the image, defaults to no, and
+says the size.
+
+**And nothing that the machine is using can be removed while it is running.** One line, covering both
+the resource case and the device case that had no rule at all: **while a device is the machine,
+`Remove` on that device — and on every resource it references — is disabled with the machine-rule
+reason `My 5.5G is running. Stop it first.`, and the device's drawer page carries `Power off`
+immediately above it.** Without it the consequences were all live: the bench would have no device to
+draw while a machine thread executed, `Settings::current` would dangle, §12.4's park would write
+`<device>.parked.png` for a name that no longer exists, and §9.1's empty bench would be drawn while an
+ARM7 was mid-boot. Same construction as the Composer's field locking, which already solves this shape.
+
+**The plugged-in-iPod row is reserved, always.** `identity::detect_mounted()` scans `/Volumes`,
+`/media` and `/run/media` one and two levels deep for iPod-shaped volumes and reads
+`iPod_Control/Device/SysInfo` — **no dump, no driver, no privileges** — and it has no caller anywhere.
+The previous revision had the `iPods` group *grow* a row when one appeared, which moves every row
+below it on an event the user did not initiate at this surface: principle 2's exact prohibition, and
+the operator's own words. So the group always carries a first row, `No iPod is plugged in` in
+`fg-disabled`, which becomes `An iPod is plugged in — 7B4••••••X3N. Read its identity?` when one
+appears. Three more rules with it: **`detect_mounted()` runs off the UI thread** on a 2 s poll while
+Parts is open and never otherwise, because a `/Volumes` walk on a machine with an unresponsive SMB
+mount blocks its caller; the offer says **`read only`**; and it carries `open-drive`'s honesty
+forward — `this cannot tell whether anything else is writing to it`.
+
+**`▸` expands in place**, pushing rows down, `gentle`, content faded in after the height settles —
+and inside the Scroll, an Expand that opens below the fold scrolls its own top edge into view (§8.1):
+
+- **a ROM** → `inspect::flash()`'s verdict with its own diagnosis (`0 bytes — Rockbox's Dump ROM
+  contents writes its output at the end, so an iPod reset before it finishes leaves exactly this` ·
+  `a 512 KiB dump is a nano-class device` · `2 MiB — a 6G Classic or a nano` · `word 0 is not an ARM
+  branch` · `no flsh directory at 0xffe00`); the image directory and tags; the reset vector; the
+  bootloader's own build string; the SysCfg identity resolved through libgpod's table (**197 rows —
+  the README's "198" is wrong and should be corrected**) to capacity, colour and generation; a
+  separate warning when `Mod#` and `HwVr` disagree about the generation; **the raw bytes of every
+  record it could not decode**, because Rockbox names nine tags and this 5G NOR carries a tenth; the
+  identity **masked** with a `Show`; `TitleAuth`; and `Show its boot screen ›`.
+
+  **Two states the previous revision had no answer for, and both are machine rules that disable the
+  ROM for use in a device:**
+
+  | | says |
+  |---|---|
+  | the `Mod#` is not in the table | `Mod# 〈code〉 is not in the model table. HwVr says 〈code〉. This will not claim a generation it cannot look up.` |
+  | the generation resolves and is not the 5th | `this is not a 5th-generation iPod — the table says 〈generation〉` |
+
+  A 1 MiB NOR pulled off a nano passes every size-based diagnosis `flash()` has, and the bench draws
+  whatever ROM a device points at using one `hero` and one drawing — so it would be rendered as a 5.5G
+  with a 320 × 240 glass, which is inventing a fact about somebody's hardware. That is the exact thing
+  `Colour::Unspecified`'s `#E4E4E2` exists to refuse. §7.3 has the matching cradle row.
+
+- **an `.ipsw`** → firmware versions and checksums, and `firmware::identify()`'s answer **by
+  contents, not filename**. `Unrecognised` is explicitly allowed and carries its paragraph: modified
+  firmware is a legitimate reason to want an emulator, and it is reported so you know, not to stop
+  you.
+- **a disk** → the partition table; the FAT type spelled out; `built_from` and `installed` in order;
+  whether the flash updater is armed (`armed — this drive boots the updater, not the OS`); what
+  `volume_software()` found (`/.rockbox/rockbox-info.txt`, `/loader.cfg`, `/boot/vmlinux`); the full
+  path in `mono`, copyable; and an **in-window FAT32 tree** from `ipod-boot fat tree`.
+- **a snapshot** → the instruction count it was taken at, whether `Config::pair_is_whole()` still
+  answers yes, and if not, why — `the drive has been written to since this was taken`.
+
+**The boot-screen preview obeys the layer rule.** `nor::Source::boot_screen(320, 240)` is emulator
+output, so it is drawn in a 320 × 240 rectangle with the same `#08080a` glass treatment and a
+`preview · 320 × 240` caption — never flowed into our layout at an arbitrary size.
+
+**Dropping is the best acquisition route and the whole window is the target**, because winit's file
+events carry no cursor position (§16.4). While a drag is over the window, the shelf's rows 1 and 2
+crossfade to what the program thinks it has — **nothing moves, and no pixels are spent**:
+
+```
+ ├─────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+ │  Eight files                                                                    let go to file these     │
+ │  1 048 576 B · not a boot ROM · word 0 is not an ARM branch  ·  Apple firmware · iPod_25.1.3  ·  +6 more │
+ │  works on a copy of my-5.5g.img                                                                          │
+ └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+Four rules, and three of them are corrections:
+
+1. **A drop is a 150 ms coalescing window.** winit delivers `DroppedFile(PathBuf)` **one event per
+   file, with no cursor position and no terminating event** — the previous revision recorded the first
+   two facts and missed the third, so nothing in it could tell eight events apart from eight drops.
+   All `DroppedFile` events within 150 ms are one drop.
+2. **The band shows a count and at most two identifications, then `+N more`.** It was written for
+   `Three files` with three identifications on one 20 px line; eight do not fit, and a band that
+   reflows is a band that moves.
+3. **Ambiguity files and does not compose.** A drop containing more than one ROM or more than one
+   `.ipsw` files everything into Parts and creates **no** device, with the Work Rail saying
+   `eight files filed; make a device from them in Devices ›` and naming each. The old promise — *"a
+   ROM and an `.ipsw` dropped together, in either order, produce one device"* — is undefined with two
+   of each, and its test, `dropped_files_route_themselves_in_either_order`, is a two-file test that
+   was carried across unchanged. It stays, and it keeps its two-file scope; the ambiguous case gets
+   its own.
+4. **For a ROM-sized file the band shows `inspect::flash()`'s verdict, not `inspect::Kind`.**
+   `Kind::Rom` is "exactly 1 MiB" and nothing else, so a 1 048 576-byte JPEG classified as `Rom` and
+   the band rendered `boot ROM · 5.5G · 1 048 576 B` — an affirmative claim, with a generation
+   attached, for a photograph. The real verdicts (`word 0 is not an ARM branch`, `no flsh directory
+   at 0xffe00`) existed only inside the Parts row's `Expand`, which the user has to go and open. **A
+   size class is a hypothesis and the band is where it gets tested**, because that is the last moment
+   before the file acquires a name. Note the contrast case the previous revision handled correctly —
+   a 4.2 MB unknown reads `no recognisable header — named, not filed` — and the dangerous one did not.
+
+Identification is **by content**, never by extension: `inspect::Kind` first (a `.ipod` image is
+verified by its big-endian checksum seeded with 5 — before that check existed, `rockbox.ipod` at
+7.5 MB fell through the size test and an OS was handed to the disk parser), then `firmware::identify`
+by hash. **Identification during `HoveredFile` is size-gated and hashing happens after the drop, not
+during it** — a SHA-256 of the 101 MB ZeroSlackr archive on the UI thread while a hover is in
+progress is a frozen window. An Apple Partition Map is **named** (`this is a Mac-formatted iPod`)
+rather than reported as "no MBR". On drop, each file is filed and the Work Rail says where it went
+and **whether it was copied in or referenced in place**.
+
+### 11.5 The platform split, and why the FAT32 tree is a requirement
+
+`open-drive` uses `hdiutil attach -imagekey diskimage-class=CRawDiskImage` on macOS and
+`udisksctl loop-setup` on Linux, probed with `mount::available()` rather than trusted from
+`cfg!(target_os)` — and **cannot work on Windows at all**, because Windows mounts ISO and VHD, not a
+raw image. So the in-window FAT32 tree is **Windows's only route to putting files on a volume**,
+which makes it a requirement rather than a nicety, and it is offered on every platform so the two are
+not separate mental models.
+
+`Reveal the disk` is disabled while that device runs, with the honest sentence:
+`Two writers on one filesystem is how a volume gets corrupted. This cannot check that the iPod is
+powered off, so it says so rather than pretending to.`
+
+### 11.6 Settings — one page, three rows, and it is not a settings app
+
+`Settings::chassis`, `Settings::check_updates_on_start` and the theme were settled decisions with no
+surface at all. §15 said *"there are three program settings and this is one of them"* and §14.3
+argued the drawer is not a sidebar partly because *"this program has five resource groups and three
+settings"* — and then no page owned any of them. The operator rejected **a settings screen reachable
+only by destroying the running machine**, not settings.
+
+```
+ ┌──────────────────────────────────────┐
+ │ ‹ MENU             Settings          │
+ │══════════════════════════════════════│
+ │  Theme           System            › │   system / light / dark
+ │  Check for updates on launch     ☐   │   Settings::check_updates_on_start
+ │  Settings file   ~/…/settings.txt  ⧉ │   Settings::path() — a preference
+ └──────────────────────────────────────┘   nobody can find is one nobody
+                                             can reset
+```
+
+Three rows, reachable while the machine runs, which is the whole cure. **`chassis` is not one of
+them** — it is an override on the *device's* page, because the model's own comment says it is *"the
+window's iPod, not the machine's identity"*, and a global override for a per-device fact is how the
+same setting comes to mean two things. `Settings::mode` is §17.Q8 and is not on this page until it
+has a job.
 
 ---
 
-## 18. Where we deliberately differ
+## 12. Running
 
-The operator's design work elsewhere locks a rule: **hide, do not disable** — an option that cannot
-be used is removed rather than greyed.
+**Running is a *state of the bench*, not a place.** Nothing about the layout changes when the machine
+starts. That is the direct cure for the original disease — settings could only be reached by
+destroying the machine, because settings and running were different screens and *"no machine"* was
+how the window knew which to draw.
 
-**This program does the opposite, on purpose**, and principle 3 is the statement of it.
+Four things change and only four: **the screen lights**, the cradle's ring and label change, the
+shelf's rows change text, and the drawer's Composer fields **lock in place** with
+`The machine is running. Stop it to change what it is made of.` — visible, same size, same position,
+greyed. Principle 4 applied to the exact case that caused the bug.
 
-The reason is that this program's subject *is* the compatibility matrix. Which bootloader can carry
-which operating system on which ROM is not incidental complexity to be smoothed away — it is the
-thing the user came to find out, and much of `research/` exists to establish it. An option that
-silently vanishes teaches nothing. An option that is visible, greyed, and says *"ipodloader2 reads
-FAT32 type 0x0B and this drive is 0x0C"* has taught the reader something true about the hardware.
+### 12.1 The screen
 
-Recorded here so that it reads as a decision rather than an oversight.
+`Out.fb` is 320 × 240 RGB888, refreshed by the emulator at most 60 Hz with an `fb_seq` counter so an
+unchanged frame skips the texture upload. Its size is §6.6's `k × 320` physical, and **nothing that
+animates feeds it**.
+
+Two mechanical corrections before this ships, both measurable:
+
+- **`Image::from_rgba8_premultiplied`, not `from_rgb8`.** Skia cannot take RGB888, so the RGB path
+  runs `pixels.as_bytes().chunks(3).flat_map(...).collect::<Vec<u8>>()` — 76 800 iterations building
+  a 307 200-byte `Vec` — and copies it again into a `skia_safe::Data`. **It is not cached**: a
+  programmatically built `SharedPixelBuffer` gets `ImageCacheKey::Invalid`, and
+  `replace_cached_image` returns immediately on an Invalid key, so both allocations re-run on **every
+  draw**, not once per frame.
+- **Try `SLINT_SKIA_PARTIAL_RENDERING=1`.** Partial rendering is off by default with Skia, so pushing
+  frames at 60 Hz repaints the whole window at 60 Hz.
+
+Measure both arms with `SLINT_DEBUG_PERFORMANCE=refresh_lazy,console` against the recorded **17.4 M
+instr/s headless and ~14 M with a window open** (README vs KNOWN-BUGS — a ~20 % loss that the
+previous revision of this document called unmeasured while two other files already disagreed by that
+much), and put the number in the changelog.
+
+### 12.2 The four phases, and Off is genuinely one of them
+
+| phase | cradle | glass | shelf row 1 trailing |
+|---|---|---|---|
+| `Off` | `accent`, or a broken ring | **dark** | `off` |
+| `Booting { target }` | `fg-dim` | the ROM's boot screen | `booting · 62 %` or the instruction count |
+| `Running` | `fg-dim` | live | `running · 14.2 M instr/s · 24 % of real` |
+| `Stopped(reason)` | `danger` | **its last frame, kept** | `stopped` |
+
+`Off` means **no machine exists, nothing is executing, and the panel is dark** — the state a 5G is in
+with a flat battery. It is not a pause and it is not drawn as one: a powered-off iPod's glass is
+`#08080a` and empty, never a frozen last frame, because a frozen frame is a paused machine
+pretending.
+
+`Stopped` is the opposite and for the opposite reason: **the last frame is evidence** and is kept.
+Row 2 carries the reason in `fg`, row 3's trailing slot offers `Cold boot` and `Copy the reason`, and
+it stays until dismissed.
+
+**A fifth thing that is not a phase, and needs its own treatment**: `stalled_secs > 2.0` turns the
+Readout's stalled Gauge `warn` and adds one line — *the instruction count has not moved for 6.4 s;
+the core is halted waiting for an interrupt with no deadline armed.* One session sat dead at
+2 791 999 952 instructions and was only noticed because two `state` replies happened to be compared
+by hand.
+
+### 12.3 Progress, honestly — and what happens when the recipe changes
+
+The denominator is `Device::boot_instructions` — **this device's own last completed cold boot**,
+which is why one bar is honest across Rockbox (~100 M), RetailOS (~1.6 G) and iPodLinux (~21.5 G)
+without detecting which is on the drive. Before a device has ever booted there is **no fraction and
+no bar**: the cradle label carries an instruction count that moves. A 4 px indeterminate rule that
+does not animate would be acceptable; a spinner would not (§8.3).
+
+**That honesty is conditional on the device never changing what it boots, and §11.3 exists precisely
+so it can.** A device that learned ~1.6 G on RetailOS and then has Rockbox installed reaches its menu
+at ~100 M against a 1.6 G denominator, so the cradle reads `booting · 6 %` at the moment the machine
+is finished. Boot the other way and the bar passes 100 % and keeps going. Both are the specific
+defect `boot_instructions` replaced `snap_at` to fix, reintroduced through the edit path.
+
+So: **`Create` clears `Device::boot_instructions` whenever the recipe's `oses` or `loader` changed**,
+and the first boot after an edit has no fraction, exactly like a device that has never booted. One
+line in `Create`, and it makes the honesty claim true rather than conditional.
+
+### 12.4 Parking, and what it costs
+
+`Esc` from `Running`, the drawer, or closing the window sets `Link::save_on_quit`. It is a **~1.6 GB
+write**, so `Link::saving` drives a real sentence — `parking · 0.7 of 1.6 GB` — rather than the
+window appearing to hang, and the bench is usable throughout.
+
+**Free space is checked against the snapshot size before `save_on_quit` is set, and if it is short
+the window closes without parking.** The park that fails for lack of space fails *at window close*,
+when there is by definition no window left to show §9.3's `space` class in and `Link::saving` has
+nowhere to land — so the report goes to the only surface that still exists, the next launch's Work
+page: `My 5.5G was not parked at last close — 1.6 GB needed, 0.9 GB free.`
+
+A snapshot is **RAM and CPU only**, so the drive is frozen beside it (`Config::frozen`): pairing
+restored RAM with a drive that kept moving is what produced the intermittent "connect to computer"
+screen, and `Config::pair_is_whole()` is the single place that knows. **The cradle reads it before it
+draws a parked state** (§7.3) — it is one `stat` and one line compare on a copy, or a file-existence
+test on a frozen clone, so it costs nothing to ask. Resume is ~3 s against ~75.
+
+**A parked device's glass shows the frame it stopped on**, at exactly `k × 320`, with `parked` in the
+shelf. Park writes `<device>.parked.png` beside the snapshot; `png.rs` — currently unreferenced — is
+the writer, and this retires one of the five `#[allow(dead_code)]` modules with a real caller. If the
+PNG is absent the glass is dark, which is the honest fallback.
+
+`Resume` and `Cold boot` are **two separate, both-visible rows** on the device's drawer page, joined
+by `Discard the snapshot` when the pair is broken. Never a modifier you have to know.
+
+**`Device::parked_at` is a stored field, not an inference** (§3.3). The shelf renders `parked ·
+4 min ago` and the model carried nothing to render it from — the same shape as the `fetched and
+verified` string literals §3.2 was written to delete.
+
+### 12.5 Power and boot targets
+
+`Cmd::PowerOff | PowerOn | PowerCycle | Boot(BootTarget)` live on the device's drawer page and in the
+Machine menu — **and `PowerOff` is also the centre button while `Booting`** (§7.3), because a
+twenty-one-minute boot with no stop control is not a design, it is a hostage situation.
+
+Power off is real — the machine is dropped and re-entered at the reset vector, not restored and
+pretended.
+
+`BootTarget::Nor("diag" | "disk")` are reached by **power-cycling**, because that is how the hardware
+reaches them, and the row's verb is `Start into`, never `Switch to`. MENU + SELECT is **not** offered
+as a restart: nothing measured in this project shows RetailOS acting on that combo, and a control
+claiming to be the hardware combo while actually restarting the emulator would be the window lying.
+
+| target | state |
+|---|---|
+| `Apple's software` | ✓ |
+| `Diagnostics` | ✓ on a dumped ROM. On a synthesised one, **disabled, machine rule**: `Diagnostics lives inside the boot ROM's image directory, and a generated ROM has none.` |
+| `Target disk mode` | **disabled, project state**: `Faults after about 128 000 instructions — Lost(0xe19b0000). It is a USB feature and USB is unmodelled.` |
+| `An image…` | any raw ARM image expecting 0x10000000 — `rb-main.raw`, `ipodloader2` |
+
+### 12.6 Fullscreen — the only place a scale above `k` exists
+
+`⌃⌘F` on macOS, `F11` on Windows and Linux — the one row of §16.8's table that is not one column, and
+§16.8 says why. `Window.full-screen` is a plain in-out boolean, so this is one property.
+
+The whole display, `bg-sunken`, the framebuffer at
+`K = floor(min(W_phys / 320, H_phys / 240))`, centred, `image-rendering: pixelated`, hard-edged. **No
+glass, no border, no glow, no shader.**
+
+**Recomputed in physical pixels, because the previous revision's table was not.** Every row of it was
+computed in logical pixels while §6.6's own Rust computed `K` in physical ones from `scale_factor()`
+— so the document contradicted itself, and the wrong half was the one rendered into a user-facing
+string on §9.5's screen.
+
+| display | sf | backing store, physical | K | drawn | chrome strip? `K × 240 + 44 × sf ≤ H_phys` |
+|---|---|---|---|---|---|
+| 1280 × 800 | 1.0 | 1280 × 800 | **3** | 960 × 720 | 764 ≤ 800 ✓ |
+| 1366 × 768 | 1.0 | 1366 × 768 | **3** | 960 × 720 | 764 ≤ 768 ✓ |
+| 1440 × 900 | 1.0 | 1440 × 900 | **3** | 960 × 720 | 764 ≤ 900 ✓ |
+| **1470 × 956** (the operator's) | 2.0 | **2940 × 1912** | **7** | **2240 × 1680** | 1768 ≤ 1912 ✓ |
+| 1512 × 982 (14″ MBP) | 2.0 | **3024 × 1964** | **8** | **2560 × 1920** | 2008 > 1964 ✗ |
+| 1920 × 1080 | 1.0 or 1.25 | 1920 × 1080 | **4** | 1280 × 960 | 1004 ≤ 1080 ✓ |
+
+The previous revision promised the operator's own machine 3× / 960 × 720 and printed that as a
+sentence. It is **7× / 2240 × 1680**. The 14″ MacBook Pro was 4× and is 8×. The conclusion that only
+the 14″ fails the chrome-strip test survives — reached by arithmetic that applies this time — and
+**§9.5's sentence interpolates `K` from the same function rather than quoting a constant.**
+
+**The chrome strip is 44 logical px, top.** It fades in on pointer movement, out 2.5 s after it
+stops, and it sits on the black surround **outside the drawn rectangle**, never over it. Where it
+cannot be drawn, `Esc` is the way out — and §7.3 now has a cradle row that says so before you enter
+(`running · ⌃⌘F for 7× · Esc to come back`), which the previous revision claimed as its cover while
+its own closed cradle set rendered the single word `running`. **Principle 9 outranks principle 5's
+convenience, and this is where they meet.**
+
+Keyboard is unchanged, which is exactly why the map has to be complete: the drawn wheel is not on
+screen.
+
+**Fullscreen is available whenever the glass has something on it** — `Booting`, `Running`, `Stopped`
+with its last frame, or parked with a `.parked.png`. Otherwise it is disabled with its reason —
+`Fullscreen shows the panel at the largest whole-number scale that fits. There is nothing on the
+panel yet.` The previous revision made it `Running` only, which is why §9.5 offered a control that
+§12.6 disabled in exactly the state §9.5 offered it in. A key that silently does nothing is worse
+than one that says why; a key that is offered and refused in the same breath is worse than both.
+
+### 12.7 Screenshots, and what cancelling costs
+
+**Two keys, two files, two names**, because a program whose discipline is knowing which layer a
+picture is of should not make you guess which one you got:
+
+- `S` → the panel alone, **exactly 320 × 240**, no scaling, no body → `<device>-<n>-panel.png`. This
+  is what `research/` and a bug report want.
+- `⇧S` → the window as drawn → `<device>-<n>-window.png`. This is what `docs/media/` wants.
+
+Both report the path and the size afterwards, per principle 7. **`⇧S` respects §11.2's masking**: a
+window screenshot taken with the Composer open captures whatever is on screen, so the masking is what
+protects it, and §11.2's position-only reason wording is what closes the last hole.
+
+**Long work.** The target volume is checked, then free space, both before a byte is written. Builds go
+to `<name>.img.part` and are renamed only on success, so a cancelled build leaves **no partial file
+with a real name**. **Cancelling deletes only our own temporary file** — never the source, never
+anything supplied, never anything already named. That rule has no exception and no "unless", and the
+Work page says which file cancelling will delete **and how big it is right now** before you press it.
+
+### 12.8 The Readout
+
+A drawer page, `Region` + `accessible-live-region: polite`, built from **Gauges** and nothing else.
+It **pushes the device aside; it never covers it** (principle 5, and the specific complaint filed
+against OpenEmu's HUD).
+
+**Its body is a Scroll and it has to be.** Thirty-six Row-shaped items at 44 px is 1 584 px of rows
+alone, about 1 970 with headings and gaps, against a drawer body of roughly 715–800 px. The page
+header stays fixed above it and the two action rows stay pinned below it, so the two things you reach
+for are always in the same place and never scroll away.
+
+**The Gauge's three-state freshness is the whole ethic and it is a property of the primitive, not a
+discipline:**
+
+| state | rendering |
+|---|---|
+| **live** — sampled within 500 ms | value in `fg` |
+| **stale** — older, or the machine is off | value in `fg-disabled`; the group heading gains ` · stale` |
+| **not measured** | **`—`, never `0`** |
+| **final** — the machine stopped here | value in `fg`, group heading gains ` · final` |
+
+A zero and an unmeasured are different facts and this repository has been burned by conflating them.
+`final` and `stale` are different too: stale means we stopped looking, final means the machine ended
+there.
+
+Seven groups, fixed order, all present always:
+
+```
+ ┌──────────────────────────────────────┐
+ │ ‹ MENU             Readout           │   ← fixed header
+ │══════════════════════════════════════│
+ │ MACHINE                           ▲  │   ← the Scroll starts here
+ │  phase                    running    │
+ │  instructions      1 612 004 992     │
+ │  this session ·      487 220 016     │
+ │  simulated                21.5 s     │
+ │  wall                     34.8 s     │
+ │  speed          14.2 M instr/s       │
+ │  ratio           24.1 % of real      │
+ │  stalled                   0.0 s     │
+ │                                      │
+ │ CORES                     arrivals   │   ONE column. `Stats::enters` is
+ │  frame decoder               1 041   │   [u64; WATCHED.len()] — a flat
+ │  button edge                12 880   │   array with no per-core dimension
+ │  scroll accumulator          3 204   │   anywhere in Stats or Out. A second
+ │  button event                  218   │   column could only be filled with
+ │  wheel event                 3 201   │   an invented zero, and a zero and an
+ │                                      │   unmeasured are different facts
+ │ PANEL                                │
+ │  shown surface       0x000e0000      │
+ │  shown moved                yes      │
+ │  other surface       0x00100000      │   a restored machine can be one
+ │  other moved                 no      │   page-flip out of phase, and this
+ │  lit pixels              74 057      │   is the only place that says so
+ │  backlight              16 / 32      │
+ │  steps up / down       214 / 198     │   a level that is not moving and a
+ │  frames posted ·          1 041      │   pin that is not pulsing are
+ │  dropped / suppressed     0 / 12     │   different diagnoses
+ │                                      │
+ │ INPUT                                │
+ │  wheel position         41 / 96      │
+ │  touched                    yes      │
+ │  buttons                     ——      │
+ │  hold switch                 off     │
+ │  frames asked for ·          yes     │
+ │  steps dropped                12  ⚠  │  ← warn above zero
+ │                                      │
+ │ BUS                                  │
+ │  ata commands               611      │
+ │  ready                      611      │
+ │  irqs                   183 452      │
+ │  co-proc frames ·         1 041      │
+ │  co-proc commands ·         302      │
+ │                                      │
+ │ MEMORY                               │
+ │  unmapped pages               3      │
+ │  0x7000c000 0x7000c100 0x60000000    │   the addresses, not a count: the
+ │                                      │   question it settles wants them
+ │ PROVENANCE                           │
+ │  restored from a snapshot at         │
+ │  1 612 000 000 instructions.         │
+ │  · marks a counter that starts at    │   ← the label that stops a healthy
+ │  zero after a restore. The picture   │     restored machine reading as
+ │  on the panel is real.            ▼  │     "RetailOS has never drawn"
+ │══════════════════════════════════════│
+ │  Screenshot the panel  320×240     › │   ← pinned footer, never scrolls
+ │  Copy this readout                 › │
+ └──────────────────────────────────────┘
+```
+
+**The CORES group is one column until the model carries two.** The previous revision drew it as
+`core 0  core 1` with a literal `0` in every core-1 cell and captioned it *"this is where what the
+two cores are doing lives"* — which is exactly the conflation the Gauge's own three-state rule
+forbids, committed in the group whose caption claims the most. §17.Q10 is whether the run loop can
+even attribute an arrival to a core; §3.3 has the field it would need.
+
+`Copy this readout` puts the whole thing on the clipboard as text, which is what a bug report
+actually needs.
+
+**`Stats::sim_usec_here` and `Stats::queued` are `#[allow(dead_code)]` today, and this design
+decides.** `sim_usec_here` earns a row — it is the honest simulated-versus-wall ratio now that idle
+costs what running costs. `queued` does not: `input_dropped` is the number that matters, because a
+refused step is a lie about what you did and a deep queue is only ever the reason for one. The allow
+comes off both.
+
+**Cost discipline.** The run loop takes the `out` lock once per `SLICE` = 250 000 instructions —
+about 56 times a second at 14 M instr/s — and memcpys 230 400 bytes into `out.fb` on refresh frames.
+**The Readout polls at 8 Hz, not per frame**, and copies the scalar `Stats` out under the lock in one
+go. A UI thread holding that lock blocks the machine directly. `fb_seq` gates the texture upload.
+
+### 12.9 What the window will not become
+
+Two things the machine publishes that this window is **not** going to grow surfaces for, stated so
+their absence reads as a carve-out rather than an omission:
+
+- `trace`'s ~90 measurement flags, `dis`, `tcb`, `eapp-inspect`, `ghidra`, `ipod-film`, the seven
+  boot recipes, and the Unix control socket. These are terminal instruments for a person already
+  holding a hypothesis, and putting them in a window would make it a debugger — which is the one
+  thing this thesis must not become. The socket is additionally **absent by default on purpose**: *a
+  socket that appears without being asked for is an interface nobody audited, on a program that reads
+  a NOR dump and a drive image.*
+- `put-zip` and `put-files`, because they modify the disk they are given, which is a different
+  contract from everything else here. **And because they do**, a device whose image they touched
+  between sessions has a broken snapshot pair — which §7.3 and §12.4 now say out loud rather than
+  promising three seconds.
+
+**The honest bridge is one row** on the device's drawer page: `Copy the command line for this
+device ›`, which emits `ipod-boot --print`'s already-shell-quoted argv — including its provenance
+annotation for every input path (`# NOR dump: /path — environment | setup screen | repository
+default`).
+
+**And it masks by default, because the other surface does.** `--print` shell-quotes the full argv,
+which for a synthesised ROM includes `--serial` and `--guid` in the clear and for a dumped one names
+the dump's path — so the program was protecting those identifiers on §11.2 and putting them on the
+clipboard here, with no sentence at all. The row states what it is about to copy, `--serial` and
+`--guid` are elided as `…`, and a sibling toggle `include the serial and GUID`, **default off**,
+turns them back on for the person who actually needs to reproduce a run.
+
+**What does earn a surface**: `facts`, `syscfg`, `fat` browsing, `rsrc`, the firmware cache,
+`make-nor --preview`, and `open-drive`. Separately: **six `ipod-boot` subcommands are missing from
+its own `--help`** — `syscfg`, `ghidra`, `make-nor`, `firmware`, `fat`, `rsrc`. Four of them get a
+window; the help text is still a bug and should be fixed.
 
 ---
 
-## 19. Decisions
+## 13. Games (0.6), designed in
 
-Settled 2026-08-20. Each was a recommendation the operator did not overrule; each is one constant or
-one section away from being reversed, and the reasoning is here so a reversal is cheap rather than
-archaeological.
+**A title is another thing that stands on the bench**, and that single sentence is why nothing has to
+be bolted on. The bench has one body, one 320 × 240 glass, one wheel and one centre button, and
+*press the centre button to run the thing in front of you* is already the whole interaction. So
+Games costs **one drawer page and one cradle-label state**.
+
+### 13.1 What is already true, so the design rests on facts
+
+- A `.ipg` is a **zip** whose executable is an `eapp` container at load base `0x18000000`, with named
+  imports as `ldr pc,[pc,#N]` thunks. **20 decrypted titles are on hand.**
+- RetailOS **publishes** its framework surface at `0x000793fc`–`0x00079ce0`: **8 frameworks, 433
+  functions** — `OpenGLES` 179, `Metadata` 152, `Audio` 61, `AsyncFileIO` 17, `miscTBD` 15,
+  `Filesytem` 4, `Settings` 3, `InputEvents` 2 — each with a 16-byte interface hash **byte-identical**
+  to the ones `eapp-inspect` reads out of a title's own import blocks. The ABI is confirmed from both
+  sides at once. Pac-Man declares **98** of the 433.
+- `Machine::bind_native(&EApp, only) -> Vec<(String, usize, usize)>` matches each framework by hash,
+  rewrites every import thunk's literal slot to the real export, and **removes the corresponding
+  trap** so a call that still lands in trap space is unambiguous.
+
+**And one thing that is not true yet, stated as such.** Nothing in this tree reads a `.ipg` zip's
+members: `grep -rni "ipg" --include='*.rs' tools/` returns **nothing at all**, and `cover` appears in
+the codebase only as an anti-aliasing coverage variable in `nor.rs`. §13.2 draws the cover from the
+title's name unconditionally, and **whether a `.ipg` carries cover art, and under what member name,
+is §17.Q9** — with the 20 decrypted titles named as the way to answer it. A structural claim about a
+file format the program does not parse is exactly what §16.9 exists to stop.
+
+### 13.2 The readiness matrix is `bind_native`'s return value, drawn
+
+Not *"will this boot?"* but *"this title declares 98 functions; we can serve 98"* — or *"we can serve
+61, and here are the 37, by name."* **The trap table is the missing-function list**, exactly because a
+bound import loses its trap.
+
+That is principle 4 at the highest resolution this program will ever achieve, and it is the same
+instrument as the boot matrix one layer up.
+
+```
+ ┌──────────────────────────────────────┐
+ │ ‹ Games          Pac-Man             │
+ │══════════════════════════════════════│
+ │        ┌────────────────┐            │   drawn from the title's name.
+ │        │   PAC-MAN      │            │   Whether the zip carries art is
+ │        │                │            │   §17.Q9 — never a blank rectangle,
+ │        └────────────────┘            │   never a stock icon
+ │                                      │
+ │  98 of 98 functions bound            │
+ │══════════════════════════════════════│
+ │ FRAMEWORKS                           │
+ │  OpenGLES            179 / 179     › │
+ │  Metadata            152 / 152     › │
+ │  Audio                61 /  61     › │
+ │  AsyncFileIO          17 /  17     › │
+ │  miscTBD              15 /  15     › │
+ │  Filesytem             4 /   4     › │
+ │  Settings              3 /   3     › │
+ │  InputEvents           2 /   2     › │
+ │──────────────────────────────────────│
+ │ SERVED BY                            │
+ │  Frameworks   Apple's, from        › │   retail-versus-synthesised, one
+ │               iPod_25.1.3            │   layer up. Same grammar as §11.
+ │──────────────────────────────────────│
+ │ IDENTITY                             │
+ │  iPod         Black 5.5G           › │   §3.1 is what makes this
+ │  Authorises   never — this identity  │   expressible: a title references
+ │               is generated, and      │   an iPod for its GUID without
+ │               matches no purchase    │   booting it
+ │               ever made. A decrypted │
+ │               title runs anyway.     │
+ │══════════════════════════════════════│
+ │ There is no boot. Press the centre   │
+ │ button and the title is there.       │
+ └──────────────────────────────────────┘
+```
+
+**The matrix has a dependency and the page states it.** `bind_native` matches a title's imports
+against **RetailOS's** published framework table at `0x000793fc` — so with no `Installer` filed there
+is no RetailOS image, nothing to match against, and the page's central figure cannot be computed at
+all. Previously the page rendered `SERVED BY → Frameworks: Apple's, from iPod_25.1.3` as if the
+dependency were incidental, and §9.1's Games empty state never mentioned it. So:
+
+> **not measured** — a title's imports are matched against RetailOS's framework table, and no Apple
+> firmware is filed.  `Fetch… ›`
+
+in exactly §9.3's shape, with the same next-step-is-a-control rule.
+
+**And the matrix is computed on a throwaway `Machine` seeded from the firmware bundle, never on the
+one that will run the title.** `bind_native` **mutates** — it rewrites import thunks and removes traps
+— so computing the matrix for a page you can open without pressing anything would have a side effect
+on the machine, and opening a page would change what pressing ● does. Free inspection has to actually
+be free.
+
+**Framework choice surfaces only when it is the answer to a problem.** It defaults to whatever binds
+most and collapses to one `fg-dim` line until something is short. Nobody should have to learn the
+word "framework" to play Pac-Man.
+
+### 13.3 And there is no boot
+
+No 2.4 G instructions, no seventy-five seconds, no learned denominator. The cradle label goes
+`press ● to play · there is no boot` → `running` in one frame, and the wake is the same 220 ms
+backlight ramp — which now reads as *instant*.
+
+**That is the best demo this program will ever have**, and this layout is the one that shows it: the
+same iPod, the same button, and the wait simply is not there.
+
+### 13.4 The refusals, and the one thing not promised
+
+**An encrypted title is refused first-class, in our own words**, because the keystore work is not in
+this repository and a refusal that reads as a bug report is a bug:
+
+> This title is encrypted. It binds to the 8-byte FireWire GUID in the iPod's NOR — the one it was
+> purchased against, not the one on this bench — and the keystore that mints those keys is not part
+> of this program. A decrypted title runs; this one cannot, and we cannot help with that.
+
+**A partly-bound title is not disabled at all.** `61 of 98` runs, in `warn`. Watching where a call
+lands in trap space *is* the mode, and refusing to run it would delete the instrument.
+
+**Before 0.6, the `Games` root row is a project state**: `0.6. bind_native() resolves a title's
+imports against RetailOS's eight frameworks today; the surface that runs one is not built.
+eapp-inspect reads a title's import table now.`
+
+**Speed is a hypothesis with an obvious measurement, not a claim.** With Apple's frameworks the calls
+are still emulated ARM at ~24 % of real time and the title may not be playable. With native
+implementations the 179 `OpenGLES` functions become Rust and the emulated work collapses to the
+game's own logic — plausibly the first mode that runs at real speed. The Readout's ratio Gauge is
+exactly the instrument that settles it, and it is on screen while you play. Around 25 functions carry
+all rendering across twenty titles, so the practical first cut is far smaller than 433 — the matrix
+will read `25 of 98` long before it reads `98 of 98`, and the row already knows how to say it.
+
+**What it must not grow: a shader pipeline.** The screen is 76 800 pixels. Any presentation effect
+worth having costs nothing on the CPU, and rendering above 320 × 240 would change the machine rather
+than the presentation, which principle 9 forbids as flatly as `unstable-wgpu-*` being off.
+
+---
+
+## 14. Where this deliberately differs from convention
+
+### 14.1 Disable with a reason, where the rule elsewhere is hide-don't-disable
+
+Mainstream guidance is against principle 4, and its reasons are specific: disabled controls "appear
+clickable but provide no response", grey-on-grey often fails contrast, and screen readers frequently
+cannot reach them. Those are real and they are why §9.4 and §16.5 are as prescriptive as they are —
+**and the grey-on-grey one bit this design in §6.4**, where the "cannot start" cradle ring was
+1.67 : 1 against the surface it is drawn on. A refusal that cannot be seen is a hidden option, which
+is the rule this section exists to reject, arrived at by not doing the arithmetic.
+
+**This program does the opposite on purpose**, because its subject *is* the compatibility matrix.
+Which bootloader can carry which operating system on which ROM is not incidental complexity to be
+smoothed away — it is the thing the user came to find out, and much of `research/` exists to
+establish it. An option that silently vanishes teaches nothing. An option that is visible, greyed,
+and says *"ipodloader2 reads FAT32 type 0x0B and this drive is 0x0C"* has taught the reader something
+true about the hardware.
+
+86Box — the closest hardware-accuracy analogue on the PC side — chose **hide**: it lists only CPUs
+compatible with the selected machine. `compose.rs` is better-shaped for the opposite choice, because
+it produces a paragraph and a remedy rather than a filtered list.
+
+### 14.2 The drawn device is a control surface, and desktop accuracy emulators have declined that
+
+VICE closed a virtual-keyboard request denied in 2020 — *"doesn't make sense on a proper OS"* — and
+the device-as-control-surface is a touch-platform idiom (Delta, Provenance, `.deltaskin`). The
+justification here is different from theirs and belongs on the record so nobody re-litigates it:
+**the click wheel is not a keyboard.** It is four marks and a ring, it is the single recognisable
+thing about this machine, and pressing its centre button is a better Start affordance than a chrome
+button precisely because a 2005 iPod had no chrome.
+
+**But this is not a skin format.** Delta's `.deltaskin` (JSON `items[]` with `frame`/`inputs`/
+`extendedEdges`, `screens[]` with `inputFrame`/`outputFrame`, resizable PDF art) is right when you
+serve dozens of consoles and hundreds of community skins. This program has one device, two model
+variants and fourteen chassis colours. `ipod.slint` deriving everything from one `body-height` is
+already the correct amount of abstraction; a data format would be a second source of truth for a
+single drawing.
+
+**Two things are stolen from that world anyway** and named: Delta's `extendedEdges` — **already
+satisfied by `wheel.rs`**, whose `select` radius is 39 % wider than the drawn button because that is
+the hardware's own membrane, so the borrowing is a recognition rather than an addition (§7.4) — and
+MAME's `inputtag` idea, a drawn control's appearance reading the *emulated* state rather than the
+pointer, which principle 3 now states as a two-edge rule because the emulated state does not exist
+when the machine does not.
+
+### 14.3 No sidebar, and the drawer is not one wearing a hat
+
+The operator rejected a 280 px sidebar. The drawer is 420 px on the other edge, and the difference is
+checkable rather than rhetorical:
+
+- **It is not on screen by default.** The bench opens with it closed and one key closes it.
+- **It holds pages you visit**, not a permanently-visible list of things to switch between.
+- **It cannot shrink the subject.** The device is a constant physical size whether it is open or not,
+  and `min-width: 880` already accommodates it open — the window never resizes under you.
+- **A sidebar's cost is proportional to the configuration surface it serves.** UTM has ~10
+  configuration categories across two backends and is converging *on* a sidebar for that reason. This
+  program has six resource groups and one Settings page with three rows.
+
+### 14.4 Nothing floats, and the genre agrees
+
+Everything Slint gives away for free that floats is unusable here: `PopupWindow`, `ContextMenu`,
+`TooltipArea` (whose 500 ms delay and 8 px offset are hard-coded and marked internal). Expand, Rail
+and every disabled reason are built from ordinary layout elements, and that is more work than it
+looks.
+
+The external confirmation is worth citing rather than asserting: OpenEmu's own tracker carries an
+open issue proposing that its floating HUD be replaced with toolbar controls, because it interferes
+with the content — the same complaint that applies to this program's current `D` overlay.
+
+**And "nothing floats" is why there are no toasts**, which the previous revision violated once, in
+§7.4, with a four-second self-dismissing message on shelf row 2. It is easy to violate by accident;
+the rule holds anyway.
+
+### 14.5 Reference, not copy — and it is made visible
+
+UTM bundles disks inside the `.utm` bundle, so a second VM from the same base image is a full copy.
+Here `Device` holds **names** into shared lists. For a program whose images are 74 GB and are
+sometimes the only copy of somebody's iPod, that is the safety property, and §11.4's `used by N` is
+what makes it visible — as is §11.3's rule that the one control which quietly *changes* a reference
+has to say so first.
+
+### 14.6 The chassis has no off switch, and Apple's own simulator disagrees
+
+`Show Device Bezels` is a menu item in the iOS Simulator, and turning it off is the documented fix
+when the frame fights the scale. Here the escape hatch exists and it is called **fullscreen**
+(§12.6): the panel alone, no body, at 3× to 8×, which is strictly better than the same thing at `k`
+in a window. There is no separate bezels toggle, because it would be a third way to look at one
+thing.
+
+---
+
+## 15. What is deliberately not in 0.5
+
+Each for a stated reason, not for lack of time.
+
+| out | why |
+|---|---|
+| **Games** (§13) | 0.6. The framework work is not done and the keystore is in a private repository. The design lands now so the shape is right when it does. `bind_native()` already resolves imports; `eapp-inspect` already reads a title's table |
+| **iPodLinux as an offered system** | `Os::OFFERED` is 2. Its kernel boot is clean and ZeroLauncher stalls at "Finishing Up…" after a 101 MB download. Offered as a **disabled project state with its escape hatch**, never hidden — and §20 moves the escape hatch off a `make`d vendor binary onto the fetched `ipodlinux::LOADER`, which is what makes it an escape hatch rather than a second dead end |
+| **Target disk mode as a working target** | a USB feature, and USB is unmodelled. `Lost(0xe19b0000)` after 127 952 instructions. Offered as a **disabled project state** |
+| **Audio** | a 1.0 condition. The Wolfson codec is unmodelled |
+| **The ~90 trace instruments, `dis`, `tcb`, `ghidra`, `ipod-film`, the boot recipes, the control socket** | §12.9. Terminal instruments for a person already holding a hypothesis. The bridge is `Copy the command line for this device`, masked by default |
+| **A second window, tear-off panels, multiple machines** | there is exactly one machine, by design. §7.2 is what makes "look at a second device" possible without one |
+| **A shader pipeline, any scaler above nearest** | §13.4 and principle 9 |
+| **Remembering window position on Wayland** | `set_outer_position` is documented Unsupported there, and there is no work-area query either. Stated in Reference rather than pretended |
+| **A theme beyond system / light / dark** | §11.6 has all three program settings on one page; a fourth theme is not one of them |
+| **Re-deciding `k` on a plain window resize** | principle 1. §17.Q11 |
+
+---
+
+## 16. Implementation notes — Slint 1.17
+
+Chosen over Iced, Dioxus Native, egui and Tauri: a semver-stable 1.x with a release every few weeks,
+a real layout and styling system, live preview, and GPLv3 matching this repository. `backend-winit` +
+`renderer-skia` only; `unstable-wgpu-*` deliberately off.
+
+### 16.1 The pushed `hero`, and the binding-loop trap
+
+**Reading a size that the layout itself decides is a binding loop.** The window's height comes from
+its layout, the layout from the content, the content from `hero` — so `property <length> hero:
+root.height - 200px` is a hard compile error in the strict case and a deprecation warning that says
+it "may cause panic at runtime" in the inherited case. Slint's own test fixture
+(`tests/syntax/analysis/binding_loop_layout_if.slint`) is exactly this construct.
+
+Consequences, and they are constraints rather than advice:
+
+- **`hero` is a length pushed in from Rust and never read from the window inside markup.** It is
+  computed from `scale_factor()` and a measured `size()` (§6.6) — both **window** properties set by
+  the platform, not sizes the layout decides.
+- **The arrow only points one way as long as the Window's own `min-height` and `preferred-height` are
+  plain constants that do not read `hero`.** They are: 400 and 846. If either were bound to `hero` in
+  the same frame the loop would close and oscillate, and this is the sentence that stops somebody
+  "tidying" it.
+- **The container that holds the device must declare no intrinsic height** — `min-height: 0px;
+  preferred-height: 0px` — so the arrow points one way there too. `window.slint` claims to do this
+  today and does not; `stage-area` sets neither.
+- **There are no responsive breakpoints and there cannot be.** "One layout, nothing collapses at a
+  breakpoint" is not a taste rule, it is the only thing Slint permits. §9.5's too-short state is
+  therefore decided **in Rust** and pushed in as a boolean.
+
+**And the boolean is recomputed on `Resized` and `Moved`, not only on startup and
+`ScaleFactorChanged`.** The previous revision promised it was decided *"once, on startup and on
+`ScaleFactorChanged`, never while you are looking at it"*, and that promise is not one the platform
+can keep. Two ways to break it, both ordinary:
+
+- **Drag the window's bottom edge up** to make room for a terminal. Neither event fires. Every term
+  in §9.6's column except the top margin is a fixed `height:`, so §16.2's adjuster can take nothing
+  from any of them, the loop exits oversized, and the trailing children — the shelf, carrying
+  `write_target()` — are positioned past the container's bottom edge and drawn there. The user is now
+  writing to a disk with the warning off-screen.
+- **Drag the window onto a second monitor of the same scale factor.** No `ScaleFactorChanged` fires,
+  the window keeps its 846 px height on a 735 px client, and the same thing happens.
+
+So: recompute on `Resized`, `Moved` and `ScaleFactorChanged`, with hysteresis (drop below the
+threshold, restore 20 px above it), and **delete the "never while you are looking at it" claim**.
+`k` itself is *not* recomputed on `Resized` — only on `Moved` and `ScaleFactorChanged` — which is
+principle 1 and §17.Q11.
+
+### 16.2 Nothing gives, so shrinking must be designed
+
+Setting `height:` on a layout child sets `min = max = that value`. When a layout is smaller than the
+sum of its children's minimums, the `Shrink` adjuster can only take `size − min` from each item —
+**an item pinned by an explicit `height:` contributes zero** — the loop exits still oversized, and
+the trailing children are positioned **past the container's bottom edge**
+(`i-slint-core-1.17.1/layout.rs:189-202, :232-268`). Layouts do not clip by default, so the surplus
+draws outside the pane, silently.
+
+That is the same class of failure as the 560 px hero: it looks fine and it is wrong. §9.6's budget
+gives exactly one elastic term (the top margin), §9.5 is what happens when it runs out, and **§5's
+Scroll is what happens on a drawer page**, where the content is genuinely unbounded and no budget can
+be drawn.
+
+Also: **stretch factors are inert unless the layout's alignment is `stretch`.** With
+`alignment: center | start | end | space-*` and available space ≥ preferred, every item gets exactly
+its preferred size and `vertical-stretch` is never consulted. The comment at `window.slint:191` is
+correct and this is the mechanism.
+
+### 16.3 `visible` versus `if`, decided per element
+
+`visible: false` lowers to a wrapping `Clip` element with `clip: !visible`, and that pass runs at
+step **180**, *after* layout lowering at step **156** — so **the layout has already allocated the
+cell and the element keeps its full space.** That is principle 2, mechanically, and it is the default
+here: optional captions, the cradle label's content, the shelf's row-3 trailing slot while the drawer
+is open, the `No iPod is plugged in` row, every line that comes and goes.
+
+`if` becomes a conditional repeater whose cell the layout genuinely omits **and it destroys the
+subtree** — which is why the shipped `if tab == 0:` throws away all carousel state, hover and focus
+on every tab change. `if` is used here only where an unbounded list genuinely has no rows.
+
+And: **`visible` on a component's root element is silently ignored** and only warns. It must be set
+at the use site.
+
+### 16.4 Drag and drop is a winit hook, not `DropArea`
+
+**Slint's `DropArea` cannot carry file paths at all.** `DataTransfer` holds an image, plain text and
+an internal `Rc<dyn Any>`; there is no file-path or uri-list variant.
+
+The route is winit's raw events through `WinitWindowAccessor::on_winit_window_event` or
+`Backend::with_custom_application_handler` — **the same escape hatch `opaque_window()` already
+uses**. winit 0.30.13 delivers `DroppedFile(PathBuf)`, `HoveredFile(PathBuf)` and
+`HoveredFileCancelled`, **one event per file, carrying no cursor position, and with no event that
+says the drop is over.**
+
+Three design consequences, and the third one was missed:
+
+1. A window-wide target is the only kind that can be built, which makes §11.4's *"there is no wrong
+   target"* the only implementable design rather than merely a good one.
+2. Identification has to be cheap enough for a hover, so §11.4 size-gates it and defers hashing.
+3. **Multiplicity has to be coalesced by the program**, because nothing in the event stream marks the
+   boundary between one drop of eight files and eight drops of one. §11.4's 150 ms window.
+
+**Windows note**: winit's file drag-and-drop uses apartment-threaded COM and "will interfere with
+other crates that use multi-threaded COM API on the same thread". Any file-picker crate added later
+must agree with that apartment model. **There is no file picker in the dependency graph today** —
+`cargo tree -p ipod-gui | grep -iE "rfd|native-dialog|ashpd"` is empty — and adding `rfd` pulls GTK
+or xdg-desktop-portal on Linux. That is a real dependency decision (§17.Q3), not a checkbox.
+
+### 16.5 The disabled construction, specified once
+
+Two traps, both verified in the toolkit source:
+
+- A `TouchArea` with `enabled: false` **forcibly sets `has_hover = false`** and forwards the event to
+  whatever is underneath (`i-slint-core-1.17.1/items/input_items.rs:81`).
+- A `FocusScope` with `enabled: false` refuses focus "neither via click nor via tab focus traversal,
+  **not even programmatically**".
+
+So a disabled control that carries its own reason is unbuildable the obvious way. The shape, and it
+is written once so it is not reinvented per control:
+
+> **An always-enabled outer `TouchArea` + `FocusScope`** carrying hover, the focus ring and the
+> reason, **wrapping an action gated by a plain boolean.** Never `enabled: false` on either.
+
+**Proof obligation**: a disabled control must state its reason under **keyboard focus alone**, with
+the mouse untouched. That is also NN/g's specific complaint about disabled controls answered rather
+than dismissed.
+
+Note that `ipod.slint` walks into this today: `centre-touch` is `enabled: pressable` and line 165
+reads `centre-touch.has-hover` through the same flag.
+
+### 16.6 Text, fonts and the glyph rule
+
+Slint takes **one `font-family` string per element with no fallback list**. Slint 1.17's text stack
+is parley 0.10 + fontique 0.10; script-based fallback exists inside fontique but runtime font
+registration is behind `unstable-fontique-010`, and **nothing in `.slint` can ask whether a glyph
+exists.** That is the mechanical reason §6.7's icon set is closed and drawn, and why the glyph test
+widens rather than retires.
+
+`Path` supports SVG `commands` or declarative children, with `fill` (a brush, so gradients work),
+`stroke`, caps and joins — and **no dash array**. `commands` "can only be set in a binding and cannot
+be accessed in an expression". That is why §7.3's refused cradle is a **broken** ring — four arcs
+with gaps — rather than a dashed one: a gap is a shape and a shape is buildable.
+
+### 16.7 Accessibility is not compiled in
+
+`accessibility` is in slint's default feature set; `tools/ipod-gui/Cargo.toml` sets
+`default-features = false` and does not list it. `grep -c accesskit Cargo.lock` returns **0**. Every
+ARIA claim in the previous revision was false as built.
+
+Turning it on is a prerequisite. Then: `Region` / `Complementary` / `Main` for surfaces,
+`accessible-live-region: polite` for the Rail and the Readout, `accessible-expandable` / `-expanded` /
+`accessible-action-expand` for Expand, `accessible-item-selectable` / `-selected` / `-index` /
+`-count` for lists, `accessible-enabled` and `accessible-description` for every disabled control.
+
+`AccessibleRole::TextInput` additionally has a **behavioural** job here, not only an announced one:
+§16.8's shortcut suppression is keyed on it.
+
+**The honest gap**: a 96-detent ring has no announced equivalent — Slint has `Slider` but a wheel is
+not one, and the `↑` / `↓` keys are the accessible route and are a fallback, not a peer. Say so once
+rather than pretending.
+
+### 16.8 Keyboard, shortcuts and the menu bar
+
+**⌘ and Ctrl are one binding.** On Apple platforms Slint's winit backend swaps them — ⌘ (winit
+`Super`) is delivered as `Control` (`i-slint-backend-winit-1.17.1/event_loop.rs:258-274`) — and the
+compiler explicitly rejects `Cmd` / `Command` / `Win`. So `@keys(Control + ",")` is ⌘, on macOS and
+Ctrl+, elsewhere; write the table with one column and use `Platform.os` only for the printed hint.
+
+| key | does |
+|---|---|
+| `Tab` / `⇧Tab` | focus, in document order. Never a positive tabindex |
+| `Esc` | **one definition, outwards, in order**: leaves fullscreen · then closes an Expand · then closes the drawer · then, from `Running`, parks. **From `Booting` it powers off** |
+| `Enter` / `Space` | the primary action — on the bench, the centre button; on §9.5's bench, its primary row |
+| `←` `→` | the wheel while there is a machine; previous / next device when there is not |
+| `↑` `↓` | the wheel, always |
+| `M` `P` `N` `B` | MENU, Play, Next, Prev — only while there is a machine |
+| `H` | the hold switch |
+| `⌘,` · `?` | Reference · Reference on help |
+| `⌘\` | the drawer |
+| **`⌃⌘F` / `F11`** | fullscreen — **the one row that is not one column**; see below |
+| `S` · `⇧S` | the panel · the window |
+| `D` | the Readout page |
+
+**`Esc` had three incompatible definitions and now has one.** §4 listed it as a way *into* the
+drawer, §16.8 defined it as a pure exit, and §12.6 said it was the way out of fullscreen — so on a
+14″ MacBook Pro, where §12.6's chrome strip cannot be drawn and `Esc` is the only exit, the same key
+might instead have initiated a 1.6 GB park. It is deleted from §4's list of entrances (there are
+already four) and the order above is total. And **from `Booting` it powers off rather than parking**,
+because parking a boot is a 1.6 GB write of a state nobody wants.
+
+**One exception, and it is focus rather than modality.** *Single-letter shortcuts and `Space` are
+suppressed while an element with `AccessibleRole::TextInput` holds focus.* Only modified keys
+(`⌘,`, `⌘\`, `⌃⌘F` / `F11`), `Tab`, `Esc` and `Enter` survive.
+
+Without that line the Composer is unusable and the previous revision's claim — *"There is no modal
+keyboard… Every other key is the window's, **in every state**"* — is false the moment §11.2 exists.
+Type `My 5.5G` into the Name field and you fire `M` (MENU), `Space` (the centre button, i.e.
+`Cmd::PowerOn`) and `S` (a screenshot written to disk); type a serial and you fire `S`, `M`, `S` and
+`⇧S` on the shift-held capitals. The Composer has four text inputs and every one of them was
+unusable. Slint offers exactly two shapes and no third: declared with `KeyBinding` or
+`capture_key_pressed`, the shortcuts intercept window-down and the field cannot be typed into; on a
+bubbling root `key_pressed`, the `TextInput` consumes them first and the shortcuts silently stop
+working. The second is the correct one, and it is delivered through `FocusScope` bubbling with
+`reject` — **that is focus, not a mode**, and it is the "in every state" claim that has to go.
+
+**The fullscreen row is the one exception to the one-column rule, and the reason is mechanical.**
+`⌃⌘F` needs both modifiers, so on Apple platforms it is `@keys(Control + Meta + "F")`. The swap only
+applies on Apple platforms, so on Windows and Linux that same binding is **Win+Ctrl+F** — reserved by
+the Windows shell and by most Linux compositors, so the keystroke never reaches the program. It is
+platform-selected in `main.rs`: `⌃⌘F` on macOS, `F11` elsewhere, which is each platform's own
+convention rather than a compromise between them.
+
+**The menu bar.** Slint 1.17 has a real `MenuBar` / `Menu` / `MenuItem`, and `muda 0.19.3` is already
+in the tree (`i-slint-backend-winit` depends on it for `macos` and `windows`). Slint's own
+documentation says **the Window's `width` and `height` define the client area, excluding the menu
+bar**, so on macOS it costs nothing from §9.6's budget.
+
+Two caveats, both real:
+
+- **`MenuBar` "must not be in a `for` or an `if`"**, so it cannot be conditionally declared. Two
+  top-level `.slint` components importing one shared `Bench` component, selected by `cfg` in
+  `main.rs`, is the way to have it on macOS and not elsewhere — and that is the same `cfg` the
+  fullscreen row already needs.
+- **On Linux there is no muda**, so Slint renders the bar itself — which costs outer height and may
+  need a style this crate does not compile in. **Measure it before trusting it.** §17.Q4.
+
+Every menu item is also a drawer row. Nothing is menu-only, which is what makes the menu bar a
+convenience rather than a dependency.
+
+### 16.9 Model updates, and one mechanical rule
+
+**Do not rebuild `ModelRc`.** `window.set_devices(ModelRc::from(Rc::new(VecModel::from(rows))))`
+replaces the model wholesale, tearing down and reconstructing every repeater instance — losing focus,
+hover and any in-flight animation. That is exactly the jumping principle 2 forbids, and `main.rs`
+does it today in both `device_rows` and `resource_rows`. Keep one retained `Rc<VecModel<_>>` per list
+and call `set_row_data`. It matters most for the Rail, which appends constantly.
+
+**And the rule this whole revision exists to install: no prose claim about the window without a check
+that can fail.** Every drift found in §1.1 is the same shape — a document describing a deleted
+layout, a comment describing an unset property, a test citing a file it cannot read, a README
+advertising removed features — and §19 shows the shape survived one full rewrite: a cover-art claim
+about a file format nothing parses, a `core 1` column with no per-core field behind it, a
+`parked · 4 min ago` with no timestamp in the model, a cradle state nothing computes. The design layer
+gets the discipline `research/` already has: **the constants live in one place, the tests read them,
+and a claim without a check is deleted rather than left standing.**
+
+Mechanically: `build.rs` emits every ratio and every geometry constant from **one Rust source of
+truth** into both a generated `.slint` file and a Rust `const` module, so the test reads what the
+markup reads rather than hand-copying it. `min-width: 880` is one of them, and its derivation lives
+beside it (§9.6) rather than in a parenthetical that sums to 449.
+
+### 16.10 The tests, and proving they can fail
+
+**Re-express, do not drop.** The current window's tests caught real regressions — twelve missing
+glyphs, then two more within the hour.
+
+| test | asserts |
+|---|---|
+| `the_panel_is_an_exact_integer_number_of_device_pixels` | drawn width is an exact integer multiple of **320 physical px**; drawn height is the **same** multiple of 240; the aspect is 4:3 to a float epsilon. **Runs at `sf ∈ {1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.5}` × `k ∈ 1..8`** — and **it goes red at 2.75 / 7 today**, which is the prove-it-can-fail obligation satisfied by a real case rather than an assumed one (§6.6). Also **prove the ratio arm**: set the ratios back to `0.4866 / 0.3672` and watch it go red before trusting it |
+| **`the_glass_is_the_panel_plus_ten_and_a_half_physical_pixels`** | the black surround is `0.016 × hero_phys` on **all four** sides at every `k` and every `sf`, and the glass is computed **from** the panel rather than from a ratio — so a re-measured bezel cannot silently flip which axis bounds `k` (§6.6) |
+| `the_column_fits_the_declared_minimum` | derives §9.6's terms from the generated constants — not from typed copies — and asserts `sum ≤ min_height`, **including the cradle's overhang and focus ring above the body as well as below** |
+| `the_drawn_ipod_is_the_shape_of_a_real_one` | survives unchanged except for the two corrected ratios and the added hold switch |
+| `every_surface_can_be_left` | every drawer page reaches the bench in ≤ 3 presses of one key |
+| `every_disabled_control_states_its_reason_under_keyboard_focus_alone` | §16.5's proof obligation, with the mouse untouched |
+| **`a_single_letter_shortcut_does_not_reach_the_window_while_a_field_has_focus`** | §16.8's one exception, and it must be shown to fail with the suppression removed |
+| **`every_cradle_state_clears_three_to_one_against_bg_sunken`** | §6.4's table, computed rather than eyeballed, in both schemes |
+| `dropped_files_route_themselves_in_either_order` | comes across unchanged, and keeps its two-file scope |
+| **`an_ambiguous_drop_files_and_makes_no_device`** | §11.4's rule for two ROMs or two `.ipsw`s |
+| **`a_fix_that_changes_a_resource_reference_says_so_and_needs_two_presses`** | §11.3, and it is the assertion `every_refusal_carries_a_fix_and_applying_it_resolves` does not make |
+| `no_ui_string_contains_a_glyph_the_font_is_not_proven_to_have` | widened per §6.7 — and it catches the shipped ` · ` today |
+| `the_verdict_preview_matches_what_the_installer_writes` | already exists in `compose.rs`; the window renders it verbatim |
+| `every_refusal_carries_a_fix_and_applying_it_resolves` | already exists in `compose.rs` |
+
+**`IPOD_LAYOUT=1` does not exist.** `docs/DEVELOPING.md` documents it as the way to make the window
+print the measurements its size constants derive from; `grep -rn 'IPOD_LAYOUT' tools/` returns
+nothing. Either build it — it is ten lines once the constants are generated — or delete the claim.
+
+### 16.11 Scroll, and the price of a `Flickable`
+
+**Every drawer page's body is a `Flickable`**, between a fixed page header and any pinned footer row.
+The bench is not one; the shelf is not one; the well is not one. That is the whole of where Scroll
+is allowed, and §5 says why it had to exist at all.
+
+Three costs, all verified in `i-slint-core-1.17.1/items/flickable.rs`, all accepted with their
+numbers rather than discovered later:
+
+| | value | consequence |
+|---|---|---|
+| `FORWARD_DELAY` | **100 ms** (`:370`) | a press inside reaches inner children 100 ms late, which collides with `tight`'s 140 ms press feedback. §11.2's three-level re-cut is the mitigation: the page you press most does not need a Flickable at all |
+| `DISTANCE_THRESHOLD` | **8 px** (`:366`) | a drag under 8 px is a press, over it is a scroll. Fine for rows; it is the reason nothing draggable lives inside a Scroll |
+| `SCROLL_FILTER_DURATION` | **800 ms** (`:376`) | once it has scrolled, it captures further wheel events for 800 ms. A nested scroll would be unusable, so there are none |
+
+Two design rules on top:
+
+- **An `Expand` that opens below the fold scrolls its own top edge into view**, `gentle`, rather than
+  letting the rows below it travel under a stationary cursor. Without that rule, §11.3's expanding
+  refusal is principle 2 violated through a mechanism §16.3 does not cover — `visible` keeps a cell,
+  but a scroll offset is not a cell.
+- **A pinned footer is outside the Flickable**, so `Create`, `Screenshot the panel` and
+  `Copy this readout` are always in the same place. A primary action that scrolls away is a primary
+  action you hunt for.
+
+---
+
+## 17. Open questions for the operator
+
+Real ones, each with a recommendation.
+
+**Q1 — the shelf's height, and what a refusal gets.** The shelf is 88 px and a bench refusal is one
+elided line plus `why ›`. A 134 px shelf holds the whole `Verdict::No.why` paragraph and its `Fix`
+inline. **The cost changed with §6.6 and is now smaller than it was**: the column goes
+`body + 154` → `body + 200`, which at `k = 1, sf = 1` is 810 → 856. That loses **1440 × 900 with the
+Dock hidden** and nothing else — 1920 × 1080 at 125 % now has 122 px of slack instead of 11, and the
+operator's own machine has 81. One display class, not two.
+**Recommendation: keep 88.** The full paragraph is one keypress away, under the control that caused
+it; 46 px of permanent chrome to hold a paragraph that is one keypress away is a bad trade even at
+one display. But the number moved, so the trade is worth re-reading rather than inheriting.
+
+**Q2 — the cradle.** A permanent 2 px outline 10 px around the device, plus two clamp marks, plus a
+broken-ring variant for refusals and an `fg` focus ring 4 px outside. It is the mechanism that keeps
+UI state off the object (principle 3) and it is the largest untested aesthetic bet in this document —
+and it now costs 32 px of the vertical budget (16 above, 16 below) rather than 10. The alternatives
+are: clamps only, no outline; or accept a tinted device and lose principle 3.
+**Recommendation: build it, look at it, and decide from a screenshot rather than from this
+paragraph.** If it reads as clutter, drop to clamps-only before dropping principle 3 — and note that
+clamps-only returns 32 px to the budget, which is most of what Q1 wants.
+
+**Q3 — a file picker.** `Provide…`, `Add a dump…` and `Choose somewhere else…` all need one — and
+`Choose somewhere else…` is now the next step for **three** failure classes, not one, because §9.3
+split `space` and added `volume`. Nothing in the dependency graph provides it; `rfd` pulls GTK or
+xdg-desktop-portal on Linux.
+**Recommendation: add `rfd`.** Drag-and-drop is the better route and it is window-wide, but "the only
+way to give this program a file is to drag it" is not a program, and a Linux portal dependency is a
+smaller cost than that.
+
+**Q4 — the menu bar on Windows and Linux.** macOS is free (§16.8). On Linux, Slint renders it and it
+costs outer height. **The physical-hero correction bought the fractional-scale displays enough slack
+that this is no longer likely to be decisive** — 1920 × 1080 at 125 % went from 11 px of headroom to
+122 — but it has still never been measured.
+**Recommendation: macOS only in 0.5**, via two top-level components and a `cfg` — which §16.8's
+fullscreen row needs anyway, so the mechanism is not a new cost. Everything in it is a drawer row.
+Revisit when the Linux cost has actually been measured rather than estimated.
+
+**Q5 — a second device on the bench.** Settled, not open, and it is worth saying why it moved. The
+previous revision left "one device on screen" and a `←`/`→` that switched devices coexisting, which
+meant looking at a second iPod either destroyed the first or left it executing behind a panel that
+was no longer drawn. §7.2 decides it: **the bench shows the machine whenever there is one, and other
+devices are inspected on the Devices page**, with `Start` disabled and a reason. The carousel stays
+deleted because it animates `body-height` on a live framebuffer (§8.2).
+**Recommendation: as written.** If a carousel is ever wanted back, it must not animate anything the
+Screen reads, and it must not imply that the bench can show a device that is not the machine.
+
+**Q6 — the hold switch's proportions.** §6.6's numbers (0.100 × 0.024 h, right edge inset 0.055 h)
+come from **published dimensions, not from Rockbox's drawing**, because the SVG is a front elevation
+and may not carry the top edge. An invented proportion is exactly the mistake this drawing already
+made once — wrong by 66 % on where the screen sits.
+**Recommendation: mark them a placeholder in the source, and make the test refuse to pass until
+they are derived from a measured source.** If the SVG does not carry the top edge, say so in the
+comment and cite where the numbers did come from.
+
+**Q7 — the parked frame.** §12.4 writes a 320 × 240 PNG beside the snapshot so a parked device's
+glass shows the frame it stopped on. It costs one write per park and retires `png.rs`'s dead-code
+allow — and §11.4's Snapshots group now makes both it and the 1.6 GB behind it visible and
+deletable.
+**Recommendation: do it.** A shelf of parked machines that look parked rather than off is worth one
+PNG, and it is drawn at exactly `k` so it costs nothing in fidelity.
+
+**Q8 — `Settings::mode` (User / Debug).** The model carries it, nothing reaches it, and this design
+has no use for it: the Readout is a drawer page anyone can open, and there is no second presentation.
+§11.6's Settings page deliberately does **not** include it.
+**Recommendation: delete it from the model**, or give it one job — hiding the Readout row from the
+drawer root — and say which. A field with no mechanism is a landmine.
+
+**Q9 — does a `.ipg` carry cover art, and under what member name?** Nothing in this tree reads a
+`.ipg` zip's members; `grep -rni "ipg" --include='*.rs' tools/` returns nothing. §13.2 draws the
+cover from the title's name unconditionally in 0.6 rather than claiming a structure that has not been
+looked at.
+**Recommendation: open one of the 20 decrypted titles and list its members before 0.6 designs
+anything else around them.** It is a `unzip -l` away, and it is the difference between a design and a
+guess.
+
+**Q10 — can an arrival at a `WATCHED` PC be attributed to a core?** `Stats::enters` is
+`[u64; WATCHED.len()]` with no per-core dimension anywhere in `Stats` or `Out`, and §12.8 draws one
+column because of it. The second column is worth having — the second core cost 24 % until its message
+was found never to arrive — but only if the run loop actually knows which core executed the
+instruction.
+**Recommendation: answer it before §12.8 is built.** If yes, `enters_by_core: [[u64; WATCHED.len()];
+2]` joins §20's list beside §3.1 and §3.2. If no, the one column is the honest drawing and the
+caption stops claiming to show what two cores are doing.
+
+**Q11 — should a plain window resize re-decide `k`?** Today it does not (§6.6): `k` is fixed when the
+window is shown and re-decided only on `ScaleFactorChanged` and `Moved`. A window dragged large
+enough for `k = 2` does not take it until the next launch. Re-deciding on `Resized` would give it
+immediately and would make the iPod change size under a drag, which is principle 1.
+**Recommendation: leave it, and put the fact where it can be seen** — the shelf's fidelity slot says
+which `k` is in force, so it is a stated limitation rather than a mystery. If it turns out to annoy,
+the cheapest fix is a one-line offer in that slot (`2× fits this window — relaunch to use it`), not a
+live recompute.
+
+---
+
+## 18. Decisions, including the ones this revision overturns
+
+Each is one constant or one section away from being reversed, and the reasoning is here so a reversal
+is cheap rather than archaeological.
+
+### 18.1 Overturned
+
+| | was | is | why |
+|---|---|---|---|
+| **The panel's ratios** | `0.4866 / 0.3672`, measured from the SVG | **`0.48799 / 0.36599`**, from the hardware | The SVG's own 0.2 % error makes the well 1.32516 instead of 4:3, which stretches the framebuffer 1.00674 vertically. The drawing governs where the screen sits; the hardware governs how big it is. Cost: 0.43 px on the left inset |
+| **`hero`** | `658px`, a **logical** constant | **`k × 655.751` physical, pushed in from Rust** | A logical constant is not a constant. At 125 % the glass held 43 px of black each side against a declared invariant of 11, and at 150 % the panel filled 62 % of its own well. §6.6 |
+| **The glass** | `0.51999 h × 0.39799 h`, and `k` computed from it | **panel + `0.016 h` on four sides** | The glass ratio is 1.3066, not 4:3, so the two ratios the fidelity section exists to correct governed nothing but placement. It was harmless only by coincidence of the bezel |
+| **The vertical budget** | 790 min / 826 preferred, `cradle overhang 10` counted once | **`body + 154` / `body + 190`**, the cradle's overhang and focus ring counted **above and below** | The topmost thing on the bench was 16 px above the body and the budget paid for none of it. §16.2 neither shrinks nor clips it |
+| **Devices: master–detail** | a 280 px list + detail pane | **one device on the bench; the list is a drawer page** | The operator rejected the sidebar in their own words. The detail pane's job is done by the shelf and the drawer's device page |
+| **Devices: the carousel** | a horizontal row of drawn iPods | **one device, cross-dissolve** | It animates `body-height` with a live framebuffer attached, so the panel is drawn at a continuously varying non-integer scale for 320 ms on every change |
+| **The material on the centre button** | proposed, an earlier draft | **on the cradle instead, as accent** | Principle 3: a glossy blue disc is UI state painted on the object, and a screenshot of it stops being a picture of an iPod |
+| **The cradle's inactive ring** | `line` at 30 % | **`fg-dim` at 100 %** | 1.23 : 1 against `bg-sunken`, which is the only surface it is ever drawn on. Five of twelve states were invisible |
+| **The cradle's refused ring** | `fg-disabled` | **`fg-dim`, broken into four arcs** | 1.67 : 1, on the one state whose whole job is to teach. And a fourth colour that clears 3 : 1 and means nothing else does not exist on this surface |
+| **The cradle's focus ring** | a second `accent` ring, 4 px outside the first | **`fg`** | A ring around a ring in one colour is not a focus indicator |
+| **`Esc`** | a way *into* the drawer, *and* a pure exit, *and* the way out of fullscreen | **one ordered outward definition** (§16.8) | Three meanings, of which the one that fired on an empty bench started a 1.6 GB write |
+| **The keyboard's "in every state"** | asserted | **one exception: `TextInput` focus** | Four text fields in the Composer, every one of them unusable, and Slint offers no third shape |
+| **The centre button's hit region** | "12 px larger than its drawing" **and** `WheelRing::hit` | **`WheelRing::select`, and only that** | Two rules for one control, neither matching the model; one would have shrunk the target and the other would have eaten a deliberate dead band |
+| **The eight-primitive vocabulary** | eight, no scroll container | **nine — Scroll** | Three drawer pages overflow their pane by 30–60 % and Slint neither shrinks nor clips |
+| **The `space` failure class** | one class, `Nothing has been written.` | **`space, pre-flight` · `space, mid-write` · `volume`** | The wording is false 41 GB in, and free bytes are not the only thing FAT32 refuses |
+| **`Fix`** | "one press applies it" | **one press, except `BuildFromIpsw`, and none when the value is disabled** | One of the four shapes silently detached a 55.9 GB reference; another set a value the picker forbids |
+
+### 18.2 Settled
 
 | | decided | why |
 |---|---|---|
-| **Devices: grid or list** | **master–detail**, §13 | the grid was chosen first and lost. Hero-size iPod, unbounded scaling, room for the facts, and a transition that needs no tweening |
-| **Accent colour** | **`#2969d6` / `#5292e7`**, §7 | RetailOS's own selection blue, sampled off a frame we drew. Derived, not chosen |
-| **The one button's default iPod** | **5.5G, 30 GB, black**, §11 | low conviction and genuinely close. Images are sparse, so capacity costs nothing — 30 GB is a real Late-2006 configuration and the friendlier default |
-| **Games in 0.5** | **no — 0.6**, §16 | the framework work is not done. The design lands now so the shape is right when it does |
-| **iPodLinux's place** | **visible, disabled, with its reason**, §15 | principle 3. But see below — it is a different *kind* of disabled |
-| **`Reveal disk`** | **keep it**, §13 | fifteen lines, and this is a program about files that are hard to find. The expanded row also shows the full path, copyable |
-| **Reference** | a place reached by `?`, not a Sheet | long prose reads better in one |
-| **Theme** | follows the system, both fully specified | three platforms, three expectations |
-| **Nostalgia** | **borrow the language, never the resolution**, §7 | the emulated screen is *inside* our window; chrome that imitates it destroys the ability to tell which layer a screenshot is of |
-
-### The two kinds of disabled
-
-Answering the iPodLinux question exposed a gap: §9's `Disabled` state covers two different things,
-and greying them identically makes both ambiguous — which defeats the whole justification for
-principle 3.
-
-| | says | example | wording |
-|---|---|---|---|
-| **a machine rule** | *this cannot work* | `ipodloader2` reads FAT32 type `0x0B` and this drive is `0x0C` | state the rule. It is permanent, and teaching it is the point |
-| **a project state** | *this is not finished* | iPodLinux boots, then its userland stalls at ZeroLauncher's last step | say what *does* work instead — `ipod-boot install-linux` builds that drive — and match what the README already says |
-
-A machine rule is about the hardware and will never change. A project state is about us and should
-read like it. They get different wording, and a project state always names the escape hatch.
+| **The thesis** | the iPod is the program; three surfaces | it is the only shape that fits the panel at 1:1 on the operator's own 891 px machine, and it is what was asked for |
+| **The device's position** | pinned by its distance above the shelf | all slack goes to one place, so growing the window moves nothing |
+| **The device's size** | `k × 655.751` **physical** pixels, `k` fixed for a session | one number, both axes, every display scale; and the drawing does not resize under a drag |
+| **Accent** | `#2969d6` / `#5292e7` | RetailOS's own selection blue, sampled off a frame we drew. Derived, not chosen |
+| **Accent's three uses** | focus ring (except on the cradle) · progress · the cradle when startable | four blue things is no primary action |
+| **The material's three uses** | the selected drawer row · the one primary row per page · §9.5's primary row | everything glossy is a pastiche; the third is the same row as the second, on a bench that cannot draw a cradle |
+| **The one button's default iPod** | 5.5G, 30 GB, black | a real Late-2006 configuration; images are sparse so capacity costs nothing |
+| **`display` type role** | retired | 36 px of a budget with none to spare, over a rendering of the same thing |
+| **`readout` type role** | added | 25 numbers want tabular figures; without them a changing value reflows its own digits |
+| **Cradle, Gauge and Scroll** | added to the closed vocabulary | principle 3 needs somewhere to put state; the Readout needs a not-measured that is not a zero; three drawer pages do not fit in a drawer |
+| **Tile and Sheet** | retired | Tile went with the grid and the carousel; the drawer *is* the pushed surface |
+| **The drawer's geometry** | full client height above the shelf; the well **and** the shelf narrow to `W − 420` | pushing, not covering; and row 3 keeps its measure because the trailing menu list is redundant while you are inside it |
+| **The wheel** | always the machine's, never the window's | a mode whose meaning flips on a state the user did not set, and which vanishes when learned |
+| **The bench shows the machine** | whenever there is one; other devices live on the Devices page | to look at a second thing you must not destroy the first — that is the disease this whole design cures |
+| **Games** | 0.6, designed now | one drawer page and one cradle state, because a title is a thing that stands on the bench |
+| **iPodLinux** | visible, disabled, project-state wording, escape hatch named **and made reachable** | principle 4, and an escape hatch that needs a `make` in the repository is not one |
+| **Settings** | a drawer page with exactly three rows | three homeless settled decisions, and the operator rejected a settings screen you reach by destroying the machine, not settings |
+| **Reference** | a drawer page, not a surface | a page you can leave cannot be a place you get stuck in |
+| **Theme** | follows the system, **both fully specified in values** | the previous revision's dark column was qualitative and therefore not a specification |
+| **Nostalgia** | borrow the language, never the resolution — **enforced by three geometric tells, one of them now in physical pixels** | it is checkable with a ruler rather than by taste, and the ruler has to measure the right unit |
+| **Brushed metal** | refused, and recorded as refused | the one texture Apple's 2005 HIG would have licensed here, and a pixel-grid borrowing wearing a texture |
+| **§3.1, §3.2 and §3.3** | model changes, in `settings.rs`, **before the window** | the first two were declared closed once and skipped; the third is what four different surfaces were already assuming |
 
 ---
 
-## 20. Implementation notes
+## 19. What the critics found
 
-**Slint 1.17.** Chosen over Iced and Dioxus Native for the reasons argued separately: a stable 1.x
-API with a company behind it, releases every few weeks, a real styling and layout system, live
-preview, and a licence (GPLv3) that matches this repository exactly.
+This document was read twice, adversarially, by readers whose job was to break it. They found fifty
+things. Five were fatal — states the design could reach in which it offered no working action, or
+arithmetic that produced the wrong drawing. This section lists what changed, what was checked and
+found not to hold, and what is accepted as a limitation, so that the next reader knows the argument
+has already been had.
 
-- **The Screen** is `SharedPixelBuffer` → `Image::from_rgba8`, with `image-rendering: pixelated`,
-  drawn at a floored integer scale. This path is stable API. The `unstable-wgpu-*` feature is **not**
-  used and is not needed — see §16 on why there is no shader pipeline.
-- **The model stays in `eapp-loader`.** `settings.rs`, `compose.rs`, `identity.rs` and `nor.rs` do
-  not learn what a toolkit is. That separation is what made this redesign cost one file, and it is
-  worth keeping for the next one.
-- **§3.1 is a model change, not just a presentation one.** `Device::firmware: Option<String>` and
-  `Device::nor: Source` collapse into one named reference, and the migration case in the settings
-  file goes with them. Do that in `settings.rs` *before* the window is built, with its own tests, so
-  the port is not also a data migration.
-- **The layout tests come across.** The current window has tests asserting that every screen can be
-  opened from somewhere, that every wizard step draws and fits, that the surface does not move when
-  you change your mind, and that every character in the file has a glyph. Those tests caught real
-  regressions — including twelve missing glyphs, and then my own fold arrows within the hour. They
-  are re-expressed against the new window, not dropped, and §7's icon rule makes the glyph one
-  stricter rather than retiring it.
-- **The drop test comes across too** — `dropped_files_route_themselves_in_either_order` is the
-  guarantee behind §12 and it is the one feature nobody has ever complained about.
-- **One thing to measure, not assume.** Immediate mode re-lays-out and repaints the whole window
-  every frame while the CPU is emulating an ARM7; retained mode repaints only what changed. That
-  *should* buy back time, but there is no measured GUI-versus-headless delta in this repository —
-  the README's ~24% is headless. Measure it before and after, with pinned inputs in both arms, and
-  put the number in the changelog.
+### 19.1 The five that were fatal
+
+| | what broke | where it is fixed |
+|---|---|---|
+| **First run on a short display had no route to a device** | §9.5 replaced the well, the well holds the only interactive element in the program, and the only control the replacement offered was disabled by §12.6 in exactly the state it was offered in | §9.5 carries a real primary row with the cradle's own label and callback; §12.6's availability rule becomes "something on the glass"; 1366 × 768 added to §9.6 |
+| **Every text field in the Composer was unusable** | bare-letter shortcuts declared "in every state" while `M`, `S`, `H`, `D` and `Space` are letters in ordinary names | §16.8's one exception, keyed on `AccessibleRole::TextInput`, with a test that must be shown to fail |
+| **`hero` was a logical constant** | at 125 % the black glass was 43 px a side against a declared invariant of 11; at 150 % the panel filled 62 % of its well | §6.6: `hero` is `k × 655.751` physical, pushed in; the glass is sized from the panel; §9.6 re-derived |
+| **The drawer pages overflowed the drawer** | the Readout is ~1 970 px in a ~750 px pane, and Slint neither shrinks a pinned child nor clips the surplus | §5's ninth primitive; §16.11's three costs; §11.2 re-cut into three depth levels |
+| **The too-short state was only evaluated at startup** | drag the bottom edge up, or move to a second monitor of the same scale factor, and the shelf leaves the window with `write_target()` on it | §16.1: recompute on `Resized` and `Moved`, with hysteresis; the "never while you are looking at it" promise deleted |
+
+### 19.2 The changes worth naming individually
+
+- **Four surfaces assumed a model that does not exist.** `Settings::missing()` never touched the
+  filesystem, so `cannot start — the disk is not where it was` was unreachable; `Device` had no
+  parked timestamp behind `parked · 4 min ago`; `Stats` had no per-core dimension behind a `core 1`
+  column; and nothing in the tree parses a `.ipg`, behind a claim about cover art. §3.3, §12.8 and
+  §17.Q9.
+- **Three numbers for one operation, and a refusal computed from the wrong one.** The first-run screen
+  said 300 MB, 8 GiB and 8.02 GB for a 6.5 MB download and a 240 MB build, and gated free space on the
+  sparse file's apparent size. §10.1.
+- **The retry path re-minted the identity.** Three failed first runs left three iPods with three
+  FireWire GUIDs. Identity is the one permanent decision in this program. §10.2, §10.3.
+- **A one-press `Fix` detached a 55.9 GB reference with no sentence.** §11.3.
+- **A `Fix` offered a value the picker four rows above it refuses.** §11.3, and §20 deletes the
+  project state rather than papering it.
+- **Two verdicts in the always-reserved region were false**, one of them before anything had been
+  chosen and one of them flipping several seconds after a pick. §11.3.
+- **The cradle was invisible.** `line` at 30 % is 1.23 : 1 against the only surface it is ever drawn
+  on, and `fg-disabled` is 1.67 : 1 — on the state whose job is to teach. §6.4.
+- **`Esc` had three definitions**, `⌃⌘F` was unreachable on Windows and Linux, and `→` deleted the
+  keyboard route to a second device while a machine ran. §16.8, §7.2.
+- **A 1 MiB JPEG identified as a boot ROM with a generation attached**, and an eight-file drop had no
+  defined behaviour at all. §11.4.
+- **A running machine's device and its resources could be removed**, and a booting machine could not
+  be stopped. §11.4, §7.3, §12.5.
+- **A recipe edit left a stale boot denominator**, reintroducing the exact defect `boot_instructions`
+  replaced `snap_at` to fix. §12.3.
+- **§12.6's fullscreen table was computed in logical pixels** and printed 3× where the answer is 7×.
+- **A four-second self-dismissing message on shelf row 2** is a toast, banned by name in this
+  document's own principle 5. §7.4.
+- **`Copy the command line` put the identifiers §11.2 masks onto the clipboard**, and the masked
+  validation sentence quoted the offending character back. §11.2, §12.9.
+- **Parking had no budget, no listing and no eviction**, and the park that fails for lack of space
+  fails when there is no window left to say so in. §11.4's sixth group, §12.4.
+- **`work_on_copy`'s three sentences were two rules fused**, and the prose implied the opposite of
+  what three tests hold. §7.5, four sentences.
+
+### 19.3 One finding that was checked and did not hold
+
+**The f32 sub-pixel claim.** A reading held that `k × 320 / sf` stored as f32 and multiplied back by
+`sf` lands at 319.99999 physical at sf = 1.5 and 1.75, so Skia antialiases the edge columns even
+under `FilterMode::Nearest` — on the two most common Windows scalings.
+
+The renderer half is correct and is now cited in §6.6: Skia rounds an image's destination *origin* to
+whole device pixels only for a pure translation and **never rounds the destination size**. The
+arithmetic half is not. `Coord = f32` (`i-slint-core-1.17.1/lib.rs:104`) and euclid's `Scale<f32>`
+multiply is one correctly-rounded f32 operation, so `f32(320.0 / 1.5) × 1.5` is **exactly 320.0**.
+Swept over ten real-world scale factors and `k ∈ 1..8`, the round-trip is exact in **79 of 80** cases.
+
+**The defence is adopted anyway**, because the class is real even though the instance was not: the
+one failing case is `sf = 2.75, k = 7`, and arbitrary fractional scale factors of the kind Wayland
+and X11 hand out fail in 327 of 1 204 sampled combinations. `next_up_until` costs one function, and
+the widened test now has a case that genuinely goes red — which is worth more than a test that passes
+because the failure was imagined.
+
+### 19.4 Accepted as limitations, with reasons
+
+| | why it is not fixed |
+|---|---|
+| **1280 × 800 and 1366 × 768 cannot show the panel at 1:1, at any scale factor** | The body alone needs 656 physical pixels and neither display has 810 of usable window height. Drawing it smaller discards pixels the emulator produced, which principle 9 forbids. §9.5 is a designed state with a working action, not a failure — and fullscreen gives both displays 3× |
+| **`k` is not re-decided on a plain window resize** | Principle 1. A drawn iPod that changes size while you drag an edge is worse than one that takes the larger scale at the next launch. The shelf says which `k` is in force. §17.Q11 |
+| **Every control inside a drawer page's Scroll is 100 ms late to a press** | Slint's `Flickable` has no way to opt out of `FORWARD_DELAY`. Mitigated structurally: §11.2's re-cut keeps `Create` and the three level rows off the scrolling path entirely |
+| **"Centred on first launch" and the work-area read are two-platform** | Wayland has neither `set_outer_position` nor a work-area query. Mitigated by measuring the window we actually got rather than predicting it, so the *too-short* state is right on all three; only the initial placement is not |
+| **The 96-detent ring has no announced accessible equivalent** | Slint has `Slider` and a wheel is not one. `↑`/`↓` are the route and they are a fallback, not a peer. Said once rather than pretended |
+| **`BuildFromIpsw` breaks the one-press `Fix` rule** | It is the only `Fix` shape that changes which resource a device points at, and a silent detachment of somebody's only image is the worse failure. The rule is stated rather than the exception hidden |
+
+---
+
+## 20. What has to be true before any markup is written
+
+In order, because each depends on the one before it.
+
+1. **`Device::firmware` + `Device::nor` collapse into one named reference** (§3.1), in `settings.rs`,
+   with tests, and the migration case deleted with them.
+2. **`Item` gains `Provenance`** (§3.2), and the hard-coded `fetched and verified` /
+   `dumped from a real iPod` strings in `main.rs` are deleted.
+3. **`Settings::missing()` gains a filesystem existence check per resolved path** (§3.3), with its
+   own test, returning `Absent::Gone(PathBuf)` or `Absent::Unlisted(String)` so the cradle can name
+   the path — and so that the cradle state the previous revision specified becomes reachable at all.
+4. **`Device::parked_at: Option<u64>`** (§3.3), written on park and cleared on discard.
+5. **`Recipe::check()` gains a `Start::FromIpsw(name) if name.is_empty()` arm** returning
+   `Verdict::No` (§11.3), so the always-reserved verdict region stops asserting a plan for a firmware
+   nobody has chosen.
+6. **`Create` clears `Device::boot_instructions` when `oses` or `loader` changed** (§12.3). One line,
+   and it is what makes the one-bar-across-three-operating-systems claim true rather than conditional.
+7. **`install-linux` uses the fetched `ipodlinux::LOADER`** — v2.8.1, 56 912 B, SHA-256 on record —
+   rather than `resources/vendor/ipodloader2/loader.bin` (§11.3). That turns a project state into a
+   working path for anybody not working inside this checkout, and deletes a contradiction between two
+   surfaces rather than reconciling them.
+8. **The client-height reader exists**: `NSScreen.visibleFrame` on macOS (`objc2-app-kit 0.3.2` is
+   already in the tree), `SPI_GETWORKAREA` on Windows, nothing on Wayland — and §9.6's too-short
+   boolean is computed from the **measured** `Window::size()` on `Resized`, `Moved` and
+   `ScaleFactorChanged` (§16.1).
+9. **`build.rs` emits every ratio and geometry constant from one Rust source** into both a generated
+   `.slint` and a Rust `const` module (§16.9) — including `HERO_PHYS_1X`, `BEZEL_RATIO`, `CHROME_MIN`
+   and `min-width`.
+10. **`the_panel_is_an_exact_integer_number_of_device_pixels` is written and proved to fail** — twice,
+    once against the old `0.4866 / 0.3672` pair and once at `sf = 2.75, k = 7`, which it does today
+    (§16.10).
+11. **The `accessibility` feature is turned on** and `cargo tree | grep accesskit` returns something
+    (§16.7). §16.8's shortcut suppression keys on `AccessibleRole::TextInput`, so this is a
+    prerequisite for the keyboard as well as for the screen reader.
+12. **The Rail exists before the first button is wired.** Every action about to be reconnected — the
+    centre button, Create, Fetch, Build, Install — needs somewhere to narrate and somewhere to fail,
+    and principle 5 forbids the easy answer. Wire `on_start_device` after the Work page, or the first
+    failure lands in stderr again exactly as it does today.
+13. **`Settings::save()` acquires callers**: **at first-run step 1**, after every completed first-run
+    step, after any Composer `Create` or `Save`, after any Parts add or remove, and on close (together
+    with `record_boot()` and the remembered geometry). `Settings::load()` already calls
+    `seed_resources()`, which mutates and is never written back — a list that puts back what you
+    removed, every launch — and the same save points fix it.
+14. **`README.md`, `docs/DEVELOPING.md` and `docs/GETTING-THE-FILES.md` are corrected** where they
+    describe a window that does not exist: drop-anywhere, the `S` / `D` / `Esc` keys, parking on
+    close, `IPOD_LAYOUT`, and the model table's **197** rows against the README's 198.
+
+**Conditional on §17.Q10**: `Stats::enters_by_core: [[u64; WATCHED.len()]; 2]`, if the run loop can
+attribute an arrival to a core. Until it is answered, §12.8 draws one column.
+
+

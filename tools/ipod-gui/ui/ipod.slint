@@ -8,12 +8,31 @@
 //
 // **Measured, from Rockbox's own scale drawing of this device** —
 // `manual/rockbox_interface/images/ipodvideo-front.svg`, a vector front elevation shipped with the
-// Rockbox manual. `tests` re-derives every ratio below from that file, so if the drawing and this
-// markup ever disagree the test says so.
+// Rockbox manual. **The tests cannot read that file** — `resources/` is gitignored, so it is not
+// there for anybody else — and an earlier version of this comment claimed they did. What the tests
+// check instead is the thing the drawing was itself checked against: the hardware. See
+// `the_drawn_ipod_is_the_shape_of_a_real_one`.
 //
 // The parse is self-checking: on a 104.1 mm body the extracted display comes out **50.7 × 38.2 mm**
 // against the **50.8 × 38.1 mm** a 2.5-inch 4:3 panel must be — 0.2 %, which is how we know the
 // right path was read and that it is the active area rather than the glass.
+//
+// **But 0.2 % is not small here, and the drawing does not get to decide the screen's size.**
+// 0.4866 / 0.3672 is 1.32516 where 4:3 is 1.33333 — the drawing's own 0.61 % error, harmless on
+// paper and fatal in the one rule this project will not bend, because a well that is not 4:3
+// stretches a 320 × 240 buffer *in one axis only*. It shipped: at the 658 px body this file used to
+// declare, the panel was drawn 320.18 × 241.62 with `image-fit: fill` — 1.00057 across and 1.00674
+// down, non-uniform and non-integer, and under nearest-neighbour that duplicates about 1.6 rows out
+// of 240 at fixed positions, which land on RetailOS's own 1 px separator rules.
+//
+// So the dependency is inverted, which is how MAME solves the same problem: **the drawing governs
+// where the screen sits; the hardware governs how big it is.**
+//
+//   SCREEN_W = 50.8 / 104.1 = 0.48799
+//   SCREEN_H = 38.1 / 104.1 = 0.36599      ratio exactly 4:3, by construction
+//
+// The cost is one number, below the drawing's own error: the symmetric inset moves by 0.00065 of
+// body height — 0.43 px at hero, 0.07 mm on a real device — and the symmetry test still holds.
 //
 // The first version of this file used none of that. Its body and screen sizes were roughly right
 // because they came from published specs, but the *placement* was arithmetic I chose to make the
@@ -78,14 +97,16 @@ export component IPod inherits Rectangle {
     // iPod its bezel. Drawing the framebuffer flush to the body — the first version — is why it read
     // as a sticker rather than a display.
     //
-    // The drawing insets the screen by the same 0.0525 h on the left, the top and the right. That
-    // symmetry is not a coincidence and it is asserted in the tests: it is how the parse was
-    // confirmed to have found the right rectangle.
+    // The drawing insets the screen by the same 0.0525 h on the left, the top and the right, and
+    // that symmetry is how the parse was confirmed to have found the right rectangle rather than
+    // some other one. Since §6.6 took the screen's *size* off the drawing, the left inset is now an
+    // output — (0.5917 − 0.48799) / 2 = 0.05186 — and differs from the top by 0.00065 of body
+    // height, which is 0.43 px at hero and inside the test's 0.002 tolerance.
     glass := Rectangle {
         x: (parent.width - self.width) / 2;
         y: 0.0525 * h - 0.016 * h;
-        width: 0.4866 * h + 0.032 * h;
-        height: 0.3672 * h + 0.032 * h;
+        width: 0.48799 * h + 0.032 * h;
+        height: 0.36599 * h + 0.032 * h;
         background: #08080a;
         border-radius: 0.008 * h;
         border-width: 1px;
@@ -94,8 +115,8 @@ export component IPod inherits Rectangle {
         Image {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 0.4866 * h;
-            height: 0.3672 * h;
+            width: 0.48799 * h;
+            height: 0.36599 * h;
             source: screen-source;
             // The whole point (§2.8): nearest-neighbour, never smoothed, and a 4:3 well so 320×240
             // is never stretched either.

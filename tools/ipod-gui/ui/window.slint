@@ -228,22 +228,26 @@ export component MainWindow inherits Window {
                 // device that resized itself (GUI.md §6) in a different hat — a size that can
                 // influence its own container oscillates. `stage-area` declares no intrinsic height,
                 // so the arrow points one way only.
-                // **658 px, fixed, and the number is not a taste.**
+                // **655.751 px, and every digit is doing work.**
                 //
-                // The screen is 0.4866 of body height wide, so a 320-pixel-wide framebuffer at
-                // 1:1 needs a body of 320 / 0.4866 = 658. Anything smaller *downscales* the
-                // framebuffer, which principle 8 forbids — the panel is 320×240 and it is
-                // presented at an integer scale, never smoothed and never stretched. At 560 px,
-                // where this sat a moment ago, the screen was 253 px wide and every frame the
-                // emulator produced was being thrown away by a quarter.
+                // `320 / 0.48799 = 655.751` and `240 / 0.36599 = 655.756` — the same number to four
+                // figures, because §6.6 made the well exactly 4:3. That is the body height at which
+                // one framebuffer pixel is one device pixel.
                 //
-                // 2× would need a 1315 px body, which does not fit on a laptop, so 1:1 is the
-                // scale and the window's minimum height is sized around it rather than the other
-                // way round.
+                // It was 658 px against a 0.4866 / 0.3672 pair, which drew the panel 320.18 × 241.62
+                // for a 320 × 240 buffer: a stretch, not a scale, in the one rule this project will
+                // not bend. Before that it was 560 px, which threw away a quarter of every frame.
+                // Neither was visible on screen and neither failed a test.
                 //
-                // It is also a constant rather than a function of the window, which is what makes
-                // it loop-free: a size derived from a height it can itself influence oscillates.
-                property <length> hero: 658px;
+                // **Still logical pixels, and that is a known gap.** At a fractional display scale
+                // this is a fractional number of device pixels; docs/GUI.md §6.6 makes `hero` a
+                // physical `k × 655.751` pushed in from Rust, and §20 item 10 requires the test that
+                // catches it to be proved red at `sf = 2.75, k = 7` first. At sf 1 and sf 2 — every
+                // Mac and most Windows machines — this is already exact.
+                //
+                // It is a constant rather than a function of the window, which is what keeps it
+                // loop-free: a size derived from a height it can itself influence oscillates.
+                property <length> hero: 655.751px;
                 property <length> hero-w: 0.5917 * hero;
                 property <length> step: hero-w * 0.5 + hero-w * 0.55 * 0.5 + Metric.s7;
 
@@ -255,9 +259,6 @@ export component MainWindow inherits Window {
                     // The carousel. Absolute positions, animated, so the neighbours slide rather
                     // than reflow — a layout that re-flows on selection is one that jumps (§2.2).
                     //
-                    // `min-height` and `preferred-height` are pinned to zero so this reports no
-                    // intrinsic size of its own. Without that it sizes itself from the iPods inside
-                    // it, whose size comes from `hero`, which comes from here.
                     stage-area := Rectangle {
                         height: pane.hero;
                         width: 100%;
