@@ -1,0 +1,56 @@
+// The design tokens — docs/GUI.md §7.
+//
+// **The light palette is measured, not chosen.** Every value below was sampled from
+// docs/media/ipod-03-main-menu.png, a frame this emulator drew, by walking a vertical strip through
+// RetailOS's own chrome. The accent is the blue the iPod itself uses to say *this one*.
+//
+// What is deliberately NOT borrowed: the pixel grid. No pixel fonts, no faux-LCD, no scanlines,
+// nothing that could make our chrome mistakable for the emulated screen — because being able to
+// tell which layer a screenshot is of is this project's whole discipline.
+
+export global Ink {
+    out property <color> bg: #ffffff;
+    out property <color> bg-raised: #f7f7ff;
+    out property <color> bg-band-top: #eff3f7;
+    out property <color> bg-band-bottom: #c6cbce;
+    out property <color> bg-sunken: #c6cfd6;
+    out property <color> fg: #000000;
+    out property <color> fg-dim: #5a616b;
+    out property <color> fg-disabled: #9aa0a8;
+    out property <color> line: #848ea5;
+
+    // RetailOS's selection blue. 5.14:1 on white — clears AA for white text on the fill.
+    out property <color> accent: #2969d6;
+
+    // The material (§7): a 1px darker top rule, a bright band under it, a fall to the bottom edge.
+    // Dark edge, highlight beneath, falloff — the whole of the era's vocabulary.
+    out property <color> material-rule: #2969d6;
+    out property <color> material-top: #5a9aef;
+    out property <color> material-bottom: #4a86de;
+
+    out property <color> warn: #9a6700;
+}
+
+export global Metric {
+    // The closed space scale. Nothing between these steps.
+    out property <length> s1: 4px;
+    out property <length> s2: 8px;
+    out property <length> s3: 12px;
+    out property <length> s4: 16px;
+    out property <length> s5: 24px;
+    out property <length> s6: 32px;
+    out property <length> s7: 48px;
+
+    // Six type roles and no seventh.
+    out property <length> display-size: 30px;
+    out property <length> title-size: 20px;
+    out property <length> body-size: 14px;
+    out property <length> label-size: 12px;
+
+    // §8's motion. **Slint has no spring easing**, so the document's spring vocabulary maps onto
+    // Slint's curves rather than being implemented literally — recorded here so the difference is a
+    // decision rather than a drift. `ease-out-quart` is the closest thing to `gentle` that Slint
+    // offers: fast departure, long settle, no overshoot.
+    out property <duration> quick: 140ms;
+    out property <duration> settle: 320ms;
+}
