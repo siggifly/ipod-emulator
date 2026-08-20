@@ -2651,72 +2651,6 @@ impl App {
         self.settings.save();
     }
 
-    /// Model and colour, as two rows.
-    ///
-    /// **Colour is not a separate fact.** No `SysCfg` on any iPod carries one; the model number
-    /// decides it. So this picks a generation and a capacity, and then which of the model numbers
-    /// sharing them — which is the same choice Apple's own part numbers encode.
-    fn model_rows(&mut self, ui: &mut egui::Ui) {
-        use eapp_loader::identity::Generation;
-        let all = Self::offered_models();
-        let current = self.synthetic_model();
-
-        // (generation, capacity) is what a person thinks of as "which iPod".
-        let mut kinds: Vec<(Generation, u16)> =
-            all.iter().map(|m| (m.generation, m.capacity_gb)).collect();
-        kinds.dedup();
-        let mut chosen_kind = (current.generation, current.capacity_gb);
-
-        let mut pick: Option<&'static eapp_loader::identity::Model> = None;
-        ui.horizontal(|ui| {
-            ui.label("Model");
-            egui::ComboBox::from_id_salt("setup_model")
-                .selected_text(format!(
-                    "iPod Video — {}, {} GB",
-                    chosen_kind.0.label(),
-                    chosen_kind.1
-                ))
-                .width(260.0)
-                .show_ui(ui, |ui| {
-                    for k in &kinds {
-                        let label = format!("iPod Video — {}, {} GB", k.0.label(), k.1);
-                        if ui.selectable_value(&mut chosen_kind, *k, label).clicked() {
-                            // Keep the colour if this kind has it, else take its first.
-                            pick = all
-                                .iter()
-                                .find(|m| {
-                                    (m.generation, m.capacity_gb) == *k
-                                        && m.colour() == current.colour()
-                                })
-                                .or_else(|| {
-                                    all.iter().find(|m| (m.generation, m.capacity_gb) == *k)
-                                })
-                                .copied();
-                        }
-                    }
-                });
-        });
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.label("Colour");
-            for m in all
-                .iter()
-                .filter(|m| (m.generation, m.capacity_gb) == chosen_kind)
-            {
-                let mut sel = m.number == current.number;
-                if ui
-                    .selectable_value(&mut sel, true, m.colour().label())
-                    .clicked()
-                {
-                    pick = Some(m);
-                }
-            }
-        });
-        if let Some(m) = pick {
-            self.set_synthetic_model(m);
-        }
-    }
-
     /// Everything the project knows about obtaining the two files.
     ///
     /// A page, not a fold. These paragraphs are why several people got a working emulator instead
@@ -3076,41 +3010,38 @@ impl App {
             .map(|i| i.name.clone())
             .collect();
 
-        ui.label(egui::RichText::new("Boot ROM").color(UI_HEADING));
+        // **One row, like every other.** This was a radio list that grew by a row each time a dump
+        // was filed, so the first dump somebody added moved everything under it — and the list and
+        // the table below were two different shapes for one question. A dropdown is the same height
+        // whether it holds one option or ten.
+        const GENERATE: &str = "Generate one";
+        const PICK: &str = "Use a dump I have…";
         let mut chosen = self.compose.as_ref().and_then(|c| c.firmware.clone());
         let mut pick_file = false;
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            ui.vertical(|ui| {
-                if ui
-                    .radio(chosen.is_none(), "Generate one")
-                    .on_hover_text(
-                        "The identity block a real iPod carries — serial, model, hardware id and \
-                         version — built to the same layout from a seed, so the same iPod comes \
-                         back next launch. None of Apple's code.",
-                    )
-                    .clicked()
-                {
-                    chosen = None;
-                }
-                // **Every dump already here is offered.** Somebody who supplied one should never
-                // be asked for it again.
-                for name in &dumps {
-                    if ui
-                        .radio(chosen.as_deref() == Some(name.as_str()), name.as_str())
-                        .clicked()
-                    {
-                        chosen = Some(name.clone());
+        self.id_row(ui, "Boot ROM", |_app, ui| {
+            let cur = chosen.clone().unwrap_or_else(|| GENERATE.to_string());
+            egui::ComboBox::from_id_salt("wiz-rom")
+                .selected_text(cur.clone())
+                .width(260.0)
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(chosen.is_none(), GENERATE).clicked() {
+                        chosen = None;
                     }
-                }
-                if ui
-                    .radio(false, "Use a dump I have…")
-                    .on_hover_text("Added to Resources, so it is offered here from now on.")
-                    .clicked()
-                {
-                    pick_file = true;
-                }
-            });
+                    // **Every dump already here is offered.** Somebody who supplied one should
+                    // never be asked for it again.
+                    for name in &dumps {
+                        if ui
+                            .selectable_label(chosen.as_deref() == Some(name.as_str()), name)
+                            .clicked()
+                        {
+                            chosen = Some(name.clone());
+                        }
+                    }
+                    ui.separator();
+                    if ui.selectable_label(false, PICK).clicked() {
+                        pick_file = true;
+                    }
+                });
         });
         if pick_file {
             if let Some(p) = pick_files("A 1 MB NOR dump", &["bin", "rom"]).first() {
@@ -3168,7 +3099,7 @@ impl App {
                         .color(UI_TEXT_DIM),
                 );
             }
-            None => app.model_rows(ui),
+            None => app.model_combo(ui),
         });
 
         // Serial — editable and validated for a generated ROM; printed for a dump.
@@ -3292,8 +3223,20 @@ impl App {
                         None,
                         format!("from the iPod — {}", derived.label()),
                     );
-                    for c in [Colour::White, Colour::Black, Colour::U2] {
+                    // **U2 only where there was one.** Apple made a U2 Video at 30 GB and no
+                    // other size — the table has `A452` and `A664`, both 30 — so offering it for a
+                    // 60 GB is offering an iPod that never existed. White and black are always
+                    // there; the third entry is only in the list when the model table has one.
+                    let u2 = Self::offered_models().iter().any(|m| {
+                        m.generation == app.synthetic_model().generation
+                            && m.capacity_gb == app.synthetic_model().capacity_gb
+                            && m.colour() == Colour::U2
+                    });
+                    for c in [Colour::White, Colour::Black] {
                         ui.selectable_value(&mut pick, Some(c), c.label());
+                    }
+                    if u2 {
+                        ui.selectable_value(&mut pick, Some(Colour::U2), Colour::U2.label());
                     }
                     app.settings.chassis = pick;
                 });
@@ -3311,6 +3254,44 @@ impl App {
             };
             ui.label(egui::RichText::new(text).small().color(colour));
         });
+    }
+
+    /// The model, as **one dropdown naming a real iPod**.
+    ///
+    /// This was two rows — a generation-and-capacity picker and a separate Colour row that chose
+    /// between the white, black and U2 *models* of that size. Two controls for one choice, the
+    /// second of which shared a name with the case override below it and meant something else.
+    ///
+    /// One list of the iPods Apple actually shipped is shorter to read and impossible to
+    /// misinterpret: a U2 is a model, not a colour you can apply to a 60 GB.
+    fn model_combo(&mut self, ui: &mut egui::Ui) {
+        let all = Self::offered_models();
+        let current = self.synthetic_model();
+        let name = |m: &eapp_loader::identity::Model| {
+            format!(
+                "iPod Video {} — {} GB, {}",
+                m.generation.label(),
+                m.capacity_gb,
+                m.colour().label().to_lowercase()
+            )
+        };
+        let mut pick: Option<&'static eapp_loader::identity::Model> = None;
+        egui::ComboBox::from_id_salt("wiz-model")
+            .selected_text(name(current))
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                for m in &all {
+                    if ui
+                        .selectable_label(m.number == current.number, name(m))
+                        .clicked()
+                    {
+                        pick = Some(m);
+                    }
+                }
+            });
+        if let Some(m) = pick {
+            self.set_synthetic_model(m);
+        }
     }
 
     /// One labelled row of the identity table, **exactly one row tall whatever is in it**.
@@ -7647,5 +7628,24 @@ mod tests {
             out.textures_delta.clear();
         }
         used
+    }
+
+    /// Step 1 must be the same height with **no dumps filed** and with one **chosen**.
+    ///
+    /// The sibling test holds the resource list constant and varies only the choice. This varies
+    /// the list too — which is the case a person actually meets, because filing their first dump
+    /// and choosing it happen in one gesture.
+    #[test]
+    fn step_one_is_the_same_height_before_and_after_a_dump_exists() {
+        let none = lay_out_wizard(ComposeWhat::Device { first_run: false }, 1);
+        let one = lay_out_wizard_with(ComposeWhat::Device { first_run: false }, 1, true);
+        // **Zero, now that the ROM source is a dropdown.** A list of radio buttons grew by a row
+        // per dump, so the first one somebody filed moved everything under it. A dropdown is the
+        // same height whether it holds one option or ten, and step 1 is six fixed rows.
+        assert_eq!(
+            none.round(),
+            one.round(),
+            "filing and choosing a dump changed step 1 from {none:.0} to {one:.0} px"
+        );
     }
 }
