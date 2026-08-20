@@ -72,8 +72,12 @@ pub enum Start {
     /// An image the person already has. `fat_type` is what its data partition actually says, when
     /// it has been read; `None` when it has not been looked at yet.
     FromImage { path: String, fat_type: Option<u8> },
-    /// A partitioned drive with nothing on it.
-    Empty,
+    /// A disk already in the library, by name.
+    ///
+    /// **Distinct from a file somebody picks**, because the library knows what is on it — an
+    /// existing disk arrives with its `built_from` and its install list, so a device made from one
+    /// can say what it will boot without opening anything.
+    FromDisk { name: String, fat_type: Option<u8> },
 }
 
 /// A drive somebody is describing: where it starts, what bootloader, and which systems.
@@ -220,14 +224,6 @@ impl Recipe {
             };
         }
 
-        // Apple's software has to come from somewhere.
-        if has(Os::Apple) && self.start == Start::Empty {
-            return Verdict::No {
-                why: "Apple's software comes out of an .ipsw — an empty drive has none.".into(),
-                fix: Some(Fix::RemoveOs(Os::Apple)),
-            };
-        }
-
         // (5)
         if self.oses.is_empty() {
             return Verdict::Ok(
@@ -267,6 +263,46 @@ impl Recipe {
         }
     }
 
+    /// The bootloader this set of systems wants, if there is exactly one sensible answer.
+    ///
+    /// **So the wizard defaults instead of complaining.** Ticking iPodLinux and then being told
+    /// that the bootloader you had is wrong is a correction; ticking iPodLinux and having the
+    /// bootloader follow is the same knowledge applied before it becomes a mistake. The verdict is
+    /// still there for the cases somebody drives into deliberately.
+    ///
+    /// - iPodLinux at all -> `ipodloader2`; nothing else starts a kernel.
+    /// - Rockbox without it -> Rockbox's own, which hands back to Apple's software.
+    /// - Apple's alone -> none; the ROM starts the firmware partition directly.
+    pub fn best_loader(&self) -> Loader {
+        if self.oses.contains(&Os::IPodLinux) {
+            Loader::IPodLoader2
+        } else if self.oses.contains(&Os::Rockbox) {
+            Loader::Rockbox
+        } else {
+            Loader::Apple
+        }
+    }
+
+    /// Whether a bootloader can carry this set of systems at all — what the wizard greys out.
+    ///
+    /// A disabled control says *that* something is impossible and never *why*, so each one keeps
+    /// its reason: [`Recipe::why_not`] is what the tooltip shows.
+    pub fn loader_works(&self, l: Loader) -> bool {
+        let mut trial = self.clone();
+        trial.loader = l;
+        trial.check().ok()
+    }
+
+    /// Why a bootloader cannot carry this set, for the tooltip on the control that is greyed out.
+    pub fn why_not(&self, l: Loader) -> String {
+        let mut trial = self.clone();
+        trial.loader = l;
+        match trial.check() {
+            Verdict::No { why, .. } => why,
+            Verdict::Ok(_) => String::new(),
+        }
+    }
+
     /// The number of systems, for the word a person uses: dual boot, triple boot.
     pub fn boot_word(&self) -> Option<&'static str> {
         match self.oses.len() {
@@ -297,7 +333,7 @@ impl Recipe {
                 v.push(Step::Build("a drive, 8 GB sparse".into()));
             }
             Start::FromImage { path, .. } => v.push(Step::Copy(path.clone())),
-            Start::Empty => v.push(Step::Build("an empty drive, 8 GB sparse".into())),
+            Start::FromDisk { name, .. } => v.push(Step::Copy(format!("{name}, from the library"))),
         }
         if self.loader == Loader::IPodLoader2 {
             v.push(Step::Install(
@@ -493,6 +529,45 @@ mod tests {
         let real = crate::install::loader_menu_for_tests(true, true);
         for entry in ["ZeroSlackr", "Apple OS", "Rockbox", "Disk Mode", "Sleep"] {
             assert!(real.contains(entry), "loader_menu no longer writes {entry}");
+        }
+    }
+
+    /// **The default must always be a working default.** A wizard that picks a bootloader and then
+    /// refuses the result is worse than one that never picked.
+    #[test]
+    fn the_best_loader_for_any_set_of_systems_actually_works() {
+        for n in 0..8u8 {
+            let oses: Vec<Os> = Os::ALL
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| n & (1 << i) != 0)
+                .map(|(_, o)| *o)
+                .collect();
+            let mut r = recipe(Loader::Apple, &oses);
+            r.loader = r.best_loader();
+            assert!(
+                r.check().ok(),
+                "the default for {oses:?} is {:?}, which is refused: {}",
+                r.loader,
+                r.check().text()
+            );
+        }
+    }
+
+    /// And every bootloader that is greyed out has to say why, or the grey is just a wall.
+    #[test]
+    fn a_bootloader_that_cannot_be_used_says_why() {
+        let r = recipe(Loader::IPodLoader2, &[Os::IPodLinux]);
+        for l in Loader::ALL {
+            if r.loader_works(l) {
+                continue;
+            }
+            let why = r.why_not(l);
+            assert!(!why.is_empty(), "{l:?} is disabled with no reason given");
+            assert!(
+                why.contains("ipodloader2"),
+                "the reason is not about the loader: {why}"
+            );
         }
     }
 

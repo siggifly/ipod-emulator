@@ -3256,41 +3256,88 @@ impl App {
         });
     }
 
-    /// The model, as **one dropdown naming a real iPod**.
+    /// The model, as **three small dropdowns**: revision, capacity, finish.
     ///
-    /// This was two rows — a generation-and-capacity picker and a separate Colour row that chose
-    /// between the white, black and U2 *models* of that size. Two controls for one choice, the
-    /// second of which shared a name with the case override below it and meant something else.
+    /// One long list naming every iPod was tried and reads badly — you scan twenty lines to change
+    /// one thing, and the thing you want to change is usually the last field. Three narrow lists
+    /// are the three questions actually being asked, and each one only offers what the others leave
+    /// possible: pick 60 GB and the finish list loses U2, because Apple never made one.
     ///
-    /// One list of the iPods Apple actually shipped is shorter to read and impossible to
-    /// misinterpret: a U2 is a model, not a colour you can apply to a 60 GB.
+    /// **Every combination on offer is a real iPod**, because the lists are filtered against the
+    /// model table rather than composed and then validated.
     fn model_combo(&mut self, ui: &mut egui::Ui) {
+        use eapp_loader::identity::Generation;
         let all = Self::offered_models();
-        let current = self.synthetic_model();
-        let name = |m: &eapp_loader::identity::Model| {
-            format!(
-                "iPod Video {} — {} GB, {}",
-                m.generation.label(),
-                m.capacity_gb,
-                m.colour().label().to_lowercase()
-            )
+        let cur = self.synthetic_model();
+        let (mut gen, mut cap, mut col) = (cur.generation, cur.capacity_gb, cur.colour());
+
+        let gen_label = |g: Generation| {
+            if g == Generation::Video2 {
+                "5.5G"
+            } else {
+                "5G"
+            }
         };
-        let mut pick: Option<&'static eapp_loader::identity::Model> = None;
-        egui::ComboBox::from_id_salt("wiz-model")
-            .selected_text(name(current))
-            .width(260.0)
+        let mut gens: Vec<Generation> = all.iter().map(|m| m.generation).collect();
+        gens.dedup();
+        egui::ComboBox::from_id_salt("wiz-gen")
+            .selected_text(gen_label(gen))
+            .width(64.0)
             .show_ui(ui, |ui| {
-                for m in &all {
-                    if ui
-                        .selectable_label(m.number == current.number, name(m))
-                        .clicked()
-                    {
-                        pick = Some(m);
-                    }
+                for g in gens {
+                    ui.selectable_value(&mut gen, g, gen_label(g));
                 }
             });
-        if let Some(m) = pick {
-            self.set_synthetic_model(m);
+
+        // Only the capacities this revision came in.
+        let mut caps: Vec<u16> = all
+            .iter()
+            .filter(|m| m.generation == gen)
+            .map(|m| m.capacity_gb)
+            .collect();
+        caps.dedup();
+        if !caps.contains(&cap) {
+            cap = caps[0];
+        }
+        egui::ComboBox::from_id_salt("wiz-cap")
+            .selected_text(format!("{cap} GB"))
+            .width(78.0)
+            .show_ui(ui, |ui| {
+                for c in caps {
+                    ui.selectable_value(&mut cap, c, format!("{c} GB"));
+                }
+            });
+
+        // And only the finishes that revision came in **at that capacity** — which is what keeps
+        // U2 off a 60 GB, since the table has it at 30 and nowhere else.
+        let cols: Vec<Colour> = {
+            let mut v: Vec<Colour> = all
+                .iter()
+                .filter(|m| m.generation == gen && m.capacity_gb == cap)
+                .map(|m| m.colour())
+                .collect();
+            v.dedup();
+            v
+        };
+        if !cols.contains(&col) {
+            col = cols[0];
+        }
+        egui::ComboBox::from_id_salt("wiz-col")
+            .selected_text(col.label())
+            .width(78.0)
+            .show_ui(ui, |ui| {
+                for c in &cols {
+                    ui.selectable_value(&mut col, *c, c.label());
+                }
+            });
+
+        if let Some(m) = all
+            .iter()
+            .find(|m| m.generation == gen && m.capacity_gb == cap && m.colour() == col)
+        {
+            if m.number != cur.number {
+                self.set_synthetic_model(m);
+            }
         }
     }
 
@@ -3317,15 +3364,11 @@ impl App {
         });
     }
 
-    /// Step 2 — what goes on the disk. Free checkboxes, with a live verdict.
+    /// Step 2 — what goes on the disk. **Rows, like step one, and every list already filtered.**
     fn wizard_disk(&mut self, ui: &mut egui::Ui) {
         use eapp_loader::compose::{Fix, Loader, Os, Start};
-        let Some(c) = self.compose.as_mut() else {
-            return;
-        };
 
-        // Where the drive starts.
-        ui.label(egui::RichText::new("Start from").color(UI_HEADING));
+        // What is already here, so nothing has to be found twice.
         let bundles: Vec<String> = self
             .settings
             .resources
@@ -3333,62 +3376,122 @@ impl App {
             .filter(|i| matches!(&i.what, eapp_loader::settings::Resource::Installer(_)))
             .map(|i| i.name.clone())
             .collect();
-        let mut want_image = false;
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            ui.vertical(|ui| {
-                let from_ipsw = matches!(c.recipe.start, Start::FromIpsw(_));
-                if ui.radio(from_ipsw, "Apple's firmware").clicked() {
-                    c.recipe.start = Start::FromIpsw(bundles.first().cloned().unwrap_or_default());
-                }
-                if from_ipsw {
-                    ui.horizontal(|ui| {
-                        ui.add_space(22.0);
-                        let cur = match &c.recipe.start {
-                            Start::FromIpsw(n) => n.clone(),
-                            _ => String::new(),
-                        };
-                        egui::ComboBox::from_id_salt("wiz-ipsw")
-                            .selected_text(if cur.is_empty() {
-                                "fetch one from Apple".to_string()
-                            } else {
-                                cur.clone()
-                            })
-                            .show_ui(ui, |ui| {
-                                let mut pick = cur.clone();
-                                ui.selectable_value(
-                                    &mut pick,
-                                    String::new(),
-                                    "fetch one from Apple",
-                                );
-                                for b in &bundles {
-                                    ui.selectable_value(&mut pick, b.clone(), b.as_str());
-                                }
-                                if pick != cur {
-                                    c.recipe.start = Start::FromIpsw(pick);
-                                }
-                            });
+        let disks: Vec<String> = self.settings.disks.iter().map(|d| d.name.clone()).collect();
+        let disk_path = |s: &eapp_loader::settings::Settings, n: &str| {
+            s.disks.iter().find(|d| d.name == n).map(|d| d.path.clone())
+        };
+
+        const FETCH: &str = "fetch it from Apple";
+        const PICK_IPSW: &str = "choose an .ipsw…";
+        const PICK_IMG: &str = "choose a disk image…";
+        let mut want_ipsw_file = false;
+        let mut want_img_file = false;
+
+        // ---- where the drive starts. Two rows, one per source, and the one you are not using
+        //      still shows its choices — so switching does not move anything.
+        let from_apple = matches!(
+            self.compose.as_ref().map(|c| &c.recipe.start),
+            Some(Start::FromIpsw(_))
+        );
+        self.id_row(ui, "Start from", |app, ui| {
+            let Some(c) = app.compose.as_mut() else {
+                return;
+            };
+            if ui.radio(from_apple, "Apple's firmware").clicked() {
+                c.recipe.start = Start::FromIpsw(bundles.first().cloned().unwrap_or_default());
+            }
+            let cur = match &c.recipe.start {
+                Start::FromIpsw(n) if !n.is_empty() => n.clone(),
+                Start::FromIpsw(_) => FETCH.to_string(),
+                _ => FETCH.to_string(),
+            };
+            ui.add_enabled_ui(from_apple, |ui| {
+                egui::ComboBox::from_id_salt("wiz-ipsw")
+                    .selected_text(cur.clone())
+                    .width(230.0)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(cur == FETCH, FETCH).clicked() {
+                            c.recipe.start = Start::FromIpsw(String::new());
+                        }
+                        for b in &bundles {
+                            if ui.selectable_label(cur == *b, b.as_str()).clicked() {
+                                c.recipe.start = Start::FromIpsw(b.clone());
+                            }
+                        }
+                        ui.separator();
+                        if ui.selectable_label(false, PICK_IPSW).clicked() {
+                            want_ipsw_file = true;
+                        }
                     });
-                }
-                if ui
-                    .radio(
-                        matches!(c.recipe.start, Start::FromImage { .. }),
-                        "An image I already have…",
-                    )
-                    .clicked()
-                {
-                    want_image = true;
-                }
-                if ui.radio(c.recipe.start == Start::Empty, "Empty").clicked() {
-                    c.recipe.start = Start::Empty;
-                }
             });
         });
 
-        ui.add_space(10.0);
-        ui.label(egui::RichText::new("Systems").color(UI_HEADING));
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
+        let from_disk = !from_apple;
+        self.id_row(ui, "", |app, ui| {
+            let Some(c) = app.compose.as_mut() else {
+                return;
+            };
+            if ui.radio(from_disk, "A disk I already have").clicked() {
+                c.recipe.start = match disks.first() {
+                    Some(n) => Start::FromDisk {
+                        name: n.clone(),
+                        fat_type: None,
+                    },
+                    None => Start::FromImage {
+                        path: String::new(),
+                        fat_type: None,
+                    },
+                };
+            }
+            let cur = match &c.recipe.start {
+                Start::FromDisk { name, .. } => name.clone(),
+                Start::FromImage { path, .. } if !path.is_empty() => path.clone(),
+                _ => "—".to_string(),
+            };
+            ui.add_enabled_ui(from_disk, |ui| {
+                egui::ComboBox::from_id_salt("wiz-disk")
+                    .selected_text(cur.clone())
+                    .width(230.0)
+                    .show_ui(ui, |ui| {
+                        for d in &disks {
+                            if ui.selectable_label(cur == *d, d.as_str()).clicked() {
+                                c.recipe.start = Start::FromDisk {
+                                    name: d.clone(),
+                                    fat_type: None,
+                                };
+                            }
+                        }
+                        ui.separator();
+                        if ui.selectable_label(false, PICK_IMG).clicked() {
+                            want_img_file = true;
+                        }
+                    });
+            });
+        });
+
+        // **A disk chosen from the library is read once**, so the verdict below is about that
+        // volume rather than about volumes in general.
+        if let Some(c) = self.compose.as_mut() {
+            if let Start::FromDisk { name, fat_type } = &c.recipe.start {
+                if fat_type.is_none() {
+                    if let Some(p) = disk_path(&self.settings, name) {
+                        let t = eapp_loader::install::data_partition_type(&p).ok();
+                        c.recipe.start = Start::FromDisk {
+                            name: name.clone(),
+                            fat_type: t,
+                        };
+                    }
+                }
+            }
+        }
+
+        ui.add_space(6.0);
+        // ---- systems
+        self.id_row(ui, "Systems", |app, ui| {
+            let Some(c) = app.compose.as_mut() else {
+                return;
+            };
+            let mut changed = false;
             for o in Os::ALL {
                 let mut on = c.recipe.oses.contains(&o);
                 if ui.checkbox(&mut on, o.label()).changed() {
@@ -3397,32 +3500,56 @@ impl App {
                     } else {
                         c.recipe.oses.remove(&o);
                     }
+                    changed = true;
                 }
+            }
+            // **The bootloader follows the systems.** Being told after the fact that the loader you
+            // had cannot start a kernel is a correction; having it follow is the same knowledge
+            // applied before it becomes a mistake.
+            if changed {
+                c.recipe.loader = c.recipe.best_loader();
             }
         });
 
-        ui.add_space(8.0);
-        ui.label(egui::RichText::new("Bootloader").color(UI_HEADING));
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
+        // ---- bootloader, with the impossible ones greyed and each keeping its reason
+        self.id_row(ui, "Bootloader", |app, ui| {
+            let Some(c) = app.compose.as_mut() else {
+                return;
+            };
             for l in Loader::ALL {
-                if ui.radio(c.recipe.loader == l, l.label()).clicked() {
+                let works = c.recipe.loader_works(l);
+                let why = if works {
+                    String::new()
+                } else {
+                    c.recipe.why_not(l)
+                };
+                let r = ui.add_enabled(
+                    works,
+                    egui::RadioButton::new(c.recipe.loader == l, l.label()),
+                );
+                let r = if why.is_empty() {
+                    r
+                } else {
+                    r.on_disabled_hover_text(why)
+                };
+                if r.clicked() {
                     c.recipe.loader = l;
                 }
             }
         });
 
-        // **The verdict, live, and nothing is ever greyed out.** A checkbox you cannot tick tells
-        // you that something is impossible and never why; the why is what somebody learning this
-        // hardware actually wants. So every box ticks, and an impossible combination explains
-        // itself and offers the one change that resolves it.
-        ui.add_space(10.0);
-        let verdict = c.recipe.check();
+        // ---- the verdict and the plan, both in reserved space so nothing below them moves
+        let recipe = self
+            .compose
+            .as_ref()
+            .map(|c| c.recipe.clone())
+            .unwrap_or_default();
+        let verdict = recipe.check();
         let mut apply: Option<Fix> = None;
-        match &verdict {
+        ui.add_space(6.0);
+        reserved(ui, 40.0, |ui| match &verdict {
             eapp_loader::compose::Verdict::Ok(text) => {
-                let word = c
-                    .recipe
+                let word = recipe
                     .boot_word()
                     .map(|w| format!("{w} — "))
                     .unwrap_or_default();
@@ -3434,53 +3561,63 @@ impl App {
             eapp_loader::compose::Verdict::No { why, fix } => {
                 ui.label(egui::RichText::new(format!("⚠ {why}")).color(UI_WARN));
                 if let Some(f) = fix {
-                    ui.horizontal(|ui| {
-                        ui.add_space(8.0);
-                        if ui.button(f.label()).clicked() {
-                            apply = Some(f.clone());
-                        }
-                    });
+                    if ui.button(f.label()).clicked() {
+                        apply = Some(f.clone());
+                    }
                 }
             }
-        }
+        });
         if let Some(f) = apply {
-            match f {
-                Fix::UseLoader(l) => c.recipe.loader = l,
-                Fix::AddOs(o) => {
-                    c.recipe.oses.insert(o);
-                }
-                Fix::RemoveOs(o) => {
-                    c.recipe.oses.remove(&o);
-                }
-                Fix::BuildFromIpsw => {
-                    c.recipe.start = Start::FromIpsw(bundles.first().cloned().unwrap_or_default())
+            if let Some(c) = self.compose.as_mut() {
+                match f {
+                    Fix::UseLoader(l) => c.recipe.loader = l,
+                    Fix::AddOs(o) => {
+                        c.recipe.oses.insert(o);
+                    }
+                    Fix::RemoveOs(o) => {
+                        c.recipe.oses.remove(&o);
+                    }
+                    Fix::BuildFromIpsw => c.recipe.start = Start::FromIpsw(String::new()),
                 }
             }
         }
 
-        // **What this will cost, before it happens.** A plan a person cannot see before agreeing
-        // to it is a download they did not agree to.
-        if verdict.ok() {
-            ui.add_space(10.0);
-            ui.label(egui::RichText::new("This will").color(UI_HEADING));
-            for st in c.recipe.steps() {
+        // **What this will cost, before it happens.** A plan somebody cannot see before agreeing to
+        // it is a download they did not agree to. Four lines of room, always.
+        ui.label(egui::RichText::new("This will").small().color(UI_HEADING));
+        reserved(ui, 64.0, |ui| {
+            for st in recipe.steps() {
                 ui.label(
-                    egui::RichText::new(format!("     {} {}", st.verb(), st.what()))
+                    egui::RichText::new(format!("  {} {}", st.verb(), st.what()))
                         .small()
                         .color(UI_TEXT_FAINT),
                 );
             }
-        }
+        });
 
-        if want_image {
+        if want_ipsw_file {
+            if let Some(p) = pick_files("An Apple .ipsw", &["ipsw"]).first() {
+                if let Some(name) = self.file_into_library(&PathBuf::from(p)) {
+                    if let Some(c) = self.compose.as_mut() {
+                        c.recipe.start = Start::FromIpsw(name);
+                    }
+                    self.settings.save();
+                }
+            }
+        }
+        if want_img_file {
             if let Some(p) = pick_files("A drive image", &["img", "dmg", "bin"]).first() {
                 let path = PathBuf::from(p);
-                // Read the partition type now, so the verdict can be about *this* drive rather
-                // than about drives in general.
+                let stem = path
+                    .file_stem()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "a drive".into());
                 let fat = eapp_loader::install::data_partition_type(&path).ok();
+                let name = self.settings.file_disk(path, &stem);
+                self.settings.save();
                 if let Some(c) = self.compose.as_mut() {
-                    c.recipe.start = Start::FromImage {
-                        path: path.to_string_lossy().into_owned(),
+                    c.recipe.start = Start::FromDisk {
+                        name,
                         fat_type: fat,
                     };
                 }
@@ -3665,6 +3802,15 @@ impl App {
         let recipe = c.recipe.clone();
         let out = drives_dir().join(format!("{}.img", sanitise(&c.disk_name)));
         let sectors = self.synthetic_model().sectors();
+        let from_disk: Option<PathBuf> = match &recipe.start {
+            Start::FromDisk { name, .. } => self
+                .settings
+                .disks
+                .iter()
+                .find(|d| d.name == *name)
+                .map(|d| d.path.clone()),
+            _ => None,
+        };
         let bundle = match &recipe.start {
             Start::FromIpsw(name) => self
                 .settings
@@ -3698,9 +3844,12 @@ impl App {
                         std::fs::copy(path, &out).map_err(|e| format!("{path}: {e}"))?;
                         report.push(format!("copied {path}"));
                     }
-                    Start::Empty => {
-                        eapp_loader::ipsw::build_disk(&[], &out, sectors)?;
-                        report.push("built an empty drive".into());
+                    // A disk from the library: copied, so installing onto it leaves the one the
+                    // person already has alone.
+                    Start::FromDisk { name, .. } => {
+                        let src = from_disk.ok_or_else(|| format!("no disk called {name:?}"))?;
+                        std::fs::copy(&src, &out).map_err(|e| format!("{}: {e}", src.display()))?;
+                        report.push(format!("copied {name}"));
                     }
                 }
                 // 2 Rockbox, whose bootloader also goes in the firmware partition.
@@ -3988,6 +4137,10 @@ impl App {
     /// somewhere else again and every operation had to reconcile the two. The one that is running
     /// is just the one `current` names.
     fn pane_devices(&mut self, ui: &mut egui::Ui) {
+        // **A tab hosts only its own wizard.** Both panes used to draw whichever one was open, so
+        // starting a device and then pressing Resources showed the device wizard again — the tabs
+        // worked and looked broken. Hosting it where it belongs means switching away shows the
+        // other tab and switching back resumes, with nothing lost either way.
         // **Nothing to show means there is one thing to do.** An empty list with a button on it is
         // a page whose only content is a way off it; somebody who has no devices did not come here
         // to read that they have none. The welcome moves inside the wizard's first step, which is
@@ -3995,7 +4148,14 @@ impl App {
         if self.settings.devices.is_empty() && self.compose.is_none() {
             self.compose = Some(Compose::new(ComposeWhat::Device { first_run: true }));
         }
-        if self.wizard(ui) {
+        if !matches!(
+            self.compose,
+            Some(Compose {
+                what: ComposeWhat::Disk,
+                ..
+            })
+        ) && self.wizard(ui)
+        {
             return;
         }
         if self.device_editor(ui) {
@@ -4491,7 +4651,15 @@ impl App {
     /// as long as everything you own.
     fn pane_resources(&mut self, ui: &mut egui::Ui) {
         use eapp_loader::settings::Resource;
-        if self.wizard(ui) {
+        // Only the disk wizard belongs here; the device one lives on the Devices tab.
+        if matches!(
+            self.compose,
+            Some(Compose {
+                what: ComposeWhat::Disk,
+                ..
+            })
+        ) && self.wizard(ui)
+        {
             return;
         }
         let mut forget: Option<String> = None;
