@@ -3133,98 +3133,59 @@ impl App {
                 .and_then(|i| i.what.path().map(|p| p.to_path_buf()))
         });
 
-        // **One panel, two modes, one height.** Both are drawn into the same reserved space so the
-        // page does not move when you change your mind — see `reserved`.
         ui.add_space(10.0);
-        reserved(ui, IDENTITY_H, |ui| match &dump {
-            Some(path) => self.identity_from_dump(ui, path),
-            None => self.identity_generated(ui),
-        });
+        self.identity_rows(ui, dump.as_deref());
 
-        // **The case stays editable either way**, and it is the only thing that does when a dump is
-        // chosen. It is the *window's* iPod rather than the machine's identity — nothing the
-        // firmware reads changes with it — so a case swapped at some point in twenty years is an
-        // ordinary thing to say, whatever the `Mod#` says.
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Case").color(UI_HEADING));
-            let derived = self.derived_chassis;
-            let cur = self
-                .settings
-                .chassis
-                .map(|c| c.label().to_string())
-                .unwrap_or_else(|| format!("from the iPod — {}", derived.label()));
-            egui::ComboBox::from_id_salt("wiz-case")
-                .selected_text(cur)
-                .width(220.0)
-                .show_ui(ui, |ui| {
-                    let mut pick = self.settings.chassis;
-                    ui.selectable_value(
-                        &mut pick,
-                        None,
-                        format!("from the iPod — {}", derived.label()),
-                    );
-                    for c in [Colour::White, Colour::Black, Colour::U2] {
-                        ui.selectable_value(&mut pick, Some(c), c.label());
-                    }
-                    self.settings.chassis = pick;
-                });
-        });
         self.wizard_buttons(ui);
     }
 
-    /// What a dump says about itself. **Read-only: these are not choices.**
-    fn identity_from_dump(&mut self, ui: &mut egui::Ui, path: &Path) {
-        ui.label(
-            egui::RichText::new("READ FROM THE DUMP")
-                .small()
-                .color(UI_HEADING),
-        );
-        ui.add_space(2.0);
-        for (k, v) in nor_facts(path) {
-            ui.horizontal(|ui| {
-                ui.add_space(8.0);
+    /// **One identity table, whichever the ROM is.** The rows are the same and in the same place;
+    /// only whether a value is a control or a sentence changes.
+    ///
+    /// Two panels in a reserved box was the wrong answer to the right problem. It stopped the page
+    /// jumping, but it did it by drawing one of two different things into a fixed hole — so the
+    /// dump's panel and the generated one duplicated each other's labels, and the one that did not
+    /// fill the hole left the rest of it looking like an overlay on whatever came next.
+    ///
+    /// A table cannot jump, because the row count does not depend on anything. There is nothing to
+    /// reserve.
+    fn identity_rows(&mut self, ui: &mut egui::Ui, dump: Option<&Path>) {
+        let facts = dump.map(nor_facts);
+        let fact = |k: &str| -> String {
+            facts
+                .as_ref()
+                .and_then(|f| f.iter().find(|(a, _)| *a == k).map(|(_, v)| v.clone()))
+                .unwrap_or_default()
+        };
+        let id = self.settings.nor.identity().ok();
+
+        // Model — a picker when it is ours to choose, and what the dump says when it is not.
+        self.id_row(ui, "Model", |app, ui| match dump {
+            Some(_) => {
                 ui.label(
-                    egui::RichText::new(format!("{k:<10}"))
+                    egui::RichText::new(fact("Model"))
                         .small()
-                        .monospace()
-                        .color(UI_TEXT_FAINT),
+                        .color(UI_TEXT_DIM),
                 );
+            }
+            None => app.model_rows(ui),
+        });
+
+        // Serial — editable and validated for a generated ROM; printed for a dump.
+        self.id_row(ui, "Serial", |app, ui| {
+            if dump.is_some() {
                 ui.label(
-                    egui::RichText::new(v)
+                    egui::RichText::new(fact("Serial"))
                         .small()
                         .monospace()
                         .color(UI_TEXT_DIM),
                 );
-            });
-        }
-        ui.add_space(2.0);
-        ui.label(
-            egui::RichText::new("Not editable — this is what the iPod is.")
-                .small()
-                .color(UI_TEXT_FAINT),
-        );
-    }
-
-    /// The generated identity, which **is** a set of choices, each validated.
-    fn identity_generated(&mut self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("GENERATED").small().color(UI_HEADING));
-        ui.add_space(2.0);
-        self.model_rows(ui);
-        let id = self.settings.nor.identity().ok();
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new("Serial    ")
-                    .small()
-                    .monospace()
-                    .color(UI_TEXT_FAINT),
-            );
-            match self.typing_serial.clone() {
+                return;
+            }
+            match app.typing_serial.clone() {
                 // **Checked as it is typed, and refused before it is kept.** A serial written into
                 // a `SysCfg` is read by the firmware and by iTunes, and nothing downstream of here
-                // would ever question it — so the field it is entered in is the only place it can
-                // be questioned.
+                // would question it — so the field it is entered in is the only place it can be.
                 Some(mut typed) => {
                     ui.add(
                         egui::TextEdit::singleline(&mut typed)
@@ -3237,12 +3198,12 @@ impl App {
                         .add_enabled(ok.is_ok(), egui::Button::new("use").small())
                         .clicked()
                     {
-                        self.set_serial(&typed);
-                        self.typing_serial = None;
+                        app.set_serial(&typed);
+                        app.typing_serial = None;
                     } else if ui.small_button("cancel").clicked() {
-                        self.typing_serial = None;
+                        app.typing_serial = None;
                     } else {
-                        self.typing_serial = Some(typed);
+                        app.typing_serial = Some(typed);
                     }
                 }
                 None => {
@@ -3257,10 +3218,10 @@ impl App {
                         .color(UI_TEXT_DIM),
                     );
                     if ui.small_button("regenerate").clicked() {
-                        self.reseed();
+                        app.reseed();
                     }
                     if ui.small_button("type my own…").clicked() {
-                        self.typing_serial = Some(
+                        app.typing_serial = Some(
                             id.as_ref()
                                 .and_then(|i| i.serial.clone())
                                 .unwrap_or_default(),
@@ -3269,39 +3230,109 @@ impl App {
                 }
             }
         });
-        // One reserved line for the reason a typed serial is refused, so the panel does not grow
-        // the moment somebody types a character.
-        reserved(ui, 16.0, |ui| {
+
+        // One line for why a typed serial is refused. Always here, so typing does not move the row
+        // below it — the only thing in this table that needs reserving, because it is the only
+        // thing that is not a row.
+        reserved(ui, 15.0, |ui| {
             if let Some(w) = self
                 .typing_serial
                 .as_ref()
                 .and_then(|t| eapp_loader::identity::Identity::check_serial(t).err())
             {
                 ui.horizontal(|ui| {
-                    ui.add_space(8.0);
+                    ui.add_space(74.0);
                     ui.label(egui::RichText::new(w).small().color(UI_WARN));
                 });
             }
         });
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
+
+        self.id_row(ui, "GUID", |app, ui| {
+            let v = match dump {
+                Some(_) => fact("GUID"),
+                None => id
+                    .as_ref()
+                    .map(|i| i.guid_hex())
+                    .unwrap_or_else(|| "—".into()),
+            };
             ui.label(
-                egui::RichText::new("GUID      ")
-                    .small()
-                    .monospace()
-                    .color(UI_TEXT_FAINT),
-            );
-            ui.label(
-                egui::RichText::new(id.map(|i| i.guid_hex()).unwrap_or_else(|| "—".into()))
+                egui::RichText::new(v)
                     .small()
                     .monospace()
                     .color(UI_TEXT_DIM),
             );
-            ui.label(
-                egui::RichText::new("from the seed")
-                    .small()
-                    .color(UI_TEXT_FAINT),
-            );
+            if dump.is_none() {
+                ui.label(
+                    egui::RichText::new("from the seed")
+                        .small()
+                        .color(UI_TEXT_FAINT),
+                );
+            }
+            let _ = app;
+        });
+
+        // **The case is editable either way**, and it is the only thing that is when a dump is
+        // chosen. It is the *window's* iPod rather than the machine's identity — nothing the
+        // firmware reads changes with it — so a case swapped at some point in twenty years stays
+        // sayable, whatever the `Mod#` says.
+        self.id_row(ui, "Case", |app, ui| {
+            let derived = app.derived_chassis;
+            let cur = app
+                .settings
+                .chassis
+                .map(|c| c.label().to_string())
+                .unwrap_or_else(|| format!("from the iPod — {}", derived.label()));
+            egui::ComboBox::from_id_salt("wiz-case")
+                .selected_text(cur)
+                .width(210.0)
+                .show_ui(ui, |ui| {
+                    let mut pick = app.settings.chassis;
+                    ui.selectable_value(
+                        &mut pick,
+                        None,
+                        format!("from the iPod — {}", derived.label()),
+                    );
+                    for c in [Colour::White, Colour::Black, Colour::U2] {
+                        ui.selectable_value(&mut pick, Some(c), c.label());
+                    }
+                    app.settings.chassis = pick;
+                });
+        });
+
+        // **The images a dump carries, and the ones a generated ROM cannot.** This row is the whole
+        // difference between the two in one line, which is worth a row of its own.
+        self.id_row(ui, "Images", |_app, ui| {
+            let (text, colour) = match dump {
+                Some(_) => (fact("Images"), UI_TEXT_DIM),
+                None => (
+                    "none — a generated ROM has no diagnostics or disk mode".to_string(),
+                    UI_TEXT_FAINT,
+                ),
+            };
+            ui.label(egui::RichText::new(text).small().color(colour));
+        });
+    }
+
+    /// One labelled row of the identity table, **exactly one row tall whatever is in it**.
+    ///
+    /// A dropdown is a pixel taller than the label that replaces it when a dump is chosen, and one
+    /// pixel per row is still a page that moves. Fixing the row height makes the table's geometry a
+    /// property of the table rather than of what happens to be in it.
+    fn id_row(&mut self, ui: &mut egui::Ui, label: &str, f: impl FnOnce(&mut Self, &mut egui::Ui)) {
+        reserved(ui, ID_ROW_H, |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.add_sized(
+                    [62.0, 18.0],
+                    egui::Label::new(
+                        egui::RichText::new(label)
+                            .small()
+                            .monospace()
+                            .color(UI_TEXT_FAINT),
+                    ),
+                );
+                f(self, ui);
+            });
         });
     }
 
@@ -3976,6 +4007,13 @@ impl App {
     /// somewhere else again and every operation had to reconcile the two. The one that is running
     /// is just the one `current` names.
     fn pane_devices(&mut self, ui: &mut egui::Ui) {
+        // **Nothing to show means there is one thing to do.** An empty list with a button on it is
+        // a page whose only content is a way off it; somebody who has no devices did not come here
+        // to read that they have none. The welcome moves inside the wizard's first step, which is
+        // where they were going anyway.
+        if self.settings.devices.is_empty() && self.compose.is_none() {
+            self.compose = Some(Compose::new(ComposeWhat::Device { first_run: true }));
+        }
         if self.wizard(ui) {
             return;
         }
@@ -6355,12 +6393,8 @@ fn sanitise(name: &str) -> String {
     }
 }
 
-/// The height the identity panel takes, whichever mode it is in.
-///
-/// Both modes are drawn into this, so choosing a dump instead of a generated ROM does not move the
-/// buttons under it. Measured from the taller of the two — the generated one, which has a model
-/// picker, a serial row, a reserved line for its validation message and a GUID row.
-const IDENTITY_H: f32 = 132.0;
+/// One row of the identity table. Tall enough for a dropdown, which is the tallest thing in one.
+const ID_ROW_H: f32 = 24.0;
 
 /// Which group is which in [`App::groups`]. Named, because five bare indices in a fold is five
 /// chances to open the wrong one.
