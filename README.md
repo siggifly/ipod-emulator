@@ -39,7 +39,12 @@ it, then **System Settings → Privacy & Security** has a button to open it anyw
 
 **The two halves are independent.** The boot ROM and the drive are separate questions, and you can
 supply either, both or neither — drop whatever you have anywhere on the window, in any order. Each
-file is identified by what it *contains*, not by which box you put it in, and it remembers.
+file is identified by what it *contains*, not by which box you put it in.
+
+**It keeps them all.** Everything you drop is filed in a library — boot ROMs, `.ipsw` bundles,
+drives — and a *machine* is a name for one selection from it. So a second boot ROM does not replace
+the first, one ROM can back several machines, and switching between two iPods is picking one from a
+list rather than finding two files again.
 
 | the boot ROM | the drive |
 |---|---|

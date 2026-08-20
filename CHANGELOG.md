@@ -323,6 +323,61 @@ used to answer *"cannot read this file: failed to fill whole buffer"*, because i
 before it measured it. It measures first now, and an empty dump gets the sentence written for it:
 the file is empty, the dump wrote nothing, and a reset before it finishes leaves exactly this.
 
+### Resuming gave you an iPod that ignored every button
+
+**And it was not ignoring you — it was dead.** Closing the window parks the machine so the next
+launch resumes in three seconds instead of cold-booting for seventy-five. What came back could not
+execute a single instruction: the saved state carried every region of memory, both interrupt banks
+and the whole processor, and left out the sixteen words that describe the **address windows**.
+RetailOS runs entirely through one of those windows, so it resumed, read zeros where its own code
+should be, and ran off into nothing a few hundred instructions later.
+
+Nothing reported it, and that is why it presented as an input bug. The screen still held the last
+picture the video chip had been handed, so the window showed a perfectly ordinary iPod that would
+not respond to the wheel or the hold switch.
+
+```text
+before   the resumed program counter reads 00 00 00 00    dead after 223 instructions
+after    the same address reads 04 00 00 1a               3 000 000 and still going
+```
+
+Saved machines from before this release are **refused rather than misread**, so the first launch
+after updating cold-boots once and saves a new one. Nothing else is lost.
+
+Three more things came out of the same investigation:
+
+- **A truncated save file crashed the program** instead of being rejected. It is written as the
+  window closes, so a truncated one is exactly what a crash or a full disk leaves behind — the worst
+  moment to take the program down with it. It cold-boots now, as it always said it would.
+- **`from-idle` cached a machine built differently from the one it resumed into**, so a run that
+  asked for a click wheel got a machine that had never had one.
+- **The click wheel's report named the wrong cause.** Two different refusals — reporting switched
+  off, and a receiver that was never armed — shared one counter, so a run could print `reporting ON`
+  and `12 frames suppressed while off` on consecutive lines.
+
+### The iPod is full size again, and stays that size
+
+It had been drawing at **half size**. The window's height was reduced to fit a 13-inch laptop, and
+because the iPod is drawn at a whole number of screen pixels per emulator pixel — which is what
+makes the panel exact rather than blurred — that reduction crossed a step and halved it. Nothing
+failed; it just got small.
+
+It also **changed size while you watched**: the strip under it grew when the machine had something
+to report, and a warning appearing could push the iPod down a whole step. Both strips are fixed
+heights now, so a notice is a notice rather than the emulator appearing to break.
+
+### One settings button, and a library behind it
+
+There were two buttons — `settings…` and `software…` — that opened the same page. There is one now.
+
+And **the page has a library**: every boot ROM, `.ipsw` and drive this program knows about, in one
+list. Before, a file that was not the one running had nowhere to live, so choosing a second boot ROM
+lost the first. A machine is now **composed of** entries from that library, so the same ROM can back
+several machines and editing an entry changes all of them. Files you drop on the window are filed as
+well as used, and the list fills itself the first time from whatever you already had.
+
+Settings → About carries the repository link.
+
 ### Fixed
 
 - **`--headless`, `--selftest`, `--probe` and `--power-cycle-at` could not open a drive.** Which
@@ -374,6 +429,26 @@ out of a drive image — `tree`, `find`, `cat`, and `lba`, which turns the absol
 `trace`'s DMA log back into paths. `ipod-boot rsrc` does the same for the `rsrc` volume in the
 firmware partition. Both open the image read-only and neither mounts anything, because a
 partitioning command aimed at the wrong device is the one mistake here with no undo.
+
+**Anchor a wheel script in simulated time, not instructions — especially against a snapshot.** A
+machine resumed at an idle snapshot is already at a menu, so it is halted from its first step: a
+3 G-instruction budget executed **495 M**, and a script anchored at `@2200M` fired **0 of 12** steps.
+Anchors that did land were worse than ones that did not — they all fired at once during a disk scan,
+and the run reported `1 word read of DATA, 11 frames dropped unread`, which reads exactly like a
+firmware that has stopped listening. The same script anchored at `@24s` on the same snapshot:
+**16 posted, 0 dropped, 16 read, 16 interrupts.** Nothing about the machine changed. `trace
+--restore=` prints the clock it resumed at; anchor past it.
+
+**`--restore` checks whether anything is mapped at the resumed program counter** and says so, rather
+than leaving a machine to execute zeros until it is declared lost. **`IPOD_LAYOUT=1`** makes the
+window print the measurement its size constants are derived from, so those can be re-measured rather
+than trusted.
+
+**`tests/snapshot_round_trip.rs`** is new, and its first version was worthless: it restored into a
+machine that had already configured the address windows itself, so it passed with the fix reverted.
+It restores into a bare machine now, the way the real path does, and is verified to fail without the
+fix. `every_settings_pane_draws_and_fits` closes a similar gap — laying out the settings screen
+draws the rail and exactly one pane, so five of six were never rendered by any test.
 
 ## 0.4.0
 

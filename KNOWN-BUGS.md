@@ -14,6 +14,66 @@ belongs here.
 
 ---
 
+## ~~A resumed machine was dead, and looked like one that ignored input~~ — FIXED 2026-08-20
+
+Reported as *"the booted RetailOS is not taking anything when I click on the hold switch or use the
+click wheel — just stuck on the language screen."* It was not an input defect. The saved machine
+carried every memory region, both interrupt banks and the whole CPU, and omitted **`mmap_regs`** —
+the sixteen words defining the MMAP unit's address windows. RetailOS executes entirely through the
+low window, so a restored machine read zeros at its own program counter, executed `andeq r0, r0, r0`
+through address space, and was declared `Lost` a few hundred instructions later.
+
+```text
+before   pc 0x002079dc reads 00 00 00 00    Lost after 223 instructions
+after    pc 0x002079dc reads 04 00 00 1a    3 000 000 and still running
+```
+
+**The silence is the lesson.** The co-processor still held the last picture it had been given, so
+the window showed an ordinary iPod that ignored every button — a dead machine and an unresponsive
+one are indistinguishable from outside when the panel is somebody else's memory.
+
+Ruled out along the way, each with its control: the second core (arms with and without it were
+byte-identical), the user's particular snapshot (reproduced with a fresh one, same binary, same
+flags), and the click wheel itself (`CTRL 0x600a1f00`, receiver armed, in the saved state).
+
+The format is `IPODSNP7`; older images are refused rather than misparsed.
+`tests/snapshot_round_trip.rs` is the guard, and it is verified to fail without the fix — its first
+version was **not**, because it restored into a machine that had already configured the windows
+itself.
+
+## ~~A truncated snapshot took the whole program down~~ — FIXED 2026-08-20
+
+`Machine::restore`'s doc had always promised *"returns false on a bad or truncated image"*. It
+indexed the buffer directly, so a short one **panicked**. A snapshot is written by a background
+thread as the window closes, which makes a truncated one exactly what a crash or a full disk leaves
+behind — the moment when killing the program is least useful. Every read is bounds-checked now and
+the caller cold-boots.
+
+## iPodLinux's userland stalls at ZeroLauncher's last step — 2026-08-20
+
+Unchanged as a symptom, but no longer a mystery. ZeroLauncher reaches **"Finishing Up…"** and spins;
+the profile puts **94.9 %** of the phase in two adjacent buckets. Disassembling the flat binary off
+the drive shows a three-instruction poll:
+
+```
+    mov  r12, #0xc5000000
+    ldr  r2, [r12, #0x184]
+    orr  r0, r2, #0x100        ; set bit 8
+    str  r0, [r12, #0x184]
+    ldr  r3, [r1, #0x184]
+    tst  r3, #0x100
+    bne  .-16                  ; spin until the hardware clears it
+```
+
+`0xc5000000` is `USB_BASE` and `+0x184` is `PORTSC1`, whose bit 8 is **port reset**: software sets
+it, hardware clears it when the reset completes. We model that region as plain memory, so the bit
+stays set and the poll never ends. One register away, `USB_BASE + 0x140` bit 1 is already filtered
+for precisely this reason.
+
+**Not yet claimed as the cause**: the address the profile reports depends on where the kernel loaded
+the flat binary, and that base is inferred rather than read. A run logging reads of `0xc5000184` is
+what settles it, and until it lands this is a decode that fits, not a measurement.
+
 ## The cold boot takes longer in simulated time than hardware does — MOSTLY EXPLAINED 2026-08-18
 
 **It was the clock, and the clock was ours.** `--clock` sets how many interpreter instructions make
