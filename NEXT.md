@@ -274,6 +274,44 @@ believed until a control on the cold recipe returned 107 622. It prints `NOT MEA
 control before believing a zero**; that is the eighth instrument in this project to report an
 absence it could not have observed.
 
+## 0x — Why iPodLinux takes 4.8 *simulated* minutes to boot, when a real 5G takes about one
+
+**Two different numbers, and only one of them is the emulator being slow.**
+
+| | |
+|---|---|
+| wall clock to ZeroLauncher | ~17 min |
+| **simulated iPod time** | 21.5 G instructions ÷ 75 instr/µs = **287 s = 4.8 min** |
+| our speed | ~21 M instr/s against 80 M — **~26 % of real time**, which is the known figure |
+
+So the 17 minutes is fully explained by 4.8 simulated minutes at a quarter of real speed, and there
+is nothing to find there. **The 4.8 minutes is the question.** ZeroSlackr on real hardware is
+reported to boot in about a minute, so this machine appears to be executing several times the
+instructions a real one would.
+
+**A profile of the first 4 G says where they go, and it is not spread out:**
+
+```
+profile: 62 500 000 samples over 14 508 buckets
+  0x40002230   12.5%      0x40002220   12.5%      0x40003b00    9.1%
+  0x40002470    7.6%      0x40003b10    6.1%      0x000188b0    5.0%
+```
+
+**~48 % of the kernel's boot is four addresses in IRAM**, in pairs a few instructions apart — the
+shape of a spin loop, not of work. That lines up exactly with what
+[research/16](research/16-the-third-bootloader.md) already recorded and never followed up: the
+kernel polls `0x64004000` — the interrupt controller — **8 385 336 times**, from two program
+counters a few instructions apart inside the interrupt path.
+
+**What would settle it:** symbolise those four IRAM addresses against `vmlinux` and find what the
+loop is waiting for. If our interrupt controller reports "nothing pending" where a real one would
+have delivered, the kernel spins for real time that hardware never spends — and that is an accuracy
+defect wearing a performance costume, which is the same shape as the masked-completion bug fixed
+today.
+
+**Do not read this as "the emulator is slow."** ~26 % of real time is the emulator's speed and it is
+uniform. This is the *guest* doing several times the work, and that is ours to explain.
+
 ## 0z — ~~iPodLinux does not boot~~ · **IT BOOTS, 2026-08-20 — and the last fix mended Rockbox too**
 
 ```
