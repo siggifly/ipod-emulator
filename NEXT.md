@@ -249,6 +249,31 @@ films' 72 M/s is the CPU's rate and makes a rally unwatchable, because at `--clo
 
 **Still open, and small:** `Parachute`, `Music Quiz` and `Solitaire` have never been launched.
 
+## 0y — ~~Nothing draws on a synthetic NOR~~ · **FIXED 2026-08-20 — one pin, three cells**
+
+`GPO32_VAL` bit 14 is a general-purpose output Apple's bootloader drives when it powers the BCM. A
+warm entry skips that bootloader, so the bit read back zero — and Rockbox's `lcd_init_device` keys
+on it directly, with `lcd_update_rect` returning immediately while `display_on` is false. Every warm
+boot this project has run took the ROLO recovery branch, and got away with it only because that
+branch re-uploads the co-processor firmware from `flash_get_section('vmcs')` — which a real dump
+carries and a synthesised NOR does not.
+
+| | before | after |
+|---|---|---|
+| Rockbox warm, retail 5G | 3 858 px | **3 858 px** |
+| Rockbox warm, synthetic 5G | 0 px | **3 858 px** |
+| Rockbox warm, synthetic 5.5G | 0 px | **3 858 px** |
+| iPodLinux, synthetic 5G | `Lost(0x40020000)` | **boots, same dmesg as retail** |
+
+Retail unmoved. It sits beside `--sysinfo` because it is the same kind of thing: not something the
+NOR carries, but machine state a bootloader leaves behind.
+
+**`--norlog` nearly sent this the wrong way.** It counts through the `Nor` model and the warm recipes
+install none, so it reported `0 flash reads` for *both* arms — "Rockbox never reads the NOR" was
+believed until a control on the cold recipe returned 107 622. It prints `NOT MEASURED` now. **Run the
+control before believing a zero**; that is the eighth instrument in this project to report an
+absence it could not have observed.
+
 ## 0z — ~~iPodLinux does not boot~~ · **IT BOOTS, 2026-08-20 — and the last fix mended Rockbox too**
 
 ```

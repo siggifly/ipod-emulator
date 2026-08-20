@@ -69,7 +69,7 @@ re-run says.
 | **RetailOS**, cold | boots — 611 READ DMA, 4 WRITE DMA | — | — |
 | **Rockbox**, warm | **main menu, 3 858 lit pixels** | **main menu, 3 858** ✅ | **main menu, 3 858** ✅ |
 | **ipodloader2** | draws its own console | not yet run | not yet run |
-| **iPodLinux** | **boots to ZeroSlackr's userland** | `Lost(0x40020000)` | not yet run |
+| **iPodLinux** | **boots to ZeroSlackr's userland** | **boots — same dmesg** ✅ | not yet run |
 
 ### FIXED the same day: the pin that says the co-processor is powered
 
@@ -110,9 +110,11 @@ loads its whole binary off the disk either way, and both end at **the same instr
 `0x00086300`, inside `switch_thread`. It is running its scheduler on both. What differs is that
 nothing reaches the co-processor surface at `0xE0000`. Ledger #6 is the neighbourhood.
 
-**iPodLinux on a synthetic NOR ends at `Lost(0x40020000)`** — a jump one byte past the top of IRAM —
-after 12 792 unmapped reads around `0x04716000`, every one of them from a single PC. That is past
-the end of the 64 MB SDRAM region, from code running through the low mirror.
+~~**iPodLinux on a synthetic NOR ends at `Lost(0x40020000)`**~~ — **fixed by the same one line.**
+The `GPO32_VAL` bit-14 handover repaired this cell too: the kernel now runs to
+`EXT3-fs: mounted filesystem with ordered data mode.` on a synthetic NOR, the same dmesg it produces
+on the real dump, and the panel carries ZeroSlackr's startup screen. **Three cells, one line** —
+Rockbox on both synthetic NORs and iPodLinux on the 5G one.
 
 **And one cell is not the emulator at all.** `ipodloader2` reads FAT32 partition type `0x0B` and no
 other — `vfs.c` has `case 0x83` for ext2 and `case 0xB` for FAT32, and nothing else. Every drive
