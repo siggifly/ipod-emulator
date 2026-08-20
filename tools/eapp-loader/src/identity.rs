@@ -266,7 +266,20 @@ impl Identity {
         // invented one: two random letters produce prefixes no factory ever had.
         const LOCATIONS: &[&str] = &["4J", "JQ", "9C"];
 
+        // **The model is part of the seed, not merely a source of digits.**
+        //
+        // Only `year_digits`, `serial_codes` and `colour` were read from the model, and all three
+        // are properties of the *generation* — so every 5G produced the same serial and the same
+        // GUID for a given seed, and choosing a 60 GB instead of a 30 GB changed the `Mod#` and
+        // nothing a person could see. "I picked a different iPod and got the same one" is not a
+        // subtle failure; it is the screen saying the choice did not take.
+        //
+        // Mixing the model number in makes the identity a function of the whole choice while
+        // keeping the property that matters: same model and same seed, same iPod, every launch.
         let mut st = seed;
+        for b in model.number.bytes() {
+            st = st.wrapping_mul(0x0100_0000_01B3) ^ b as u64;
+        }
         let pick = |st: &mut u64, n: usize| -> String {
             (0..n)
                 .map(|_| A[(mix(st) % A.len() as u64) as usize] as char)
@@ -306,6 +319,47 @@ impl Identity {
             guid,
             source: Source::Generated,
         }
+    }
+
+    /// Whether a string is shaped like an Apple iPod serial, and what is wrong if not.
+    ///
+    /// **Eleven characters: `LLYWWUUUCCC`.** Two for the manufacturing location, one for the year,
+    /// two for the week, three unique, three for the model. This is the same layout
+    /// [`Identity::generate`] assembles, read backwards — so a serial somebody types is held to the
+    /// shape the program itself produces, rather than accepted and quietly written into a `SysCfg`
+    /// where nothing will ever check it.
+    ///
+    /// What is deliberately **not** checked: whether the location prefix or the model code is one
+    /// Apple used. Those sets are short and observed rather than published, and refusing a real
+    /// iPod's serial because its factory is not in a list of three would be worse than accepting an
+    /// invented one.
+    pub fn check_serial(s: &str) -> Result<(), String> {
+        const A: &str = "0123456789ABCDEFGHIJKLMNPQRSTUVWXYZ";
+        if s.len() != 11 {
+            return Err(format!(
+                "a serial is 11 characters — this is {}. The shape is LLYWWUUUCCC: location, \
+                 year, week, three unique, three for the model.",
+                s.len()
+            ));
+        }
+        if let Some(c) = s.chars().find(|c| !A.contains(*c)) {
+            return Err(if c == 'O' {
+                "`O` does not appear in Apple serials — it would be read as a zero.".to_string()
+            } else if c.is_ascii_lowercase() {
+                format!("serials are upper case; `{c}` is not.")
+            } else {
+                format!("`{c}` is not a character Apple serials use.")
+            });
+        }
+        let week: u32 = s[3..5]
+            .parse()
+            .map_err(|_| "the week is not a number".to_string())?;
+        if !(1..=52).contains(&week) {
+            return Err(format!(
+                "week {week} is not a week — positions 4 and 5 are 01 to 52."
+            ));
+        }
+        Ok(())
     }
 
     /// `000A270014EFE726` — the form iTunes, `SysInfo` and a USB descriptor all use.
@@ -783,5 +837,94 @@ mod tests {
         assert_eq!(m.generation.gestalt(), Some(0x000B_0005));
         // Every other generation is honest about not knowing.
         assert_eq!(Generation::Nano1.gestalt(), None);
+    }
+}
+
+#[cfg(test)]
+mod serial_tests {
+    use super::*;
+
+    /// **A different iPod has to produce a different iPod.** Only the generation and the colour
+    /// were read from the model, so every 5G shared a serial for a given seed and picking a 60 GB
+    /// instead of a 30 GB changed nothing anybody could see.
+    #[test]
+    fn two_models_of_one_generation_get_different_identities() {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut n = 0;
+        for m in crate::models::MODELS
+            .iter()
+            .filter(|m| m.model == crate::models::IpodModel::VideoWhite)
+        {
+            let id = Identity::generate(m, 5);
+            seen.insert((id.serial.clone(), id.guid));
+            n += 1;
+        }
+        assert!(
+            n >= 2,
+            "the test needs at least two Video models, found {n}"
+        );
+        assert_eq!(
+            seen.len(),
+            n,
+            "{n} models produced {} identities",
+            seen.len()
+        );
+    }
+
+    /// And the property that made it a *seed* rather than a random number still holds.
+    #[test]
+    fn the_same_model_and_seed_is_the_same_ipod_every_time() {
+        let m = crate::models::MODELS
+            .iter()
+            .find(|m| m.model == crate::models::IpodModel::VideoWhite)
+            .unwrap();
+        let a = Identity::generate(m, 7);
+        let b = Identity::generate(m, 7);
+        assert_eq!(a.serial, b.serial);
+        assert_eq!(a.guid, b.guid);
+        assert_ne!(
+            Identity::generate(m, 8).serial,
+            a.serial,
+            "the seed stopped mattering"
+        );
+    }
+
+    /// **Everything this program generates must pass its own validator.** A checker stricter than
+    /// the generator rejects the program's own output, which is the one thing it must never do.
+    #[test]
+    fn every_generated_serial_is_a_valid_serial() {
+        for m in crate::models::MODELS.iter().take(60) {
+            for seed in 0..8 {
+                let id = Identity::generate(m, seed);
+                let s = id.serial.clone().unwrap();
+                Identity::check_serial(&s).unwrap_or_else(|e| {
+                    panic!(
+                        "{} seed {seed} generated {s}, which it rejects: {e}",
+                        m.number
+                    )
+                });
+            }
+        }
+    }
+
+    /// And it has to refuse the things it exists to refuse, each with its own reason.
+    #[test]
+    fn the_validator_says_what_is_wrong() {
+        for (bad, want) in [
+            ("7Q7411K2VQ", "11 characters"),
+            ("7Q7411K2VQKX", "11 characters"),
+            ("7QO411K2VQK", "read as a zero"),
+            ("7q7411k2vqk", "upper case"),
+            ("7Q7411K2VQ!", "not a character"),
+            ("7Q7991K2VQK", "not a week"),
+            ("7Q7001K2VQK", "not a week"),
+        ] {
+            let e = Identity::check_serial(bad).unwrap_err();
+            assert!(e.contains(want), "{bad}: expected {want:?}, got {e:?}");
+        }
+        assert!(
+            Identity::check_serial("7Q7411K2VQK").is_ok(),
+            "a real serial was refused"
+        );
     }
 }

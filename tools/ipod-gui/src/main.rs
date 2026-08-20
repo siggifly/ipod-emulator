@@ -146,7 +146,7 @@ pub const IPOD_VIDEO: Device = Device {
 /// dump, and anything that lists devices all read this — none of them names a model.
 ///
 /// It holds exactly one entry today, and that is the point rather than an omission:
-/// [`ROADMAP.md`](../../../ROADMAP.md) Ⅳ says *a device drawn in the picker is a promise, and each
+/// [`ROADMAP.md`](../../../ROADMAP.md) IV says *a device drawn in the picker is a promise, and each
 /// one appears when it boots, not before*. So the structure carries every clickwheel iPod from the
 /// day it is written, and the list carries the ones that work. Adding the Classic 6G means adding
 /// its millimetres and flipping [`Device::boots`] — not a refactor, and not a claim made early.
@@ -310,7 +310,6 @@ const CONDITIONS_H: f32 = 34.0;
 /// this page to do.
 const SETTINGS_TABS: &[(SettingsTab, &str)] = &[
     (SettingsTab::Devices, "Devices"),
-    (SettingsTab::Disks, "Disks"),
     (SettingsTab::Resources, "Resources"),
 ];
 
@@ -374,9 +373,12 @@ enum SettingsTab {
     /// What you can run. First, because it is what somebody opening this page came for.
     #[default]
     Devices,
-    /// The drive images, and what is on each. Where installing happens.
-    Disks,
-    /// Firmware, installers and software. Inert — nothing here runs.
+    /// Everything a device is made from: disks, firmware, installers and software.
+    ///
+    /// **Disks live here rather than in a tab of their own.** They are a different *kind* of thing
+    /// from the rest — the thing the rest is combined into — but that is a distinction about
+    /// verbs, not about where you go to look, and two tabs where one would do is a choice the
+    /// person has to make before they can start.
     Resources,
 }
 
@@ -392,7 +394,7 @@ const DEFAULT_W: f32 = 1100.0;
 ///   x3   1994                      997
 /// ```
 ///
-/// The consequence bit once. `DEFAULT_H` was cut 800 → 720 to fit a 13" laptop, which left the
+/// The consequence bit once. `DEFAULT_H` was cut 800 -> 720 to fit a 13" laptop, which left the
 /// device 593 logical px where x2 needs 681 — so it silently fell to x1 and the iPod drew at half
 /// size. Nothing failed; it just got small. `default_window_is_tall_enough_for_a_full_size_ipod`
 /// is the guard, and it is the whole reason that test exists.
@@ -1353,6 +1355,8 @@ struct App {
     install_busy: bool,
     settings_tab: SettingsTab,
     /// What the machine being saved will be called.
+    /// A serial being typed in, when the field is open.
+    typing_serial: Option<String>,
     /// Whether the preferences sheet is open over the library.
     prefs: bool,
     /// The device being edited, as a draft. `None` = nobody is editing one.
@@ -1375,7 +1379,7 @@ struct App {
     /// An install in flight: the disk it came from, what is going on, and where it will land — so
     /// the collector can name the result after what was installed rather than guess from a path.
     installing: Option<(String, String, PathBuf)>,
-    /// The phase at the previous frame, so the boot→running edge can be seen.
+    /// The phase at the previous frame, so the boot->running edge can be seen.
     last_phase: Phase,
     /// `None` = no check has finished. `Some(None)` = a check ran and found nothing, which is what
     /// offline looks like and is never shown.
@@ -1868,6 +1872,7 @@ impl App {
             install_slot: Arc::new(Mutex::new(None)),
             install_busy: false,
             settings_tab: SettingsTab::default(),
+            typing_serial: None,
             prefs: false,
             editing: None,
             editing_was: String::new(),
@@ -2053,7 +2058,7 @@ impl App {
         if was_booting && phase == Phase::Running && executed > 0 {
             // **A restored machine cannot reach here**, and that is the emulator's doing rather
             // than a flag kept in step with it: `emu` sets `Running` outright when it restores and
-            // `Booting` only when it does not, so there is no boot→running edge to see. A separate
+            // `Booting` only when it does not, so there is no boot->running edge to see. A separate
             // "did we restore" field would be a second copy of that fact, and second copies drift.
             if self.settings.current.is_some() {
                 self.settings.record_boot(executed);
@@ -2607,8 +2612,13 @@ impl App {
     /// Point the synthesised ROM at a different model, keeping the seed so the same person keeps
     /// the same machine when they only change its colour.
     fn set_synthetic_model(&mut self, m: &'static eapp_loader::identity::Model) {
-        // Everything but the model is carried, so changing an iPod's colour keeps its identity and
-        // its splash rather than quietly resetting them.
+        // **The seed and the splash are carried; a typed identity is not.**
+        //
+        // A serial encodes which iPod it belongs to, so keeping one across a change of model
+        // leaves a 30 GB 5G wearing a 5.5G's serial — the two disagree and nothing says so. The
+        // seed is carried because it is not an identity, it is a choice of *which* generated one,
+        // and `Identity::generate` now folds the model in, so the same seed on a new model gives a
+        // new iPod rather than the old one's.
         let (seed, serial, guid, splash) = match &self.settings.nor {
             eapp_loader::nor::Source::Synthetic {
                 seed,
@@ -2619,11 +2629,12 @@ impl App {
             } => (*seed, serial.clone(), *guid, splash.clone()),
             eapp_loader::nor::Source::File(_) => (0, None, None, None),
         };
+        let changed = self.settings.nor.model().map(|c| c.number) != Some(m.number);
         self.settings.nor = eapp_loader::nor::Source::Synthetic {
             model: m.number.to_string(),
             seed,
-            serial,
-            guid,
+            serial: if changed { None } else { serial },
+            guid: if changed { None } else { guid },
             splash,
         };
         // The chosen model is what `auto` resolves to from here on. A person's explicit override,
@@ -2916,16 +2927,20 @@ impl App {
                 for (tab, label) in SETTINGS_TABS {
                     let on = app.settings_tab == *tab;
                     if ui
-                        .add_sized([104.0, 26.0], egui::Button::selectable(on, *label))
+                        .add_sized(
+                            [104.0, 26.0],
+                            egui::Button::selectable(on && !app.prefs, *label),
+                        )
                         .clicked()
                     {
                         app.settings_tab = *tab;
+                        app.prefs = false;
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .add_sized([30.0, 26.0], egui::Button::new("⚙"))
-                        .on_hover_text("Appearance, storage, keyboard and about.")
+                        .add_sized([30.0, 26.0], egui::Button::selectable(app.prefs, "⚙"))
+                        .on_hover_text("Storage, keyboard and about. Press a tab to leave.")
                         .clicked()
                     {
                         app.prefs = !app.prefs;
@@ -2934,7 +2949,7 @@ impl App {
                     // this page that is about a machine rather than about the library.
                     if app.link.is_some()
                         && ui
-                            .button("◀ back to the iPod")
+                            .button("« back to the iPod")
                             .on_hover_text("Esc does this too.")
                             .clicked()
                     {
@@ -2943,27 +2958,29 @@ impl App {
                 });
             });
             ui.add_space(14.0);
+            // **The tabs above are always live.** This used to `return` here, so opening the gear
+            // left no way back to Devices but a second button below it — a page you can enter and
+            // not leave by the way you came in. Pressing a tab closes the sheet, because pressing
+            // a tab plainly means "show me that".
             if app.prefs {
                 app.prefs_sheet(ui);
-                return;
-            }
-            match app.settings_tab {
-                SettingsTab::Devices => app.pane_devices(ui),
-                SettingsTab::Disks => app.pane_disks(ui),
-                SettingsTab::Resources => app.pane_resources(ui),
+            } else {
+                match app.settings_tab {
+                    SettingsTab::Devices => app.pane_devices(ui),
+                    SettingsTab::Resources => app.pane_resources(ui),
+                }
             }
         });
     }
 
     /// The four things that genuinely are preferences, behind the gear.
     fn prefs_sheet(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if ui.button("◀ back").clicked() {
-                self.prefs = false;
-            }
-        });
-        ui.add_space(10.0);
-        self.pane_appearance(ui);
+        // **No back button.** The tabs are the way out and they are three inches above this; a
+        // second control that does what they do is a control that has to be found first.
+        //
+        // **And no Appearance.** The iPod's colour is a fact about *a device* — which iPod you had
+        // — not a preference of the window, and it already lives on `Device::chassis`. Having it
+        // here as well meant two places set one thing and the last one written won.
         self.pane_storage(ui);
         self.pane_about(ui);
     }
@@ -3034,7 +3051,7 @@ impl App {
         true
     }
 
-    /// Step ① — which iPod, and where its boot ROM comes from.
+    /// Step 1 — which iPod, and where its boot ROM comes from.
     fn wizard_ipod(&mut self, ui: &mut egui::Ui) {
         self.model_rows(ui);
         ui.add_space(10.0);
@@ -3097,8 +3114,66 @@ impl App {
                                     .color(UI_TEXT_FAINT),
                                 );
                             }
-                            if ui.small_button("regenerate").clicked() {
-                                self.reseed();
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .small_button("regenerate")
+                                    .on_hover_text("A different seed: a different serial and GUID.")
+                                    .clicked()
+                                {
+                                    self.reseed();
+                                }
+                                if ui
+                                    .small_button("type my own…")
+                                    .on_hover_text(
+                                        "The serial off a real iPod, if you have one. It is \
+                                         checked for shape before it is used.",
+                                    )
+                                    .clicked()
+                                {
+                                    self.typing_serial = Some(
+                                        id.as_ref()
+                                            .and_then(|i| i.serial.clone())
+                                            .unwrap_or_default(),
+                                    );
+                                }
+                            });
+                            // **Checked as it is typed, and refused before it is kept.** A serial
+                            // written into a `SysCfg` is read by the firmware and by iTunes, and
+                            // nothing downstream of here would ever question it — so the one place
+                            // it can be questioned is the field it is entered in.
+                            if let Some(mut typed) = self.typing_serial.clone() {
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut typed)
+                                            .hint_text("7Q7411K2VQK")
+                                            .desired_width(150.0)
+                                            .char_limit(11),
+                                    );
+                                    let ok = eapp_loader::identity::Identity::check_serial(&typed);
+                                    if ui
+                                        .add_enabled(ok.is_ok(), egui::Button::new("use").small())
+                                        .clicked()
+                                    {
+                                        self.set_serial(&typed);
+                                        self.typing_serial = None;
+                                    } else if ui.small_button("cancel").clicked() {
+                                        self.typing_serial = None;
+                                    } else {
+                                        self.typing_serial = Some(typed);
+                                    }
+                                });
+                                if let Some(w) = self
+                                    .typing_serial
+                                    .as_ref()
+                                    .map(|t| eapp_loader::identity::Identity::check_serial(t))
+                                    .and_then(|r| r.err())
+                                {
+                                    ui.label(
+                                        egui::RichText::new(format!("     {w}"))
+                                            .small()
+                                            .color(UI_WARN),
+                                    );
+                                }
                             }
                         });
                     });
@@ -3124,10 +3199,39 @@ impl App {
                 }
             });
         });
+        // **The case is a fact about this device, not a preference of the window.** It lived in
+        // an Appearance section beside Storage and About, so two places set one thing and the last
+        // one written won. Which iPod you had belongs with which iPod you are describing.
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Case").color(UI_HEADING));
+            let derived = self.derived_chassis;
+            let cur = self
+                .settings
+                .chassis
+                .map(|c| c.label().to_string())
+                .unwrap_or_else(|| format!("from the iPod — {}", derived.label()));
+            egui::ComboBox::from_id_salt("wiz-case")
+                .selected_text(cur)
+                .width(220.0)
+                .show_ui(ui, |ui| {
+                    let mut pick = self.settings.chassis;
+                    ui.selectable_value(
+                        &mut pick,
+                        None,
+                        format!("from the iPod — {}", derived.label()),
+                    );
+                    for c in [Colour::White, Colour::Black, Colour::U2] {
+                        ui.selectable_value(&mut pick, Some(c), c.label());
+                    }
+                    self.settings.chassis = pick;
+                });
+        });
+
         ui.add_space(6.0);
         ui.label(
             egui::RichText::new(
-                "ⓘ A generated ROM boots Apple's software, Rockbox and iPodLinux. Apple's own \
+                "ℹ A generated ROM boots Apple's software, Rockbox and iPodLinux. Apple's own \
                  bootloader and the service diagnostics live inside a real dump and cannot be \
                  generated.",
             )
@@ -3149,7 +3253,7 @@ impl App {
         self.wizard_buttons(ui);
     }
 
-    /// Step ② — what goes on the disk. Free checkboxes, with a live verdict.
+    /// Step 2 — what goes on the disk. Free checkboxes, with a live verdict.
     fn wizard_disk(&mut self, ui: &mut egui::Ui) {
         use eapp_loader::compose::{Fix, Loader, Os, Start};
         let Some(c) = self.compose.as_mut() else {
@@ -3259,7 +3363,7 @@ impl App {
                     .map(|w| format!("{w} — "))
                     .unwrap_or_default();
                 ui.label(
-                    egui::RichText::new(format!("✓ {word}{text}"))
+                    egui::RichText::new(format!("✔ {word}{text}"))
                         .color(Color32::from_rgb(0x6a, 0x9a, 0x60)),
                 );
             }
@@ -3321,7 +3425,7 @@ impl App {
         self.wizard_buttons(ui);
     }
 
-    /// Step ③ — a name, then the plan runs with a tick against each line.
+    /// Step 3 — a name, then the plan runs with a tick against each line.
     fn wizard_build(&mut self, ui: &mut egui::Ui) {
         let Some(c) = self.compose.as_mut() else {
             return;
@@ -3349,9 +3453,9 @@ impl App {
         let steps = c.recipe.steps();
         for (i, st) in steps.iter().enumerate() {
             let mark = if i < c.done.len() {
-                "✓"
+                "✔"
             } else if c.building && i == c.done.len() {
-                "⣾"
+                "✱"
             } else {
                 "·"
             };
@@ -3395,11 +3499,11 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if c.step < 3 {
                     let ready = c.step != 2 || c.recipe.check().ok();
-                    if ui.add_enabled(ready, egui::Button::new("next ▸")).clicked() {
+                    if ui.add_enabled(ready, egui::Button::new("next »")).clicked() {
                         step = c.step + 1;
                     }
                 } else if ui
-                    .add_enabled(!c.building, egui::Button::new("create ▸"))
+                    .add_enabled(!c.building, egui::Button::new("create »"))
                     .clicked()
                 {
                     start = true;
@@ -3424,6 +3528,34 @@ impl App {
         }
         if start {
             self.wizard_run();
+        }
+    }
+
+    /// Use a serial somebody typed, keeping the generated GUID.
+    ///
+    /// The GUID is left generated on purpose: it is not printed on the case, so a person who has
+    /// their serial does not have their GUID, and inventing a pairing between a real serial and a
+    /// generated GUID would be a machine that claims to be an iPod that does not exist.
+    fn set_serial(&mut self, serial: &str) {
+        use eapp_loader::nor::Source;
+        if let Source::Synthetic {
+            model,
+            seed,
+            splash,
+            guid,
+            ..
+        } = self.settings.nor.clone()
+        {
+            let guid = guid.or_else(|| self.settings.nor.identity().ok().map(|i| i.guid));
+            self.settings.nor = Source::Synthetic {
+                model,
+                seed,
+                serial: Some(serial.to_string()),
+                guid,
+                splash,
+            };
+            self.settings.save();
+            self.say(format!("serial: {serial}"));
         }
     }
 
@@ -3483,7 +3615,7 @@ impl App {
         std::thread::spawn(move || {
             let r = (|| -> Result<(PathBuf, Vec<String>), String> {
                 let mut report = Vec::new();
-                // ① the drive itself
+                // 1 the drive itself
                 match &recipe.start {
                     Start::FromIpsw(name) => {
                         let bundle = bundle.ok_or_else(|| {
@@ -3507,7 +3639,7 @@ impl App {
                         report.push("built an empty drive".into());
                     }
                 }
-                // ② Rockbox, whose bootloader also goes in the firmware partition.
+                // 2 Rockbox, whose bootloader also goes in the firmware partition.
                 if recipe.oses.contains(&Os::Rockbox) {
                     let cache = eapp_loader::rockbox::cache_dir();
                     let boot = eapp_loader::rockbox::download(
@@ -3523,7 +3655,7 @@ impl App {
                     }
                     report.extend(eapp_loader::install::put_zip(&out, &zip)?);
                 }
-                // ③ iPodLinux, which brings ipodloader2 with it — and `install_linux` writes the
+                // 3 iPodLinux, which brings ipodloader2 with it — and `install_linux` writes the
                 //    menu naming whatever else is on the volume, so it goes last.
                 if recipe.oses.contains(&Os::IPodLinux) {
                     let tree = eapp_loader::ipodlinux::fetch(&eapp_loader::ipodlinux::cache_dir())?;
@@ -3594,7 +3726,7 @@ impl App {
         self.settings.save();
         self.compose = None;
         self.settings_tab = if c.what == ComposeWhat::Disk {
-            SettingsTab::Disks
+            SettingsTab::Resources
         } else {
             SettingsTab::Devices
         };
@@ -3823,7 +3955,7 @@ impl App {
                         ui.label(
                             egui::RichText::new(format!(
                                 "{} {}",
-                                if live { "●" } else { "○" },
+                                if live { "•" } else { "○" },
                                 d.name
                             ))
                             .color(if live {
@@ -3834,7 +3966,7 @@ impl App {
                         );
                         if live {
                             ui.label(
-                                egui::RichText::new("▶ running")
+                                egui::RichText::new("» running")
                                     .small()
                                     .color(UI_TEXT_FAINT),
                             );
@@ -3984,10 +4116,7 @@ impl App {
     /// This is where installing happens, and the change that matters is the preposition: software
     /// installs *onto a disk you pick*, not onto whichever drive happens to be live. The old
     /// Software page had verbs with no target, which is most of why these pages read as unrelated.
-    fn pane_disks(&mut self, ui: &mut egui::Ui) {
-        if self.wizard(ui) {
-            return;
-        }
+    fn disks_section(&mut self, ui: &mut egui::Ui) {
         self.section(ui, "DISKS");
         ui.label(
             egui::RichText::new(
@@ -4020,7 +4149,7 @@ impl App {
                         ui.label(
                             egui::RichText::new(format!(
                                 "{} {}",
-                                if live { "●" } else { "○" },
+                                if live { "•" } else { "○" },
                                 d.name
                             ))
                             .color(if live {
@@ -4146,7 +4275,7 @@ impl App {
             }
             ui.label(
                 egui::RichText::new(
-                    "To build one from Apple's firmware, use Resources → Apple firmware.",
+                    "To build one from Apple's firmware, use Resources -> Apple firmware.",
                 )
                 .small()
                 .color(UI_TEXT_FAINT),
@@ -4295,11 +4424,21 @@ impl App {
 
     /// **Resources — firmware, installers and software.** Inert: nothing here runs.
     fn pane_resources(&mut self, ui: &mut egui::Ui) {
-        self.section(ui, "RESOURCES");
+        if self.wizard(ui) {
+            return;
+        }
+        // **The disks come first, because they are the ones you act on.** A disk is not an
+        // ingredient — it is what the ingredients are combined into — and it used to be a tab of
+        // its own for exactly that reason. But that is a distinction about verbs, not about where
+        // somebody goes to look, and a tab you must choose before you can start is a decision
+        // charged for nothing.
+        self.disks_section(ui);
+        ui.add_space(16.0);
+        self.section(ui, "MADE FROM");
         ui.label(
             egui::RichText::new(
-                "Everything a device or a disk is made from. Firmware is chosen by a device, an \
-                 .ipsw makes a disk, and software installs onto one.",
+                "Firmware is chosen by a device, an .ipsw makes a disk, and software installs \
+                 onto one.",
             )
             .small()
             .color(UI_TEXT_FAINT),
@@ -4469,59 +4608,6 @@ impl App {
             }
             Err(e) => self.say(format!("{resource}: {e}")),
         }
-    }
-
-    fn pane_appearance(&mut self, ui: &mut egui::Ui) {
-        self.section(ui, "APPEARANCE");
-        // **The model number answers first, and a person can overrule it.**
-        //
-        // The colour is stated by the hardware — a dump's `Mod#` resolves to it, and no
-        // `SysCfg` on any iPod carries a colour field — so `From the iPod` is the default and
-        // is right without being asked. But this is the *window's* iPod, not the machine's
-        // identity: nothing the firmware reads changes with it, so overruling it costs
-        // nothing and a case swapped at some point in twenty years is an ordinary thing.
-        let derived = self.derived_chassis;
-        let mut pick = self.settings.chassis;
-        let from_ipod = format!("From the iPod — {}", derived.label());
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Case").color(UI_TEXT_DIM));
-            let label = match pick {
-                None => from_ipod.clone(),
-                Some(c) => c.label().to_string(),
-            };
-            egui::ComboBox::from_id_salt("case-colour")
-                .selected_text(label)
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut pick, None, &from_ipod);
-                    for c in [Colour::White, Colour::Black, Colour::U2] {
-                        ui.selectable_value(&mut pick, Some(c), c.label());
-                    }
-                })
-                .response
-                .on_hover_text(format!(
-                    "The model number ({}) says {}. This is only what the window draws — the \
-                     iPod is handed the same identity either way.",
-                    self.synthetic_model().apple_number(),
-                    derived.label()
-                ));
-        });
-        if pick != self.settings.chassis {
-            self.settings.chassis = pick;
-            self.settings.save();
-        }
-        ui.add_space(4.0);
-        let mut debug = self.settings.mode == Mode::Debug;
-        if ui
-            .checkbox(&mut debug, "Show the readout over the device")
-            .on_hover_text(
-                "Instruction counts, the clocks, the wheel and the panel. `D` toggles it.",
-            )
-            .changed()
-        {
-            self.set_mode(if debug { Mode::Debug } else { Mode::User });
-        }
-
-        ui.add_space(20.0);
     }
 
     fn pane_storage(&mut self, ui: &mut egui::Ui) {
@@ -4836,7 +4922,7 @@ impl App {
                         // modal and not settings — it is where the window lives — so the button
                         // says where it goes, and going there stops paying for an idle iPod.
                         if ui
-                            .button("◀ Devices")
+                            .button("« Devices")
                             .on_hover_text(
                                 "Back to your devices. The iPod is parked, and resumes where it \
                                  left off in about three seconds. Esc does this too.",
@@ -5349,7 +5435,7 @@ impl App {
                 .show_ui(ui, |ui| {
                     for (i, r) in releases.iter().enumerate() {
                         let held = dir.join(r.file).exists();
-                        let mark = if held { " ✓" } else { "" };
+                        let mark = if held { " ✔" } else { "" };
                         ui.selectable_value(
                             &mut self.fw_pick,
                             i,
@@ -5975,10 +6061,10 @@ impl App {
 /// platform spells multi-select differently and none of them does it by default:
 ///
 /// ```text
-///   macOS      choose file … with multiple selections allowed  → a list of aliases
-///   Windows    OpenFileDialog.Multiselect = $true              → .FileNames
-///   GNOME      zenity --file-selection --multiple              → separator-joined
-///   KDE        kdialog --getopenfilename --multiple            → shell-quoted, space-joined
+///   macOS      choose file … with multiple selections allowed  -> a list of aliases
+///   Windows    OpenFileDialog.Multiselect = $true              -> .FileNames
+///   GNOME      zenity --file-selection --multiple              -> separator-joined
+///   KDE        kdialog --getopenfilename --multiple            -> shell-quoted, space-joined
 /// ```
 ///
 /// The separator is the trap, and each is handled where it is chosen rather than guessed at the
@@ -7031,7 +7117,7 @@ mod tests {
         );
     }
 
-    /// A device drawn anywhere is a device that boots. `ROADMAP.md` Ⅳ.
+    /// A device drawn anywhere is a device that boots. `ROADMAP.md` IV.
     #[test]
     fn nothing_offers_a_model_it_cannot_run() {
         assert!(
@@ -7162,5 +7248,86 @@ mod tests {
             src.contains("Screen::Library"),
             "the first run is gone entirely"
         );
+    }
+
+    /// **Every character this window can draw must exist in the font it draws with.**
+    ///
+    /// Twelve did not, and they had shipped: `●` the running dot, `✓` the verdict tick, `▶` start,
+    /// `◀` back, `ⓘ`, `▸`, `⣾`, `→`, and three circled digits. Each rendered as an empty square, and
+    /// the only reason any of it was noticed is that somebody looked at the window — no test could
+    /// fail, because a missing glyph is not an error anywhere in egui.
+    ///
+    /// The set egui ships is Ubuntu-Light plus a small emoji subset, and which arrows are in it is
+    /// not guessable: `«` and `»` are, `◀` and `▶` are not; `✔` is, `✓` is not; `○` is, `●` is not.
+    /// So this asks the font rather than a person's memory of it.
+    ///
+    /// It scans the source rather than the drawn frame because a string only reaches the screen in
+    /// the state that shows it, and half of these live behind a condition — the running dot needs a
+    /// running device, the verdict tick needs a valid recipe.
+    #[test]
+    fn every_character_in_this_file_has_a_glyph() {
+        let ctx = egui::Context::default();
+        ctx.run_ui(egui::RawInput::default(), |_| {});
+        // **String literals only.** Comments are not drawn, and this test's own prose names the
+        // characters it is testing for — scanning the whole file made it fail on itself.
+        let mut missing: Vec<char> = Vec::new();
+        for c in string_literal_chars(include_str!("main.rs")) {
+            if missing.contains(&c) {
+                continue;
+            }
+            let has = ctx.fonts_mut(|f| {
+                f.has_glyph(&egui::FontId::proportional(12.0), c)
+                    || f.has_glyph(&egui::FontId::monospace(12.0), c)
+            });
+            if !has {
+                missing.push(c);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "these render as empty squares: {missing:?}\n\
+             the guillemets, bullet, heavy check, hollow circle, warning sign, gear, middle dot, \
+             em dash, clockwise arrow, information source and black star are known to work."
+        );
+    }
+
+    /// Characters inside Rust string literals, skipping comments.
+    ///
+    /// Deliberately small rather than a real lexer: it needs to be right about which text reaches
+    /// the screen, and being over-inclusive is safe — a character in a comment that *does* have a
+    /// glyph costs nothing, and one that does not is worth looking at anyway.
+    fn string_literal_chars(src: &str) -> Vec<char> {
+        let mut out = Vec::new();
+        let mut chars = src.chars().peekable();
+        let (mut in_str, mut in_line_comment, mut in_block) = (false, false, false);
+        while let Some(c) = chars.next() {
+            match () {
+                _ if in_line_comment => {
+                    if c == '\n' {
+                        in_line_comment = false;
+                    }
+                }
+                _ if in_block => {
+                    if c == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        in_block = false;
+                    }
+                }
+                _ if in_str => {
+                    if c == '\\' {
+                        chars.next();
+                    } else if c == '"' {
+                        in_str = false;
+                    } else if !c.is_ascii() {
+                        out.push(c);
+                    }
+                }
+                _ if c == '/' && chars.peek() == Some(&'/') => in_line_comment = true,
+                _ if c == '/' && chars.peek() == Some(&'*') => in_block = true,
+                _ if c == '"' => in_str = true,
+                _ => {}
+            }
+        }
+        out
     }
 }
