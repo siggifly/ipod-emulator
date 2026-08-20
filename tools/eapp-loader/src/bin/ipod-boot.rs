@@ -1820,14 +1820,15 @@ fn install_linux(args: &[String]) -> Result<(), String> {
             loader.display()
         ));
     }
-    if !tree.exists() {
-        return Err(format!(
-            "{}: the ZeroSlackr distribution is not unpacked here. It is \
-             `ZeroSlackr-SVN-snapshot-2008-08-11.7z` from sourceforge.net/projects/zeroslackr — \
-             see resources/vendor/zeroslackr/PROVENANCE.txt.",
-            tree.display()
-        ));
-    }
+    // Not there? Fetch it, the same way Rockbox and Apple's firmware are fetched — a recorded
+    // size and SHA-256, and nothing renamed into place until it verifies. It used to be a file
+    // somebody had downloaded by hand, and the one time that was done only `boot/vmlinux` was kept.
+    let tree = if tree.exists() {
+        tree
+    } else {
+        println!("  ZeroSlackr is not unpacked yet — fetching it (101 MB, verified)");
+        eapp_loader::ipodlinux::fetch(&eapp_loader::ipodlinux::cache_dir())?
+    };
     for line in eapp_loader::install::install_linux(&src, &loader, &tree, &out)? {
         println!("{line}");
     }
