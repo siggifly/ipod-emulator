@@ -396,3 +396,87 @@ pub fn put_zip(disk: &Path, zip: &Path) -> Result<Vec<String>, String> {
     report.push(format!("  {files} file(s) in {dirs} directory(ies), {bytes} bytes"));
     Ok(report)
 }
+
+/// The five directories `IPOD_LINUX_INSTALL.md` says to copy to the iPod's FAT32 root.
+///
+/// **Not four.** A drive built with `boot/` alone boots the kernel completely and then has nothing
+/// to execute, and the panic that follows reads exactly like an emulator defect. It was chased as
+/// one for a session. `bin/` carries `busybox`, `init` and `sh`; `etc/inittab` names `/etc/pre-rc`,
+/// which loop-mounts `boot/userland.ext3` and `pivot_root`s into it; `ZeroSlackr/` holds the
+/// launcher and applications the userland's `/etc/rc` then starts.
+pub const ZEROSLACKR_DIRS: [&str; 5] = ["bin", "boot", "dev", "etc", "ZeroSlackr"];
+
+/// `loader.cfg`'s entries, in `ipodloader2`'s own syntax.
+///
+/// The distribution ships one of these listing five applications it assumes are installed; this is
+/// the subset that is true of a drive we built, plus Apple's OS and Rockbox, which the loader finds
+/// only if they are there. A menu entry for something absent is a menu entry that fails when
+/// pressed, so each line is written only when the file behind it exists.
+fn loader_menu(has_rockbox: bool, has_apple: bool) -> String {
+    let mut s = String::from(
+        "# Written by `ipod-boot install-linux`. `ipodloader2` reads this from the volume root.\n\
+         timeout=5\n\
+         default=0\n\
+         debug=0\n\
+         backlight=1\n\n",
+    );
+    s.push_str("ZeroSlackr @ (hd0,1)/boot/vmlinux root=/dev/hda2 rootfstype=vfat rw quiet\n");
+    if has_apple {
+        s.push_str("Apple OS @ ramimg\n");
+    }
+    if has_rockbox {
+        s.push_str("Rockbox @ (hd0,1)/.rockbox/rockbox.ipod\n");
+    }
+    s.push_str("Disk Mode @ diskmode\nSleep @ standby\n");
+    s
+}
+
+/// Build a drive that boots iPodLinux: `ipodloader2` in the firmware partition, ZeroSlackr's five
+/// directories on the data partition, and a `loader.cfg` naming what is actually there.
+///
+/// `tree` is the extracted ZeroSlackr distribution — the directory holding `bin/`, `boot/` and the
+/// rest. `loader` is `ipodloader2`'s built `loader.bin`.
+pub fn install_linux(
+    src: &Path,
+    loader: &Path,
+    tree: &Path,
+    out: &Path,
+) -> Result<Vec<String>, String> {
+    for (what, p) in [("loader", loader), ("ZeroSlackr tree", tree)] {
+        if !p.exists() {
+            return Err(format!("{what}: {} does not exist", p.display()));
+        }
+    }
+    let missing: Vec<&str> =
+        ZEROSLACKR_DIRS.iter().copied().filter(|d| !tree.join(d).is_dir()).collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "{}: not a ZeroSlackr tree — missing {}. IPOD_LINUX_INSTALL.md lists five directories \
+             and all five are load-bearing; a drive without them boots the kernel and then has \
+             nothing to run.",
+            tree.display(),
+            missing.join(", ")
+        ));
+    }
+
+    // The bootloader goes where Apple's own bootloader looks, exactly as another OS would.
+    let mut report = install_os(src, loader, out)?;
+
+    for d in ZEROSLACKR_DIRS {
+        report.extend(put_files(out, &tree.join(d), &format!("/{d}"))?);
+    }
+
+    let mut vol = crate::fat::Fat32::open(out)?;
+    let names: Vec<String> = vol.walk()?.into_iter().map(|f| f.path).collect();
+    let has_rockbox = names.iter().any(|p| p.eq_ignore_ascii_case("/.rockbox/rockbox.ipod"));
+    let has_apple = names.iter().any(|p| p.to_ascii_lowercase().starts_with("/ipod_control"));
+    let root = vol.root();
+    vol.write_file(root, "ipodloader.conf", loader_menu(has_rockbox, has_apple).as_bytes())?;
+    vol.flush()?;
+    report.push(format!(
+        "  ipodloader.conf — ZeroSlackr{}{}",
+        if has_apple { ", Apple OS" } else { "" },
+        if has_rockbox { ", Rockbox" } else { "" }
+    ));
+    Ok(report)
+}

@@ -177,6 +177,19 @@ fn main() {
         }
     }
 
+    // iPodLinux, whole. `install-os` puts the bootloader where Apple's looks; this also puts the
+    // distribution's five directories on the data partition, which is the half that was missing
+    // for a long time and cost a session of looking for an emulator defect that was not there.
+    if name == "install-linux" {
+        match install_linux(&rest) {
+            Ok(()) => return,
+            Err(e) => {
+                eprintln!("ipod-boot install-linux: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     // The other half of installing an OS: the firmware partition holds what the bootloader runs,
     // the data partition holds everything that bootloader then looks for.
     if name == "ghidra" {
@@ -397,6 +410,11 @@ ipod-boot — Apple's firmware, booted under the emulator
                                      an image of somebody's iPod, and RetailOS builds the rest of
                                      the volume itself on first boot. SECTORS defaults to
                                      16777216 (8 GiB); the file is sparse.
+
+  ipod-boot install-linux [SRC.img [OUT.img]]
+                                     build a drive that boots iPodLinux — ipodloader2 in the
+                                     firmware partition, ZeroSlackr's five directories on the
+                                     data partition, and a loader.cfg naming what is on it.
 
   ipod-boot install-os SRC.img OS.ipod OUT.img
                                      install another operating system into a COPY of the drive's
@@ -1770,6 +1788,50 @@ fn install_os(args: &[String]) -> Result<(), String> {
     for line in eapp_loader::install::install_os(src, os, out)? {
         println!("{line}");
     }
+    Ok(())
+}
+
+/// `ipod-boot install-linux [SRC.img [OUT.img]]` — argv, then
+/// [`eapp_loader::install::install_linux`].
+///
+/// Both paths default: the drive from settings, and `<drive>-linux.img` beside it. The loader and
+/// the distribution come from `resources/vendor/`, where they are kept with their provenance.
+fn install_linux(args: &[String]) -> Result<(), String> {
+    const USAGE: &str = "usage: ipod-boot install-linux [SRC.img [OUT.img]]\n\
+                         builds a drive that boots iPodLinux: ipodloader2 in the firmware \
+                         partition, ZeroSlackr's five directories on the data partition, and a \
+                         loader.cfg naming what is actually on it";
+    let src = args
+        .first()
+        .map(PathBuf::from)
+        .or_else(|| eapp_loader::settings::Settings::load().disk.clone())
+        .ok_or(USAGE)?;
+    let out = args.get(1).map(PathBuf::from).unwrap_or_else(|| {
+        let stem = src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        src.with_file_name(format!("{stem}-linux.img"))
+    });
+    let root = eapp_loader::settings::repo_root();
+    let loader = root.join("resources/vendor/ipodloader2/loader.bin");
+    let tree = root.join("resources/vendor/zeroslackr/tree");
+    if !loader.exists() {
+        return Err(format!(
+            "{}: `ipodloader2` has not been built. `make` in resources/vendor/ipodloader2 \
+             produces it.",
+            loader.display()
+        ));
+    }
+    if !tree.exists() {
+        return Err(format!(
+            "{}: the ZeroSlackr distribution is not unpacked here. It is \
+             `ZeroSlackr-SVN-snapshot-2008-08-11.7z` from sourceforge.net/projects/zeroslackr — \
+             see resources/vendor/zeroslackr/PROVENANCE.txt.",
+            tree.display()
+        ));
+    }
+    for line in eapp_loader::install::install_linux(&src, &loader, &tree, &out)? {
+        println!("{line}");
+    }
+    println!("  -> {}", out.display());
     Ok(())
 }
 
