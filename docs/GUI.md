@@ -3,7 +3,7 @@
 The design of the program's interface, written **before** the interface. When the window and this
 document disagree, this document is what gets argued with first.
 
-> **Status: draft for review.** Nothing here is built. §14 lists the questions that need an answer
+> **Status: draft for review.** Nothing here is built. §18 lists the questions that need an answer
 > before it can be.
 
 ---
@@ -24,14 +24,17 @@ The symptoms were all the same disease:
 - Screens **jumped** as you changed your mind, because space was drawn only when it was filled.
 - The identity fields did not agree with the model, because identity was designed before the model
   was a choice.
+- **The one-button first run was lost.** The README still promises *"press the button and it
+  synthesises a boot ROM and downloads Apple's firmware itself"*; the program grew a three-step form
+  in front of it. Nobody decided that. It happened. See §11.
 
 None of those are bugs in a screen. They are a window that has no model of itself.
 
 **What is being kept.** The toolkit only ever touched one file. `settings.rs`, `compose.rs`,
 `identity.rs` and `nor.rs` (the device model, the compatibility rules, the serial/GUID validation,
 the ROM recipes) know nothing about any toolkit and survive intact — as do `emu.rs`, `wheel.rs`,
-`control.rs` and `png.rs`. **The nouns are right. The surfaces are wrong.** This is a redesign of the
-window, not of the program.
+`control.rs` and `png.rs`. **The nouns are nearly right. The surfaces are wrong.** This is a redesign
+of the window, not of the program.
 
 ---
 
@@ -48,7 +51,7 @@ Eight, and every one of them is the scar of something that actually went wrong.
 
 3. **Disable with a reason. Do not hide.** An option that cannot be used stays visible, greyed, and
    says why when you point at it. Hiding it hides the machine's rules; showing it teaches them. See
-   §13 — this is a deliberate reversal of a rule we follow elsewhere. *(Earned: the compatibility
+   §17 — this is a deliberate reversal of a rule we follow elsewhere. *(Earned: the compatibility
    matrix. A bootloader that silently vanishes when you pick a ROM teaches nothing.)*
 
 4. **Nothing floats.** No modals, no dialogs, no popovers, no toasts, no tooltips carrying
@@ -74,19 +77,47 @@ Eight, and every one of them is the scar of something that actually went wrong.
 
 ## 3. The nouns
 
-Already correct, already implemented, unchanged by this redesign. The window's job is to show these
-and nothing else.
+Nearly all of this is already implemented and correct. One change, in §3.1.
 
 | noun | what it is |
 |---|---|
-| **Resource** | something a device is made *from*. Four kinds: **boot ROM** (a retail dump, or a recipe for a synthetic one), **firmware** (an Apple `.ipsw`), **software** (Rockbox), **installer** |
-| **Disk** | a drive image. Not a resource — it is the thing resources are combined *into*. Knows what built it and what is installed on it |
-| **Device** | a *name for one selection*: a boot ROM, a disk, a chassis colour, and whether to work on a copy. Cheap to make, cheap to keep. Several devices may share one ROM |
-| **Title** | a decrypted game. Not built yet — see §12 |
+| **iPod** *(a boot ROM)* | **an iPod's identity.** Model, capacity, serial, GUID, colour. Either **dumped** from a real device or **synthesised** from a seed |
+| **Firmware** | an Apple `.ipsw` bundle |
+| **Software** | Rockbox, and later others — a thing installed *onto* a disk |
+| **Disk** | a drive image. Knows what built it and what is installed on it |
+| **Device** | a *name for one selection*: an iPod, a disk, and how to treat them. Cheap to make, cheap to keep |
+| **Title** | a decrypted game. Not built yet — see §16 |
 | **The machine** | one device, running. There is exactly one, and only while you are on Running |
 
 The single most important consequence: **a device is a selection, not a copy.** Making a second
 device does not duplicate a 60 GB image, and deleting a device does not delete anything it pointed at.
+
+### 3.1 A synthesised boot ROM is a resource, exactly like a dumped one
+
+Settled here, because the old model was of two minds about it.
+
+On real hardware **the NOR flash *is* the iPod** — model, serial and GUID all live in its SysCfg,
+and the drive is swappable. So a boot ROM is not an ingredient like a firmware bundle is; it is *an
+iPod's identity*. Whether its bytes came off a real device or out of the generator is
+**provenance, not category.** Both kinds are listed together, in one group, with the same row shape.
+
+This deletes a real inconsistency. `Device` today carries **both** `firmware: Option<String>` (a
+named resource) **and** `nor: Source` (an inline recipe), where `None` means "the inline one
+answers" — a shape the code itself describes as what a device migrated from an older settings file
+has. Unifying on *the ROM is always a named resource* removes the split and the migration case with
+it.
+
+Two consequences, both improvements:
+
+- **The Sheet's two steps become symmetric.** Step 2 was already "pick a disk you have, or build
+  one". Step 1 becomes **"pick an iPod, or make one"** rather than a differently-shaped radio.
+- **One flow, two entrances.** Synthesising from inside the device Sheet and from the Resources tab
+  are the same flow producing the same named thing. Not two code paths that agree by hand.
+
+**Presentation follows from this.** A synthesised ROM has no file size, and putting the word
+"recipe" where every other row shows megabytes advertises it as a lesser kind of thing. Size is not
+the interesting fact about a boot ROM. *Which iPod it is* is — so that is what the row says, for
+both kinds.
 
 ---
 
@@ -115,7 +146,7 @@ Three places. That is the whole navigation model.
 └─────────────────────────────────────────────────────────────────────┘
 
           REFERENCE  ← ? or ⓘ from anywhere, returns to wherever asked
-          help · about · where the files are · licences · credit
+          help · about · the program's own settings · licences · credit
 ```
 
 **Library** is home and the launch surface. **Running** is one device. **Reference** is reachable
@@ -146,7 +177,7 @@ this document first.
 |---|---|---|---|
 | **Pane** | a full surface | `region` | Library, Running, Reference |
 | **Sheet** | edge-anchored push for one focused task; the surface behind stays visible and does not dim | `dialog`, `aria-modal="false"` | new device, edit device, build a disk, inspect a file |
-| **Tile** | one thing, shown as an object — a drawn iPod, a disk, a cover | `button` / `listitem` | the device grid, later the title grid |
+| **Tile** | one thing, shown as an object — a drawn iPod, a cover | `button` / `listitem` | the device grid, later the title grid |
 | **Row** | one thing, shown as a line, with its actions at the trailing edge | `listitem` | resources, disks, firmware |
 | **Expand** | in-place detail for a Row; pushes the rows below it down | `button` + `aria-expanded` + `aria-controls` | what is inside a ROM or an `.ipsw` |
 | **Rail** | a stream of progress and results along an edge; pushes, never covers | `log` | fetching, building, installing, the debug readout |
@@ -158,7 +189,26 @@ And one thing that is not a primitive because it obeys different laws:
 
 ---
 
-## 6. The visual system
+## 6. The window itself
+
+Unspecified last time, which is how the current program got both *the tiny iPod* and *the device
+that resizes itself*.
+
+- **Minimum size: 900 × 640.** Below that the design does not work and the window refuses to go, so
+  there is no degraded layout to design or to test.
+- **Default on first launch: 1100 × 830**, centred. Remembered afterwards.
+- **The Screen's scale is a floored integer**, recomputed from the space available, and it **never
+  feeds back into the window size.** The device does not resize the window; the window sizes the
+  device. A layout that can grow its own container will oscillate, and this one did.
+- **Resizing is continuous and never rearranges.** The grid reflows its columns; nothing moves
+  between surfaces, nothing collapses into a different control at a breakpoint. There is one layout.
+- **Fullscreen** is available on Running only, where it means the Screen at the largest integer
+  scale that fits, centred on `bg-sunken`, chrome hidden until the pointer moves. It is not
+  available on the Library, because a full-screen list is not a thing anyone wants.
+
+---
+
+## 7. The visual system
 
 ### Type
 
@@ -202,12 +252,29 @@ only — no raw hex anywhere but the one table that defines them.
 | `fg-dim` | 60% | 60% | labels, subtitles, secondary detail |
 | `fg-disabled` | 38% | 38% | a control that cannot be used |
 | `line` | subtle | subtle | the only borders that exist |
-| `accent` | *§14 Q3* | *§14 Q3* | focus rings, Start, progress |
+| `accent` | *§18 Q3* | *§18 Q3* | focus rings, Start, progress |
 | `warn` | amber | amber | "this will write to your image" |
 | `danger` | red | red | destructive confirmation only |
 
 **The accent is used for three things and no others**: the focus ring, the primary action on the
 current surface, and progress. A window where four things are blue has no primary action.
+
+### Icons are drawn, never typed
+
+**No icon is a font glyph.** Every one is a vector drawn by us, from a small named set, sized in the
+space scale.
+
+This is not aesthetics. The current window shipped **twelve missing glyphs** to the operator — `ⓘ`,
+arrows, and others rendering as empty squares — and the test written to catch it caught two more of
+my own within the hour. A glyph is a bet that three operating systems all have that codepoint in
+some font they will actually choose. We lost that bet, visibly, twice.
+
+The set, and it is closed: `back`, `close`, `add`, `remove`, `expand`, `collapse`, `power`,
+`camera`, `readout`, `info`, `help`, `check`, `warning`, `folder`, `download`. Fifteen. Anything
+else is a word.
+
+**The glyph test survives the port** and is widened: no source file may contain a non-ASCII
+character that is rendered as UI text unless the font in use is proven to have it.
 
 ### The iPod
 
@@ -223,7 +290,7 @@ The chassis colour comes from the ROM unless the operator overrides it, which is
 
 ---
 
-## 7. Motion
+## 8. Motion
 
 **Springs only.** No `ease-in-out`, no fixed-duration curves, with one exception noted below.
 
@@ -243,20 +310,30 @@ change still happens; only its animation does not.
 
 ---
 
-## 8. Four states, everywhere
+## 9. Four states, everywhere
 
 Every surface that can show a list, run a task, or take input specifies all four. A surface that
 only specifies the happy one is not designed.
 
 **Empty** — never a bare "nothing here". It says what this is for, and offers the one action that
-fills it. The Library's empty state is the hero iPod at rest, `No devices yet`, and the button.
+fills it. The Library's empty state is §11.
 
 **Working** — an inline Rail entry naming what is happening and against what: `Fetching
-iPod_25.1.3.ipsw from Apple — 6.5 MB`. Never a spinner alone. Long tasks are cancellable and say so.
+iPod_25.1.3.ipsw from Apple — 6.5 MB`. Never a spinner alone. Long tasks are cancellable, and §10
+says what cancelling costs.
 
 **Failed** — stays on screen until dismissed. Says what was being attempted, what happened in the
 program's own words, and **what to do next**. A failure that leaves the surface unchanged and shows
-nothing is the bug that sent the wizard back to step one with no explanation.
+nothing is the bug that sent the wizard back to step one with no explanation. Five classes, each
+with a different next step:
+
+| class | example | next step offered |
+|---|---|---|
+| **network** | Apple's server did not answer | Retry · Provide the file yourself |
+| **verification** | the download's SHA-256 does not match the recorded one | Retry · Report it — a mismatch is interesting and should not be shrugged off |
+| **incompatible** | this bootloader cannot carry this OS on this drive | the reason, and the option that does work, pre-selected |
+| **space** | 74 GB needed, 31 GB free | the two numbers, and where it would have been written |
+| **permission** | the image is read-only, or the directory is not writable | the path, and what to change |
 
 **Disabled** — visible, `fg-disabled`, non-interactive, and **carries its reason on focus and on
 hover**. Note for implementation: in the current toolkit `.clicked()` is never true on a disabled
@@ -265,9 +342,117 @@ the same way.
 
 ---
 
-## 9. Library — Devices
+## 10. Long work, and what cancelling costs
 
-The default tab, and the program's front door.
+Building a drive for an 80 GB iPod writes tens of gigabytes and takes minutes. Three rules.
+
+**Check before starting.** Free space is checked against the estimate before a byte is written, and
+a shortfall is a *space* failure per §9 with both numbers — not a crash forty gigabytes in.
+
+**Build to a temporary name; rename on success.** This is already the rule for fetched firmware —
+*nothing is renamed into place until it verifies* — and it extends to disks unchanged. A cancelled
+or failed build leaves **no partial file with a real name**, so there is nothing to mistake for a
+working drive later.
+
+**Cancelling deletes only our own temporary file.** Never the source image, never anything the
+operator supplied, never anything that was already named. That rule has no exception and no
+"unless".
+
+### Whose file is about to be written to
+
+The current program has a surface that says this out loud before the machine starts, and my first
+draft of this document lost it. It is the thing standing between an afternoon and somebody's only
+image of an iPod they own.
+
+It appears in **two** places, saying the same sentence:
+
+- on the device Tile, as one dim line — `writes to my-5.5g.img` or `works on a copy`;
+- in Running's chrome bar for the first few seconds after start, and permanently in the readout Rail.
+
+When the target is the operator's own supplied image and `work_on_copy` is off, the line is `warn`
+coloured. That is the only routine use of `warn` in the program.
+
+---
+
+## 11. First run, and the one button
+
+The README's promise is the product's whole first impression:
+
+> **Press the button.** It synthesises a boot ROM and downloads Apple's firmware itself — then
+> builds a drive from it and boots.
+
+**That is restored and it is the design.** A person who has just downloaded this does not have a
+boot ROM, does not have an `.ipsw`, does not know what either is, and should not meet a form.
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│  ipod-emulator                                                  ? ⓘ   │
+├───────────────────────────────────────────────────────────────────────┤
+│                                                                       │
+│                              ▟▙▙▙▙▙▛                                  │
+│                            ▐          ▌                               │
+│                            ▐  ┌────┐  ▌            ← the hero iPod,   │
+│                            ▐  │    │  ▌              at rest          │
+│                            ▐  └────┘  ▌                               │
+│                            ▐   ( ● )  ▌                               │
+│                            ▜▙▙▙▙▙▙▙▙▙▛                                │
+│                                                                       │
+│                    You do not need an iPod,                           │
+│                    or any files off one.                              │
+│                                                                       │
+│                    ┌───────────────────────┐                          │
+│                    │   Make me an iPod     │                          │
+│                    └───────────────────────┘                          │
+│                                                                       │
+│         Already have files?  Set one up yourself  ·  or drop them here │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+**One button.** It synthesises a 5.5G boot ROM, fetches and verifies the matching firmware, builds
+the drive, names the device, and starts it — narrating each step in the Rail as it goes, and leaving
+every artifact it made in Resources under a name, so nothing is magic and everything is editable
+afterwards.
+
+**It is not a mode.** It produces exactly the objects the Sheet produces. Someone who presses it and
+later wants to change the model opens the device and changes it.
+
+The two smaller links are the escape hatches: the full Sheet for someone who knows what they want,
+and §12 for someone holding files.
+
+**After the first device exists, this screen is never seen again.** The Library's empty state
+thereafter — reached by deleting every device — is the same hero iPod with `No devices yet` and both
+paths offered equally, without the welcome copy.
+
+---
+
+## 12. Dropping files
+
+The best thing the current program does, and it was missing from the first draft of this document
+entirely.
+
+**Drop anything, anywhere on the window, in any order.** A file is identified by **what it
+contains**, not by which control you dropped it on. A 1 MB NOR dump is a boot ROM whether you meant
+it to be; an `.ipsw` is firmware; a `.ipod` is software; a large image is a drive. There is no
+"choose file type" step and there is no wrong target.
+
+- **The whole window is the target.** While a drag is over it, the window shows one line naming
+  what it thinks the file is — `boot ROM · 5.5G` — before you let go. Identification happens on
+  hover, so a wrong guess is visible before it is committed.
+- **Several at once, in any order.** Dropping a ROM and an `.ipsw` together produces one device.
+  Order never matters. There is a test asserting exactly this and it comes across.
+- **Nothing is moved or copied without saying so.** The drop reports where the file was filed and
+  whether it was copied in or referenced in place.
+- **Unrecognised files are named, not swallowed.** `That does not look like anything this program
+  can use — 4.2 MB, no recognisable header.` Silence would leave you wondering whether it worked.
+
+Dropping onto Running is the same: it files the resource and says so. It does not disturb the
+machine.
+
+---
+
+## 13. Library — Devices
+
+The default tab, and the program's front door once §11 has been through once.
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
@@ -280,54 +465,55 @@ The default tab, and the program's front door.
 │   │     ▐  ▌      │  │     ▐  ▌      │  │     ▐  ▌      │             │
 │   │     ▐()▌      │  │     ▐()▌      │  │     ▐()▌      │             │
 │   │      ▜▛       │  │      ▜▛       │  │      ▜▛       │             │
-│   │               │  │               │  │               │            │
+│   │               │  │               │  │               │             │
 │   │  My 5.5G      │  │  Rockbox test │  │  Retail dump  │             │
 │   │  80 GB · 25.1.3│ │  60 GB · RB4.0│  │  30 GB · 20.1.3│            │
-│   │  parked        │ │               │  │               │            │
+│   │  parked        │ │  works on a copy│ │ writes to disk│            │
 │   │ [Resume][Cold] │  │   [ Start ]   │  │   [ Start ]   │            │
 │   └───────────────┘  └───────────────┘  └───────────────┘             │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
 A **grid of Tiles**, not a list. Three reasons: the drawn iPod is worth showing; a grid tells you at
-a glance which iPod is which by colour; and it is the same shape as the title grid in §12, so the
+a glance which iPod is which by colour; and it is the same shape as the title grid in §16, so the
 two rhyme instead of being unrelated screens.
 
 **Each Tile carries** the iPod in its chassis colour, the name, one summary line (capacity ·
-what it boots), a state word if it has one (`parked`, `never started`), and its action — always
-visible, never revealed on hover.
+what it boots), the write-target line from §10, a state word if it has one (`parked`, `never
+started`), and its action — always visible, never revealed on hover.
 
 **Clicking the Tile body** opens the device Sheet. **The action button** starts it. Two targets,
 two outcomes, no ambiguity.
 
-**Right-click / long-press / the ⋯ affordance** morphs the Tile's action area into an inline action
-strip — Edit, Duplicate, Reveal disk, Remove — in place, on the Tile. Not a context menu; nothing
-floats.
+**Right-click, long-press, or `⋯`** morphs the Tile's action area into an inline action strip —
+Edit, Duplicate, Reveal disk, Remove — in place, on the Tile. Not a context menu; nothing floats.
+`Esc`, or clicking elsewhere, morphs it back; **the strip always carries its own way out**, because
+it replaces the Start button and a mode you cannot leave is §2's seventh principle.
 
-**Remove asks**, names what will and will not be deleted (`Removes the device. The disk and the ROM
+**Remove asks**, names what will and will not be deleted (`Removes the device. The iPod and the disk
 stay in Resources.`), and is the only place `danger` appears.
 
 ---
 
-## 10. Library — Resources
+## 14. Library — Resources
 
-Everything a device is made from, including disks. Rows here, not Tiles: these are files, and files
-compare by name, size and date, which is what a row is for.
+Everything a device is made from. Rows here, not Tiles: these are files, and files compare by name,
+size and date, which is what a row is for.
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
 │  ipod-emulator                        Devices [Resources]       ? ⓘ   │
 ├───────────────────────────────────────────────────────────────────────┤
-│   Boot ROMs                                        [ Add… ][ New… ]   │
-│   ▸ retail-5g.bin           1.0 MB   5G · A1136 · from a real iPod    │
-│   ▸ synthetic 5.5G          recipe   5.5G · 80 GB · seed 4f2a…        │
+│   iPods                                 [ Add a dump… ][ Synthesise… ]│
+│   ▸ From my 30 GB       5G   · 30 GB · white · dumped from a real iPod │
+│   ▸ Black 5.5G          5.5G · 80 GB · black · synthesised · seed 4f2a│
 │                                                                       │
 │   Apple firmware                             [ Fetch… ][ Provide… ]   │
-│   ▸ iPod_25.1.3.ipsw        6.5 MB   5.5G · verified                  │
-│   ▸ iPod_20.1.3.ipsw        6.5 MB   5G   · verified                  │
+│   ▸ iPod_25.1.3.ipsw        6.5 MB   5.5G · fetched and verified      │
+│   ▸ iPod_20.1.3.ipsw        6.5 MB   5G   · fetched and verified      │
 │                                                                       │
 │   Software                                            [ Fetch… ]      │
-│   ▸ Rockbox 4.0             8.1 MB   5G/5.5G · verified               │
+│   ▸ Rockbox 4.0             8.1 MB   5G/5.5G · fetched and verified   │
 │                                                                       │
 │   Disks                                    [ Build… ][ Provide… ]     │
 │   ▸ my-5.5g.img            74.5 GB   from iPod_25.1.3 · Rockbox 4.0   │
@@ -339,20 +525,23 @@ Four groups, fixed order, **always all four present even when empty** — an emp
 name, its actions, and one dim line saying what belongs there. A page whose sections come and go is
 a page you have to re-learn every visit.
 
+**`iPods` holds both kinds** per §3.1, in one list, in the same row shape. The trailing column is
+provenance — `dumped from a real iPod` or `synthesised · seed …` — where the other three groups put
+`fetched and verified` or `provided by you`. **Every row states where it came from**, because in
+this program that is the interesting fact.
+
 **`▸` expands in place** to show what is *inside* that file — the ROM's image directory and the
 identity it declares; the `.ipsw` firmware versions and their checksums; the disk's partitions and
 what is installed. This replaces the current separate Details and Firmware pages, both of which
 exist only because there was nowhere to put this.
 
-**Every row states its provenance**, because in this program that is the interesting fact: fetched
-and verified against a recorded hash, or provided by you. A disk says what built it.
-
 **Removing** a resource that a device depends on says which devices, by name, and offers to remove
-it anyway or cancel. It never silently breaks a device.
+it anyway or cancel. It never silently breaks a device. Removing a **synthesised** iPod warns that
+the identity is regenerable only from its seed, and shows the seed so it can be written down.
 
 ---
 
-## 11. The device Sheet
+## 15. The device Sheet
 
 One Sheet, two modes: **new** (steps) and **edit** (all of it at once). Same layout, same fields,
 same order — so what you learn making one you keep when changing one.
@@ -361,41 +550,46 @@ same order — so what you learn making one you keep when changing one.
                             ┌────────────────────────────────────────┐
    Library stays visible    │  New device                    ✕ Close │
    and does not dim         ├────────────────────────────────────────┤
-                            │  ① The boot ROM                        │
-                            │     ◉ Synthesise one                   │
-                            │     ○ Use a dump…                      │
+                            │  ① Which iPod                          │
+                            │     ◉ One I have                       │
+                            │       [ Black 5.5G               ▾]    │
+                            │     ○ Make one                         │
                             │                                        │
-                            │     Model     [ 5.5G  ▾][ Black ▾]     │
-                            │               [ 80 GB ▾]               │
-                            │     Serial    [ 7B4••••••X3N        ]  │
-                            │     GUID      [ 000A27••••••••      ]  │
-                            │       ⓘ Generated from the seed, so    │
-                            │         the same iPod comes back.      │
+                            │       Model  [ 5.5G ▾][ Black ▾]       │
+                            │              [ 80 GB ▾]                │
+                            │       Serial [ 7B4••••••X3N         ]  │
+                            │       GUID   [ 000A27••••••••       ]  │
+                            │         ⓘ Generated from the seed, so  │
+                            │           the same iPod comes back.    │
                             ├────────────────────────────────────────┤
                             │  ② What it runs                        │
-                            │     ◉ Build a disk                     │
+                            │     ◉ A disk I have                    │
+                            │       [ my-5.5g.img              ▾]    │
+                            │     ○ Build one                        │
                             │       from [ iPod_25.1.3.ipsw     ▾]   │
                             │       plus [✓] Rockbox 4.0             │
                             │            [ ] iPodLinux — experimental│
-                            │     ○ A disk I already have            │
-                            │       [ my-5.5g.img              ▾]    │
                             ├────────────────────────────────────────┤
                             │  ③ Name it                             │
                             │     [ My 5.5G                       ]  │
                             │     [✓] Work on a copy                 │
+                            │       writes to my-5.5g-copy.img       │
                             ├────────────────────────────────────────┤
                             │              [ Cancel ] [ Create ]     │
                             └────────────────────────────────────────┘
 ```
 
-**The ROM comes first and decides everything after it.** That ordering is settled and is not a
-layout preference: a retail dump *states* its model, capacity, serial and GUID, so those fields are
-filled in and **locked**; a synthetic ROM makes them a choice, and the choice constrains which
-firmware and which software can follow.
+**The two steps are symmetric** per §3.1: *have one, or make one*, in both. That symmetry is the
+point — the previous draft had a differently-shaped question in each step for no reason but history.
 
-**Retail and synthetic look identical.** Same controls, same positions, same heights — the retail
-case simply has them locked with a reason attached. This is the only way the surface does not jump
-when you switch between them, and it is why a locked dropdown is a dropdown and not a line of text.
+**The iPod comes first and decides everything after it.** That ordering is settled and is not a
+layout preference: an iPod *states* its model, capacity, serial and GUID, so choosing an existing
+one fills those in and **locks** them; making one turns them into a choice, and the choice
+constrains which firmware and which software can follow.
+
+**Existing and new look identical.** Same controls, same positions, same heights — the existing case
+simply has them locked with a reason attached. This is the only way the surface does not jump when
+you switch between them, and it is why a locked dropdown is a dropdown and not a line of text.
 
 **Changing the model regenerates the serial and the GUID**, and both are validated against the model
 that is actually selected — a 5G serial is not a 5.5G serial, and the program knows the difference.
@@ -404,15 +598,19 @@ A typed serial is validated the same way and says specifically what is wrong.
 **Impossible combinations are disabled with their reason attached**, and the best available option is
 selected by default. Nothing disappears.
 
+**Making an iPod here creates the resource.** It appears in §14 under its name the moment it is made
+— not on completion of the whole device — so a cancelled device does not throw away the identity you
+just tuned.
+
 **In `edit` mode** the three numbered groups become three plain groups, all open, no step counter,
-`Save` and `Cancel`. Changing the ROM of an existing device warns before it invalidates anything.
+`Save` and `Cancel`. Changing the iPod of an existing device warns before it invalidates anything.
 
 **Build failures land in this Sheet**, in the Rail, with the surface intact and the inputs still
 filled. They do not close it, and they do not return you to step one.
 
 ---
 
-## 12. Running — and the console
+## 16. Running — and the console
 
 ### Running a device
 
@@ -430,8 +628,8 @@ filled. They do not close it, and they do not return you to step one.
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-The iPod is the subject; the chrome is one bar. `⏻` power, `⤓` screenshot, `⌗` the readout. The
-readout is a **Rail that pushes the iPod aside**, not an overlay — the current `D` overlay covers
+The iPod is the subject; the chrome is one bar — power, screenshot, readout, all drawn icons per §7.
+The readout is a **Rail that pushes the iPod aside**, not an overlay; the current `D` overlay covers
 the thing you are debugging.
 
 **Progress is honest**: the denominator is this device's own last completed cold boot, which is why
@@ -444,7 +642,7 @@ The older goal, and the reason the project exists: a decrypted game runs directl
 OS in the loop**. It is designed into this document now so that it is not bolted onto a finished
 window later.
 
-It is a **third Library tab**, and it is deliberately the same grid as §9 with a different object on
+It is a **third Library tab**, and it is deliberately the same grid as §13 with a different object on
 the Tile:
 
 ```
@@ -462,10 +660,10 @@ Play uses the **same** Library → Running transition, the same Screen at the sa
 the same chrome bar. A title is a thing you run, exactly like a device; making it feel like a
 different program would be a mistake.
 
-**Two things it needs that a device does not**, both specified now: a **cover** (supplied or drawn
+**Two things it needs that a device does not**, both specified now: a **cover** (supplied, or drawn
 from the title's own name if there is none — never a blank rectangle), and **input that is not a
-click wheel**, since these are played with the wheel *as a control* rather than as furniture. Gamepad
-support belongs here and is toolkit-independent.
+click wheel**, since these are played with the wheel *as a control* rather than as furniture.
+Gamepad support belongs here and is toolkit-independent.
 
 **What it does not need, and must not grow**: a shader pipeline. The screen is 76,800 pixels. Any
 presentation effect worth having costs nothing on the CPU, and rendering the game at higher than
@@ -473,7 +671,50 @@ presentation effect worth having costs nothing on the CPU, and rendering the gam
 
 ---
 
-## 13. Where we deliberately differ
+## 17. The rest
+
+### Keyboard
+
+Every interaction has a keyboard route. Unspecified last time, and the current program's map grew by
+accretion.
+
+| | |
+|---|---|
+| `Tab` / `Shift-Tab` | focus, in document order. Never a positive `tabindex` |
+| `Esc` | leave: closes a Sheet, exits an action strip, parks a running machine and returns |
+| `Enter` | the primary action of the focused surface |
+| `Space` | activate the focused control; on Running, the centre button |
+| arrows | move within a grid, a list, or a group of fields; on Running, the wheel and buttons |
+| `⌘,` / `Ctrl,` | Reference |
+| `?` | Reference, on help |
+| `⌘F` / `Ctrl F` | fullscreen, Running only |
+| `S` | screenshot, Running only |
+| `D` | the readout Rail, Running only |
+
+**Running is a mode and says so**: while the machine has focus, letter keys drive the iPod rather
+than the window, and the chrome bar shows which. This is the one place the program is modal, it is
+unavoidable, and the way out is the same `Esc` as everywhere else.
+
+### Where the program's own settings live
+
+There is no Settings surface, because there are only three settings and they are not worth a place:
+
+- **check for updates on start** — off unless asked for, and it stays that way.
+- **default for *work on a copy*** — the per-device answer overrides it.
+- **theme** — system, light, dark.
+
+All three live in **Reference**, under the help and above the credits. Everything else that used to
+be a setting is a property of a device and lives on the device.
+
+### Screen readers
+
+Slint carries AccessKit, so the roles in §5 are real rather than aspirational. The target is that
+the Library, the Sheet and Reference are fully navigable and announced. **Running is not** — a live
+framebuffer has nothing to announce — and it says so once, rather than pretending.
+
+---
+
+## 18. Where we deliberately differ
 
 The operator's design work elsewhere locks a rule: **hide, do not disable** — an option that cannot
 be used is removed rather than greyed.
@@ -490,34 +731,39 @@ Recorded here so that it reads as a decision rather than an oversight.
 
 ---
 
-## 14. Open questions
+## 19. Open questions
 
 Answers needed before building.
 
-**Q1 — Grid or list for devices?** §9 chooses a grid, for the reasons given. A list is denser and
+**Q1 — Grid or list for devices?** §13 chooses a grid, for the reasons given. A list is denser and
 scales better past a dozen devices. How many devices do you expect to have?
 
-**Q2 — Where does `Reference` live?** §4 makes it a third place reached by `?`. The alternative is a
-Sheet like everything else. A Sheet is more consistent; a place is easier to read long prose in.
-
-**Q3 — The accent colour.** The program has no brand. Options: a restrained blue-grey (neutral,
+**Q2 — The accent colour.** The program has no brand. Options: a restrained blue-grey (neutral,
 invisible, safe); iPod-era chrome silver (thematic, weak as an accent); or take the accent from the
 device's own chassis colour (charming, and inconsistent between surfaces, which is why I have not
 just chosen it).
 
-**Q4 — Light or dark by default?** §6 follows the system. A black iPod on a near-white page looks
-better than either of them alone; a dark window looks more like an instrument.
+**Q3 — Does the one button in §11 default to a 5.5G?** It has to pick something. 5.5G is the later
+and more capable machine; 5G is the more common one in the wild and the one most dumps are from.
 
-**Q5 — Does the title grid ship in 0.5?** §12 designs it and marks it 0.6. If it is 0.5, the tab
+**Q4 — Does the title grid ship in 0.5?** §16 designs it and marks it 0.6. If it is 0.5, the tab
 exists and is empty until there is a decrypted title to put in it, which is a worse first impression
 than not having it.
 
-**Q6 — iPodLinux's place.** It is cut from 0.5 and marked experimental. §11 shows it as a disabled
+**Q5 — iPodLinux's place.** It is cut from 0.5 and marked experimental. §15 shows it as a disabled
 checkbox with its reason. The alternative is that it does not appear at all until it works.
+
+**Q6 — Is `Reveal disk` in the Tile's action strip worth the platform code?** It is three
+implementations (Finder, Explorer, `xdg-open`) for a convenience. Cut it and the strip is four items
+instead of five.
+
+**Settled without asking**, both changeable: Reference is a place reached by `?` rather than a Sheet,
+because long prose reads better in one; and the window follows the system theme, with light and dark
+both fully specified.
 
 ---
 
-## 15. Implementation notes
+## 20. Implementation notes
 
 **Slint 1.17.** Chosen over Iced and Dioxus Native for the reasons argued separately: a stable 1.x
 API with a company behind it, releases every few weeks, a real styling and layout system, live
@@ -525,15 +771,22 @@ preview, and a licence (GPLv3) that matches this repository exactly.
 
 - **The Screen** is `SharedPixelBuffer` → `Image::from_rgba8`, with `image-rendering: pixelated`,
   drawn at a floored integer scale. This path is stable API. The `unstable-wgpu-*` feature is **not**
-  used and is not needed — see §12 on why there is no shader pipeline.
+  used and is not needed — see §16 on why there is no shader pipeline.
 - **The model stays in `eapp-loader`.** `settings.rs`, `compose.rs`, `identity.rs` and `nor.rs` do
   not learn what a toolkit is. That separation is what made this redesign cost one file, and it is
   worth keeping for the next one.
+- **§3.1 is a model change, not just a presentation one.** `Device::firmware: Option<String>` and
+  `Device::nor: Source` collapse into one named reference, and the migration case in the settings
+  file goes with them. Do that in `settings.rs` *before* the window is built, with its own tests, so
+  the port is not also a data migration.
 - **The layout tests come across.** The current window has tests asserting that every screen can be
   opened from somewhere, that every wizard step draws and fits, that the surface does not move when
   you change your mind, and that every character in the file has a glyph. Those tests caught real
-  regressions — including, within an hour of being written, twelve missing glyphs and then my own
-  fold arrows. They are re-expressed against the new window, not dropped.
+  regressions — including twelve missing glyphs, and then my own fold arrows within the hour. They
+  are re-expressed against the new window, not dropped, and §7's icon rule makes the glyph one
+  stricter rather than retiring it.
+- **The drop test comes across too** — `dropped_files_route_themselves_in_either_order` is the
+  guarantee behind §12 and it is the one feature nobody has ever complained about.
 - **One thing to measure, not assume.** Immediate mode re-lays-out and repaints the whole window
   every frame while the CPU is emulating an ARM7; retained mode repaints only what changed. That
   *should* buy back time, but there is no measured GUI-versus-headless delta in this repository —
