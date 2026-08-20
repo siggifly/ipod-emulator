@@ -297,10 +297,29 @@ script does `exec >> /opt/Base/ZeroLauncher/Misc/Launch.log 2>&1`, and after a w
 reached `Launch.sh` and the shell opened its redirect — and nothing was ever flushed to it. The
 launcher is running and has printed nothing to stderr, which rules out its failing loudly.
 
-**What would settle it next.** Profile the userland phase and symbolise the hot addresses. Harder
-than the kernel's: ZeroLauncher is a `BINFMT_FLAT` binary rather than `vmlinux`, so the addresses
-have to be resolved against the flat image's own load base, which the kernel prints when it loads
-it (`BINFMT_FLAT: Loading file:`).
+**Profiled, and it is a two-instruction spin.** `--profile-window=22000000000:24000000000` samples
+only the stalled phase, so the 20 G of boot before it cannot drown it out:
+
+```
+profile: 31 250 000 samples over 160 buckets
+  0x00a042d0   63.3%   19 772 049
+  0x00a042c0   31.6%    9 862 775
+```
+
+**94.9 % in two adjacent addresses, and the whole phase touches 160 buckets.** Nothing else is
+running. `0x00a04xxx` is in the flat binary's load region, so this is ZeroLauncher itself spinning in
+userspace — not the kernel, and not a driver.
+
+**The hypothesis to test next, and it is testable.** The wheel *is* delivered and the kernel *does*
+read it — `9 of 9 steps fired`, `14 word reads of DATA (14 with a frame waiting)`. What is not
+established is whether the kernel's input layer then produces something **userland** can read.
+iPodLinux exposes the wheel through a device node; if frames reach the driver but no event reaches
+`/dev`, a launcher waiting for input spins exactly like this and nothing in the kernel log complains.
+
+Settle it by finding what those two instructions are. The flat binary is on the drive
+(`/ZeroSlackr/opt/Base/ZeroLauncher/ZeroLauncher`, readable with `ipod-boot fat`), and the kernel
+prints its load base at `BINFMT_FLAT: Loading file:` — subtract, disassemble, read the loop's
+condition.
 
 Worth doing before or alongside 0x above: a launcher spinning is exactly the kind of thing that also
 shows up as "the guest executes several times the instructions hardware would".
