@@ -72,9 +72,15 @@ it and jumps. RetailOS starts its RTXC kernel and 61 tasks, formats its own FAT3
 Rockbox 4.0 and iPodLinux — each unmodified, from upstream, installed onto a drive this program
 wrote and started by Apple's own bootloader.
 
-| Rockbox 4.0 | `ipodloader2` | iPodLinux |
+| Rockbox 4.0 — its main menu | `ipodloader2` — reading the drive | iPodLinux — its userland starting |
 |---|---|---|
 | ![](docs/media/ipod-14-rockbox-menu.png) | ![](docs/media/ipod-24-ipodloader2.png) | ![](docs/media/ipod-26-ipodlinux-loaded.png) |
+
+**Rockbox is finished; iPodLinux is not.** Its kernel boot is clean — both partitions found, FAT32
+root mounted, `/bin/init` run, ZeroSlackr's ext3 userland loop-mounted, and no ATA error anywhere in
+the dmesg. Then ZeroLauncher draws the screen above and **stalls at its last step**. That is a real
+open bug and it is [in the queue](NEXT.md); the picture is there because it is what actually
+happens, not because it is finished.
 
 `ipod-boot install-linux` builds the drive: the loader into the firmware partition, ZeroSlackr's five
 directories onto the volume, and a boot menu naming only what is actually on it. On a drive that

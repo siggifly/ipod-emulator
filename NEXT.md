@@ -274,6 +274,30 @@ believed until a control on the cold recipe returned 107 622. It prints `NOT MEA
 control before believing a zero**; that is the eighth instrument in this project to report an
 absence it could not have observed.
 
+## 0w — iPodLinux's userland stalls at ZeroLauncher's last step
+
+The kernel boot is finished and clean. What is not is what happens next: ZeroLauncher — podzilla's
+launcher, `/opt/Base/ZeroLauncher/ZeroLauncher` — draws its startup progress, reaches
+**"Finishing Up…"**, and stops there.
+
+**It is stuck, not waiting.** Two measurements, both with their control:
+
+- **Not short of budget.** 21.5 G and 25 G produce the same frame, and the I/O between them is flat:
+  6 398 reads / 75 writes against 6 395 / 77. Three and a half billion instructions bought two
+  writes.
+- **Not waiting for input.** A wheel script at 22 G — touch, SELECT, two rotations, MENU — fired
+  **9 of 9 steps**, and the guest *read* them: `14 word reads of DATA (14 with a frame waiting)`.
+  The frames arrive, the kernel consumes them, the screen does not move. **The control matters
+  here**: this project has published a wheel finding before on a script that turned out to have
+  fired 0 of 20 steps, so the fired-count is quoted rather than assumed.
+
+**What would settle it.** `/opt/Base/ZeroLauncher/Misc/Launch.log` is written by the launcher's own
+wrapper script (`exec >> …/Launch.log 2>&1`) and it is on the drive — so the launcher's stderr is
+recoverable with `ipod-boot fat` after a run, without any new instrument. Read that first.
+
+Worth doing before or alongside 0x above: a launcher spinning is exactly the kind of thing that also
+shows up as "the guest executes several times the instructions hardware would".
+
 ## 0x — Why iPodLinux takes 4.8 *simulated* minutes to boot, when a real 5G takes about one
 
 **Two different numbers, and only one of them is the emulator being slow.**
