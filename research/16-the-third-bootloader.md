@@ -570,7 +570,7 @@ at it:
 | frame updates | 8 | **97** |
 | non-black pixels | 7 538 | 74 419 |
 
-![ipodloader2 loading a Linux kernel](../docs/media/ipod-26-ipodlinux-loaded.png)
+![iPodLinux running ZeroSlackr's userland — ZeroLauncher's splash, after the kernel has mounted its root and loop-mounted the ext3 image](../docs/media/ipod-26-ipodlinux-loaded.png)
 
 > `Load succeeded` · `Jmp to 10000000`
 
