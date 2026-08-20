@@ -46,9 +46,45 @@ impl Mode {
     }
 }
 
+/// A saved machine: a boot ROM, a drive, and how to dress and run them.
+///
+/// **This is not a new kind of state — it is the state this program has always had, named.** The
+/// fields are exactly the ones [`Settings`] already carried for the one machine it could hold, so
+/// a machine is what you get by giving that set a name and being allowed more than one.
+///
+/// The live machine stays in `Settings`' own fields, and this list is what you can switch *to*.
+/// Keeping it that way means every existing reader of `settings.nor` and `settings.disk` is still
+/// reading the machine that is running, which is what it meant before and still means.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Machine {
+    /// What the person calls it. The key, so it is unique and renaming is a delete plus an add.
+    pub name: String,
+    pub nor: crate::nor::Source,
+    pub disk: Option<PathBuf>,
+    pub chassis: Option<crate::identity::Colour>,
+    pub work_on_copy: Option<bool>,
+    /// Instructions the last **completed** cold boot of this machine took.
+    ///
+    /// The progress bar's denominator, and the reason it can be honest across operating systems.
+    /// It used to be `snap_at` — a constant tuned to RetailOS's 1.6 G — which made the bar
+    /// meaningless for anything else: Rockbox reaches its menu in about 100 M and barely moved it,
+    /// iPodLinux takes 21.5 G and pinned it at 100 % for twenty billion instructions. A machine's
+    /// own last boot is a better predictor of its next one than any constant, and it needs no
+    /// detection of which operating system is on the drive.
+    ///
+    /// `None` until it has booted once, and the bar says "booting" without a fraction rather than
+    /// inventing one.
+    pub boot_instructions: Option<u64>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Settings {
     pub mode: Mode,
+    /// Saved machines, in the order they were made. **Does not include the live one's edits** —
+    /// `Settings`' own fields are the machine that is running.
+    pub machines: Vec<Machine>,
+    /// The name of the machine the live fields came from, if any.
+    pub current: Option<String>,
     /// Where the boot ROM comes from — a dump, or a recipe for synthesising one.
     ///
     /// **Stored as a recipe rather than as a megabyte.** A synthesised ROM is a pure function of a
@@ -133,6 +169,44 @@ impl Settings {
                 }
                 "check_updates_on_start" => s.check_updates_on_start = v == "true",
                 "work_on_copy" => s.work_on_copy = Some(v == "true"),
+                "current" if !v.is_empty() => s.current = Some(v.to_string()),
+                // `machine.N.field = value`. Flat, because the file is flat and a nested format
+                // would mean a parser that can fail — and a settings file is not a place to fail.
+                // Indices are dense on write and tolerated sparse on read.
+                _ if k.starts_with("machine.") => {
+                    let mut it = k.splitn(3, '.');
+                    let (_, idx, field) = (it.next(), it.next(), it.next());
+                    let (Some(idx), Some(field)) = (idx, field) else { continue };
+                    let Ok(i) = idx.parse::<usize>() else { continue };
+                    while s.machines.len() <= i {
+                        s.machines.push(Machine::default());
+                    }
+                    let m = &mut s.machines[i];
+                    match field {
+                        "name" => m.name = v.to_string(),
+                        "flash" if !v.is_empty() => {
+                            m.nor = crate::nor::Source::File(PathBuf::from(v))
+                        }
+                        "nor_model" if !v.is_empty() => m.nor = with_model(m.nor.clone(), v),
+                        "nor_seed" => {
+                            if let Ok(n) = v.parse::<u64>() {
+                                m.nor = with_seed(m.nor.clone(), n);
+                            }
+                        }
+                        "nor_serial" => m.nor = with_serial(m.nor.clone(), v),
+                        "nor_splash" => m.nor = with_splash(m.nor.clone(), v),
+                        "nor_guid" => {
+                            if let Ok(g) = u64::from_str_radix(v.trim_start_matches("0x"), 16) {
+                                m.nor = with_guid(m.nor.clone(), g);
+                            }
+                        }
+                        "disk" if !v.is_empty() => m.disk = Some(PathBuf::from(v)),
+                        "chassis" => m.chassis = crate::identity::Colour::parse(v),
+                        "work_on_copy" => m.work_on_copy = Some(v == "true"),
+                        "boot_instructions" => m.boot_instructions = v.parse::<u64>().ok(),
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
         }
@@ -152,7 +226,15 @@ impl Settings {
 
     /// The `nor` half of the settings file.
     fn render_nor(&self) -> String {
-        match &self.nor {
+        render_nor_of(&self.nor)
+    }
+}
+
+/// One [`crate::nor::Source`] as settings lines. Shared by the live machine and every saved one, so
+/// the two can never drift into different spellings of the same recipe.
+fn render_nor_of(nor: &crate::nor::Source) -> String {
+    {
+        match nor {
             crate::nor::Source::File(p) => format!("flash = {}\n", p.display()),
             crate::nor::Source::Synthetic { model, seed, serial, guid, splash } => {
                 let mut out = format!("nor_model = {model}\nnor_seed = {seed}\n");
@@ -169,7 +251,9 @@ impl Settings {
             }
         }
     }
+}
 
+impl Settings {
     pub fn render(&self) -> String {
         let p = |o: &Option<PathBuf>| {
             o.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
@@ -199,11 +283,129 @@ impl Settings {
                 Some(v) => format!("work_on_copy = {v}\n"),
                 None => String::new(),
             },
-        )
+        ) + &self.render_machines()
+    }
+
+    /// The saved machines, as `machine.N.field` lines.
+    ///
+    /// Written after everything else so that the top of the file is still the live machine and the
+    /// program's own preferences — which is what a person opening this file to hand-edit is looking
+    /// for. Nothing here is required: a file with no machine lines is a program with one machine,
+    /// which is what it was before.
+    fn render_machines(&self) -> String {
+        if self.machines.is_empty() {
+            return String::new();
+        }
+        let mut out = String::from(
+            "\n# Saved machines. `current` names the one the settings above came from.\n",
+        );
+        if let Some(c) = &self.current {
+            out.push_str(&format!("current = {c}\n"));
+        }
+        for (i, m) in self.machines.iter().enumerate() {
+            out.push_str(&format!("\nmachine.{i}.name = {}\n", m.name));
+            for line in render_nor_of(&m.nor).lines() {
+                out.push_str(&format!("machine.{i}.{line}\n"));
+            }
+            if let Some(d) = &m.disk {
+                out.push_str(&format!("machine.{i}.disk = {}\n", d.display()));
+            }
+            if let Some(c) = m.chassis {
+                out.push_str(&format!("machine.{i}.chassis = {}\n", c.as_str()));
+            }
+            if let Some(w) = m.work_on_copy {
+                out.push_str(&format!("machine.{i}.work_on_copy = {w}\n"));
+            }
+            if let Some(b) = m.boot_instructions {
+                out.push_str(&format!("machine.{i}.boot_instructions = {b}\n"));
+            }
+        }
+        out
     }
 
     /// Best-effort. A window that could not write its preferences is a window that opens in user
     /// mode next time, not a window that refuses to run.
+    /// The live machine, as a [`Machine`] under `name`.
+    pub fn as_machine(&self, name: &str) -> Machine {
+        Machine {
+            name: name.to_string(),
+            nor: self.nor.clone(),
+            disk: self.disk.clone(),
+            chassis: self.chassis,
+            work_on_copy: self.work_on_copy,
+            // Carried across, so naming a machine you have already booted does not throw away the
+            // one measurement that makes its progress bar honest.
+            boot_instructions: self
+                .current
+                .as_deref()
+                .and_then(|c| self.machines.iter().find(|m| m.name == c))
+                .and_then(|m| m.boot_instructions),
+        }
+    }
+
+    /// Save the live machine under `name`, replacing any machine of that name.
+    ///
+    /// **Name is the key.** Two machines called the same thing is a list nobody can act on — you
+    /// cannot say which one you meant, and neither can the program.
+    pub fn remember_as(&mut self, name: &str) {
+        let m = self.as_machine(name);
+        match self.machines.iter().position(|x| x.name == name) {
+            Some(i) => self.machines[i] = m,
+            None => self.machines.push(m),
+        }
+        self.current = Some(name.to_string());
+    }
+
+    /// Make a saved machine the live one. `false` if there is no machine of that name.
+    ///
+    /// **The machine being replaced is written back first**, so switching away from something you
+    /// have been editing does not discard the edits — which is what every person switching between
+    /// two of anything expects, and what they never say out loud.
+    pub fn switch_to(&mut self, name: &str) -> bool {
+        let Some(i) = self.machines.iter().position(|m| m.name == name) else { return false };
+        if let Some(c) = self.current.clone() {
+            if c != name && self.machines.iter().any(|m| m.name == c) {
+                let live = self.as_machine(&c);
+                if let Some(j) = self.machines.iter().position(|m| m.name == c) {
+                    self.machines[j] = live;
+                }
+            }
+        }
+        let m = self.machines[i].clone();
+        self.nor = m.nor;
+        self.disk = m.disk;
+        self.chassis = m.chassis;
+        self.work_on_copy = m.work_on_copy;
+        self.current = Some(name.to_string());
+        true
+    }
+
+    /// Remove a saved machine. The live fields are untouched — forgetting the machine you are
+    /// running stops it being in the list, it does not stop it running.
+    pub fn forget(&mut self, name: &str) {
+        self.machines.retain(|m| m.name != name);
+        if self.current.as_deref() == Some(name) {
+            self.current = None;
+        }
+    }
+
+    /// Record how long this machine's cold boot took, for the next one's progress bar.
+    pub fn record_boot(&mut self, instructions: u64) {
+        let Some(c) = self.current.clone() else { return };
+        if let Some(m) = self.machines.iter_mut().find(|m| m.name == c) {
+            m.boot_instructions = Some(instructions);
+        }
+    }
+
+    /// What the progress bar should divide by, if anything is known.
+    pub fn expected_boot(&self) -> Option<u64> {
+        self.current
+            .as_deref()
+            .and_then(|c| self.machines.iter().find(|m| m.name == c))
+            .and_then(|m| m.boot_instructions)
+            .filter(|n| *n > 0)
+    }
+
     pub fn save(&self) {
         let dir = data_dir();
         if std::fs::create_dir_all(&dir).is_err() {
@@ -621,6 +823,8 @@ mod tests {
             disk: Some(PathBuf::from("/a/b/disk.img")),
             check_updates_on_start: true,
             work_on_copy: Some(true),
+            machines: Vec::new(),
+            current: None,
         };
         assert_eq!(Settings::parse(&s.render()), s);
     }
@@ -670,5 +874,99 @@ mod tests {
             Some(v) => unsafe { std::env::set_var("IPOD_EMULATOR_DATA", v) },
             None => unsafe { std::env::remove_var("IPOD_EMULATOR_DATA") },
         }
+    }
+}
+
+#[cfg(test)]
+mod machine_tests {
+    use super::*;
+
+    fn synth(model: &str, seed: u64) -> crate::nor::Source {
+        crate::nor::Source::Synthetic {
+            model: model.into(),
+            seed,
+            serial: None,
+            guid: None,
+            splash: None,
+        }
+    }
+
+    /// **A machine list has to survive the round trip, or it is not storage.**
+    #[test]
+    fn machines_survive_render_and_parse() {
+        let mut s = Settings { nor: synth("A146", 5), ..Default::default() };
+        s.disk = Some(PathBuf::from("/drives/one.img"));
+        s.remember_as("Video 5G");
+        s.nor = crate::nor::Source::File(PathBuf::from("/roms/real.bin"));
+        s.disk = Some(PathBuf::from("/drives/two.img"));
+        s.remember_as("my own iPod");
+
+        let back = Settings::parse(&s.render());
+        assert_eq!(back.machines.len(), 2, "both machines came back");
+        assert_eq!(back.machines[0].name, "Video 5G");
+        assert_eq!(back.machines[0].nor, synth("A146", 5), "a synthesised ROM is a recipe");
+        assert_eq!(back.machines[1].disk, Some(PathBuf::from("/drives/two.img")));
+        assert_eq!(back.current.as_deref(), Some("my own iPod"));
+    }
+
+    /// **Switching must be able to go back to a synthesised ROM**, which is the whole complaint
+    /// that started this: one boot from a dump used to make "generate one" unreachable.
+    #[test]
+    fn switching_restores_a_synthesised_rom() {
+        let mut s = Settings { nor: synth("A146", 7), ..Default::default() };
+        s.remember_as("generated");
+        s.nor = crate::nor::Source::File(PathBuf::from("/roms/real.bin"));
+        s.remember_as("real dump");
+
+        assert!(s.switch_to("generated"));
+        assert_eq!(s.nor, synth("A146", 7), "back to the recipe, not to a path");
+        assert!(s.switch_to("real dump"));
+        assert!(matches!(s.nor, crate::nor::Source::File(_)));
+        assert!(!s.switch_to("nothing of that name"));
+    }
+
+    /// Switching away from a machine you have edited keeps the edits.
+    #[test]
+    fn switching_writes_back_what_you_were_editing() {
+        let mut s = Settings { nor: synth("A146", 1), ..Default::default() };
+        s.remember_as("a");
+        s.remember_as("b");
+        s.switch_to("a");
+        s.disk = Some(PathBuf::from("/drives/edited.img"));
+        s.switch_to("b");
+        s.switch_to("a");
+        assert_eq!(
+            s.disk,
+            Some(PathBuf::from("/drives/edited.img")),
+            "the edit made while `a` was live came back with it"
+        );
+    }
+
+    /// The progress bar's denominator is per machine, and absent until one boot has finished.
+    #[test]
+    fn the_expected_boot_is_learned_not_assumed() {
+        let mut s = Settings::default();
+        assert_eq!(s.expected_boot(), None, "nothing is known before the first boot");
+        s.remember_as("one");
+        assert_eq!(s.expected_boot(), None);
+        s.record_boot(1_600_000_000);
+        assert_eq!(s.expected_boot(), Some(1_600_000_000));
+        s.remember_as("two");
+        s.record_boot(21_500_000_000);
+        assert_eq!(s.expected_boot(), Some(21_500_000_000), "each machine learns its own");
+        s.switch_to("one");
+        assert_eq!(s.expected_boot(), Some(1_600_000_000), "and keeps it");
+    }
+
+    /// **An old settings file must still describe the machine it described.** Anyone updating has
+    /// one machine in the old keys and no machine list at all.
+    #[test]
+    fn a_settings_file_from_before_machines_still_loads() {
+        let old = "mode = user\nflash = /roms/mine.bin\ndisk = /drives/mine.img\nchassis = black\n";
+        let s = Settings::parse(old);
+        assert_eq!(s.nor, crate::nor::Source::File(PathBuf::from("/roms/mine.bin")));
+        assert_eq!(s.disk, Some(PathBuf::from("/drives/mine.img")));
+        assert!(s.machines.is_empty(), "no list, and that is not an error");
+        assert_eq!(s.current, None);
     }
 }
