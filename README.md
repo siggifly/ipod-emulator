@@ -2,7 +2,7 @@
 
 **Apple's iPod Video firmware boots here, from the reset vector, on an emulator written from
 scratch.** It formats its own filesystem, reads the click wheel, draws its own menus, and plays a
-game. So do Rockbox and iPodLinux.
+game. So does Rockbox.
 
 ![cold boot through to a game](docs/media/ipod-12-device-boot.gif)
 
@@ -41,10 +41,10 @@ it, then **System Settings → Privacy & Security** has a button to open it anyw
 supply either, both or neither — drop whatever you have anywhere on the window, in any order. Each
 file is identified by what it *contains*, not by which box you put it in.
 
-**It keeps them all.** Everything you drop is filed in a library — boot ROMs, `.ipsw` bundles,
-drives — and a *machine* is a name for one selection from it. So a second boot ROM does not replace
-the first, one ROM can back several machines, and switching between two iPods is picking one from a
-list rather than finding two files again.
+**It keeps them all.** Everything you drop is filed in Resources — boot ROMs, `.ipsw` bundles,
+drives — and a **device** is a name for one selection from it. So a second boot ROM does not replace
+the first, one ROM can back several devices, and switching between two iPods is pressing start on
+one of them rather than finding two files again.
 
 | the boot ROM | the drive |
 |---|---|
@@ -73,19 +73,27 @@ it and jumps. RetailOS starts its RTXC kernel and 61 tasks, formats its own FAT3
 | ![](docs/media/ipod-07-apple-logo.png) | ![](docs/media/ipod-03-main-menu.png) |
 | ![](docs/media/ipod-05-games-list.png) | ![](docs/media/ipod-06-brick.png) |
 
-**Three bootloaders and three operating systems.** Apple's, Rockbox's and `ipodloader2`; RetailOS,
-Rockbox 4.0 and iPodLinux — each unmodified, from upstream, installed onto a drive this program
-wrote and started by Apple's own bootloader.
+**Two bootloaders and two operating systems in the window** — Apple's and Rockbox's; RetailOS and
+Rockbox 4.0, each unmodified, from upstream, fetched and verified by this program, installed onto a
+drive it wrote and started by Apple's own bootloader.
+
+**A third of each runs, and is not offered in the window yet.** `ipodloader2` and iPodLinux are
+**experimental**: the install is complete and the kernel boot is clean, and then ZeroLauncher stalls
+at its last step. `ipod-boot install-linux` builds that drive for anyone who wants to look at it —
+the window does not offer a path that ends there after a 101 MB download. See
+[KNOWN-BUGS.md](KNOWN-BUGS.md).
 
 | Rockbox 4.0 — its main menu | `ipodloader2` — reading the drive | iPodLinux — its userland starting |
 |---|---|---|
 | ![](docs/media/ipod-14-rockbox-menu.png) | ![](docs/media/ipod-24-ipodloader2.png) | ![](docs/media/ipod-26-ipodlinux-loaded.png) |
 
-**Rockbox is finished; iPodLinux is not.** Its kernel boot is clean — both partitions found, FAT32
-root mounted, `/bin/init` run, ZeroSlackr's ext3 userland loop-mounted, and no ATA error anywhere in
-the dmesg. Then ZeroLauncher draws the screen above and **stalls at its last step**. That is a real
-open bug and it is [in the queue](NEXT.md); the picture is there because it is what actually
-happens, not because it is finished.
+*The right two are the experimental pair, reached with `ipod-boot install-linux`.*
+
+**Rockbox is finished; iPodLinux is not, which is why the window does not offer it.** Its kernel
+boot is clean — both partitions found, FAT32 root mounted, `/bin/init` run, ZeroSlackr's ext3
+userland loop-mounted, and no ATA error anywhere in the dmesg. Then ZeroLauncher draws the screen
+above and **stalls at its last step**. The picture is there because it is what actually happens, not
+because it is finished.
 
 `ipod-boot install-linux` builds the drive: the loader into the firmware partition, ZeroSlackr's five
 directories onto the volume, and a boot menu naming only what is actually on it. On a drive that
@@ -115,8 +123,10 @@ of cold-booting for seventy-five. **Work on a copy** in settings never touches y
 
 - **No audio.** The Wolfson codec is unmodelled.
 - **No USB** — so no target disk mode and no restore.
-- **~30 % of real time** headless, ~19 % with the window: about 21 M instructions/sec against an
-  80 MHz ARM7TDMI. Idle costs the same as busy, so the ratio holds whatever the iPod is doing.
+- **~24 % of real time** headless — about 17.4 M instructions/sec against a 72 MHz PP5021C,
+  simulating *both* of its cores. One core alone runs at 18.8 M, so the second costs 7 %: it used to
+  cost 24 %, because it was awake and spinning for entire boots (see CHANGELOG 0.5.0). Idle costs
+  about the same as busy, so the ratio holds whatever the iPod is doing.
 
 ## Where to look next
 

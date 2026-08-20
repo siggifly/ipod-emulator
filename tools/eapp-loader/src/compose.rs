@@ -35,6 +35,19 @@ impl Os {
         }
     }
     pub const ALL: [Os; 3] = [Os::Apple, Os::Rockbox, Os::IPodLinux];
+
+    /// What the window offers.
+    ///
+    /// **iPodLinux is not on it, and the rules for it are kept anyway.** Its kernel boot is clean —
+    /// both partitions found, the root mounted, `/bin/init` run, no ATA error anywhere — and then
+    /// ZeroLauncher reaches "Finishing Up…" and stalls, which is a real open bug (KNOWN-BUGS.md).
+    /// Offering a path that ends there, after a 101 MB download, is offering a disappointment.
+    ///
+    /// The engine keeps knowing about it because the knowledge is measured and the tests that hold
+    /// the free-choice model honest run over `ALL` — and because the way back is deleting a line
+    /// here, not rebuilding what was thrown away. `ipod-boot install-linux` still does the whole
+    /// install for anybody who wants to look at it.
+    pub const OFFERED: [Os; 2] = [Os::Apple, Os::Rockbox];
 }
 
 /// What goes in the **firmware partition**, which holds exactly one thing.
@@ -61,6 +74,10 @@ impl Loader {
         }
     }
     pub const ALL: [Loader; 3] = [Loader::Apple, Loader::Rockbox, Loader::IPodLoader2];
+
+    /// What the window offers — see [`Os::OFFERED`]. `ipodloader2` goes with iPodLinux: it is the
+    /// only thing that needs it, and a bootloader with nothing to boot is a menu with one entry.
+    pub const OFFERED: [Loader; 2] = [Loader::Apple, Loader::Rockbox];
 }
 
 /// Where the drive comes from before anything is installed onto it.
@@ -529,6 +546,30 @@ mod tests {
         let real = crate::install::loader_menu_for_tests(true, true);
         for entry in ["ZeroSlackr", "Apple OS", "Rockbox", "Disk Mode", "Sleep"] {
             assert!(real.contains(entry), "loader_menu no longer writes {entry}");
+        }
+    }
+
+    /// **What the window offers must be closed under its own rules.** Every set of offered systems
+    /// has to be buildable by an offered bootloader — otherwise removing iPodLinux from the list
+    /// would have left a combination that can be ticked and never built.
+    #[test]
+    fn every_offered_combination_is_buildable_with_an_offered_loader() {
+        for n in 0..(1 << Os::OFFERED.len()) {
+            let oses: Vec<Os> = Os::OFFERED
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| n & (1 << i) != 0)
+                .map(|(_, o)| *o)
+                .collect();
+            let r = recipe(Loader::Apple, &oses);
+            let best = r.best_loader();
+            assert!(
+                Loader::OFFERED.contains(&best),
+                "{oses:?} defaults to {best:?}, which the window does not offer"
+            );
+            let mut fixed = r.clone();
+            fixed.loader = best;
+            assert!(fixed.check().ok(), "{oses:?} on {best:?} is refused");
         }
     }
 

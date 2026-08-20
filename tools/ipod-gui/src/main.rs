@@ -1356,7 +1356,7 @@ struct App {
     settings_tab: SettingsTab,
     /// What the machine being saved will be called.
     /// Which resource groups are open. See `GROUP_*`.
-    groups: [bool; 5],
+    groups: [bool; 4],
     /// A GUID being typed in, when that field is open.
     typing_guid: Option<String>,
     /// A serial being typed in, when the field is open.
@@ -1878,7 +1878,7 @@ impl App {
             settings_tab: SettingsTab::default(),
             // Disks open, the rest folded: what you have is usually a list of disks, and the
             // four kinds under it are what they are made from.
-            groups: [true, false, false, false, false],
+            groups: [true, false, false, false],
             typing_guid: None,
             typing_serial: None,
             prefs: false,
@@ -3544,7 +3544,7 @@ impl App {
                 return;
             };
             let mut changed = false;
-            for o in Os::ALL {
+            for o in Os::OFFERED {
                 let mut on = c.recipe.oses.contains(&o);
                 if ui.checkbox(&mut on, o.label()).changed() {
                     if on {
@@ -3568,7 +3568,7 @@ impl App {
             let Some(c) = app.compose.as_mut() else {
                 return;
             };
-            for l in Loader::ALL {
+            for l in Loader::OFFERED {
                 let works = c.recipe.loader_works(l);
                 let why = if works {
                     String::new()
@@ -4688,20 +4688,10 @@ impl App {
             {
                 chosen = Some("rockbox");
             }
-            // **Offered whether or not anything is downloaded yet**, because both halves fetch.
-            // This used to be gated on two files inside the checkout existing, so the button was
-            // invisible to everyone who had not cloned the repository — a feature hidden by the
-            // absence of a file nobody outside it could have.
-            if ui
-                .add_enabled(!busy, egui::Button::new("iPodLinux"))
-                .on_hover_text(
-                    "ipodloader2 into the firmware partition and ZeroSlackr's five directories \
-                         onto the volume. The loader's menu then offers Apple's software too.",
-                )
-                .clicked()
-            {
-                chosen = Some("ipodlinux");
-            }
+            // **No iPodLinux here.** The install works and the kernel boots cleanly; what does
+            // not is ZeroLauncher, which reaches "Finishing Up…" and stalls. Offering a button
+            // that ends there after a 101 MB download is offering a disappointment.
+            // `ipod-boot install-linux` still does the whole install — see KNOWN-BUGS.md.
             if ui.button("cancel").clicked() {
                 chosen = Some("cancel");
             }
@@ -4817,7 +4807,6 @@ impl App {
         for (slot, kind, title) in [
             (GROUP_ROMS, "firmware", "Boot ROMs"),
             (GROUP_IPSW, "installer", "Apple firmware"),
-            (GROUP_LOADERS, "bootloader", "Bootloaders"),
             (GROUP_OS, "software", "Operating systems"),
         ] {
             let group: Vec<_> = self
@@ -6697,8 +6686,10 @@ const ID_ROW_H: f32 = 24.0;
 const GROUP_DISKS: usize = 0;
 const GROUP_ROMS: usize = 1;
 const GROUP_IPSW: usize = 2;
-const GROUP_LOADERS: usize = 3;
-const GROUP_OS: usize = 4;
+// **No `GROUP_LOADERS`.** A bootloader resource is only useful for installing iPodLinux, and the
+// window does not offer that yet — so a group listing them would be inventory for a verb that is
+// not on any screen. `Resource::Bootloader` stays, because the kind is real and `ipod-boot` uses it.
+const GROUP_OS: usize = 3;
 
 /// One line of facts about a resource — **facts, not prose**.
 ///

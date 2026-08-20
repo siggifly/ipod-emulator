@@ -51,6 +51,12 @@ the caller cold-boots.
 
 ## iPodLinux's userland stalls at ZeroLauncher's last step — 2026-08-20
 
+> **The window does not offer iPodLinux because of this.** The install works, the kernel boots
+> cleanly, and then this happens — so offering it would be offering a 101 MB download that ends at a
+> stalled screen. `ipod-boot install-linux` still builds the drive, and `Os::IPodLinux` and
+> `Loader::IPodLoader2` are still in the compatibility engine with their rules and their tests. The
+> way back is deleting a line from `Os::OFFERED`.
+
 Unchanged as a symptom, but no longer a mystery. ZeroLauncher reaches **"Finishing Up…"** and spins;
 the profile puts **94.9 %** of the phase in two adjacent buckets. Disassembling the flat binary off
 the drive shows a three-instruction poll:
