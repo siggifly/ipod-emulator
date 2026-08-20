@@ -291,9 +291,16 @@ launcher, `/opt/Base/ZeroLauncher/ZeroLauncher` — draws its startup progress, 
   here**: this project has published a wheel finding before on a script that turned out to have
   fired 0 of 20 steps, so the fired-count is quoted rather than assumed.
 
-**What would settle it.** `/opt/Base/ZeroLauncher/Misc/Launch.log` is written by the launcher's own
-wrapper script (`exec >> …/Launch.log 2>&1`) and it is on the drive — so the launcher's stderr is
-recoverable with `ipod-boot fat` after a run, without any new instrument. Read that first.
+**Its own log is on the drive, and it is empty — which is a fact, not a dead end.** The wrapper
+script does `exec >> /opt/Base/ZeroLauncher/Misc/Launch.log 2>&1`, and after a writable run
+`ipod-boot fat` finds the entry with **`size=0`, `clus=0`**. So the file was *created* — `/etc/rc`
+reached `Launch.sh` and the shell opened its redirect — and nothing was ever flushed to it. The
+launcher is running and has printed nothing to stderr, which rules out its failing loudly.
+
+**What would settle it next.** Profile the userland phase and symbolise the hot addresses. Harder
+than the kernel's: ZeroLauncher is a `BINFMT_FLAT` binary rather than `vmlinux`, so the addresses
+have to be resolved against the flat image's own load base, which the kernel prints when it loads
+it (`BINFMT_FLAT: Loading file:`).
 
 Worth doing before or alongside 0x above: a launcher spinning is exactly the kind of thing that also
 shows up as "the guest executes several times the instructions hardware would".
