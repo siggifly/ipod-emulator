@@ -1939,6 +1939,12 @@ impl App {
                 "Rockbox's bootloader. It expects to be installed in the firmware partition and \
                  entered by Apple's bootloader, so entering it directly is not how it runs.",
             ),
+            (
+                "resources/vendor/ipodloader2/loader.bin",
+                "`ipodloader2`, the third bootloader — its menu chooses between Apple's software, \
+                 Rockbox and iPodLinux. Like Rockbox's, it belongs in the firmware partition: use \
+                 Install iPodLinux, then start the iPod normally.",
+            ),
         ] {
             let p = root.join(path);
             if p.exists() {
@@ -2010,6 +2016,37 @@ impl App {
                     })();
                     *slot.lock().unwrap() = Some(r);
                 });
+            }
+
+            // **iPodLinux, and the whole of it.** The distribution is five directories, not one
+            // file: a drive carrying only `boot/vmlinux` boots the kernel completely and then has
+            // nothing to execute. That drive existed here for weeks and the panic it produced was
+            // read as an emulator defect. So this button installs what the install document says
+            // to install, or explains what is missing and installs nothing.
+            let tree = eapp_loader::settings::repo_root().join("resources/vendor/zeroslackr/tree");
+            let loader =
+                eapp_loader::settings::repo_root().join("resources/vendor/ipodloader2/loader.bin");
+            let have_linux = tree.is_dir() && loader.is_file();
+            if have_linux {
+                let can = !drive.is_empty() && !self.install_busy;
+                if ui
+                    .add_enabled(can, egui::Button::new("Install iPodLinux…"))
+                    .on_hover_text(
+                        "Installs ipodloader2 into the firmware partition and ZeroSlackr's five                          directories onto the volume, on a COPY of your drive. The loader's menu                          then offers Apple's software as well, so nothing is taken away.",
+                    )
+                    .clicked()
+                {
+                    let src = PathBuf::from(&drive);
+                    let out = drives_dir().join("ipodlinux.img");
+                    let slot = self.install_slot.clone();
+                    self.install_busy = true;
+                    self.say("installing iPodLinux …".to_string());
+                    std::thread::spawn(move || {
+                        let r = eapp_loader::install::install_linux(&src, &loader, &tree, &out)
+                            .map(|report| (out, report));
+                        *slot.lock().unwrap() = Some(r);
+                    });
+                }
             }
 
             // **Only where the host can actually do it.** Windows mounts ISO and VHD, not a raw
