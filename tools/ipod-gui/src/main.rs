@@ -283,9 +283,6 @@ const MIN_W: f32 = 1000.0;
 ///
 /// **This is a floor, not an opening size.** See [`DEFAULT_H`].
 const MIN_H: f32 = 600.0;
-/// The rail down the left of the settings page.
-const RAIL_W: f32 = 132.0;
-
 /// The two strips below the device, both **fixed**, so the iPod above them never resizes.
 ///
 /// Neither used to be. Measured with `IPOD_LAYOUT=1`, the pair took anywhere from 46 px to 147 px
@@ -315,9 +312,6 @@ const SETTINGS_TABS: &[(SettingsTab, &str)] = &[
     (SettingsTab::Devices, "Devices"),
     (SettingsTab::Disks, "Disks"),
     (SettingsTab::Resources, "Resources"),
-    (SettingsTab::Appearance, "Appearance"),
-    (SettingsTab::Storage, "Storage"),
-    (SettingsTab::About, "About"),
 ];
 
 /// The wizard's answers, and where it is.
@@ -384,9 +378,6 @@ enum SettingsTab {
     Disks,
     /// Firmware, installers and software. Inert — nothing here runs.
     Resources,
-    Appearance,
-    Storage,
-    About,
 }
 
 /// What the window opens at. Above the minimum on both axes, and the device gets the difference.
@@ -1362,6 +1353,8 @@ struct App {
     install_busy: bool,
     settings_tab: SettingsTab,
     /// What the machine being saved will be called.
+    /// Whether the preferences sheet is open over the library.
+    prefs: bool,
     /// The device being edited, as a draft. `None` = nobody is editing one.
     ///
     /// **Editing is not the wizard.** The wizard makes media — it fetches bundles and builds
@@ -1434,13 +1427,15 @@ struct Drag {
 /// separate now, and a machine runs behind the settings the entire time it is open.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Screen {
-    /// Nothing is configured yet. One screen, no way out but forward — an emulator with no images
-    /// is not a thing anyone can be left holding.
-    FirstRun,
-    /// The iPod.
-    Device,
-    /// Everything about the program, in sections, with the machine still running behind it.
-    Settings,
+    /// **Home.** The devices, the disks and the resources, under three tabs.
+    ///
+    /// The window starts here and returns here, and nothing is running while you are looking at
+    /// it. Before this the iPod *was* home and the library was a modal you visited "with the
+    /// machine still running behind it" — which is a single-machine emulator with a list bolted to
+    /// the side, and it is why the pages read as unrelated.
+    Library,
+    /// One device, running. Reached only by pressing start on a device in the library.
+    Running,
     /// Where the two files come from. A page of its own, reachable from either of the others and
     /// returning to whichever asked for it — see [`App::back_to`].
     Help,
@@ -1838,14 +1833,14 @@ impl App {
         if settings.check_updates_on_start {
             update::spawn(Arc::clone(&update_slot));
         }
-        let mut app = App {
+        let app = App {
             link: None,
             worker: None,
             cfg,
-            screen: Screen::FirstRun,
+            screen: Screen::Library,
             images,
             cold_at_open: None,
-            back_to: Screen::FirstRun,
+            back_to: Screen::Library,
             details_row: 0,
             settings,
             tex,
@@ -1873,6 +1868,7 @@ impl App {
             install_slot: Arc::new(Mutex::new(None)),
             install_busy: false,
             settings_tab: SettingsTab::default(),
+            prefs: false,
             editing: None,
             editing_was: String::new(),
             compose: None,
@@ -1891,10 +1887,11 @@ impl App {
             wheel_units: 0.0,
             stale_cache: (0, Vec::new()),
         };
-        // Nothing to set up: the images are there and they parse. Skip straight to the iPod.
-        if app.images.both_good() {
-            app.start();
-        }
+        // **Nothing starts on its own.** This used to be `if both_good() { start() }`, so two
+        // paths that happened to resolve meant an iPod on screen before anything had been asked —
+        // no device made, no question put, and the devices list empty beside a running machine
+        // that was not in it. A machine boots when somebody presses start on a device, and never
+        // otherwise.
         app
     }
 
@@ -1966,7 +1963,7 @@ impl App {
         // There is a machine now, so there is an iPod to look at. The screen is set here rather
         // than by each caller: `start` is reached from the first run, from a restart in the
         // settings, and from launch with images already saved, and all three want the same thing.
-        self.screen = Screen::Device;
+        self.screen = Screen::Running;
     }
 
     /// End the machine, parking it first, and wait for the thread to finish doing so.
@@ -2455,23 +2452,25 @@ impl eframe::App for App {
                 self.file_into_library(&p);
                 self.say(line);
             }
-            // A file dropped on a *running* iPod cannot be applied to it, and applying it silently
-            // at the next launch would be a change nobody agreed to. So it opens the settings on
-            // the row it landed in, with the restart banner already showing what it did — the
-            // state the drop actually put the program in, rather than a log line under the device.
-            if self.screen == Screen::Device {
-                self.open_settings();
-                self.cold_at_open = Some(before);
+            // **A file dropped on a running iPod is filed, not applied.** It cannot be applied to
+            // a machine that is already using a drive, and applying it silently at the next launch
+            // would be a change nobody agreed to. So the window goes where the file went — the
+            // library, on the list it landed in — rather than leaving a log line under the device
+            // as the only trace.
+            let _ = before;
+            if self.screen == Screen::Running {
+                self.settings.save();
+                self.screen = Screen::Library;
+                self.settings_tab = SettingsTab::Resources;
             }
         }
 
         match self.screen {
-            Screen::FirstRun => return self.first_run(ui),
-            Screen::Settings => return self.settings_screen(ui),
+            Screen::Library => return self.library_screen(ui),
             Screen::Firmware => return self.firmware_screen(ui),
             Screen::Help => return self.help_screen(ui),
             Screen::Details => return self.details_screen(ui),
-            Screen::Device => {}
+            Screen::Running => {}
         }
         let ctx = ui.ctx().clone();
         // The machine is running on another thread whether or not anything moved, so the window has
@@ -2563,37 +2562,6 @@ impl App {
     }
 
     // ------------------------------------------------------------ the first run
-
-    /// What a stranger meets: one screen, two files, and no way to leave without them.
-    ///
-    /// **There are no steps and no slots.** A dropped file says what it is ([`inspect::classify`]),
-    /// so the only instruction is "give me your two files" and the window does the sorting. The
-    /// previous version asked for them one at a time, in an order the user had no reason to know,
-    /// with a text field for a path nobody types, and then hid the program's settings on its third
-    /// page — where a running machine could never reach them.
-    ///
-    /// Everything this project knows about where the files come from is still here, behind one
-    /// disclosure. It is reference material: right when you are stuck, noise when you are not.
-    fn first_run(&mut self, ui: &mut egui::Ui) {
-        // **A new arrival is not a special case — they are somebody with no devices yet.** The
-        // first-run screen and `+ new device` ask the same questions, so they are the same screen,
-        // and only the welcome above it differs.
-        if self.compose.is_none() {
-            self.compose = Some(Compose::new(ComposeWhat::Device { first_run: true }));
-        }
-        let mut drew = false;
-        self.column(ui, |app, ui| {
-            drew = app.wizard(ui);
-        });
-        if drew {
-            return;
-        }
-        // **Nothing else.** This screen used to carry a second copy of the whole setup — model
-        // rows, file rows, an install row and a start button — and the wizard replaced every one
-        // of them. Left in place it was not merely dead: `wizard_finish` clears `compose`, so the
-        // frame after a device was created fell through to the old screen, which then re-opened
-        // the wizard on the next frame. The way out of the first run is having a device.
-    }
 
     /// Every model this emulator can present itself as, **newest generation first**.
     ///
@@ -2921,13 +2889,6 @@ impl App {
     /// The whole point of the screen split: this used to end the worker, because the settings
     /// screen *was* the no-machine screen. The iPod keeps running behind it, and only a change
     /// that cannot be applied to a running machine costs anything — see [`Cold`].
-    fn open_settings(&mut self) {
-        self.images.revalidate();
-        self.images.revalidate_ipsw();
-        self.cold_at_open = Some(self.cold());
-        self.screen = Screen::Settings;
-    }
-
     /// The restart-needing settings, as they stand right now.
     fn cold(&self) -> Cold {
         Cold {
@@ -2937,80 +2898,74 @@ impl App {
         }
     }
 
-    /// Everything about the program, on one page, in four sections.
+    /// **Home: the devices, the disks and the resources.** Nothing is running while you are here.
     ///
-    /// **Done is always there.** It is disabled only while the images do not validate, which is the
-    /// same predicate the first run uses — one rule, so there is no second one to drift out of step
-    /// with it. Somebody who opened this to change the case colour can close it again immediately;
-    /// somebody who broke their drive path cannot leave the emulator pointed at nothing.
-    fn settings_screen(&mut self, ui: &mut egui::Ui) {
-        // Esc is what people press, and it obeys the same gate the button does — a first run cannot
-        // be escaped, and a settings visit that broke nothing costs one key.
-        if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) && self.images.both_good() {
-            self.close_settings();
+    /// Three tabs across the top rather than a rail down the side, because these are not settings —
+    /// they are what the program is. A rail labelled "Settings" containing the whole application
+    /// beside Appearance and About is what made these pages read as unrelated: the gear moved to
+    /// the corner and took the four things that really are preferences with it.
+    fn library_screen(&mut self, ui: &mut egui::Ui) {
+        // Esc goes back to a running machine when there is one, and does nothing when there is not
+        // — there is nowhere behind home.
+        if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) && self.link.is_some() {
+            self.screen = Screen::Running;
             return;
         }
         self.column(ui, |app, ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Settings").heading());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let ready = app.images.both_good();
+                for (tab, label) in SETTINGS_TABS {
+                    let on = app.settings_tab == *tab;
                     if ui
-                        .add_enabled(ready, egui::Button::new("  Done  "))
+                        .add_sized([104.0, 26.0], egui::Button::selectable(on, *label))
                         .clicked()
                     {
-                        app.close_settings();
+                        app.settings_tab = *tab;
                     }
-                    if !ready {
-                        ui.label(
-                            egui::RichText::new("both files are needed")
-                                .small()
-                                .color(UI_TEXT_FAINT),
-                        );
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_sized([30.0, 26.0], egui::Button::new("⚙"))
+                        .on_hover_text("Appearance, storage, keyboard and about.")
+                        .clicked()
+                    {
+                        app.prefs = !app.prefs;
                     }
-                });
-            });
-            ui.add_space(18.0);
-
-            // No model name here. The boot ROM's row already says which iPod this is, and says it
-            // with the serial of the one the dump came off — a heading repeating the model above it
-            // is a line that costs height and tells you less.
-            // **A rail, because height is the scarce axis and width is not.**
-            //
-            // Stacked, these six sections came to 936 px at their tallest — taller than a 12"
-            // MacBook has (667 usable) and taller than a 1366x768 laptop (715). Every one of those
-            // machines has 1152 px or more of *width* going spare. So the page is now as tall as
-            // its tallest single section rather than the sum of all of them, and the window got
-            // wider instead of taller.
-            ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(RAIL_W);
-                    for (tab, label) in SETTINGS_TABS {
-                        let on = app.settings_tab == *tab;
-                        if ui
-                            .add_sized([RAIL_W - 8.0, 26.0], egui::Button::selectable(on, *label))
+                    // Only when something is running: the way back to it, and the only thing on
+                    // this page that is about a machine rather than about the library.
+                    if app.link.is_some()
+                        && ui
+                            .button("◀ back to the iPod")
+                            .on_hover_text("Esc does this too.")
                             .clicked()
-                        {
-                            app.settings_tab = *tab;
-                        }
-                    }
-                });
-                ui.add_space(14.0);
-                ui.separator();
-                ui.add_space(14.0);
-                ui.vertical(|ui| {
-                    ui.set_width((ui.available_width() - 8.0).max(240.0));
-                    match app.settings_tab {
-                        SettingsTab::Devices => app.pane_devices(ui),
-                        SettingsTab::Disks => app.pane_disks(ui),
-                        SettingsTab::Resources => app.pane_resources(ui),
-                        SettingsTab::Appearance => app.pane_appearance(ui),
-                        SettingsTab::Storage => app.pane_storage(ui),
-                        SettingsTab::About => app.pane_about(ui),
+                    {
+                        app.screen = Screen::Running;
                     }
                 });
             });
+            ui.add_space(14.0);
+            if app.prefs {
+                app.prefs_sheet(ui);
+                return;
+            }
+            match app.settings_tab {
+                SettingsTab::Devices => app.pane_devices(ui),
+                SettingsTab::Disks => app.pane_disks(ui),
+                SettingsTab::Resources => app.pane_resources(ui),
+            }
         });
+    }
+
+    /// The four things that genuinely are preferences, behind the gear.
+    fn prefs_sheet(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui.button("◀ back").clicked() {
+                self.prefs = false;
+            }
+        });
+        ui.add_space(10.0);
+        self.pane_appearance(ui);
+        self.pane_storage(ui);
+        self.pane_about(ui);
     }
 
     /// The wizard: what iPod, what goes on the disk, and a name.
@@ -3645,6 +3600,65 @@ impl App {
         };
     }
 
+    /// **Resolve a device, build its machine, and show it.** The only path to a running iPod.
+    ///
+    /// Before this the machine was started by `App::new` whenever two paths happened to resolve,
+    /// so a window could be showing an iPod that no device described and the devices list could be
+    /// empty beside it. Starting is now something a person does to a *device*, which is the only
+    /// way the list and the machine can be talking about the same thing.
+    fn start_device(&mut self, name: &str) {
+        if !self.settings.run_device(name) {
+            self.say(format!("device: {name} is not in the list"));
+            return;
+        }
+        let missing = self
+            .settings
+            .devices
+            .iter()
+            .find(|d| d.name == name)
+            .map(|d| self.settings.missing(d))
+            .unwrap_or_default();
+        if !missing.is_empty() {
+            self.say(format!("{name}: not found — {}", missing.join(", ")));
+            return;
+        }
+        self.images.flash = match &self.settings.nor {
+            eapp_loader::nor::Source::File(p) => p.to_string_lossy().into_owned(),
+            eapp_loader::nor::Source::Synthetic { .. } => String::new(),
+        };
+        self.images.disk = self
+            .settings
+            .disk
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.images.revalidate();
+        if !self.images.both_good() {
+            self.say(format!("{name}: its files did not check out — see Disks"));
+            return;
+        }
+        self.settings.save();
+        // A different device means a different machine: the one running belongs to whoever was
+        // running before, and handing its memory to another iPod is not a thing hardware does.
+        self.stop_machine();
+        self.start();
+        self.screen = Screen::Running;
+    }
+
+    /// Leave the running machine and go back to the library, **parking it on the way out**.
+    ///
+    /// Parking rather than leaving it running is the operator's call and the right one here: an
+    /// idle iPod costs a whole core to simulate — measured, the second core alone runs 370 M
+    /// instructions in a 400 M window — and the machine comes back in about three seconds from the
+    /// snapshot. A VM manager can afford to leave guests running; this cannot, while we are still
+    /// chasing where the time goes.
+    fn back_to_library(&mut self) {
+        self.stop_machine();
+        self.screen = Screen::Library;
+        self.settings_tab = SettingsTab::Devices;
+        self.say("parked — it resumes where it left off".to_string());
+    }
+
     /// Change a device: its name, its boot ROM, its disk, its colour.
     ///
     /// **Two dropdowns and a name.** Everything offered here already exists — this is composition,
@@ -3924,21 +3938,7 @@ impl App {
             self.editing = Some(d);
         }
         if let Some(name) = run {
-            if self.settings.run_device(&name) {
-                self.images.flash = match &self.settings.nor {
-                    eapp_loader::nor::Source::File(p) => p.to_string_lossy().into_owned(),
-                    eapp_loader::nor::Source::Synthetic { .. } => String::new(),
-                };
-                self.images.disk = self
-                    .settings
-                    .disk
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                self.images.revalidate();
-                self.settings.save();
-                self.say(format!("device: {name} boots next — restart to apply"));
-            }
+            self.start_device(&name);
         }
         if let Some(name) = forget {
             self.settings.forget(&name);
@@ -4717,9 +4717,9 @@ impl App {
         self.settings.disk = Some(PathBuf::from(self.images.disk.trim()));
         self.settings.save();
         self.screen = if self.link.is_some() {
-            Screen::Device
+            Screen::Running
         } else {
-            Screen::FirstRun
+            Screen::Library
         };
     }
 
@@ -4831,15 +4831,19 @@ impl App {
                         // on the first run used to be the images for ever unless you were willing to
                         // reboot to look at them, because this button and the first-run screen were
                         // the same screen.
+                        // **The way home, and it parks on the way.** This said "settings…" and
+                        // opened a modal over a machine that kept running. The library is not a
+                        // modal and not settings — it is where the window lives — so the button
+                        // says where it goes, and going there stops paying for an idle iPod.
                         if ui
-                            .button("settings…")
+                            .button("◀ Devices")
                             .on_hover_text(
-                                "The machine, the software on its drive, and this window's own \
-                             preferences. The iPod keeps running; Esc comes back.",
+                                "Back to your devices. The iPod is parked, and resumes where it \
+                                 left off in about three seconds. Esc does this too.",
                             )
                             .clicked()
                         {
-                            self.open_settings();
+                            self.back_to_library();
                         }
                         if let Some(line) = self.update_line.clone() {
                             ui.separator();
@@ -6668,7 +6672,7 @@ mod tests {
     /// Panes other than the first are never reached by `lay_out`, which is how a pane could be
     /// added, be unreachable in every test, and panic the first time somebody clicked it.
     fn lay_out_tab(tab: SettingsTab, w: f32, h: f32) -> f32 {
-        lay_out_with(Screen::Settings, w, h, Files::Chosen, Some(tab))
+        lay_out_with(Screen::Library, w, h, Files::Chosen, Some(tab))
     }
 
     fn lay_out(screen: Screen, w: f32, h: f32, files: Files) -> f32 {
@@ -6738,7 +6742,7 @@ mod tests {
                             "the tallest case needs its warning"
                         );
                     }
-                    if screen == Screen::Settings {
+                    if screen == Screen::Library {
                         // As `open_settings` leaves it, plus a change to restart for — the tallest
                         // this page ever gets.
                         a.cold_at_open = Some(Cold {
@@ -6750,12 +6754,11 @@ mod tests {
                     a
                 });
                 match screen {
-                    Screen::FirstRun => app.first_run(ui),
-                    Screen::Settings => app.settings_screen(ui),
+                    Screen::Library => app.library_screen(ui),
                     Screen::Firmware => app.firmware_screen(ui),
                     Screen::Help => app.help_screen(ui),
                     Screen::Details => app.details_screen(ui),
-                    Screen::Device => {}
+                    Screen::Running => {}
                 }
                 used = ui.min_rect().height();
             });
@@ -6928,11 +6931,11 @@ mod tests {
     #[test]
     fn every_screen_fits_the_smallest_window() {
         for (screen, files) in [
-            (Screen::FirstRun, Files::None),
-            (Screen::FirstRun, Files::Chosen),
-            (Screen::FirstRun, Files::Rejected),
-            (Screen::Settings, Files::Chosen),
-            (Screen::Settings, Files::Rejected),
+            (Screen::Library, Files::None),
+            (Screen::Library, Files::Chosen),
+            (Screen::Library, Files::Rejected),
+            (Screen::Library, Files::Chosen),
+            (Screen::Library, Files::Rejected),
             (Screen::Help, Files::None),
             // The details page carries every fact at full size; it is the page that exists
             // because they did not fit anywhere else, so it is the one that must be checked.
@@ -6987,26 +6990,30 @@ mod tests {
     /// height instead of the *wanted* height, every page would fit every window by definition.
     #[test]
     fn the_layout_measurement_tracks_the_content_and_not_the_window() {
+        // **The pair moved again, and the property did not.** It was settings-versus-help, then
+        // first-run-versus-details when settings grew a rail; the first run is now the library's
+        // empty state, which is deliberately compact, so it is no longer the long page. The
+        // wizard's second step is — checkboxes, a verdict and the plan — and what is under test is
+        // still that the number follows the content.
         let short = lay_out(Screen::Details, MIN_W, MIN_H, Files::Rejected);
-        let long = lay_out(Screen::FirstRun, MIN_W, MIN_H, Files::None);
+        let long = lay_out_wizard(ComposeWhat::Device { first_run: false }, 2);
         assert!(
             short > 0.0,
             "a height of zero passes every other assertion for the wrong reason"
         );
         assert!(
             long > short + 40.0,
-            "the first run is a much longer page than the details; measured {long:.0} vs {short:.0}"
+            "the wizard's disk step is a much longer page than the details; {long:.0} vs {short:.0}"
         );
 
-        // **The settings page is now as tall as its rail.** Six sections at a row apiece is more
-        // than the Device pane puts under them, so this is the number, and it must still be a
+        // **The library page must still measure its content.** It must sit above one row of tabs
+        // and strictly below the window it was handed; a measurement that returned the visible
         // measurement of content: above the rail it is built from, and strictly below the window it
         // was handed. A measurement that returned the visible height would equal `MIN_H` exactly.
-        let settings = lay_out(Screen::Settings, MIN_W, MIN_H, Files::Chosen);
-        let rail = SETTINGS_TABS.len() as f32 * 20.0;
+        let settings = lay_out(Screen::Library, MIN_W, MIN_H, Files::Chosen);
         assert!(
-            settings > rail,
-            "the settings page came back shorter than its own rail; {settings:.0} vs {rail:.0}"
+            settings > 26.0,
+            "the library page came back shorter than its own tab row; {settings:.0}"
         );
         assert!(
             settings < MIN_H,
@@ -7016,7 +7023,7 @@ mod tests {
         );
 
         // Squeezed into a window none of them fits, the answer must be what the page *wanted*.
-        let squeezed = lay_out(Screen::Settings, MIN_W, 200.0, Files::Chosen);
+        let squeezed = lay_out(Screen::Library, MIN_W, 200.0, Files::Chosen);
         assert!(
             squeezed > 200.0,
             "measured {squeezed:.0} in a 200 px window — that is the window, not the content, and \
@@ -7109,14 +7116,14 @@ mod tests {
                         Settings::default(),
                         String::new(),
                     );
-                    a.screen = Screen::Settings;
+                    a.screen = Screen::Library;
                     a.settings_tab = SettingsTab::Devices;
                     a
                 });
                 let mut c = Compose::new(what);
                 c.step = step;
                 app.compose = Some(c);
-                app.settings_screen(ui);
+                app.library_screen(ui);
                 used = ui.min_rect().height();
             });
             out.textures_delta.clear();
@@ -7137,7 +7144,7 @@ mod tests {
     #[test]
     fn every_screen_can_be_opened_from_somewhere() {
         let src = include_str!("main.rs");
-        for screen in ["Settings", "Firmware", "Help", "Details", "Device"] {
+        for screen in ["Library", "Firmware", "Help", "Details", "Running"] {
             let assigned = src
                 .lines()
                 .filter(|l| !l.trim_start().starts_with("//"))
@@ -7152,7 +7159,7 @@ mod tests {
         }
         // The first run is the exception and states why: it is where the window starts.
         assert!(
-            src.contains("Screen::FirstRun"),
+            src.contains("Screen::Library"),
             "the first run is gone entirely"
         );
     }
