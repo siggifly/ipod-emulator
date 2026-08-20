@@ -1357,6 +1357,8 @@ struct App {
     /// What the machine being saved will be called.
     /// Which resource groups are open. See `GROUP_*`.
     groups: [bool; 5],
+    /// A GUID being typed in, when that field is open.
+    typing_guid: Option<String>,
     /// A serial being typed in, when the field is open.
     typing_serial: Option<String>,
     /// Whether the preferences sheet is open over the library.
@@ -1877,6 +1879,7 @@ impl App {
             // Disks open, the rest folded: what you have is usually a list of disks, and the
             // four kinds under it are what they are made from.
             groups: [true, false, false, false, false],
+            typing_guid: None,
             typing_serial: None,
             prefs: false,
             editing: None,
@@ -3143,7 +3146,10 @@ impl App {
                             .desired_width(150.0)
                             .char_limit(11),
                     );
-                    let ok = eapp_loader::identity::Identity::check_serial(&typed);
+                    let ok = eapp_loader::identity::Identity::check_serial_for(
+                        &typed,
+                        app.settings.nor.model(),
+                    );
                     if ui
                         .add_enabled(ok.is_ok(), egui::Button::new("use").small())
                         .clicked()
@@ -3183,10 +3189,16 @@ impl App {
         // One line for why a typed serial is refused. Always here, so typing does not move the row
         // below it — the only thing in this table that is not a row.
         reserved(ui, 15.0, |ui| {
+            let model = self.settings.nor.model();
             if let Some(w) = self
                 .typing_serial
                 .as_ref()
-                .and_then(|t| eapp_loader::identity::Identity::check_serial(t).err())
+                .and_then(|t| eapp_loader::identity::Identity::check_serial_for(t, model).err())
+                .or_else(|| {
+                    self.typing_guid
+                        .as_ref()
+                        .and_then(|t| eapp_loader::identity::Identity::check_guid(t).err())
+                })
             {
                 ui.horizontal(|ui| {
                     ui.add_space(74.0);
@@ -3197,7 +3209,28 @@ impl App {
 
         // **The GUID is never editable, in either mode**, so it is locked whichever ROM this is —
         // which is why it says what it is rather than where it came from.
-        self.id_row(ui, "GUID", |_app, ui| {
+        self.id_row(ui, "GUID", |app, ui| {
+            if let Some(mut typed) = app.typing_guid.clone() {
+                ui.add(
+                    egui::TextEdit::singleline(&mut typed)
+                        .hint_text("000A270014EFE726")
+                        .desired_width(150.0)
+                        .char_limit(18),
+                );
+                let ok = eapp_loader::identity::Identity::check_guid(&typed);
+                if ui
+                    .add_enabled(ok.is_ok(), egui::Button::new("use").small())
+                    .clicked()
+                {
+                    app.set_guid(&typed);
+                    app.typing_guid = None;
+                } else if ui.small_button("cancel").clicked() {
+                    app.typing_guid = None;
+                } else {
+                    app.typing_guid = Some(typed);
+                }
+                return;
+            }
             let v = match dump {
                 Some(_) => fact("GUID"),
                 None => id
@@ -3205,12 +3238,20 @@ impl App {
                     .map(|i| i.guid_hex())
                     .unwrap_or_else(|| "—".into()),
             };
+            let editable = dump.is_none();
+            let v2 = v.clone();
             locked_field(ui, 150.0, v).on_disabled_hover_text(
                 "The FireWire GUID — the number iTunes and a USB host see as this iPod's serial. \
                  It is not printed on the case, so there is nothing to copy off a real one: a \
                  generated iPod gets one built from its model and its seed, and `regenerate` \
                  gives it another. A dump carries the GUID of the iPod it came off.",
             );
+            // **Editable for a generated ROM.** Locking it was justified by "it is not printed on
+            // the case" — an argument about convenience, not possibility. It is readable from a
+            // real iPod through `SysInfo` and iTunes, and this program parses it out of dumps.
+            if editable && ui.small_button("edit").clicked() {
+                app.typing_guid = Some(v2);
+            }
         });
 
         // **The case is editable either way**, and it is the only thing that is when a dump is
@@ -3771,6 +3812,37 @@ impl App {
         }
     }
 
+    /// Use a GUID somebody typed, keeping the serial.
+    fn set_guid(&mut self, guid: &str) {
+        use eapp_loader::nor::Source;
+        let Ok(g) = u64::from_str_radix(guid.trim().trim_start_matches("0x"), 16) else {
+            return;
+        };
+        if let Source::Synthetic {
+            model,
+            seed,
+            splash,
+            serial,
+            ..
+        } = self.settings.nor.clone()
+        {
+            // The serial is carried, and derived if it was not set: `Identity::provided` takes both
+            // together, so a GUID typed against a generated serial has to bring that serial with it
+            // or the pair would come back as two halves of different iPods.
+            let serial =
+                serial.or_else(|| self.settings.nor.identity().ok().and_then(|i| i.serial));
+            self.settings.nor = Source::Synthetic {
+                model,
+                seed,
+                serial,
+                guid: Some(g),
+                splash,
+            };
+            self.settings.save();
+            self.say(format!("GUID: {guid}"));
+        }
+    }
+
     /// Give the generated iPod a new identity: a different seed, so a different serial and GUID.
     fn reseed(&mut self) {
         use eapp_loader::nor::Source;
@@ -3813,6 +3885,15 @@ impl App {
         let recipe = c.recipe.clone();
         let out = drives_dir().join(format!("{}.img", sanitise(&c.disk_name)));
         let sectors = self.synthetic_model().sectors();
+        // **Which firmware this iPod takes.** 5G is updater family 13 or 20, 5.5G is 25 — the only
+        // thing that separates them, since they share `FamilyID` 6. Getting it wrong is the
+        // "70 ATA commands then restore from iTunes" failure in research/17, so the wizard chooses
+        // rather than asking somebody to learn what an updater family is.
+        let families: Vec<u32> = self
+            .synthetic_model()
+            .generation
+            .updater_families()
+            .to_vec();
         let from_disk: Option<PathBuf> = match &recipe.start {
             Start::FromDisk { name, .. } => self
                 .settings
@@ -3839,9 +3920,32 @@ impl App {
                 // 1 the drive itself
                 match &recipe.start {
                     Start::FromIpsw(name) => {
-                        let bundle = bundle.ok_or_else(|| {
-                            format!("no .ipsw called {name:?} — fetch one from Resources first")
-                        })?;
+                        // **"Fetch it from Apple" fetches from Apple.** It used to set an empty
+                        // name and the builder then looked for a resource called `""`, failed, and
+                        // told you to go and fetch one — a promise the dropdown made and nothing
+                        // kept. The catalogue and the verified download were already here.
+                        let bundle = match bundle {
+                            Some(p) => p,
+                            None => {
+                                let rel = eapp_loader::firmware::CATALOGUE
+                                    .iter()
+                                    .filter(|r| families.contains(&(r.updater_family as u32)))
+                                    .filter(|r| r.served && r.is_verifiable())
+                                    // The last row of a family is its final firmware, which is
+                                    // what somebody means by "Apple's software" without saying so.
+                                    .next_back()
+                                    .ok_or_else(|| {
+                                        format!(
+                                            "no .ipsw called {name:?}, and Apple serves none for \
+                                             this iPod's updater family"
+                                        )
+                                    })?;
+                                eapp_loader::firmware::download(
+                                    rel,
+                                    &eapp_loader::firmware::cache_dir(),
+                                )?
+                            }
+                        };
                         let mut fw = match eapp_loader::ipsw::inspect(&bundle) {
                             eapp_loader::ipsw::Ipsw::Good(_, fw) => fw,
                             eapp_loader::ipsw::Ipsw::Wrong(why)
@@ -3882,9 +3986,13 @@ impl App {
                 // 3 iPodLinux, which brings ipodloader2 with it — and `install_linux` writes the
                 //    menu naming whatever else is on the volume, so it goes last.
                 if recipe.oses.contains(&Os::IPodLinux) {
-                    let tree = eapp_loader::ipodlinux::fetch(&eapp_loader::ipodlinux::cache_dir())?;
-                    let loader = eapp_loader::settings::repo_root()
-                        .join("resources/vendor/ipodloader2/loader.bin");
+                    // **Both fetched, neither taken out of the checkout.** The loader was
+                    // `repo_root()/resources/vendor/ipodloader2/loader.bin`, which exists here and
+                    // in no release — so iPodLinux could not be installed by anybody who was not
+                    // working in this repository, and the failure came *after* a 101 MB download.
+                    let cache = eapp_loader::ipodlinux::cache_dir();
+                    let tree = eapp_loader::ipodlinux::fetch(&cache)?;
+                    let loader = eapp_loader::ipodlinux::loader(&cache)?;
                     report.extend(eapp_loader::install::install_linux(
                         &out, &loader, &tree, &out,
                     )?);
@@ -4580,18 +4688,17 @@ impl App {
             {
                 chosen = Some("rockbox");
             }
-            let tree = eapp_loader::settings::repo_root().join("resources/vendor/zeroslackr/tree");
-            let loader =
-                eapp_loader::settings::repo_root().join("resources/vendor/ipodloader2/loader.bin");
-            if tree.is_dir()
-                && loader.is_file()
-                && ui
-                    .add_enabled(!busy, egui::Button::new("iPodLinux"))
-                    .on_hover_text(
-                        "ipodloader2 into the firmware partition and ZeroSlackr's five directories \
+            // **Offered whether or not anything is downloaded yet**, because both halves fetch.
+            // This used to be gated on two files inside the checkout existing, so the button was
+            // invisible to everyone who had not cloned the repository — a feature hidden by the
+            // absence of a file nobody outside it could have.
+            if ui
+                .add_enabled(!busy, egui::Button::new("iPodLinux"))
+                .on_hover_text(
+                    "ipodloader2 into the firmware partition and ZeroSlackr's five directories \
                          onto the volume. The loader's menu then offers Apple's software too.",
-                    )
-                    .clicked()
+                )
+                .clicked()
             {
                 chosen = Some("ipodlinux");
             }

@@ -9,10 +9,28 @@
 //!
 //! So it is a catalogue like the others.
 //!
-//! **`ipodloader2` is not in it, and that is not an omission.** It is built from source, from the
-//! checkout in `resources/vendor/ipodloader2`, because upstream publishes no binary this project
-//! could hash. A row here would have to name a build somebody made, which is the opposite of what
-//! the other two catalogues are for.
+//! **`ipodloader2` is in it now, and the reason it was not is a mistake worth recording.** This
+//! file used to say upstream published no binary this project could hash — which was wrong.
+//! `crozone/ipodloader2` publishes GitHub releases with a `loader.bin` asset, and v2.8.1 is one.
+//! The claim was never checked; it was inferred from the repository having a Makefile.
+//!
+//! The cost of that was not academic: the window built its loader from
+//! `resources/vendor/ipodloader2/loader.bin`, a path inside this checkout, so **iPodLinux could not
+//! be installed by anybody who was not working in the repository** — and the failure arrived after
+//! a 101 MB download.
+//!
+//! Two loaders were considered and rejected, which is worth saying because both are defensible:
+//!
+//! - **ZeroSlackr carries one**, at `patch-files/loader.bin` — inside an archive already fetched
+//!   and already hashed, so it costs nothing. But it is `iPL Loader 2.5 rxported`, from 2008, and
+//!   using it would be a downgrade from what this project has measured.
+//! - **Our own build is `iPL 2.9.0d`**, from `master` at `a41ec49` — newer than any release, and
+//!   the one every number in research/17 was measured on. It cannot be fetched, because it is a
+//!   build somebody made rather than a thing upstream published.
+//!
+//! So v2.8.1 it is: the newest thing with a URL and a hash. **The numbers in research/17 are
+//! 2.9.0d's**, and until the same run is made against 2.8.1 they describe a loader most people
+//! will not be running.
 
 use std::path::{Path, PathBuf};
 
@@ -50,6 +68,24 @@ pub const CATALOGUE: &[Piece] = &[Piece {
 /// Re-exported from [`crate::install`] so a caller checking an unpacked tree does not have to know
 /// which module owns the list.
 pub use crate::install::ZEROSLACKR_DIRS;
+
+/// **`ipodloader2` v2.8.1**, the newest release upstream publishes a binary for.
+///
+/// `master` is further along — this project builds `2.9.0d` from it — but a build is not a
+/// release, and a catalogue row naming one would be a row nobody else could reproduce.
+pub const LOADER: Piece = Piece {
+    file: "ipodloader2-v2.8.1-loader.bin",
+    url: "https://github.com/crozone/ipodloader2/releases/download/v2.8.1/loader.bin",
+    bytes: 56_912,
+    sha256: "28eb4b805580b959cee73566999912bf0a9f54a581eb32d0b72df56669b427e9",
+    about: "ipodloader2 v2.8.1 — the bootloader iPodLinux needs. Reads `loader.cfg` from the \
+            volume and offers everything installed on it.",
+};
+
+/// Fetch the loader, or return the copy already here if it verifies.
+pub fn loader(dir: &Path) -> Result<PathBuf, String> {
+    download(&LOADER, dir)
+}
 
 /// Where downloads are kept — beside Apple's and Rockbox's, because they are the same kind of
 /// thing and somebody clearing one expects to have cleared all of them.

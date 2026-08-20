@@ -334,6 +334,22 @@ impl Identity {
     /// iPod's serial because its factory is not in a list of three would be worse than accepting an
     /// invented one.
     pub fn check_serial(s: &str) -> Result<(), String> {
+        Self::check_serial_for(s, None)
+    }
+
+    /// The same check, **against a particular iPod** when one is known.
+    ///
+    /// **What this can and cannot say.** A real serial's last three characters are its model code,
+    /// and its year digit is the year it was made — both are checkable against a chosen model, and
+    /// neither was checked at all. What is *not* checkable is which code means which capacity:
+    /// `serial_codes` says so itself — "which capacity each denotes is not known and is not
+    /// claimed" — because the published list does not separate them and a real `MA446`, a 5.5G, was
+    /// observed here ending `V9M`, which is on the 5th-generation list.
+    ///
+    /// So this refuses an ending no iPod of that generation is known to carry, and a year that
+    /// generation was not made in, and stops there. Inventing a code-to-capacity mapping would put
+    /// a fabricated fact into a `SysCfg` that nothing downstream would ever question.
+    pub fn check_serial_for(s: &str, model: Option<&'static Model>) -> Result<(), String> {
         const A: &str = "0123456789ABCDEFGHIJKLMNPQRSTUVWXYZ";
         if s.len() != 11 {
             return Err(format!(
@@ -357,6 +373,64 @@ impl Identity {
         if !(1..=52).contains(&week) {
             return Err(format!(
                 "week {week} is not a week — positions 4 and 5 are 01 to 52."
+            ));
+        }
+        let Some(m) = model else { return Ok(()) };
+
+        // The year digit, position 3, against the years that generation was made in.
+        let years = m.generation.year_digits();
+        if !years.is_empty() {
+            let y = s.as_bytes()[2] - b'0';
+            if !years.contains(&y) {
+                return Err(format!(
+                    "the {} was made in {}, so its serial's third character is one of those — not `{}`.",
+                    m.generation.label(),
+                    years.iter().map(|y| format!("200{y}")).collect::<Vec<_>>().join(" or "),
+                    s.as_bytes()[2] as char
+                ));
+            }
+        }
+
+        // The last three, against the codes real iPods of that generation carry.
+        let codes = m.generation.serial_codes();
+        if !codes.is_empty() && !codes.contains(&&s[8..]) {
+            return Err(format!(
+                "`{}` is not an ending seen on a {} — the ones this project has records for are {}. \
+                 Which capacity each denotes is not known, so that part is not checked.",
+                &s[8..],
+                m.generation.label(),
+                codes.join(", ")
+            ));
+        }
+        Ok(())
+    }
+
+    /// Whether a string is a FireWire GUID an iPod could have, and what is wrong if not.
+    ///
+    /// **Sixteen hex digits whose top 24 bits are Apple's OUI.** Every iPod's GUID begins
+    /// `00:0A:27`; a number that does not is not one, whoever typed it. That is the whole of the
+    /// check, because the 40 bits below it are a serial number Apple allocated and nothing about
+    /// them is derivable.
+    ///
+    /// It is worth being able to type at all — the argument for locking it was that it is not
+    /// printed on the case, which is an argument about *convenience*, not possibility. It is
+    /// readable from a real iPod through `SysInfo` and iTunes, and this program parses it out of
+    /// dumps itself.
+    pub fn check_guid(s: &str) -> Result<(), String> {
+        let t = s.trim().trim_start_matches("0x");
+        if t.len() != 16 {
+            return Err(format!(
+                "a GUID is 16 hex digits — this is {}. `000A270014EFE726` is the shape.",
+                t.len()
+            ));
+        }
+        let v = u64::from_str_radix(t, 16)
+            .map_err(|_| "that is not hexadecimal — 0-9 and A-F only.".to_string())?;
+        if v >> 40 != APPLE_OUI {
+            return Err(format!(
+                "every iPod's GUID starts {APPLE_OUI:06X} — Apple's FireWire OUI. This one starts \
+                 {:06X}, so it belongs to some other maker's hardware.",
+                v >> 40
             ));
         }
         Ok(())
@@ -905,6 +979,97 @@ mod serial_tests {
                 });
             }
         }
+    }
+
+    /// The GUID check: Apple's OUI, sixteen hex digits, and every generated one passes it.
+    #[test]
+    fn a_guid_has_to_be_one_an_ipod_could_have() {
+        for m in crate::models::MODELS.iter().take(24) {
+            for seed in 0..4 {
+                let g = Identity::generate(m, seed).guid_hex();
+                Identity::check_guid(&g)
+                    .unwrap_or_else(|e| panic!("{} generated {g} and rejects it: {e}", m.number));
+            }
+        }
+        assert!(Identity::check_guid("000A270014EFE726").is_ok());
+        assert!(
+            Identity::check_guid("0x000A270014EFE726").is_ok(),
+            "an 0x prefix is ordinary"
+        );
+        for (bad, want) in [
+            ("000A270014EFE72", "16 hex digits"),
+            ("000A270014EFE7266", "16 hex digits"),
+            ("000A270014EFE72Z", "hexadecimal"),
+            ("001B6300ABCDEF01", "Apple's FireWire OUI"),
+        ] {
+            let e = Identity::check_guid(bad).unwrap_err();
+            assert!(e.contains(want), "{bad}: expected {want:?}, got {e:?}");
+        }
+    }
+
+    /// **Model-aware checking, and the generator must still pass it.** A validator stricter than
+    /// the generator rejects the program's own output; a validator that ignores the model accepts a
+    /// 5.5G's serial on a 5G, which is what it used to do.
+    #[test]
+    fn a_serial_is_checked_against_the_ipod_it_claims_to_be() {
+        let video = |g| {
+            crate::models::MODELS
+                .iter()
+                .find(|m| m.generation == g && m.model == crate::models::IpodModel::VideoWhite)
+                .unwrap()
+        };
+        let g5 = video(crate::models::Generation::Video1);
+        let g55 = video(crate::models::Generation::Video2);
+
+        // Everything generated for a model passes that model's own check.
+        for m in [g5, g55] {
+            for seed in 0..16 {
+                let s = Identity::generate(m, seed).serial.unwrap();
+                Identity::check_serial_for(&s, Some(m))
+                    .unwrap_or_else(|e| panic!("{} generated {s} and rejects it: {e}", m.number));
+            }
+        }
+
+        // A 5G serial has a 2005 or 2006 digit; 2007 is the 5.5G's and is refused for a 5G.
+        let bad_year = "4J7011K2V9K";
+        assert!(
+            Identity::check_serial_for(bad_year, Some(g5))
+                .unwrap_err()
+                .contains("made in"),
+            "a 2007 digit was accepted on a 5G"
+        );
+
+        // An ending no iPod carries is refused, with the list.
+        let bad_code = "4J5011K2AAA";
+        let e = Identity::check_serial_for(bad_code, Some(g5)).unwrap_err();
+        assert!(
+            e.contains("AAA"),
+            "the reason does not name the ending: {e}"
+        );
+        assert!(
+            e.contains("V9K"),
+            "the reason does not offer the real ones: {e}"
+        );
+
+        // **And the capacity is deliberately not checked.** The same ending is accepted on a 30 GB
+        // and a 60 GB, because which code means which capacity is not known — `serial_codes` says
+        // so, and a real 5.5G was observed carrying an ending from the 5th-generation list.
+        let g5_60 = crate::models::MODELS
+            .iter()
+            .find(|m| {
+                m.generation == crate::models::Generation::Video1
+                    && m.capacity_gb == 60
+                    && m.model == crate::models::IpodModel::VideoWhite
+            })
+            .unwrap();
+        let s = Identity::generate(g5, 3).serial.unwrap();
+        assert!(
+            Identity::check_serial_for(&s, Some(g5_60)).is_ok(),
+            "a capacity claim crept into the check"
+        );
+
+        // With no model in hand it is the old, shape-only check — which is what a dump gets.
+        assert!(Identity::check_serial_for(bad_code, None).is_ok());
     }
 
     /// And it has to refuse the things it exists to refuse, each with its own reason.
