@@ -573,6 +573,8 @@ pub struct Memory {
     /// polling contributes several thousand while the kernel contributes a few dozen — so a total
     /// cannot answer "did *this* completion arrive". A ring keeps the tail, which is the part with
     /// the operating system in it. `what` is one of the `IDE_EV_*` constants.
+    /// Flash reads by 256-byte page, when `--norlog` asked for them. `None` costs one compare.
+    pub nor_reads: Option<BTreeMap<u32, u64>>,
     pub ide_events: std::collections::VecDeque<(u32, u8)>,
     pub ide_irq_raised: u64,
     pub ide_irq_acked: u64,
@@ -1726,8 +1728,20 @@ impl Memory {
         // In read-array mode this answers `None` and the backing region serves the byte, which is
         // the case for all but a few thousand instructions of a boot.
         if let Some(n) = &self.nor {
-            if let Some(v) = n.hit(addr).and_then(|off| n.read(off)) {
-                return v;
+            if let Some(off) = n.hit(addr) {
+                // **What a firmware reads out of flash, by 256-byte page.**
+                //
+                // A synthesised NOR is an identity block and a reset vector; a real dump is 390 KB
+                // of Apple's code and images. When a firmware behaves differently on the two, the
+                // useful question is *which bytes it went looking for* — and nothing here could
+                // answer it, because an array-mode read never enters `Nor::read` at all. It
+                // resolves against the backing region like any other memory.
+                if let Some(h) = self.nor_reads.as_mut() {
+                    *h.entry(off >> 8).or_insert(0) += 1;
+                }
+                if let Some(v) = n.read(off) {
+                    return v;
+                }
             }
         }
         if let Some((base, dev)) = &mut self.ata {
@@ -2756,6 +2770,7 @@ impl Machine {
             write_log: None,
             write_log_entries: Capped::new(8192),
             write_log_regions: BTreeMap::new(),
+            nor_reads: None,
             ide_events: std::collections::VecDeque::new(),
             ide_irq_raised: 0,
             ide_irq_acked: 0,

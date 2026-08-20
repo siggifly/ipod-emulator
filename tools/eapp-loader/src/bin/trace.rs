@@ -236,6 +236,11 @@ fn main() {
         let body = std::fs::read_to_string(spec).unwrap_or_else(|_| spec.replace(',', "\n"));
         m.mem.read_addrs.extend(body.split_whitespace().filter_map(parse_addr));
     }
+    // --norlog : a histogram of which flash pages the firmware read. The question a synthesised
+    // NOR raises is "what was it looking for that is not there", and this is what answers it.
+    if args.iter().any(|a| a == "--norlog") {
+        m.mem.nor_reads = Some(Default::default());
+    }
     m.mem.ide_cfg_ack_off = args.iter().any(|a| a == "--no-cfg-ack");
     m.mem.ide_irq_latch_off = args.iter().any(|a| a == "--no-ide-irq-latch");
     // --pp-dma-irq=N : which interrupt line the 0x60008000 DMA controller's completion drives.
@@ -2008,7 +2013,31 @@ fn main() {
         }
         report_bcm_dump(&args, &m);
         report_bcm_peek(&args, &m);
-        report_findptr(&args, &m);
+        if let Some(h) = &m.mem.nor_reads {
+        let total: u64 = h.values().sum();
+        // **This counter sits on the `Nor` model's path, and not every recipe installs one.**
+        // Without `--nor` the flash is a plain backing region, the guest reads it perfectly well,
+        // and nothing here sees any of it — so a bare `0` would be a blind instrument reporting a
+        // measurement it never took. It said exactly that once, and "Rockbox never reads the NOR"
+        // was believed for ten minutes on the strength of it.
+        if m.mem.nor.is_none() {
+            println!(
+                "\nflash reads: NOT MEASURED — this recipe installs no flash model, so the \n\
+                 counter cannot see array-mode reads. Add `--nor` and run it again."
+            );
+        } else {
+            println!("\nflash reads: {total} across {} pages of 256 bytes", h.len());
+        let mut rows: Vec<(u32, u64)> = h.iter().map(|(a, n)| (*a, *n)).collect();
+        rows.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        for (page, n) in rows.iter().take(16) {
+            println!("  {:#08x}..{:#08x}  {n}", page << 8, (page << 8) + 0xff);
+        }
+        if rows.len() > 16 {
+            println!("  … and {} more pages", rows.len() - 16);
+        }
+        }
+    }
+    report_findptr(&args, &m);
         report_dumps(&args, &mut m);
         report_profile(&m);
         report_unmapped(&mut m);
@@ -2411,6 +2440,26 @@ fn install_sysinfo(
     sdram_size: u32,
     flash: Option<&str>,
 ) {
+    // **The co-processor is powered, and the pin that says so has to say so.**
+    //
+    // `GPO32_VAL` bit 14 is a general-purpose output Apple's bootloader drives when it brings the
+    // BCM up. A warm entry skips that bootloader, so the bit read back zero — and Rockbox's
+    // `lcd_init_device` keys on exactly this:
+    //
+    //     if (GPO32_VAL & 0x4000) { display_on = true; tick_add_task(&lcd_tick); }
+    //     else                    { display_on = false; lcd_awake(); }   /* the ROLO path */
+    //
+    // with `lcd_update_rect` returning immediately while `display_on` is false. So every warm boot
+    // took the recovery branch meant for ROLO, and got away with it only because that branch
+    // re-uploads the co-processor firmware out of `flash_get_section('vmcs')` — which a real dump
+    // has and a synthesised NOR does not. **Measured: real NOR 96 384 flash reads from
+    // `lcd_init_device+0xc4` and 32 frame updates; synthetic NOR nothing and a black screen.**
+    //
+    // This belongs here rather than in the NOR, because it is not something the NOR carries. It is
+    // machine state a bootloader leaves behind, which is what this whole function is for.
+    let gpo32 = m.mem.read32(0x7000_0080) | 0x4000;
+    m.mem.write32(0x7000_0080, gpo32);
+
     // Everything the block says about *which iPod this is* comes from the NOR, when there is one.
     // The constants this used to carry were measured on the PROTOTYPE dump, before the retail one
     // existed: it wrote a Gestalt of 0x000b0011 where the retail NOR's HwVr record reads
