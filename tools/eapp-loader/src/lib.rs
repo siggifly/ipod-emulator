@@ -5300,6 +5300,20 @@ pub fn parse_wheel_script(spec: &str, click_instr: u64) -> Result<Vec<WheelStep>
     // twenty seconds in" and what the firmware's own timers measure. `CLOCK` instructions per
     // simulated microsecond is the conversion, and the run's printed schedule shows the resolved
     // instruction counts either way.
+    //
+    // **A restored machine makes this sharper, and it caught the author of this paragraph.** A
+    // machine resumed at an idle snapshot is *already* at the menu, so it is halted from its first
+    // step: a 3 G budget executed **495 M instructions**, and a script anchored at `@2200M` fired
+    // **0 of 12**. Anchors that landed inside the run were worse than ones that did not — they all
+    // fired in a bunch during the disk scan, and the run reported `1 word read of DATA, 11 frames
+    // dropped unread`, which reads exactly like a firmware that has stopped listening. The same
+    // script anchored in simulated time on the same snapshot: **16 posted, 0 dropped, 16 read, 16
+    // interrupts.** Nothing about the machine changed. Use the clock:
+    //
+    // ```text
+    //   trace … --restore=idle.snap        # prints `usec` at the halt; the restore point's clock
+    //   --wheel='@24s:touch,@24500ms:rotate=+6,…'
+    // ```
     // Returns the value and whether it is simulated microseconds.
     let number = |t: &str| -> Result<(u64, bool), String> {
         let t = t.replace('_', "");

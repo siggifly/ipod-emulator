@@ -314,6 +314,7 @@ const CONDITIONS_H: f32 = 34.0;
 const SETTINGS_TABS: &[(SettingsTab, &str)] = &[
     (SettingsTab::Device, "Device"),
     (SettingsTab::Machines, "Machines"),
+    (SettingsTab::Library, "Library"),
     (SettingsTab::Software, "Software"),
     (SettingsTab::Appearance, "Appearance"),
     (SettingsTab::Storage, "Storage"),
@@ -325,6 +326,7 @@ enum SettingsTab {
     #[default]
     Device,
     Machines,
+    Library,
     Software,
     Appearance,
     Storage,
@@ -2231,6 +2233,21 @@ impl App {
                             }
                         });
                     });
+                    // **A machine that names a library entry that is gone says so, here.** The
+                    // alternative is a machine that switches to a boot ROM it does not have and
+                    // shows a white screen, and "it boots to a white screen" is not a diagnosis —
+                    // the name of the file that went is.
+                    let missing = self.settings.missing(&m);
+                    if !missing.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "     ⚠ not in the library: {}",
+                                missing.join(", ")
+                            ))
+                            .small()
+                            .color(UI_WARN),
+                        );
+                    }
                     // What it is, under the name, so the list can be read without opening anything.
                     ui.label(
                         egui::RichText::new(format!(
@@ -2657,6 +2674,13 @@ impl eframe::App for App {
             for p in dropped {
                 let sectors = self.synthetic_model().sectors();
                 let line = self.images.accept(&p, &drives_dir(), sectors);
+                // **Filed as well as used.** Before the library, dropping a second boot ROM
+                // replaced the first and the first was gone — there was nowhere for a file you
+                // owned but were not currently running. Now using something and keeping it are the
+                // same gesture, which is the only way a library fills up without being a chore.
+                // `file_into_library` returns `None` for an OS image or a Rockbox bundle; those are
+                // software to install onto a drive, not parts a machine is made of.
+                self.file_into_library(&p);
                 self.say(line);
             }
             // A file dropped on a *running* iPod cannot be applied to it, and applying it silently
@@ -3705,6 +3729,7 @@ impl App {
                     match app.settings_tab {
                         SettingsTab::Device => app.pane_device(ui),
                         SettingsTab::Machines => app.pane_machines(ui),
+                        SettingsTab::Library => app.pane_library(ui),
                         SettingsTab::Software => app.pane_software(ui),
                         SettingsTab::Appearance => app.pane_appearance(ui),
                         SettingsTab::Storage => app.pane_storage(ui),
@@ -3876,6 +3901,242 @@ impl App {
 
     fn pane_machines(&mut self, ui: &mut egui::Ui) {
         self.machines_section(ui);
+    }
+
+    /// File one path under the right kind, and return the name it went in as.
+    ///
+    /// **The kind comes from what is inside the file, not from its extension** — the same
+    /// `inspect::classify` the drop handler routes by, so a file dropped on the window and a file
+    /// added here cannot end up filed as two different things. `None` for anything that is not a
+    /// machine part: an OS image and a Rockbox bundle are *software you install onto* a drive, and
+    /// putting them in a list of boot ROMs and drives would be putting them where they cannot be
+    /// used.
+    fn file_into_library(&mut self, path: &Path) -> Option<String> {
+        use eapp_loader::settings::Ingredient;
+        let what = match inspect::classify(path) {
+            inspect::Kind::Rom => {
+                Ingredient::Rom(eapp_loader::nor::Source::File(path.to_path_buf()))
+            }
+            inspect::Kind::Disk => Ingredient::Disk(path.to_path_buf()),
+            inspect::Kind::Ipsw => Ingredient::Ipsw(path.to_path_buf()),
+            _ => return None,
+        };
+        let suggested = path
+            .file_stem()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "unnamed".into());
+        Some(self.settings.file_away(what, &suggested))
+    }
+
+    /// Put the boot ROM and drive this iPod is running into the library. Returns how many were new.
+    ///
+    /// The count is what makes the message honest: filing a machine whose parts are already there
+    /// should say so rather than claiming to have done something.
+    fn file_live_machine(&mut self) -> usize {
+        use eapp_loader::settings::Ingredient;
+        let before = self.settings.library.len();
+        let rom = self.settings.nor.clone();
+        let suggested = match &rom {
+            eapp_loader::nor::Source::File(p) => p
+                .file_stem()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "a boot ROM".into()),
+            eapp_loader::nor::Source::Synthetic { model, seed, .. } => {
+                format!("{model}, seed {seed}")
+            }
+        };
+        self.settings.file_away(Ingredient::Rom(rom), &suggested);
+        if let Some(d) = self.settings.disk.clone() {
+            let name = d
+                .file_stem()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "a drive".into());
+            self.settings.file_away(Ingredient::Disk(d), &name);
+        }
+        self.settings.library.len() - before
+    }
+
+    /// Every boot ROM, `.ipsw` and drive this program has been told about.
+    ///
+    /// **This page is the answer to "Device, Machines and Software feel disconnected".** They were:
+    /// Device chose two files, Machines named the pair, Software wrote to whichever drive happened
+    /// to be live, and nothing tied them together — a second boot ROM had nowhere to live unless it
+    /// was the one running. The library is that place, and a machine is a selection from it.
+    ///
+    /// The three panes now read in order. **Library** is what you have. **Machines** are the
+    /// combinations you have named. **Device** is the one running. Nothing here starts anything: a
+    /// file becomes live when a machine selects it, which is the one place that decision is made.
+    fn pane_library(&mut self, ui: &mut egui::Ui) {
+        self.section(ui, "LIBRARY");
+        ui.label(
+            egui::RichText::new(
+                "Everything this program knows about. A machine is a boot ROM and a drive chosen \
+                 from here, so the same ROM can back several machines and a file you are not \
+                 running is still kept.",
+            )
+            .small()
+            .color(UI_TEXT_FAINT),
+        );
+        ui.add_space(6.0);
+
+        let mut use_item: Option<String> = None;
+        let mut forget: Option<String> = None;
+        // Bounded for the reason `machines_section` gives: the page has to have a height that does
+        // not depend on how many files somebody has.
+        egui::ScrollArea::vertical()
+            .id_salt("library")
+            .max_height(150.0)
+            .show(ui, |ui| {
+                for item in self.settings.library.clone() {
+                    let live = match &item.what {
+                        eapp_loader::settings::Ingredient::Rom(src) => *src == self.settings.nor,
+                        eapp_loader::settings::Ingredient::Disk(p) => {
+                            self.settings.disk.as_deref() == Some(p.as_path())
+                        }
+                        eapp_loader::settings::Ingredient::Ipsw(_) => false,
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} {}",
+                                if live { "●" } else { "○" },
+                                item.name
+                            ))
+                            .color(if live {
+                                UI_TEXT
+                            } else {
+                                UI_TEXT_DIM
+                            }),
+                        );
+                        ui.label(
+                            egui::RichText::new(match &item.what {
+                                eapp_loader::settings::Ingredient::Rom(_) => "boot ROM",
+                                eapp_loader::settings::Ingredient::Ipsw(_) => "Apple firmware",
+                                eapp_loader::settings::Ingredient::Disk(_) => "drive",
+                            })
+                            .small()
+                            .color(UI_TEXT_FAINT),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .small_button("remove")
+                                .on_hover_text(
+                                    "Takes it out of this list. The file on your computer is not \
+                                     touched — nothing here deletes anything.",
+                                )
+                                .clicked()
+                            {
+                                forget = Some(item.name.clone());
+                            }
+                            // An `.ipsw` is not something that can be run; a drive is built from
+                            // one. Offering "use" for it would be offering something that cannot
+                            // happen, so the Software page is named instead.
+                            let runnable =
+                                !matches!(item.what, eapp_loader::settings::Ingredient::Ipsw(_));
+                            if runnable && !live && ui.small_button("use").clicked() {
+                                use_item = Some(item.name.clone());
+                            }
+                        });
+                    });
+                    // The path, under the name, so two files called the same thing are still
+                    // distinguishable — and so a synthesised ROM says it has no file rather than
+                    // showing an empty space.
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "     {}",
+                            match (&item.what, item.what.path()) {
+                                (_, Some(p)) => p.display().to_string(),
+                                (eapp_loader::settings::Ingredient::Rom(src), None) =>
+                                    src.describe(),
+                                (_, None) => "—".to_string(),
+                            }
+                        ))
+                        .small()
+                        .color(UI_TEXT_FAINT),
+                    );
+                    ui.add_space(4.0);
+                }
+                if self.settings.library.is_empty() {
+                    ui.label(
+                        egui::RichText::new(
+                            "Nothing yet. Files land here as you use them — drop a boot ROM, an \
+                             .ipsw or a drive anywhere on the window.",
+                        )
+                        .small()
+                        .color(UI_TEXT_FAINT),
+                    );
+                    ui.add_space(4.0);
+                }
+            });
+
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if ui
+                .button("add a file…")
+                .on_hover_text(
+                    "A boot ROM, an .ipsw or a drive image. Which it is, is worked out from what \
+                     is inside it rather than from its name.",
+                )
+                .clicked()
+            {
+                for p in pick_files(
+                    "A boot ROM, an .ipsw, or a drive image",
+                    &["bin", "rom", "ipsw", "img", "dmg"],
+                ) {
+                    self.file_into_library(&PathBuf::from(p));
+                }
+            }
+            if ui
+                .button("file what is running")
+                .on_hover_text("Adds the boot ROM and drive this iPod is using, if they are new.")
+                .clicked()
+            {
+                let n = self.file_live_machine();
+                self.say(match n {
+                    0 => "library: both were already here".into(),
+                    1 => "library: one new entry".into(),
+                    n => format!("library: {n} new entries"),
+                });
+            }
+        });
+
+        if let Some(name) = use_item {
+            // The settings hold the choice; `Images` holds the *cold* configuration the next boot
+            // is built from, and the two are separate on purpose — one is what you picked, the
+            // other is what has been checked. Selecting an entry has to move both, or the page
+            // would show a new drive while the restart banner still described the old one.
+            if self.settings.use_item(&name) {
+                match self
+                    .settings
+                    .library
+                    .iter()
+                    .find(|it| it.name == name)
+                    .map(|it| it.what.clone())
+                {
+                    Some(eapp_loader::settings::Ingredient::Rom(src)) => {
+                        self.images.flash = match &src {
+                            eapp_loader::nor::Source::File(p) => p.to_string_lossy().into_owned(),
+                            // A synthesised ROM has no file, and an empty `flash` is exactly how
+                            // this program spells "generate one".
+                            eapp_loader::nor::Source::Synthetic { .. } => String::new(),
+                        };
+                    }
+                    Some(eapp_loader::settings::Ingredient::Disk(p)) => {
+                        self.images.disk = p.to_string_lossy().into_owned();
+                    }
+                    _ => {}
+                }
+                self.images.revalidate();
+                self.say(format!("library: now using {name}"));
+            }
+        }
+        if let Some(name) = forget {
+            self.settings.library.retain(|it| it.name != name);
+            self.say(format!(
+                "library: removed {name} from the list (the file is untouched)"
+            ));
+        }
+        ui.add_space(14.0);
     }
 
     fn pane_about(&mut self, ui: &mut egui::Ui) {
@@ -5896,7 +6157,19 @@ mod tests {
         (rom, drive)
     }
 
+    /// Lay out one settings pane and return its height. `None` is the default pane.
+    ///
+    /// Panes other than the first are never reached by `lay_out`, which is how a pane could be
+    /// added, be unreachable in every test, and panic the first time somebody clicked it.
+    fn lay_out_tab(tab: SettingsTab, w: f32, h: f32) -> f32 {
+        lay_out_with(Screen::Settings, w, h, Files::Chosen, Some(tab))
+    }
+
     fn lay_out(screen: Screen, w: f32, h: f32, files: Files) -> f32 {
+        lay_out_with(screen, w, h, files, None)
+    }
+
+    fn lay_out_with(screen: Screen, w: f32, h: f32, files: Files, tab: Option<SettingsTab>) -> f32 {
         let ctx = egui::Context::default();
         let mut used = 0.0;
         let mut app: Option<App> = None;
@@ -5928,6 +6201,9 @@ mod tests {
                     }
                     let mut a = App::new(ctx, cfg, Settings::default(), String::new());
                     a.screen = screen;
+                    if let Some(t) = tab {
+                        a.settings_tab = t;
+                    }
                     if files == Files::Rejected {
                         // Everything a page can grow at once: both fact lists open, and the pair
                         // warning under them. Injected rather than provoked, because provoking it
@@ -6192,8 +6468,13 @@ mod tests {
     ///   grew a rail — 936 px stacked became 466. The property under test never mentioned settings;
     ///   only the example did, so the example moved to first-run versus details and the assertion
     ///   is the same assertion;
-    /// - the settings **with a restart to offer** from the same page **without one**, which is the
-    ///   smallest real content change on the tallest page;
+    /// - the settings page from the **rail** it is built around, which is now what sets its height:
+    ///   with six sections the rail is taller than any single pane's content, so a pane growing by
+    ///   a banner no longer moves the page at all. That is a fact about the design, not a defect —
+    ///   but it means the banner is no longer a usable probe, and the assertion that used it was
+    ///   passing on a coincidence. What replaced it is the property the probe was standing in for:
+    ///   the number must be the **content's** height, so it must sit above the rail and below the
+    ///   window;
     /// - and a window too small for any of them, which must come back over budget rather than
     ///   clipped to the window it was given.
     ///
@@ -6212,44 +6493,21 @@ mod tests {
             "the first run is a much longer page than the details; measured {long:.0} vs {short:.0}"
         );
 
-        // The same page, one banner apart. `lay_out` gives Settings a restart to offer; this is
-        // that page without one. Still the Device pane either way — the rail does not move the
-        // banner, so this remains the smallest real content change on that page.
+        // **The settings page is now as tall as its rail.** Six sections at a row apiece is more
+        // than the Device pane puts under them, so this is the number, and it must still be a
+        // measurement of content: above the rail it is built from, and strictly below the window it
+        // was handed. A measurement that returned the visible height would equal `MIN_H` exactly.
         let settings = lay_out(Screen::Settings, MIN_W, MIN_H, Files::Chosen);
-        let quiet = {
-            let ctx = egui::Context::default();
-            let mut cfg = emu::Config::default();
-            cfg.flash = PathBuf::from("/some/where/internal_rom_000000-0FFFFF.bin");
-            cfg.disk = PathBuf::from("/some/where/an-ipod-drive.img");
-            let mut used = 0.0;
-            let mut app: Option<App> = None;
-            let input = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(MIN_W, MIN_H))),
-                ..Default::default()
-            };
-            for _ in 0..2 {
-                let mut out = ctx.run_ui(input.clone(), |ui| {
-                    let app = app.get_or_insert_with(|| {
-                        let mut a = App::new(
-                            &ui.ctx().clone(),
-                            cfg.clone(),
-                            Settings::default(),
-                            String::new(),
-                        );
-                        a.screen = Screen::Settings;
-                        a.cold_at_open = Some(a.cold());
-                        a
-                    });
-                    app.settings_screen(ui);
-                    used = ui.min_rect().height();
-                });
-                out.textures_delta.clear();
-            }
-            used
-        };
+        let rail = SETTINGS_TABS.len() as f32 * 20.0;
         assert!(
-            settings > quiet,
-            "offering a restart makes the page taller; measured {settings:.0} with, {quiet:.0} without"
+            settings > rail,
+            "the settings page came back shorter than its own rail; {settings:.0} vs {rail:.0}"
+        );
+        assert!(
+            settings < MIN_H,
+            "the settings page measured {settings:.0} at a window of {MIN_H:.0} — that is the \
+             window's height, not the content's, and every page would fit every window by \
+             definition"
         );
 
         // Squeezed into a window none of them fits, the answer must be what the page *wanted*.
@@ -6280,5 +6538,24 @@ mod tests {
         // The Video's ROM is 1 MiB, and `inspect` leads its verdict with that length. The two
         // numbers being the same number is what makes identifying a dump by model possible at all.
         assert_eq!(IPOD_VIDEO.rom_len, eapp_loader::inspect::NOR_LEN);
+    }
+
+    /// **Every pane on the rail is drawn at the smallest window, not just the first one.**
+    ///
+    /// `every_screen_fits_the_smallest_window` lays out the settings *screen*, which draws the rail
+    /// and exactly one pane — the default. So five of the six were never rendered by any test: a
+    /// pane could be added, be unreachable, and panic the first time somebody clicked it. This
+    /// walks the rail.
+    #[test]
+    fn every_settings_pane_draws_and_fits() {
+        for (tab, label) in SETTINGS_TABS {
+            let used = lay_out_tab(*tab, MIN_W, MIN_H);
+            assert!(used > 0.0, "the {label} pane drew nothing");
+            assert!(
+                used <= MIN_H,
+                "the {label} pane wants {used:.0} px at the {MIN_H:.0} px minimum — {:.0} too tall",
+                used - MIN_H
+            );
+        }
     }
 }

@@ -395,15 +395,16 @@ impl Zip {
             .get(start..end)
             .ok_or_else(|| format!("zip: {} runs past the end of the archive", m.name))?;
 
-        let out =
-            match m.method {
-                0 => packed.to_vec(),
-                8 => inflate(packed, m.size as usize)?,
-                other => return Err(format!(
+        let out = match m.method {
+            0 => packed.to_vec(),
+            8 => inflate(packed, m.size as usize)?,
+            other => {
+                return Err(format!(
                     "zip: {} uses compression method {other}, which this reader does not implement",
                     m.name
-                )),
-            };
+                ))
+            }
+        };
         if out.len() as u64 != m.size {
             return Err(format!(
                 "zip: {} unpacked to {} bytes, not the {} the directory declares",
