@@ -1258,7 +1258,7 @@ fn main() {
             let mut open = false;
             for (_, w) in &ev {
                 match *w {
-                    IDE_EV_ARMED | IDE_EV_ASSERTED => {
+                    IDE_EV_ARMED | IDE_EV_ASSERTED | eapp_loader::IDE_EV_ASSERTED_MASKED => {
                         if open {
                             lost += 1;
                         }

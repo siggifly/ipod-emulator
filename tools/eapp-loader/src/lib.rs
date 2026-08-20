@@ -1887,7 +1887,12 @@ impl Memory {
     /// Assert the drive's completion: the controller latch the driver reads back, plus both
     /// interrupt-controller lines it enabled for the drive.
     pub fn fire_ide_irq(&mut self) {
-        self.note_ide_event(IDE_EV_ASSERTED);
+        // Whether the controller would let this through, recorded at the moment it goes up. An
+        // assertion nobody can take and an assertion nobody happened to take look identical in a
+        // timeline that does not say which.
+        let (_, en_stat, _, _) = Core::Cpu.int_regs();
+        let masked = self.read32(en_stat) & (1 << IDE_IRQ) == 0;
+        self.note_ide_event(if masked { IDE_EV_ASSERTED_MASKED } else { IDE_EV_ASSERTED });
         self.ide_irq_due = None;
         self.int_pending |= 1 << IDE_IRQ;
         self.int_pending_hi |= 1 << IDE_DMA_IRQ_HI;
@@ -1982,8 +1987,15 @@ impl Memory {
         }
         if let Some((base, _)) = &self.ata {
             if addr.wrapping_sub(*base) == 0x28 && val & 0x30 != 0 && !self.ide_cfg_ack_off {
+                // The SECOND ack path, and the one a timeline that only knew about status reads
+                // could not see: a driver arming its next wait writes these bits, and if the line
+                // is already up it goes down without any handler having run.
+                let up = self.int_pending & (1 << IDE_IRQ) != 0;
                 self.int_pending &= !(1 << IDE_IRQ);
                 self.int_pending_hi &= !(1 << IDE_DMA_IRQ_HI);
+                if up {
+                    self.note_ide_event(IDE_EV_CFG_ACKED);
+                }
             }
         }
         // The outbound half of DMA: the drive staged a WRITE and needs the bytes, which only the
@@ -6160,7 +6172,16 @@ pub const IDE_EV_ARMED: u8 = 0;
 pub const IDE_EV_ASSERTED: u8 = 1;
 pub const IDE_EV_DELIVERED: u8 = 2;
 pub const IDE_EV_ACKED: u8 = 3;
-pub const IDE_EV_NAMES: [&str; 4] = ["armed", "asserted", "delivered", "acked"];
+pub const IDE_EV_CFG_ACKED: u8 = 4;
+pub const IDE_EV_ASSERTED_MASKED: u8 = 5;
+pub const IDE_EV_NAMES: [&str; 6] = [
+    "armed",
+    "asserted",
+    "delivered",
+    "acked/status",
+    "acked/cfg",
+    "asserted/MASKED",
+];
 
 /// The DMA engine's completion line, as a bit in the controller's *second* bank — IRQ 55.
 /// Read off RetailOS rather than a header: its ATA driver enables this bit at 0x00233768.
