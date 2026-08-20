@@ -199,21 +199,33 @@ const HARDWARE_MIPS: f64 = 72e6;
 /// below, at `MIN_W`, in pixels of content:
 ///
 /// ```text
-///   first run,  nothing chosen        512
-///   first run,  two files chosen      512
-///   first run,  two files refused     667
-///   settings,   two files chosen      523
-///   settings,   two files refused     678   <- the tallest page this program has
+///   first run,  nothing chosen        542
+///   first run,  two files chosen      542
+///   first run,  two files refused     541
+///   settings,   two files chosen      781
+///   settings,   two files refused     936   <- the tallest page this program has
 ///   help                              470
 ///   details                           230
+///   firmware                          164
 /// ```
 ///
 /// The tallest is the one nobody designs for and everybody eventually sees: the settings, with a
 /// restart to offer, both files printing the sentence explaining why they were turned down, *and*
-/// the warning that the two are for different iPods. 700 leaves that case a little over 20 px,
-/// which is the room a different font or a translated string would want, and still fits a 1366x768
-/// laptop once the menu bar and the title bar are counted. The previous minimum was 520 — under
-/// every one of these numbers.
+/// the warning that the two are for different iPods. 960 leaves that case 24 px, which is the room
+/// a different font or a translated string would want.
+///
+/// **Re-measured 2026-08-20, and it went up by 258 px.** Settings absorbed two sections — the
+/// software that used to be a page of its own, and the machine list — because a page per concept
+/// meant "settings" and "what is installed on it" were two places to look for one question. The
+/// numbers above are printed by the test for *every* page, not only the failing one, so this table
+/// is read off a run rather than raised until the assertion stopped firing.
+///
+/// **The cost, stated rather than discovered later: 960 no longer fits a 1366x768 laptop.** 700 did,
+/// with about 15 px to spare once the menu bar and title bar are counted, and that was part of why
+/// it was 700. Anyone on a 768-tall screen now gets a window taller than their display. The
+/// alternative was letting the settings page scroll — which the test's own message calls out as the
+/// thing this project does not do — and that rule is worth one more look if the laptop case matters
+/// more than the rule does.
 /// The window's own colours.
 ///
 /// **The background is a cool charcoal, not near-black.** It used to be `0x12`, which meant a
@@ -266,7 +278,7 @@ fn contrast(a: Color32, b: Color32) -> f32 {
 }
 
 const MIN_W: f32 = 720.0;
-const MIN_H: f32 = 700.0;
+const MIN_H: f32 = 960.0;
 /// What the window opens at. Comfortably above the minimum, and the device gets the difference.
 const DEFAULT_W: f32 = 980.0;
 const DEFAULT_H: f32 = 800.0;
@@ -1170,6 +1182,8 @@ struct App {
     /// crashed one.
     install_slot: Arc<Mutex<Option<Result<(PathBuf, Vec<String>), String>>>>,
     install_busy: bool,
+    /// What the machine being saved will be called.
+    new_machine_name: String,
     /// The phase at the previous frame, so the boot→running edge can be seen.
     last_phase: Phase,
     update_slot: Arc<Mutex<Option<Option<update::Found>>>>,
@@ -1659,6 +1673,7 @@ impl App {
             update_slot,
             install_slot: Arc::new(Mutex::new(None)),
             install_busy: false,
+            new_machine_name: String::new(),
             last_phase: Phase::Off,
             update_line: None,
             update_asked: false,
@@ -2018,6 +2033,134 @@ impl App {
     /// is the install this program can do end to end because it can verify every byte of it; the
     /// other is the escape hatch for everything it cannot identify — music, WADs, somebody's own
     /// plugin — which is the door the device itself has.
+    /// **The machines this program knows, and which one is running.**
+    ///
+    /// Until this existed the program *was* one machine: changing what you ran meant editing the
+    /// two file settings, and there was no way to keep the setup you had while trying another. The
+    /// worst of that was one-way — a boot from a real dump overwrote the ROM setting with a path,
+    /// so "generate one" became unreachable. That bug is fixed; this is the shape that stops it
+    /// being possible.
+    fn machines_section(&mut self, ui: &mut egui::Ui) {
+        self.section(ui, "MACHINES");
+        ui.label(
+            egui::RichText::new(
+                "A machine is a boot ROM and a drive, saved together under a name. Switching                  changes what boots next time; the one running now keeps running.",
+            )
+            .small()
+            .color(UI_TEXT_FAINT),
+        );
+        ui.add_space(6.0);
+
+        let current = self.settings.current.clone();
+        let mut switch_to: Option<String> = None;
+        let mut forget: Option<String> = None;
+        // **The list scrolls; the page does not.** Every other section here is a fixed set of rows,
+        // so `MIN_H` can be derived from them — that is what `every_screen_fits_the_smallest_window`
+        // checks. A machine list has no such bound: it is as tall as the number of machines, and
+        // no window minimum can be chosen for a number the person picks. Bounding the list keeps
+        // the page a measurable height and keeps the rule the test enforces.
+        egui::ScrollArea::vertical().max_height(112.0).show(ui, |ui| {
+        for m in self.settings.machines.clone() {
+            ui.horizontal(|ui| {
+                let live = current.as_deref() == Some(m.name.as_str());
+                let dot = if live { "●" } else { "○" };
+                ui.label(
+                    egui::RichText::new(format!("{dot} {}", m.name))
+                        .color(if live { UI_TEXT } else { UI_TEXT_DIM }),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("forget").clicked() {
+                        forget = Some(m.name.clone());
+                    }
+                    if !live && ui.small_button("switch to").clicked() {
+                        switch_to = Some(m.name.clone());
+                    }
+                });
+            });
+            // What it is, under the name, so the list can be read without opening anything.
+            ui.label(
+                egui::RichText::new(format!(
+                    "     {} · {}",
+                    match &m.nor {
+                        eapp_loader::nor::Source::File(p) => p
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "a boot ROM".into()),
+                        eapp_loader::nor::Source::Synthetic { model, .. } =>
+                            format!("{model}, synthesised"),
+                    },
+                    m.disk
+                        .as_ref()
+                        .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
+                        .unwrap_or_else(|| "no drive".into()),
+                ))
+                .small()
+                .color(UI_TEXT_FAINT),
+            );
+            ui.add_space(4.0);
+        }
+        if self.settings.machines.is_empty() {
+            ui.label(
+                egui::RichText::new("None saved yet.").small().color(UI_TEXT_FAINT),
+            );
+            ui.add_space(4.0);
+        }
+        });
+
+        ui.horizontal(|ui| {
+            let name = self.new_machine_name.clone();
+            ui.add(
+                egui::TextEdit::singleline(&mut self.new_machine_name)
+                    .hint_text("name this setup")
+                    .desired_width(180.0),
+            );
+            let ok = !name.trim().is_empty();
+            if ui
+                .add_enabled(ok, egui::Button::new("Save as a machine"))
+                .on_hover_text(
+                    "Remembers the boot ROM and drive above under this name, so you can come                      back to them after trying something else.",
+                )
+                .clicked()
+            {
+                let n = name.trim().to_string();
+                self.settings.remember_as(&n);
+                self.settings.save();
+                self.new_machine_name.clear();
+                self.say(format!("saved this setup as “{n}”"));
+            }
+        });
+
+        // **Applied after the loop, not inside it.** Switching mutates the list the loop is walking
+        // and changes which files the next boot uses; doing it mid-draw is how a frame ends up
+        // half-describing two machines.
+        if let Some(n) = switch_to {
+            if self.settings.switch_to(&n) {
+                // **The file rows are what boots, so they have to move too.** `cold()` — the thing
+                // that decides whether a change needs a restart, and the thing the next boot reads
+                // — is built from `images`, not from `settings`. Switching the settings alone would
+                // save a machine nobody was going to run and offer no restart, which is the
+                // quietest way to look broken.
+                self.images.flash = match &self.settings.nor {
+                    eapp_loader::nor::Source::File(p) => p.display().to_string(),
+                    // A synthesised ROM has no path, and an empty row is how this program has
+                    // always spelled that.
+                    eapp_loader::nor::Source::Synthetic { .. } => String::new(),
+                };
+                self.images.disk =
+                    self.settings.disk.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
+                self.images.revalidate();
+                self.settings.save();
+                self.say(format!("switched to “{n}” — restart the iPod to boot it"));
+            }
+        }
+        if let Some(n) = forget {
+            self.settings.forget(&n);
+            self.settings.save();
+            self.say(format!("forgot “{n}”"));
+        }
+        ui.add_space(14.0);
+    }
+
     fn software_screen(&mut self, ui: &mut egui::Ui) {
         if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
             self.screen = self.back_to;
@@ -3422,6 +3565,19 @@ impl App {
             }
 
             ui.add_space(20.0);
+            // **Software is a section, not a screen.** It was split out because inline it pushed
+            // this page 109 px past the smallest window — which is a layout problem being solved
+            // by cutting a concept in half. Installing an operating system onto this machine's
+            // drive is a thing you do to the machine, and the machine is configured here; making
+            // it a separate page meant "settings" and "the software on it" were two places to look
+            // for one question. The window is taller instead, and `MIN_H` is derived by a test
+            // rather than chosen, so the number below is measured.
+            app.section(ui, "SOFTWARE");
+            app.software_rows(ui);
+            ui.add_space(14.0);
+
+            app.machines_section(ui);
+
             app.section(ui, "ABOUT");
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(format!("ipod-emulator {}", update::VERSION)).small());
@@ -3627,7 +3783,7 @@ impl App {
                         .clicked()
                     {
                         self.back_to = self.screen;
-                        self.screen = Screen::Software;
+                        self.screen = Screen::Settings;
                     }
                     if let Some(line) = self.update_line.clone() {
                         ui.separator();
@@ -5370,6 +5526,10 @@ mod tests {
             (Screen::Firmware, Files::Chosen),
         ] {
             let used = lay_out(screen, MIN_W, MIN_H, files);
+            // Printed for every page, not only the one that fails. `cargo test -- --nocapture`
+            // then gives the whole table in one run, which is how `MIN_H` gets a measured value
+            // instead of a guess raised until the assertion stops firing.
+            println!("  {screen:?} / {files:?}: {used:.0} px");
             assert!(
                 used <= MIN_H,
                 "{screen:?} with {files:?} files wants {used:.0} px at the {MIN_H:.0} px minimum \
