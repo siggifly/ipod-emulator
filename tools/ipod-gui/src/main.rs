@@ -1362,8 +1362,15 @@ struct App {
     install_busy: bool,
     settings_tab: SettingsTab,
     /// What the machine being saved will be called.
-    /// What the device being saved will be called.
-    new_device_name: String,
+    /// The device being edited, as a draft. `None` = nobody is editing one.
+    ///
+    /// **Editing is not the wizard.** The wizard makes media — it fetches bundles and builds
+    /// drives. Changing which disk an iPod boots is picking from what already exists, and running
+    /// three steps and a build for that would be theatre.
+    editing: Option<eapp_loader::settings::Device>,
+    /// The name the device being edited had when the editor opened, so a rename replaces rather
+    /// than leaves two.
+    editing_was: String,
     /// The wizard, when it is open. `None` = it is not.
     ///
     /// **One state for three entry points** — first run, `+ new device`, and `+ new disk` — because
@@ -1866,7 +1873,8 @@ impl App {
             install_slot: Arc::new(Mutex::new(None)),
             install_busy: false,
             settings_tab: SettingsTab::default(),
-            new_device_name: String::new(),
+            editing: None,
+            editing_was: String::new(),
             compose: None,
             install_into: None,
             installing: None,
@@ -2580,75 +2588,11 @@ impl App {
         if drew {
             return;
         }
-        self.column(ui, |app, ui| {
-            let dev = IPOD_VIDEO;
-            let (rect, _) = ui
-                .allocate_exact_size(Vec2::new(ui.available_width(), 118.0), egui::Sense::hover());
-            device_at_rest(ui.painter(), &dev, rect.center(), 108.0, app.chassis());
-            ui.add_space(6.0);
-
-            ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new("ipod-emulator").heading());
-                ui.label(
-                    egui::RichText::new("Apple's own iPod software, on a machine that is not one.")
-                        .color(UI_TEXT_FAINT),
-                );
-            });
-            ui.add_space(16.0);
-
-            // **Choose an iPod, press the button.** Nothing has to be supplied: the boot ROM is
-            // generated and the firmware comes from Apple. Everything below is already answered,
-            // and every answer can be changed.
-            app.model_rows(ui);
-            ui.add_space(12.0);
-            app.source_rows(ui);
-            ui.add_space(10.0);
-
-            ui.vertical_centered(|ui| {
-                ui.label(
-                    egui::RichText::new(
-                        "Already have files? Drop a dump, an .ipsw or a drive image anywhere on \
-                         this window.",
-                    )
-                    .small()
-                    .color(UI_TEXT_FAINT),
-                );
-                ui.add_space(2.0);
-                if ui
-                    .link("What are these, and where do I get them?")
-                    .clicked()
-                {
-                    app.open_help();
-                }
-            });
-
-            ui.add_space(14.0);
-            ui.separator();
-            ui.add_space(8.0);
-            ui.vertical_centered(|ui| {
-                // A generated ROM needs no file, so readiness is only ever about the software.
-                let ready = app.images.disk_good();
-                let label = if ready {
-                    "   Build my iPod   "
-                } else {
-                    "   Build my iPod   "
-                };
-                if ui.add_enabled(ready, egui::Button::new(label)).clicked() {
-                    app.start();
-                }
-                if !ready {
-                    ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new(
-                            "Choose where the software comes from — download it, or point at a \
-                             file you have.",
-                        )
-                        .small()
-                        .color(UI_TEXT_FAINT),
-                    );
-                }
-            });
-        });
+        // **Nothing else.** This screen used to carry a second copy of the whole setup — model
+        // rows, file rows, an install row and a start button — and the wizard replaced every one
+        // of them. Left in place it was not merely dead: `wizard_finish` clears `compose`, so the
+        // frame after a device was created fell through to the old screen, which then re-opened
+        // the wizard on the next frame. The way out of the first run is having a device.
     }
 
     /// Every model this emulator can present itself as, **newest generation first**.
@@ -2789,287 +2733,6 @@ impl App {
         }
     }
 
-    /// Where the boot ROM and the software come from — the two questions setup exists to answer.
-    ///
-    /// **Neither has a mode flag.** Which way each row is set is read from the state itself: the
-    /// ROM is synthesised unless a dump has been chosen, and the software is downloaded unless a
-    /// file has been. A separate flag could disagree with the state, and then the window would be
-    /// showing one thing and doing another.
-    fn source_rows(&mut self, ui: &mut egui::Ui) {
-        use eapp_loader::nor::Source;
-        let mut want_own_rom = false;
-        let mut want_generate = false;
-        let mut want_firmware = false;
-        let mut want_own_software = false;
-
-        ui.group(|ui| {
-            ui.set_width(ui.available_width());
-
-            // ---- boot ROM -------------------------------------------------------------------
-            let generating = matches!(self.settings.nor, Source::Synthetic { .. });
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Boot ROM").strong());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let mut own = !generating;
-                    if ui.selectable_value(&mut own, true, "Use my dump").clicked() {
-                        want_own_rom = true;
-                    }
-                    if ui.selectable_value(&mut own, false, "Generate").clicked() {
-                        want_generate = true;
-                    }
-                });
-            });
-            ui.add_space(2.0);
-            ui.label(
-                egui::RichText::new(self.settings.nor.describe())
-                    .small()
-                    .color(UI_TEXT_DIM),
-            );
-            if generating {
-                ui.label(
-                    egui::RichText::new(
-                        "No dump needed. The serial and FireWire GUID are made up — which means \
-                         purchased titles cannot authorise against them, on any machine.",
-                    )
-                    .small()
-                    .color(UI_TEXT_FAINT),
-                );
-            }
-
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(8.0);
-
-            // ---- software -------------------------------------------------------------------
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Software").strong());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if self.images.disk.trim().is_empty() {
-                        if ui.button("Choose a file…").clicked() {
-                            want_own_software = true;
-                        }
-                        if ui.button("Download from Apple").clicked() {
-                            want_firmware = true;
-                        }
-                    } else if ui.small_button("replace").clicked() {
-                        want_own_software = true;
-                    }
-                });
-            });
-            ui.add_space(2.0);
-            let line = if self.images.disk.trim().is_empty() {
-                "Apple's firmware, or a drive image you already have.".to_string()
-            } else {
-                self.images
-                    .disk_name
-                    .clone()
-                    .unwrap_or_else(|| self.images.disk.trim().to_string())
-            };
-            ui.label(egui::RichText::new(line).small().color(UI_TEXT_DIM));
-            // Whose firmware it is, whenever we can say — and the warning when we cannot vouch
-            // for it, which is allowed and only needs mentioning.
-            if let Some(p) = &self.images.ipsw_provenance {
-                let (text, colour) = match p.warning() {
-                    None => (p.line(), Color32::from_rgb(0x6C, 0xC6, 0x88)),
-                    Some(w) => (format!("⚠ {w}"), Color32::from_rgb(0xE0, 0xA0, 0x40)),
-                };
-                ui.add_space(2.0);
-                ui.label(egui::RichText::new(text).small().color(colour));
-            }
-        });
-
-        if want_generate {
-            let m = self.synthetic_model();
-            self.set_synthetic_model(m);
-        }
-        if want_own_rom {
-            self.take(&pick_files("Boot ROM", &["bin"]));
-        }
-        if want_own_software {
-            self.take(&pick_files(
-                "Software",
-                &["img", "bin", "dmg", "iso", "ipsw", "zip"],
-            ));
-        }
-        self.install_row(ui);
-        if want_firmware {
-            self.back_to = self.screen;
-            self.screen = Screen::Firmware;
-        }
-    }
-
-    /// The two rows, and what the window makes of what is in them.
-    ///
-    /// A filename and a mark, not a path and a paragraph. The verdict's own words appear when it is
-    /// *not* good, because that is when they are the answer to a question rather than reassurance
-    /// nobody asked for — and those sentences are the ones that save an evening: an `iPod_24`
-    /// bundle against a family 20 ROM, a 2 MiB dump that is somebody else's iPod, an Apple
-    /// Partition Map where an MBR was expected.
-    /// **What to do with an operating system somebody dropped on the window.**
-    ///
-    /// `Images::accept` identifies `rockbox.ipod` by its own checksum and a Rockbox release by
-    /// being a zip that is not an `.ipsw`, and it used to stop there: the verdict said "ready to
-    /// install" and nothing could act on it. This is the thing that acts on it.
-    ///
-    /// **It installs onto a copy and never the source.** Apple's `osos` is 7.21 MiB of software
-    /// that can no longer be downloaded; an installer that edits in place is one mistake away from
-    /// destroying the only copy somebody has. So the result is a new drive, named for what is in
-    /// it, and switching operating systems is switching drives — which is what the machine is
-    /// actually doing.
-    fn install_row(&mut self, ui: &mut egui::Ui) {
-        // Collect a finished install first, so the button below is drawn in the right state.
-        let done = self.install_slot.lock().unwrap().take();
-        if let Some(done) = done {
-            self.install_busy = false;
-            match done {
-                Ok((drive, report)) => {
-                    for line in report {
-                        self.say(line);
-                    }
-                    self.images.pending_os = None;
-                    self.images.pending_bundle = None;
-                    self.images.disk = drive.to_string_lossy().into_owned();
-                    self.images.revalidate();
-                    self.say(format!("installed — {} is the drive now", drive.display()));
-                }
-                Err(e) => self.say(format!("install failed: {e}")),
-            }
-        }
-        if self.images.pending_os.is_none() && self.images.pending_bundle.is_none() {
-            return;
-        }
-        let drive = self.images.disk.trim().to_string();
-        ui.add_space(8.0);
-        egui::Frame::NONE
-            .fill(UI_BG_DEEP)
-            .inner_margin(8.0)
-            .corner_radius(4.0)
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                let os = self.images.pending_os.clone();
-                let bundle = self.images.pending_bundle.clone();
-                let what = match (&os, &bundle) {
-                    (Some(_), Some(_)) => "an operating system and its files",
-                    (Some(_), None) => "an operating system",
-                    _ => "files for the volume",
-                };
-                if drive.is_empty() {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Ready to install {what} — but there is no drive yet. Add one above,                              or build one from an .ipsw."
-                        ))
-                        .color(UI_TEXT_DIM),
-                    );
-                    return;
-                }
-                ui.label(
-                    egui::RichText::new(format!("Ready to install {what}."))
-                        .strong()
-                        .color(UI_TEXT),
-                );
-                ui.label(
-                    egui::RichText::new(
-                        "Onto a copy of the drive — the original is not touched. Apple's own                          bootloader finds it in the firmware partition and runs it, so nothing new                          boots and nothing is bypassed.",
-                    )
-                    .small()
-                    .color(UI_TEXT_FAINT),
-                );
-                ui.add_space(6.0);
-                // **Adding to a drive is not the same act as installing an operating system, and
-                // it should not cost eight gigabytes.**
-                //
-                // Rockbox plugins, themes, games and fonts all ship as zips that go onto the
-                // volume beside an install that is already there — which is what somebody doing
-                // this actually wants, and copying the whole drive for every one of them is what
-                // `put_files` calls "its own kind of hostile". So a bundle with no operating
-                // system beside it, landing on a drive this program built, goes on in place.
-                //
-                // A drive the *user* supplied never does: it might be the only image of an iPod
-                // they own. That is the same rule `write_target` already applies to the machine's
-                // own writes, and it is applied here for the same reason.
-                let bundle_only = os.is_none() && bundle.is_some();
-                let ours = Path::new(&drive).parent().is_some_and(|p| p == drives_dir());
-                if self.install_busy {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(
-                            egui::RichText::new("installing — copying eight gigabytes")
-                                .color(UI_TEXT_DIM),
-                        );
-                    });
-                    ui.ctx().request_repaint_after(Duration::from_millis(200));
-                    return;
-                }
-                let mut in_place = false;
-                if bundle_only && ours {
-                    in_place = ui
-                        .button("Add to this drive")
-                        .on_hover_text(
-                            "Writes onto the drive you are running, which this program built. \
-                             Rockbox plugins, themes and games go on this way.",
-                        )
-                        .clicked();
-                }
-                if ui.button("Install onto a new drive").clicked() || in_place {
-                    let src = PathBuf::from(&drive);
-                    // Named for what goes into it, so the drive list reads as a list of machines.
-                    let stem = os
-                        .as_deref()
-                        .or(bundle.as_deref())
-                        .map(|p| {
-                            Path::new(p)
-                                .file_stem()
-                                .map(|s| s.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| "installed".into())
-                        })
-                        .unwrap_or_else(|| "installed".into());
-                    let out =
-                        if in_place { src.clone() } else { drives_dir().join(format!("{stem}.img")) };
-                    let slot = self.install_slot.clone();
-                    self.install_busy = true;
-                    self.say(format!("installing into {} …", out.display()));
-                    std::thread::spawn(move || {
-                        let r = (|| -> Result<(PathBuf, Vec<String>), String> {
-                            let mut report = Vec::new();
-                            match &os {
-                                // An OS goes into a NEW file, which is also what makes the copy.
-                                Some(p) => report.extend(eapp_loader::install::install_os(
-                                    &src,
-                                    Path::new(p),
-                                    &out,
-                                )?),
-                                // Files only. `out == src` when the person asked to add to the
-                                // drive they are running; otherwise this is the copy.
-                                None if out != src => {
-                                    std::fs::copy(&src, &out)
-                                        .map_err(|e| format!("copying the drive: {e}"))?;
-                                    report.push(format!("  copied {} -> {}", src.display(), out.display()));
-                                }
-                                None => {}
-                            }
-                            if let Some(b) = &bundle {
-                                report.extend(eapp_loader::install::put_zip(&out, Path::new(b))?);
-                            }
-                            Ok((out, report))
-                        })();
-                        *slot.lock().unwrap() = Some(r);
-                    });
-                }
-            });
-    }
-
-    /// Take however many files arrived — dropped, or chosen from a dialog — and route each one.
-    ///
-    /// The one door. Both ways of handing the window a file end up here, so there is no second
-    /// place where "what is this file" could be answered differently.
-    fn take(&mut self, paths: &[String]) {
-        for p in paths {
-            let sectors = self.synthetic_model().sectors();
-            let line = self.images.accept(Path::new(p), &drives_dir(), sectors);
-            self.say(line);
-        }
-    }
-
     /// Everything the project knows about obtaining the two files.
     ///
     /// A page, not a fold. These paragraphs are why several people got a working emulator instead
@@ -3117,12 +2780,6 @@ impl App {
             ui.add_space(18.0);
             app.where_from(ui);
         });
-    }
-
-    /// Open the help, remembering where from.
-    fn open_help(&mut self) {
-        self.back_to = self.screen;
-        self.screen = Screen::Help;
     }
 
     /// Open the details of one of the two chosen files, remembering where from.
@@ -3988,6 +3645,132 @@ impl App {
         };
     }
 
+    /// Change a device: its name, its boot ROM, its disk, its colour.
+    ///
+    /// **Two dropdowns and a name.** Everything offered here already exists — this is composition,
+    /// not creation, which is why it is not the wizard. Returns true when it drew.
+    fn device_editor(&mut self, ui: &mut egui::Ui) -> bool {
+        let Some(mut d) = self.editing.clone() else {
+            return false;
+        };
+        self.section(ui, "EDIT DEVICE");
+        ui.horizontal(|ui| {
+            ui.label("Name    ");
+            ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(240.0));
+        });
+
+        // Firmware: every firmware resource, plus "generate one" — which is what a device with no
+        // named resource is already doing.
+        ui.horizontal(|ui| {
+            ui.label("Firmware");
+            let cur = d.firmware.clone().unwrap_or_else(|| "generate one".into());
+            egui::ComboBox::from_id_salt("edit-firmware")
+                .selected_text(cur.clone())
+                .width(240.0)
+                .show_ui(ui, |ui| {
+                    let mut pick = cur.clone();
+                    ui.selectable_value(&mut pick, "generate one".into(), "generate one");
+                    for i in &self.settings.resources {
+                        if matches!(&i.what, eapp_loader::settings::Resource::Firmware(_)) {
+                            ui.selectable_value(&mut pick, i.name.clone(), i.name.as_str());
+                        }
+                    }
+                    if pick != cur {
+                        d.firmware = (pick != "generate one").then_some(pick);
+                    }
+                });
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Disk    ");
+            let cur = d.disk.clone().unwrap_or_else(|| "no disk".into());
+            egui::ComboBox::from_id_salt("edit-disk")
+                .selected_text(cur.clone())
+                .width(240.0)
+                .show_ui(ui, |ui| {
+                    let mut pick = cur.clone();
+                    ui.selectable_value(&mut pick, "no disk".into(), "no disk");
+                    for k in &self.settings.disks {
+                        let what = if k.installed.is_empty() {
+                            k.name.clone()
+                        } else {
+                            format!("{} — {}", k.name, k.installed.join(" · "))
+                        };
+                        ui.selectable_value(&mut pick, k.name.clone(), what);
+                    }
+                    if pick != cur {
+                        d.disk = (pick != "no disk").then_some(pick);
+                    }
+                });
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Colour  ");
+            let cur = d.chassis.map(|c| c.as_str()).unwrap_or("from the iPod");
+            egui::ComboBox::from_id_salt("edit-colour")
+                .selected_text(cur)
+                .width(240.0)
+                .show_ui(ui, |ui| {
+                    let mut pick = d.chassis;
+                    ui.selectable_value(&mut pick, None, "from the iPod");
+                    for c in [Colour::White, Colour::Black, Colour::U2] {
+                        ui.selectable_value(&mut pick, Some(c), c.as_str());
+                    }
+                    d.chassis = pick;
+                });
+        });
+
+        ui.add_space(10.0);
+        let mut close = false;
+        let mut save = false;
+        ui.horizontal(|ui| {
+            if ui.button("cancel").clicked() {
+                close = true;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(!d.name.trim().is_empty(), egui::Button::new("save"))
+                    .clicked()
+                {
+                    save = true;
+                }
+            });
+        });
+        self.editing = Some(d.clone());
+        if save {
+            let was = self.editing_was.clone();
+            // A rename replaces rather than leaving two, and `current` follows it — otherwise the
+            // device that is running stops being in the list under the name it is running as.
+            self.settings
+                .devices
+                .retain(|x| x.name != was && x.name != d.name);
+            self.settings.devices.push(d.clone());
+            if self.settings.current.as_deref() == Some(was.as_str()) {
+                self.settings.current = Some(d.name.clone());
+                // The live fields follow the edit, so "restart" applies what is on screen.
+                self.settings.run_device(&d.name);
+                self.images.flash = match &self.settings.nor {
+                    eapp_loader::nor::Source::File(p) => p.to_string_lossy().into_owned(),
+                    eapp_loader::nor::Source::Synthetic { .. } => String::new(),
+                };
+                self.images.disk = self
+                    .settings
+                    .disk
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.images.revalidate();
+            }
+            self.settings.save();
+            self.say(format!("device: saved {}", d.name));
+            close = true;
+        }
+        if close {
+            self.editing = None;
+        }
+        true
+    }
+
     /// **Devices — the only thing that can be run.**
     ///
     /// A device is a firmware and a disk under a name. It replaced a page that picked two file
@@ -3996,6 +3779,9 @@ impl App {
     /// is just the one `current` names.
     fn pane_devices(&mut self, ui: &mut egui::Ui) {
         if self.wizard(ui) {
+            return;
+        }
+        if self.device_editor(ui) {
             return;
         }
         self.section(ui, "DEVICES");
@@ -4012,6 +3798,7 @@ impl App {
         let current = self.settings.current.clone();
         let mut run: Option<String> = None;
         let mut forget: Option<String> = None;
+        let mut edit: Option<eapp_loader::settings::Device> = None;
         egui::ScrollArea::vertical()
             .id_salt("devices")
             .max_height(190.0)
@@ -4039,8 +3826,22 @@ impl App {
                             );
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("forget").clicked() {
+                            if ui
+                                .small_button("delete")
+                                .on_hover_text(
+                                    "Removes the device. Its disk and boot ROM are untouched and \
+                                     stay in their lists.",
+                                )
+                                .clicked()
+                            {
                                 forget = Some(d.name.clone());
+                            }
+                            if ui
+                                .small_button("edit")
+                                .on_hover_text("Rename it, or point it at a different ROM or disk.")
+                                .clicked()
+                            {
+                                edit = Some(d.clone());
                             }
                             if !live && ui.small_button("run").clicked() {
                                 run = Some(d.name.clone());
@@ -4118,6 +3919,10 @@ impl App {
             }
         });
 
+        if let Some(d) = edit {
+            self.editing_was = d.name.clone();
+            self.editing = Some(d);
+        }
         if let Some(name) = run {
             if self.settings.run_device(&name) {
                 self.images.flash = match &self.settings.nor {
@@ -4804,33 +4609,20 @@ impl App {
         Some(self.settings.file_away(what, &suggested))
     }
 
-    /// Put the boot ROM and disk this iPod is running into the lists. Returns how many were new.
-    fn file_live_machine(&mut self) -> usize {
-        use eapp_loader::settings::Resource;
-        let before = self.settings.resources.len() + self.settings.disks.len();
-        let rom = self.settings.nor.clone();
-        let suggested = match &rom {
-            eapp_loader::nor::Source::File(p) => p
-                .file_stem()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "a boot ROM".into()),
-            eapp_loader::nor::Source::Synthetic { model, seed, .. } => {
-                format!("{model}, seed {seed}")
-            }
-        };
-        self.settings.file_away(Resource::Firmware(rom), &suggested);
-        if let Some(d) = self.settings.disk.clone() {
-            let name = d
-                .file_stem()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "a drive".into());
-            self.settings.file_disk(d, &name);
-        }
-        self.settings.resources.len() + self.settings.disks.len() - before
-    }
-
     fn pane_about(&mut self, ui: &mut egui::Ui) {
         self.section(ui, "ABOUT");
+        // **The help page needs a door.** It was reached from a button on the old setup screen,
+        // and deleting that screen left a page nothing could open — the same way the details page
+        // was orphaned one commit earlier. A page with no route to it is a page that is gone.
+        if ui
+            .button("Keyboard and controls…")
+            .on_hover_text("Every key, and what the wheel and the buttons do.")
+            .clicked()
+        {
+            self.back_to = self.screen;
+            self.screen = Screen::Help;
+        }
+        ui.add_space(8.0);
         // **The repository, where somebody looking for it looks.** This program has no other way of
         // saying where it comes from — the licence is in the source, the research is in the source,
         // and the only copy anyone runs is a binary. A version number with nowhere to go is a
@@ -7330,5 +7122,38 @@ mod tests {
             out.textures_delta.clear();
         }
         used
+    }
+
+    /// **Every screen has a route to it, in the source.**
+    ///
+    /// Three pages were orphaned in one session by deleting the thing that opened them: the details
+    /// page when the file rows went, the help page when the setup screen went, and the first run
+    /// itself nearly, when the wizard replaced its body. Each compiled, each passed every test, and
+    /// each was simply unreachable.
+    ///
+    /// Rust's own dead-code warning catches a `Screen` variant nobody constructs — but only while
+    /// the variant is unused *everywhere*, and a variant that survives in a `match` arm does not
+    /// trip it. This asserts the assignment exists.
+    #[test]
+    fn every_screen_can_be_opened_from_somewhere() {
+        let src = include_str!("main.rs");
+        for screen in ["Settings", "Firmware", "Help", "Details", "Device"] {
+            let assigned = src
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .any(|l| {
+                    l.contains(&format!("screen = Screen::{screen}"))
+                        || l.contains(&format!("Screen::{screen};"))
+                });
+            assert!(
+                assigned,
+                "nothing opens Screen::{screen} — it is drawn by `page` and reached by nobody"
+            );
+        }
+        // The first run is the exception and states why: it is where the window starts.
+        assert!(
+            src.contains("Screen::FirstRun"),
+            "the first run is gone entirely"
+        );
     }
 }
