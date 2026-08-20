@@ -6711,6 +6711,24 @@ impl Ata {
             // RECALIBRATE — obsolete since ATA-4 and still what Linux issues when it is trying to
             // recover a drive after a timeout. Aborting it turns a recoverable stall into
             // `DriveStatusError`, which is a worse report than the one the drive should have given.
+            // **The power-management family, which a real drive answers and we were aborting.**
+            //
+            // `0xe0` STANDBY IMMEDIATE was already handled; its siblings were not, so a driver that
+            // spins the disk down or asks what mode it is in got ABRT — and Linux, which issues
+            // `0xe3` IDLE once its root filesystem is up, reported `DriveStatusError` for a command
+            // every ATA drive since ATA-1 has accepted.
+            //
+            // `0xe5` CHECK POWER MODE answers in the sector-count register: `0xff` is "active or
+            // idle", which is what a drive with no spin-down modelled is.
+            0xe1 | 0xe2 | 0xe3 | 0xe6 => {
+                self.status = ATA_DRDY | ATA_DSC;
+                self.irq_pending = true;
+            }
+            0xe5 => {
+                self.nsector = 0xff;
+                self.status = ATA_DRDY | ATA_DSC;
+                self.irq_pending = true;
+            }
             0x10 => {
                 self.status = ATA_DRDY | ATA_DSC;
                 self.irq_pending = true;
