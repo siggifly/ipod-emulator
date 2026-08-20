@@ -1683,7 +1683,13 @@ impl Bus for Memory {
         // the hoist is exactly how the first two were lost.
         if let Some((idx, off)) = self
             .fast_region(a, true)
-            .filter(|_| Mbx::strobe(a).is_none())
+            // **The queues have to leave the fast path too, and forgetting them cost a
+            // measurement.** The hoist copies straight into the region, so a write that needs to
+            // *do* something never reaches `write8_inner` — which is what this filter exists for,
+            // and adding a device to the slow path without adding it here is a fix that changes
+            // nothing. Measured: with the queue absent from this line, the second core ran exactly
+            // the same 369 943 068 instructions it had before the queue was modelled at all.
+            .filter(|_| Mbx::strobe(a).is_none() && Mbx::queue(a).is_none())
         {
             // `watch_range` and `input_probe` were missing from this hoist, and `count` is the only
             // thing that feeds them — so `--watch-range` saw *byte* writes (write8_inner calls
@@ -1766,6 +1772,28 @@ impl Memory {
         // `ldr`, so both widths have to agree. See `core_register`.
         if let Some(word) = self.core_register(addr & !3) {
             return (word >> ((addr & 3) * 8)) as u8;
+        }
+        // **Reading `CPU_QUEUE` is what clears it** — Rockbox's `pp5020.h` says so in as many
+        // words, and it is the whole of the handshake: the COP posts, the CPU is interrupted, the
+        // CPU reads, and the read both takes the message and drops the line. A queue that could
+        // only be cleared by writing would need a strobe nothing writes.
+        //
+        // Taken on the **last byte of the word**, so one `ldr` clears once — the same rule the
+        // click wheel's `DATA` counts on, and for the same reason: a word read arrives here as four
+        // byte reads and clearing on the first would drop three quarters of the value.
+        if Mbx::queue(addr) == Some(Core::Cpu) && addr & 3 == 3 && self.asking == Core::Cpu {
+            let word = Mbx::BASE + Mbx::CPU_QUEUE;
+            let v = self.read32(word);
+            if v & Mbx::MSG != 0 {
+                let cleared = (v & !Mbx::MSG).to_le_bytes();
+                for (k, b) in cleared.iter().enumerate() {
+                    if let Some((buf, i)) = self.locate_write(word + k as u32) {
+                        buf[i] = *b;
+                    }
+                }
+                self.int_pending &= !(1 << Mbx::IRQ);
+            }
+            return (v >> 24) as u8;
         }
         // Ahead of `locate`, or the zeroed MMIO region would answer first and the clock would
         // still read as stopped.
@@ -2325,6 +2353,33 @@ impl Memory {
         // ledger #7's second core is exactly what this register exists to coordinate with: the day
         // the COP runs, an inert mailbox is a deadlock. Zero risk to what we measure — RetailOS
         // does not touch it.
+        // **Posting to a queue interrupts the core it is addressed to.**
+        //
+        // This was three registers of backing store, and the two queues were not modelled at all —
+        // so RetailOS's second core posted work into `CPU_QUEUE` and the first core was never told.
+        // Measured on a cold retail boot: the COP writes `0x60001010` four times from `0x4001d928`
+        // with bit 29 set, **nothing anywhere reads any mailbox register**, and the COP then spins
+        // 123 266 376 times on a flag at `0x40000fac` that only the CPU's handler would clear. It
+        // is awake and doing nothing for the whole boot, which is about half of everything this
+        // emulator interprets.
+        //
+        // RetailOS has the interrupt enabled and is waiting for it: `CPU_INT_EN_STAT` reads
+        // `0xcc802017`, and bit 4 is `MAILBOX_IRQ`.
+        // **Only `CPU_QUEUE` raises anything, and that is a limit rather than a choice.**
+        // `int_pending` is one set of asserted lines for both cores — which is how the part works,
+        // the per-core *enable* registers deciding who takes each — so there is no way to assert
+        // IRQ 4 at the COP alone. `COP_QUEUE` is therefore left as storage. Nothing writes it: in a
+        // whole cold boot the only mailbox traffic is the COP's four posts to `CPU_QUEUE`.
+        if Mbx::queue(addr) == Some(Core::Cpu) {
+            let word = Mbx::BASE + (addr & !3);
+            let lane = (addr & 3) as usize;
+            let mut cur = self.read32(word).to_le_bytes();
+            cur[lane] = val;
+            if u32::from_le_bytes(cur) & Mbx::MSG != 0 {
+                // Level, like every other line here: it stays until the read that clears it.
+                self.int_pending |= 1 << Mbx::IRQ;
+            }
+        }
         if let Some(set) = Mbx::strobe(addr) {
             // Byte-wise, because a 32-bit store arrives here as four of these; the lane is the
             // low two address bits and is the same lane in STAT.
@@ -4744,6 +4799,24 @@ impl Mbx {
     pub const STAT: u32 = 0x00;
     pub const SET: u32 = 0x04;
     pub const CLR: u32 = 0x08;
+    /// `CPU_QUEUE` — **the COP posts here and the CPU is interrupted.** Rockbox's `pp5020.h`:
+    /// *"COP can set bit 29 — only CPU read clears it"*.
+    pub const CPU_QUEUE: u32 = 0x10;
+    /// `COP_QUEUE`, the same the other way: *"CPU can set bit 29 — only COP read clears it"*.
+    pub const COP_QUEUE: u32 = 0x20;
+    /// The bit that means "there is a message", and the one that raises the interrupt.
+    pub const MSG: u32 = 1 << 29;
+    /// `MAILBOX_IRQ` — Rockbox's `pp5020.h` line 108. Low bank, so `int_pending` bit 4.
+    pub const IRQ: u32 = 4;
+
+    /// Which queue an address is, and which core is meant to be woken by it.
+    pub fn queue(addr: u32) -> Option<Core> {
+        match addr.wrapping_sub(Self::BASE) & !3 {
+            Self::CPU_QUEUE => Some(Core::Cpu),
+            Self::COP_QUEUE => Some(Core::Cop),
+            _ => None,
+        }
+    }
 
     /// `Some(true)` for a write to SET, `Some(false)` for CLR, `None` for anything else.
     pub fn strobe(addr: u32) -> Option<bool> {
