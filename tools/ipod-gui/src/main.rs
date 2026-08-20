@@ -1711,9 +1711,14 @@ impl App {
 
         // Remember what worked, so the next launch opens straight into the iPod.
         self.adopt_chassis_from_nor(&self.cfg.flash.clone());
-        // Only when there IS a file. A synthesised ROM has no path, and writing one here would
-        // turn "generate a 5.5G" into "load a file that is not there" on the next launch.
-        self.settings.nor = eapp_loader::nor::Source::File(self.cfg.flash.clone());
+        // **Only when there IS a file** — and until 2026-08-20 this comment described a guard that
+        // was never written. The assignment ran unconditionally, so every successful boot replaced
+        // the setting with `File(path)`; for a synthesised ROM `cfg.flash` is an empty `PathBuf`,
+        // so it persisted `File("")`. One boot with a real dump made "generate a 5.5G" unreachable
+        // for good, which is exactly what it says it must not do.
+        if !self.cfg.flash.as_os_str().is_empty() {
+            self.settings.nor = eapp_loader::nor::Source::File(self.cfg.flash.clone());
+        }
         self.settings.disk = Some(self.cfg.disk.clone());
         self.settings.save();
 
@@ -1811,13 +1816,34 @@ impl App {
         }
         self.down.push(b);
         self.push(WheelEvent::Button(b.mask(), true));
-        self.say(format!("{} pressed", b.label()));
+        self.say(self.held_line());
     }
 
     fn release(&mut self, b: Button) {
         if let Some(i) = self.down.iter().position(|x| *x == b) {
             self.down.remove(i);
             self.push(WheelEvent::Button(b.mask(), false));
+            self.say(self.held_line());
+        }
+    }
+
+    /// **What is held right now**, rather than what was pressed a moment ago.
+    ///
+    /// The log used to say `"MENU pressed"` per button and nothing at all on release, so a chord —
+    /// the thing the hardware actually distinguishes, and the thing every reset gesture is made of —
+    /// was unreadable: `MENU+SELECT` appeared as two lines that also appear when you press one and
+    /// then the other, and letting go appeared as nothing.
+    ///
+    /// A line naming the whole set answers "what does the machine think I am doing", which is the
+    /// question someone reading this log has.
+    fn held_line(&self) -> String {
+        match self.down.len() {
+            0 => "no buttons held".to_string(),
+            1 => format!("{} held", self.down[0].label()),
+            _ => {
+                let names: Vec<&str> = self.down.iter().map(|b| b.label()).collect();
+                format!("{} held", names.join(" + "))
+            }
         }
     }
 
@@ -3840,13 +3866,25 @@ impl App {
                 transport(&p, b, at, size, ink);
             }
         }
+        // **The centre button is lit the way the other four are.** They turn their glyph blue; this
+        // one only darkened its fill from 0.94 to 0.82, which is invisible at any size — so holding
+        // SELECT looked like nothing, and holding MENU+SELECT looked like MENU alone. The state was
+        // right all along (`down` is a set and every button reads it); only the drawing was silent.
         let select_lit = self.down.contains(&Button::Select);
         p.circle_filled(
             c,
             ring.select,
             if select_lit { wheel_fill.gamma_multiply(0.82) } else { wheel_fill.gamma_multiply(0.94) },
         );
-        p.circle_stroke(c, ring.select, Stroke::new(1.0, Color32::from_black_alpha(26)));
+        p.circle_stroke(
+            c,
+            ring.select,
+            if select_lit {
+                Stroke::new(2.0, Color32::from_rgb(0x2f, 0x6f, 0xd0))
+            } else {
+                Stroke::new(1.0, Color32::from_black_alpha(26))
+            },
+        );
 
         // Where the machine believes the finger is. Drawn from the emulator's `position`, not from
         // the pointer, so a click the model never received is visibly a click that did not happen.
