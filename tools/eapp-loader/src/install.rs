@@ -459,6 +459,41 @@ pub fn install_linux(
         ));
     }
 
+    // **`ipodloader2` reads FAT32 type `0x0B` and no other, and real iPods carry `0x0C`.**
+    //
+    // `vfs.c` switches on the MBR partition type with `case 0x83` for ext2 and `case 0xB` for
+    // FAT32, and nothing else — a `0x0C` volume prints `Unknown 0xC` and then `No valid paritions
+    // found!`, which is the loader's own spelling. Both types are legitimate FAT32: `0x0B` is the
+    // CHS form and `0x0C` the LBA one, and every drive image in this project taken off real
+    // hardware is `0x0C` while `make-disk`'s own volumes are `0x0B`.
+    //
+    // So this is an upstream defect rather than ours, and the rule from ROADMAP.md holds — **do
+    // not rewrite the partition type to match the loader.** A drive edited to suit a bug is a
+    // drive that encodes the bug. What is left is to refuse clearly, because the alternative is a
+    // drive that installs without complaint and then cannot boot, which costs whoever built it an
+    // afternoon finding out why.
+    {
+        let mut mbr = [0u8; 512];
+        let mut f = std::fs::File::open(src).map_err(|e| format!("{}: {e}", src.display()))?;
+        std::io::Read::read_exact(&mut f, &mut mbr).map_err(|e| e.to_string())?;
+        let data_type = (0..4)
+            .map(|i| mbr[446 + i * 16 + 4])
+            .find(|t| matches!(t, 0x0b | 0x0c))
+            .unwrap_or(0);
+        if data_type == 0x0c {
+            return Err(format!(
+                "{}: its data partition is FAT32 type 0x0C (the LBA form), and `ipodloader2` \
+                 2.9.0d reads only 0x0B — `vfs.c` has no case for it and reports `No valid \
+                 paritions found!`. Installing here would produce a drive that cannot boot.\n\
+                 \n\
+                 A drive built by `ipod-boot make-disk` from an .ipsw is 0x0B and works. Rewriting \
+                 this one's partition type would make the loader happy and the disk a lie, so this \
+                 does neither.",
+                src.display()
+            ));
+        }
+    }
+
     // The bootloader goes where Apple's own bootloader looks, exactly as another OS would.
     let mut report = install_os(src, loader, out)?;
 
