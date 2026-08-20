@@ -68,8 +68,12 @@ pub enum Resource {
     /// An `.ipsw`. Not bootable itself and never installed onto anything: a drive is **built** from
     /// it, and the drive is what runs.
     Installer(PathBuf),
-    /// An operating system, a bootloader, or a bundle of files for the volume. **Installed onto a
-    /// disk** — it is not a machine part and cannot be run on its own.
+    /// A bootloader: `ipodloader2`, or Rockbox's. **Goes in the firmware partition**, which holds
+    /// exactly one thing — which is why it is not filed with the software that goes on the volume.
+    /// Everything called dual or triple boot is one of these offering the rest.
+    Bootloader(PathBuf),
+    /// An operating system, or a bundle of files for the volume. **Installed onto a disk** — it is
+    /// not a machine part and cannot be run on its own.
     Software(PathBuf),
 }
 
@@ -79,6 +83,7 @@ impl Resource {
         match self {
             Resource::Firmware(_) => "firmware",
             Resource::Installer(_) => "installer",
+            Resource::Bootloader(_) => "bootloader",
             Resource::Software(_) => "software",
         }
     }
@@ -88,6 +93,7 @@ impl Resource {
         match self {
             Resource::Firmware(_) => "chosen by a device",
             Resource::Installer(_) => "makes a disk",
+            Resource::Bootloader(_) => "goes in the firmware partition",
             Resource::Software(_) => "installs onto a disk",
         }
     }
@@ -98,7 +104,7 @@ impl Resource {
         match self {
             Resource::Firmware(crate::nor::Source::File(p)) => Some(p),
             Resource::Firmware(_) => None,
-            Resource::Installer(p) | Resource::Software(p) => Some(p),
+            Resource::Installer(p) | Resource::Software(p) | Resource::Bootloader(p) => Some(p),
         }
     }
 }
@@ -443,6 +449,7 @@ impl Settings {
                         "kind" => {
                             item.what = match v {
                                 "installer" | "ipsw" => Resource::Installer(PathBuf::new()),
+                                "bootloader" => Resource::Bootloader(PathBuf::new()),
                                 "software" | "disk" => Resource::Software(PathBuf::new()),
                                 _ => Resource::Firmware(crate::nor::Source::default()),
                             };
@@ -454,6 +461,7 @@ impl Settings {
                             let p = PathBuf::from(v);
                             item.what = match &item.what {
                                 Resource::Installer(_) => Resource::Installer(p),
+                                Resource::Bootloader(_) => Resource::Bootloader(p),
                                 Resource::Software(_) => Resource::Software(p),
                                 Resource::Firmware(_) => {
                                     Resource::Firmware(crate::nor::Source::File(p))
@@ -619,7 +627,7 @@ impl Settings {
                         out.push_str(&format!("res.{i}.{line}\n"));
                     }
                 }
-                Resource::Installer(p) | Resource::Software(p) => {
+                Resource::Installer(p) | Resource::Software(p) | Resource::Bootloader(p) => {
                     out.push_str(&format!("res.{i}.path = {}\n", p.display()));
                 }
             }

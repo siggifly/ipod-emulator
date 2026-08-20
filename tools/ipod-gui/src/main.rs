@@ -1355,6 +1355,8 @@ struct App {
     install_busy: bool,
     settings_tab: SettingsTab,
     /// What the machine being saved will be called.
+    /// Which resource groups are open. See `GROUP_*`.
+    groups: [bool; 5],
     /// A serial being typed in, when the field is open.
     typing_serial: Option<String>,
     /// Whether the preferences sheet is open over the library.
@@ -1872,6 +1874,9 @@ impl App {
             install_slot: Arc::new(Mutex::new(None)),
             install_busy: false,
             settings_tab: SettingsTab::default(),
+            // Disks open, the rest folded: what you have is usually a list of disks, and the
+            // four kinds under it are what they are made from.
+            groups: [true, false, false, false, false],
             typing_serial: None,
             prefs: false,
             editing: None,
@@ -3051,15 +3056,13 @@ impl App {
         true
     }
 
-    /// Step 1 — which iPod, and where its boot ROM comes from.
+    /// Step 1 — **the boot ROM first, because it decides what the rest of the questions are.**
+    ///
+    /// This asked for a model and then for a ROM, which is backwards: a dump *states* its model,
+    /// its serial and its GUID, so everything above it was a question the answer had already been
+    /// given to — and the two could disagree, with the dump winning silently. Ask where the ROM
+    /// comes from, then show what that implies.
     fn wizard_ipod(&mut self, ui: &mut egui::Ui) {
-        self.model_rows(ui);
-        ui.add_space(10.0);
-        ui.label(egui::RichText::new("Boot ROM").color(UI_HEADING));
-
-        // **Every dump already here is offered.** Somebody who supplied one should never be asked
-        // for it again — that was the point of the resources list, and a wizard that only offers
-        // "generate" or "go and find a file" makes the list pointless.
         let dumps: Vec<String> = self
             .settings
             .resources
@@ -3073,6 +3076,7 @@ impl App {
             .map(|i| i.name.clone())
             .collect();
 
+        ui.label(egui::RichText::new("Boot ROM").color(UI_HEADING));
         let mut chosen = self.compose.as_ref().and_then(|c| c.firmware.clone());
         let mut pick_file = false;
         ui.horizontal(|ui| {
@@ -3089,99 +3093,11 @@ impl App {
                 {
                     chosen = None;
                 }
-                if chosen.is_none() {
-                    let id = self.settings.nor.identity().ok();
-                    ui.horizontal(|ui| {
-                        ui.add_space(22.0);
-                        ui.vertical(|ui| {
-                            if let Some(id) = &id {
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "serial  {}",
-                                        id.serial.as_deref().unwrap_or("—")
-                                    ))
-                                    .small()
-                                    .monospace()
-                                    .color(UI_TEXT_FAINT),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "GUID    {}",
-                                        format!("{:016X}", id.guid)
-                                    ))
-                                    .small()
-                                    .monospace()
-                                    .color(UI_TEXT_FAINT),
-                                );
-                            }
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .small_button("regenerate")
-                                    .on_hover_text("A different seed: a different serial and GUID.")
-                                    .clicked()
-                                {
-                                    self.reseed();
-                                }
-                                if ui
-                                    .small_button("type my own…")
-                                    .on_hover_text(
-                                        "The serial off a real iPod, if you have one. It is \
-                                         checked for shape before it is used.",
-                                    )
-                                    .clicked()
-                                {
-                                    self.typing_serial = Some(
-                                        id.as_ref()
-                                            .and_then(|i| i.serial.clone())
-                                            .unwrap_or_default(),
-                                    );
-                                }
-                            });
-                            // **Checked as it is typed, and refused before it is kept.** A serial
-                            // written into a `SysCfg` is read by the firmware and by iTunes, and
-                            // nothing downstream of here would ever question it — so the one place
-                            // it can be questioned is the field it is entered in.
-                            if let Some(mut typed) = self.typing_serial.clone() {
-                                ui.horizontal(|ui| {
-                                    ui.add(
-                                        egui::TextEdit::singleline(&mut typed)
-                                            .hint_text("7Q7411K2VQK")
-                                            .desired_width(150.0)
-                                            .char_limit(11),
-                                    );
-                                    let ok = eapp_loader::identity::Identity::check_serial(&typed);
-                                    if ui
-                                        .add_enabled(ok.is_ok(), egui::Button::new("use").small())
-                                        .clicked()
-                                    {
-                                        self.set_serial(&typed);
-                                        self.typing_serial = None;
-                                    } else if ui.small_button("cancel").clicked() {
-                                        self.typing_serial = None;
-                                    } else {
-                                        self.typing_serial = Some(typed);
-                                    }
-                                });
-                                if let Some(w) = self
-                                    .typing_serial
-                                    .as_ref()
-                                    .map(|t| eapp_loader::identity::Identity::check_serial(t))
-                                    .and_then(|r| r.err())
-                                {
-                                    ui.label(
-                                        egui::RichText::new(format!("     {w}"))
-                                            .small()
-                                            .color(UI_WARN),
-                                    );
-                                }
-                            }
-                        });
-                    });
-                }
+                // **Every dump already here is offered.** Somebody who supplied one should never
+                // be asked for it again.
                 for name in &dumps {
                     if ui
                         .radio(chosen.as_deref() == Some(name.as_str()), name.as_str())
-                        .on_hover_text("A dump you have already supplied. Nothing to find again.")
                         .clicked()
                     {
                         chosen = Some(name.clone());
@@ -3189,19 +3105,46 @@ impl App {
                 }
                 if ui
                     .radio(false, "Use a dump I have…")
-                    .on_hover_text(
-                        "A 1 MB NOR dump. It is added to Resources, so every device you make \
-                         after this can use it without you finding it again.",
-                    )
+                    .on_hover_text("Added to Resources, so it is offered here from now on.")
                     .clicked()
                 {
                     pick_file = true;
                 }
             });
         });
-        // **The case is a fact about this device, not a preference of the window.** It lived in
-        // an Appearance section beside Storage and About, so two places set one thing and the last
-        // one written won. Which iPod you had belongs with which iPod you are describing.
+        if pick_file {
+            if let Some(p) = pick_files("A 1 MB NOR dump", &["bin", "rom"]).first() {
+                if let Some(name) = self.file_into_library(&PathBuf::from(p)) {
+                    chosen = Some(name);
+                    self.settings.save();
+                }
+            }
+        }
+        if let Some(c) = self.compose.as_mut() {
+            c.firmware = chosen.clone();
+        }
+
+        // The path of the chosen dump, if it is one.
+        let dump: Option<PathBuf> = chosen.as_deref().and_then(|n| {
+            self.settings
+                .resources
+                .iter()
+                .find(|i| i.name == n)
+                .and_then(|i| i.what.path().map(|p| p.to_path_buf()))
+        });
+
+        // **One panel, two modes, one height.** Both are drawn into the same reserved space so the
+        // page does not move when you change your mind — see `reserved`.
+        ui.add_space(10.0);
+        reserved(ui, IDENTITY_H, |ui| match &dump {
+            Some(path) => self.identity_from_dump(ui, path),
+            None => self.identity_generated(ui),
+        });
+
+        // **The case stays editable either way**, and it is the only thing that does when a dump is
+        // chosen. It is the *window's* iPod rather than the machine's identity — nothing the
+        // firmware reads changes with it — so a case swapped at some point in twenty years is an
+        // ordinary thing to say, whatever the `Mod#` says.
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Case").color(UI_HEADING));
@@ -3227,30 +3170,139 @@ impl App {
                     self.settings.chassis = pick;
                 });
         });
+        self.wizard_buttons(ui);
+    }
 
-        ui.add_space(6.0);
+    /// What a dump says about itself. **Read-only: these are not choices.**
+    fn identity_from_dump(&mut self, ui: &mut egui::Ui, path: &Path) {
         ui.label(
-            egui::RichText::new(
-                "ℹ A generated ROM boots Apple's software, Rockbox and iPodLinux. Apple's own \
-                 bootloader and the service diagnostics live inside a real dump and cannot be \
-                 generated.",
-            )
-            .small()
-            .color(UI_TEXT_FAINT),
+            egui::RichText::new("READ FROM THE DUMP")
+                .small()
+                .color(UI_HEADING),
         );
+        ui.add_space(2.0);
+        for (k, v) in nor_facts(path) {
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(format!("{k:<10}"))
+                        .small()
+                        .monospace()
+                        .color(UI_TEXT_FAINT),
+                );
+                ui.label(
+                    egui::RichText::new(v)
+                        .small()
+                        .monospace()
+                        .color(UI_TEXT_DIM),
+                );
+            });
+        }
+        ui.add_space(2.0);
+        ui.label(
+            egui::RichText::new("Not editable — this is what the iPod is.")
+                .small()
+                .color(UI_TEXT_FAINT),
+        );
+    }
 
-        if pick_file {
-            if let Some(p) = pick_files("A 1 MB NOR dump", &["bin", "rom"]).first() {
-                if let Some(name) = self.file_into_library(&PathBuf::from(p)) {
-                    chosen = Some(name);
-                    self.settings.save();
+    /// The generated identity, which **is** a set of choices, each validated.
+    fn identity_generated(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("GENERATED").small().color(UI_HEADING));
+        ui.add_space(2.0);
+        self.model_rows(ui);
+        let id = self.settings.nor.identity().ok();
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("Serial    ")
+                    .small()
+                    .monospace()
+                    .color(UI_TEXT_FAINT),
+            );
+            match self.typing_serial.clone() {
+                // **Checked as it is typed, and refused before it is kept.** A serial written into
+                // a `SysCfg` is read by the firmware and by iTunes, and nothing downstream of here
+                // would ever question it — so the field it is entered in is the only place it can
+                // be questioned.
+                Some(mut typed) => {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut typed)
+                            .hint_text("7Q7411K2VQK")
+                            .desired_width(130.0)
+                            .char_limit(11),
+                    );
+                    let ok = eapp_loader::identity::Identity::check_serial(&typed);
+                    if ui
+                        .add_enabled(ok.is_ok(), egui::Button::new("use").small())
+                        .clicked()
+                    {
+                        self.set_serial(&typed);
+                        self.typing_serial = None;
+                    } else if ui.small_button("cancel").clicked() {
+                        self.typing_serial = None;
+                    } else {
+                        self.typing_serial = Some(typed);
+                    }
+                }
+                None => {
+                    ui.label(
+                        egui::RichText::new(
+                            id.as_ref()
+                                .and_then(|i| i.serial.clone())
+                                .unwrap_or_else(|| "—".into()),
+                        )
+                        .small()
+                        .monospace()
+                        .color(UI_TEXT_DIM),
+                    );
+                    if ui.small_button("regenerate").clicked() {
+                        self.reseed();
+                    }
+                    if ui.small_button("type my own…").clicked() {
+                        self.typing_serial = Some(
+                            id.as_ref()
+                                .and_then(|i| i.serial.clone())
+                                .unwrap_or_default(),
+                        );
+                    }
                 }
             }
-        }
-        if let Some(c) = self.compose.as_mut() {
-            c.firmware = chosen;
-        }
-        self.wizard_buttons(ui);
+        });
+        // One reserved line for the reason a typed serial is refused, so the panel does not grow
+        // the moment somebody types a character.
+        reserved(ui, 16.0, |ui| {
+            if let Some(w) = self
+                .typing_serial
+                .as_ref()
+                .and_then(|t| eapp_loader::identity::Identity::check_serial(t).err())
+            {
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new(w).small().color(UI_WARN));
+                });
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("GUID      ")
+                    .small()
+                    .monospace()
+                    .color(UI_TEXT_FAINT),
+            );
+            ui.label(
+                egui::RichText::new(id.map(|i| i.guid_hex()).unwrap_or_else(|| "—".into()))
+                    .small()
+                    .monospace()
+                    .color(UI_TEXT_DIM),
+            );
+            ui.label(
+                egui::RichText::new("from the seed")
+                    .small()
+                    .color(UI_TEXT_FAINT),
+            );
+        });
     }
 
     /// Step 2 — what goes on the disk. Free checkboxes, with a live verdict.
@@ -4116,18 +4168,7 @@ impl App {
     /// This is where installing happens, and the change that matters is the preposition: software
     /// installs *onto a disk you pick*, not onto whichever drive happens to be live. The old
     /// Software page had verbs with no target, which is most of why these pages read as unrelated.
-    fn disks_section(&mut self, ui: &mut egui::Ui) {
-        self.section(ui, "DISKS");
-        ui.label(
-            egui::RichText::new(
-                "Drive images. Make one from Apple's firmware, or import one you have; then \
-                 install software onto it and point a device at it.",
-            )
-            .small()
-            .color(UI_TEXT_FAINT),
-        );
-        ui.add_space(6.0);
-
+    fn disks_group(&mut self, ui: &mut egui::Ui) {
         let mut open: Option<PathBuf> = None;
         let mut details = false;
         let mut install_into: Option<String> = None;
@@ -4139,10 +4180,8 @@ impl App {
                 .map(|d| d.name.clone())
                 .collect()
         };
-        egui::ScrollArea::vertical()
-            .id_salt("disks")
-            .max_height(210.0)
-            .show(ui, |ui| {
+        {
+            {
                 for d in self.settings.disks.clone() {
                     let live = self.settings.disk.as_deref() == Some(d.path.as_path());
                     ui.horizontal(|ui| {
@@ -4244,7 +4283,8 @@ impl App {
                     );
                     ui.add_space(4.0);
                 }
-            });
+            }
+        }
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -4422,145 +4462,148 @@ impl App {
         });
     }
 
-    /// **Resources — firmware, installers and software.** Inert: nothing here runs.
+    /// **Everything a device or a disk is made from, in five groups of identical rows.**
+    ///
+    /// It was three lists of different shapes inside a scroll area, with a full sentence of prose
+    /// per row — so the page had a scrollbar inside a scrollbar and no two rows looked alike. Every
+    /// row here is the same: a name, one line of facts, and the actions that apply to that kind.
+    ///
+    /// The groups collapse to a count, so the page is as long as what you have opened rather than
+    /// as long as everything you own.
     fn pane_resources(&mut self, ui: &mut egui::Ui) {
+        use eapp_loader::settings::Resource;
         if self.wizard(ui) {
             return;
         }
-        // **The disks come first, because they are the ones you act on.** A disk is not an
-        // ingredient — it is what the ingredients are combined into — and it used to be a tab of
-        // its own for exactly that reason. But that is a distinction about verbs, not about where
-        // somebody goes to look, and a tab you must choose before you can start is a decision
-        // charged for nothing.
-        self.disks_section(ui);
-        ui.add_space(16.0);
-        self.section(ui, "MADE FROM");
-        ui.label(
-            egui::RichText::new(
-                "Firmware is chosen by a device, an .ipsw makes a disk, and software installs \
-                 onto one.",
-            )
-            .small()
-            .color(UI_TEXT_FAINT),
-        );
-        ui.add_space(6.0);
-
         let mut forget: Option<String> = None;
         let mut build_from: Option<String> = None;
-        let mut details: Option<usize> = None;
-        egui::ScrollArea::vertical()
-            .id_salt("resources")
-            .max_height(230.0)
-            .show(ui, |ui| {
-                for (kind, heading) in [
-                    ("firmware", "FIRMWARE — chosen by a device"),
-                    ("installer", "APPLE FIRMWARE — makes a disk"),
-                    ("software", "SOFTWARE — installs onto a disk"),
-                ] {
-                    let group: Vec<_> = self
-                        .settings
-                        .resources
-                        .iter()
-                        .filter(|i| i.what.kind() == kind)
-                        .cloned()
-                        .collect();
-                    ui.label(egui::RichText::new(heading).small().color(UI_HEADING));
-                    if group.is_empty() {
-                        ui.label(egui::RichText::new("     —").small().color(UI_TEXT_FAINT));
+        let mut details = false;
+
+        ui.horizontal(|ui| {
+            self.section(ui, "RESOURCES");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button("+ add a file…")
+                    .on_hover_text(
+                        "A boot ROM, an .ipsw, a drive image or an operating system. Which it is \
+                         is worked out from what is inside it, not from its name.",
+                    )
+                    .clicked()
+                {
+                    for p in pick_files(
+                        "A boot ROM, .ipsw, drive image or operating system",
+                        &["bin", "rom", "ipsw", "img", "dmg", "ipod", "zip"],
+                    ) {
+                        self.file_into_library(&PathBuf::from(p));
                     }
-                    for item in group {
-                        ui.horizontal(|ui| {
-                            ui.add_space(12.0);
-                            ui.label(egui::RichText::new(&item.name).color(UI_TEXT_DIM));
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui.small_button("remove").clicked() {
-                                        forget = Some(item.name.clone());
-                                    }
-                                    // **Only on the entry that is live.** The details page reads
-                                    // what was parsed out of the file this machine is running —
-                                    // offering it on an entry that is not would open a page about
-                                    // something else, which is worse than not offering it.
-                                    if kind == "firmware"
-                                        && matches!(
-                                            &item.what,
-                                            eapp_loader::settings::Resource::Firmware(src)
-                                                if *src == self.settings.nor
-                                        )
-                                        && ui
-                                            .small_button("details")
-                                            .on_hover_text(
-                                                "Everything found inside this boot ROM: identity, \
-                                                 images, versions.",
-                                            )
-                                            .clicked()
-                                    {
-                                        details = Some(0);
-                                    }
-                                    if kind == "installer"
-                                        && ui
-                                            .small_button("make a disk")
-                                            .on_hover_text(
-                                                "Builds a drive from this bundle: Apple's \
-                                                 firmware image into the firmware partition and \
-                                                 an empty FAT32 volume beside it.",
-                                            )
-                                            .clicked()
-                                    {
-                                        build_from = Some(item.name.clone());
-                                    }
-                                },
-                            );
-                        });
+                    self.settings.save();
+                }
+            });
+        });
+        ui.add_space(6.0);
+
+        // ---- disks, first, because they are the ones with things to do to them
+        let n = self.settings.disks.len();
+        if self.group_header(ui, GROUP_DISKS, "Disk images", n) {
+            self.disks_group(ui);
+        }
+
+        // ---- the four made-from kinds, each a filter over one list
+        for (slot, kind, title) in [
+            (GROUP_ROMS, "firmware", "Boot ROMs"),
+            (GROUP_IPSW, "installer", "Apple firmware"),
+            (GROUP_LOADERS, "bootloader", "Bootloaders"),
+            (GROUP_OS, "software", "Operating systems"),
+        ] {
+            let group: Vec<_> = self
+                .settings
+                .resources
+                .iter()
+                .filter(|i| i.what.kind() == kind)
+                .cloned()
+                .collect();
+            if !self.group_header(ui, slot, title, group.len()) {
+                continue;
+            }
+            for item in group {
+                ui.horizontal(|ui| {
+                    ui.add_space(14.0);
+                    let live =
+                        matches!(&item.what, Resource::Firmware(s) if *s == self.settings.nor);
+                    ui.label(egui::RichText::new(&item.name).color(if live {
+                        UI_TEXT
+                    } else {
+                        UI_TEXT_DIM
+                    }));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("remove").clicked() {
+                            forget = Some(item.name.clone());
+                        }
+                        if kind == "installer"
+                            && ui
+                                .small_button("make a disk")
+                                .on_hover_text(
+                                    "Apple's firmware image into the firmware partition and an \
+                                     empty FAT32 volume beside it.",
+                                )
+                                .clicked()
+                        {
+                            build_from = Some(item.name.clone());
+                        }
+                        if live && ui.small_button("details").clicked() {
+                            details = true;
+                        }
+                    });
+                });
+                // **One line of facts, and it is facts rather than prose.** This was a whole
+                // sentence per row, which is what made the list unreadable and the page scroll.
+                ui.horizontal(|ui| {
+                    ui.add_space(24.0);
+                    ui.label(
+                        egui::RichText::new(resource_facts(&item.what))
+                            .small()
+                            .monospace()
+                            .color(UI_TEXT_FAINT),
+                    );
+                });
+            }
+            // How to get more of this kind, where that kind is.
+            ui.horizontal(|ui| {
+                ui.add_space(24.0);
+                match kind {
+                    "installer" => {
+                        if ui.small_button("get Apple's firmware…").clicked() {
+                            self.back_to = self.screen;
+                            self.screen = Screen::Firmware;
+                        }
+                    }
+                    "software" => {
                         ui.label(
-                            egui::RichText::new(format!(
-                                "        {}",
-                                match (&item.what, item.what.path()) {
-                                    (_, Some(p)) => p.display().to_string(),
-                                    (eapp_loader::settings::Resource::Firmware(src), None) =>
-                                        src.describe(),
-                                    (_, None) => "—".into(),
-                                }
-                            ))
+                            egui::RichText::new(
+                                "Rockbox and ZeroSlackr are fetched and verified when a disk asks \
+                                 for them.",
+                            )
                             .small()
                             .color(UI_TEXT_FAINT),
                         );
                     }
-                    ui.add_space(6.0);
+                    "bootloader" => {
+                        ui.label(
+                            egui::RichText::new(
+                                "ipodloader2 is built from source; Rockbox's comes with Rockbox.",
+                            )
+                            .small()
+                            .color(UI_TEXT_FAINT),
+                        );
+                    }
+                    _ => {}
                 }
             });
+            ui.add_space(4.0);
+        }
 
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if ui
-                .button("add a file…")
-                .on_hover_text(
-                    "A boot ROM, an .ipsw, or an operating system image. Which it is, is worked \
-                     out from what is inside it rather than from its name.",
-                )
-                .clicked()
-            {
-                for p in pick_files(
-                    "A boot ROM, an .ipsw, or an operating system image",
-                    &["bin", "rom", "ipsw", "ipod", "zip"],
-                ) {
-                    self.file_into_library(&PathBuf::from(p));
-                }
-                self.settings.save();
-            }
-            if ui
-                .button("get Apple's firmware…")
-                .on_hover_text("71 releases, 66 still served by Apple, every one verified.")
-                .clicked()
-            {
-                self.back_to = self.screen;
-                self.screen = Screen::Firmware;
-            }
-        });
-
-        if let Some(row) = details {
-            self.open_details(row);
+        if details {
+            self.open_details(0);
         }
         if let Some(name) = build_from {
             self.build_disk_from(&name);
@@ -4571,6 +4614,31 @@ impl App {
             self.say(format!("resources: removed {name} (the file is untouched)"));
         }
         ui.add_space(14.0);
+    }
+
+    /// A group heading that folds, with what is inside it counted. Returns whether it is open.
+    fn group_header(&mut self, ui: &mut egui::Ui, slot: usize, title: &str, n: usize) -> bool {
+        let open = self.groups[slot];
+        ui.horizontal(|ui| {
+            if ui
+                .add_sized(
+                    [200.0, 22.0],
+                    egui::Button::selectable(
+                        open,
+                        format!("{} {title}", if open { "-" } else { "+" }),
+                    ),
+                )
+                .clicked()
+            {
+                self.groups[slot] = !open;
+            }
+            ui.label(
+                egui::RichText::new(format!("{n}"))
+                    .small()
+                    .color(UI_TEXT_FAINT),
+            );
+        });
+        self.groups[slot]
     }
 
     /// Build a drive from an `.ipsw` resource, and file the result as a disk.
@@ -6287,6 +6355,148 @@ fn sanitise(name: &str) -> String {
     }
 }
 
+/// The height the identity panel takes, whichever mode it is in.
+///
+/// Both modes are drawn into this, so choosing a dump instead of a generated ROM does not move the
+/// buttons under it. Measured from the taller of the two — the generated one, which has a model
+/// picker, a serial row, a reserved line for its validation message and a GUID row.
+const IDENTITY_H: f32 = 132.0;
+
+/// Which group is which in [`App::groups`]. Named, because five bare indices in a fold is five
+/// chances to open the wrong one.
+const GROUP_DISKS: usize = 0;
+const GROUP_ROMS: usize = 1;
+const GROUP_IPSW: usize = 2;
+const GROUP_LOADERS: usize = 3;
+const GROUP_OS: usize = 4;
+
+/// One line of facts about a resource — **facts, not prose**.
+///
+/// Every row used to carry a whole sentence from `describe_rom`, which is why the list needed a
+/// scrollbar of its own and no two rows lined up. What somebody scanning a list wants is the same
+/// shape in every row.
+fn resource_facts(what: &eapp_loader::settings::Resource) -> String {
+    use eapp_loader::settings::Resource;
+    match what {
+        Resource::Firmware(eapp_loader::nor::Source::File(p)) => {
+            let facts = nor_facts(p);
+            let get = |k: &str| {
+                facts
+                    .iter()
+                    .find(|(a, _)| *a == k)
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default()
+            };
+            format!("{} · {}", get("Model"), get("Serial"))
+        }
+        Resource::Firmware(src @ eapp_loader::nor::Source::Synthetic { seed, .. }) => src
+            .model()
+            .map(|m| {
+                format!(
+                    "generated · {} · {} GB · seed {seed}",
+                    m.generation.label(),
+                    m.capacity_gb
+                )
+            })
+            .unwrap_or_else(|| format!("generated · seed {seed}")),
+        Resource::Installer(p) | Resource::Bootloader(p) | Resource::Software(p) => {
+            let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if size == 0 {
+                format!("{name} — missing")
+            } else {
+                format!("{name} · {}", human_bytes(size))
+            }
+        }
+    }
+}
+
+/// Draw `f` into exactly `height` pixels, whatever it puts there.
+///
+/// **Because a window that moves while you read it is a window you cannot read.** Everything
+/// optional in this program — a warning, a validation message, a mode with fewer rows than the
+/// other — used to take space only when it existed, so the controls below it jumped as somebody
+/// changed their mind. Reserving is the whole fix: the space is spent once and never moves.
+///
+/// This is the layout equivalent of pinning the device screen's strips, which stopped the iPod
+/// halving in size when a condition line appeared. Same failure, same answer.
+fn reserved(ui: &mut egui::Ui, height: f32, f: impl FnOnce(&mut egui::Ui)) {
+    let want = egui::vec2(ui.available_width(), height);
+    let (rect, _) = ui.allocate_exact_size(want, egui::Sense::hover());
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+    child.set_clip_rect(rect);
+    f(&mut child);
+}
+
+/// What a NOR dump says about itself, as rows for the read-only panel.
+///
+/// **Everything here is read out of the file.** A dump carries its own `SysCfg` — the serial on the
+/// case, the FireWire GUID a host sees, the model number that resolves to capacity and colour, and
+/// the hardware version RetailOS switches on — so none of it is a question worth asking. Presenting
+/// it as a form was the defect: the two could disagree and the dump won silently.
+fn nor_facts(path: &Path) -> Vec<(&'static str, String)> {
+    let mut out = Vec::new();
+    let Ok(nor) = std::fs::read(path) else {
+        return vec![("File", format!("cannot be read: {}", path.display()))];
+    };
+    let Some(cfg) = inspect::syscfg(&nor) else {
+        return vec![
+            ("Size", human_bytes(nor.len() as u64)),
+            (
+                "SysCfg",
+                "none found — this may not be an iPod boot ROM".into(),
+            ),
+        ];
+    };
+    out.push((
+        "Model",
+        match (&cfg.model, cfg.model_info()) {
+            (Some(m), Some(info)) => format!(
+                "{m} · {} · {} GB · {}",
+                info.generation.label(),
+                info.capacity_gb,
+                info.colour().label().to_lowercase()
+            ),
+            (Some(m), None) => format!("{m} — not in the model table"),
+            (None, _) => "no Mod# in this dump".into(),
+        },
+    ));
+    out.push((
+        "Serial",
+        cfg.serial.clone().unwrap_or_else(|| "none".into()),
+    ));
+    out.push((
+        "GUID",
+        cfg.guid
+            .map(|g| format!("{g:016X}"))
+            .unwrap_or_else(|| "none".into()),
+    ));
+    out.push((
+        "Hardware",
+        cfg.hw_vr
+            .map(|v| format!("HwVr {v:#010x}"))
+            .unwrap_or_else(|| "no HwVr".into()),
+    ));
+    // The `flsh` directory is what a generated ROM cannot have: Apple's own images, and the reason
+    // a dump is the only way to the service diagnostics.
+    let images: Vec<String> = inspect::nor_images(&nor)
+        .iter()
+        .map(|e| e.tag.clone())
+        .collect();
+    out.push((
+        "Images",
+        if images.is_empty() {
+            "none — no flsh directory".into()
+        } else {
+            images.join(" · ")
+        },
+    ));
+    out
+}
+
 fn human_bytes(n: u64) -> String {
     const U: [&str; 4] = ["B", "KB", "MB", "GB"];
     let mut v = n as f64;
@@ -7329,5 +7539,79 @@ mod tests {
             }
         }
         out
+    }
+
+    /// **A page must be the same height in every state it can be in.**
+    ///
+    /// Changing your mind should not move the controls under your cursor, and every optional thing
+    /// in this window used to take space only when it existed: a warning row, a validation message,
+    /// an identity panel with fewer rows in one mode than the other. The device screen had the same
+    /// failure in a worse form — the strip under the iPod grew when the machine had something to
+    /// report, and because the device's scale is a floored integer, the iPod *halved* — and pinning
+    /// the strips is what fixed it. This is that fix, generalised, with a test behind it.
+    ///
+    /// Nothing else can catch this. Every state renders, every state fits, every test passes, and
+    /// the page still jumps.
+    #[test]
+    fn the_wizard_does_not_move_when_you_change_your_mind() {
+        // Step 1 in both identity modes: generated, and with a dump chosen. The dump is a file
+        // that does not exist, which is deliberate — `nor_facts` reports that in one row, and a
+        // panel that is the right height only when the file parses is a panel that jumps for
+        // anybody whose dump has gone.
+        // **The same list either way, a different choice in it.** Comparing "no dumps, generated"
+        // against "one dump, chosen" would be comparing two different lists — filing a dump adds a
+        // radio row, and that row is a real 21 px that ought to be there.
+        let generated = lay_out_wizard_with(ComposeWhat::Device { first_run: false }, 1, false);
+        let dumped = lay_out_wizard_with(ComposeWhat::Device { first_run: false }, 1, true);
+        assert!(generated > 0.0 && dumped > 0.0, "a step drew nothing");
+        assert_eq!(
+            generated.round(),
+            dumped.round(),
+            "step 1 is {generated:.0} px generated and {dumped:.0} px with a dump — the panel \
+             below the radio buttons has to be one height in both modes, or choosing a dump moves \
+             everything under it"
+        );
+    }
+
+    /// `lay_out_wizard`, with a firmware choice.
+    fn lay_out_wizard_with(what: ComposeWhat, step: u8, choose_dump: bool) -> f32 {
+        let ctx = egui::Context::default();
+        let mut used = 0.0;
+        let mut app: Option<App> = None;
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(MIN_W, MIN_H))),
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            used = 0.0;
+            let mut out = ctx.run_ui(input.clone(), |ui| {
+                let app = app.get_or_insert_with(|| {
+                    let mut a = App::new(
+                        &ui.ctx().clone(),
+                        emu::Config::default(),
+                        Settings::default(),
+                        String::new(),
+                    );
+                    a.screen = Screen::Library;
+                    a.settings_tab = SettingsTab::Devices;
+                    // Always filed, so the radio list is the same length in both arms.
+                    a.settings.file_away(
+                        eapp_loader::settings::Resource::Firmware(eapp_loader::nor::Source::File(
+                            PathBuf::from("/no/such/dump.bin"),
+                        )),
+                        "a dump",
+                    );
+                    a
+                });
+                let mut c = Compose::new(what);
+                c.step = step;
+                c.firmware = choose_dump.then(|| "a dump".to_string());
+                app.compose = Some(c);
+                app.library_screen(ui);
+                used = ui.min_rect().height();
+            });
+            out.textures_delta.clear();
+        }
+        used
     }
 }
