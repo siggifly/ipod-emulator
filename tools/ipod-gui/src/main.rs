@@ -1361,6 +1361,8 @@ struct App {
     typing_guid: Option<String>,
     /// A serial being typed in, when the field is open.
     typing_serial: Option<String>,
+    /// Whether the wizard has been opened for an empty list already. See `pane_devices`.
+    wizard_offered: bool,
     /// Whether the preferences sheet is open over the library.
     prefs: bool,
     /// The device being edited, as a draft. `None` = nobody is editing one.
@@ -1881,6 +1883,7 @@ impl App {
             groups: [true, false, false, false],
             typing_guid: None,
             typing_serial: None,
+            wizard_offered: false,
             prefs: false,
             editing: None,
             editing_was: String::new(),
@@ -4279,7 +4282,13 @@ impl App {
         // a page whose only content is a way off it; somebody who has no devices did not come here
         // to read that they have none. The welcome moves inside the wizard's first step, which is
         // where they were going anyway.
-        if self.settings.devices.is_empty() && self.compose.is_none() {
+        // **Offered once, not forced.** An empty list opens the wizard, which is right for somebody
+        // who has just arrived — but `compose` is cleared by cancelling *and* by a build that
+        // failed, so without this the list was empty again, the wizard reopened at step one, and
+        // there was no way out and no sight of what went wrong. Reported as "when i click on
+        // devices it shows me new device step 1 instead of showing me my devices".
+        if self.settings.devices.is_empty() && self.compose.is_none() && !self.wizard_offered {
+            self.wizard_offered = true;
             self.compose = Some(Compose::new(ComposeWhat::Device { first_run: true }));
         }
         if !matches!(
@@ -4414,15 +4423,29 @@ impl App {
                     }
                     ui.add_space(6.0);
                 }
+                // The stale line here said "Name what is running to make the first one", which was
+                // the instruction for a way of making devices that no longer exists.
                 if self.settings.devices.is_empty() {
-                    ui.label(
-                        egui::RichText::new(
-                            "None yet. Name what is running to make the first one.",
-                        )
-                        .small()
-                        .color(UI_TEXT_FAINT),
-                    );
-                    ui.add_space(4.0);
+                    ui.add_space(8.0);
+                    ui.vertical_centered(|ui| {
+                        let (rect, _) = ui.allocate_exact_size(
+                            Vec2::new(ui.available_width(), 96.0),
+                            egui::Sense::hover(),
+                        );
+                        device_at_rest(
+                            ui.painter(),
+                            &IPOD_VIDEO,
+                            rect.center(),
+                            88.0,
+                            Colour::White,
+                        );
+                        ui.label(egui::RichText::new("No devices yet.").heading());
+                        ui.label(
+                            egui::RichText::new("Press + new device to make one.")
+                                .color(UI_TEXT_FAINT),
+                        );
+                    });
+                    ui.add_space(8.0);
                 }
             });
 
