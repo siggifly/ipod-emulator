@@ -46,118 +46,153 @@ impl Mode {
     }
 }
 
-/// One thing an iPod can be built out of: a boot ROM, an Apple firmware bundle, or a drive.
+/// One thing in the resources list, and **the verb is what distinguishes them**.
 ///
-/// **Named, so a machine can refer to it instead of repeating it.** Before this, a machine held a
-/// path; two machines that shared a boot ROM held the same path twice, and there was nowhere to
-/// keep a file you had but were not currently running. A library entry is that place.
+/// The three kinds are not three flavours of the same thing — they attach to different places, and
+/// that is the whole reason this is an enum rather than a `PathBuf` with a label:
+///
+/// ```text
+///   Firmware   ->  chosen by a DEVICE      a boot ROM, real or synthesised
+///   Installer  ->  makes a DISK            an Apple .ipsw
+///   Software   ->  installs onto a DISK    Rockbox, ZeroSlackr, ipodloader2
+/// ```
+///
+/// A flat list with no roles was tried first, and it is what made the settings page read as three
+/// unrelated screens: a list of things with no verbs, beside a page of verbs with no target. Each
+/// kind now appears only where its verb makes sense, so aiming the wrong one at the wrong place is
+/// not a mistake you can make.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Ingredient {
-    /// A 1 MB dump, or the recipe for synthesising one — the same [`crate::nor::Source`] a machine
-    /// has always carried, so a synthesised ROM is a library entry like any other.
-    Rom(crate::nor::Source),
-    /// An `.ipsw`. Not bootable itself: a drive is **built** from it, and the drive is what runs.
-    Ipsw(PathBuf),
-    /// A drive image.
-    Disk(PathBuf),
+pub enum Resource {
+    /// A 1 MB dump, or the recipe for synthesising one. **Chosen by a device**; never installed.
+    Firmware(crate::nor::Source),
+    /// An `.ipsw`. Not bootable itself and never installed onto anything: a drive is **built** from
+    /// it, and the drive is what runs.
+    Installer(PathBuf),
+    /// An operating system, a bootloader, or a bundle of files for the volume. **Installed onto a
+    /// disk** — it is not a machine part and cannot be run on its own.
+    Software(PathBuf),
 }
 
-impl Ingredient {
+impl Resource {
     /// The word the settings file and the window both use.
     pub fn kind(&self) -> &'static str {
         match self {
-            Ingredient::Rom(_) => "rom",
-            Ingredient::Ipsw(_) => "ipsw",
-            Ingredient::Disk(_) => "disk",
+            Resource::Firmware(_) => "firmware",
+            Resource::Installer(_) => "installer",
+            Resource::Software(_) => "software",
+        }
+    }
+
+    /// What this kind is *for*, in the words the window uses for it.
+    pub fn verb(&self) -> &'static str {
+        match self {
+            Resource::Firmware(_) => "chosen by a device",
+            Resource::Installer(_) => "makes a disk",
+            Resource::Software(_) => "installs onto a disk",
         }
     }
 
     /// Where it is on disk, when it is a file at all. A synthesised ROM is a recipe and has none —
-    /// which is the whole reason this returns an `Option` rather than a `PathBuf`.
+    /// which is the whole reason this returns an `Option`.
     pub fn path(&self) -> Option<&Path> {
         match self {
-            Ingredient::Rom(crate::nor::Source::File(p)) => Some(p),
-            Ingredient::Rom(_) => None,
-            Ingredient::Ipsw(p) | Ingredient::Disk(p) => Some(p),
+            Resource::Firmware(crate::nor::Source::File(p)) => Some(p),
+            Resource::Firmware(_) => None,
+            Resource::Installer(p) | Resource::Software(p) => Some(p),
         }
     }
 }
 
-/// A named entry in the library.
+/// A named entry in the resources list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Item {
-    /// What the person calls it, and the key a machine refers to it by. Unique within the library.
+    /// What the person calls it, and the key a device refers to it by. Unique within the list.
     pub name: String,
-    pub what: Ingredient,
+    pub what: Resource,
 }
 
-/// A saved machine: a boot ROM, a drive, and how to dress and run them.
+/// A drive image, and **what is on it**.
 ///
-/// **This is not a new kind of state — it is the state this program has always had, named.** The
-/// fields are exactly the ones [`Settings`] already carried for the one machine it could hold, so
-/// a machine is what you get by giving that set a name and being allowed more than one.
-///
-/// The live machine stays in `Settings`' own fields, and this list is what you can switch *to*.
-/// Keeping it that way means every existing reader of `settings.nor` and `settings.disk` is still
-/// reading the machine that is running, which is what it meant before and still means.
-///
-/// **A machine composed of library entries stores their names, not their contents** — see
-/// [`Machine::rom`] and [`Machine::drive`]. The `nor` and `disk` fields below stay as the resolved
-/// answer, so nothing downstream of here had to learn about the library at all.
+/// A disk used to be a `PathBuf`, which is why the list of them was a list of filenames: nothing
+/// recorded that this one was built from `iPod_20.1.3.ipsw` and has Rockbox on it, so choosing
+/// between two of them meant remembering. All of this is already detectable; it simply was not kept.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Machine {
+pub struct Disk {
+    /// What the person calls it, and the key a device refers to it by.
+    pub name: String,
+    pub path: PathBuf,
+    /// The `.ipsw` resource this was built from, by name. `None` for an image that was imported.
+    pub built_from: Option<String>,
+    /// What has been installed onto it, in the order it went on — so a triple-boot drive reads as
+    /// one, rather than as a filename somebody has to remember the history of.
+    pub installed: Vec<String>,
+}
+
+/// **A device: a firmware and a disk, under a name.** The only thing that can be run.
+///
+/// This replaced `Machine`, which was the same idea with the seams showing: the machine you were
+/// *running* lived in [`Settings`]' own fields and the saved list was something you switched
+/// between, so every operation had to reconcile the two and "the live one" was a special case in
+/// each. A device is just a device; the one that is running is the one `current` names.
+///
+/// **It refers to its parts by name** — [`Device::firmware`] into the resources, [`Device::disk`]
+/// into the disks — so editing a resource changes every device made of it. `nor` and `disk_path`
+/// below are the *resolved* values, kept because everything downstream of here reads them and none
+/// of it should have to know a resource list exists.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Device {
     /// What the person calls it. The key, so it is unique and renaming is a delete plus an add.
     pub name: String,
+    /// The firmware resource this device boots, by name. `None` means [`Device::nor`] answers
+    /// directly, which is what a device migrated from an older settings file has.
+    pub firmware: Option<String>,
+    /// The disk this device runs, by name. `None` means [`Device::disk_path`] answers directly.
+    pub disk: Option<String>,
+    /// The resolved boot ROM. A recipe, not a megabyte — see [`Settings::nor`].
     pub nor: crate::nor::Source,
-    pub disk: Option<PathBuf>,
+    /// The resolved drive image.
+    pub disk_path: Option<PathBuf>,
     pub chassis: Option<crate::identity::Colour>,
     pub work_on_copy: Option<bool>,
-    /// Instructions the last **completed** cold boot of this machine took.
+    /// Instructions the last **completed** cold boot of this device took.
     ///
     /// The progress bar's denominator, and the reason it can be honest across operating systems.
     /// It used to be `snap_at` — a constant tuned to RetailOS's 1.6 G — which made the bar
     /// meaningless for anything else: Rockbox reaches its menu in about 100 M and barely moved it,
-    /// iPodLinux takes 21.5 G and pinned it at 100 % for twenty billion instructions. A machine's
+    /// iPodLinux takes 21.5 G and pinned it at 100 % for twenty billion instructions. A device's
     /// own last boot is a better predictor of its next one than any constant, and it needs no
     /// detection of which operating system is on the drive.
     ///
     /// `None` until it has booted once, and the bar says "booting" without a fraction rather than
     /// inventing one.
     pub boot_instructions: Option<u64>,
-    /// The library entry this machine's boot ROM comes from, by name.
-    ///
-    /// `None` means the `nor` field above is the answer directly — which is every machine saved
-    /// before the library existed, and is why nothing had to be migrated destructively. A name that
-    /// is not in the library is **reported, not ignored**: see [`Settings::missing`].
-    pub rom: Option<String>,
-    /// The library entry this machine's drive comes from, by name. `None` means `disk` is the
-    /// answer directly, as above.
-    pub drive: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Settings {
     pub mode: Mode,
-    /// Saved machines, in the order they were made. **Does not include the live one's edits** —
-    /// `Settings`' own fields are the machine that is running.
-    pub machines: Vec<Machine>,
-    /// The name of the machine the live fields came from, if any.
+    /// The devices, in the order they were made.
+    pub devices: Vec<Device>,
+    /// The name of the device that is running, if the live fields came from one.
     pub current: Option<String>,
-    /// Every boot ROM, `.ipsw` and drive this program has been told about.
+    /// Firmware, installers and software — everything that is **not** a disk. See [`Resource`].
     ///
-    /// **The library exists because a file is worth keeping when it is not the one running.** Every
-    /// path this program learned used to be attached to the single live machine, so choosing a
-    /// second drive lost the first one and there was no way to say "I have these four ROMs". A
-    /// machine now names entries from here, and one entry can back any number of machines.
+    /// It exists because a file is worth keeping when it is not the one running. Every path this
+    /// program learned used to be attached to the single live machine, so choosing a second boot
+    /// ROM lost the first and there was no way to say "I have these four".
+    pub resources: Vec<Item>,
+    /// The drive images, and what is on each — see [`Disk`].
     ///
-    /// Entries are added rather than replaced: dropping a file on the window files it here as well
-    /// as using it, so the thing you just used is still here next time.
-    pub library: Vec<Item>,
-    /// Whether [`Settings::seed_library`] has run.
+    /// **Separate from [`Settings::resources`] because a disk is not an ingredient.** It is the
+    /// thing ingredients are combined *into*: an installer makes one, software goes onto one, and a
+    /// device runs one. Filing it beside the `.ipsw` that built it is what made the old list
+    /// unreadable.
+    pub disks: Vec<Disk>,
+    /// Whether [`Settings::seed_resources`] has run.
     ///
-    /// **A marker, so that removing an entry sticks.** Seeding whenever the library is empty would
-    /// be simpler and would be wrong: empty is also what you get after removing the last entry, and
-    /// a list that puts back what you took out is a list you cannot edit.
+    /// **A marker, so that removing an entry sticks.** Seeding whenever the list is empty would be
+    /// simpler and would be wrong: empty is also what you get after removing the last entry, and a
+    /// list that puts back what you took out is a list you cannot edit.
     pub library_seeded: bool,
     /// Where the boot ROM comes from — a dump, or a recipe for synthesising one.
     ///
@@ -203,12 +238,12 @@ impl Settings {
             Some(text) => Settings::parse(&text),
             None => Settings::default(),
         };
-        s.seed_library();
+        s.seed_resources();
         s
     }
 
-    /// Fill an empty library from what this program already has: the live machine's boot ROM and
-    /// drive, and every saved machine's.
+    /// Fill empty resource and disk lists from what this program already has: the live boot ROM
+    /// and drive, and every device's.
     ///
     /// **Once.** A setup that predates the library would otherwise open the page and be told it has
     /// nothing, while running a boot ROM and a drive — which is not a list of what you have, it is
@@ -216,7 +251,7 @@ impl Settings {
     ///
     /// Guarded by [`Settings::library_seeded`] rather than by emptiness, so that removing every
     /// entry is a thing you can do rather than a thing that undoes itself at the next launch.
-    pub fn seed_library(&mut self) {
+    pub fn seed_resources(&mut self) {
         if self.library_seeded {
             return;
         }
@@ -230,34 +265,57 @@ impl Settings {
             crate::nor::Source::File(p) => stem(p),
             crate::nor::Source::Synthetic { model, seed, .. } => format!("{model}, seed {seed}"),
         };
-        // Gathered before anything is filed, because filing borrows the library mutably and the
-        // names are read out of the very fields being filed.
+        // Gathered before anything is filed, because filing borrows the lists mutably and the names
+        // are read out of the very fields being filed.
         //
         // The live machine comes first, so its entries get the unsuffixed names — it is the one on
         // screen, and the one whose name a person will recognise.
-        let mut want: Vec<(Ingredient, String)> = Vec::new();
-        want.push((Ingredient::Rom(self.nor.clone()), describe(&self.nor)));
-        if let Some(d) = &self.disk {
-            want.push((Ingredient::Disk(d.clone()), stem(d)));
-        }
-        for m in &self.machines {
-            want.push((Ingredient::Rom(m.nor.clone()), describe(&m.nor)));
-            if let Some(d) = &m.disk {
-                want.push((Ingredient::Disk(d.clone()), stem(d)));
+        let mut firmware: Vec<(crate::nor::Source, String)> =
+            vec![(self.nor.clone(), describe(&self.nor))];
+        let mut drives: Vec<(PathBuf, String)> =
+            self.disk.iter().map(|d| (d.clone(), stem(d))).collect();
+        for d in &self.devices {
+            firmware.push((d.nor.clone(), describe(&d.nor)));
+            if let Some(p) = &d.disk_path {
+                drives.push((p.clone(), stem(p)));
             }
         }
-        for (what, name) in want {
-            let name = if name.is_empty() {
-                "unnamed".to_string()
-            } else {
-                name
-            };
-            self.file_away(what, &name);
+        for (src, name) in firmware {
+            self.file_away(Resource::Firmware(src), &name);
+        }
+        for (path, name) in drives {
+            self.file_disk(path, &name);
+        }
+        // A device migrated from the old shape carries a path and no name. Now that every path is
+        // a named disk, point it at the name — otherwise the Devices page shows "(no disk)" beside
+        // a device that plainly has one.
+        for i in 0..self.devices.len() {
+            if self.devices[i].disk.is_none() {
+                if let Some(p) = self.devices[i].disk_path.clone() {
+                    self.devices[i].disk = self
+                        .disks
+                        .iter()
+                        .find(|d| d.path == p)
+                        .map(|d| d.name.clone());
+                }
+            }
+            if self.devices[i].firmware.is_none() {
+                let nor = self.devices[i].nor.clone();
+                self.devices[i].firmware = self
+                    .resources
+                    .iter()
+                    .find(|it| matches!(&it.what, Resource::Firmware(s) if *s == nor))
+                    .map(|it| it.name.clone());
+            }
         }
     }
 
     pub fn parse(text: &str) -> Settings {
         let mut s = Settings::default();
+        // Resource entries an older file filed as `kind = disk`. Moved into `disks` once the whole
+        // file is read, because an entry's `path` line arrives after its `kind` line and moving it
+        // early would move an empty one.
+        let mut was_a_disk: Vec<usize> = Vec::new();
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -296,91 +354,116 @@ impl Settings {
                 "work_on_copy" => s.work_on_copy = Some(v == "true"),
                 "current" if !v.is_empty() => s.current = Some(v.to_string()),
                 "library_seeded" => s.library_seeded = v == "true",
-                // `machine.N.field = value`. Flat, because the file is flat and a nested format
-                // would mean a parser that can fail — and a settings file is not a place to fail.
-                // Indices are dense on write and tolerated sparse on read.
-                _ if k.starts_with("machine.") => {
-                    let mut it = k.splitn(3, '.');
-                    let (_, idx, field) = (it.next(), it.next(), it.next());
-                    let (Some(idx), Some(field)) = (idx, field) else {
+                // `device.N.field`, `disk.N.field`, `res.N.field`. Flat, because the file is flat
+                // and a nested format would mean a parser that can fail — and a settings file is
+                // not a place to fail. Indices are dense on write and tolerated sparse on read.
+                //
+                // **`machine.` and `item.` are still read**, into devices and resources. They are
+                // what a settings file written before this shape looks like, and the alternative to
+                // reading them is a person's setup silently emptying itself.
+                _ if k.starts_with("device.") || k.starts_with("machine.") => {
+                    let Some((i, field)) = indexed(k) else {
                         continue;
                     };
-                    let Ok(i) = idx.parse::<usize>() else {
-                        continue;
-                    };
-                    while s.machines.len() <= i {
-                        s.machines.push(Machine::default());
+                    while s.devices.len() <= i {
+                        s.devices.push(Device::default());
                     }
-                    let m = &mut s.machines[i];
+                    let d = &mut s.devices[i];
                     match field {
-                        "name" => m.name = v.to_string(),
+                        "name" => d.name = v.to_string(),
                         "flash" if !v.is_empty() => {
-                            m.nor = crate::nor::Source::File(PathBuf::from(v))
+                            d.nor = crate::nor::Source::File(PathBuf::from(v))
                         }
-                        "nor_model" if !v.is_empty() => m.nor = with_model(m.nor.clone(), v),
-                        "nor_seed" => {
-                            if let Ok(n) = v.parse::<u64>() {
-                                m.nor = with_seed(m.nor.clone(), n);
+                        // `disk` was a path in the old shape and is the disk's *name* in this one.
+                        // Told apart by what it looks like: a path has a separator in it.
+                        "disk" if !v.is_empty() => {
+                            if v.contains('/') || v.contains('\\') {
+                                d.disk_path = Some(PathBuf::from(v));
+                            } else {
+                                d.disk = Some(v.to_string());
                             }
                         }
-                        "nor_serial" => m.nor = with_serial(m.nor.clone(), v),
-                        "nor_splash" => m.nor = with_splash(m.nor.clone(), v),
-                        "nor_guid" => {
-                            if let Ok(g) = u64::from_str_radix(v.trim_start_matches("0x"), 16) {
-                                m.nor = with_guid(m.nor.clone(), g);
+                        "firmware" => d.firmware = (!v.is_empty()).then(|| v.to_string()),
+                        // The old shape's names for the two references.
+                        "rom" if !v.is_empty() => d.firmware = Some(v.to_string()),
+                        "drive" if !v.is_empty() => d.disk = Some(v.to_string()),
+                        "chassis" => d.chassis = crate::identity::Colour::parse(v),
+                        "work_on_copy" => d.work_on_copy = Some(v == "true"),
+                        "boot_instructions" => d.boot_instructions = v.parse::<u64>().ok(),
+                        _ => {
+                            if let Some(next) = nor_field(d.nor.clone(), field, v) {
+                                d.nor = next;
                             }
                         }
-                        "disk" if !v.is_empty() => m.disk = Some(PathBuf::from(v)),
-                        "chassis" => m.chassis = crate::identity::Colour::parse(v),
-                        "work_on_copy" => m.work_on_copy = Some(v == "true"),
-                        "boot_instructions" => m.boot_instructions = v.parse::<u64>().ok(),
-                        "rom" if !v.is_empty() => m.rom = Some(v.to_string()),
-                        "drive" if !v.is_empty() => m.drive = Some(v.to_string()),
+                    }
+                }
+                _ if k.starts_with("disk.") => {
+                    let Some((i, field)) = indexed(k) else {
+                        continue;
+                    };
+                    while s.disks.len() <= i {
+                        s.disks.push(Disk::default());
+                    }
+                    let d = &mut s.disks[i];
+                    match field {
+                        "name" => d.name = v.to_string(),
+                        "path" if !v.is_empty() => d.path = PathBuf::from(v),
+                        "built_from" if !v.is_empty() => d.built_from = Some(v.to_string()),
+                        // One line, comma separated, because the order is the install order and a
+                        // key per entry would make that order an accident of the file.
+                        "installed" if !v.is_empty() => {
+                            d.installed = v
+                                .split(',')
+                                .map(|x| x.trim().to_string())
+                                .filter(|x| !x.is_empty())
+                                .collect()
+                        }
                         _ => {}
                     }
                 }
-                // `item.N.field = value` — the library, in the same flat shape as the machines
-                // above and for the same reason.
-                _ if k.starts_with("item.") => {
-                    let mut it = k.splitn(3, '.');
-                    let (_, idx, field) = (it.next(), it.next(), it.next());
-                    let (Some(idx), Some(field)) = (idx, field) else {
+                _ if k.starts_with("res.") || k.starts_with("item.") => {
+                    let Some((i, field)) = indexed(k) else {
                         continue;
                     };
-                    let Ok(i) = idx.parse::<usize>() else {
-                        continue;
-                    };
-                    while s.library.len() <= i {
-                        s.library.push(Item {
+                    while s.resources.len() <= i {
+                        s.resources.push(Item {
                             name: String::new(),
-                            what: Ingredient::Rom(crate::nor::Source::default()),
+                            what: Resource::Firmware(crate::nor::Source::default()),
                         });
                     }
-                    let item = &mut s.library[i];
+                    let item = &mut s.resources[i];
                     match field {
                         "name" => item.name = v.to_string(),
-                        // `kind` before `path` on write, so this has always seen it first. A kind
-                        // it does not know leaves the entry as it was rather than dropping it —
-                        // the same tolerance every other key here has.
+                        // `kind` before `path` on write, so this has always seen it first. An
+                        // unknown kind leaves the entry as it was rather than dropping it.
+                        //
+                        // `disk` is the old shape's third kind. A disk is not a resource any more,
+                        // so it is parked here and moved by `migrate_disks_out_of_resources` —
+                        // dropping it would lose the drive somebody is running.
                         "kind" => {
                             item.what = match v {
-                                "ipsw" => Ingredient::Ipsw(PathBuf::new()),
-                                "disk" => Ingredient::Disk(PathBuf::new()),
-                                _ => Ingredient::Rom(crate::nor::Source::default()),
+                                "installer" | "ipsw" => Resource::Installer(PathBuf::new()),
+                                "software" | "disk" => Resource::Software(PathBuf::new()),
+                                _ => Resource::Firmware(crate::nor::Source::default()),
+                            };
+                            if v == "disk" {
+                                was_a_disk.push(i);
                             }
                         }
                         "path" if !v.is_empty() => {
                             let p = PathBuf::from(v);
                             item.what = match &item.what {
-                                Ingredient::Ipsw(_) => Ingredient::Ipsw(p),
-                                Ingredient::Disk(_) => Ingredient::Disk(p),
-                                Ingredient::Rom(_) => Ingredient::Rom(crate::nor::Source::File(p)),
+                                Resource::Installer(_) => Resource::Installer(p),
+                                Resource::Software(_) => Resource::Software(p),
+                                Resource::Firmware(_) => {
+                                    Resource::Firmware(crate::nor::Source::File(p))
+                                }
                             }
                         }
                         _ => {
-                            if let Ingredient::Rom(src) = &item.what {
+                            if let Resource::Firmware(src) = &item.what {
                                 if let Some(next) = nor_field(src.clone(), field, v) {
-                                    item.what = Ingredient::Rom(next);
+                                    item.what = Resource::Firmware(next);
                                 }
                             }
                         }
@@ -389,7 +472,35 @@ impl Settings {
                 _ => {}
             }
         }
+        s.migrate_disks_out_of_resources(&was_a_disk);
         s
+    }
+
+    /// Move entries an older settings file filed as resources of `kind = disk` into [`Self::disks`].
+    ///
+    /// **The old shape had three kinds in one list and a disk was one of them.** It is not: a disk
+    /// is what resources are combined *into*. Leaving them there would show drives on the resources
+    /// page under a verb that does not apply to them, and dropping them would lose the drive
+    /// somebody is running — so they move, keeping their names, and a device that pointed at one by
+    /// name still resolves.
+    fn migrate_disks_out_of_resources(&mut self, was_a_disk: &[usize]) {
+        for &i in was_a_disk.iter().rev() {
+            if i >= self.resources.len() {
+                continue;
+            }
+            let item = self.resources.remove(i);
+            if let Some(p) = item.what.path() {
+                let path = p.to_path_buf();
+                if !self.disks.iter().any(|d| d.path == path) {
+                    self.disks.push(Disk {
+                        name: item.name,
+                        path,
+                        built_from: None,
+                        installed: Vec::new(),
+                    });
+                }
+            }
+        }
     }
 
     /// The path of a supplied dump, or `None` when the ROM is synthesised.
@@ -470,8 +581,9 @@ impl Settings {
                 Some(v) => format!("work_on_copy = {v}\n"),
                 None => String::new(),
             },
-        ) + &self.render_library()
-            + &self.render_machines()
+        ) + &self.render_resources()
+            + &self.render_disks()
+            + &self.render_devices()
     }
 
     /// The library, as `item.N.field` lines.
@@ -479,258 +591,275 @@ impl Settings {
     /// `kind` is written **before** `path`, and the parser depends on that order: it uses the kind
     /// to decide which variant a path belongs to. Reordering these two lines by hand in the file
     /// would file an `.ipsw` as a boot ROM, so the order is load-bearing rather than tidy.
-    fn render_library(&self) -> String {
-        if self.library.is_empty() && !self.library_seeded {
+    /// The resources, as `res.N.field` lines.
+    ///
+    /// `kind` is written **before** `path`, and the parser depends on that order: it uses the kind
+    /// to decide which variant a path belongs to. Reordering these two by hand would file an
+    /// `.ipsw` as a boot ROM, so the order is load-bearing rather than tidy.
+    fn render_resources(&self) -> String {
+        if self.resources.is_empty() && !self.library_seeded {
             return String::new();
         }
         let mut out = String::from(
-            "\n# The library: every boot ROM, .ipsw and drive this program knows about.\n\
-             # A machine refers to these by name — see `machine.N.rom` and `machine.N.drive`.\n",
+            "\n# Resources: firmware a device can boot, installers that make a disk, and\n\
+             # software that installs onto one. A device names firmware from here.\n",
         );
         out.push_str(&format!("library_seeded = {}\n", self.library_seeded));
-        for (i, item) in self.library.iter().enumerate() {
-            out.push_str(&format!("\nitem.{i}.name = {}\n", item.name));
-            out.push_str(&format!("item.{i}.kind = {}\n", item.what.kind()));
+        for (i, item) in self.resources.iter().enumerate() {
+            out.push_str(&format!("\nres.{i}.name = {}\n", item.name));
+            out.push_str(&format!("res.{i}.kind = {}\n", item.what.kind()));
             match &item.what {
-                // A synthesised ROM is a recipe, so it is written the way every other recipe in
-                // this file is written — and `flash = …` becomes `path = …` because at this level
-                // the three kinds share one key.
-                Ingredient::Rom(src) => {
+                // A synthesised ROM is a recipe, written the way every other recipe in this file
+                // is. `flash = …` becomes `path = …` because at this level the kinds share one key.
+                Resource::Firmware(src) => {
                     for line in render_nor_of(src).lines() {
                         let line = line
                             .strip_prefix("flash = ")
                             .map_or_else(|| line.to_string(), |p| format!("path = {p}"));
-                        out.push_str(&format!("item.{i}.{line}\n"));
+                        out.push_str(&format!("res.{i}.{line}\n"));
                     }
                 }
-                Ingredient::Ipsw(p) | Ingredient::Disk(p) => {
-                    out.push_str(&format!("item.{i}.path = {}\n", p.display()));
+                Resource::Installer(p) | Resource::Software(p) => {
+                    out.push_str(&format!("res.{i}.path = {}\n", p.display()));
                 }
             }
         }
         out
     }
 
-    /// The saved machines, as `machine.N.field` lines.
-    ///
-    /// Written after everything else so that the top of the file is still the live machine and the
-    /// program's own preferences — which is what a person opening this file to hand-edit is looking
-    /// for. Nothing here is required: a file with no machine lines is a program with one machine,
-    /// which is what it was before.
-    fn render_machines(&self) -> String {
-        if self.machines.is_empty() {
+    /// The disks, as `disk.N.field` lines.
+    fn render_disks(&self) -> String {
+        if self.disks.is_empty() {
             return String::new();
         }
-        let mut out = String::from(
-            "\n# Saved machines. `current` names the one the settings above came from.\n",
-        );
+        let mut out = String::from("\n# Drive images, and what is on each.\n");
+        for (i, d) in self.disks.iter().enumerate() {
+            out.push_str(&format!("\ndisk.{i}.name = {}\n", d.name));
+            out.push_str(&format!("disk.{i}.path = {}\n", d.path.display()));
+            if let Some(b) = &d.built_from {
+                out.push_str(&format!("disk.{i}.built_from = {b}\n"));
+            }
+            if !d.installed.is_empty() {
+                out.push_str(&format!(
+                    "disk.{i}.installed = {}\n",
+                    d.installed.join(", ")
+                ));
+            }
+        }
+        out
+    }
+
+    /// The devices, as `device.N.field` lines.
+    fn render_devices(&self) -> String {
+        if self.devices.is_empty() {
+            return String::new();
+        }
+        let mut out =
+            String::from("\n# Devices. `current` names the one the settings above came from.\n");
         if let Some(c) = &self.current {
             out.push_str(&format!("current = {c}\n"));
         }
-        for (i, m) in self.machines.iter().enumerate() {
-            out.push_str(&format!("\nmachine.{i}.name = {}\n", m.name));
-            for line in render_nor_of(&m.nor).lines() {
-                out.push_str(&format!("machine.{i}.{line}\n"));
+        for (i, d) in self.devices.iter().enumerate() {
+            out.push_str(&format!("\ndevice.{i}.name = {}\n", d.name));
+            match &d.firmware {
+                // Composed of a resource: the name is the whole of it, and the resolved recipe is
+                // not written, because writing both is how the two come to disagree.
+                Some(f) => out.push_str(&format!("device.{i}.firmware = {f}\n")),
+                None => {
+                    for line in render_nor_of(&d.nor).lines() {
+                        out.push_str(&format!("device.{i}.{line}\n"));
+                    }
+                }
             }
-            if let Some(d) = &m.disk {
-                out.push_str(&format!("machine.{i}.disk = {}\n", d.display()));
+            match (&d.disk, &d.disk_path) {
+                (Some(name), _) => out.push_str(&format!("device.{i}.disk = {name}\n")),
+                (None, Some(p)) => out.push_str(&format!("device.{i}.disk = {}\n", p.display())),
+                (None, None) => {}
             }
-            if let Some(c) = m.chassis {
-                out.push_str(&format!("machine.{i}.chassis = {}\n", c.as_str()));
+            if let Some(c) = d.chassis {
+                out.push_str(&format!("device.{i}.chassis = {}\n", c.as_str()));
             }
-            if let Some(w) = m.work_on_copy {
-                out.push_str(&format!("machine.{i}.work_on_copy = {w}\n"));
+            if let Some(w) = d.work_on_copy {
+                out.push_str(&format!("device.{i}.work_on_copy = {w}\n"));
             }
-            if let Some(r) = &m.rom {
-                out.push_str(&format!("machine.{i}.rom = {r}\n"));
-            }
-            if let Some(d) = &m.drive {
-                out.push_str(&format!("machine.{i}.drive = {d}\n"));
-            }
-            if let Some(b) = m.boot_instructions {
-                out.push_str(&format!("machine.{i}.boot_instructions = {b}\n"));
+            if let Some(b) = d.boot_instructions {
+                out.push_str(&format!("device.{i}.boot_instructions = {b}\n"));
             }
         }
         out
     }
 
-    /// Best-effort. A window that could not write its preferences is a window that opens in user
-    /// mode next time, not a window that refuses to run.
-    /// The live machine, as a [`Machine`] under `name`.
-    pub fn as_machine(&self, name: &str) -> Machine {
-        let existing = self.machines.iter().find(|m| m.name == name);
-        Machine {
+    /// The live fields as a [`Device`] under `name`.
+    pub fn as_device(&self, name: &str) -> Device {
+        let existing = self.devices.iter().find(|d| d.name == name);
+        Device {
             name: name.to_string(),
-            nor: self.nor.clone(),
-            disk: self.disk.clone(),
-            chassis: self.chassis,
-            work_on_copy: self.work_on_copy,
-            // Carried across, so naming a machine you have already booted does not throw away the
-            // one measurement that makes its progress bar honest.
-            boot_instructions: self
-                .current
-                .as_deref()
-                .and_then(|c| self.machines.iter().find(|m| m.name == c))
-                .and_then(|m| m.boot_instructions),
             // **The composition is kept, not re-derived.** Deriving it from the live values was
-            // tried and is wrong: switching machines writes back the one you were editing, so the
-            // moment a library entry changed, the write-back looked for an entry matching the old
-            // value, found none, and quietly cut the machine loose from the entry it was made of.
-            // The test `editing_a_library_entry_changes_the_machines_composed_of_it` is that bug.
-            //
-            // So an existing machine keeps what it was composed of, exactly as it keeps its
-            // measured boot length, and the derivation below is only for a machine being named for
-            // the first time — where the files it is running are the only evidence of what it is
-            // made of.
-            rom: existing.and_then(|m| m.rom.clone()).or_else(|| {
-                self.library
+            // tried and is wrong: switching devices writes back the one you were editing, so the
+            // moment a resource changed, the write-back looked for one matching the old value,
+            // found none, and quietly cut the device loose from what it was made of.
+            firmware: existing.and_then(|d| d.firmware.clone()).or_else(|| {
+                self.resources
                     .iter()
-                    .find(|it| matches!(&it.what, Ingredient::Rom(src) if *src == self.nor))
+                    .find(|it| matches!(&it.what, Resource::Firmware(src) if *src == self.nor))
                     .map(|it| it.name.clone())
             }),
-            drive: existing.and_then(|m| m.drive.clone()).or_else(|| {
-                self.disk.as_ref().and_then(|d| {
-                    self.library
-                        .iter()
-                        .find(|it| matches!(&it.what, Ingredient::Disk(p) if p == d))
-                        .map(|it| it.name.clone())
-                })
+            disk: existing.and_then(|d| d.disk.clone()).or_else(|| {
+                self.disk
+                    .as_ref()
+                    .and_then(|p| self.disks.iter().find(|d| d.path == *p))
+                    .map(|d| d.name.clone())
             }),
+            nor: self.nor.clone(),
+            disk_path: self.disk.clone(),
+            chassis: self.chassis,
+            work_on_copy: self.work_on_copy,
+            boot_instructions: existing.and_then(|d| d.boot_instructions),
         }
     }
 
-    /// Put something in the library, or return the name it already has.
+    /// Put something in the resources, or return the name it already has.
     ///
-    /// **Adding the same file twice is not an error and does not make a second entry** — dropping a
-    /// drive on the window that you dropped last week should leave one drive in the list, named the
-    /// way you named it. Identity is the value, not the name: two entries pointing at one path
-    /// would be two names for one thing, and nothing could tell you which you were running.
-    pub fn file_away(&mut self, what: Ingredient, suggested: &str) -> String {
-        if let Some(existing) = self.library.iter().find(|it| it.what == what) {
+    /// **Adding the same file twice is not an error and does not make a second entry.** Identity is
+    /// the value, not the name: two entries pointing at one path would be two names for one thing,
+    /// and nothing could tell you which you were running. A name collision with a *different* thing
+    /// gets a suffix rather than overwriting it.
+    pub fn file_away(&mut self, what: Resource, suggested: &str) -> String {
+        if let Some(existing) = self.resources.iter().find(|it| it.what == what) {
             return existing.name.clone();
         }
-        // A name collision with a *different* thing gets a suffix rather than overwriting it.
-        let mut name = suggested.to_string();
-        let mut n = 2;
-        while self.library.iter().any(|it| it.name == name) {
-            name = format!("{suggested} ({n})");
-            n += 1;
-        }
-        self.library.push(Item {
+        let name = self.unique_name(suggested, |s| s.resources.iter().map(|i| i.name.as_str()));
+        self.resources.push(Item {
             name: name.clone(),
             what,
         });
         name
     }
 
-    /// Library entries a saved machine names but the library does not have.
+    /// Put a drive image in the disks, or return the name the same path already has.
+    pub fn file_disk(&mut self, path: PathBuf, suggested: &str) -> String {
+        if let Some(existing) = self.disks.iter().find(|d| d.path == path) {
+            return existing.name.clone();
+        }
+        let name = self.unique_name(suggested, |s| s.disks.iter().map(|d| d.name.as_str()));
+        self.disks.push(Disk {
+            name: name.clone(),
+            path,
+            built_from: None,
+            installed: Vec::new(),
+        });
+        name
+    }
+
+    /// A name not already taken in the list `taken` names.
+    fn unique_name<'a, F, I>(&'a self, suggested: &str, taken: F) -> String
+    where
+        F: Fn(&'a Settings) -> I,
+        I: Iterator<Item = &'a str>,
+    {
+        let base = if suggested.is_empty() {
+            "unnamed"
+        } else {
+            suggested
+        };
+        let mut name = base.to_string();
+        let mut n = 2;
+        while taken(self).any(|t| t == name) {
+            name = format!("{base} ({n})");
+            n += 1;
+        }
+        name
+    }
+
+    /// Names a device refers to that no longer exist.
     ///
-    /// **Reported rather than silently ignored.** A machine whose ROM went missing should say which
-    /// one, because "it boots to a white screen" is not a diagnosis and the file that went is the
-    /// whole of the answer.
-    pub fn missing(&self, m: &Machine) -> Vec<String> {
+    /// **Reported rather than swallowed.** A device whose firmware went missing should say which
+    /// one, because "it boots to a white screen" is not a diagnosis and the name of the file that
+    /// went is the whole of the answer.
+    pub fn missing(&self, d: &Device) -> Vec<String> {
         let mut out = Vec::new();
-        for want in [m.rom.as_deref(), m.drive.as_deref()].into_iter().flatten() {
-            if !self.library.iter().any(|it| it.name == want) {
-                out.push(want.to_string());
+        if let Some(f) = &d.firmware {
+            if !self.resources.iter().any(|it| it.name == *f) {
+                out.push(f.clone());
+            }
+        }
+        if let Some(k) = &d.disk {
+            if !self.disks.iter().any(|x| x.name == *k) {
+                out.push(k.clone());
             }
         }
         out
     }
 
-    /// Use a library entry now: a ROM or a drive becomes the live machine's, an `.ipsw` is not
-    /// something that can be *run* and is refused rather than half-applied.
+    /// Resolve a device's parts and make it the live one. `false` if there is no device of that name.
     ///
-    /// `false` when there is no entry of that name, so a caller can say so.
-    pub fn use_item(&mut self, name: &str) -> bool {
-        let Some(item) = self.library.iter().find(|it| it.name == name) else {
-            return false;
-        };
-        match item.what.clone() {
-            Ingredient::Rom(src) => self.nor = src,
-            Ingredient::Disk(p) => self.disk = Some(p),
-            // Building a drive from a bundle is a job with a progress bar and a destination, not a
-            // field assignment. The window runs it; this refuses rather than pretending.
-            Ingredient::Ipsw(_) => return false,
-        }
-        true
-    }
-
-    /// Save the live machine under `name`, replacing any machine of that name.
-    ///
-    /// **Name is the key.** Two machines called the same thing is a list nobody can act on — you
-    /// cannot say which one you meant, and neither can the program.
-    pub fn remember_as(&mut self, name: &str) {
-        let m = self.as_machine(name);
-        match self.machines.iter().position(|x| x.name == name) {
-            Some(i) => self.machines[i] = m,
-            None => self.machines.push(m),
-        }
-        self.current = Some(name.to_string());
-    }
-
-    /// Make a saved machine the live one. `false` if there is no machine of that name.
-    ///
-    /// **The machine being replaced is written back first**, so switching away from something you
+    /// **The device being replaced is written back first**, so switching away from something you
     /// have been editing does not discard the edits — which is what every person switching between
     /// two of anything expects, and what they never say out loud.
-    pub fn switch_to(&mut self, name: &str) -> bool {
-        let Some(i) = self.machines.iter().position(|m| m.name == name) else {
+    pub fn run_device(&mut self, name: &str) -> bool {
+        let Some(i) = self.devices.iter().position(|d| d.name == name) else {
             return false;
         };
         if let Some(c) = self.current.clone() {
-            if c != name && self.machines.iter().any(|m| m.name == c) {
-                let live = self.as_machine(&c);
-                if let Some(j) = self.machines.iter().position(|m| m.name == c) {
-                    self.machines[j] = live;
+            if c != name && self.devices.iter().any(|d| d.name == c) {
+                let live = self.as_device(&c);
+                if let Some(j) = self.devices.iter().position(|d| d.name == c) {
+                    self.devices[j] = live;
                 }
             }
         }
-        let m = self.machines[i].clone();
-        // **The library entry wins when the machine names one**, so editing an entry changes every
-        // machine composed of it — which is the point of composing rather than copying. A name that
-        // is not in the library falls back to the machine's own stored value rather than leaving it
-        // with no ROM at all; `missing` is what reports that, at a moment when it can be read.
-        self.nor = m
-            .rom
+        let d = self.devices[i].clone();
+        // **The named resource wins**, so editing one changes every device made of it — the point
+        // of composing rather than copying. A name that is not there falls back to the device's own
+        // stored value rather than leaving it with no firmware at all; `missing` reports that, at a
+        // moment when it can be read.
+        self.nor = d
+            .firmware
             .as_deref()
-            .and_then(|n| self.library.iter().find(|it| it.name == n))
+            .and_then(|n| self.resources.iter().find(|it| it.name == n))
             .and_then(|it| match &it.what {
-                Ingredient::Rom(src) => Some(src.clone()),
+                Resource::Firmware(src) => Some(src.clone()),
                 _ => None,
             })
-            .unwrap_or(m.nor);
-        self.disk = m
-            .drive
+            .unwrap_or(d.nor);
+        self.disk = d
+            .disk
             .as_deref()
-            .and_then(|n| self.library.iter().find(|it| it.name == n))
-            .and_then(|it| match &it.what {
-                Ingredient::Disk(p) => Some(p.clone()),
-                _ => None,
-            })
-            .or(m.disk);
-        self.chassis = m.chassis;
-        self.work_on_copy = m.work_on_copy;
+            .and_then(|n| self.disks.iter().find(|x| x.name == n))
+            .map(|x| x.path.clone())
+            .or(d.disk_path);
+        self.chassis = d.chassis;
+        self.work_on_copy = d.work_on_copy;
         self.current = Some(name.to_string());
         true
     }
 
-    /// Remove a saved machine. The live fields are untouched — forgetting the machine you are
-    /// running stops it being in the list, it does not stop it running.
+    /// Save the live fields as a device under `name`, replacing any device of that name.
+    pub fn remember_as(&mut self, name: &str) {
+        let d = self.as_device(name);
+        match self.devices.iter().position(|x| x.name == name) {
+            Some(i) => self.devices[i] = d,
+            None => self.devices.push(d),
+        }
+        self.current = Some(name.to_string());
+    }
+
+    /// Remove a device. The live fields are untouched — forgetting the device you are running
+    /// stops it being in the list, it does not stop it running.
     pub fn forget(&mut self, name: &str) {
-        self.machines.retain(|m| m.name != name);
+        self.devices.retain(|d| d.name != name);
         if self.current.as_deref() == Some(name) {
             self.current = None;
         }
     }
 
-    /// Record how long this machine's cold boot took, for the next one's progress bar.
+    /// Record how long this device's cold boot took, for the next one's progress bar.
     pub fn record_boot(&mut self, instructions: u64) {
         let Some(c) = self.current.clone() else {
             return;
         };
-        if let Some(m) = self.machines.iter_mut().find(|m| m.name == c) {
-            m.boot_instructions = Some(instructions);
+        if let Some(d) = self.devices.iter_mut().find(|d| d.name == c) {
+            d.boot_instructions = Some(instructions);
         }
     }
 
@@ -738,8 +867,8 @@ impl Settings {
     pub fn expected_boot(&self) -> Option<u64> {
         self.current
             .as_deref()
-            .and_then(|c| self.machines.iter().find(|m| m.name == c))
-            .and_then(|m| m.boot_instructions)
+            .and_then(|c| self.devices.iter().find(|d| d.name == c))
+            .and_then(|d| d.boot_instructions)
             .filter(|n| *n > 0)
     }
 
@@ -1039,6 +1168,15 @@ fn as_synth(src: crate::nor::Source) -> Synth {
     }
 }
 
+/// Split `prefix.N.field` into `(N, field)`. `None` for anything that is not that shape.
+///
+/// One place, because three sections use it and the fourth copy is where the off-by-one goes.
+fn indexed(key: &str) -> Option<(usize, &str)> {
+    let mut it = key.splitn(3, '.');
+    let (_, idx, field) = (it.next()?, it.next()?, it.next()?);
+    Some((idx.parse().ok()?, field))
+}
+
 /// Apply one `nor_*` settings key to a ROM source, or return `None` if it is not one.
 ///
 /// **One place, because there are now three callers**: the live machine's keys, a saved machine's
@@ -1247,9 +1385,10 @@ mod tests {
             disk: Some(PathBuf::from("/a/b/disk.img")),
             check_updates_on_start: true,
             work_on_copy: Some(true),
-            machines: Vec::new(),
+            devices: Vec::new(),
             current: None,
-            library: Vec::new(),
+            resources: Vec::new(),
+            disks: Vec::new(),
             library_seeded: false,
         };
         assert_eq!(Settings::parse(&s.render()), s);
@@ -1314,7 +1453,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod machine_tests {
+mod device_tests {
     use super::*;
 
     fn synth(model: &str, seed: u64) -> crate::nor::Source {
@@ -1329,7 +1468,7 @@ mod machine_tests {
 
     /// **A machine list has to survive the round trip, or it is not storage.**
     #[test]
-    fn machines_survive_render_and_parse() {
+    fn devices_survive_render_and_parse() {
         let mut s = Settings {
             nor: synth("A146", 5),
             ..Default::default()
@@ -1341,15 +1480,16 @@ mod machine_tests {
         s.remember_as("my own iPod");
 
         let back = Settings::parse(&s.render());
-        assert_eq!(back.machines.len(), 2, "both machines came back");
-        assert_eq!(back.machines[0].name, "Video 5G");
+        assert_eq!(back.devices.len(), 2, "both devices came back");
+        assert_eq!(back.devices[0].name, "Video 5G");
         assert_eq!(
-            back.machines[0].nor,
+            back.devices[0].nor,
             synth("A146", 5),
             "a synthesised ROM is a recipe"
         );
+        // The disk arrives as a *name*, and it resolves to the path it was seeded from.
         assert_eq!(
-            back.machines[1].disk,
+            back.devices[1].disk_path,
             Some(PathBuf::from("/drives/two.img"))
         );
         assert_eq!(back.current.as_deref(), Some("my own iPod"));
@@ -1367,11 +1507,11 @@ mod machine_tests {
         s.nor = crate::nor::Source::File(PathBuf::from("/roms/real.bin"));
         s.remember_as("real dump");
 
-        assert!(s.switch_to("generated"));
+        assert!(s.run_device("generated"));
         assert_eq!(s.nor, synth("A146", 7), "back to the recipe, not to a path");
-        assert!(s.switch_to("real dump"));
+        assert!(s.run_device("real dump"));
         assert!(matches!(s.nor, crate::nor::Source::File(_)));
-        assert!(!s.switch_to("nothing of that name"));
+        assert!(!s.run_device("nothing of that name"));
     }
 
     /// Switching away from a machine you have edited keeps the edits.
@@ -1383,10 +1523,10 @@ mod machine_tests {
         };
         s.remember_as("a");
         s.remember_as("b");
-        s.switch_to("a");
+        s.run_device("a");
         s.disk = Some(PathBuf::from("/drives/edited.img"));
-        s.switch_to("b");
-        s.switch_to("a");
+        s.run_device("b");
+        s.run_device("a");
         assert_eq!(
             s.disk,
             Some(PathBuf::from("/drives/edited.img")),
@@ -1414,7 +1554,7 @@ mod machine_tests {
             Some(21_500_000_000),
             "each machine learns its own"
         );
-        s.switch_to("one");
+        s.run_device("one");
         assert_eq!(s.expected_boot(), Some(1_600_000_000), "and keeps it");
     }
 
@@ -1429,7 +1569,7 @@ mod machine_tests {
             crate::nor::Source::File(PathBuf::from("/roms/mine.bin"))
         );
         assert_eq!(s.disk, Some(PathBuf::from("/drives/mine.img")));
-        assert!(s.machines.is_empty(), "no list, and that is not an error");
+        assert!(s.devices.is_empty(), "no list, and that is not an error");
         assert_eq!(s.current, None);
     }
 
@@ -1438,26 +1578,36 @@ mod machine_tests {
     /// **The library has to survive the round trip, or it is not storage** — the same bar the
     /// machine list is held to, for the same reason.
     #[test]
-    fn the_library_survives_render_and_parse() {
+    fn the_resources_survive_render_and_parse() {
         let mut s = Settings::default();
-        s.file_away(Ingredient::Rom(synth("A146", 5)), "a synthesised 30 GB");
+        s.file_away(Resource::Firmware(synth("A146", 5)), "a synthesised 30 GB");
         s.file_away(
-            Ingredient::Rom(crate::nor::Source::File(PathBuf::from("/roms/retail.bin"))),
+            Resource::Firmware(crate::nor::Source::File(PathBuf::from("/roms/retail.bin"))),
             "my own dump",
         );
         s.file_away(
-            Ingredient::Ipsw(PathBuf::from("/fw/iPod_20.1.3.ipsw")),
+            Resource::Installer(PathBuf::from("/fw/iPod_20.1.3.ipsw")),
             "20.1.3",
         );
         s.file_away(
-            Ingredient::Disk(PathBuf::from("/drives/rockbox.img")),
-            "with Rockbox",
+            Resource::Software(PathBuf::from("/software/rockbox.ipod")),
+            "Rockbox 4.0",
         );
+        s.disks.push(Disk {
+            name: "Music 30GB".into(),
+            path: PathBuf::from("/drives/music.img"),
+            built_from: Some("20.1.3".into()),
+            installed: vec!["Rockbox 4.0".into(), "ipodloader2".into()],
+        });
 
         let back = Settings::parse(&s.render());
         assert_eq!(
-            back.library, s.library,
-            "the library did not come back as it went in"
+            back.resources, s.resources,
+            "the resources did not come back as they went in"
+        );
+        assert_eq!(
+            back.disks, s.disks,
+            "the disks did not come back as they went in"
         );
     }
 
@@ -1467,21 +1617,27 @@ mod machine_tests {
     #[test]
     fn filing_the_same_file_twice_returns_the_name_it_already_has() {
         let mut s = Settings::default();
-        let first = s.file_away(Ingredient::Disk(PathBuf::from("/drives/one.img")), "mine");
+        let first = s.file_away(Resource::Software(PathBuf::from("/sw/one.ipod")), "mine");
         let again = s.file_away(
-            Ingredient::Disk(PathBuf::from("/drives/one.img")),
+            Resource::Software(PathBuf::from("/sw/one.ipod")),
             "something else",
         );
-        assert_eq!(first, again, "the same drive was filed under a second name");
-        assert_eq!(s.library.len(), 1);
+        assert_eq!(first, again, "the same file was filed under a second name");
+        assert_eq!(s.resources.len(), 1);
 
         // A different thing that wants a taken name gets a suffix rather than overwriting it.
-        let other = s.file_away(Ingredient::Disk(PathBuf::from("/drives/two.img")), "mine");
+        let other = s.file_away(Resource::Software(PathBuf::from("/sw/two.ipod")), "mine");
         assert_ne!(
             other, "mine",
-            "a second drive overwrote the first one's name"
+            "a second file overwrote the first one's name"
         );
-        assert_eq!(s.library.len(), 2);
+        assert_eq!(s.resources.len(), 2);
+
+        // Disks are a separate list with the same rule, and the two do not collide: a disk called
+        // "mine" and a resource called "mine" are different things in different lists.
+        assert_eq!(s.file_disk(PathBuf::from("/drives/a.img"), "mine"), "mine");
+        assert_eq!(s.file_disk(PathBuf::from("/drives/a.img"), "other"), "mine");
+        assert_eq!(s.disks.len(), 1);
     }
 
     /// **The point of composing rather than copying**: edit the entry, and every machine made of it
@@ -1490,21 +1646,21 @@ mod machine_tests {
     #[test]
     fn editing_a_library_entry_changes_the_machines_composed_of_it() {
         let mut s = Settings::default();
-        s.file_away(Ingredient::Rom(synth("A146", 5)), "the shared ROM");
+        s.file_away(Resource::Firmware(synth("A146", 5)), "the shared ROM");
         s.nor = synth("A146", 5);
         s.disk = Some(PathBuf::from("/drives/one.img"));
         s.remember_as("first");
         s.remember_as("second");
         assert_eq!(
-            s.machines[0].rom.as_deref(),
+            s.devices[0].firmware.as_deref(),
             Some("the shared ROM"),
             "not composed of it"
         );
 
         // Re-seed the entry. Both machines are made of it, so both should now boot the new one.
-        s.library[0].what = Ingredient::Rom(synth("A146", 99));
+        s.resources[0].what = Resource::Firmware(synth("A146", 99));
         for name in ["first", "second"] {
-            assert!(s.switch_to(name));
+            assert!(s.run_device(name));
             assert_eq!(
                 s.nor,
                 synth("A146", 99),
@@ -1520,11 +1676,11 @@ mod machine_tests {
             "machine.0.name = old\nmachine.0.nor_model = A146\nmachine.0.nor_seed = 7\n\
              machine.0.disk = /drives/old.img\n",
         );
-        assert!(s.switch_to("old"));
+        assert!(s.run_device("old"));
         assert_eq!(s.nor, synth("A146", 7));
         assert_eq!(s.disk, Some(PathBuf::from("/drives/old.img")));
         assert!(
-            s.missing(&s.machines[0].clone()).is_empty(),
+            s.missing(&s.devices[0].clone()).is_empty(),
             "nothing was named, so nothing is missing"
         );
     }
@@ -1537,7 +1693,7 @@ mod machine_tests {
             "machine.0.name = broken\nmachine.0.rom = a ROM that was deleted\n\
              machine.0.drive = a drive that was deleted\n",
         );
-        let missing = s.missing(&s.machines[0]);
+        let missing = s.missing(&s.devices[0]);
         assert_eq!(
             missing.len(),
             2,
@@ -1549,31 +1705,64 @@ mod machine_tests {
     /// An `.ipsw` is not something that can be run — a drive is *built* from it. Applying one as if
     /// it were a drive would produce a machine that boots nothing, silently.
     #[test]
-    fn an_ipsw_cannot_be_used_as_a_drive() {
+    fn a_disk_is_not_a_resource_and_an_installer_is_not_software() {
         let mut s = Settings::default();
         s.file_away(
-            Ingredient::Ipsw(PathBuf::from("/fw/iPod_20.1.3.ipsw")),
+            Resource::Installer(PathBuf::from("/fw/iPod_20.1.3.ipsw")),
             "20.1.3",
         );
-        assert!(
-            !s.use_item("20.1.3"),
-            "an .ipsw was accepted as something to run"
-        );
-        assert_eq!(s.disk, None, "and it set the drive anyway");
-        assert!(!s.use_item("not in the library"));
-
         s.file_away(
-            Ingredient::Disk(PathBuf::from("/drives/one.img")),
-            "a drive",
+            Resource::Software(PathBuf::from("/sw/rockbox.ipod")),
+            "Rockbox 4.0",
         );
-        assert!(s.use_item("a drive"));
-        assert_eq!(s.disk, Some(PathBuf::from("/drives/one.img")));
+        s.file_disk(PathBuf::from("/drives/one.img"), "a drive");
+
+        // **The lists are what stop the wrong thing being aimed at the wrong place.** An `.ipsw`
+        // and a Rockbox build are both files in `resources`, but they carry different verbs; a
+        // drive is not in that list at all, because it is what the other two are combined into.
+        assert_eq!(s.resources.len(), 2);
+        assert_eq!(s.disks.len(), 1);
+        let verbs: Vec<&str> = s.resources.iter().map(|i| i.what.verb()).collect();
+        assert_eq!(verbs, ["makes a disk", "installs onto a disk"]);
+        assert!(
+            !s.resources
+                .iter()
+                .any(|i| i.what.path().unwrap().ends_with("one.img")),
+            "a drive was filed as a resource"
+        );
     }
 
-    /// **A setup that predates the library is not an empty library.** Someone who has been running
-    /// a boot ROM and a drive for months should open the page and see them, not "nothing yet".
+    /// A settings file from the shape where a disk *was* a resource has to come back with the disk
+    /// in the disks — otherwise updating empties the list of drives somebody is running.
     #[test]
-    fn the_library_seeds_itself_from_what_is_already_configured() {
+    fn an_older_file_that_filed_disks_as_resources_migrates_them() {
+        let s = Settings::parse(
+            "item.0.name = my dump\nitem.0.kind = rom\nitem.0.path = /roms/retail.bin\n\
+             item.1.name = ipod8g\nitem.1.kind = disk\nitem.1.path = /drives/ipod8g.img\n\
+             machine.0.name = old\nmachine.0.drive = ipod8g\n",
+        );
+        assert_eq!(
+            s.resources.len(),
+            1,
+            "the disk stayed in the resources: {:?}",
+            s.resources
+        );
+        assert_eq!(s.disks.len(), 1, "the disk did not arrive in the disks");
+        assert_eq!(s.disks[0].name, "ipod8g");
+        assert_eq!(s.disks[0].path, PathBuf::from("/drives/ipod8g.img"));
+        // And the device that referred to it by name still resolves, which is the whole point of
+        // moving it rather than dropping it.
+        assert_eq!(s.devices[0].disk.as_deref(), Some("ipod8g"));
+        assert!(
+            s.missing(&s.devices[0]).is_empty(),
+            "the reference broke in the move"
+        );
+    }
+
+    /// **A setup that predates this is not an empty list.** Someone who has been running a boot ROM
+    /// and a drive for months should open the page and see them, not "nothing yet".
+    #[test]
+    fn the_lists_seed_themselves_from_what_is_already_configured() {
         let mut s = Settings {
             nor: synth("A146", 5),
             disk: Some(PathBuf::from("/drives/mine.img")),
@@ -1583,21 +1772,14 @@ mod machine_tests {
         s.nor = crate::nor::Source::File(PathBuf::from("/roms/retail.bin"));
         s.remember_as("with my own dump");
 
-        s.seed_library();
-        assert_eq!(
-            s.library.len(),
-            3,
-            "two ROMs and one drive: {:?}",
-            s.library
-        );
+        s.seed_resources();
+        assert_eq!(s.resources.len(), 2, "two boot ROMs: {:?}", s.resources);
+        assert_eq!(s.disks.len(), 1, "one drive: {:?}", s.disks);
         assert!(s
-            .library
+            .resources
             .iter()
-            .any(|i| i.what == Ingredient::Rom(synth("A146", 5))));
-        assert!(s
-            .library
-            .iter()
-            .any(|i| matches!(&i.what, Ingredient::Disk(p) if p.ends_with("mine.img"))));
+            .any(|i| i.what == Resource::Firmware(synth("A146", 5))));
+        assert!(s.disks[0].path.ends_with("mine.img"));
     }
 
     /// **Seeding happens once, so removing an entry sticks.** A list that puts back what you took
@@ -1608,16 +1790,16 @@ mod machine_tests {
             nor: synth("A146", 5),
             ..Default::default()
         };
-        s.seed_library();
-        assert_eq!(s.library.len(), 1);
+        s.seed_resources();
+        assert_eq!(s.resources.len(), 1);
 
-        s.library.clear();
+        s.resources.clear();
         let back = Settings::parse(&s.render());
         assert!(back.library_seeded, "the marker did not survive the file");
         let mut back = back;
-        back.seed_library();
+        back.seed_resources();
         assert!(
-            back.library.is_empty(),
+            back.resources.is_empty(),
             "an entry that was removed came back"
         );
     }
