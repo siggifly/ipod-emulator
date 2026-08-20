@@ -115,10 +115,29 @@ userland around 20 G.
 | `--bcm-ppm=` / `--bcm-film=` | the panel |
 | `--cop-trace` | the second core's park/wake ledger |
 | `--stop-when-idle=N` | end the run once nothing new is reached |
+| `--restore=FILE` | resume a saved machine — and say so if nothing is mapped at its program counter |
+
+`IPOD_LAYOUT=1` makes the **window** print the measurement its size constants are derived from:
+
+```
+layout: window 1100x830 @2 ppp · device area 1100x714 · chrome 116 px · scale x2
+```
 
 **[NEXT.md](../NEXT.md) lists every instrument with a note on how each one lies.** That section is
 not decoration: eight of them have reported an absence they could not have observed. Before
 believing a zero, run the control that makes the instrument produce a non-zero.
+
+### Anchor an injected wheel script in simulated time
+
+`--wheel=@24s:touch` and not `--wheel=@2200M:touch`. A machine spends most of a budget **halted**,
+and one resumed from a snapshot is halted from its first step: a 3 G budget executed **495 M**, so a
+script anchored at `@2200M` fired **0 of 12** steps and read as a wheel nobody was listening to.
+Anchors that did land were worse — they fired in a bunch during a disk scan and the run reported
+`1 word read of DATA, 11 frames dropped unread`, which is what a hung driver looks like. Anchored in
+simulated time on the same snapshot: **16 posted, 0 dropped, 16 read, 16 interrupts.**
+
+`trace --restore=` prints the clock it resumed at. Anchor past it, and read the `script: N of M
+steps fired` line before believing anything the run says about input.
 
 ## The research
 
