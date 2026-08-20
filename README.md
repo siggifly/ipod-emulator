@@ -35,14 +35,26 @@ reverse-engineering tool look official is the wrong trade. macOS 15+ blocks the 
 it, then **System Settings → Privacy & Security** has a button to open it anyway. Windows:
 **More info → Run anyway**. Anything you build yourself skips this.
 
-### Using your own iPod's files instead
+### Bringing your own files
 
-Optional, and worth doing for two things a synthesised ROM cannot give you: **Apple's own bootloader
-running from the reset vector**, and **the service diagnostics**, which live inside the ROM itself.
+**The two halves are independent.** The boot ROM and the drive are separate questions, and you can
+supply either, both or neither — drop whatever you have anywhere on the window, in any order. Each
+file is identified by what it *contains*, not by which box you put it in, and it remembers.
 
-Drop a 1 MB NOR dump and an `.ipsw` (or a drive image) anywhere on the window, in any order — each
-file is identified by what it *contains*, not by which box you put it in, and it remembers. Reading
-the dump off your own iPod takes about five minutes with Rockbox and undoes cleanly:
+| the boot ROM | the drive |
+|---|---|
+| **synthesised** — no file needed | **built from a fetched `.ipsw`** — no file needed |
+| **your own 1 MB NOR dump** | **your own `.ipsw`**, built into a drive as it lands |
+| | **a drive image you already have** — then no `.ipsw` is needed at all |
+
+Any combination works. What a *real* dump additionally buys you is the things that **are** the ROM
+and cannot be synthesised: **Apple's own bootloader** running from the reset vector, and the
+**service diagnostics** below.
+
+You can also give a synthesised iPod **your own boot picture** in place of the click-wheel outline —
+it is a path in the settings, re-read when you edit the file.
+
+Reading a dump off your own iPod takes about five minutes with Rockbox and undoes cleanly:
 **[docs/GETTING-THE-FILES.md](docs/GETTING-THE-FILES.md)**.
 
 ## What it runs
@@ -68,7 +80,9 @@ wrote and started by Apple's own bootloader.
 directories onto the volume, and a boot menu naming only what is actually on it. On a drive that
 already has Rockbox, that is a three-entry menu — **ZeroSlackr, Apple OS, Rockbox.**
 
-**And Apple's service diagnostics** — the program a real iPod shows on `SELECT`+`REW` at power-on:
+**And Apple's service diagnostics** — the program a real iPod shows on `SELECT`+`REW` at power-on.
+It lives *inside* the boot ROM, so this one **needs a real dump**; a synthesised ROM has no image
+directory to hold it:
 
 <img src="docs/media/ipod-22-diagnostics.gif" width="320" alt="Apple's iPod diagnostics: the boot screen, manual-test menu, IO, Wheel, and Key Test">
 
@@ -105,6 +119,7 @@ One document per question, and none of them answers another's.
 | [research/04-bypass-ledger.md](research/04-bypass-ledger.md) | what is *faked*, with a retirement condition for each |
 | [CHANGELOG.md](CHANGELOG.md) | what *changed*, release by release |
 | [NEXT.md](NEXT.md) | what is being worked on *now* |
+| [research/17](research/17-the-boot-matrix.md) | **the boot matrix** — which OS boots on which ROM, cell by cell |
 | [research/](research/) | how any of it was found out — the larger half of this project |
 
 `research/` keeps what was believed and why it was wrong, in place, rather than tidying it away.

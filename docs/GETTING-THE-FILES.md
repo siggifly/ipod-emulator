@@ -74,12 +74,29 @@ Apple no longer serves say so, rather than failing with a transport error.
 
 Full catalogue and the `FamilyID`/`UpdaterFamilyID` trap: [firmware-catalogue.md](firmware-catalogue.md).
 
-## They must be a matching pair
+## The two halves are independent
+
+The boot ROM and the drive are **separate questions**. Supply either, both or neither:
+
+| the boot ROM | the drive |
+|---|---|
+| synthesised — no file needed | built from a fetched `.ipsw` — no file needed |
+| your own 1 MB NOR dump | your own `.ipsw` |
+| | a drive image you already have, in which case **no `.ipsw` is needed at all** |
+
+A synthesised ROM with your own `.ipsw` works. Your dump with a fetched `.ipsw` works. Your dump
+with a drive image and no `.ipsw` anywhere works.
+
+## What must match is the firmware and the iPod
+
+Not "the two files you supplied" — the *firmware family* and the *model*.
 
 Apple ships each model's software under an **updater family**, and an iPod recognises only its own —
-the Video takes family 20. A mismatched pair boots, fails to recognise the drive, and asks to be
-restored from iTunes after about **70 ATA commands**, where a matching pair reaches the language
-picker with **618**.
+the Video takes family 20. A mismatch boots, fails to recognise the drive, and asks to be restored
+from iTunes after about **70 ATA commands**, where a match reaches the language picker with **618**.
+
+This is checked whichever way the two arrived, including when one of them was synthesised or
+fetched.
 
 The emulator checks before booting rather than after. With no window at all:
 
@@ -103,6 +120,32 @@ whichever iPod you name.
 **The window's device picker offers one device, not 198.** That is deliberate — ROADMAP Ⅳ: *a device
 drawn in the picker is a promise, and each one appears when it boots, not before.* The table carries
 every clickwheel iPod so that adding one is a row rather than a refactor.
+
+### Your own boot picture
+
+A synthesised iPod shows the click-wheel outline while it starts. You can replace it: the setting is
+a **path**, not the pixels, so editing the picture is enough and there is nothing to regenerate.
+
+```sh
+ipod-boot make-nor --model A146 --seed 5 --preview boot.png out.bin
+```
+
+writes out what a given machine will show, which is where
+`docs/media/ipod-30-synthetic-nor-boot.png` came from.
+
+### What a synthesised ROM cannot do
+
+`diag`, `disk` and the `aupd` updater are **images inside the NOR** — Apple's code, which is exactly
+what is not synthesised. There is no `flsh` directory in a synthesised ROM and the tools say so:
+
+```
+ipod-boot flsh: synth-5g.bin has no `flsh` image directory at all
+```
+
+Apple's **service diagnostics needs a real dump** and always will. Cold RetailOS does too, because
+reaching it means running Apple's bootloader. Everything entered directly — RetailOS high-level,
+Rockbox, `ipodloader2`, iPodLinux — runs on either, with identical numbers. Cell by cell:
+[research/17](../research/17-the-boot-matrix.md).
 
 ## What has actually been tested
 
