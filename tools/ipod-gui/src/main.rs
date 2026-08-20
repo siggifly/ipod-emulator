@@ -1170,6 +1170,8 @@ struct App {
     /// crashed one.
     install_slot: Arc<Mutex<Option<Result<(PathBuf, Vec<String>), String>>>>,
     install_busy: bool,
+    /// The phase at the previous frame, so the boot→running edge can be seen.
+    last_phase: Phase,
     update_slot: Arc<Mutex<Option<Option<update::Found>>>>,
     update_line: Option<String>,
     update_asked: bool,
@@ -1657,6 +1659,7 @@ impl App {
             update_slot,
             install_slot: Arc::new(Mutex::new(None)),
             install_busy: false,
+            last_phase: Phase::Off,
             update_line: None,
             update_asked: false,
             fw_cache: None,
@@ -1797,6 +1800,35 @@ impl App {
             return Some("The flash updater is armed, so this drive boots the updater instead of the OS.".into());
         }
         None
+    }
+
+    /// **Learn how long this machine's boot takes, by watching one finish.**
+    ///
+    /// The boot ends when the machine asks for wheel frames — a signal any operating system gives,
+    /// which is why the *end* of the progress bar was always right and only its denominator was
+    /// RetailOS-shaped. Recording the instruction count at that moment gives the next boot of this
+    /// machine a number that came from this machine, rather than from a constant that happened to
+    /// fit the one operating system the constant was measured on.
+    ///
+    /// Only on the transition, and only for a machine that has a name to record it against.
+    fn note_boot_finished(&mut self) {
+        let Some(link) = &self.link else { return };
+        let (phase, executed) = {
+            let out = link.out.lock().unwrap();
+            (out.phase.clone(), out.stats.executed)
+        };
+        let was_booting = matches!(self.last_phase, Phase::Booting { .. });
+        self.last_phase = phase.clone();
+        if was_booting && phase == Phase::Running && executed > 0 {
+            // **A restored machine cannot reach here**, and that is the emulator's doing rather
+            // than a flag kept in step with it: `emu` sets `Running` outright when it restores and
+            // `Booting` only when it does not, so there is no boot→running edge to see. A separate
+            // "did we restore" field would be a second copy of that fact, and second copies drift.
+            if self.settings.current.is_some() {
+                self.settings.record_boot(executed);
+                self.settings.save();
+            }
+        }
     }
 
     fn say(&mut self, s: impl Into<String>) {
@@ -2281,6 +2313,7 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_update();
+        self.note_boot_finished();
         self.scripted_presses(ui.ctx());
         self.window_shot_step(ui.ctx());
         // Anywhere on the window, on every screen. A drop target that is a rectangle inside the
@@ -3503,27 +3536,53 @@ impl App {
             // gives no evidence the machine is doing anything at all, and a blank window that is
             // busy is indistinguishable from a blank window that has hung. The same bar has been
             // in the debug panel all along; there was no reason it was only there.
-            if let Phase::Booting { target } = &out.phase {
-                let f = (s.executed as f32 / (*target).max(1) as f32).min(1.0);
+            if let Phase::Booting { .. } = &out.phase {
                 // A bar with no text in it. At 6 points there is no room for a label inside,
                 // and shrinking the label to fit is how it became unreadable — so the words go
                 // in the row below, at the left, where the rest of the footer's text already is.
                 ui.add_space(4.0);
-                ui.add(egui::ProgressBar::new(f).desired_height(6.0).corner_radius(3));
+                match self.settings.expected_boot() {
+                    Some(n) => {
+                        let f = (s.executed as f32 / n as f32).min(1.0);
+                        ui.add(egui::ProgressBar::new(f).desired_height(6.0).corner_radius(3));
+                    }
+                    // **No fraction until this machine has finished a boot once.** The denominator
+                    // used to be `snap_at`, a constant tuned to RetailOS, so the bar lied about
+                    // every other operating system: Rockbox reaches its menu in about 100 M and
+                    // barely moved it, iPodLinux takes 21.5 G and pinned it at 100 % for twenty
+                    // billion instructions — which is worse than no bar, because a full bar that
+                    // never finishes reads as a hang.
+                    None => {
+                        ui.add(
+                            egui::ProgressBar::new(0.0)
+                                .desired_height(6.0)
+                                .corner_radius(3)
+                                .animate(true),
+                        );
+                    }
+                }
                 ui.add_space(3.0);
             }
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 // During a cold boot the useful number is how much of it is left, not how fast
                 // it is going, so that is what the leftmost slot says while it lasts.
-                let badge = if let Phase::Booting { target } = &out.phase {
-                    // **An estimate, and it says so.** The fraction is instructions against
-                    // `snap_at`, which is where the snapshot is taken and not where the boot ends —
-                    // the machine is finished when RetailOS asks for wheel frames, which is what
-                    // ends this phase. So the bar is a rough sense of progress and the words no
-                    // longer promise a deadline the program cannot keep.
-                    let f = (s.executed as f32 / (*target).max(1) as f32).min(1.0);
-                    format!("cold boot — roughly {:.0} %", f * 100.0)
+                let badge = if let Phase::Booting { .. } = &out.phase {
+                    // **An estimate against this machine's own last boot, and it says so.** The
+                    // boot ends when the machine asks for wheel frames — which any operating
+                    // system does — so the *end* was always honest; it was the denominator that
+                    // was RetailOS-shaped. A machine that has not finished a boot yet gets a count
+                    // rather than a percentage, because a percentage would be invented.
+                    match self.settings.expected_boot() {
+                        Some(n) => {
+                            let f = (s.executed as f32 / n as f32).min(1.0);
+                            format!("cold boot — roughly {:.0} %", f * 100.0)
+                        }
+                        None => format!(
+                            "cold boot — {:.1} G instructions so far",
+                            s.executed as f64 / 1e9
+                        ),
+                    }
                 } else if s.executed_here == 0 {
                     "≈30 % of real-time — emulated".to_string()
                 } else {
