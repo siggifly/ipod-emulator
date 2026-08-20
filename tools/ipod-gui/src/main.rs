@@ -195,37 +195,39 @@ const HARDWARE_MIPS: f64 = 72e6;
 
 /// The narrowest and shortest the window may be made.
 ///
-/// **`MIN_H` is derived from the pages, not chosen for them.** Measured 2026-08-18 by the test
-/// below, at `MIN_W`, in pixels of content:
+/// **Height is the scarce axis; width is not.** That is the whole of this design, and it was
+/// learned the wrong way round. The settings page grew to 936 px stacked, `MIN_H` went to 960 to
+/// fit it, and 960 does not fit the machines people actually use:
 ///
 /// ```text
-///   first run,  nothing chosen        542
+///   12" MacBook   1152 x 720    667 px of height once the menu bar and title bar are counted
+///   1366x768      1366 x 768    715
+///   13" Air       1440 x 900    847
+///   13" Pro       1512 x 982    929
+/// ```
+///
+/// Every one of them has **1152 px or more of width going spare.** So the settings page spends
+/// width instead: a rail of sections down the left and one pane at a time on the right, which makes
+/// it as tall as its tallest single section rather than the sum of six. Measured by the test below,
+/// at `MIN_W`, in pixels of content:
+///
+/// ```text
+///   first run,  nothing chosen        542   <- the tallest page this program has
 ///   first run,  two files chosen      542
 ///   first run,  two files refused     541
-///   settings,   two files chosen      781
-///   settings,   two files refused     936   <- the tallest page this program has
+///   settings,   two files chosen      266     (was 781 stacked)
+///   settings,   two files refused     466     (was 936 stacked, and it set the old minimum)
 ///   help                              470
 ///   details                           230
 ///   firmware                          164
 /// ```
 ///
-/// The tallest is the one nobody designs for and everybody eventually sees: the settings, with a
-/// restart to offer, both files printing the sentence explaining why they were turned down, *and*
-/// the warning that the two are for different iPods. 960 leaves that case 24 px, which is the room
-/// a different font or a translated string would want.
+/// 600 leaves the tallest 58 px, which is the room a different font or a translated string would
+/// want, and fits a 12" MacBook with 67 px to spare. The first run is now the page that sets the
+/// floor — which is the right page to be bounded by, because it is the one nobody can skip.
 ///
-/// **Re-measured 2026-08-20, and it went up by 258 px.** Settings absorbed two sections — the
-/// software that used to be a page of its own, and the machine list — because a page per concept
-/// meant "settings" and "what is installed on it" were two places to look for one question. The
-/// numbers above are printed by the test for *every* page, not only the failing one, so this table
-/// is read off a run rather than raised until the assertion stopped firing.
-///
-/// **The cost, stated rather than discovered later: 960 no longer fits a 1366x768 laptop.** 700 did,
-/// with about 15 px to spare once the menu bar and title bar are counted, and that was part of why
-/// it was 700. Anyone on a 768-tall screen now gets a window taller than their display. The
-/// alternative was letting the settings page scroll — which the test's own message calls out as the
-/// thing this project does not do — and that rule is worth one more look if the laptop case matters
-/// more than the rule does.
+/// `MIN_W` is 1000 for the rail plus a pane wide enough for a file path. That is more than the old
+
 /// The window's own colours.
 ///
 /// **The background is a cool charcoal, not near-black.** It used to be `0x12`, which meant a
@@ -277,11 +279,40 @@ fn contrast(a: Color32, b: Color32) -> f32 {
     (hi + 0.05) / (lo + 0.05)
 }
 
-const MIN_W: f32 = 720.0;
-const MIN_H: f32 = 960.0;
+
+const MIN_W: f32 = 1000.0;
+const MIN_H: f32 = 600.0;
 /// What the window opens at. Comfortably above the minimum, and the device gets the difference.
-const DEFAULT_W: f32 = 980.0;
-const DEFAULT_H: f32 = 800.0;
+/// The rail down the left of the settings page.
+const RAIL_W: f32 = 132.0;
+
+/// The settings page's sections, in the order they are offered.
+///
+/// **Device first, because it is what a new arrival came for**, and About last because it is what
+/// nobody came for. Machines sits second: once there is more than one, it is the thing people open
+/// this page to do.
+const SETTINGS_TABS: &[(SettingsTab, &str)] = &[
+    (SettingsTab::Device, "Device"),
+    (SettingsTab::Machines, "Machines"),
+    (SettingsTab::Software, "Software"),
+    (SettingsTab::Appearance, "Appearance"),
+    (SettingsTab::Storage, "Storage"),
+    (SettingsTab::About, "About"),
+];
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SettingsTab {
+    #[default]
+    Device,
+    Machines,
+    Software,
+    Appearance,
+    Storage,
+    About,
+}
+
+const DEFAULT_W: f32 = 1100.0;
+const DEFAULT_H: f32 = 720.0;
 /// The reading column. Capped so prose does not run the full width of a maximised window.
 const COLUMN_W: f32 = 620.0;
 /// The space above a page's first line and below its last.
@@ -1182,6 +1213,7 @@ struct App {
     /// crashed one.
     install_slot: Arc<Mutex<Option<Result<(PathBuf, Vec<String>), String>>>>,
     install_busy: bool,
+    settings_tab: SettingsTab,
     /// What the machine being saved will be called.
     new_machine_name: String,
     /// The phase at the previous frame, so the boot→running edge can be seen.
@@ -1673,6 +1705,7 @@ impl App {
             update_slot,
             install_slot: Arc::new(Mutex::new(None)),
             install_busy: false,
+            settings_tab: SettingsTab::default(),
             new_machine_name: String::new(),
             last_phase: Phase::Off,
             update_line: None,
@@ -3440,173 +3473,227 @@ impl App {
             // No model name here. The boot ROM's row already says which iPod this is, and says it
             // with the serial of the one the dump came off — a heading repeating the model above it
             // is a line that costs height and tells you less.
-            app.section(ui, "DEVICE");
-            app.file_rows(ui);
-            // Named before it happens, and only when it is true.
-            if let Some(before) = &app.cold_at_open {
-                let changed = before.differences(&app.cold());
-                if !changed.is_empty() {
-                    ui.add_space(8.0);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "⟳ {} changed. Restart to apply now, or Done to apply next launch.",
-                                changed.join(" and ")
-                            ))
-                            .small()
-                            .color(Color32::from_rgb(0xE0, 0xA0, 0x40)),
-                        );
-                    });
-                    ui.add_space(4.0);
-                    // Gated on the same predicate as Done. A restart into images that do not
-                    // validate is a machine that stops during `build` and a window showing a
-                    // stopped iPod nobody asked for.
-                    if ui
-                        .add_enabled(app.images.both_good(), egui::Button::new("Restart the iPod"))
-                        .on_hover_text(
-                            "A booted RetailOS read its partition table at startup and has been \
-                             writing to that drive since, so there is no honest way to hand it \
-                             another one. The machine is parked first, so nothing is lost that \
-                             these files can get back.",
-                        )
-                        .clicked()
-                    {
-                        app.restart();
-                    }
-                }
-            }
-
-            ui.add_space(20.0);
-            app.section(ui, "APPEARANCE");
-            // **The model number answers first, and a person can overrule it.**
+            // **A rail, because height is the scarce axis and width is not.**
             //
-            // The colour is stated by the hardware — a dump's `Mod#` resolves to it, and no
-            // `SysCfg` on any iPod carries a colour field — so `From the iPod` is the default and
-            // is right without being asked. But this is the *window's* iPod, not the machine's
-            // identity: nothing the firmware reads changes with it, so overruling it costs
-            // nothing and a case swapped at some point in twenty years is an ordinary thing.
-            let derived = app.derived_chassis;
-            let mut pick = app.settings.chassis;
-            let from_ipod = format!("From the iPod — {}", derived.label());
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Case").color(UI_TEXT_DIM));
-                let label = match pick {
-                    None => from_ipod.clone(),
-                    Some(c) => c.label().to_string(),
-                };
-                egui::ComboBox::from_id_salt("case-colour")
-                    .selected_text(label)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut pick, None, &from_ipod);
-                        for c in [Colour::White, Colour::Black, Colour::U2] {
-                            ui.selectable_value(&mut pick, Some(c), c.label());
+            // Stacked, these six sections came to 936 px at their tallest — taller than a 12"
+            // MacBook has (667 usable) and taller than a 1366x768 laptop (715). Every one of those
+            // machines has 1152 px or more of *width* going spare. So the page is now as tall as
+            // its tallest single section rather than the sum of all of them, and the window got
+            // wider instead of taller.
+            ui.horizontal_top(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(RAIL_W);
+                    for (tab, label) in SETTINGS_TABS {
+                        let on = app.settings_tab == *tab;
+                        if ui
+                            .add_sized([RAIL_W - 8.0, 26.0], egui::Button::selectable(on, *label))
+                            .clicked()
+                        {
+                            app.settings_tab = *tab;
                         }
-                    })
-                    .response
-                    .on_hover_text(format!(
-                        "The model number ({}) says {}. This is only what the window draws — the \
-                         iPod is handed the same identity either way.",
-                        app.synthetic_model().apple_number(),
-                        derived.label()
-                    ));
-            });
-            if pick != app.settings.chassis {
-                app.settings.chassis = pick;
-                app.settings.save();
-            }
-            ui.add_space(4.0);
-            let mut debug = app.settings.mode == Mode::Debug;
-            if ui
-                .checkbox(&mut debug, "Show the readout over the device")
-                .on_hover_text("Instruction counts, the clocks, the wheel and the panel. `D` toggles it.")
-                .changed()
-            {
-                app.set_mode(if debug { Mode::Debug } else { Mode::User });
-            }
-
-            ui.add_space(20.0);
-            app.section(ui, "STORAGE");
-            app.cache_controls(ui);
-            ui.add_space(8.0);
-            // **Whose file gets written to, said out loud.** Both modes remember across launches
-            // -- copy mode re-freezes its working drive on the way out -- so the only difference
-            // that was ever real is this one, and it is the one a person needs to see before the
-            // machine starts rather than after.
-            let target = write_target(Path::new(app.images.disk.trim()), app.settings.work_on_copy);
-            ui.label(egui::RichText::new(target.line()).small().color(UI_TEXT_DIM));
-            ui.add_space(4.0);
-            if target == WriteTo::ReadOnly {
-                ui.label(
-                    egui::RichText::new(
-                        "There is no choice to make while it stays read-only: opening it for \
-                         writing is refused by the operating system.",
-                    )
-                    .small()
-                    .color(UI_TEXT_FAINT),
-                );
-            } else {
-                let mut copy = target.copies();
-                if ui
-                    .checkbox(&mut copy, "Work on a copy, leaving my image untouched")
-                    .on_hover_text(
-                        "A copy costs a second drive -- up to 8 GB where the filesystem cannot \
-                         share blocks, which is most of Linux and all of NTFS.\n\nUntouched \
-                         until you set it, this follows where the drive came from: one built here \
-                         from an .ipsw is written to directly, because building it again produces \
-                         the same bytes; one you supplied is copied, because it might be the only \
-                         image of an iPod you own.",
-                    )
-                    .changed()
-                {
-                    app.cfg.work_on_copy = copy;
-                    app.settings.work_on_copy = Some(copy);
-                    app.settings.save();
-                }
-            }
-
-            ui.add_space(20.0);
-            // **Software is a section, not a screen.** It was split out because inline it pushed
-            // this page 109 px past the smallest window — which is a layout problem being solved
-            // by cutting a concept in half. Installing an operating system onto this machine's
-            // drive is a thing you do to the machine, and the machine is configured here; making
-            // it a separate page meant "settings" and "the software on it" were two places to look
-            // for one question. The window is taller instead, and `MIN_H` is derived by a test
-            // rather than chosen, so the number below is measured.
-            app.section(ui, "SOFTWARE");
-            app.software_rows(ui);
-            ui.add_space(14.0);
-
-            app.machines_section(ui);
-
-            app.section(ui, "ABOUT");
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(format!("ipod-emulator {}", update::VERSION)).small());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("check for updates").clicked() {
-                        app.update_asked = true;
-                        app.update_line = Some("checking…".into());
-                        update::spawn(Arc::clone(&app.update_slot));
                     }
-                    let mut on = app.settings.check_updates_on_start;
-                    if ui
-                        .checkbox(&mut on, "on launch")
-                        .on_hover_text(
-                            "One HTTPS GET of GitHub's releases API and a version comparison. \
-                             Nothing is downloaded, nothing is installed, nothing is run, and a \
-                             check that fails says nothing at all.",
-                        )
-                        .changed()
-                    {
-                        app.settings.check_updates_on_start = on;
-                        app.settings.save();
+                });
+                ui.add_space(14.0);
+                ui.separator();
+                ui.add_space(14.0);
+                ui.vertical(|ui| {
+                    ui.set_width((ui.available_width() - 8.0).max(240.0));
+                    match app.settings_tab {
+                        SettingsTab::Device => app.pane_device(ui),
+                        SettingsTab::Machines => app.pane_machines(ui),
+                        SettingsTab::Software => app.pane_software(ui),
+                        SettingsTab::Appearance => app.pane_appearance(ui),
+                        SettingsTab::Storage => app.pane_storage(ui),
+                        SettingsTab::About => app.pane_about(ui),
                     }
                 });
             });
-            if let Some(l) = app.update_line.clone() {
-                ui.label(egui::RichText::new(l).small().color(UI_TEXT_FAINT));
-            }
         });
     }
+
+    fn pane_device(&mut self, ui: &mut egui::Ui) {
+        self.section(ui, "DEVICE");
+        self.file_rows(ui);
+        // Named before it happens, and only when it is true.
+        if let Some(before) = &self.cold_at_open {
+            let changed = before.differences(&self.cold());
+            if !changed.is_empty() {
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "⟳ {} changed. Restart to apply now, or Done to apply next launch.",
+                            changed.join(" and ")
+                        ))
+                        .small()
+                        .color(Color32::from_rgb(0xE0, 0xA0, 0x40)),
+                    );
+                });
+                ui.add_space(4.0);
+                // Gated on the same predicate as Done. A restart into images that do not
+                // validate is a machine that stops during `build` and a window showing a
+                // stopped iPod nobody asked for.
+                if ui
+                    .add_enabled(self.images.both_good(), egui::Button::new("Restart the iPod"))
+                    .on_hover_text(
+                        "A booted RetailOS read its partition table at startup and has been \
+                         writing to that drive since, so there is no honest way to hand it \
+                         another one. The machine is parked first, so nothing is lost that \
+                         these files can get back.",
+                    )
+                    .clicked()
+                {
+                    self.restart();
+                }
+            }
+        }
+
+        ui.add_space(20.0);
+    }
+
+    fn pane_appearance(&mut self, ui: &mut egui::Ui) {
+        self.section(ui, "APPEARANCE");
+        // **The model number answers first, and a person can overrule it.**
+        //
+        // The colour is stated by the hardware — a dump's `Mod#` resolves to it, and no
+        // `SysCfg` on any iPod carries a colour field — so `From the iPod` is the default and
+        // is right without being asked. But this is the *window's* iPod, not the machine's
+        // identity: nothing the firmware reads changes with it, so overruling it costs
+        // nothing and a case swapped at some point in twenty years is an ordinary thing.
+        let derived = self.derived_chassis;
+        let mut pick = self.settings.chassis;
+        let from_ipod = format!("From the iPod — {}", derived.label());
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Case").color(UI_TEXT_DIM));
+            let label = match pick {
+                None => from_ipod.clone(),
+                Some(c) => c.label().to_string(),
+            };
+            egui::ComboBox::from_id_salt("case-colour")
+                .selected_text(label)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut pick, None, &from_ipod);
+                    for c in [Colour::White, Colour::Black, Colour::U2] {
+                        ui.selectable_value(&mut pick, Some(c), c.label());
+                    }
+                })
+                .response
+                .on_hover_text(format!(
+                    "The model number ({}) says {}. This is only what the window draws — the \
+                     iPod is handed the same identity either way.",
+                    self.synthetic_model().apple_number(),
+                    derived.label()
+                ));
+        });
+        if pick != self.settings.chassis {
+            self.settings.chassis = pick;
+            self.settings.save();
+        }
+        ui.add_space(4.0);
+        let mut debug = self.settings.mode == Mode::Debug;
+        if ui
+            .checkbox(&mut debug, "Show the readout over the device")
+            .on_hover_text("Instruction counts, the clocks, the wheel and the panel. `D` toggles it.")
+            .changed()
+        {
+            self.set_mode(if debug { Mode::Debug } else { Mode::User });
+        }
+
+        ui.add_space(20.0);
+    }
+
+    fn pane_storage(&mut self, ui: &mut egui::Ui) {
+        self.section(ui, "STORAGE");
+        self.cache_controls(ui);
+        ui.add_space(8.0);
+        // **Whose file gets written to, said out loud.** Both modes remember across launches
+        // -- copy mode re-freezes its working drive on the way out -- so the only difference
+        // that was ever real is this one, and it is the one a person needs to see before the
+        // machine starts rather than after.
+        let target = write_target(Path::new(self.images.disk.trim()), self.settings.work_on_copy);
+        ui.label(egui::RichText::new(target.line()).small().color(UI_TEXT_DIM));
+        ui.add_space(4.0);
+        if target == WriteTo::ReadOnly {
+            ui.label(
+                egui::RichText::new(
+                    "There is no choice to make while it stays read-only: opening it for \
+                     writing is refused by the operating system.",
+                )
+                .small()
+                .color(UI_TEXT_FAINT),
+            );
+        } else {
+            let mut copy = target.copies();
+            if ui
+                .checkbox(&mut copy, "Work on a copy, leaving my image untouched")
+                .on_hover_text(
+                    "A copy costs a second drive -- up to 8 GB where the filesystem cannot \
+                     share blocks, which is most of Linux and all of NTFS.\n\nUntouched \
+                     until you set it, this follows where the drive came from: one built here \
+                     from an .ipsw is written to directly, because building it again produces \
+                     the same bytes; one you supplied is copied, because it might be the only \
+                     image of an iPod you own.",
+                )
+                .changed()
+            {
+                self.cfg.work_on_copy = copy;
+                self.settings.work_on_copy = Some(copy);
+                self.settings.save();
+            }
+        }
+
+        ui.add_space(20.0);
+        // **Software is a section, not a screen.** It was split out because inline it pushed
+        // this page 109 px past the smallest window — which is a layout problem being solved
+        // by cutting a concept in half. Installing an operating system onto this machine's
+        // drive is a thing you do to the machine, and the machine is configured here; making
+        // it a separate page meant "settings" and "the software on it" were two places to look
+        // for one question. The window is taller instead, and `MIN_H` is derived by a test
+        // rather than chosen, so the number below is measured.
+    }
+
+    fn pane_software(&mut self, ui: &mut egui::Ui) {
+        self.section(ui, "SOFTWARE");
+        self.software_rows(ui);
+        ui.add_space(14.0);
+
+    }
+
+    fn pane_machines(&mut self, ui: &mut egui::Ui) {
+        self.machines_section(ui);
+
+    }
+
+    fn pane_about(&mut self, ui: &mut egui::Ui) {
+        self.section(ui, "ABOUT");
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(format!("ipod-emulator {}", update::VERSION)).small());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("check for updates").clicked() {
+                    self.update_asked = true;
+                    self.update_line = Some("checking…".into());
+                    update::spawn(Arc::clone(&self.update_slot));
+                }
+                let mut on = self.settings.check_updates_on_start;
+                if ui
+                    .checkbox(&mut on, "on launch")
+                    .on_hover_text(
+                        "One HTTPS GET of GitHub's releases API and a version comparison. \
+                         Nothing is downloaded, nothing is installed, nothing is run, and a \
+                         check that fails says nothing at all.",
+                    )
+                    .changed()
+                {
+                    self.settings.check_updates_on_start = on;
+                    self.settings.save();
+                }
+            });
+        });
+        if let Some(l) = self.update_line.clone() {
+            ui.label(egui::RichText::new(l).small().color(UI_TEXT_FAINT));
+        }
+    }
+
 
     /// A section heading: the one piece of chrome that makes a long page scannable.
     fn section(&mut self, ui: &mut egui::Ui, title: &str) {
@@ -5552,6 +5639,10 @@ mod tests {
     /// to tell apart things it must be able to tell apart:
     ///
     /// - a **short page** from a **long one**, which is the difference the gate exists to notice;
+    ///   the pair used to be settings-versus-help, and settings stopped being the long one when it
+    ///   grew a rail — 936 px stacked became 466. The property under test never mentioned settings;
+    ///   only the example did, so the example moved to first-run versus details and the assertion
+    ///   is the same assertion;
     /// - the settings **with a restart to offer** from the same page **without one**, which is the
     ///   smallest real content change on the tallest page;
     /// - and a window too small for any of them, which must come back over budget rather than
@@ -5561,16 +5652,18 @@ mod tests {
     /// height instead of the *wanted* height, every page would fit every window by definition.
     #[test]
     fn the_layout_measurement_tracks_the_content_and_not_the_window() {
-        let help = lay_out(Screen::Help, MIN_W, MIN_H, Files::None);
-        let settings = lay_out(Screen::Settings, MIN_W, MIN_H, Files::Chosen);
-        assert!(help > 0.0, "a height of zero passes every other assertion for the wrong reason");
+        let short = lay_out(Screen::Details, MIN_W, MIN_H, Files::Rejected);
+        let long = lay_out(Screen::FirstRun, MIN_W, MIN_H, Files::None);
+        assert!(short > 0.0, "a height of zero passes every other assertion for the wrong reason");
         assert!(
-            settings > help + 40.0,
-            "the settings are a much longer page than the help; measured {settings:.0} vs {help:.0}"
+            long > short + 40.0,
+            "the first run is a much longer page than the details; measured {long:.0} vs {short:.0}"
         );
 
         // The same page, one banner apart. `lay_out` gives Settings a restart to offer; this is
-        // that page without one.
+        // that page without one. Still the Device pane either way — the rail does not move the
+        // banner, so this remains the smallest real content change on that page.
+        let settings = lay_out(Screen::Settings, MIN_W, MIN_H, Files::Chosen);
         let quiet = {
             let ctx = egui::Context::default();
             let mut cfg = emu::Config::default();
