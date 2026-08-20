@@ -44,8 +44,17 @@ usage:
   ipod-film asset boot | gameplay | diag | all
   ipod-film concat DIR
 
-  RECIPE=retail|flsh|rockbox|warm   which machine to film (default retail)
+  RECIPE=retail|flsh|rockbox|warm|loader
+                                    which machine to film (default retail). Any `ipod-boot`
+                                    recipe works — RECIPE is passed straight through as the
+                                    subcommand — so this list is what is useful, not what is
+                                    accepted.
   IMG=diag|disk                     which NOR image, when RECIPE=flsh
+  DISK=PATH                         the drive, for the recipes that take one. `loader` needs one
+                                    with iPodLinux installed — `ipod-boot install-linux` builds it.
+                                    That boot is long: the kernel's own output begins around 8 G
+                                    instructions and ZeroSlackr's screen around 20 G, so film it
+                                    with BUDGET=25000000000 and --from= set past the bootloader.
   BUDGET=N                          run length for every recipe but retail
   --realtime                        one sample lasts `--every`/75 microseconds, so the film runs
                                     at the machine's own speed instead of one second per sample
