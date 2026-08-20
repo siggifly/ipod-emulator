@@ -1,0 +1,422 @@
+// The window — docs/GUI.md is the design this implements. Section references below point at it.
+//
+// Everything visual here comes from §7, and the light palette is *measured*: sampled from
+// docs/media/ipod-03-main-menu.png, a frame this emulator drew. The accent is RetailOS's own
+// selection blue. See §7 "borrow the language, never the resolution" for what is deliberately NOT
+// borrowed — no pixel fonts, no faux-LCD, nothing that could be mistaken for the emulated screen.
+
+// ─── Tokens (§7) ────────────────────────────────────────────────────────────────────────────────
+
+export global Ink {
+    // Sampled. `bg-band` and the material below are the two gradients in the program.
+    out property <color> bg: #ffffff;
+    out property <color> bg-raised: #f7f7ff;
+    out property <color> bg-band-top: #eff3f7;
+    out property <color> bg-band-bottom: #c6cbce;
+    out property <color> bg-sunken: #c6cfd6;
+    out property <color> fg: #000000;
+    out property <color> fg-dim: #5a616b;
+    out property <color> fg-disabled: #9aa0a8;
+    out property <color> line: #848ea5;
+
+    // RetailOS's selection blue. 5.14:1 on white.
+    out property <color> accent: #2969d6;
+    // The material (§7): a 1px darker top rule, a bright band under it, a fall to the bottom edge.
+    out property <color> material-rule: #2969d6;
+    out property <color> material-top: #5a9aef;
+    out property <color> material-bottom: #4a86de;
+
+    out property <color> warn: #9a6700;
+}
+
+export global Metric {
+    // The closed space scale. Nothing between these steps.
+    out property <length> s1: 4px;
+    out property <length> s2: 8px;
+    out property <length> s3: 12px;
+    out property <length> s4: 16px;
+    out property <length> s5: 24px;
+    out property <length> s6: 32px;
+    out property <length> s7: 48px;
+
+    // Six type roles and no seventh (§7).
+    out property <length> display-size: 28px;
+    out property <length> title-size: 20px;
+    out property <length> body-size: 14px;
+    out property <length> label-size: 12px;
+
+    out property <length> list-width: 280px;
+    out property <length> row-height: 44px;
+}
+
+// ─── The data the window shows ──────────────────────────────────────────────────────────────────
+
+export struct DeviceRow {
+    name: string,
+    // "80 GB · Apple 25.1.3 · Rockbox 4.0"
+    summary: string,
+    // "parked" / "never started" / "" — a state word, or nothing.
+    state: string,
+    // §10: whose file is about to be written to, said out loud, before the machine starts.
+    write-target: string,
+    // True when write-target names the operator's own supplied image and we are not on a copy.
+    write-target-is-warning: bool,
+    // §7: the chassis colour the ROM declares, unless overridden.
+    chassis: color,
+    parked: bool,
+}
+
+// ─── The drawn iPod (§7) ────────────────────────────────────────────────────────────────────────
+//
+// Rounded rectangles and a circle, not an SVG and not a bitmap: it has to be drawn at three sizes
+// (§7) and stay crisp at any DPI. `scale` is the one knob — every dimension is derived from it, so
+// the device cannot resize itself, which is the bug §6 exists to prevent.
+
+component IPod inherits Rectangle {
+    in property <float> scale: 1.0;
+    in property <color> chassis: #f2f2f2;
+    // The live framebuffer. When there is none the screen is dark, which is what an iPod at rest
+    // looks like.
+    in property <image> screen-source;
+    in property <bool> screen-lit: false;
+
+    width: 220px * scale;
+    height: 380px * scale;
+    border-radius: 14px * scale;
+    background: chassis;
+    // A hairline rather than a drop shadow: nothing in this program floats (§2.4), and a shadow is
+    // the visual grammar of floating.
+    border-width: 1px;
+    border-color: Ink.line.with-alpha(0.35);
+
+    // The screen. 320×240 is 4:3, and this rectangle is exactly that ratio at every scale, so the
+    // framebuffer inside it is never stretched (§2.8).
+    screen-well := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: 18px * scale;
+        width: 184px * scale;
+        height: 138px * scale;
+        background: #000000;
+        border-radius: 3px * scale;
+
+        Image {
+            width: parent.width - 4px * scale;
+            height: parent.height - 4px * scale;
+            x: 2px * scale;
+            y: 2px * scale;
+            source: screen-source;
+            // The whole point. Nearest-neighbour, never smoothed (§2.8).
+            image-rendering: pixelated;
+            image-fit: fill;
+            visible: screen-lit;
+        }
+    }
+
+    // The click wheel.
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: 196px * scale;
+        width: 152px * scale;
+        height: 152px * scale;
+        border-radius: self.width / 2;
+        background: chassis.darker(0.06);
+        border-width: 1px;
+        border-color: Ink.line.with-alpha(0.25);
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 58px * scale;
+            height: 58px * scale;
+            border-radius: self.width / 2;
+            background: chassis.darker(0.02);
+            border-width: 1px;
+            border-color: Ink.line.with-alpha(0.25);
+        }
+    }
+}
+
+// ─── The material (§7) ──────────────────────────────────────────────────────────────────────────
+//
+// Used for exactly two things: the primary action, and the selected row. Everywhere else is flat.
+// A window where everything is glossy is a pastiche; a window where the one thing you are about to
+// press is glossy is a 2005 idea applied with judgement.
+
+component Material inherits Rectangle {
+    background: @linear-gradient(180deg, Ink.material-top 0%, Ink.material-bottom 100%);
+    // The 1px darker top rule that makes it read as of a time rather than as a blue rectangle.
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: Ink.material-rule;
+    }
+}
+
+component PrimaryButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    // §9: a disabled control keeps its reason, and the reason is never hidden.
+    in property <string> disabled-reason;
+    callback clicked();
+
+    height: 34px;
+    min-width: 108px;
+    border-radius: 5px;
+    // Disabled is visible and flat — the material is a promise that pressing does something.
+    background: enabled ? transparent : Ink.bg-band-bottom;
+
+    material := Material {
+        width: 100%;
+        height: 100%;
+        border-radius: 5px;
+        visible: enabled;
+    }
+
+    Text {
+        x: Metric.s3;
+        width: parent.width - 2 * Metric.s3;
+        text: label;
+        font-size: Metric.body-size;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        height: 100%;
+        color: enabled ? #ffffff : Ink.fg-disabled;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+
+    states [
+        pressed when touch.pressed: {
+            // §8: press is scale(0.98), restored on release.
+            material.opacity: 0.85;
+        }
+    ]
+}
+
+// ─── A row in the device list (§13) ─────────────────────────────────────────────────────────────
+//
+// The borrowed grammar: big left-aligned type, a generous row, a full-width selection wearing the
+// material, a trailing chevron. Rendered at desktop size, where it cannot be confused with a
+// 320×240 menu.
+
+component DeviceListRow inherits Rectangle {
+    in property <string> name;
+    in property <bool> selected;
+    callback clicked();
+
+    height: Metric.row-height;
+    background: selected ? transparent : (touch.has-hover ? Ink.bg-band-top : transparent);
+
+    Material {
+        width: 100%;
+        height: 100%;
+        visible: selected;
+    }
+
+    HorizontalLayout {
+        padding-left: Metric.s4;
+        padding-right: Metric.s3;
+        spacing: Metric.s2;
+
+        Text {
+            text: name;
+            font-size: Metric.title-size;
+            font-weight: 600;
+            vertical-alignment: center;
+            color: selected ? #ffffff : Ink.fg;
+            overflow: elide;
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        // The chevron, drawn rather than typed — §7 bans font glyphs after twelve of them shipped
+        // as empty squares.
+        Path {
+            width: 8px;
+            height: 14px;
+            stroke: selected ? #ffffff : Ink.fg-dim;
+            stroke-width: 2px;
+            viewbox-width: 8;
+            viewbox-height: 14;
+            MoveTo { x: 1; y: 1; }
+            LineTo { x: 7; y: 7; }
+            LineTo { x: 1; y: 13; }
+        }
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// ─── The window ─────────────────────────────────────────────────────────────────────────────────
+
+export component MainWindow inherits Window {
+    title: "ipod-emulator";
+    background: Ink.bg;
+    // §6: below this the design does not work, so the window refuses to go there and there is no
+    // degraded layout to design or to test.
+    min-width: 900px;
+    min-height: 640px;
+    preferred-width: 1100px;
+    preferred-height: 830px;
+
+    in property <[DeviceRow]> devices;
+    in-out property <int> selected: 0;
+    in property <image> screen-source;
+    in property <bool> running: false;
+
+    callback start-device(int);
+    callback new-device();
+
+    property <bool> has-devices: devices.length > 0;
+    property <DeviceRow> current: devices.length > 0 ? devices[selected] : { name: "", chassis: #f2f2f2 };
+
+    VerticalLayout {
+        // ── The only chrome (§4) ──
+        Rectangle {
+            height: 46px;
+            background: @linear-gradient(180deg, Ink.bg-band-top 0%, Ink.bg-band-bottom 100%);
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Ink.line.with-alpha(0.5);
+            }
+
+            HorizontalLayout {
+                padding-left: Metric.s6;
+                padding-right: Metric.s6;
+                spacing: Metric.s5;
+
+                Text {
+                    text: "ipod-emulator";
+                    font-size: Metric.body-size;
+                    font-weight: 600;
+                    color: Ink.fg-dim;
+                    vertical-alignment: center;
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                Text {
+                    text: "Devices";
+                    font-size: Metric.body-size;
+                    font-weight: 600;
+                    color: Ink.fg;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "Resources";
+                    font-size: Metric.body-size;
+                    color: Ink.fg-dim;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // ── Master–detail (§13) ──
+        HorizontalLayout {
+            // The list.
+            Rectangle {
+                width: Metric.list-width;
+                background: Ink.bg-raised;
+
+                Rectangle {
+                    x: parent.width - 1px;
+                    width: 1px;
+                    background: Ink.line.with-alpha(0.35);
+                }
+
+                VerticalLayout {
+                    padding-top: Metric.s2;
+                    padding-bottom: Metric.s4;
+
+                    for d[i] in devices: DeviceListRow {
+                        name: d.name;
+                        selected: i == root.selected;
+                        clicked => { root.selected = i; }
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+
+                    HorizontalLayout {
+                        padding-left: Metric.s4;
+                        padding-right: Metric.s4;
+                        PrimaryButton {
+                            label: "+ New device";
+                            clicked => { root.new-device(); }
+                        }
+                    }
+                }
+            }
+
+            // The detail pane. The iPod is the subject; everything else is caption.
+            Rectangle {
+                background: Ink.bg;
+                horizontal-stretch: 1;
+
+                VerticalLayout {
+                    padding: Metric.s6;
+                    spacing: Metric.s4;
+                    alignment: center;
+
+                    HorizontalLayout {
+                        alignment: center;
+                        IPod {
+                            scale: 1.0;
+                            chassis: root.current.chassis;
+                            screen-source: root.screen-source;
+                            screen-lit: root.running;
+                        }
+                    }
+
+                    Text {
+                        text: has-devices ? root.current.name : "No devices yet";
+                        font-size: Metric.display-size;
+                        font-weight: 600;
+                        color: Ink.fg;
+                        horizontal-alignment: center;
+                    }
+
+                    Text {
+                        text: has-devices ? root.current.summary : "Press + new device to make one.";
+                        font-size: Metric.body-size;
+                        color: Ink.fg-dim;
+                        horizontal-alignment: center;
+                    }
+
+                    // §10: whose file is about to be written to, before the machine starts. The
+                    // row is always present so nothing moves when it fills (§2.2).
+                    Text {
+                        text: root.current.write-target;
+                        font-size: Metric.label-size;
+                        color: root.current.write-target-is-warning ? Ink.warn : Ink.fg-dim;
+                        horizontal-alignment: center;
+                        height: 16px;
+                    }
+
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: Metric.s3;
+                        PrimaryButton {
+                            label: root.current.parked ? "Resume" : "Start";
+                            enabled: has-devices;
+                            clicked => { root.start-device(root.selected); }
+                        }
+                        PrimaryButton {
+                            label: "Cold boot";
+                            enabled: has-devices && root.current.parked;
+                            visible: root.current.parked;
+                            clicked => { root.start-device(root.selected); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

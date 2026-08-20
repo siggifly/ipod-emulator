@@ -12,29 +12,32 @@ description = "An interactive iPod 5G: the emulator's framebuffer on a drawn dev
 name = "ipod-emulator"
 path = "src/main.rs"
 
-# A sibling crate rather than another `[[bin]]` in eapp-loader, deliberately. egui pulls in winit,
-# glow and a hundred transitive crates; putting it behind a feature in eapp-loader would still make
+# A sibling crate rather than another `[[bin]]` in eapp-loader, deliberately. A UI toolkit pulls in
+# winit and a hundred transitive crates; putting it behind a feature in eapp-loader would still make
 # `cargo build` there resolve them, and every baseline in research/ is measured with `cargo test
 # --release` in that crate. Keeping the window out of the emulator's manifest keeps that fast and
 # keeps `trace` buildable on a machine with no display stack at all.
 #
-# `x11` and `wayland` are not optional extras — without at least one of them this crate **does not
-# compile on Linux at all**. They are in eframe's default set, which `default-features = false`
-# turns off, and winit's `platform_impl/linux/mod.rs` answers a unix build with neither by
-# `compile_error!("Please select a feature to build for unix: `x11`, `wayland`")`. Both are enabled
-# so a released binary runs under either display server. They cost nothing on macOS and Windows,
-# where a different backend is selected and these features gate nothing.
+# **Slint, not egui, since 0.5** — see docs/GUI.md §20 for the argument. The two facts that decided
+# it: a semver-stable 1.x with a release every few weeks, and `SharedPixelBuffer` +
+# `image-rendering: pixelated`, which is a stable-API path to a pixel-exact framebuffer rather than
+# a fight. The GPLv3 option matches this repository exactly, so it costs nothing.
 #
-# Everything else eframe's defaults would bring is still off: `wgpu` (glow is the renderer here),
-# `accesskit`, `persistence` (this crate writes its own four-key settings file — see settings.rs),
-# `web_screen_reader`, `links`.
+# `unstable-wgpu-*` is deliberately NOT enabled. It is the one part of Slint outside the 1.x
+# stability promise, and docs/GUI.md §16 argues we never need it: the screen is 76,800 pixels, so
+# any presentation effect worth having costs nothing on the CPU.
+#
+# `backend-winit` + `renderer-skia` rather than the default set: skia because the material in
+# docs/GUI.md §7 is gradients and rounded rectangles and skia draws those properly at any DPI.
 [dependencies]
 eapp-loader = { path = "../eapp-loader" }
 arm7tdmi = { path = "../arm7tdmi" }
-eframe = { version = "0.36", default-features = false, features = [
-    "glow",
-    "default_fonts",
-    "x11",
-    "wayland",
+slint = { version = "1.17", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "renderer-skia",
+    "compat-1-2",
 ] }
 
+[build-dependencies]
+slint-build = "1.17"
