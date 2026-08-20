@@ -249,6 +249,48 @@ films' 72 M/s is the CPU's rate and makes a rally unwatchable, because at `--clo
 
 **Still open, and small:** `Parachute`, `Music Quiz` and `Solitaire` have never been launched.
 
+## 0z — ~~iPodLinux does not boot~~ · **IT BOOTS, 2026-08-20 — and the last fix mended Rockbox too**
+
+```
+Partition check: /dev/hda:  p1  p2
+VFS: Mounted root (vfat filesystem).
+Mounted devfs on /dev
+Freeing init memory
+BINFMT_FLAT: Loading file: …                          ← /bin/init running
+kjournald starting.  Commit interval 5 seconds
+EXT3 FS 2.4-0.9.19 … internal journal
+EXT3-fs: mounted filesystem with ordered data mode.   ← ZeroSlackr's userland.ext3, loop-mounted
+```
+
+The whole chain: kernel → both partitions → FAT32 root → `init` → `/etc/pre-rc` → loop-mount →
+`pivot_root`. Five emulator defects and one missing installation stood between us and this.
+
+**The last one is the interesting one, and it was never about Linux.** ATA's INTRQ is a level the
+drive holds until the host reads Status or writes Command; masking the interrupt *controller* does
+not discard it. We asserted into a masked line and let the driver's own housekeeping sweep it away —
+a write of IDE0_CFG's clear bits, issued while arming the next wait, drops the line whether or not a
+handler ran. Holding the completion until the mask lifts is simpler and truer.
+
+**Attribution, measured one build at a time on warm Rockbox at 1.2 G:**
+
+| build | non-black pixels | what is on screen |
+|---|---|---|
+| pre-session | 580 | **"Installation incomplete"** |
+| + 16-bit data register, `0x91` | 580 | same |
+| + absent device 1, per-block completion, RECALIBRATE | 580 | same |
+| **+ the masked-completion hold** | **3858** | **Rockbox's main menu** |
+
+So the change that let Linux read its disk is the same one that takes **Rockbox** from a failed boot
+to its menu — on a firmware whose source we have, which is the strongest evidence available here
+that the model moved toward the hardware rather than toward one guest. RetailOS is byte-identical
+across all of it on a pinned A/B: `4 · 611 · 4 · 3 · 11`.
+
+**Run Rockbox in every A/B, not just RetailOS.** RetailOS is inert to most of the ATA path — it moves
+bulk data by DMA and polls with interrupts masked. Rockbox exercises PIO, interrupts and the
+filesystem, and it is the only guest here whose source can be read when a number moves. Four changes
+this session were checked against RetailOS alone and looked like no-ops; on Rockbox one of them was
+the difference between a boot and a failure.
+
 ## 0a — ~~iPodLinux cannot read its partition table~~ · **SETTLED 2026-08-20 — our IDE data register was 32 bits wide and should be 16**
 
 **The whole iPodLinux blocker was one line of ours.** Every register in the PP502x IDE block is four
