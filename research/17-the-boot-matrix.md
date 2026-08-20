@@ -58,7 +58,44 @@ bootloader consults. The Linux kernel then boots in full and panics; that is
 `ipod-boot make-nor --model MA146|MA446`, so "we are testing a 5.5G" is true only of the synthetic
 row: **the default machine is a real 5G.**
 
-## The whole matrix, measured 2026-08-19
+## Re-measured 2026-08-20, after six ATA fixes — and the old table below is superseded
+
+R4 applies in full: the machine now gets further with two of these firmwares than it ever has, so
+every cell of the 2026-08-19 table was measured on a machine that no longer exists. This is what a
+re-run says.
+
+| | real 5G dump | synthetic 5G | synthetic 5.5G |
+|---|---|---|---|
+| **RetailOS**, cold | boots — 611 READ DMA, 4 WRITE DMA | — | — |
+| **Rockbox**, warm | **main menu, 3 858 lit pixels** | runs, **0 pixels** | runs, **0 pixels** |
+| **ipodloader2** | draws its own console | not yet run | not yet run |
+| **iPodLinux** | **boots to ZeroSlackr's userland** | `Lost(0x40020000)` | not yet run |
+
+**Rockbox on a synthetic NOR is a display failure, not a boot failure — and that is measured, not
+inferred.** Both arms issue the identical `0xc6 ·  0xc8 x2065 ·  0xec x2 ·  0xef x2`, so Rockbox
+loads its whole binary off the disk either way, and both end at **the same instruction** —
+`0x00086300`, inside `switch_thread`. It is running its scheduler on both. What differs is that
+nothing reaches the co-processor surface at `0xE0000`. Ledger #6 is the neighbourhood.
+
+**iPodLinux on a synthetic NOR ends at `Lost(0x40020000)`** — a jump one byte past the top of IRAM —
+after 12 792 unmapped reads around `0x04716000`, every one of them from a single PC. That is past
+the end of the 64 MB SDRAM region, from code running through the low mirror.
+
+**And one cell is not the emulator at all.** `ipodloader2` reads FAT32 partition type `0x0B` and no
+other — `vfs.c` has `case 0x83` for ext2 and `case 0xB` for FAT32, and nothing else. Every drive
+image here taken off real hardware is `0x0C`, the LBA form, and the loader's own console says so:
+
+```
+Detected WinPod MBR
+[0]: Bad iPod FW entry
+[1]: Unknown 0xC2          <- mlc_printf("0x%X2"), so the trailing 2 is a literal
+No valid paritions found!
+```
+
+A real 5G with a `0x0C` volume would fail identically on real hardware. `install-linux` refuses
+those drives now rather than writing 1 776 files onto a disk that cannot boot.
+
+## Superseded: the whole matrix, measured 2026-08-19
 
 Every cell is a run. `—` is not "untested", it is "cannot, and the row below says why".
 
