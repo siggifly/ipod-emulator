@@ -214,15 +214,73 @@ Neither ever touches the image you point it at. `install-os` writes a **new** fi
 cannot — added because the first version did not, and produced an image the bootloader rejected 71
 ATA commands into a boot with *"Use iTunes to restore."*
 
-### Three bootloaders
+### Three bootloaders, and a third operating system
 
-Apple's retail bootloader, Rockbox's, and **`ipodloader2`** — which builds and cold-boots for the
-first time. It does not get far yet: it asks whether byte 16 of a chip-id register is ASCII `'2'`,
-does not like our answer, concludes it is running on a 2003 iPod and addresses that machine's
-registers ninety-one million times. Apple's firmware reads that register twenty-three times a boot
-and has never once cared what it says, because it already knows what chip it is on. That is the
-fourth device model found to be shaped around Apple's drivers rather than around the parts, and the
-first found by something other than Rockbox.
+Apple's retail bootloader, Rockbox's, and **`ipodloader2`** — and through the third of them,
+**iPodLinux boots**. Not "executes instructions": it finds both partitions, mounts the FAT32 volume
+as its root, runs `/bin/init`, and loop-mounts ZeroSlackr's 8 MB ext3 userland out of a file on that
+volume, with no ATA error anywhere in the kernel's log.
+
+```
+Partition check: /dev/hda:  p1  p2
+VFS: Mounted root (vfat filesystem).
+Mounted devfs on /dev
+BINFMT_FLAT: Loading file: …
+EXT3-fs: mounted filesystem with ordered data mode.
+```
+
+**Getting there meant fixing six things in our ATA model, and every one of them was a place the
+hardware behaves one way and this emulator behaved another.** RetailOS is byte-identical across all
+six, so none of them is a change made to suit one guest:
+
+- **The IDE data register is sixteen bits wide, in a four-byte slot.** We served the upper two byte
+  lanes as more sector data. iPodLinux reads that port with 32-bit loads and keeps the low halfword
+  — correct for a 16-bit register — so it received every *second* word of its IDENTIFY and read
+  `heads` out of the wrong field. Rockbox and Apple's firmware never noticed: both read it 16 bits
+  at a time and never touch those lanes.
+- **A completion is a level the drive holds, not a pulse.** We asserted it into a masked interrupt
+  line and let the driver's own housekeeping sweep it away, which is `hda: lost interrupt` exactly
+  as reported. **This one also fixed Rockbox** — see below.
+- **There is one drive on this bus.** We answered for a device 1 a 5G does not have, so the kernel
+  attached two disks of the same size and interleaved their commands through one state machine.
+- **A multi-sector PIO read interrupts once per block**, not once per command.
+- **RECALIBRATE and the power-management family are legal commands.** We aborted them, so Linux's
+  error recovery got a fresh error and a routine spin-down got `DriveStatusError`.
+- **INITIALIZE DEVICE PARAMETERS now takes effect** rather than being acknowledged and ignored.
+
+**What is not finished:** ZeroSlackr's launcher draws its startup screen and stalls at its last step.
+That is a real open bug, and the README shows the picture with that said rather than implied.
+
+### Rockbox draws on a synthesised ROM, and that was the same fix
+
+`GPO32_VAL` bit 14 is a pin Apple's bootloader drives when it powers the video co-processor. A warm
+entry skips that bootloader, so the bit read back zero — and Rockbox's `lcd_init_device` keys on it
+directly, taking a recovery path meant for ROLO and getting away with it only because that path
+re-uploads the co-processor's firmware from the ROM, which a synthesised one does not have.
+
+| Rockbox's main menu, non-black pixels | before | after |
+|---|---|---|
+| real 5G dump | 74 057 | 74 057 |
+| synthesised 5G | **0** | **74 057** |
+| synthesised 5.5G | **0** | **74 057** |
+
+Rockbox's full themed menu — icons, backdrop, watermark — on a boot ROM that contains none of
+Apple's code. The same line fixed iPodLinux on synthesised ROMs.
+
+### Installing iPodLinux, and triple boot
+
+`ipod-boot install-linux` builds the drive: `ipodloader2` into the firmware partition, all five of
+the distribution's directories onto the volume, and a boot menu naming **only what is actually
+there**. On a drive that already carries Apple's software and Rockbox, that comes out as a
+three-entry menu — *ZeroSlackr, Apple OS, Rockbox*. There is a button for it in the window.
+
+ZeroSlackr is fetched and verified like everything else here — URL, size, SHA-256, and nothing
+renamed into place until it verifies.
+
+**It refuses drives it cannot boot rather than building them.** `ipodloader2` reads FAT32 partition
+type `0x0B` and has no case for `0x0C`; every drive image taken off real hardware here is `0x0C`.
+That is an upstream limitation, and rewriting the partition type to suit it would make the loader
+happy and the disk a lie.
 
 ### The clock stopped inventing time
 
