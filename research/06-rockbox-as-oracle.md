@@ -588,7 +588,7 @@ Apple's boot ROM  →  Apple's bootloader  →  the Rockbox bootloader we instal
 firmware partition  →  rockbox.ipod, loaded from the FAT32 volume we wrote  →  Rockbox
 ```
 
-![Rockbox, cold-booted from its own binary on disk](../docs/media/ipod-18-rockbox-cold.png)
+![Rockbox, cold-booted from its own binary on disk](../docs/media/ipod-14-rockbox-menu.png)
 
 The splash appears at ~110 M instructions and holds for 15 M. Nothing here is warm-entered and no
 step is skipped.
@@ -1274,7 +1274,7 @@ reading.
 > | ATA commands | 113 | **10 304** |
 > | non-black pixels | 0 | **74 057** |
 >
-> ![Rockbox, cold-booted to its main menu](../docs/media/ipod-18-rockbox-cold.png)
+> ![Rockbox, cold-booted to its main menu](../docs/media/ipod-14-rockbox-menu.png)
 >
 > **Cold-booted Rockbox reaches its main menu**, themed, in the volume's own 15 px font. Unmoved:
 > retail 599 ATA and 2 916 pixels, warm Rockbox 3 953 ATA, `flash-update` byte-identical to its

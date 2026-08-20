@@ -263,11 +263,13 @@ chip-id register whose answer nothing had ever had to be right about until a thi
 asked. None of the four is findable with one operating system.
 
 **And it cold-boots to that menu too**, through Apple's own bootloader and Rockbox's, off a drive
-this project installed — `ipod-18-rockbox-cold.png` above. That took a memory-system fix rather than
-anything Rockbox-shaped: a byte store below 1 MB was being swallowed by the flash model after the
-firmware remaps SDRAM over address 0, so `disk_init` wrote the partition table's `.start` with a
-word store (landed) and its `.type` with a byte store (dropped), every partition read as type 0, and
-Rockbox sat on *"No partition found."* `disk_mount_all()` 0 → 1, ATA 113 → 10 304.
+this project installed — the same picture as above, and that is not an approximation: the cold and
+warm boots produced **byte-identical** frames, which is why there is now one file rather than two.
+That took a memory-system fix rather than anything Rockbox-shaped: a byte store below 1 MB was
+being swallowed by the flash model after the firmware remaps SDRAM over address 0, so `disk_init`
+wrote the partition table's `.start` with a word store (landed) and its `.type` with a byte store
+(dropped), every partition read as type 0, and Rockbox sat on *"No partition found."*
+`disk_mount_all()` 0 → 1, ATA 113 → 10 304.
 
 Not finished: **nothing past the menu is verified**, there is no sound, and it is not yet something
 the window can start for you — that is [on the roadmap](ROADMAP.md). The picture of the wheel moving
@@ -293,13 +295,35 @@ compensating for the test fixture, not for a bug, and is deleted: on a `0x0B` dr
 loader reaches **3 209 ATA commands**, prints `[1]: FAT` and `FAT32 detected`, and jumps to the
 kernel.
 
-The loader reads its config, loads the kernel and jumps — the right-hand picture. **The kernel then
-executes**: the machine ends inside
-`ldmia sp, {r0-pc}^`, an exception return restoring user-mode registers, having taken interrupts.
+The loader reads its config, loads the kernel and jumps — and **iPodLinux boots.** Not "executes
+instructions": it finds both partitions, mounts the FAT32 volume as its root, runs `/bin/init`, and
+loop-mounts ZeroSlackr's 8 MB ext3 userland out of a file on that volume:
 
-It stops on an address nothing here models — 8 385 336 reads of `0x64004000` from two program
-counters inside the interrupt path — and that address appears in no register map this project has.
-Nothing is drawn by Linux itself. See [research/16](research/16-the-third-bootloader.md).
+```
+Partition check: /dev/hda:  p1  p2
+VFS: Mounted root (vfat filesystem).
+Mounted devfs on /dev
+BINFMT_FLAT: Loading file: …
+kjournald starting.  Commit interval 5 seconds
+EXT3-fs: mounted filesystem with ordered data mode.
+```
+
+with no ATA errors anywhere in it. The right-hand picture is what it then draws on the panel.
+
+**Six defects in our ATA model stood between us and that, and one installation mistake.** The model
+served a 16-bit data register as if it were 32, answered for a device 1 that a 5G does not have,
+interrupted once per command where ATA interrupts once per data block, aborted RECALIBRATE and the
+whole power-management family, accepted INITIALIZE DEVICE PARAMETERS and then ignored it, and —
+the one that mattered most — asserted the drive's completion into a masked interrupt line and let the
+driver's own housekeeping sweep it away. Every one of them is a place the hardware behaves one way
+and this model behaved another; RetailOS is byte-identical across all six. The seventh problem was
+not ours at all: the drive carried **one file out of the distribution's 1 805**, so the kernel
+booted perfectly and had nothing to execute. See [research/16](research/16-the-third-bootloader.md).
+
+`ipod-boot install-linux` now builds the whole thing — the loader into the firmware partition, all
+five of the distribution's directories onto the volume, and a `loader.cfg` naming only what is
+actually there. On a drive that already has Rockbox that comes out as a three-entry menu:
+**ZeroSlackr, Apple OS, Rockbox.**
 
 ### And it is not only the operating system
 
