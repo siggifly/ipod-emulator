@@ -3,8 +3,7 @@
 The design of the program's interface, written **before** the interface. When the window and this
 document disagree, this document is what gets argued with first.
 
-> **Status: draft for review.** Nothing here is built. §18 lists the questions that need an answer
-> before it can be.
+> **Status: agreed, being built.** §19 records what was decided and what is still reversible.
 
 ---
 
@@ -51,7 +50,7 @@ Eight, and every one of them is the scar of something that actually went wrong.
 
 3. **Disable with a reason. Do not hide.** An option that cannot be used stays visible, greyed, and
    says why when you point at it. Hiding it hides the machine's rules; showing it teaches them. See
-   §17 — this is a deliberate reversal of a rule we follow elsewhere. *(Earned: the compatibility
+   §18 — this is a deliberate reversal of a rule we follow elsewhere. *(Earned: the compatibility
    matrix. A bootloader that silently vanishes when you pick a ROM teaches nothing.)*
 
 4. **Nothing floats.** No modals, no dialogs, no popovers, no toasts, no tooltips carrying
@@ -86,7 +85,7 @@ Nearly all of this is already implemented and correct. One change, in §3.1.
 | **Software** | Rockbox, and later others — a thing installed *onto* a disk |
 | **Disk** | a drive image. Knows what built it and what is installed on it |
 | **Device** | a *name for one selection*: an iPod, a disk, and how to treat them. Cheap to make, cheap to keep |
-| **Title** | a decrypted game. Not built yet — see §16 |
+| **Game** | a decrypted `.ipg` title. Runs with **no boot ROM and no disk** — see §16 |
 | **The machine** | one device, running. There is exactly one, and only while you are on Running |
 
 The single most important consequence: **a device is a selection, not a copy.** Making a second
@@ -210,6 +209,40 @@ that resizes itself*.
 
 ## 7. The visual system
 
+### Nostalgia: borrow the language, never the resolution
+
+**The window should feel like the iPod's world.** This is an emulator for a 2005 object and the
+nostalgia is the point — it is why anyone comes.
+
+But there is one hazard, and it is not aesthetic. **The emulated screen lives inside our window.**
+If our chrome also looks like RetailOS, nobody can tell what is emulated and what is ours — and that
+breaks things this project depends on: the screenshots in `research/`, the films in `docs/media/`,
+and every bug report where somebody sends a picture and the first question is whether the defect is
+in Apple's code or in ours. Knowing which layer you are looking at is this project's whole
+discipline.
+
+So the rule is a line, not a dial:
+
+| borrow | never borrow |
+|---|---|
+| the **palette**, sampled (above) | pixel fonts, faux-LCD, scanlines, screen glass |
+| the **material** — dark rule, bright band, falloff | type sizes derived from a 320×240 grid |
+| the **row grammar** — big left-aligned type, generous rows, full-width selection, trailing chevron | skeuomorphic plastic or brushed-metal textures |
+| the **motion** — deeper slides in, back slides out | any chrome outside the device body that could be mistaken for the device's screen |
+
+Everything in the left column is the design *language*, rendered at native desktop resolution, where
+it cannot be confused with a 320×240 framebuffer. Everything in the right column imitates the
+*pixel grid*, which is exactly what makes chrome mistakable for content — and is also what makes a
+serious instrument read as a toy.
+
+The drawn iPod body with a hard-edged 320×240 rectangle at integer scale inside it is already an
+unmistakable boundary. Keep that, and the rest is safe.
+
+**One thing already true by accident.** Principle 4 says nothing floats and everything pushes. That
+is exactly how iPod menus move — deeper slides in from the right, back slides out. It was arrived at
+from the no-floating-UI rule, not from the iPod, and it turns out to be the same grammar. Where the
+iPod's grammar is good, this design already agrees with it.
+
 ### Type
 
 One family. The system UI font, because it is the only one that is right on three platforms and this
@@ -238,26 +271,49 @@ above 48 except deliberate page margins.
 - Between groups: 24.
 - Page margin: 32.
 
-### Colour
+### Colour — sampled from RetailOS, not chosen
 
-Follows the system: both light and dark are specified and neither is an afterthought. Named roles
-only — no raw hex anywhere but the one table that defines them.
+The light palette is **measured off the artifact**, the same way every number in `research/` is:
+sampled from `docs/media/ipod-03-main-menu.png`, a frame our own emulator drew.
 
 | role | light | dark | used for |
 |---|---|---|---|
-| `bg` | near-white | near-black | the page |
-| `bg-raised` | white | one step up | Tiles, Sheets, Rows |
-| `bg-sunken` | one step down | one step down | the well the iPod sits in |
-| `fg` | near-black | near-white | body text |
-| `fg-dim` | 60% | 60% | labels, subtitles, secondary detail |
+| `bg` | `#ffffff` | near-black | the page |
+| `bg-raised` | `#f7f7ff` | one step up | Sheets, rows, the list |
+| `bg-band` | `#eff3f7` → `#c6cbce` | one step down | header bands, the title strip |
+| `bg-sunken` | `#c6cfd6` | one step down | the well the iPod sits in |
+| `fg` | `#000000` | near-white | body text |
+| `fg-dim` | `#5a616b` | 60% | labels, subtitles, secondary detail |
 | `fg-disabled` | 38% | 38% | a control that cannot be used |
-| `line` | subtle | subtle | the only borders that exist |
-| `accent` | *§18 Q3* | *§18 Q3* | focus rings, Start, progress |
+| `line` | `#848ea5` | subtle | the only borders that exist |
+| **`accent`** | **`#2969d6`** | **`#5292e7`** | focus rings, the primary action, progress |
 | `warn` | amber | amber | "this will write to your image" |
 | `danger` | red | red | destructive confirmation only |
 
+**The accent is RetailOS's own selection blue** — the colour the iPod itself uses to say *this one*.
+Contrast, computed: `#2969d6` is **5.14:1** on white, `#5292e7` is **5.91:1** on `#121212`. Both
+clear 3:1 for non-text UI with room to spare, and white text on the light-mode fill clears AA.
+
 **The accent is used for three things and no others**: the focus ring, the primary action on the
 current surface, and progress. A window where four things are blue has no primary action.
+
+### The material
+
+2005 interfaces were made of *materials*, not flat fills, and RetailOS's selection is a material
+with a precise structure. Sampled down a vertical strip:
+
+| | |
+|---|---|
+| a **1 px darker top rule** | `#2969d6` |
+| an immediate **bright band** under it | `#5a9aef` |
+| a **gentle fall** to the bottom edge | `#4a86de` |
+
+Dark edge, highlight beneath, falloff. That is the whole of the era's vocabulary, and it is what
+makes a surface read as *of a time* rather than as a flat rectangle with a period colour on it.
+
+**Used for exactly two things**: the primary action, and the selected row in a list. Everywhere else
+is flat. A window where everything is glossy is a 2005 pastiche; a window where the *one thing you
+are about to press* is glossy is a 2005 idea applied with judgement.
 
 ### Icons are drawn, never typed
 
@@ -302,7 +358,7 @@ The chassis colour comes from the ROM unless the operator overrides it, which is
 | Rail appears | push from the edge, `gentle` |
 | press | `scale(0.98)`, `tight`, restored on release |
 | focus ring | appears instantly. A focus ring that animates is a focus ring you lose |
-| **Library → Running** | **the showpiece.** The device Tile's iPod grows into the Running iPod — one continuous object, `lively`. Going back reverses it |
+| **Library → Running** | **the showpiece.** The hero iPod is already the right size in the right place, so it does not grow — it **wakes up**: the screen lights, the chrome recedes, the list slides out, `lively`. Going back reverses it |
 | progress | **linear, not sprung.** It is data. A progress bar that overshoots is lying |
 
 `prefers-reduced-motion` collapses every one of these to an instant state change. The structural
@@ -454,44 +510,56 @@ machine.
 
 The default tab, and the program's front door once §11 has been through once.
 
+**Master–detail, not a grid.** The list carries the borrowed row grammar from §7; the detail pane is
+ours, and is where the drawn iPod lives at hero size.
+
 ```
-┌───────────────────────────────────────────────────────────────────────┐
-│  ipod-emulator                        [Devices] Resources       ? ⓘ   │
-├───────────────────────────────────────────────────────────────────────┤
-│   Devices                                              [ + New… ]     │
-│                                                                       │
-│   ┌───────────────┐  ┌───────────────┐  ┌───────────────┐             │
-│   │      ▟▙       │  │      ▟▙       │  │      ▟▙       │             │
-│   │     ▐  ▌      │  │     ▐  ▌      │  │     ▐  ▌      │             │
-│   │     ▐()▌      │  │     ▐()▌      │  │     ▐()▌      │             │
-│   │      ▜▛       │  │      ▜▛       │  │      ▜▛       │             │
-│   │               │  │               │  │               │             │
-│   │  My 5.5G      │  │  Rockbox test │  │  Retail dump  │             │
-│   │  80 GB · 25.1.3│ │  60 GB · RB4.0│  │  30 GB · 20.1.3│            │
-│   │  parked        │ │  works on a copy│ │ writes to disk│            │
-│   │ [Resume][Cold] │  │   [ Start ]   │  │   [ Start ]   │            │
-│   └───────────────┘  └───────────────┘  └───────────────┘             │
-└───────────────────────────────────────────────────────────────────────┘
+┌────────────────────────┬──────────────────────────────────────────────────┐
+│ ██ My 5.5G          ›  │                                                  │
+│    Rockbox test     ›  │                    ▟▙▙▙▙▙▛                       │
+│    Retail dump      ›  │                  ▐          ▌                    │
+│                        │                  ▐  ┌────┐  ▌                    │
+│                        │                  ▐  │    │  ▌                    │
+│                        │                  ▐  └────┘  ▌                    │
+│                        │                  ▐   ( ● )  ▌                    │
+│                        │                  ▜▙▙▙▙▙▙▙▙▙▛                     │
+│                        │                                                  │
+│                        │                   My 5.5G                        │
+│                        │        80 GB · Apple 25.1.3 · Rockbox 4.0        │
+│                        │              parked · works on a copy            │
+│                        │                                                  │
+│                        │            ┏━━━━━━━━━━━━━━━━━━━━━┓               │
+│                        │            ┃  Resume    Cold boot ┃              │
+│ [ + New device ]       │            ┗━━━━━━━━━━━━━━━━━━━━━┛               │
+└────────────────────────┴──────────────────────────────────────────────────┘
+   the selected row wears        the iPod is always at hero size — this is
+   the §7 material               the object the program is about
 ```
 
-A **grid of Tiles**, not a list. Three reasons: the drawn iPod is worth showing; a grid tells you at
-a glance which iPod is which by colour; and it is the same shape as the title grid in §16, so the
-two rhyme instead of being unrelated screens.
+**Why this beat the grid.** Four reasons, and the fourth is the one that decided it:
 
-**Each Tile carries** the iPod in its chassis colour, the name, one summary line (capacity ·
-what it boots), the write-target line from §10, a state word if it has one (`parked`, `never
-started`), and its action — always visible, never revealed on hover.
+- The drawn iPod is at **hero size always**, instead of a 48 px thumbnail on a tile.
+- It **scales to any number of devices**, which retires the question of how many you will have.
+- The detail pane has **room for the facts** a tile could not hold — provenance, what is installed,
+  the write target from §10, the last boot.
+- **The showpiece transition gets simpler and better.** The hero iPod does not grow into the running
+  one; it is already the right size and in the right place. It *wakes up* — the screen lights, the
+  chrome recedes, the list slides out. Nothing has to be tweened between two geometries.
 
-**Clicking the Tile body** opens the device Sheet. **The action button** starts it. Two targets,
-two outcomes, no ambiguity.
+**The list.** One row per device: the name, a trailing chevron, and nothing else — density is the
+point. The selected row is full-width and wears the §7 material. Rows are `title` sized and
+generously spaced, which is the borrowed grammar and is also just a good list.
 
-**Right-click, long-press, or `⋯`** morphs the Tile's action area into an inline action strip —
-Edit, Duplicate, Reveal disk, Remove — in place, on the Tile. Not a context menu; nothing floats.
-`Esc`, or clicking elsewhere, morphs it back; **the strip always carries its own way out**, because
-it replaces the Start button and a mode you cannot leave is §2's seventh principle.
+**The detail pane** holds everything about the selected device and every action on it — Start,
+Edit, Duplicate, Reveal disk, Remove. **This deletes a mechanism**: the earlier draft needed
+right-click to morph a tile's action area into an inline strip, with its own way back out. A detail
+pane simply has room, so there is no morph, no mode, and no way to get stuck in one.
 
 **Remove asks**, names what will and will not be deleted (`Removes the device. The iPod and the disk
 stay in Resources.`), and is the only place `danger` appears.
+
+**Empty** is §11 on first run. Thereafter — reached by deleting every device — the list is empty,
+the detail pane holds the hero iPod at rest with `No devices yet`, and both paths are offered.
 
 ---
 
@@ -636,38 +704,64 @@ the thing you are debugging.
 it works for Rockbox (~100 M instructions) and iPodLinux (~21.5 G) without knowing which is on the
 drive. Before a device has ever booted it says `booting` with no fraction rather than inventing one.
 
-### Titles — the console (0.6, designed now)
+### Games — the console (0.6, designed now)
 
-The older goal, and the reason the project exists: a decrypted game runs directly, **with no Apple
-OS in the loop**. It is designed into this document now so that it is not bolted onto a finished
-window later.
+The older goal, and the reason the project exists: a purchased title runs directly, **with no boot
+ROM, no disk and no Apple OS in the loop**. Designed in now so it is not bolted onto a finished
+window later. Called **Games** in the window; `research/` keeps saying *title*.
 
-It is a **third Library tab**, and it is deliberately the same grid as §13 with a different object on
-the Tile:
+**What is already known, so the design rests on facts rather than hope:**
 
-```
-│   Titles                                            [ + Add… ]        │
-│   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐                 │
-│   │  cover   │ │  cover   │ │  cover   │ │  cover   │                 │
-│   │   art    │ │   art    │ │   art    │ │   art    │                 │
-│   ├──────────┤ ├──────────┤ ├──────────┤ ├──────────┤                 │
-│   │ Brick    │ │ Vortex   │ │ Mahjong  │ │ Solitaire│                 │
-│   │ [ Play ] │ │ [ Play ] │ │ [ Play ] │ │ [ Play ] │                 │
-│   └──────────┘ └──────────┘ └──────────┘ └──────────┘                 │
-```
+- A `.ipg` is a **zip archive**; its executable is an eApp container — `eapp` magic, block table,
+  load base `0x18000000`, named imports as `ldr pc,[pc,#N]` thunks. **20 decrypted titles are on
+  hand**, plaintext, verified by their header.
+- RetailOS **publishes** its framework surface: **8 frameworks, 433 functions**, each with a 16-byte
+  interface hash. Those hashes are byte-identical to the ones `eapp-inspect` reads out of a title's
+  own import blocks — the ABI confirmed independently from both sides. Pac-Man declares **98** of
+  the 433.
+- **`eapp_loader::Machine::bind_native()` already exists.** It matches each framework by interface
+  hash and rewrites every import thunk to the real export, returning `(framework, bound, total)`.
+  Unbound imports stay pointed at trap space on purpose, so a call that lands there is unambiguous.
 
-Play uses the **same** Library → Running transition, the same Screen at the same integer scale, and
-the same chrome bar. A title is a thing you run, exactly like a device; making it feel like a
-different program would be a mistake.
+**A game needs a framework, and that has the same grammar as a boot ROM.** *Apple's, out of an
+`.ipsw`* or *ours, native Rust* — exactly retail-versus-synthesised, one layer up. So §15's Sheet
+shape is reused. But the choice **surfaces only when it is the answer to a problem**: default to
+whatever works and never make anyone learn the word "framework" to play Pac-Man.
 
-**Two things it needs that a device does not**, both specified now: a **cover** (supplied, or drawn
-from the title's own name if there is none — never a blank rectangle), and **input that is not a
-click wheel**, since these are played with the wheel *as a control* rather than as furniture.
-Gamepad support belongs here and is toolkit-independent.
+**The readiness readout is this mode's compatibility matrix, and `bind_native`'s return value is
+already it.** Not *"will this boot?"* but *"this title declares 98 functions; we can serve 98"* — or
+*"…we can serve 61, and here are the 37 missing, by name."* **The trap table is the missing-function
+list.** That is §2's third principle at its best.
 
-**What it does not need, and must not grow**: a shader pipeline. The screen is 76,800 pixels. Any
-presentation effect worth having costs nothing on the CPU, and rendering the game at higher than
-320×240 would change the machine rather than the presentation — which principle 8 forbids.
+**The UI barely moves.** Games is a third tab with the same master–detail as §13: list on the left,
+the title's own cover art where the hero iPod goes, its readiness underneath, and Play. Same Running
+surface, same Screen, same integer scale, same transition. A game is a thing you run, exactly like a
+device, and making it feel like a different program would be a mistake.
+
+**Two things it needs that a device does not:**
+
+- **A cover.** It is in the zip. Drawn from the title's name if there is none — never a blank
+  rectangle.
+- **An identity without a boot ROM.** The DRM binds to the 8-byte **FireWire GUID in `sysinfo_t`,
+  read from the NOR, never from the disk** — measured, down to the function. So an encrypted title
+  needs an *identity* even though it needs no bootable ROM, and §3.1 is what makes that expressible:
+  a game can reference an iPod for its identity without booting it.
+
+**The keystore is unsolved and that work is not in this repository**, so this program takes
+**decrypted** titles. The refusal must therefore be first-class and honest — the same one RetailOS
+itself draws, in our own words, saying what it binds to and why we cannot help.
+
+**And there is no boot.** No 2.4 G instructions, no seventy-five seconds. Press Play and the game is
+there. That is the best demo this program will ever have.
+
+**One thing not to promise.** With Apple's framework the calls are still emulated ARM at ~24 % of
+real time, which may not be playable. With native implementations the 179 `OpenGLES` functions
+become Rust and the emulated work collapses to the game's own logic — plausibly the first mode that
+runs at real speed. That is a hypothesis with an obvious measurement, not a claim.
+
+**What it must not grow**: a shader pipeline. The screen is 76,800 pixels. Any presentation effect
+worth having costs nothing on the CPU, and rendering above 320×240 would change the machine rather
+than the presentation, which principle 8 forbids.
 
 ---
 
@@ -731,35 +825,37 @@ Recorded here so that it reads as a decision rather than an oversight.
 
 ---
 
-## 19. Open questions
+## 19. Decisions
 
-Answers needed before building.
+Settled 2026-08-20. Each was a recommendation the operator did not overrule; each is one constant or
+one section away from being reversed, and the reasoning is here so a reversal is cheap rather than
+archaeological.
 
-**Q1 — Grid or list for devices?** §13 chooses a grid, for the reasons given. A list is denser and
-scales better past a dozen devices. How many devices do you expect to have?
+| | decided | why |
+|---|---|---|
+| **Devices: grid or list** | **master–detail**, §13 | the grid was chosen first and lost. Hero-size iPod, unbounded scaling, room for the facts, and a transition that needs no tweening |
+| **Accent colour** | **`#2969d6` / `#5292e7`**, §7 | RetailOS's own selection blue, sampled off a frame we drew. Derived, not chosen |
+| **The one button's default iPod** | **5.5G, 30 GB, black**, §11 | low conviction and genuinely close. Images are sparse, so capacity costs nothing — 30 GB is a real Late-2006 configuration and the friendlier default |
+| **Games in 0.5** | **no — 0.6**, §16 | the framework work is not done. The design lands now so the shape is right when it does |
+| **iPodLinux's place** | **visible, disabled, with its reason**, §15 | principle 3. But see below — it is a different *kind* of disabled |
+| **`Reveal disk`** | **keep it**, §13 | fifteen lines, and this is a program about files that are hard to find. The expanded row also shows the full path, copyable |
+| **Reference** | a place reached by `?`, not a Sheet | long prose reads better in one |
+| **Theme** | follows the system, both fully specified | three platforms, three expectations |
+| **Nostalgia** | **borrow the language, never the resolution**, §7 | the emulated screen is *inside* our window; chrome that imitates it destroys the ability to tell which layer a screenshot is of |
 
-**Q2 — The accent colour.** The program has no brand. Options: a restrained blue-grey (neutral,
-invisible, safe); iPod-era chrome silver (thematic, weak as an accent); or take the accent from the
-device's own chassis colour (charming, and inconsistent between surfaces, which is why I have not
-just chosen it).
+### The two kinds of disabled
 
-**Q3 — Does the one button in §11 default to a 5.5G?** It has to pick something. 5.5G is the later
-and more capable machine; 5G is the more common one in the wild and the one most dumps are from.
+Answering the iPodLinux question exposed a gap: §9's `Disabled` state covers two different things,
+and greying them identically makes both ambiguous — which defeats the whole justification for
+principle 3.
 
-**Q4 — Does the title grid ship in 0.5?** §16 designs it and marks it 0.6. If it is 0.5, the tab
-exists and is empty until there is a decrypted title to put in it, which is a worse first impression
-than not having it.
+| | says | example | wording |
+|---|---|---|---|
+| **a machine rule** | *this cannot work* | `ipodloader2` reads FAT32 type `0x0B` and this drive is `0x0C` | state the rule. It is permanent, and teaching it is the point |
+| **a project state** | *this is not finished* | iPodLinux boots, then its userland stalls at ZeroLauncher's last step | say what *does* work instead — `ipod-boot install-linux` builds that drive — and match what the README already says |
 
-**Q5 — iPodLinux's place.** It is cut from 0.5 and marked experimental. §15 shows it as a disabled
-checkbox with its reason. The alternative is that it does not appear at all until it works.
-
-**Q6 — Is `Reveal disk` in the Tile's action strip worth the platform code?** It is three
-implementations (Finder, Explorer, `xdg-open`) for a convenience. Cut it and the strip is four items
-instead of five.
-
-**Settled without asking**, both changeable: Reference is a place reached by `?` rather than a Sheet,
-because long prose reads better in one; and the window follows the system theme, with light and dark
-both fully specified.
+A machine rule is about the hardware and will never change. A project state is about us and should
+read like it. They get different wording, and a project state always names the escape hatch.
 
 ---
 
