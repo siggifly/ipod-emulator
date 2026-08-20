@@ -3070,16 +3070,15 @@ impl App {
         self.wizard_buttons(ui);
     }
 
-    /// **One identity table, whichever the ROM is.** The rows are the same and in the same place;
-    /// only whether a value is a control or a sentence changes.
+    /// **One identity table, and every row is a control — some of them locked.**
     ///
-    /// Two panels in a reserved box was the wrong answer to the right problem. It stopped the page
-    /// jumping, but it did it by drawing one of two different things into a fixed hole — so the
-    /// dump's panel and the generated one duplicated each other's labels, and the one that did not
-    /// fill the hole left the rest of it looking like an overlay on whatever came next.
+    /// A row that swapped a dropdown for a plain sentence when a dump was chosen changed shape as
+    /// well as content: different height, different alignment, different weight, so the table read
+    /// as two tables and the page moved between them. A **disabled** dropdown is the same object in
+    /// the same place, and it says "this is not yours to change" in the way every other program
+    /// says it, rather than by quietly becoming text.
     ///
-    /// A table cannot jump, because the row count does not depend on anything. There is nothing to
-    /// reserve.
+    /// It also cannot jump, because the geometry no longer depends on which ROM is chosen.
     fn identity_rows(&mut self, ui: &mut egui::Ui, dump: Option<&Path>) {
         let facts = dump.map(nor_facts);
         let fact = |k: &str| -> String {
@@ -3089,28 +3088,48 @@ impl App {
                 .unwrap_or_default()
         };
         let id = self.settings.nor.identity().ok();
+        let locked = dump.is_some();
 
-        // Model — a picker when it is ours to choose, and what the dump says when it is not.
-        self.id_row(ui, "Model", |app, ui| match dump {
-            Some(_) => {
-                ui.label(
-                    egui::RichText::new(fact("Model"))
-                        .small()
-                        .color(UI_TEXT_DIM),
-                );
-            }
-            None => app.model_combo(ui),
+        self.id_row(ui, "Model", |app, ui| {
+            ui.add_enabled_ui(!locked, |ui| {
+                if locked {
+                    // The dump's own answer, in the same three boxes the generated one uses — so
+                    // the relationship between `Mod#` and what you would otherwise have picked is
+                    // on the screen rather than in a paragraph.
+                    let m = app.settings.nor.model();
+                    locked_combo(
+                        ui,
+                        "lk-gen",
+                        64.0,
+                        match m.map(|m| m.generation) {
+                            Some(eapp_loader::identity::Generation::Video2) => "5.5G".into(),
+                            Some(_) => "5G".into(),
+                            None => "—".into(),
+                        },
+                    );
+                    locked_combo(
+                        ui,
+                        "lk-cap",
+                        78.0,
+                        m.map(|m| format!("{} GB", m.capacity_gb))
+                            .unwrap_or_else(|| "—".into()),
+                    );
+                    locked_combo(
+                        ui,
+                        "lk-col",
+                        78.0,
+                        m.map(|m| m.colour().label().to_string())
+                            .unwrap_or_else(|| "—".into()),
+                    );
+                } else {
+                    app.model_combo(ui);
+                }
+            });
         });
 
-        // Serial — editable and validated for a generated ROM; printed for a dump.
         self.id_row(ui, "Serial", |app, ui| {
-            if dump.is_some() {
-                ui.label(
-                    egui::RichText::new(fact("Serial"))
-                        .small()
-                        .monospace()
-                        .color(UI_TEXT_DIM),
-                );
+            if locked {
+                locked_field(ui, 150.0, fact("Serial"));
                 return;
             }
             match app.typing_serial.clone() {
@@ -3121,7 +3140,7 @@ impl App {
                     ui.add(
                         egui::TextEdit::singleline(&mut typed)
                             .hint_text("7Q7411K2VQK")
-                            .desired_width(130.0)
+                            .desired_width(150.0)
                             .char_limit(11),
                     );
                     let ok = eapp_loader::identity::Identity::check_serial(&typed);
@@ -3138,20 +3157,19 @@ impl App {
                     }
                 }
                 None => {
-                    ui.label(
-                        egui::RichText::new(
-                            id.as_ref()
-                                .and_then(|i| i.serial.clone())
-                                .unwrap_or_else(|| "—".into()),
-                        )
-                        .small()
-                        .monospace()
-                        .color(UI_TEXT_DIM),
-                    );
+                    // Shown in the same locked field as a dump's, so the two modes line up. The
+                    // `edit` button beside it is how it opens: a disabled widget never reports a
+                    // click, so making the field itself clickable would be a control that looks
+                    // live and is not.
+                    let s = id
+                        .as_ref()
+                        .and_then(|i| i.serial.clone())
+                        .unwrap_or_else(|| "—".into());
+                    locked_field(ui, 150.0, s);
                     if ui.small_button("regenerate").clicked() {
                         app.reseed();
                     }
-                    if ui.small_button("type my own…").clicked() {
+                    if ui.small_button("edit").clicked() {
                         app.typing_serial = Some(
                             id.as_ref()
                                 .and_then(|i| i.serial.clone())
@@ -3163,8 +3181,7 @@ impl App {
         });
 
         // One line for why a typed serial is refused. Always here, so typing does not move the row
-        // below it — the only thing in this table that needs reserving, because it is the only
-        // thing that is not a row.
+        // below it — the only thing in this table that is not a row.
         reserved(ui, 15.0, |ui| {
             if let Some(w) = self
                 .typing_serial
@@ -3178,7 +3195,9 @@ impl App {
             }
         });
 
-        self.id_row(ui, "GUID", |app, ui| {
+        // **The GUID is never editable, in either mode**, so it is locked whichever ROM this is —
+        // which is why it says what it is rather than where it came from.
+        self.id_row(ui, "GUID", |_app, ui| {
             let v = match dump {
                 Some(_) => fact("GUID"),
                 None => id
@@ -3186,20 +3205,12 @@ impl App {
                     .map(|i| i.guid_hex())
                     .unwrap_or_else(|| "—".into()),
             };
-            ui.label(
-                egui::RichText::new(v)
-                    .small()
-                    .monospace()
-                    .color(UI_TEXT_DIM),
+            locked_field(ui, 150.0, v).on_disabled_hover_text(
+                "The FireWire GUID — the number iTunes and a USB host see as this iPod's serial. \
+                 It is not printed on the case, so there is nothing to copy off a real one: a \
+                 generated iPod gets one built from its model and its seed, and `regenerate` \
+                 gives it another. A dump carries the GUID of the iPod it came off.",
             );
-            if dump.is_none() {
-                ui.label(
-                    egui::RichText::new("from the seed")
-                        .small()
-                        .color(UI_TEXT_FAINT),
-                );
-            }
-            let _ = app;
         });
 
         // **The case is editable either way**, and it is the only thing that is when a dump is
@@ -3215,7 +3226,7 @@ impl App {
                 .unwrap_or_else(|| format!("from the iPod — {}", derived.label()));
             egui::ComboBox::from_id_salt("wiz-case")
                 .selected_text(cur)
-                .width(210.0)
+                .width(226.0)
                 .show_ui(ui, |ui| {
                     let mut pick = app.settings.chassis;
                     ui.selectable_value(
@@ -3223,14 +3234,13 @@ impl App {
                         None,
                         format!("from the iPod — {}", derived.label()),
                     );
-                    // **U2 only where there was one.** Apple made a U2 Video at 30 GB and no
-                    // other size — the table has `A452` and `A664`, both 30 — so offering it for a
-                    // 60 GB is offering an iPod that never existed. White and black are always
-                    // there; the third entry is only in the list when the model table has one.
-                    let u2 = Self::offered_models().iter().any(|m| {
-                        m.generation == app.synthetic_model().generation
-                            && m.capacity_gb == app.synthetic_model().capacity_gb
-                            && m.colour() == Colour::U2
+                    // **U2 only where there was one.** Apple made a U2 Video at 30 GB and no other
+                    // size, so offering it for a 60 GB is offering an iPod that never existed.
+                    let m = app.synthetic_model();
+                    let u2 = Self::offered_models().iter().any(|x| {
+                        x.generation == m.generation
+                            && x.capacity_gb == m.capacity_gb
+                            && x.colour() == Colour::U2
                     });
                     for c in [Colour::White, Colour::Black] {
                         ui.selectable_value(&mut pick, Some(c), c.label());
@@ -3242,17 +3252,18 @@ impl App {
                 });
         });
 
-        // **The images a dump carries, and the ones a generated ROM cannot.** This row is the whole
-        // difference between the two in one line, which is worth a row of its own.
+        // **The images a dump carries, and the ones a generated ROM cannot.** The whole difference
+        // between the two ROMs in one line, which is worth a row.
         self.id_row(ui, "Images", |_app, ui| {
-            let (text, colour) = match dump {
-                Some(_) => (fact("Images"), UI_TEXT_DIM),
-                None => (
-                    "none — a generated ROM has no diagnostics or disk mode".to_string(),
-                    UI_TEXT_FAINT,
-                ),
+            let v = match dump {
+                Some(_) => fact("Images"),
+                None => "none — no diagnostics, no disk mode".to_string(),
             };
-            ui.label(egui::RichText::new(text).small().color(colour));
+            locked_field(ui, 226.0, v).on_disabled_hover_text(
+                "The programs Apple put inside the boot ROM itself: the service diagnostics, disk \
+                 mode, the flash updater. They are Apple's code, so a generated ROM has none of \
+                 them and never will.",
+            );
         });
     }
 
@@ -6540,6 +6551,35 @@ fn sanitise(name: &str) -> String {
     } else {
         s
     }
+}
+
+/// A dropdown that cannot be opened, showing one value.
+///
+/// **The shape of the control is the message.** A value that is not yours to change used to be
+/// drawn as plain text, so the row changed height and weight as well as content and the table read
+/// as two different tables. This is the same object in the same place, greyed — which is how every
+/// other program says "not here", and it costs no layout.
+fn locked_combo(ui: &mut egui::Ui, salt: &str, width: f32, text: String) {
+    ui.add_enabled_ui(false, |ui| {
+        egui::ComboBox::from_id_salt(salt)
+            .selected_text(text)
+            .width(width)
+            .show_ui(ui, |_| {});
+    });
+}
+
+/// A text field that cannot be typed in, showing one value.
+///
+/// Returns the response so a caller can attach `on_disabled_hover_text` — **not** `on_hover_text`,
+/// which does not fire on a disabled widget, and not `clicked`, which is never true on one. Both
+/// compile and neither does anything, which is the kind of control that looks live for a release.
+fn locked_field(ui: &mut egui::Ui, width: f32, mut text: String) -> egui::Response {
+    ui.add_enabled(
+        false,
+        egui::TextEdit::singleline(&mut text)
+            .desired_width(width)
+            .font(egui::TextStyle::Monospace),
+    )
 }
 
 /// One row of the identity table. Tall enough for a dropdown, which is the tallest thing in one.
