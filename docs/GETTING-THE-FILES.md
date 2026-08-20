@@ -1,9 +1,18 @@
-# Getting the two files
+# Bringing your own iPod's files
 
-Apple wrote both. This project ships neither, and never will.
+**Optional.** The emulator synthesises a boot ROM and fetches Apple's firmware itself, and that is
+the path the [README](../README.md) describes. This is for when you would rather run *your* iPod.
 
-You need a **boot ROM** and **something to make a drive from**. Or neither — see
-[Skipping the boot ROM](#skipping-the-boot-rom).
+Two things a synthesised ROM cannot give you, because they are Apple's code and live inside the ROM:
+
+- **Apple's own bootloader**, running from the reset vector
+- **the service diagnostics** — `SELECT`+`REW` at power-on
+
+Everything entered directly — RetailOS through the high-level boot, Rockbox, `ipodloader2`,
+iPodLinux — runs on a synthesised ROM. What is measured, cell by cell, is in
+[research/17](../research/17-the-boot-matrix.md).
+
+Apple wrote both files below. This project ships neither, and never will.
 
 ## The boot ROM
 
@@ -42,14 +51,28 @@ boot a pristine firmware partition.
 
 ## Something to make a drive from
 
-Either Apple's `.ipsw` (~14 MB) or a drive image you already have. An `.ipsw` is built into a drive
-as it lands in the window, or with:
+Either Apple's `.ipsw` or a drive image you already have. An `.ipsw` is built into a drive as it
+lands in the window, or with:
 
 ```sh
 ipod-boot make-disk iPod_20.1.3.ipsw disk.img
 ```
 
-**Apple no longer serves these**, so there is no official source to try.
+**You almost certainly do not need to find one.** Apple still serves 66 of the 71 releases in the
+catalogue, from `secure-appldnld.apple.com` — their own servers, not a mirror — and every one has
+been downloaded and hashed here, so it can be verified byte for byte:
+
+```sh
+ipod-boot firmware list [filter]          # everything, or matching a model or filename
+ipod-boot firmware get 20                 # by UpdaterFamilyID — 20 is the 5G Rev A
+ipod-boot firmware get iPod_20.1.3.ipsw   # or by name
+```
+
+Downloads are verified rather than trusted — size and SHA-256, both — and nothing is renamed into
+place until it verifies, so an interrupted download can never be mistaken for a finished one. The 5
+Apple no longer serves say so, rather than failing with a transport error.
+
+Full catalogue and the `FamilyID`/`UpdaterFamilyID` trap: [firmware-catalogue.md](firmware-catalogue.md).
 
 ## They must be a matching pair
 
@@ -66,16 +89,20 @@ ipod-emulator --check-images --flash=… --disk=…
 
 which reports which of the size, the reset vector and the image directory is wrong.
 
-## Skipping the boot ROM
+## What the synthesised ROM is, exactly
 
-Pick a model from a list of 198 — transcribed mechanically from libgpod's table — and the emulator
-**synthesises a boot ROM** for it: the identity block a real iPod carries, with a serial and GUID
-generated from a seed so the same machine comes back next launch. It then fetches Apple's firmware
-itself, verified against a recorded SHA-256.
+A reset vector, a mark, and the identity block a real iPod carries — `SrNm`, `HwId`, `HwVr`, `Regn`,
+`Mod#`, `DrmV` — with the serial and GUID generated from a seed, so the same iPod comes back on the
+next launch. **None of Apple's code**, which is the point: it is 101 live bytes against the real
+dump's ~390 KB.
 
-A synthesised ROM carries an identity and a reset vector, and none of Apple's code. What that costs
-is recorded in [research/17](../research/17-the-boot-matrix.md): everything that has to *run* Apple's
-bootloader needs a real dump, and everything entered directly does not.
+The model numbers come from a table of **198 rows**, transcribed mechanically from libgpod's
+`ipod_model_table` rather than retyped. That table is what makes `Mod#` and the capacity right for
+whichever iPod you name.
+
+**The window's device picker offers one device, not 198.** That is deliberate — ROADMAP Ⅳ: *a device
+drawn in the picker is a promise, and each one appears when it boots, not before.* The table carries
+every clickwheel iPod so that adding one is a row rather than a refactor.
 
 ## What has actually been tested
 

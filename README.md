@@ -13,31 +13,36 @@ game. So do Rockbox and iPodLinux.
 
 ## Quick start
 
-**1. Get the app.** Download a [release](https://github.com/siggifly/ipod-emulator/releases), unpack
-it, and open `ipod-emulator.app` (macOS) or run `ipod-emulator` (Linux, Windows).
+**You do not need an iPod, or any files off one.**
 
-It is not code-signed — deliberately, because buying a certificate to make a reverse-engineering
-tool look official is the wrong trade. macOS 15+ blocks the first launch: open it, then
-**System Settings → Privacy & Security** has a button to open it anyway. Windows: **More info →
-Run anyway**. Anything you build yourself skips all of this.
+1. **Get the app.** Download a [release](https://github.com/siggifly/ipod-emulator/releases), unpack
+   it, and open `ipod-emulator.app` (macOS) or run `ipod-emulator` (Linux, Windows).
+2. **Press the button.** It synthesises a boot ROM and downloads Apple's firmware itself — then
+   builds a drive from it and boots.
 
-**2. Get two files off an iPod you own.** Apple wrote both; this project ships neither.
+That is the whole of it. The ROM is built from a table of **198 iPods** transcribed from libgpod, so
+the machine carries a real model number, serial and GUID, generated from a seed so the same iPod
+comes back next launch. The firmware comes from **Apple's own servers** — 66 of the 71 releases are
+still served, every one verified against a recorded size and SHA-256, and nothing is renamed into
+place until it verifies.
 
-| | What | Where it comes from |
-|---|---|---|
-| **Boot ROM** | a 1 MB NOR dump | Read it off your own iPod — [Rockbox Utility](https://www.rockbox.org/wiki/RockboxUtility), then **System → Debug → Dump ROM contents**. Five minutes, uninstallable afterwards. |
-| **A drive** | Apple's `.ipsw` (~14 MB) **or** a drive image | An `.ipsw` is turned into a drive as it lands |
-
-Or **skip the ROM entirely**: pick a model from a list of 198 and the emulator synthesises one, then
-fetches Apple's firmware itself. That is the click-wheel outline it shows while booting.
+This is what a synthesised iPod shows while it starts:
 
 <img src="docs/media/ipod-30-synthetic-nor-boot.png" width="240" alt="The click-wheel outline a synthesised boot ROM shows while starting">
 
-**3. Drop them on the window.** Any order, anywhere on it — each file is identified by what it
-*contains*, not by which box you put it in. It remembers, so you do this once.
+**It is not code-signed** — deliberately, because buying a certificate to make a
+reverse-engineering tool look official is the wrong trade. macOS 15+ blocks the first launch: open
+it, then **System Settings → Privacy & Security** has a button to open it anyway. Windows:
+**More info → Run anyway**. Anything you build yourself skips this.
 
-Both files must be for the same iPod, and it checks before booting rather than failing ninety
-seconds in. Details, and what to do when a dump comes out 0 bytes:
+### Using your own iPod's files instead
+
+Optional, and worth doing for two things a synthesised ROM cannot give you: **Apple's own bootloader
+running from the reset vector**, and **the service diagnostics**, which live inside the ROM itself.
+
+Drop a 1 MB NOR dump and an `.ipsw` (or a drive image) anywhere on the window, in any order — each
+file is identified by what it *contains*, not by which box you put it in, and it remembers. Reading
+the dump off your own iPod takes about five minutes with Rockbox and undoes cleanly:
 **[docs/GETTING-THE-FILES.md](docs/GETTING-THE-FILES.md)**.
 
 ## What it runs
