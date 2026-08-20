@@ -39,5 +39,13 @@ slint = { version = "1.17", default-features = false, features = [
     "compat-1-2",
 ] }
 
+# Only so the window can be asked for an OPAQUE one. Slint's winit backend creates a transparent
+# window by default on macOS, which leaves the system title bar showing whatever is behind the app
+# — the client area looks right because we paint it, and the title bar does not. There is no
+# Slint-level property for this, so the window attributes have to be reached through the backend.
+i-slint-backend-winit = { version = "1.17", default-features = false, features = [
+    "renderer-skia",
+] }
+
 [build-dependencies]
 slint-build = "1.17"

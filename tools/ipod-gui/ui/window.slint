@@ -1,13 +1,13 @@
 // The window — docs/GUI.md is the design this implements.
 //
-// **There is no sidebar.** The first cut had one, 280 px wide, holding a list that will realistically
-// never exceed half a dozen entries: 25 % of the window spent on three words, which left the subject
-// of the program occupying 13 % of the stage and made the whole thing read as a settings pane with a
-// picture in it. Master–detail was solving a scaling problem this program does not have.
+// **Three tabs, and the first one is the device.** Per the operator, 2026-08-21: the main view is
+// the iPod at full size and *pressing it* is what starts it, so the chrome carries no Start button
+// at all. Devices are composed out of Resources on their own tab; Resources is the files.
 //
-// The device gets the window. Switching between devices is a carousel — neighbours peek in at the
-// edges, dimmed and small; the centre one is the size it deserves. That also happens to be the
-// era's own idea about browsing things you own.
+// **There is no sidebar.** The first cut had one, 280 px wide, holding a list that will realistically
+// never exceed half a dozen entries — 25 % of the window for three words, which left the subject of
+// the program on 13 % of the stage. Master–detail was solving a scaling problem this program does
+// not have.
 
 import { Ink, Metric } from "tokens.slint";
 import { IPod } from "ipod.slint";
@@ -21,6 +21,14 @@ export struct DeviceRow {
     chassis: color,
     dark-chassis: bool,
     parked: bool,
+}
+
+// A flat list with headings in it, rather than a list of groups each holding a list. Slint handles
+// both; this one is easier to keep in step with the model, which is a `Vec` of the same shape.
+export struct ResourceRow {
+    heading: bool,
+    text: string,
+    detail: string,
 }
 
 // ─── The material (§7) ──────────────────────────────────────────────────────────────────────────
@@ -38,38 +46,44 @@ component Material inherits Rectangle {
     }
 }
 
-component PrimaryButton inherits Rectangle {
+// ─── One button ─────────────────────────────────────────────────────────────────────────────────
+//
+// **One height, one radius, one weight, one type size.** The first cut had a 42 px primary, a 32 px
+// secondary and a 28 px tab — three button systems in a window with four buttons in it. Only the
+// fill changes between a primary and a plain one.
+
+component Button inherits Rectangle {
     in property <string> label;
+    in property <bool> primary: false;
     in property <bool> enabled: true;
-    in property <bool> quiet: false;
     callback clicked();
 
-    height: quiet ? 32px : 42px;
-    min-width: quiet ? 104px : 148px;
+    height: 36px;
+    width: text.preferred-width + 2 * Metric.s5;
     border-radius: 6px;
-    background: enabled ? (quiet ? Ink.bg-raised : transparent) : Ink.bg-band-top;
-    border-width: quiet ? 1px : 0;
+    background: primary ? transparent : Ink.bg-raised;
+    border-width: primary ? 0 : 1px;
     border-color: Ink.line.with-alpha(0.4);
-    opacity: enabled ? 1.0 : 0.55;
+    opacity: enabled ? 1.0 : 0.5;
 
-    material := Material {
+    Material {
         width: 100%;
         height: 100%;
         border-radius: 6px;
-        visible: enabled && !quiet;
+        visible: primary && enabled;
         opacity: touch.pressed ? 0.86 : 1.0;
         animate opacity { duration: Metric.quick; }
     }
 
-    Text {
+    text := Text {
         width: 100%;
         height: 100%;
         text: label;
-        font-size: quiet ? Metric.body-size : 16px;
+        font-size: Metric.body-size;
         font-weight: 600;
         horizontal-alignment: center;
         vertical-alignment: center;
-        color: !enabled ? Ink.fg-disabled : (quiet ? Ink.fg : #ffffff);
+        color: !enabled ? Ink.fg-disabled : (primary ? #ffffff : Ink.fg);
     }
 
     touch := TouchArea {
@@ -83,14 +97,15 @@ component Tab inherits Rectangle {
     in property <bool> active;
     callback clicked();
 
-    height: 28px;
+    // The same 36 px as a button, so the chrome has one rhythm rather than three.
+    height: 36px;
     width: text.preferred-width + 2 * Metric.s4;
-    border-radius: 5px;
+    border-radius: 6px;
 
     Material {
         width: 100%;
         height: 100%;
-        border-radius: 5px;
+        border-radius: 6px;
         visible: active;
     }
 
@@ -110,21 +125,30 @@ component Tab inherits Rectangle {
     }
 }
 
+component Caption inherits Text {
+    font-size: Metric.body-size;
+    color: Ink.fg-dim;
+    horizontal-alignment: center;
+}
+
 // ─── The window ─────────────────────────────────────────────────────────────────────────────────
 
 export component MainWindow inherits Window {
     title: "ipod-emulator";
     background: Ink.bg;
-    // §6: below this the design does not work, so the window refuses rather than degrading into a
-    // second layout nobody designed and nobody tests.
+    // §6, revised: the minimum is not a taste either. A 1:1 320×240 framebuffer needs a 658 px
+    // device (see `hero` below), and 56 chrome + 658 + a caption + padding is 852. Below that the
+    // choice is a smaller window or a downscaled screen, and principle 8 settles which.
     min-width: 900px;
-    min-height: 640px;
+    min-height: 860px;
     preferred-width: 1100px;
-    preferred-height: 830px;
+    preferred-height: 880px;
     forward-focus: keys;
 
     in property <[DeviceRow]> devices;
+    in property <[ResourceRow]> resources;
     in-out property <int> selected: 0;
+    in-out property <int> tab: 0;
     in property <image> screen-source;
     in property <bool> running: false;
 
@@ -136,10 +160,6 @@ export component MainWindow inherits Window {
         ? devices[selected]
         : { name: "", chassis: #e4e4e2, dark-chassis: false };
 
-    // One number sets the size of everything on this surface.
-    property <length> hero: min(self.height - 268px, 540px);
-    property <length> hero-w: 0.5971 * hero;
-    property <length> step: hero-w * 0.5 + hero-w * 0.55 * 0.5 + Metric.s7;
 
     public function move(delta: int) {
         if (devices.length == 0) { return; }
@@ -160,7 +180,7 @@ export component MainWindow inherits Window {
         VerticalLayout {
             // ── The only chrome (§4) ──
             Rectangle {
-                height: 52px;
+                height: 56px;
                 background: @linear-gradient(180deg, Ink.bg-band-top 0%, Ink.bg-band-bottom 100%);
                 Rectangle {
                     y: parent.height - 1px;
@@ -169,151 +189,288 @@ export component MainWindow inherits Window {
                 }
 
                 // No `alignment` here on purpose: setting one packs the children and makes
-                // `horizontal-stretch` inert, which is why Help and About sat next to Resources
-                // instead of at the far edge.
+                // `horizontal-stretch` inert, which is why Help and About once sat next to
+                // Resources instead of at the far edge.
                 HorizontalLayout {
                     padding-left: Metric.s5;
                     padding-right: Metric.s5;
-                    spacing: Metric.s2;
+                    padding-top: Metric.s2;
+                    padding-bottom: Metric.s2;
+                    spacing: Metric.s1;
 
-                    VerticalLayout {
-                        alignment: center;
-                        HorizontalLayout {
-                            spacing: Metric.s1;
-                            Tab { label: "Devices"; active: true; }
-                            Tab { label: "Resources"; active: false; }
-                        }
-                    }
+                    Tab { label: "iPod";      active: tab == 0; clicked => { tab = 0; } }
+                    Tab { label: "Devices";   active: tab == 1; clicked => { tab = 1; } }
+                    Tab { label: "Resources"; active: tab == 2; clicked => { tab = 2; } }
 
                     Rectangle { horizontal-stretch: 1; }
 
+                    Tab { label: "Help";  active: false; }
+                    Tab { label: "About"; active: false; }
+                }
+            }
+
+            // ── Tab 1 — the device, and pressing it is what starts it ──
+            if tab == 0: pane := Rectangle {
+                background: Ink.bg;
+                vertical-stretch: 1;
+                // Pinned to zero so the pane reports no intrinsic height of its own and takes
+                // whatever the window has left. Without it, `hero` below would be reading a height
+                // that its own content decides — the loop again, one level up.
+                min-height: 0px;
+                preferred-height: 0px;
+
+                // One number sets the size of everything on this tab — read from the stage, never
+                // from the window.
+                //
+                // **Reading the window's height here is a binding loop**: the window's height comes
+                // from its layout, the layout from the content, the content from `hero`. Slint says
+                // so at build time and warns it may panic at run time. It is the same bug as the
+                // device that resized itself (GUI.md §6) in a different hat — a size that can
+                // influence its own container oscillates. `stage-area` declares no intrinsic height,
+                // so the arrow points one way only.
+                // **658 px, fixed, and the number is not a taste.**
+                //
+                // The screen is 0.4866 of body height wide, so a 320-pixel-wide framebuffer at
+                // 1:1 needs a body of 320 / 0.4866 = 658. Anything smaller *downscales* the
+                // framebuffer, which principle 8 forbids — the panel is 320×240 and it is
+                // presented at an integer scale, never smoothed and never stretched. At 560 px,
+                // where this sat a moment ago, the screen was 253 px wide and every frame the
+                // emulator produced was being thrown away by a quarter.
+                //
+                // 2× would need a 1315 px body, which does not fit on a laptop, so 1:1 is the
+                // scale and the window's minimum height is sized around it rather than the other
+                // way round.
+                //
+                // It is also a constant rather than a function of the window, which is what makes
+                // it loop-free: a size derived from a height it can itself influence oscillates.
+                property <length> hero: 658px;
+                property <length> hero-w: 0.5917 * hero;
+                property <length> step: hero-w * 0.5 + hero-w * 0.55 * 0.5 + Metric.s7;
+
+                VerticalLayout {
+                    padding: Metric.s4;
+                    spacing: Metric.s4;
+                    alignment: center;
+
+                    // The carousel. Absolute positions, animated, so the neighbours slide rather
+                    // than reflow — a layout that re-flows on selection is one that jumps (§2.2).
+                    //
+                    // `min-height` and `preferred-height` are pinned to zero so this reports no
+                    // intrinsic size of its own. Without that it sizes itself from the iPods inside
+                    // it, whose size comes from `hero`, which comes from here.
+                    stage-area := Rectangle {
+                        height: pane.hero;
+                        width: 100%;
+
+                        for d[i] in devices: IPod {
+                            body-height: i == root.selected ? pane.hero : pane.hero * 0.55;
+                            chassis: d.chassis;
+                            dark-chassis: d.dark-chassis;
+                            screen-source: i == root.selected ? root.screen-source : @image-url("");
+                            screen-lit: i == root.selected && root.running;
+                            pressable: i == root.selected;
+                            x: parent.width / 2 - self.width / 2 + (i - root.selected) * pane.step;
+                            y: (parent.height - self.height) / 2;
+                            opacity: i == root.selected ? 1.0 : 0.3;
+                            clicked => { root.selected = i; }
+                            pressed-device => { root.start-device(i); }
+
+                            animate x, opacity, body-height {
+                                duration: Metric.settle;
+                                easing: ease-out-quart;
+                            }
+                        }
+
+                        // Empty (§9): the hero iPod at rest, not a bare "nothing here".
+                        IPod {
+                            body-height: pane.hero;
+                            chassis: #e4e4e2;
+                            dark-chassis: false;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            visible: !root.has-devices;
+                            opacity: 0.45;
+                        }
+                    }
+
+                    // `alignment: start` and no stretch: without both, this column takes the
+                    // slack and spreads four lines of caption over three hundred pixels.
                     VerticalLayout {
-                        alignment: center;
+                        spacing: Metric.s2;
+                        alignment: start;
+                        vertical-stretch: 0;
+
+                        Text {
+                            text: root.has-devices ? root.current.name : "No devices yet";
+                            font-size: Metric.display-size;
+                            font-weight: 600;
+                            color: Ink.fg;
+                            horizontal-alignment: center;
+                        }
+
+                        Caption {
+                            text: root.has-devices ? root.current.summary : "";
+                            height: 20px;
+                        }
+
+                        // §10: whose file is about to be written to, before the machine starts.
+                        Text {
+                            text: root.current.write-target;
+                            font-size: Metric.label-size;
+                            color: root.current.write-target-is-warning ? Ink.warn : Ink.fg-dim;
+                            horizontal-alignment: center;
+                            height: 16px;
+                        }
+
+                        // The instruction, because an iPod that starts when you press its centre
+                        // button is only obvious once you know. It goes once it is running.
+                        Caption {
+                            text: !root.has-devices
+                                ? "Make one on the Devices tab — you need no iPod and no files."
+                                : (root.running ? "" : "Press the centre button to start");
+                            height: 20px;
+                        }
+
+                        // Where you are in the carousel. Only earns its place past one device.
                         HorizontalLayout {
-                            spacing: Metric.s1;
-                            Tab { label: "Help"; active: false; }
-                            Tab { label: "About"; active: false; }
+                            padding-top: Metric.s3;
+                            spacing: Metric.s2;
+                            alignment: center;
+                            height: 8px;
+                            visible: devices.length > 1;
+
+                            for d[i] in devices: Rectangle {
+                                width: 7px;
+                                height: 7px;
+                                border-radius: 3.5px;
+                                background: i == root.selected ? Ink.accent : Ink.line.with-alpha(0.4);
+                                animate background { duration: Metric.settle; }
+                            }
                         }
                     }
                 }
             }
 
-            // ── The stage ──
-            stage := Rectangle {
+            // ── Tab 2 — devices, composed out of resources ──
+            if tab == 1: Rectangle {
                 background: Ink.bg;
                 vertical-stretch: 1;
 
                 VerticalLayout {
-                alignment: center;
-                spacing: Metric.s5;
-
-                // The carousel. Absolute positions, animated, so the neighbours slide rather than
-                // reflow — a layout that re-flows on selection is a layout that jumps (§2.2).
-                Rectangle {
-                    height: root.hero;
-                    width: 100%;
-
-                    for d[i] in devices: IPod {
-                        body-height: i == root.selected ? root.hero : root.hero * 0.55;
-                        chassis: d.chassis;
-                        dark-chassis: d.dark-chassis;
-                        screen-source: i == root.selected ? root.screen-source : @image-url("");
-                        screen-lit: i == root.selected && root.running;
-                        x: parent.width / 2 - self.width / 2 + (i - root.selected) * root.step;
-                        y: (parent.height - self.height) / 2;
-                        opacity: i == root.selected ? 1.0 : 0.3;
-                        clicked => { root.selected = i; }
-
-                        animate x, opacity, body-height {
-                            duration: Metric.settle;
-                            easing: ease-out-quart;
-                        }
-                    }
-
-                    // Empty (§9): the hero iPod at rest, not a bare "nothing here".
-                    IPod {
-                        body-height: root.hero;
-                        chassis: #e4e4e2;
-                        dark-chassis: false;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        visible: !root.has-devices;
-                        opacity: 0.5;
-                    }
-                }
-
-                // The caption, under the device. Every row is always present so nothing moves when
-                // one fills (§2.2).
-                VerticalLayout {
-                    spacing: Metric.s2;
-
-                    Text {
-                        text: root.has-devices ? root.current.name : "No devices yet";
-                        font-size: Metric.display-size;
-                        font-weight: 600;
-                        color: Ink.fg;
-                        horizontal-alignment: center;
-                    }
-
-                    Text {
-                        text: root.has-devices
-                            ? root.current.summary
-                            : "Press New device to make one — you need no iPod and no files.";
-                        font-size: Metric.body-size;
-                        color: Ink.fg-dim;
-                        horizontal-alignment: center;
-                        height: 20px;
-                    }
-
-                    // §10: whose file is about to be written to, said out loud, before the machine
-                    // starts. This is what stands between an afternoon and somebody's only image of
-                    // an iPod they own, so it is on the surface rather than in a settings page.
-                    Text {
-                        text: root.current.write-target;
-                        font-size: Metric.label-size;
-                        color: root.current.write-target-is-warning ? Ink.warn : Ink.fg-dim;
-                        horizontal-alignment: center;
-                        height: 16px;
-                    }
+                    padding: Metric.s6;
+                    spacing: Metric.s3;
+                    alignment: start;
 
                     HorizontalLayout {
-                        padding-top: Metric.s3;
                         spacing: Metric.s3;
-                        alignment: center;
-                        PrimaryButton {
-                            label: root.current.parked ? "Resume" : "Start";
-                            enabled: root.has-devices;
-                            clicked => { root.start-device(root.selected); }
+                        Text {
+                            text: "Devices";
+                            font-size: Metric.title-size;
+                            font-weight: 600;
+                            color: Ink.fg;
+                            vertical-alignment: center;
                         }
-                        if root.current.parked: PrimaryButton {
-                            label: "Cold boot";
-                            quiet: true;
-                            clicked => { root.start-device(root.selected); }
-                        }
-                        PrimaryButton {
+                        Rectangle { horizontal-stretch: 1; }
+                        Button {
                             label: "New device";
-                            quiet: true;
+                            primary: true;
                             clicked => { root.new-device(); }
                         }
                     }
 
-                    // Where you are in the carousel. Only earns its place past one device.
-                    HorizontalLayout {
-                        padding-top: Metric.s4;
-                        spacing: Metric.s2;
-                        alignment: center;
-                        height: 8px;
-                        visible: devices.length > 1;
+                    Rectangle { height: 1px; background: Ink.line.with-alpha(0.3); }
 
-                        for d[i] in devices: Rectangle {
-                            width: 7px;
-                            height: 7px;
-                            border-radius: 3.5px;
-                            background: i == root.selected ? Ink.accent : Ink.line.with-alpha(0.4);
-                            animate background { duration: Metric.settle; }
+                    for d[i] in devices: Rectangle {
+                        height: 60px;
+                        background: i == root.selected ? Ink.bg-raised : transparent;
+
+                        HorizontalLayout {
+                            padding-left: Metric.s3;
+                            padding-right: Metric.s3;
+                            spacing: Metric.s3;
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                Text {
+                                    text: d.name;
+                                    font-size: Metric.body-size;
+                                    font-weight: 600;
+                                    color: Ink.fg;
+                                }
+                                Text {
+                                    text: d.summary;
+                                    font-size: Metric.label-size;
+                                    color: Ink.fg-dim;
+                                }
+                            }
+
+                            Rectangle { horizontal-stretch: 1; }
+
+                            VerticalLayout {
+                                alignment: center;
+                                Button {
+                                    label: "Open";
+                                    clicked => { root.selected = i; root.tab = 0; }
+                                }
+                            }
                         }
+
+                        Rectangle {
+                            y: parent.height - 1px;
+                            height: 1px;
+                            background: Ink.line.with-alpha(0.2);
+                        }
+
+                        TouchArea { z: -1; clicked => { root.selected = i; } }
+                    }
+
+                    if devices.length == 0: Caption {
+                        text: "Nothing here yet. New device builds one out of Resources.";
                     }
                 }
+            }
+
+            // ── Tab 3 — resources ──
+            if tab == 2: Rectangle {
+                background: Ink.bg;
+                vertical-stretch: 1;
+
+                VerticalLayout {
+                    padding: Metric.s6;
+                    spacing: Metric.s1;
+                    alignment: start;
+
+                    for r[i] in resources: Rectangle {
+                        height: r.heading ? 44px : 30px;
+
+                        HorizontalLayout {
+                            padding-left: r.heading ? 0 : Metric.s3;
+                            padding-top: r.heading ? Metric.s3 : 0;
+                            spacing: Metric.s3;
+
+                            Text {
+                                text: r.text;
+                                font-size: r.heading ? Metric.title-size : Metric.body-size;
+                                font-weight: r.heading ? 600 : 400;
+                                color: r.heading ? Ink.fg : Ink.fg;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            Text {
+                                text: r.detail;
+                                font-size: Metric.label-size;
+                                color: Ink.fg-dim;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        if r.heading: Rectangle {
+                            y: parent.height - 1px;
+                            height: 1px;
+                            background: Ink.line.with-alpha(0.3);
+                        }
+                    }
                 }
             }
         }

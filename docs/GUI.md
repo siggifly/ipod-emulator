@@ -193,9 +193,15 @@ And one thing that is not a primitive because it obeys different laws:
 Unspecified last time, which is how the current program got both *the tiny iPod* and *the device
 that resizes itself*.
 
-- **Minimum size: 900 × 640.** Below that the design does not work and the window refuses to go, so
-  there is no degraded layout to design or to test.
-- **Default on first launch: 1100 × 830**, centred. Remembered afterwards.
+- **Minimum size: 900 × 860**, and the height is not a taste. Principle 8 says the framebuffer is
+  presented at an integer scale; the drawn screen is 0.4866 of body height wide (§7); so a 320-pixel
+  panel at 1:1 needs a **658 px device**, and 56 chrome + 658 + a caption + padding is 852. Below
+  that the choice is a smaller window or a downscaled screen, and principle 8 settles which.
+  2× would need a 1315 px body, which does not fit on a laptop, so 1:1 is the scale.
+- **Default on first launch: 1100 × 880**, centred. Remembered afterwards.
+- **The device is a constant, never a function of the window.** A size derived from a height it can
+  itself influence oscillates — that is the self-resizing device of §6 wearing a different hat, and
+  Slint reports it as a binding loop and warns it may panic.
 - **The Screen's scale is a floored integer**, recomputed from the space available, and it **never
   feeds back into the window size.** The device does not resize the window; the window sizes the
   device. A layout that can grow its own container will oscillate, and this one did.

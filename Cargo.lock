@@ -2248,6 +2248,7 @@ version = "0.5.0"
 dependencies = [
  "arm7tdmi",
  "eapp-loader",
+ "i-slint-backend-winit",
  "slint",
  "slint-build",
 ]

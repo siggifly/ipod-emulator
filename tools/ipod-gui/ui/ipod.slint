@@ -1,26 +1,30 @@
 // The drawn iPod — the one asset that appears on every surface, so it is worth drawing properly.
 //
-// **Every dimension is derived from `body-height` and nothing else.** That is deliberate: it is what
-// makes the device unable to resize itself, which is the bug docs/GUI.md §6 exists to prevent, and
-// it means one number changes it from a thumbnail to a hero.
+// **Every dimension is derived from `body-height` and nothing else.** That is what makes the device
+// unable to resize itself, which is the bug docs/GUI.md §6 exists to prevent, and it means one
+// number takes it from a thumbnail to a hero.
 //
-// The ratios are Apple's, not eyeballed. iPod 5G is 103.5 × 61.8 mm with a 2.5-inch 4:3 display and
-// a ~43 mm click wheel; everything below is that arithmetic:
+// ── Where the numbers come from ─────────────────────────────────────────────────────────────────
 //
-//   body       w/h  = 0.5971
-//   screen     w    = 0.4909 h_body     (50.8 mm active area, 82.2 % of body width)
-//              h    = 0.3681 h_body     (38.1 mm)
-//              top  = 0.0870 h_body     (9 mm of forehead — the first draft had 5 %, which is why
-//                                        it looked wrong before anyone could say why)
-//   wheel      d    = 0.4155 h_body     (43 mm, 69.6 % of body width)
-//              top  = 0.5324 h_body
-//   centre     d    = 0.1643 h_body     (17 mm)
-//   corner     r    = 0.0386 h_body     (4 mm)
+// **Measured, from Rockbox's own scale drawing of this device** —
+// `manual/rockbox_interface/images/ipodvideo-front.svg`, a vector front elevation shipped with the
+// Rockbox manual. `tests` re-derives every ratio below from that file, so if the drawing and this
+// markup ever disagree the test says so.
+//
+// The parse is self-checking: on a 104.1 mm body the extracted display comes out **50.7 × 38.2 mm**
+// against the **50.8 × 38.1 mm** a 2.5-inch 4:3 panel must be — 0.2 %, which is how we know the
+// right path was read and that it is the active area rather than the glass.
+//
+// The first version of this file used none of that. Its body and screen sizes were roughly right
+// because they came from published specs, but the *placement* was arithmetic I chose to make the
+// column add up — and it was wrong by 66 % on where the screen sits, 34 % on the centre button and
+// 13 % on the wheel. It is very hard to see that a proportion is invented; it is easy to see that
+// the result does not look like an iPod.
 
 import { Ink } from "tokens.slint";
 
-// The four click-wheel marks. Drawn as vector paths, never as font glyphs — docs/GUI.md §7, written
-// after twelve glyphs shipped to the operator as empty squares.
+// The four click-wheel marks. Vector paths, never font glyphs — docs/GUI.md §7, written after
+// twelve glyphs shipped to the operator as empty squares.
 component WheelMark inherits Path {
     in property <string> kind;
     in property <color> ink;
@@ -38,24 +42,26 @@ export component IPod inherits Rectangle {
     in property <length> body-height: 420px;
     in property <color> chassis: #2b2b2d;
     // Passed rather than computed: Slint has no luminance function, and the alternative is the
-    // window guessing at a colour's brightness with arithmetic that would be wrong for the gold and
-    // green cases.
+    // markup guessing at a colour's brightness with arithmetic that would be wrong for gold.
     in property <bool> dark-chassis: true;
     in property <image> screen-source;
     in property <bool> screen-lit: false;
+    // The device is the control (§ the operator, 2026-08-21): pressing it is what starts it, so
+    // there is no button in the chrome to press instead.
+    in property <bool> pressable: false;
 
     callback clicked();
+    callback pressed-device();
 
     property <length> h: body-height;
     property <color> marks: dark-chassis ? #76767a : #a9a9a6;
 
-    width: 0.5971 * h;
+    width: 0.5917 * h;
     height: h;
-    border-radius: 0.0386 * h;
+    border-radius: 0.0501 * h;
 
-    // Glossy polycarbonate, not a flat fill. The real front is a moulded plastic face with a
-    // highlight that falls off toward the bottom; two stops read as that at every size, and a third
-    // starts to look like a button.
+    // Glossy polycarbonate, not a flat fill. Two stops read as the real moulded face at every size;
+    // a third starts to look like a button.
     background: @linear-gradient(180deg,
         chassis.brighter(dark-chassis ? 0.22 : 0.06) 0%,
         chassis 42%,
@@ -68,26 +74,30 @@ export component IPod inherits Rectangle {
 
     // ── The screen ──
     //
-    // The active area sits inside a black glass panel that overhangs it slightly, which is what
-    // gives a real iPod its bezel. Drawing the framebuffer flush to the body — the first draft —
-    // is why it read as a sticker rather than a display.
+    // The active area sits inside a black glass panel that overhangs it, which is what gives a real
+    // iPod its bezel. Drawing the framebuffer flush to the body — the first version — is why it read
+    // as a sticker rather than a display.
+    //
+    // The drawing insets the screen by the same 0.0525 h on the left, the top and the right. That
+    // symmetry is not a coincidence and it is asserted in the tests: it is how the parse was
+    // confirmed to have found the right rectangle.
     glass := Rectangle {
         x: (parent.width - self.width) / 2;
-        y: 0.0870 * h - 0.020 * h;
-        width: 0.4909 * h + 0.040 * h;
-        height: 0.3681 * h + 0.040 * h;
+        y: 0.0525 * h - 0.016 * h;
+        width: 0.4866 * h + 0.032 * h;
+        height: 0.3672 * h + 0.032 * h;
         background: #08080a;
-        border-radius: 0.010 * h;
+        border-radius: 0.008 * h;
         border-width: 1px;
         border-color: #ffffff14;
 
         Image {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 0.4909 * h;
-            height: 0.3681 * h;
+            width: 0.4866 * h;
+            height: 0.3672 * h;
             source: screen-source;
-            // The whole point (§2.8): nearest-neighbour, never smoothed, and the 4:3 well means it
+            // The whole point (§2.8): nearest-neighbour, never smoothed, and a 4:3 well so 320×240
             // is never stretched either.
             image-rendering: pixelated;
             image-fit: fill;
@@ -98,9 +108,9 @@ export component IPod inherits Rectangle {
     // ── The click wheel ──
     wheel := Rectangle {
         x: (parent.width - self.width) / 2;
-        y: 0.5324 * h;
-        width: 0.4155 * h;
-        height: 0.4155 * h;
+        y: 0.5215 * h;
+        width: 0.3675 * h;
+        height: 0.3675 * h;
         border-radius: self.width / 2;
         background: @linear-gradient(180deg,
             chassis.brighter(dark-chassis ? 0.10 : 0.02) 0%,
@@ -110,56 +120,65 @@ export component IPod inherits Rectangle {
 
         // MENU is a word on the real device, so it is a word here. The other three are marks.
         Text {
-            y: 0.030 * h;
+            y: 0.024 * h;
             width: 100%;
             text: "MENU";
             horizontal-alignment: center;
-            font-size: 0.030 * h;
+            font-size: 0.026 * h;
             font-weight: 600;
-            letter-spacing: 0.004 * h;
+            letter-spacing: 0.003 * h;
             color: marks;
         }
         WheelMark {
             kind: "prev";
             ink: marks;
-            x: 0.030 * h;
+            x: 0.024 * h;
             y: (parent.height - self.height) / 2;
-            width: 0.042 * h;
-            height: 0.028 * h;
+            width: 0.036 * h;
+            height: 0.024 * h;
         }
         WheelMark {
             kind: "next";
             ink: marks;
-            x: parent.width - self.width - 0.030 * h;
+            x: parent.width - self.width - 0.024 * h;
             y: (parent.height - self.height) / 2;
-            width: 0.042 * h;
-            height: 0.028 * h;
+            width: 0.036 * h;
+            height: 0.024 * h;
         }
         WheelMark {
             kind: "play";
             ink: marks;
             x: (parent.width - self.width) / 2;
-            y: parent.height - self.height - 0.030 * h;
-            width: 0.046 * h;
-            height: 0.028 * h;
+            y: parent.height - self.height - 0.024 * h;
+            width: 0.040 * h;
+            height: 0.024 * h;
         }
 
-        // The centre button.
-        Rectangle {
+        // The centre button — the one you press to start.
+        centre := Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 0.1643 * h;
-            height: 0.1643 * h;
+            width: 0.1228 * h;
+            height: 0.1228 * h;
             border-radius: self.width / 2;
             background: @linear-gradient(180deg,
-                chassis.brighter(dark-chassis ? 0.14 : 0.03) 0%,
+                chassis.brighter(dark-chassis ? (centre-touch.has-hover && pressable ? 0.30 : 0.14) : 0.03) 0%,
                 chassis 100%);
             border-width: 1px;
             border-color: dark-chassis ? #ffffff1a : #00000014;
+            animate background { duration: 140ms; }
+
+            centre-touch := TouchArea {
+                enabled: pressable;
+                clicked => { root.pressed-device(); }
+            }
         }
     }
 
-    touch := TouchArea {
+    // Anywhere else on the body selects this device without starting it, which is what the
+    // carousel's neighbours need.
+    body-touch := TouchArea {
+        z: -1;
         clicked => { root.clicked(); }
     }
 }
