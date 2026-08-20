@@ -35,3 +35,11 @@ dist/
 
 # The release checklist is the operator's, not the reader's. Kept on disk, out of the tree.
 RELEASING.md
+
+# The agent working contract, for the same reason. It is written for whoever *works on* the program;
+# a public repository's documentation should be about the program. It also carries the fence against
+# the surrounding `~/dev` tree, which is nobody else's business.
+#
+# `docs/GUI.md` is deliberately NOT here — the design of the window is about the program.
+AGENTS.md
+CLAUDE.md
