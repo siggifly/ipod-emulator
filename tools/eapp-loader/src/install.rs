@@ -456,6 +456,13 @@ pub const ZEROSLACKR_DIRS: [&str; 5] = ["bin", "boot", "dev", "etc", "ZeroSlackr
 /// the subset that is true of a drive we built, plus Apple's OS and Rockbox, which the loader finds
 /// only if they are there. A menu entry for something absent is a menu entry that fails when
 /// pressed, so each line is written only when the file behind it exists.
+/// The menu text, for [`crate::compose`]'s preview test — so the preview and the file cannot
+/// drift apart without a test saying so.
+#[cfg(test)]
+pub fn loader_menu_for_tests(has_rockbox: bool, has_apple: bool) -> String {
+    loader_menu(has_rockbox, has_apple)
+}
+
 fn loader_menu(has_rockbox: bool, has_apple: bool) -> String {
     let mut s = String::from(
         "# Written by `ipod-boot install-linux`. `ipodloader2` reads this from the volume root.\n\
@@ -473,6 +480,22 @@ fn loader_menu(has_rockbox: bool, has_apple: bool) -> String {
     }
     s.push_str("Disk Mode @ diskmode\nSleep @ standby\n");
     s
+}
+
+/// The MBR type byte of the drive's FAT32 data partition, or `0` if it has none.
+///
+/// **Named, because two callers need the same question.** `install_linux` asks it to refuse a drive
+/// it cannot install onto; the window's disk composer asks it so the verdict it shows is about
+/// *that* image rather than about drives in general. `0x0B` is the CHS form and `0x0C` the LBA one;
+/// both are legitimate FAT32 and `ipodloader2` reads only the first.
+pub fn data_partition_type(src: &Path) -> Result<u8, String> {
+    let mut mbr = [0u8; 512];
+    let mut f = std::fs::File::open(src).map_err(|e| format!("{}: {e}", src.display()))?;
+    std::io::Read::read_exact(&mut f, &mut mbr).map_err(|e| e.to_string())?;
+    Ok((0..4)
+        .map(|i| mbr[446 + i * 16 + 4])
+        .find(|t| matches!(t, 0x0b | 0x0c))
+        .unwrap_or(0))
 }
 
 /// Build a drive that boots iPodLinux: `ipodloader2` in the firmware partition, ZeroSlackr's five
@@ -520,13 +543,7 @@ pub fn install_linux(
     // drive that installs without complaint and then cannot boot, which costs whoever built it an
     // afternoon finding out why.
     {
-        let mut mbr = [0u8; 512];
-        let mut f = std::fs::File::open(src).map_err(|e| format!("{}: {e}", src.display()))?;
-        std::io::Read::read_exact(&mut f, &mut mbr).map_err(|e| e.to_string())?;
-        let data_type = (0..4)
-            .map(|i| mbr[446 + i * 16 + 4])
-            .find(|t| matches!(t, 0x0b | 0x0c))
-            .unwrap_or(0);
+        let data_type = data_partition_type(src)?;
         if data_type == 0x0c {
             return Err(format!(
                 "{}: its data partition is FAT32 type 0x0C (the LBA form), and `ipodloader2` \

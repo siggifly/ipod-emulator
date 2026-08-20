@@ -320,6 +320,61 @@ const SETTINGS_TABS: &[(SettingsTab, &str)] = &[
     (SettingsTab::About, "About"),
 ];
 
+/// The wizard's answers, and where it is.
+///
+/// **Held apart from `Settings` on purpose.** Nothing here is saved until the last step succeeds:
+/// abandoning half a device should leave no device, and a settings file that carries a
+/// half-composed one is a settings file somebody has to clean up by hand.
+#[derive(Clone, Debug)]
+struct Compose {
+    step: u8,
+    /// Which entry point opened it, which decides what the last step produces and whether there is
+    /// a welcome above the first.
+    what: ComposeWhat,
+    /// The boot ROM: a firmware resource by name, or `None` for "generate one".
+    firmware: Option<String>,
+    /// The recipe for the disk — see [`eapp_loader::compose::Recipe`].
+    recipe: eapp_loader::compose::Recipe,
+    name: String,
+    disk_name: String,
+    /// Steps finished, and the one in flight, once building has started.
+    done: Vec<String>,
+    building: bool,
+    failed: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ComposeWhat {
+    /// A device and the disk it needs. The first run is this with a welcome above it.
+    Device { first_run: bool },
+    /// A disk on its own, from the Disks page.
+    Disk,
+}
+
+impl Compose {
+    fn new(what: ComposeWhat) -> Compose {
+        Compose {
+            // A disk needs no iPod chosen for it, so it opens on the question it is about.
+            step: if what == ComposeWhat::Disk { 2 } else { 1 },
+            what,
+            firmware: None,
+            recipe: eapp_loader::compose::Recipe::default(),
+            name: String::new(),
+            disk_name: String::new(),
+            done: Vec::new(),
+            building: false,
+            failed: None,
+        }
+    }
+    fn last_step(&self) -> u8 {
+        if self.what == ComposeWhat::Disk {
+            3
+        } else {
+            3
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum SettingsTab {
     /// What you can run. First, because it is what somebody opening this page came for.
@@ -1309,6 +1364,12 @@ struct App {
     /// What the machine being saved will be called.
     /// What the device being saved will be called.
     new_device_name: String,
+    /// The wizard, when it is open. `None` = it is not.
+    ///
+    /// **One state for three entry points** — first run, `+ new device`, and `+ new disk` — because
+    /// they are the same questions in different amounts. A person creating their first iPod and a
+    /// person adding a fourth are not different cases; only the welcome above it differs.
+    compose: Option<Compose>,
     /// The disk the install sheet is open for, by name. `None` = the sheet is closed.
     install_into: Option<String>,
     /// An install in flight: the disk it came from, what is going on, and where it will land — so
@@ -1806,6 +1867,7 @@ impl App {
             install_busy: false,
             settings_tab: SettingsTab::default(),
             new_device_name: String::new(),
+            compose: None,
             install_into: None,
             installing: None,
             last_phase: Phase::Off,
@@ -2505,6 +2567,19 @@ impl App {
     /// Everything this project knows about where the files come from is still here, behind one
     /// disclosure. It is reference material: right when you are stuck, noise when you are not.
     fn first_run(&mut self, ui: &mut egui::Ui) {
+        // **A new arrival is not a special case — they are somebody with no devices yet.** The
+        // first-run screen and `+ new device` ask the same questions, so they are the same screen,
+        // and only the welcome above it differs.
+        if self.compose.is_none() {
+            self.compose = Some(Compose::new(ComposeWhat::Device { first_run: true }));
+        }
+        let mut drew = false;
+        self.column(ui, |app, ui| {
+            drew = app.wizard(ui);
+        });
+        if drew {
+            return;
+        }
         self.column(ui, |app, ui| {
             let dev = IPOD_VIDEO;
             let (rect, _) = ui
@@ -3281,6 +3356,638 @@ impl App {
         });
     }
 
+    /// The wizard: what iPod, what goes on the disk, and a name.
+    ///
+    /// **This replaced "run an iPod, then save it as a device", which was backwards.** You could
+    /// not make a device without first having one running, and there was no way at all to say "I
+    /// want a triple-boot iPod" — you had to know to fetch a bundle, build a drive, install twice
+    /// and only then name the result. Five places, in an order nobody tells you.
+    ///
+    /// Returns true when it drew, so the pages that host it can skip their own content.
+    fn wizard(&mut self, ui: &mut egui::Ui) -> bool {
+        // **Collected here, because this is where the build was started.** The setup screen has
+        // its own collector for its own install button; a job begun in the wizard has to finish in
+        // the wizard or the checklist never ticks and the device is never made.
+        if self.compose.as_ref().is_some_and(|c| c.building) {
+            let done = self.install_slot.lock().unwrap().take();
+            match done {
+                Some(Ok((disk, report))) => {
+                    self.install_busy = false;
+                    self.wizard_finish(disk, report);
+                    return false;
+                }
+                Some(Err(e)) => {
+                    self.install_busy = false;
+                    if let Some(c) = self.compose.as_mut() {
+                        c.building = false;
+                        c.failed = Some(e);
+                    }
+                }
+                None => ui.ctx().request_repaint_after(Duration::from_millis(200)),
+            }
+        }
+        let Some(c) = self.compose.clone() else {
+            return false;
+        };
+        if matches!(c.what, ComposeWhat::Device { first_run: true }) && c.step == 1 {
+            ui.vertical_centered(|ui| {
+                let dev = IPOD_VIDEO;
+                let (rect, _) = ui.allocate_exact_size(
+                    Vec2::new(ui.available_width(), 96.0),
+                    egui::Sense::hover(),
+                );
+                device_at_rest(ui.painter(), &dev, rect.center(), 88.0, self.chassis());
+                ui.label(egui::RichText::new("Welcome.").heading());
+                ui.label(egui::RichText::new("Let's create an iPod.").color(UI_TEXT_FAINT));
+            });
+            ui.add_space(12.0);
+        }
+        self.section(
+            ui,
+            &format!(
+                "{} — STEP {} OF {}",
+                match c.what {
+                    ComposeWhat::Disk => "NEW DISK",
+                    _ => "NEW DEVICE",
+                },
+                c.step,
+                c.last_step()
+            ),
+        );
+        match c.step {
+            1 => self.wizard_ipod(ui),
+            2 => self.wizard_disk(ui),
+            _ => self.wizard_build(ui),
+        }
+        true
+    }
+
+    /// Step ① — which iPod, and where its boot ROM comes from.
+    fn wizard_ipod(&mut self, ui: &mut egui::Ui) {
+        self.model_rows(ui);
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new("Boot ROM").color(UI_HEADING));
+
+        // **Every dump already here is offered.** Somebody who supplied one should never be asked
+        // for it again — that was the point of the resources list, and a wizard that only offers
+        // "generate" or "go and find a file" makes the list pointless.
+        let dumps: Vec<String> = self
+            .settings
+            .resources
+            .iter()
+            .filter(|i| {
+                matches!(
+                    &i.what,
+                    eapp_loader::settings::Resource::Firmware(eapp_loader::nor::Source::File(_))
+                )
+            })
+            .map(|i| i.name.clone())
+            .collect();
+
+        let mut chosen = self.compose.as_ref().and_then(|c| c.firmware.clone());
+        let mut pick_file = false;
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.vertical(|ui| {
+                if ui
+                    .radio(chosen.is_none(), "Generate one")
+                    .on_hover_text(
+                        "The identity block a real iPod carries — serial, model, hardware id and \
+                         version — built to the same layout from a seed, so the same iPod comes \
+                         back next launch. None of Apple's code.",
+                    )
+                    .clicked()
+                {
+                    chosen = None;
+                }
+                if chosen.is_none() {
+                    let id = self.settings.nor.identity().ok();
+                    ui.horizontal(|ui| {
+                        ui.add_space(22.0);
+                        ui.vertical(|ui| {
+                            if let Some(id) = &id {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "serial  {}",
+                                        id.serial.as_deref().unwrap_or("—")
+                                    ))
+                                    .small()
+                                    .monospace()
+                                    .color(UI_TEXT_FAINT),
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "GUID    {}",
+                                        format!("{:016X}", id.guid)
+                                    ))
+                                    .small()
+                                    .monospace()
+                                    .color(UI_TEXT_FAINT),
+                                );
+                            }
+                            if ui.small_button("regenerate").clicked() {
+                                self.reseed();
+                            }
+                        });
+                    });
+                }
+                for name in &dumps {
+                    if ui
+                        .radio(chosen.as_deref() == Some(name.as_str()), name.as_str())
+                        .on_hover_text("A dump you have already supplied. Nothing to find again.")
+                        .clicked()
+                    {
+                        chosen = Some(name.clone());
+                    }
+                }
+                if ui
+                    .radio(false, "Use a dump I have…")
+                    .on_hover_text(
+                        "A 1 MB NOR dump. It is added to Resources, so every device you make \
+                         after this can use it without you finding it again.",
+                    )
+                    .clicked()
+                {
+                    pick_file = true;
+                }
+            });
+        });
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new(
+                "ⓘ A generated ROM boots Apple's software, Rockbox and iPodLinux. Apple's own \
+                 bootloader and the service diagnostics live inside a real dump and cannot be \
+                 generated.",
+            )
+            .small()
+            .color(UI_TEXT_FAINT),
+        );
+
+        if pick_file {
+            if let Some(p) = pick_files("A 1 MB NOR dump", &["bin", "rom"]).first() {
+                if let Some(name) = self.file_into_library(&PathBuf::from(p)) {
+                    chosen = Some(name);
+                    self.settings.save();
+                }
+            }
+        }
+        if let Some(c) = self.compose.as_mut() {
+            c.firmware = chosen;
+        }
+        self.wizard_buttons(ui);
+    }
+
+    /// Step ② — what goes on the disk. Free checkboxes, with a live verdict.
+    fn wizard_disk(&mut self, ui: &mut egui::Ui) {
+        use eapp_loader::compose::{Fix, Loader, Os, Start};
+        let Some(c) = self.compose.as_mut() else {
+            return;
+        };
+
+        // Where the drive starts.
+        ui.label(egui::RichText::new("Start from").color(UI_HEADING));
+        let bundles: Vec<String> = self
+            .settings
+            .resources
+            .iter()
+            .filter(|i| matches!(&i.what, eapp_loader::settings::Resource::Installer(_)))
+            .map(|i| i.name.clone())
+            .collect();
+        let mut want_image = false;
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.vertical(|ui| {
+                let from_ipsw = matches!(c.recipe.start, Start::FromIpsw(_));
+                if ui.radio(from_ipsw, "Apple's firmware").clicked() {
+                    c.recipe.start = Start::FromIpsw(bundles.first().cloned().unwrap_or_default());
+                }
+                if from_ipsw {
+                    ui.horizontal(|ui| {
+                        ui.add_space(22.0);
+                        let cur = match &c.recipe.start {
+                            Start::FromIpsw(n) => n.clone(),
+                            _ => String::new(),
+                        };
+                        egui::ComboBox::from_id_salt("wiz-ipsw")
+                            .selected_text(if cur.is_empty() {
+                                "fetch one from Apple".to_string()
+                            } else {
+                                cur.clone()
+                            })
+                            .show_ui(ui, |ui| {
+                                let mut pick = cur.clone();
+                                ui.selectable_value(
+                                    &mut pick,
+                                    String::new(),
+                                    "fetch one from Apple",
+                                );
+                                for b in &bundles {
+                                    ui.selectable_value(&mut pick, b.clone(), b.as_str());
+                                }
+                                if pick != cur {
+                                    c.recipe.start = Start::FromIpsw(pick);
+                                }
+                            });
+                    });
+                }
+                if ui
+                    .radio(
+                        matches!(c.recipe.start, Start::FromImage { .. }),
+                        "An image I already have…",
+                    )
+                    .clicked()
+                {
+                    want_image = true;
+                }
+                if ui.radio(c.recipe.start == Start::Empty, "Empty").clicked() {
+                    c.recipe.start = Start::Empty;
+                }
+            });
+        });
+
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new("Systems").color(UI_HEADING));
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            for o in Os::ALL {
+                let mut on = c.recipe.oses.contains(&o);
+                if ui.checkbox(&mut on, o.label()).changed() {
+                    if on {
+                        c.recipe.oses.insert(o);
+                    } else {
+                        c.recipe.oses.remove(&o);
+                    }
+                }
+            }
+        });
+
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new("Bootloader").color(UI_HEADING));
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            for l in Loader::ALL {
+                if ui.radio(c.recipe.loader == l, l.label()).clicked() {
+                    c.recipe.loader = l;
+                }
+            }
+        });
+
+        // **The verdict, live, and nothing is ever greyed out.** A checkbox you cannot tick tells
+        // you that something is impossible and never why; the why is what somebody learning this
+        // hardware actually wants. So every box ticks, and an impossible combination explains
+        // itself and offers the one change that resolves it.
+        ui.add_space(10.0);
+        let verdict = c.recipe.check();
+        let mut apply: Option<Fix> = None;
+        match &verdict {
+            eapp_loader::compose::Verdict::Ok(text) => {
+                let word = c
+                    .recipe
+                    .boot_word()
+                    .map(|w| format!("{w} — "))
+                    .unwrap_or_default();
+                ui.label(
+                    egui::RichText::new(format!("✓ {word}{text}"))
+                        .color(Color32::from_rgb(0x6a, 0x9a, 0x60)),
+                );
+            }
+            eapp_loader::compose::Verdict::No { why, fix } => {
+                ui.label(egui::RichText::new(format!("⚠ {why}")).color(UI_WARN));
+                if let Some(f) = fix {
+                    ui.horizontal(|ui| {
+                        ui.add_space(8.0);
+                        if ui.button(f.label()).clicked() {
+                            apply = Some(f.clone());
+                        }
+                    });
+                }
+            }
+        }
+        if let Some(f) = apply {
+            match f {
+                Fix::UseLoader(l) => c.recipe.loader = l,
+                Fix::AddOs(o) => {
+                    c.recipe.oses.insert(o);
+                }
+                Fix::RemoveOs(o) => {
+                    c.recipe.oses.remove(&o);
+                }
+                Fix::BuildFromIpsw => {
+                    c.recipe.start = Start::FromIpsw(bundles.first().cloned().unwrap_or_default())
+                }
+            }
+        }
+
+        // **What this will cost, before it happens.** A plan a person cannot see before agreeing
+        // to it is a download they did not agree to.
+        if verdict.ok() {
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new("This will").color(UI_HEADING));
+            for st in c.recipe.steps() {
+                ui.label(
+                    egui::RichText::new(format!("     {} {}", st.verb(), st.what()))
+                        .small()
+                        .color(UI_TEXT_FAINT),
+                );
+            }
+        }
+
+        if want_image {
+            if let Some(p) = pick_files("A drive image", &["img", "dmg", "bin"]).first() {
+                let path = PathBuf::from(p);
+                // Read the partition type now, so the verdict can be about *this* drive rather
+                // than about drives in general.
+                let fat = eapp_loader::install::data_partition_type(&path).ok();
+                if let Some(c) = self.compose.as_mut() {
+                    c.recipe.start = Start::FromImage {
+                        path: path.to_string_lossy().into_owned(),
+                        fat_type: fat,
+                    };
+                }
+            }
+        }
+        self.wizard_buttons(ui);
+    }
+
+    /// Step ③ — a name, then the plan runs with a tick against each line.
+    fn wizard_build(&mut self, ui: &mut egui::Ui) {
+        let Some(c) = self.compose.as_mut() else {
+            return;
+        };
+        let device = c.what != ComposeWhat::Disk;
+        if device {
+            ui.horizontal(|ui| {
+                ui.label("Name");
+                ui.add(
+                    egui::TextEdit::singleline(&mut c.name)
+                        .hint_text("My iPod Video")
+                        .desired_width(220.0),
+                );
+            });
+        }
+        ui.horizontal(|ui| {
+            ui.label("Disk");
+            ui.add(
+                egui::TextEdit::singleline(&mut c.disk_name)
+                    .hint_text("a name for the drive")
+                    .desired_width(220.0),
+            );
+        });
+        ui.add_space(8.0);
+        let steps = c.recipe.steps();
+        for (i, st) in steps.iter().enumerate() {
+            let mark = if i < c.done.len() {
+                "✓"
+            } else if c.building && i == c.done.len() {
+                "⣾"
+            } else {
+                "·"
+            };
+            ui.label(
+                egui::RichText::new(format!("  {mark} {} {}", st.verb(), st.what()))
+                    .small()
+                    .color(if i < c.done.len() {
+                        UI_TEXT_DIM
+                    } else {
+                        UI_TEXT_FAINT
+                    }),
+            );
+        }
+        if let Some(e) = c.failed.clone() {
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(format!("⚠ {e}")).color(UI_WARN));
+        }
+        self.wizard_buttons(ui);
+    }
+
+    /// Back / cancel / next, and the button that starts the build.
+    fn wizard_buttons(&mut self, ui: &mut egui::Ui) {
+        let Some(c) = self.compose.clone() else {
+            return;
+        };
+        ui.add_space(12.0);
+        let mut close = false;
+        let mut step = c.step;
+        let mut start = false;
+        ui.horizontal(|ui| {
+            if !(matches!(c.what, ComposeWhat::Device { first_run: true }) && c.step == 1)
+                && ui.button("cancel").clicked()
+            {
+                close = true;
+            }
+            if c.step > (if c.what == ComposeWhat::Disk { 2 } else { 1 })
+                && ui.button("back").clicked()
+            {
+                step = c.step - 1;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if c.step < 3 {
+                    let ready = c.step != 2 || c.recipe.check().ok();
+                    if ui.add_enabled(ready, egui::Button::new("next ▸")).clicked() {
+                        step = c.step + 1;
+                    }
+                } else if ui
+                    .add_enabled(!c.building, egui::Button::new("create ▸"))
+                    .clicked()
+                {
+                    start = true;
+                }
+            });
+        });
+        if close {
+            self.compose = None;
+            return;
+        }
+        if step != c.step {
+            if let Some(c) = self.compose.as_mut() {
+                // Reaching the last step suggests names, so the common case is one click.
+                if step == 3 && c.name.is_empty() {
+                    c.name = format!("iPod {}", self.settings.devices.len() + 1);
+                }
+                if step == 3 && c.disk_name.is_empty() {
+                    c.disk_name = format!("{} — disk", c.name);
+                }
+                c.step = step;
+            }
+        }
+        if start {
+            self.wizard_run();
+        }
+    }
+
+    /// Give the generated iPod a new identity: a different seed, so a different serial and GUID.
+    fn reseed(&mut self) {
+        use eapp_loader::nor::Source;
+        if let Source::Synthetic {
+            model,
+            seed,
+            splash,
+            ..
+        } = self.settings.nor.clone()
+        {
+            // The seed is the whole of it — serial and GUID are derived, so bumping it is the
+            // honest "give me another one" and the result is reproducible rather than random.
+            self.settings.nor = Source::Synthetic {
+                model,
+                seed: seed.wrapping_add(1),
+                serial: None,
+                guid: None,
+                splash,
+            };
+            self.settings.save();
+        }
+    }
+
+    /// Run the wizard's plan on a thread, then file everything it made.
+    ///
+    /// **Nothing is saved until it succeeds.** A device whose disk failed half way through is a
+    /// device that points at a broken drive, and the person who abandoned the wizard did not ask
+    /// for either. The resources it fetches *are* kept, because a verified download is worth
+    /// keeping whatever happened next.
+    fn wizard_run(&mut self) {
+        use eapp_loader::compose::{Loader, Os, Start};
+        let Some(c) = self.compose.clone() else {
+            return;
+        };
+        if let Some(w) = self.compose.as_mut() {
+            w.building = true;
+            w.failed = None;
+            w.done.clear();
+        }
+        let recipe = c.recipe.clone();
+        let out = drives_dir().join(format!("{}.img", sanitise(&c.disk_name)));
+        let sectors = self.synthetic_model().sectors();
+        let bundle = match &recipe.start {
+            Start::FromIpsw(name) => self
+                .settings
+                .resources
+                .iter()
+                .find(|i| i.name == *name)
+                .and_then(|i| i.what.path().map(|p| p.to_path_buf())),
+            _ => None,
+        };
+        let slot = self.install_slot.clone();
+        self.say(format!("building {} …", c.disk_name));
+        std::thread::spawn(move || {
+            let r = (|| -> Result<(PathBuf, Vec<String>), String> {
+                let mut report = Vec::new();
+                // ① the drive itself
+                match &recipe.start {
+                    Start::FromIpsw(name) => {
+                        let bundle = bundle.ok_or_else(|| {
+                            format!("no .ipsw called {name:?} — fetch one from Resources first")
+                        })?;
+                        let mut fw = match eapp_loader::ipsw::inspect(&bundle) {
+                            eapp_loader::ipsw::Ipsw::Good(_, fw) => fw,
+                            eapp_loader::ipsw::Ipsw::Wrong(why)
+                            | eapp_loader::ipsw::Ipsw::Bad(why) => return Err(why),
+                        };
+                        eapp_loader::ipsw::mark_aupd_applied(&mut fw);
+                        eapp_loader::ipsw::build_disk(&fw, &out, sectors)?;
+                        report.push(format!("built {}", out.display()));
+                    }
+                    Start::FromImage { path, .. } => {
+                        std::fs::copy(path, &out).map_err(|e| format!("{path}: {e}"))?;
+                        report.push(format!("copied {path}"));
+                    }
+                    Start::Empty => {
+                        eapp_loader::ipsw::build_disk(&[], &out, sectors)?;
+                        report.push("built an empty drive".into());
+                    }
+                }
+                // ② Rockbox, whose bootloader also goes in the firmware partition.
+                if recipe.oses.contains(&Os::Rockbox) {
+                    let cache = eapp_loader::rockbox::cache_dir();
+                    let boot = eapp_loader::rockbox::download(
+                        eapp_loader::rockbox::FULL_INSTALL[0],
+                        &cache,
+                    )?;
+                    let zip = eapp_loader::rockbox::download(
+                        eapp_loader::rockbox::FULL_INSTALL[1],
+                        &cache,
+                    )?;
+                    if recipe.loader == Loader::Rockbox {
+                        report.extend(eapp_loader::install::install_os(&out, &boot, &out)?);
+                    }
+                    report.extend(eapp_loader::install::put_zip(&out, &zip)?);
+                }
+                // ③ iPodLinux, which brings ipodloader2 with it — and `install_linux` writes the
+                //    menu naming whatever else is on the volume, so it goes last.
+                if recipe.oses.contains(&Os::IPodLinux) {
+                    let tree = eapp_loader::ipodlinux::fetch(&eapp_loader::ipodlinux::cache_dir())?;
+                    let loader = eapp_loader::settings::repo_root()
+                        .join("resources/vendor/ipodloader2/loader.bin");
+                    report.extend(eapp_loader::install::install_linux(
+                        &out, &loader, &tree, &out,
+                    )?);
+                }
+                Ok((out, report))
+            })();
+            *slot.lock().unwrap() = Some(r);
+        });
+    }
+
+    /// Collect a finished wizard build: file the disk, make the device, and open it.
+    fn wizard_finish(&mut self, disk: PathBuf, report: Vec<String>) {
+        use eapp_loader::compose::{Loader, Os};
+        let Some(c) = self.compose.clone() else {
+            return;
+        };
+        for l in report {
+            self.say(l);
+        }
+        let disk_name = self.settings.file_disk(disk.clone(), &c.disk_name);
+        if let Some(d) = self.settings.disks.iter_mut().find(|d| d.name == disk_name) {
+            d.built_from = match &c.recipe.start {
+                eapp_loader::compose::Start::FromIpsw(n) if !n.is_empty() => Some(n.clone()),
+                _ => None,
+            };
+            // What is on it, in the order the boot menu will show it.
+            d.installed = Vec::new();
+            if c.recipe.loader == Loader::IPodLoader2 {
+                d.installed.push("ipodloader2".into());
+            }
+            for o in [Os::Apple, Os::Rockbox, Os::IPodLinux] {
+                if c.recipe.oses.contains(&o) {
+                    d.installed.push(o.label().into());
+                }
+            }
+        }
+        if c.what != ComposeWhat::Disk {
+            // The device points at what was just made, and becomes the live one.
+            self.settings.nor = match c.firmware.as_deref().and_then(|n| {
+                self.settings
+                    .resources
+                    .iter()
+                    .find(|i| i.name == n)
+                    .map(|i| i.what.clone())
+            }) {
+                Some(eapp_loader::settings::Resource::Firmware(src)) => src,
+                _ => self.settings.nor.clone(),
+            };
+            self.settings.disk = Some(disk.clone());
+            self.settings.remember_as(&c.name);
+            if let Some(dev) = self.settings.devices.iter_mut().find(|d| d.name == c.name) {
+                dev.firmware = c.firmware.clone();
+                dev.disk = Some(disk_name.clone());
+            }
+            self.images.flash = match &self.settings.nor {
+                eapp_loader::nor::Source::File(p) => p.to_string_lossy().into_owned(),
+                eapp_loader::nor::Source::Synthetic { .. } => String::new(),
+            };
+            self.images.disk = disk.to_string_lossy().into_owned();
+            self.images.revalidate();
+            self.say(format!("device: {} is ready — restart to boot it", c.name));
+        }
+        self.settings.save();
+        self.compose = None;
+        self.settings_tab = if c.what == ComposeWhat::Disk {
+            SettingsTab::Disks
+        } else {
+            SettingsTab::Devices
+        };
+    }
+
     /// **Devices — the only thing that can be run.**
     ///
     /// A device is a firmware and a disk under a name. It replaced a page that picked two file
@@ -3288,6 +3995,9 @@ impl App {
     /// somewhere else again and every operation had to reconcile the two. The one that is running
     /// is just the one `current` names.
     fn pane_devices(&mut self, ui: &mut egui::Ui) {
+        if self.wizard(ui) {
+            return;
+        }
         self.section(ui, "DEVICES");
         ui.label(
             egui::RichText::new(
@@ -3396,25 +4106,15 @@ impl App {
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.new_device_name)
-                    .hint_text("name this device")
-                    .desired_width(180.0),
-            );
-            let name = self.new_device_name.trim().to_string();
             if ui
-                .add_enabled(!name.is_empty(), egui::Button::new("save what is running"))
+                .button("+ new device")
                 .on_hover_text(
-                    "Saves the boot ROM and disk this iPod is using, under that name. Saving over \
-                     an existing name replaces it.",
+                    "Pick an iPod and what should be on its disk. Anything that needs fetching is \
+                     named before it is fetched.",
                 )
                 .clicked()
             {
-                self.file_live_machine();
-                self.settings.remember_as(&name);
-                self.settings.save();
-                self.new_device_name.clear();
-                self.say(format!("device: saved as {name}"));
+                self.compose = Some(Compose::new(ComposeWhat::Device { first_run: false }));
             }
         });
 
@@ -3480,6 +4180,9 @@ impl App {
     /// installs *onto a disk you pick*, not onto whichever drive happens to be live. The old
     /// Software page had verbs with no target, which is most of why these pages read as unrelated.
     fn pane_disks(&mut self, ui: &mut egui::Ui) {
+        if self.wizard(ui) {
+            return;
+        }
         self.section(ui, "DISKS");
         ui.label(
             egui::RichText::new(
@@ -3611,6 +4314,15 @@ impl App {
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
+            if ui
+                .button("+ new disk")
+                .on_hover_text(
+                    "Start from Apple's firmware or an image you have, then install onto it.",
+                )
+                .clicked()
+            {
+                self.compose = Some(Compose::new(ComposeWhat::Disk));
+            }
             if ui
                 .button("import an image…")
                 .on_hover_text("A drive image you already have. Nothing is copied or changed.")
@@ -6558,5 +7270,65 @@ mod tests {
                 used - MIN_H
             );
         }
+    }
+
+    /// **Every step of the wizard draws, at the smallest window.**
+    ///
+    /// The pane walker only ever sees the page a tab lands on, and the wizard replaces that page —
+    /// so without this, three screens a new arrival is guaranteed to meet were rendered by no test
+    /// at all. It is also the only check that the welcome, the checkbox grid and the plan preview
+    /// fit in 1000 x 600.
+    #[test]
+    fn every_wizard_step_draws_and_fits() {
+        for what in [
+            ComposeWhat::Device { first_run: true },
+            ComposeWhat::Device { first_run: false },
+            ComposeWhat::Disk,
+        ] {
+            for step in 1..=3u8 {
+                if what == ComposeWhat::Disk && step == 1 {
+                    continue;
+                }
+                let used = lay_out_wizard(what, step);
+                assert!(used > 0.0, "{what:?} step {step} drew nothing");
+                assert!(
+                    used <= MIN_H,
+                    "{what:?} step {step} wants {used:.0} px at the {MIN_H:.0} px minimum"
+                );
+            }
+        }
+    }
+
+    fn lay_out_wizard(what: ComposeWhat, step: u8) -> f32 {
+        let ctx = egui::Context::default();
+        let mut used = 0.0;
+        let mut app: Option<App> = None;
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(MIN_W, MIN_H))),
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            used = 0.0;
+            let mut out = ctx.run_ui(input.clone(), |ui| {
+                let app = app.get_or_insert_with(|| {
+                    let mut a = App::new(
+                        &ui.ctx().clone(),
+                        emu::Config::default(),
+                        Settings::default(),
+                        String::new(),
+                    );
+                    a.screen = Screen::Settings;
+                    a.settings_tab = SettingsTab::Devices;
+                    a
+                });
+                let mut c = Compose::new(what);
+                c.step = step;
+                app.compose = Some(c);
+                app.settings_screen(ui);
+                used = ui.min_rect().height();
+            });
+            out.textures_delta.clear();
+        }
+        used
     }
 }
