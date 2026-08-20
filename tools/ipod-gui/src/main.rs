@@ -4053,7 +4053,13 @@ impl App {
             };
             self.images.disk = disk.to_string_lossy().into_owned();
             self.images.revalidate();
-            self.say(format!("device: {} is ready — restart to boot it", c.name));
+            self.settings.save();
+            // **Creating an iPod starts it.** The wizard used to finish by saying "restart to boot
+            // it" and leaving you on a list — which is a device that exists and does nothing, and
+            // the last button said `create`, not `prepare`.
+            self.compose = None;
+            self.start_device(&c.name);
+            return;
         }
         self.settings.save();
         self.compose = None;
@@ -4249,6 +4255,15 @@ impl App {
         true
     }
 
+    /// Whether this device is the one **currently running** — a machine exists and it is this one.
+    ///
+    /// **The two halves were one test**, `current == name`, and `remember_as` makes a new device
+    /// current — so finishing the wizard marked it running before anything had started, and the row
+    /// then hid its own start button because it believed it was already going.
+    fn is_running(&self, name: &str) -> bool {
+        self.settings.current.as_deref() == Some(name) && self.link.is_some()
+    }
+
     /// **Devices — the only thing that can be run.**
     ///
     /// A device is a firmware and a disk under a name. It replaced a page that picked two file
@@ -4291,16 +4306,16 @@ impl App {
         );
         ui.add_space(6.0);
 
-        let current = self.settings.current.clone();
         let mut run: Option<String> = None;
         let mut forget: Option<String> = None;
         let mut edit: Option<eapp_loader::settings::Device> = None;
+        let mut show = false;
         egui::ScrollArea::vertical()
             .id_salt("devices")
             .max_height(190.0)
             .show(ui, |ui| {
                 for d in self.settings.devices.clone() {
-                    let live = current.as_deref() == Some(d.name.as_str());
+                    let live = self.is_running(&d.name);
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(format!(
@@ -4339,7 +4354,17 @@ impl App {
                             {
                                 edit = Some(d.clone());
                             }
-                            if !live && ui.small_button("run").clicked() {
+                            if live {
+                                if ui
+                                    .button("show »")
+                                    .on_hover_text(
+                                        "Back to the iPod. It has been running all along.",
+                                    )
+                                    .clicked()
+                                {
+                                    show = true;
+                                }
+                            } else if ui.button("» start").clicked() {
                                 run = Some(d.name.clone());
                             }
                         });
@@ -4415,6 +4440,9 @@ impl App {
             }
         });
 
+        if show {
+            self.screen = Screen::Running;
+        }
         if let Some(d) = edit {
             self.editing_was = d.name.clone();
             self.editing = Some(d);
@@ -7953,5 +7981,36 @@ mod tests {
             one.round(),
             "filing and choosing a dump changed step 1 from {none:.0} to {one:.0} px"
         );
+    }
+
+    /// **A device is only "running" when a machine exists.**
+    ///
+    /// `remember_as` makes a device current, and current was the whole of the running test — so the
+    /// wizard's last step produced a row labelled running, with no start button and no machine. The
+    /// report was "it just says running and i cannot see it", which is what that looks like.
+    #[test]
+    fn a_saved_device_is_not_running_until_it_is_started() {
+        let ctx = egui::Context::default();
+        let mut app: Option<App> = None;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app = Some(App::new(
+                &ui.ctx().clone(),
+                emu::Config::default(),
+                Settings::default(),
+                String::new(),
+            ));
+        });
+        let mut app = app.unwrap();
+
+        // Exactly the state the wizard leaves behind: saved, current, and nothing started.
+        app.settings.remember_as("a device");
+        assert_eq!(app.settings.current.as_deref(), Some("a device"));
+        assert!(app.link.is_none(), "App::new must start nothing");
+
+        assert!(
+            !app.is_running("a device"),
+            "a device that has been saved but never started is reported as running"
+        );
+        assert!(!app.is_running("some other device"));
     }
 }
