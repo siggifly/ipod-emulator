@@ -234,16 +234,36 @@ JQ 5 51 Y5H TXM        from the drive's iPod_Control/Device/SysInfo
 ```
 
 **The last three characters are not the model, and chasing them was the wrong thread.** Apple's
-published 5G endings are `V9K V9P V9M V9R V9L V9N V9Q V9S WU9 WUA WUB WUC X3N`, plus `W9G` for the U2
+published endings are `V9K V9P V9M V9R V9L V9N V9Q V9S WU9 WUA WUB WUC X3N`, plus `W9G` for the U2
 edition — and **neither `TXK` nor `TXM` is on that list**, while both serials' date fields sit
-squarely in the 5G period (week 51 of 2005, week 08 of 2006). So the published tables are incomplete,
-and no mapping from these codes to a capacity is available or inferable.
+squarely in the 5G period (week 51 of 2005, week 08 of 2006).
 
-It does not matter, because **the model is a different field entirely** and we have it — see
-§"What the NOR says it is" below. Nothing validates the serial; RetailOS displays it. So a generated
-serial needs the right *shape*, and this project's generator deliberately ends its serials `ZZ?`,
-which is on no published table: a generated identity should be recognisable as generated, and can
-then never collide with a real device's code by accident.
+> **RESOLVED 2026-08-20 — the tables are not incomplete; that list is for the other revision.**
+>
+> This section concluded the published tables were missing entries. They are not. Apple gives that
+> list under **iPod (5th generation Late 2006)** — the 5.5G — and the plain *iPod (5th generation)*
+> entry publishes no endings at all
+> ([support.apple.com/en-us/103823](https://support.apple.com/en-us/103823)).
+>
+> The dates above are what settle it. The Late 2006 model was introduced in **September 2006**, so a
+> device built in week 51 of 2005 or week 08 of 2006 **cannot be one** — both of these are original
+> 5Gs, and their codes are the original 5G's. Nothing is missing from Apple's table; the two data
+> sets simply cover different revisions and were read as covering one.
+>
+> The corroboration runs the other way too: a real `MA446` — a Late 2006 in the model table — was
+> observed here ending `V9M`, which is on Apple's list.
+>
+> `Generation::serial_codes` now returns `TXK, TXM` for `Video1` and Apple's thirteen for `Video2`,
+> and `Identity::check_serial_for` refuses each on the other. **Which capacity a code denotes is
+> still unknown and still unclaimed** — Apple publishes thirteen endings for one revision and no
+> mapping from them to 30 GB or 80 GB.
+
+It does not matter for booting, because **the model is a different field entirely** and we have it —
+see §"What the NOR says it is" below. Nothing validates the serial; RetailOS displays it.
+
+*(Also corrected: this paragraph used to say the generator "deliberately ends its serials `ZZ?`". It
+has not for some time — it picks from the observed set for the chosen revision, so a generated
+serial ends where a real iPod of that revision ended.)*
 
 ### And a thing the two examples reveal
 

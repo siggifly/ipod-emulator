@@ -581,24 +581,46 @@ impl Generation {
         }
     }
 
-    /// The last three characters of serials **observed on real devices** of this generation.
+    /// The last three characters of serials real devices of this generation carry.
     ///
-    /// For the Video these are Apple's published 5th-generation endings plus two this project has
-    /// seen on hardware and which appear on no published list. **Which capacity each denotes is not
-    /// known and is not claimed** — the point is only that these are codes real iPods carry, so a
-    /// generated serial ends in one rather than in something no iPod ever did.
+    /// **The two Video revisions do not share a set, and believing they did was a misreading.**
+    /// This used to hand the 5.5G's published list to both, reasoning that "the published list does
+    /// not separate the 5G from the 5.5G". It does: Apple gives that list under *iPod (5th
+    /// generation Late 2006)*, and the plain *iPod (5th generation)* entry carries no list at all.
     ///
-    /// The published list does not separate the 5G from the 5.5G, and a real `MA446` — a 5.5G —
-    /// was observed here ending `V9M`, which is on it. So both Video generations share the set.
+    /// The two codes this project observed on hardware settle which is which, and they resolve a
+    /// loose end in research/16 rather than adding one. Their date fields are:
+    ///
+    /// ```text
+    ///   4J 6 08 2Y7 TXK    week 08 of 2006    from the NOR's handoff block
+    ///   JQ 5 51 Y5H TXM    week 51 of 2005    from the drive's SysInfo
+    /// ```
+    ///
+    /// The Late 2006 model was introduced in **September 2006**, so a device built in week 51 of
+    /// 2005 or week 08 of 2006 cannot be one. Both are original 5Gs. research/16 concluded from
+    /// their absence from Apple's list that "the published tables are incomplete"; they are not —
+    /// the table is for the *other* revision.
+    ///
+    /// And the corroboration runs the other way too: a real `MA446`, which this table puts in
+    /// `Video2`, was observed here ending `V9M`, which is on the Late 2006 list.
+    ///
+    /// **Which capacity each code denotes is still not known and is not claimed.** Apple publishes
+    /// thirteen endings for one revision and no mapping from them to 30 GB or 80 GB, and nothing
+    /// here invents one.
     pub fn serial_codes(self) -> &'static [&'static str] {
-        const VIDEO: &[&str] = &[
-            // Apple's published 5th-generation endings.
+        // Apple's published endings for the iPod (5th generation Late 2006).
+        // <https://support.apple.com/en-us/103823>
+        const LATE_2006: &[&str] = &[
             "V9K", "V9P", "V9M", "V9R", "V9L", "V9N", "V9Q", "V9S", "WU9", "WUA", "WUB", "WUC",
-            "X3N", // Observed here on real hardware, on no published list.
-            "TXK", "TXM",
+            "X3N",
         ];
+        // The original 5G, for which Apple publishes none. These are the two this project has
+        // seen, and a pool of two is small — but a generated serial ending in one of them ends
+        // where a real iPod of that revision ended, which is the whole point of the list.
+        const INITIAL: &[&str] = &["TXK", "TXM"];
         match self {
-            Generation::Video1 | Generation::Video2 => VIDEO,
+            Generation::Video1 => INITIAL,
+            Generation::Video2 => LATE_2006,
             _ => &[],
         }
     }
@@ -1047,9 +1069,26 @@ mod serial_tests {
             "the reason does not name the ending: {e}"
         );
         assert!(
-            e.contains("V9K"),
+            e.contains("TXK"),
             "the reason does not offer the real ones: {e}"
         );
+
+        // **And the two revisions do not share a set.** Apple publishes the V9-and-WU list under
+        // *iPod (5th generation Late 2006)* only; the two codes seen on hardware here date to week
+        // 51 of 2005 and week 08 of 2006, before that model existed. So each list belongs to one
+        // revision, and each is refused on the other.
+        let late_ending = "4J6011K2V9K"; // a Late 2006 code on a 2006-built 5G
+        assert!(
+            Identity::check_serial_for(late_ending, Some(g5)).is_err(),
+            "a Late 2006 ending was accepted on the original 5G"
+        );
+        let initial_ending = "4J6011K2TXK";
+        assert!(
+            Identity::check_serial_for(initial_ending, Some(g55)).is_err(),
+            "an original-5G ending was accepted on a Late 2006"
+        );
+        assert!(Identity::check_serial_for(late_ending, Some(g55)).is_ok());
+        assert!(Identity::check_serial_for(initial_ending, Some(g5)).is_ok());
 
         // **And the capacity is deliberately not checked.** The same ending is accepted on a 30 GB
         // and a 60 GB, because which code means which capacity is not known — `serial_codes` says
