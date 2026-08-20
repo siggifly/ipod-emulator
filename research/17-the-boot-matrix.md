@@ -67,9 +67,42 @@ re-run says.
 | | real 5G dump | synthetic 5G | synthetic 5.5G |
 |---|---|---|---|
 | **RetailOS**, cold | boots — 611 READ DMA, 4 WRITE DMA | — | — |
-| **Rockbox**, warm | **main menu, 3 858 lit pixels** | runs, **0 pixels** | runs, **0 pixels** |
+| **Rockbox**, warm | **main menu, 3 858 lit pixels** | **main menu, 3 858** ✅ | **main menu, 3 858** ✅ |
 | **ipodloader2** | draws its own console | not yet run | not yet run |
 | **iPodLinux** | **boots to ZeroSlackr's userland** | `Lost(0x40020000)` | not yet run |
+
+### FIXED the same day: the pin that says the co-processor is powered
+
+`GPO32_VAL` bit 14 is a general-purpose output Apple's bootloader drives when it brings the BCM up,
+and a warm entry skips that bootloader. Rockbox's `lcd_init_device` keys on it directly:
+
+```c
+if (GPO32_VAL & 0x4000) { display_on = true;  tick_add_task(&lcd_tick); }
+else                    { display_on = false; lcd_awake(); }   /* only reached via ROLO */
+```
+
+`lcd_update_rect` returns immediately while `display_on` is false. So **every warm boot this project
+has ever run took the recovery branch meant for ROLO** — and got away with it only because that
+branch re-uploads the co-processor firmware out of `flash_get_section('vmcs')`, which a real dump
+carries and a synthesised NOR does not.
+
+| Rockbox warm, non-black pixels | before | after |
+|---|---|---|
+| retail 5G | 3 858 | **3 858** |
+| synthetic 5G | 0 | **3 858** |
+| synthetic 5.5G | 0 | **3 858** |
+
+Retail unmoved; both synthetic cells now match it exactly. Rockbox's main menu, on a NOR carrying no
+Apple code at all.
+
+**The instrument nearly lied first, and that is the part worth keeping.** `--norlog` counts through
+the `Nor` model, and the warm recipes install no such model — so it reported `0 flash reads` for
+*both* arms, and "Rockbox never reads the NOR" was believed on the strength of it. A control on the
+cold recipe returned **107 622**, which is how the blindness surfaced. It now prints `NOT MEASURED`
+rather than `0` when there is no model to count through. Eighth of its kind in this project.
+
+The paragraph below is what the failure looked like before the cause was known, and is kept because
+the reasoning in it was sound and still led nowhere until the source was read.
 
 **Rockbox on a synthetic NOR is a display failure, not a boot failure — and that is measured, not
 inferred.** Both arms issue the identical `0xc6 ·  0xc8 x2065 ·  0xec x2 ·  0xef x2`, so Rockbox
