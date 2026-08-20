@@ -32,11 +32,16 @@ pub fn read_directory(disk: &[u8], part_lba: u64) -> Result<Vec<Image>, String> 
     let part = (part_lba * 512) as usize;
     let at = part + 0x4200;
     if disk.len() < at + 0x200 {
-        return Err(format!("image is {} bytes, too short to hold a directory", disk.len()));
+        return Err(format!(
+            "image is {} bytes, too short to hold a directory",
+            disk.len()
+        ));
     }
     let d = &disk[at..at + 0x200];
     if &d[..4] != b"!ATA" {
-        return Err("no `!ATA` directory at partition+0x4200 — wrong image or wrong partition".into());
+        return Err(
+            "no `!ATA` directory at partition+0x4200 — wrong image or wrong partition".into(),
+        );
     }
     let mut out = Vec::new();
     let mut off = 0usize;
@@ -49,7 +54,11 @@ pub fn read_directory(disk: &[u8], part_lba: u64) -> Result<Vec<Image>, String> 
         let tag: String = e[4..8].iter().rev().map(|&c| c as char).collect();
         let devoff = u32::from_le_bytes(e[0x0c..0x10].try_into().unwrap()) as u64;
         let len = u32::from_le_bytes(e[0x10..0x14].try_into().unwrap());
-        out.push(Image { tag, offset: part as u64 + devoff, len });
+        out.push(Image {
+            tag,
+            offset: part as u64 + devoff,
+            len,
+        });
         off += 40;
     }
     Ok(out)
@@ -92,7 +101,15 @@ impl<'a> Fat12<'a> {
         let fat = rsvd * bps;
         let root = fat + nfat * spf * bps;
         let data = root + nroot * 32;
-        Ok(Fat12 { d, bps, spc, nroot, fat, root, data })
+        Ok(Fat12 {
+            d,
+            bps,
+            spc,
+            nroot,
+            fat,
+            root,
+            data,
+        })
     }
 
     fn next_cluster(&self, n: u16) -> u16 {
@@ -101,7 +118,11 @@ impl<'a> Fat12<'a> {
             return 0xfff;
         }
         let v = u16::from_le_bytes([self.d[o], self.d[o + 1]]);
-        if n & 1 == 1 { v >> 4 } else { v & 0xfff }
+        if n & 1 == 1 {
+            v >> 4
+        } else {
+            v & 0xfff
+        }
     }
 
     /// Follow a cluster chain, bounded by the recorded size as well as by the FAT terminator.
@@ -149,7 +170,11 @@ impl<'a> Fat12<'a> {
             }
             let base = String::from_utf8_lossy(&e[0..8]).trim_end().to_string();
             let ext = String::from_utf8_lossy(&e[8..11]).trim_end().to_string();
-            let name = if ext.is_empty() { base } else { format!("{base}.{ext}") };
+            let name = if ext.is_empty() {
+                base
+            } else {
+                format!("{base}.{ext}")
+            };
             if name == "." || name == ".." {
                 continue;
             }
@@ -157,14 +182,24 @@ impl<'a> Fat12<'a> {
             let size = u32::from_le_bytes(e[28..32].try_into().unwrap());
             let full = format!("{path}{name}");
             if e[11] & 0x10 != 0 {
-                out.push(Entry { path: format!("{full}/"), cluster, size: 0, is_dir: true });
+                out.push(Entry {
+                    path: format!("{full}/"),
+                    cluster,
+                    size: 0,
+                    is_dir: true,
+                });
                 if cluster >= 2 {
                     let o = self.data + (cluster as usize - 2) * self.spc * self.bps;
                     let n = self.spc * self.bps / 32;
                     self.walk_at(o, n, &format!("{full}/"), out, depth + 1);
                 }
             } else {
-                out.push(Entry { path: full, cluster, size, is_dir: false });
+                out.push(Entry {
+                    path: full,
+                    cluster,
+                    size,
+                    is_dir: false,
+                });
             }
         }
     }
@@ -186,7 +221,10 @@ mod tests {
         disk[at + 0x10..at + 0x14].copy_from_slice(&1234u32.to_le_bytes());
         let d = read_directory(&disk, 63).expect("directory");
         assert_eq!(d.len(), 1);
-        assert_eq!(d[0].tag, "rsrc", "the tag is a u32, so its bytes run backwards");
+        assert_eq!(
+            d[0].tag, "rsrc",
+            "the tag is a u32, so its bytes run backwards"
+        );
         assert_eq!(d[0].offset, 63 * 512 + 4096);
         assert_eq!(d[0].len, 1234);
     }
@@ -202,7 +240,8 @@ mod tests {
     /// One file, one cluster, walked and read back — so the geometry arithmetic has a witness.
     #[test]
     fn a_one_file_volume_walks_and_reads_back() {
-        let (bps, spc, rsvd, nfat, nroot, spf) = (512usize, 1usize, 1usize, 1usize, 16usize, 1usize);
+        let (bps, spc, rsvd, nfat, nroot, spf) =
+            (512usize, 1usize, 1usize, 1usize, 16usize, 1usize);
         let mut v = vec![0u8; 64 * 512];
         v[11..13].copy_from_slice(&(bps as u16).to_le_bytes());
         v[13] = spc as u8;

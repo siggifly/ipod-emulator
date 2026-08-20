@@ -101,11 +101,16 @@ impl Fat32 {
             }
         }
         let base = base.ok_or_else(|| {
-            format!("{}: no FAT32 partition (type 0x0b or 0x0c) in the MBR", image.display())
+            format!(
+                "{}: no FAT32 partition (type 0x0b or 0x0c) in the MBR",
+                image.display()
+            )
         })?;
 
         let mut bpb = [0u8; 512];
-        file.seek(SeekFrom::Start(base)).and_then(|_| file.read_exact(&mut bpb)).map_err(|e| e.to_string())?;
+        file.seek(SeekFrom::Start(base))
+            .and_then(|_| file.read_exact(&mut bpb))
+            .map_err(|e| e.to_string())?;
         let bytes_per_sector = le16(&bpb, 11);
         let sectors_per_cluster = bpb[13] as u32;
         let reserved = le16(&bpb, 14);
@@ -147,18 +152,23 @@ impl Fat32 {
 
     fn read_at(&mut self, at: u64, n: usize) -> Result<Vec<u8>, String> {
         let mut b = vec![0u8; n];
-        self.file.seek(SeekFrom::Start(at)).and_then(|_| self.file.read_exact(&mut b)).map_err(|e| e.to_string())?;
+        self.file
+            .seek(SeekFrom::Start(at))
+            .and_then(|_| self.file.read_exact(&mut b))
+            .map_err(|e| e.to_string())?;
         Ok(b)
     }
 
     fn write_at(&mut self, at: u64, b: &[u8]) -> Result<(), String> {
-        self.file.seek(SeekFrom::Start(at)).and_then(|_| self.file.write_all(b)).map_err(|e| e.to_string())
+        self.file
+            .seek(SeekFrom::Start(at))
+            .and_then(|_| self.file.write_all(b))
+            .map_err(|e| e.to_string())
     }
 
     fn fat_entry(&mut self, cluster: u32) -> Result<u32, String> {
-        let at = self.base
-            + (self.reserved as u64 * self.bytes_per_sector as u64)
-            + cluster as u64 * 4;
+        let at =
+            self.base + (self.reserved as u64 * self.bytes_per_sector as u64) + cluster as u64 * 4;
         Ok(le32(&self.read_at(at, 4)?, 0) & 0x0fff_ffff)
     }
 
@@ -219,9 +229,8 @@ impl Fat32 {
                 wrapped = true;
                 c = 2;
             }
-            let at = self.base
-                + (self.reserved as u64 * self.bytes_per_sector as u64)
-                + c as u64 * 4;
+            let at =
+                self.base + (self.reserved as u64 * self.bytes_per_sector as u64) + c as u64 * 4;
             let want = (BLOCK / 4).min((last - c) as usize);
             let block = self.read_at(at, want * 4)?;
             for (i, e) in block.chunks_exact(4).enumerate() {
@@ -296,7 +305,11 @@ impl Fat32 {
                 long.insert_str(0, &part);
                 continue;
             }
-            let this = if long.is_empty() { short_name_of(e) } else { std::mem::take(&mut long) };
+            let this = if long.is_empty() {
+                short_name_of(e)
+            } else {
+                std::mem::take(&mut long)
+            };
             if this.eq_ignore_ascii_case(name) {
                 let cl = (le16(e, 20) << 16) | le16(e, 26);
                 return Ok(Some((cl, e[11] & ATTR_DIR != 0)));
@@ -412,7 +425,9 @@ impl Fat32 {
     /// tool that can free clusters is a tool that can free the wrong ones.
     pub fn write_file(&mut self, dir: u32, name: &str, bytes: &[u8]) -> Result<(), String> {
         if self.find(dir, name)?.is_some() {
-            return Err(format!("`{name}` already exists — this never replaces a file"));
+            return Err(format!(
+                "`{name}` already exists — this never replaces a file"
+            ));
         }
         let cb = self.cluster_bytes();
         let need = bytes.len().div_ceil(cb).max(1);
@@ -451,7 +466,6 @@ impl Fat32 {
     pub fn root(&self) -> u32 {
         self.root_cluster
     }
-
 
     // ------------------------------------------------------------ reading
 
@@ -495,7 +509,11 @@ impl Fat32 {
                 }
                 let base = String::from_utf8_lossy(&e[0..8]).trim_end().to_string();
                 let ext = String::from_utf8_lossy(&e[8..11]).trim_end().to_string();
-                let mut name = if ext.is_empty() { base } else { format!("{base}.{ext}") };
+                let mut name = if ext.is_empty() {
+                    base
+                } else {
+                    format!("{base}.{ext}")
+                };
                 if !lfn.is_empty() {
                     lfn.sort_by_key(|(i, _)| *i);
                     let joined: String = lfn.iter().map(|(_, p)| p.as_str()).collect();
@@ -608,7 +626,9 @@ fn short_name_of(e: &[u8]) -> String {
 
 /// The checksum every long-name entry carries, computed over the 11-byte short name it aliases.
 fn lfn_checksum(short: &[u8; 11]) -> u8 {
-    short.iter().fold(0u8, |sum, &b| (((sum & 1) << 7).wrapping_add(sum >> 1)).wrapping_add(b))
+    short.iter().fold(0u8, |sum, &b| {
+        (((sum & 1) << 7).wrapping_add(sum >> 1)).wrapping_add(b)
+    })
 }
 
 /// Generate an 8.3 alias, `~N` style, that no existing entry is using.
@@ -650,7 +670,10 @@ fn dir_entries(name: &str, cluster: u32, size: u32, is_dir: bool, existing: &[St
         e[0] = (p as u8 + 1) | if p == parts - 1 { 0x40 } else { 0 };
         e[11] = ATTR_LFN;
         e[13] = sum;
-        for (k, &o) in [1usize, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30].iter().enumerate() {
+        for (k, &o) in [1usize, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30]
+            .iter()
+            .enumerate()
+        {
             let idx = p * 13 + k;
             let v = match idx.cmp(&utf16.len()) {
                 std::cmp::Ordering::Less => utf16[idx],
@@ -733,10 +756,16 @@ mod tests {
 
         let mut v = Fat32::open(&p).unwrap();
         let root = v.root();
-        let (cl, is_dir) = v.find(root, ".rockbox").unwrap().expect(".rockbox is missing");
+        let (cl, is_dir) = v
+            .find(root, ".rockbox")
+            .unwrap()
+            .expect(".rockbox is missing");
         assert!(is_dir, ".rockbox is not a directory");
         assert_eq!(cl, dir);
-        let (_, f_is_dir) = v.find(cl, "rockbox.ipod").unwrap().expect("rockbox.ipod is missing");
+        let (_, f_is_dir) = v
+            .find(cl, "rockbox.ipod")
+            .unwrap()
+            .expect("rockbox.ipod is missing");
         assert!(!f_is_dir);
         // Case-insensitive, like every other FAT reader.
         assert!(v.find(root, ".ROCKBOX").unwrap().is_some());
@@ -785,7 +814,8 @@ mod tests {
         synth(&p);
         let mut v = Fat32::open(&p).unwrap();
         let root = v.root();
-        v.write_file(root, "a-long-file-name.txt", &[1u8; 2000]).unwrap();
+        v.write_file(root, "a-long-file-name.txt", &[1u8; 2000])
+            .unwrap();
         v.flush().unwrap();
 
         let img = std::fs::read(&p).unwrap();
@@ -820,7 +850,12 @@ mod tests {
         let mut v = Fat32::open(&p).unwrap();
         let dir = v.mkdir_p("many").unwrap();
         for i in 0..40 {
-            v.write_file(dir, &format!("a-fairly-long-name-{i:03}.dat"), &[i as u8; 8]).unwrap();
+            v.write_file(
+                dir,
+                &format!("a-fairly-long-name-{i:03}.dat"),
+                &[i as u8; 8],
+            )
+            .unwrap();
         }
         v.flush().unwrap();
         let mut v = Fat32::open(&p).unwrap();
@@ -829,7 +864,9 @@ mod tests {
         assert!(v.chain(dir).unwrap().len() > 1, "the directory never grew");
         for i in 0..40 {
             assert!(
-                v.find(dir, &format!("a-fairly-long-name-{i:03}.dat")).unwrap().is_some(),
+                v.find(dir, &format!("a-fairly-long-name-{i:03}.dat"))
+                    .unwrap()
+                    .is_some(),
                 "entry {i} is missing after the directory grew"
             );
         }
@@ -844,14 +881,22 @@ mod tests {
                 seen_free = true;
                 continue;
             }
-            assert!(!seen_free, "a used entry sits after a free one — readers stop at the gap");
+            assert!(
+                !seen_free,
+                "a used entry sits after a free one — readers stop at the gap"
+            );
             if e[11] != ATTR_LFN {
                 shorts.push(e[..11].to_vec());
             }
         }
         let unique: std::collections::BTreeSet<_> = shorts.iter().collect();
-        assert_eq!(unique.len(), shorts.len(), "duplicate 8.3 aliases: {} of {}", unique.len(), shorts.len());
+        assert_eq!(
+            unique.len(),
+            shorts.len(),
+            "duplicate 8.3 aliases: {} of {}",
+            unique.len(),
+            shorts.len()
+        );
         let _ = std::fs::remove_file(p);
     }
-
 }

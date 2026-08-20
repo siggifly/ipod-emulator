@@ -138,7 +138,9 @@ pub fn open(image: &Path) -> Result<Vec<String>, String> {
             out.push(format!("attached as {dev}"));
             // Partition 1 is the data volume; partition 0 is Apple's firmware and has no filesystem.
             let part = format!("{dev}p1");
-            let m = Command::new("udisksctl").args(["mount", "-b", &part]).output();
+            let m = Command::new("udisksctl")
+                .args(["mount", "-b", &part])
+                .output();
             match m {
                 Ok(r) if r.status.success() => {
                     let text = String::from_utf8_lossy(&r.stdout).into_owned();
@@ -150,7 +152,9 @@ pub fn open(image: &Path) -> Result<Vec<String>, String> {
                 }
                 _ => out.push(format!("attached, but {part} did not mount")),
             }
-            out.push(format!("Unmount and `udisksctl loop-delete -b {dev}` before starting the iPod again."));
+            out.push(format!(
+                "Unmount and `udisksctl loop-delete -b {dev}` before starting the iPod again."
+            ));
         }
     }
     Ok(out)

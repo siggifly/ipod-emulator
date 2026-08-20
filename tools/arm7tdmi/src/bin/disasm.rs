@@ -62,7 +62,13 @@ fn main() {
         // its own word is what identified the loader in the first place.
         let ascii: String = data[i..i + 4]
             .iter()
-            .map(|&c| if (0x20..0x7f).contains(&c) { c as char } else { '.' })
+            .map(|&c| {
+                if (0x20..0x7f).contains(&c) {
+                    c as char
+                } else {
+                    '.'
+                }
+            })
             .collect();
 
         println!("{addr:08x}  {instr:08x}  |{ascii}|  {text}");

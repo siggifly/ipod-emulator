@@ -69,7 +69,10 @@ pub fn verify(p: &Piece, data: &[u8]) -> Result<(), String> {
     }
     let got = crate::firmware::sha256(data);
     if got != p.sha256 {
-        return Err(format!("{}: sha256 is {got}, expected {}", p.file, p.sha256));
+        return Err(format!(
+            "{}: sha256 is {got}, expected {}",
+            p.file, p.sha256
+        ));
     }
     Ok(())
 }
@@ -81,7 +84,10 @@ pub fn download(p: &Piece, dir: &Path) -> Result<PathBuf, String> {
         if verify(p, &existing).is_ok() {
             return Ok(dest);
         }
-        eprintln!("{}: already here but does not verify — downloading again", dest.display());
+        eprintln!(
+            "{}: already here but does not verify — downloading again",
+            dest.display()
+        );
     }
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let part = dir.join(format!("{}.part", p.file));
@@ -138,8 +144,11 @@ pub fn unpack(archive: &Path, dest: &Path) -> Result<PathBuf, String> {
     if !st.success() {
         return Err(format!("{seven} failed to unpack {}", archive.display()));
     }
-    let missing: Vec<&str> =
-        ZEROSLACKR_DIRS.iter().copied().filter(|d| !tree.join(d).is_dir()).collect();
+    let missing: Vec<&str> = ZEROSLACKR_DIRS
+        .iter()
+        .copied()
+        .filter(|d| !tree.join(d).is_dir())
+        .collect();
     if !missing.is_empty() {
         return Err(format!(
             "unpacked {} but {} is/are not in it — this is not the archive the catalogue names",
@@ -170,7 +179,9 @@ mod tests {
             assert!(p.bytes > 0, "{}: no size", p.file);
             assert_eq!(p.sha256.len(), 64, "{}: sha256 is not 64 hex chars", p.file);
             assert!(
-                p.sha256.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+                p.sha256
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
                 "{}: sha256 must be lower-case hex",
                 p.file
             );
@@ -183,7 +194,10 @@ mod tests {
     #[test]
     fn verify_rejects_the_wrong_bytes() {
         let p = &CATALOGUE[0];
-        assert!(verify(p, b"not the archive").is_err(), "a short file must be refused");
+        assert!(
+            verify(p, b"not the archive").is_err(),
+            "a short file must be refused"
+        );
         let right_length = vec![0u8; p.bytes as usize];
         assert!(
             verify(p, &right_length).is_err(),

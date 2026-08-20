@@ -40,7 +40,11 @@ pub fn crc32(data: &[u8]) -> u32 {
     for (i, e) in table.iter_mut().enumerate() {
         let mut c = i as u32;
         for _ in 0..8 {
-            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
         }
         *e = c;
     }
@@ -92,12 +96,20 @@ struct BitReader<'a> {
 
 impl<'a> BitReader<'a> {
     fn new(data: &'a [u8]) -> Self {
-        BitReader { data, pos: 0, bit: 0, acc: 0 }
+        BitReader {
+            data,
+            pos: 0,
+            bit: 0,
+            acc: 0,
+        }
     }
 
     fn bits(&mut self, n: u32) -> Result<u32, String> {
         while self.bit < n {
-            let b = *self.data.get(self.pos).ok_or("deflate: ran off the end of the stream")?;
+            let b = *self
+                .data
+                .get(self.pos)
+                .ok_or("deflate: ran off the end of the stream")?;
             self.pos += 1;
             self.acc |= (b as u32) << self.bit;
             self.bit += 8;
@@ -208,7 +220,9 @@ fn fixed_tables() -> Result<(Huffman, Huffman), String> {
 }
 
 fn dynamic_tables(br: &mut BitReader) -> Result<(Huffman, Huffman), String> {
-    const ORDER: [usize; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+    const ORDER: [usize; 19] = [
+        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+    ];
     let hlit = br.bits(5)? as usize + 257;
     let hdist = br.bits(5)? as usize + 1;
     let hclen = br.bits(4)? as usize + 4;
@@ -228,10 +242,14 @@ fn dynamic_tables(br: &mut BitReader) -> Result<(Huffman, Huffman), String> {
                 i += 1;
             }
             16 => {
-                let prev = *lengths.get(i.wrapping_sub(1)).ok_or("deflate: repeat with no previous length")?;
+                let prev = *lengths
+                    .get(i.wrapping_sub(1))
+                    .ok_or("deflate: repeat with no previous length")?;
                 let n = 3 + br.bits(2)? as usize;
                 for _ in 0..n {
-                    *lengths.get_mut(i).ok_or("deflate: length repeat overruns")? = prev;
+                    *lengths
+                        .get_mut(i)
+                        .ok_or("deflate: length repeat overruns")? = prev;
                     i += 1;
                 }
             }
@@ -243,7 +261,10 @@ fn dynamic_tables(br: &mut BitReader) -> Result<(Huffman, Huffman), String> {
     if i > lengths.len() {
         return Err("deflate: code lengths overrun their table".into());
     }
-    Ok((Huffman::new(&lengths[..hlit])?, Huffman::new(&lengths[hlit..])?))
+    Ok((
+        Huffman::new(&lengths[..hlit])?,
+        Huffman::new(&lengths[hlit..])?,
+    ))
 }
 
 fn block(
@@ -333,7 +354,9 @@ impl Zip {
         let mut members = Vec::with_capacity(count);
         for _ in 0..count {
             if data.get(at..at + 4) != Some(&[0x50, 0x4b, 0x01, 0x02][..]) {
-                return Err("zip: the central directory is not where the archive says it is".into());
+                return Err(
+                    "zip: the central directory is not where the archive says it is".into(),
+                );
             }
             let nlen = le16(&data, at + 28) as usize;
             let elen = le16(&data, at + 30) as usize;
@@ -372,11 +395,15 @@ impl Zip {
             .get(start..end)
             .ok_or_else(|| format!("zip: {} runs past the end of the archive", m.name))?;
 
-        let out = match m.method {
-            0 => packed.to_vec(),
-            8 => inflate(packed, m.size as usize)?,
-            other => return Err(format!("zip: {} uses compression method {other}, which this reader does not implement", m.name)),
-        };
+        let out =
+            match m.method {
+                0 => packed.to_vec(),
+                8 => inflate(packed, m.size as usize)?,
+                other => return Err(format!(
+                    "zip: {} uses compression method {other}, which this reader does not implement",
+                    m.name
+                )),
+            };
         if out.len() as u64 != m.size {
             return Err(format!(
                 "zip: {} unpacked to {} bytes, not the {} the directory declares",
@@ -451,7 +478,9 @@ pub const FIRMWARE_LBA: u32 = 63;
 /// Parse the `!ATA` directory out of a firmware partition image.
 pub fn images(fw: &[u8]) -> Vec<Image> {
     let mut out = Vec::new();
-    let Some(dir) = fw.get(DIRECTORY_AT..DIRECTORY_AT + 0x200) else { return out };
+    let Some(dir) = fw.get(DIRECTORY_AT..DIRECTORY_AT + 0x200) else {
+        return out;
+    };
     for e in dir.chunks_exact(40) {
         if &e[0..4] != b"!ATA" {
             break;
@@ -503,10 +532,7 @@ pub fn osos_from_drive(path: &std::path::Path) -> Result<(Vec<u8>, u32, u32), St
 /// NOR. Being able to enter it directly is the only way to ask what it would do on a machine whose
 /// ROM cannot launch it, and a firmware image is a firmware image; nothing here is `osos`-specific
 /// except which tag was looked up.
-pub fn image_from_drive(
-    path: &std::path::Path,
-    tag: &str,
-) -> Result<(Vec<u8>, u32, u32), String> {
+pub fn image_from_drive(path: &std::path::Path, tag: &str) -> Result<(Vec<u8>, u32, u32), String> {
     // **The header this project has now got wrong twice, in two sizes.**
     //
     // `devOffset` in the `!ATA` directory is relative to the firmware PARTITION, but what is
@@ -538,9 +564,13 @@ pub fn image_from_drive(
     // so rather than have several megabytes read out of it before anyone notices.
     // `DIRECTORY_AT` is already the offset within the FILE, so this one needs no adjustment.
     let mut dir = vec![0u8; DIRECTORY_AT + 0x200];
-    f.seek(SeekFrom::Start(base)).map_err(|e| format!("{}: {e}", path.display()))?;
+    f.seek(SeekFrom::Start(base))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
     f.read_exact(&mut dir).map_err(|e| {
-        format!("{}: cannot read the firmware partition at LBA {FIRMWARE_LBA}: {e}", path.display())
+        format!(
+            "{}: cannot read the firmware partition at LBA {FIRMWARE_LBA}: {e}",
+            path.display()
+        )
     })?;
 
     let dir_images = images(&dir);
@@ -555,11 +585,19 @@ pub fn image_from_drive(
         format!(
             "{}: the firmware directory lists {} but no `{tag}`, so there is nothing to enter.",
             path.display(),
-            dir_images.iter().map(|i| i.tag.as_str()).collect::<Vec<_>>().join(", ")
+            dir_images
+                .iter()
+                .map(|i| i.tag.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         )
     })?;
     if osos.len == 0 || osos.len > 64 * 1024 * 1024 {
-        return Err(format!("{}: `{tag}` claims {} bytes, which is not a size a firmware image has", path.display(), osos.len));
+        return Err(format!(
+            "{}: `{tag}` claims {} bytes, which is not a size a firmware image has",
+            path.display(),
+            osos.len
+        ));
     }
 
     // Locate the image start: the first 4-byte-aligned position at or after `devOffset` whose two
@@ -567,25 +605,28 @@ pub fn image_from_drive(
     let mut window = vec![0u8; MAX_HEADER as usize];
     f.seek(SeekFrom::Start(base + osos.offset as u64))
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    let got = f.read(&mut window).map_err(|e| format!("{}: {e}", path.display()))?;
+    let got = f
+        .read(&mut window)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
     window.truncate(got);
-    let header = image_header(&window)
-        .map(|h| h as u64)
-        .ok_or_else(|| {
-            format!(
-                "{}: no ARM vector table within {MAX_HEADER:#x} of `{tag}` at {:#x}. An image \
+    let header = image_header(&window).map(|h| h as u64).ok_or_else(|| {
+        format!(
+            "{}: no ARM vector table within {MAX_HEADER:#x} of `{tag}` at {:#x}. An image \
                  entered at its base opens with two branch instructions and this one does not, so \
                  either it is not a 5G/5.5G OS image or it is not stored in the clear.",
-                path.display(),
-                osos.offset
-            )
-        })?;
+            path.display(),
+            osos.offset
+        )
+    })?;
 
     let mut image = vec![0u8; osos.len as usize];
     f.seek(SeekFrom::Start(base + osos.offset as u64 + header))
         .map_err(|e| format!("{}: {e}", path.display()))?;
     f.read_exact(&mut image).map_err(|e| {
-        format!("{}: `osos` runs past the end of the image: {e}", path.display())
+        format!(
+            "{}: `osos` runs past the end of the image: {e}",
+            path.display()
+        )
     })?;
     Ok((image, osos.addr, osos.entry))
 }
@@ -619,7 +660,9 @@ pub const DATA_LBA: u32 = 32_768;
 /// `with_aupd` leaves it armed, which is the configuration `flash-update.sh` measures.
 pub fn mark_aupd_applied(fw: &mut [u8]) -> bool {
     let dir = images(fw);
-    let Some(i) = dir.iter().position(|e| e.tag == "aupd") else { return false };
+    let Some(i) = dir.iter().position(|e| e.tag == "aupd") else {
+        return false;
+    };
     if dir[i].dev == 1 {
         return false;
     }
@@ -652,11 +695,14 @@ pub fn build_disk(fw: &[u8], out: &Path, sectors: u64) -> Result<(), String> {
         ));
     }
     if sectors <= DATA_LBA as u64 + 65_536 {
-        return Err(format!("a {sectors}-sector drive is too small for a FAT32 volume"));
+        return Err(format!(
+            "a {sectors}-sector drive is too small for a FAT32 volume"
+        ));
     }
 
     let mut f = std::fs::File::create(out).map_err(|e| format!("{}: {e}", out.display()))?;
-    f.set_len(sectors * 512).map_err(|e| format!("{}: {e}", out.display()))?;
+    f.set_len(sectors * 512)
+        .map_err(|e| format!("{}: {e}", out.display()))?;
 
     // ---- the MBR. Two entries, and the first one's type is 0x00, which is not a mistake: Apple's
     // firmware partition is marked "empty" so that no PC operating system offers to mount it.
@@ -671,7 +717,13 @@ pub fn build_disk(fw: &[u8], out: &Path, sectors: u64) -> Result<(), String> {
     // the megabyte the updater occupies here is exactly the room a bootloader goes in. So the drive
     // to install onto is one whose updater has been consumed, not one with a wider partition.
     part(&mut mbr, 0, 0x00, FIRMWARE_LBA, fw_sectors);
-    part(&mut mbr, 1, 0x0b, DATA_LBA, (sectors - DATA_LBA as u64) as u32);
+    part(
+        &mut mbr,
+        1,
+        0x0b,
+        DATA_LBA,
+        (sectors - DATA_LBA as u64) as u32,
+    );
     mbr[510] = 0x55;
     mbr[511] = 0xAA;
     write_at(&mut f, 0, &mbr)?;
@@ -690,8 +742,8 @@ pub fn build_disk(fw: &[u8], out: &Path, sectors: u64) -> Result<(), String> {
 fn part(mbr: &mut [u8], i: usize, kind: u8, lba: u32, sectors: u32) {
     let at = 0x1be + i * 16;
     mbr[at] = 0x00; // not bootable; the iPod's ROM does not read this byte
-    // CHS is meaningless past 8 GB and every consumer of these images is LBA-only. 0xfe/0xff/0xff
-    // is the conventional "use LBA" filler, and it is what the reference image carries.
+                    // CHS is meaningless past 8 GB and every consumer of these images is LBA-only. 0xfe/0xff/0xff
+                    // is the conventional "use LBA" filler, and it is what the reference image carries.
     mbr[at + 1] = 0xfe;
     mbr[at + 2] = 0xff;
     mbr[at + 3] = 0xff;
@@ -704,7 +756,8 @@ fn part(mbr: &mut [u8], i: usize, kind: u8, lba: u32, sectors: u32) {
 }
 
 fn write_at(f: &mut std::fs::File, at: u64, data: &[u8]) -> Result<(), String> {
-    f.seek(SeekFrom::Start(at)).map_err(|e| format!("seek to {at}: {e}"))?;
+    f.seek(SeekFrom::Start(at))
+        .map_err(|e| format!("seek to {at}: {e}"))?;
     f.write_all(data).map_err(|e| format!("write at {at}: {e}"))
 }
 
@@ -877,7 +930,11 @@ pub fn inspect(path: &Path) -> Ipsw {
     // Measured 2026-08-14: family 25 against a family-20 NOR gives exactly that screen; the matching
     // pair reaches the language picker with 618. So say the family out loud, because the user is the
     // only one who knows which iPod their flash dump came off.
-    if let Some(fam) = m.name.strip_prefix("Firmware-").and_then(|r| r.split('.').next()) {
+    if let Some(fam) = m
+        .name
+        .strip_prefix("Firmware-")
+        .and_then(|r| r.split('.').next())
+    {
         s.push_str(&format!(
             "\n  **Updater family {fam}.** This must match the iPod your NOR dump came from. \
              A mismatch does not fail loudly: RetailOS boots and then asks you to restore it \
@@ -903,22 +960,41 @@ mod tests {
         }
         let (img, addr, entry) = super::osos_from_drive(p).expect("a retail drive has an OS");
         // A stock drive is entered at the image's base; only an installed bootloader moves it.
-        assert_eq!(entry, 0, "a drive with no bootloader installed has no entry offset");
-        assert_eq!(addr, super::LOAD_ADDR_5G, "the 5G loads its OS at 0x10000000");
-        assert!(img.len() > 1_000_000, "an OS image is megabytes, got {}", img.len());
+        assert_eq!(
+            entry, 0,
+            "a drive with no bootloader installed has no entry offset"
+        );
+        assert_eq!(
+            addr,
+            super::LOAD_ADDR_5G,
+            "the 5G loads its OS at 0x10000000"
+        );
+        assert!(
+            img.len() > 1_000_000,
+            "an OS image is megabytes, got {}",
+            img.len()
+        );
         // **The check research/02 gives**: an ARM image entered at its base begins with the
         // exception vector table, so word 0 is a branch. Read one sector early it is data, and
         // this assertion is what catches that.
         let w0 = u32::from_le_bytes(img[..4].try_into().unwrap());
-        assert_eq!(w0 >> 24, 0xEA, "word 0 is {w0:#010x}, which is not an ARM branch");
+        assert_eq!(
+            w0 >> 24,
+            0xEA,
+            "word 0 is {w0:#010x}, which is not an ARM branch"
+        );
         // And its length agrees with what the directory claimed, which is the read this could
         // plausibly get wrong.
         let mut dir = vec![0u8; super::DIRECTORY_AT + 0x200];
         use std::io::{Read, Seek, SeekFrom};
         let mut f = std::fs::File::open(p).expect("open");
-        f.seek(SeekFrom::Start(super::FIRMWARE_LBA as u64 * 512)).expect("seek");
+        f.seek(SeekFrom::Start(super::FIRMWARE_LBA as u64 * 512))
+            .expect("seek");
         f.read_exact(&mut dir).expect("read");
-        let entry = super::images(&dir).into_iter().find(|i| i.tag == "osos").expect("osos");
+        let entry = super::images(&dir)
+            .into_iter()
+            .find(|i| i.tag == "osos")
+            .expect("osos");
         assert_eq!(img.len() as u32, entry.len);
         assert_eq!(addr, entry.addr);
     }
@@ -938,7 +1014,11 @@ mod tests {
         // A single branch is not a vector table -- one `0xEA` byte turns up in ordinary data.
         let mut lone = vec![0u8; 16];
         lone[3] = 0xEA;
-        assert_eq!(super::image_header(&lone), None, "one branch is not a vector table");
+        assert_eq!(
+            super::image_header(&lone),
+            None,
+            "one branch is not a vector table"
+        );
         // And nothing at all is None rather than a panic or a zero.
         assert_eq!(super::image_header(&[]), None);
         assert_eq!(super::image_header(&[0u8; 4096]), None);
@@ -955,7 +1035,6 @@ mod tests {
         assert!(e.contains("firmware"), "{e}");
         let _ = std::fs::remove_dir_all(&dir);
     }
-
 
     use super::*;
 
@@ -1059,14 +1138,26 @@ mod tests {
         };
         let mbr = read(0, 512);
         assert_eq!(&mbr[510..512], &[0x55, 0xAA]);
-        assert_eq!(mbr[0x1be + 4], 0x00, "Apple's firmware partition is type 0x00");
+        assert_eq!(
+            mbr[0x1be + 4],
+            0x00,
+            "Apple's firmware partition is type 0x00"
+        );
         assert_eq!(le32(&mbr, 0x1be + 8), FIRMWARE_LBA);
-        assert_eq!(le32(&mbr, 0x1be + 12), 27_140, "13 895 680 bytes is 27 140 sectors");
+        assert_eq!(
+            le32(&mbr, 0x1be + 12),
+            27_140,
+            "13 895 680 bytes is 27 140 sectors"
+        );
         assert_eq!(mbr[0x1be + 16 + 4], 0x0b, "and the data partition is FAT32");
         assert_eq!(le32(&mbr, 0x1be + 16 + 8), DATA_LBA);
 
         let dir = read(FIRMWARE_LBA as u64 * 512 + DIRECTORY_AT as u64, 8);
-        assert_eq!(&dir[0..4], b"!ATA", "the directory landed at partition + 0x4200");
+        assert_eq!(
+            &dir[0..4],
+            b"!ATA",
+            "the directory landed at partition + 0x4200"
+        );
         assert_eq!(&dir[4..8], b"soso");
 
         // The FAT32 volume, read back through its own boot sector.
@@ -1076,11 +1167,19 @@ mod tests {
         assert_eq!(le16(&bs, 11), 512, "bytes per sector");
         assert_eq!(le16(&bs, 17), 0, "FAT32 has no fixed root directory");
         assert_eq!(le32(&bs, 44), 2, "and its root starts at cluster 2");
-        assert_eq!(le32(&bs, 28), DATA_LBA, "hidden sectors names where the partition is");
+        assert_eq!(
+            le32(&bs, 28),
+            DATA_LBA,
+            "hidden sectors names where the partition is"
+        );
         let fat_sectors = le32(&bs, 36) as u64;
         let fat = read((DATA_LBA as u64 + 32) * 512, 12);
         assert_eq!(le32(&fat, 0) & 0x0FFF_FFFF, 0x0FFF_FFF8, "media descriptor");
-        assert_eq!(le32(&fat, 8), 0x0FFF_FFFF, "the root's chain ends at its first cluster");
+        assert_eq!(
+            le32(&fat, 8),
+            0x0FFF_FFFF,
+            "the root's chain ends at its first cluster"
+        );
         // The second FAT is a copy, and a volume whose two FATs disagree is one a checker will
         // condemn on sight.
         let fat2 = read((DATA_LBA as u64 + 32 + fat_sectors) * 512, 12);
@@ -1158,7 +1257,10 @@ mod firmware_state_tests {
         let p = std::env::temp_dir().join(format!(
             "ipod-fw-{}-{}.img",
             std::process::id(),
-            entries.iter().map(|(t, d)| format!("{t}{d}")).collect::<String>()
+            entries
+                .iter()
+                .map(|(t, d)| format!("{t}{d}"))
+                .collect::<String>()
         ));
         let mut img = vec![0u8; FIRMWARE_LBA as usize * 512 + DIRECTORY_AT + 0x200];
         let base = FIRMWARE_LBA as usize * 512 + DIRECTORY_AT;
@@ -1178,7 +1280,11 @@ mod firmware_state_tests {
     fn a_normal_drive_has_an_os_and_no_armed_updater() {
         let p = drive(&[("osos", 0), ("rsrc", 0)]);
         let s = firmware_state(&p).unwrap();
-        assert_eq!(s.tags, ["osos", "rsrc"], "tags are stored backwards and must be read back");
+        assert_eq!(
+            s.tags,
+            ["osos", "rsrc"],
+            "tags are stored backwards and must be read back"
+        );
         assert!(s.has_os);
         assert!(!s.aupd_armed);
         let _ = std::fs::remove_file(p);
@@ -1200,7 +1306,10 @@ mod firmware_state_tests {
         let p = drive(&[("osos", 0), ("rsrc", 0), ("aupd", 1)]);
         let s = firmware_state(&p).unwrap();
         assert!(!s.aupd_armed);
-        assert!(s.tags.contains(&"aupd".to_string()), "still present, just not armed");
+        assert!(
+            s.tags.contains(&"aupd".to_string()),
+            "still present, just not armed"
+        );
         let _ = std::fs::remove_file(p);
     }
 

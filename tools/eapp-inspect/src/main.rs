@@ -98,7 +98,9 @@ fn main() {
 }
 
 fn collect_bins(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let p = e.path();
         if p.is_dir() {
@@ -190,7 +192,11 @@ fn inspect(path: &Path, buf: &[u8]) -> Report {
         None
     };
 
-    let blocks = if is_eapp { scan_blocks(buf) } else { Vec::new() };
+    let blocks = if is_eapp {
+        scan_blocks(buf)
+    } else {
+        Vec::new()
+    };
     let is_sinf = path.extension().is_some_and(|x| x == "sinf");
     let (sinf, sinf_endian) = if is_sinf {
         parse_sinf(buf)
@@ -253,7 +259,13 @@ fn walk_atoms(
         };
         let id: String = buf[off + 4..off + 8]
             .iter()
-            .map(|&c| if (0x20..0x7f).contains(&c) { c as char } else { '.' })
+            .map(|&c| {
+                if (0x20..0x7f).contains(&c) {
+                    c as char
+                } else {
+                    '.'
+                }
+            })
             .collect();
         // An atom must at least hold its own header and must not run past its parent.
         if size < 8 || off + size as usize > end {
@@ -423,7 +435,11 @@ impl Report {
         }
 
         if !self.sinf.is_empty() {
-            println!("  FairPlay .sinf — {} atoms, size field is {}", self.sinf.len(), self.sinf_endian.unwrap_or("?"));
+            println!(
+                "  FairPlay .sinf — {} atoms, size field is {}",
+                self.sinf.len(),
+                self.sinf_endian.unwrap_or("?")
+            );
             for b in &self.sinf {
                 let payload = b.size.saturating_sub(8);
                 let note = match b.id.trim() {
@@ -649,7 +665,13 @@ fn dump_hex(buf: &[u8], off: usize, len: usize) {
         let hex: Vec<String> = slice.iter().map(|b| format!("{b:02x}")).collect();
         let ascii: String = slice
             .iter()
-            .map(|&c| if (0x20..0x7f).contains(&c) { c as char } else { '.' })
+            .map(|&c| {
+                if (0x20..0x7f).contains(&c) {
+                    c as char
+                } else {
+                    '.'
+                }
+            })
             .collect();
         println!("    {:08x}  {:<47}  |{}|", row, hex.join(" "), ascii);
     }
@@ -753,11 +775,17 @@ mod tests {
     fn entropy_separates_plaintext_from_ciphertext() {
         // Plaintext-ish: ARM code has heavy byte skew.
         let code = synth();
-        assert!(shannon_entropy(&code) < 7.0, "synthetic code should read as plaintext");
+        assert!(
+            shannon_entropy(&code) < 7.0,
+            "synthetic code should read as plaintext"
+        );
 
         // Ciphertext-ish: uniform bytes.
         let uniform: Vec<u8> = (0..=255u8).cycle().take(65536).collect();
-        assert!(shannon_entropy(&uniform) > 7.9, "uniform bytes should read as encrypted");
+        assert!(
+            shannon_entropy(&uniform) > 7.9,
+            "uniform bytes should read as encrypted"
+        );
     }
 
     /// Build a synthetic `.sinf` in QuickTime-atom shape: big-endian size, then 4cc id.
@@ -782,7 +810,10 @@ mod tests {
         assert_eq!(endian, Some("big-endian"));
         let ids: Vec<&str> = blocks.iter().map(|b| b.id.as_str()).collect();
         assert_eq!(ids, ["frma", "schm", "key ", "name"]);
-        assert!(blocks.iter().all(|b| b.known), "all atoms should be recognised");
+        assert!(
+            blocks.iter().all(|b| b.known),
+            "all atoms should be recognised"
+        );
         // The `key` atom is the extraction target — its payload size must be recoverable.
         let key = blocks.iter().find(|b| b.id.trim() == "key").unwrap();
         assert_eq!(key.size - 8, 16);

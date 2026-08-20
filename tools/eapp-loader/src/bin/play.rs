@@ -44,7 +44,14 @@ fn main() {
     // Identified framework entry points — see README §"The GL surface actually in use".
     m.set_stub("miscTBD", 0, Stub::Alloc);
     m.set_stub("miscTBD", 1, Stub::Free { arg: 0 });
-    m.set_stub("miscTBD", 9, Stub::Clock { arg: 0, step: 16_667 });
+    m.set_stub(
+        "miscTBD",
+        9,
+        Stub::Clock {
+            arg: 0,
+            step: 16_667,
+        },
+    );
     m.set_stub("OpenGLES", 12, Stub::GlClear);
     m.set_stub("OpenGLES", 13, Stub::GlClearColor);
     m.set_stub("OpenGLES", 157, Stub::GlSwap);
@@ -56,7 +63,12 @@ fn main() {
     m.set_stub("Filesytem", 0, Stub::FileOpen { path: 1, out: 3 });
     m.set_stub("AsyncFileIO", 0, Stub::FileOpen { path: 1, out: 3 });
     m.set_stub("AsyncFileIO", 3, Stub::FileOpen { path: 1, out: 2 });
-    let rd = Stub::FileRead { handle: 0, buffer: 1, length: 2, out: 3 };
+    let rd = Stub::FileRead {
+        handle: 0,
+        buffer: 1,
+        length: 2,
+        out: 3,
+    };
     m.set_stub("Filesytem", 2, rd.clone());
     m.set_stub("AsyncFileIO", 2, rd);
 
@@ -66,7 +78,12 @@ fn main() {
         .iter()
         .find_map(|a| a.strip_prefix("--gamedir="))
         .map(PathBuf::from)
-        .or_else(|| PathBuf::from(path).parent()?.parent().map(|p| p.to_path_buf()));
+        .or_else(|| {
+            PathBuf::from(path)
+                .parent()?
+                .parent()
+                .map(|p| p.to_path_buf())
+        });
     if let Some(d) = &m.game_dir {
         println!("resources: {}", d.display());
     }

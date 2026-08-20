@@ -100,7 +100,13 @@ fn parse_entries(buf: &[u8], magic: &[u8; 4]) -> Vec<Entry> {
         let w = |o: usize| u32::from_le_bytes([e[o], e[o + 1], e[o + 2], e[o + 3]]);
         // The tag is a little-endian u32 of four characters, so the bytes read backwards.
         let tag: String = e[4..8].iter().rev().map(|&b| b as char).collect();
-        out.push(Entry { tag, dev: w(8), offset: w(0x0c), len: w(0x10), addr: w(0x14) });
+        out.push(Entry {
+            tag,
+            dev: w(8),
+            offset: w(0x0c),
+            len: w(0x10),
+            addr: w(0x14),
+        });
     }
     out
 }
@@ -117,7 +123,9 @@ fn parse_entries(buf: &[u8], magic: &[u8; 4]) -> Vec<Entry> {
 /// So an image extracted once into a directory and reused against whatever ROM is configured is
 /// not a shortcut, it is a different machine. Take the images from the dump under test.
 pub fn nor_images(nor: &[u8]) -> Vec<Entry> {
-    nor.get(NOR_DIRECTORY as usize..).map(|d| parse_entries(d, b"hslf")).unwrap_or_default()
+    nor.get(NOR_DIRECTORY as usize..)
+        .map(|d| parse_entries(d, b"hslf"))
+        .unwrap_or_default()
 }
 
 /// One image's bytes, cut out of the NOR where its own directory record says they are.
@@ -127,7 +135,8 @@ pub fn nor_images(nor: &[u8]) -> Vec<Entry> {
 pub fn nor_image(nor: &[u8], tag: &str) -> Option<Vec<u8>> {
     let e = nor_images(nor).into_iter().find(|e| e.tag == tag)?;
     let at = e.offset as usize;
-    nor.get(at..at.checked_add(e.len as usize)?).map(<[u8]>::to_vec)
+    nor.get(at..at.checked_add(e.len as usize)?)
+        .map(<[u8]>::to_vec)
 }
 
 /// Whether an image the firmware directory indexes is **code** — something the machine can be
@@ -143,8 +152,7 @@ pub fn nor_image(nor: &[u8], tag: &str) -> Option<Vec<u8>> {
 /// two images that are not programs.
 pub fn is_bootable(image: &[u8]) -> bool {
     image.len() >= 4
-        && u32::from_le_bytes([image[0], image[1], image[2], image[3]]) & 0xff00_0000
-            == 0xea00_0000
+        && u32::from_le_bytes([image[0], image[1], image[2], image[3]]) & 0xff00_0000 == 0xea00_0000
 }
 
 fn read_at(path: &Path, at: u64, n: usize) -> std::io::Result<Vec<u8>> {
@@ -197,7 +205,14 @@ pub fn describe_rom(path: &Path, model: &str) -> Option<String> {
     // both are there. Truncated to its tail: the leading characters are the factory and the model,
     // identical across every iPod of a kind, and the distinguishing part is at the end.
     if let Some(sn) = cfg.serial.as_ref() {
-        let tail: String = sn.chars().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect();
+        let tail: String = sn
+            .chars()
+            .rev()
+            .take(5)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         return Some(format!("{model} · {tail}"));
     }
     cfg.guid.map(|g| format!("{model} · {:04X}", g & 0xffff))
@@ -256,7 +271,9 @@ pub type Fact = (&'static str, String);
 
 /// What a boot ROM turned out to contain.
 pub fn rom_facts(path: &Path) -> Vec<Fact> {
-    let Ok(nor) = std::fs::read(path) else { return Vec::new() };
+    let Ok(nor) = std::fs::read(path) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     if let Some(dir) = nor.get(NOR_DIRECTORY as usize..) {
         let images = parse_entries(dir, b"hslf");
@@ -291,11 +308,17 @@ pub fn drive_facts(path: &Path) -> Vec<Fact> {
         if !state.tags.is_empty() {
             out.push(("Firmware images", state.tags.join(" · ")));
         }
-        out.push(("Operating system", if state.has_os { "present" } else { "MISSING" }.into()));
+        out.push((
+            "Operating system",
+            if state.has_os { "present" } else { "MISSING" }.into(),
+        ));
         if state.aupd_armed {
             // Not a detail. On hardware this is the first of two boots and the second runs the OS;
             // here nothing power-cycles the machine, so this drive stops at the updater.
-            out.push(("Flash updater", "armed — this drive boots the updater, not the OS".into()));
+            out.push((
+                "Flash updater",
+                "armed — this drive boots the updater, not the OS".into(),
+            ));
         }
     }
     if let Some(f) = drive_family(path) {
@@ -324,7 +347,10 @@ pub fn volume_software(path: &Path) -> Option<String> {
     let mut found = Vec::new();
     // The version, when the file that carries it is there. `rockbox-info.txt` opens with
     // `Target: ipodvideo` and carries `Version:` a few lines down.
-    if let Some(e) = entries.iter().find(|e| e.path.eq_ignore_ascii_case("/.rockbox/rockbox-info.txt")) {
+    if let Some(e) = entries
+        .iter()
+        .find(|e| e.path.eq_ignore_ascii_case("/.rockbox/rockbox-info.txt"))
+    {
         let (first, size) = (e.first, e.size);
         let version = vol
             .read_file(first, size)
@@ -338,13 +364,22 @@ pub fn volume_software(path: &Path) -> Option<String> {
             Some(v) => format!("Rockbox {v}"),
             None => "Rockbox".into(),
         });
-    } else if entries.iter().any(|e| e.path.eq_ignore_ascii_case("/.rockbox")) {
+    } else if entries
+        .iter()
+        .any(|e| e.path.eq_ignore_ascii_case("/.rockbox"))
+    {
         found.push("Rockbox".into());
     }
-    if entries.iter().any(|e| e.path.eq_ignore_ascii_case("/loader.cfg")) {
+    if entries
+        .iter()
+        .any(|e| e.path.eq_ignore_ascii_case("/loader.cfg"))
+    {
         found.push("ipodloader2 menu".into());
     }
-    if entries.iter().any(|e| e.path.eq_ignore_ascii_case("/boot/vmlinux")) {
+    if entries
+        .iter()
+        .any(|e| e.path.eq_ignore_ascii_case("/boot/vmlinux"))
+    {
         found.push("a Linux kernel".into());
     }
     (!found.is_empty()).then(|| found.join(" · "))
@@ -352,11 +387,18 @@ pub fn volume_software(path: &Path) -> Option<String> {
 
 /// What an Apple software bundle turned out to contain.
 pub fn ipsw_facts(path: &Path) -> Vec<Fact> {
-    let Ok(zip) = crate::ipsw::Zip::open(path) else { return Vec::new() };
-    let Ok((m, fw)) = zip.firmware() else { return Vec::new() };
+    let Ok(zip) = crate::ipsw::Zip::open(path) else {
+        return Vec::new();
+    };
+    let Ok((m, fw)) = zip.firmware() else {
+        return Vec::new();
+    };
     let mut out = vec![
         ("Firmware", m.name.clone()),
-        ("Size", format!("{} bytes ({} sectors)", fw.len(), fw.len() / 512)),
+        (
+            "Size",
+            format!("{} bytes ({} sectors)", fw.len(), fw.len() / 512),
+        ),
     ];
     if let Some(f) = family_of(&m.name) {
         out.push(("Updater family", f.to_string()));
@@ -371,7 +413,12 @@ pub fn ipsw_facts(path: &Path) -> Vec<Fact> {
 
 /// The updater family in a `Firmware-20.6.3` member name.
 fn family_of(member: &str) -> Option<u32> {
-    member.strip_prefix("Firmware-")?.split('.').next()?.parse().ok()
+    member
+        .strip_prefix("Firmware-")?
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
 }
 
 /// The updater family of an Apple bundle.
@@ -418,7 +465,10 @@ pub fn generation_mismatch(
         "This firmware is updater family {found}. {} — a {} — takes {}.",
         model.apple_number(),
         model.generation.label(),
-        want.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(" or ")
+        want.iter()
+            .map(|f| f.to_string())
+            .collect::<Vec<_>>()
+            .join(" or ")
     ))
 }
 
@@ -429,7 +479,9 @@ pub fn family_mismatch(model: &str, model_family: u32, software: Option<u32>) ->
     }
     // No article before the model name. "a {model}" produces "a iPod Video", and the fix is not a
     // vowel test — the next model added would break it again, in a string nobody re-reads.
-    Some(format!("Family {found}. {model} takes family {model_family}."))
+    Some(format!(
+        "Family {found}. {model} takes family {model_family}."
+    ))
 }
 
 /// Why a family mismatch matters, for the hover rather than the page.
@@ -491,7 +543,9 @@ pub enum Kind {
 /// A file that is none of these is [`Kind::Unknown`], and the screen says so with its size — which
 /// is more use than the wrong file's verdict would be.
 pub fn classify(path: &Path) -> Kind {
-    let Ok(meta) = std::fs::metadata(path) else { return Kind::Unknown };
+    let Ok(meta) = std::fs::metadata(path) else {
+        return Kind::Unknown;
+    };
     if !meta.is_file() {
         return Kind::Unknown;
     }
@@ -505,7 +559,11 @@ pub fn classify(path: &Path) -> Kind {
         // window would otherwise read as empty and be misfiled as an `.ipsw`.
         let want = (meta.len() as usize).min(65536);
         let head = read_at(path, 0, want).unwrap_or_default();
-        return if head.windows(8).any(|w| w == b".rockbox") { Kind::OsBundle } else { Kind::Ipsw };
+        return if head.windows(8).any(|w| w == b".rockbox") {
+            Kind::OsBundle
+        } else {
+            Kind::Ipsw
+        };
     }
     // A `.ipod` image, **verified** rather than guessed. Before this, `rockbox.ipod` was 7.5 MB and
     // fell through to the size test, so the window called an operating system a drive and handed it
@@ -701,7 +759,10 @@ pub fn disk(path: &Path) -> Verdict {
             mbr[510], mbr[511]
         ));
     }
-    if read_at(path, 512, 8).map(|b| b == *b"EFI PART").unwrap_or(false) {
+    if read_at(path, 512, 8)
+        .map(|b| b == *b"EFI PART")
+        .unwrap_or(false)
+    {
         return Verdict::Wrong(
             "the MBR is a GPT protective MBR (`EFI PART` at LBA 1). \
              The iPod's own layout is a plain MBR with the firmware partition first."
@@ -912,10 +973,10 @@ mod naming_tests {
         for other in [
             "/x/my-ipod-backup.img",
             "/x/ipod.img",
-            "/x/ipod-.img",              // no version
-            "/x/ipod-20.6.3.img",        // no fingerprint
+            "/x/ipod-.img",                // no version
+            "/x/ipod-20.6.3.img",          // no fingerprint
             "/x/ipod-20.6.3-zzzzzzzz.img", // not hex
-            "/x/ipod-20.6.3-abcd.img",   // too short to be one
+            "/x/ipod-20.6.3-abcd.img",     // too short to be one
         ] {
             assert_eq!(
                 describe_drive(std::path::Path::new(other)),
@@ -932,15 +993,29 @@ mod naming_tests {
     /// one that matters.
     #[test]
     fn a_pair_from_two_different_ipods_is_named_before_the_boot() {
-        assert_eq!(family_mismatch("iPod Video", 20, Some(20)), None, "the matching pair");
-        assert_eq!(family_mismatch("iPod Video", 20, None), None, "not knowing is not objecting");
+        assert_eq!(
+            family_mismatch("iPod Video", 20, Some(20)),
+            None,
+            "the matching pair"
+        );
+        assert_eq!(
+            family_mismatch("iPod Video", 20, None),
+            None,
+            "not knowing is not objecting"
+        );
 
         let m = family_mismatch("iPod Video", 20, Some(24)).expect("24 against 20 is a mismatch");
-        assert!(m.contains("24") && m.contains("20"), "both numbers, so it can be acted on: {m}");
+        assert!(
+            m.contains("24") && m.contains("20"),
+            "both numbers, so it can be acted on: {m}"
+        );
         // The article trap: "a iPod Video" shipped once. There is no article at all now, because
         // the fix for one model is not the fix for the next one.
         assert!(!m.contains(" a iPod"), "grammar: {m}");
-        assert!(!m.contains(" an iPod"), "no article, rather than the right article: {m}");
+        assert!(
+            !m.contains(" an iPod"),
+            "no article, rather than the right article: {m}"
+        );
     }
 
     /// A ROM is described by the device it came off, not by the name it was uploaded under.
@@ -1031,7 +1106,12 @@ mod classify_tests {
     /// the drive cannot be recognised from its head and is instead what a file is when it is not
     /// one of the other two.
 
-    fn write_ipod(dir: &std::path::Path, name: &str, model: &[u8; 4], body: &[u8]) -> std::path::PathBuf {
+    fn write_ipod(
+        dir: &std::path::Path,
+        name: &str,
+        model: &[u8; 4],
+        body: &[u8],
+    ) -> std::path::PathBuf {
         let sum = body.iter().fold(5u32, |a, &b| a.wrapping_add(b as u32));
         let mut v = sum.to_be_bytes().to_vec();
         v.extend_from_slice(model);
@@ -1055,7 +1135,10 @@ mod classify_tests {
         raw[100] ^= 0xff;
         let bad = d.join("bad.ipod");
         std::fs::write(&bad, raw).unwrap();
-        assert!(os_checksum(&bad).is_none(), "a flipped byte must fail the checksum");
+        assert!(
+            os_checksum(&bad).is_none(),
+            "a flipped byte must fail the checksum"
+        );
         assert_ne!(classify(&bad), Kind::Os);
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -1080,13 +1163,20 @@ mod classify_tests {
     #[test]
     fn the_real_rockbox_bootloader_is_an_os_not_a_drive() {
         let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent().unwrap().parent().unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
             .join("resources/vendor/rockbox/bin/bootloader-ipodvideo.ipod");
         if !p.is_file() {
             eprintln!("skipped: {} absent", p.display());
             return;
         }
-        assert_eq!(classify(&p), Kind::Os, "a verified .ipod must not be classified as a drive");
+        assert_eq!(
+            classify(&p),
+            Kind::Os,
+            "a verified .ipod must not be classified as a drive"
+        );
         assert_eq!(os_checksum(&p).unwrap().0, "ipvd");
     }
 
@@ -1101,7 +1191,11 @@ mod classify_tests {
 
         assert_eq!(classify(&rom), Kind::Rom, "exactly 1 MiB is the boot ROM");
         assert_eq!(classify(&ipsw), Kind::Ipsw, "a zip is Apple's bundle");
-        assert_eq!(classify(&drive), Kind::Disk, "anything else large enough is a drive");
+        assert_eq!(
+            classify(&drive),
+            Kind::Disk,
+            "anything else large enough is a drive"
+        );
 
         // The extension is not consulted, and must not be: these files are handed around under
         // every name imaginable, and `internal_rom_000000-0FFFFF.bin` is a convention rather than
@@ -1111,7 +1205,11 @@ mod classify_tests {
 
         // A 1 MiB zip is a zip. Order matters, and this is the pair that proves which way.
         let zip_1mib = file(&dir, "big.ipsw", b"PK\x03\x04", NOR_LEN as usize);
-        assert_eq!(classify(&zip_1mib), Kind::Ipsw, "the zip test runs before the length test");
+        assert_eq!(
+            classify(&zip_1mib),
+            Kind::Ipsw,
+            "the zip test runs before the length test"
+        );
 
         // Too small to be any of them, which the screen says with its size rather than by handing
         // it to a parser and reporting whatever that parser makes of twelve bytes.
@@ -1165,9 +1263,15 @@ mod tests {
         let e = parse_entries(&disk, b"!ATA");
         assert_eq!(e.len(), 1, "the drive's magic is `!ATA`, left to right");
         assert_eq!(e[0].tag, "osos");
-        assert_eq!(e[0].len, 0x0073_5a00, "7 559 680 bytes — the RetailOS image");
+        assert_eq!(
+            e[0].len, 0x0073_5a00,
+            "7 559 680 bytes — the RetailOS image"
+        );
         assert_eq!(e[0].addr, LOAD_ADDR_5G);
-        assert!(parse_entries(&disk, b"ATA!").is_empty(), "and it is NOT `ATA!`");
+        assert!(
+            parse_entries(&disk, b"ATA!").is_empty(),
+            "and it is NOT `ATA!`"
+        );
 
         // The retail NOR at 0xffe00 — the `disk` record.
         let nor: [u8; 40] = [
@@ -1179,7 +1283,10 @@ mod tests {
         assert_eq!(e.len(), 1, "the NOR's magic is `flsh` stored little-endian");
         assert_eq!(e[0].tag, "disk");
         assert_eq!(e[0].addr, LOAD_ADDR_5G);
-        assert!(parse_entries(&nor, b"flsh").is_empty(), "and it is NOT `flsh`");
+        assert!(
+            parse_entries(&nor, b"flsh").is_empty(),
+            "and it is NOT `flsh`"
+        );
     }
 
     #[test]
@@ -1207,9 +1314,15 @@ mod tests {
     /// `tag` names the file. Named rather than derived from the arguments, because the first
     /// version hashed them into a filename, two tests hashed to the same one, and the parallel
     /// test runner had them deleting each other's images mid-read.
-    fn synthetic_disk(tag: &str, dir: &[u8], total: u64, ptype: u8, lba: u32) -> std::path::PathBuf {
-        let p = std::env::temp_dir()
-            .join(format!("ipod-gui-inspect-{tag}-{}.img", std::process::id()));
+    fn synthetic_disk(
+        tag: &str,
+        dir: &[u8],
+        total: u64,
+        ptype: u8,
+        lba: u32,
+    ) -> std::path::PathBuf {
+        let p =
+            std::env::temp_dir().join(format!("ipod-gui-inspect-{tag}-{}.img", std::process::id()));
         let mut img = vec![0u8; total as usize];
         img[510] = 0x55;
         img[511] = 0xAA;
@@ -1269,8 +1382,10 @@ mod tests {
     }
 
     fn synthetic_nor(len: u64, word0: u32, dir: &[u8]) -> std::path::PathBuf {
-        let p = std::env::temp_dir()
-            .join(format!("ipod-gui-nor-{}-{len}-{word0:08x}.bin", std::process::id()));
+        let p = std::env::temp_dir().join(format!(
+            "ipod-gui-nor-{}-{len}-{word0:08x}.bin",
+            std::process::id()
+        ));
         let mut rom = vec![0u8; len as usize];
         rom[0..4].copy_from_slice(&word0.to_le_bytes());
         if len as usize > NOR_DIRECTORY as usize + dir.len() {
@@ -1315,8 +1430,14 @@ mod tests {
 
         let names: Vec<String> = nor_images(&rom).iter().map(|e| e.tag.clone()).collect();
         assert_eq!(names, ["diag", "disk"]);
-        assert_eq!(nor_image(&rom, "diag").as_deref(), Some(&b"this is the diag"[..]));
-        assert_eq!(nor_image(&rom, "disk").as_deref(), Some(&b"this is the disk"[..]));
+        assert_eq!(
+            nor_image(&rom, "diag").as_deref(),
+            Some(&b"this is the diag"[..])
+        );
+        assert_eq!(
+            nor_image(&rom, "disk").as_deref(),
+            Some(&b"this is the disk"[..])
+        );
         // A retail ROM has no `scan`, and saying so is the point — the old path would have handed
         // back a prototype's.
         assert_eq!(nor_image(&rom, "scan"), None);
@@ -1327,11 +1448,17 @@ mod tests {
     #[test]
     fn logo_and_vmcs_are_data_and_diag_and_disk_are_programs() {
         // Word 0 of each, as dumped from the retail ROM.
-        assert!(is_bootable(&0xea00_0006u32.to_le_bytes()), "diag / disk — b +0x20");
+        assert!(
+            is_bootable(&0xea00_0006u32.to_le_bytes()),
+            "diag / disk — b +0x20"
+        );
         assert!(is_bootable(&0xea00_007au32.to_le_bytes()), "osos");
         assert!(!is_bootable(b"LoGo"), "the boot logo bitmap");
         assert!(!is_bootable(&[0, 0, 0, 0]), "the co-processor's firmware");
-        assert!(!is_bootable(&[0xea, 0x00]), "and a truncated file is not a program either");
+        assert!(
+            !is_bootable(&[0xea, 0x00]),
+            "and a truncated file is not a program either"
+        );
         // A *conditional* branch is not a reset vector: 0x1a is `bne`, and a vector table opens
         // with the unconditional form.
         assert!(!is_bootable(&0x1a00_0006u32.to_le_bytes()));
@@ -1378,7 +1505,10 @@ mod tests {
         let v = flash(&p);
         assert!(matches!(v, Verdict::Bad(_)), "{v:?}");
         assert!(v.text().contains("empty"), "{v:?}");
-        assert!(!v.text().contains("whole buffer"), "leaked the read error: {v:?}");
+        assert!(
+            !v.text().contains("whole buffer"),
+            "leaked the read error: {v:?}"
+        );
         let _ = std::fs::remove_file(p);
     }
 
@@ -1486,14 +1616,16 @@ fn syscfg_offset(nor: &[u8]) -> Option<usize> {
     // Scanning is different: here the magic alone could land on a coincidence, so the record count
     // has to be plausible too. A block at an undocumented offset with a corrupt count is the one
     // case this will miss, and missing it is better than pointing at random bytes.
-    (0..nor.len().saturating_sub(SYSCFG_HEADER)).step_by(16).find(|&at| {
-        magic_at(at)
-            && nor
-                .get(at + 0x14..at + 0x18)
-                .and_then(|b| b.try_into().ok())
-                .map(u32::from_le_bytes)
-                .is_some_and(|n| n >= 1 && n as usize <= 64)
-    })
+    (0..nor.len().saturating_sub(SYSCFG_HEADER))
+        .step_by(16)
+        .find(|&at| {
+            magic_at(at)
+                && nor
+                    .get(at + 0x14..at + 0x18)
+                    .and_then(|b| b.try_into().ok())
+                    .map(u32::from_le_bytes)
+                    .is_some_and(|n| n >= 1 && n as usize <= 64)
+        })
 }
 
 /// Read `SysCfg` out of a NOR dump.
@@ -1505,20 +1637,21 @@ pub fn syscfg(nor: &[u8]) -> Option<SysCfg> {
     let block = nor.get(syscfg_offset(nor)?..)?;
     let count = u32::from_le_bytes(block.get(0x14..0x18)?.try_into().ok()?) as usize;
 
-    let mut out =
-        SysCfg {
-            serial: None,
-            guid: None,
-            model: None,
-            hw_vr: None,
-            tags: Vec::new(),
-            records: Vec::new(),
-        };
+    let mut out = SysCfg {
+        serial: None,
+        guid: None,
+        model: None,
+        hw_vr: None,
+        tags: Vec::new(),
+        records: Vec::new(),
+    };
     let mut at = SYSCFG_HEADER;
     // Bounded by the declared count and by the buffer, because a truncated dump is a normal thing
     // to be handed and must not be read past.
     for _ in 0..count.min(64) {
-        let Some(rec) = block.get(at..at + SYSCFG_RECORD) else { break };
+        let Some(rec) = block.get(at..at + SYSCFG_RECORD) else {
+            break;
+        };
         let tag: String = rec[..4].iter().rev().map(|&b| b as char).collect();
         let payload = &rec[4..];
         // NUL-terminated ASCII from the front of the payload — the shape `SrNm` and `Mod#` share.
@@ -1548,7 +1681,8 @@ pub fn syscfg(nor: &[u8]) -> Option<SysCfg> {
             }
             _ => {}
         }
-        out.records.push((tag.clone(), payload.try_into().unwrap_or([0; 16])));
+        out.records
+            .push((tag.clone(), payload.try_into().unwrap_or([0; 16])));
         out.tags.push(tag);
         at += SYSCFG_RECORD;
     }
@@ -1674,7 +1808,11 @@ impl SysCfgBuilder {
             out.extend_from_slice(&t);
             out.extend_from_slice(payload);
         }
-        debug_assert_eq!(out.len(), size, "the size word must be the block's actual length");
+        debug_assert_eq!(
+            out.len(),
+            size,
+            "the size word must be the block's actual length"
+        );
         out
     }
 }
@@ -1735,17 +1873,27 @@ mod syscfg_tests {
         // 5.5G-only, so pairing it with the 5G HwVr is a contradiction the check has to catch.
         let mut eighty = [0u8; 16];
         eighty[..5].copy_from_slice(b"MA448");
-        assert_eq!(syscfg(&nor(&[("Mod#", eighty), ("HwVr", hwvr)])).unwrap().generation_agrees(),
-                   Some(false));
+        assert_eq!(
+            syscfg(&nor(&[("Mod#", eighty), ("HwVr", hwvr)]))
+                .unwrap()
+                .generation_agrees(),
+            Some(false)
+        );
         // Absent data is "not checked", never "agrees".
-        assert_eq!(syscfg(&nor(&[("Mod#", modn)])).unwrap().generation_agrees(), None);
+        assert_eq!(
+            syscfg(&nor(&[("Mod#", modn)])).unwrap().generation_agrees(),
+            None
+        );
     }
 
     /// The GUID is two little-endian words, high one second — so it reads backwards twice over,
     /// and getting either wrong yields a plausible-looking number that is not the device's.
     #[test]
     fn the_guid_is_the_high_word_then_the_low_one() {
-        let v = nor(&[("SrNm", srnm("AB123CD4EFG")), ("FwId", fwid(0x1234_5678, 0x000A_2700))]);
+        let v = nor(&[
+            ("SrNm", srnm("AB123CD4EFG")),
+            ("FwId", fwid(0x1234_5678, 0x000A_2700)),
+        ]);
         let c = syscfg(&v).expect("a well-formed block must parse");
         assert_eq!(c.serial.as_deref(), Some("AB123CD4EFG"));
         assert_eq!(c.guid_hex().as_deref(), Some("000A270012345678"));
@@ -1777,8 +1925,15 @@ mod syscfg_tests {
         // Nothing to compare against is silence, not a warning.
         assert_eq!(generation_mismatch(five, None), None);
         let nano = Model::lookup("A004").expect("a nano");
-        assert!(nano.generation.updater_families().is_empty(), "precondition");
-        assert_eq!(generation_mismatch(nano, Some(99)), None, "unknown mapping must not warn");
+        assert!(
+            nano.generation.updater_families().is_empty(),
+            "precondition"
+        );
+        assert_eq!(
+            generation_mismatch(nano, Some(99)),
+            None,
+            "unknown mapping must not warn"
+        );
     }
 
     /// Build it, read it back, get what went in. Every payload shape the real dump uses.
@@ -1804,8 +1959,14 @@ mod syscfg_tests {
         assert_eq!(c.hw_vr, Some(0x000B_0005));
         assert_eq!(c.tags, ["SrNm", "FwId", "HwId", "HwVr", "Mod#", "DrmV"]);
         let hwid = c.records.iter().find(|(t, _)| t == "HwId").expect("HwId").1;
-        assert_eq!(u32::from_le_bytes(hwid[..4].try_into().unwrap()), 0x8201_763A);
-        assert_eq!(c.model_info().expect("MA146").colour(), crate::identity::Colour::Black);
+        assert_eq!(
+            u32::from_le_bytes(hwid[..4].try_into().unwrap()),
+            0x8201_763A
+        );
+        assert_eq!(
+            c.model_info().expect("MA146").colour(),
+            crate::identity::Colour::Black
+        );
         assert_eq!(c.generation_agrees(), Some(true));
     }
 
@@ -1854,7 +2015,10 @@ mod syscfg_tests {
         }
         let rebuilt = b.build();
         assert_eq!(rebuilt.len(), original.len(), "length");
-        assert_eq!(rebuilt, original, "the rebuilt block must be byte-identical to Apple's");
+        assert_eq!(
+            rebuilt, original,
+            "the rebuilt block must be byte-identical to Apple's"
+        );
     }
 
     #[test]

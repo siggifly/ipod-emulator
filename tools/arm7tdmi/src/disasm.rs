@@ -230,7 +230,10 @@ fn single_transfer(instr: u32, c: &str, pc: u32, bus: Option<&mut dyn Bus>) -> S
         return match bus {
             Some(b) => {
                 let v = b.read32(target);
-                format!("{op}{c}{b_}    {rd}, ={v:#010x}    ; [{target:#010x}]", b_ = b_str(instr))
+                format!(
+                    "{op}{c}{b_}    {rd}, ={v:#010x}    ; [{target:#010x}]",
+                    b_ = b_str(instr)
+                )
             }
             None => format!("{op}{c}{b}    {rd}, [pc, #{sign}{offset:#x}]  ; {target:#010x}"),
         };

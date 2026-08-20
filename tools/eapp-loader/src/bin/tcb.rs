@@ -57,7 +57,11 @@ impl Img {
     }
     fn b(&self, addr: u32) -> u8 {
         let o = (addr & MASK) as usize;
-        if o >= self.0.len() { 0 } else { self.0[o] }
+        if o >= self.0.len() {
+            0
+        } else {
+            self.0[o]
+        }
     }
     /// A NUL-terminated ASCII string, or None if the bytes are not one.
     fn cstr(&self, addr: u32) -> Option<String> {
@@ -195,7 +199,9 @@ fn main() {
     let path = match args.iter().find(|a| !a.starts_with("--")) {
         Some(p) => p.clone(),
         None => {
-            eprintln!("usage: tcb SDRAM.bin [--array=…] [--stride=…] [--count=…] [--walk] [--free]");
+            eprintln!(
+                "usage: tcb SDRAM.bin [--array=…] [--stride=…] [--count=…] [--walk] [--free]"
+            );
             std::process::exit(2);
         }
     };
@@ -228,7 +234,9 @@ fn main() {
         let l = u32::from_str_radix(l.trim_start_matches("0x"), 16).unwrap_or(0x40);
         for row in 0..l.div_ceil(16) {
             let base = a + row * 16;
-            let words: Vec<String> = (0..4).map(|i| format!("{:08x}", img.w(base + i * 4))).collect();
+            let words: Vec<String> = (0..4)
+                .map(|i| format!("{:08x}", img.w(base + i * 4)))
+                .collect();
             println!("{base:08x}  {}", words.join(" "));
         }
         return;
@@ -239,7 +247,10 @@ fn main() {
     // once, and one field alone matches thousands of addresses by chance. This is how the interrupt
     // controller's object is located without a run — its `+0x574`/`+0x578` are pointers to the two
     // `CPU_INT_EN` registers, which is a two-field signature nothing else in 64 MB satisfies.
-    let finds: Vec<&str> = args.iter().filter_map(|a| a.strip_prefix("--findobj=")).collect();
+    let finds: Vec<&str> = args
+        .iter()
+        .filter_map(|a| a.strip_prefix("--findobj="))
+        .collect();
     if !finds.is_empty() {
         let mut hits: Option<Vec<u32>> = None;
         for spec in &finds {
@@ -335,12 +346,20 @@ fn main() {
             println!(
                 "    src {src:>2} ({src:#04x}): object {o:#010x}  fn {f:#010x}{}  logical id {}",
                 sym(f),
-                if ids.is_empty() { "-".into() } else { ids.join(",") }
+                if ids.is_empty() {
+                    "-".into()
+                } else {
+                    ids.join(",")
+                }
             );
         }
-        let empty: Vec<u32> =
-            (0..64).filter(|&s| img.w(obj + 8 + s * 4) == 0 && img.w(obj + 0x108 + s * 4) == 0).collect();
-        println!("  {} of 64 sources have no handler in either table", empty.len());
+        let empty: Vec<u32> = (0..64)
+            .filter(|&s| img.w(obj + 8 + s * 4) == 0 && img.w(obj + 0x108 + s * 4) == 0)
+            .collect();
+        println!(
+            "  {} of 64 sources have no handler in either table",
+            empty.len()
+        );
         println!(
             "  source 40 (click wheel / I2C, hi bank bit 8): object {:#010x}  fn {:#010x}",
             img.w(obj + 8 + 40 * 4),
@@ -429,14 +448,19 @@ fn main() {
         if let Some(w) = wmap.get(&resume) {
             let svc = w.svc;
             let n = service_name(svc);
-            prim = if n.is_empty() { format!("svc {svc:#04x}") } else { n.into() };
+            prim = if n.is_empty() {
+                format!("svc {svc:#04x}")
+            } else {
+                n.into()
+            };
             if img.w(r0) != svc {
                 prim.push_str(" (!req)");
             }
             arg = match w.arg0 {
                 None => {
-                    let ws: Vec<String> =
-                        (1..5).map(|i| format!("{:08x}", img.w(r0 + i * 4))).collect();
+                    let ws: Vec<String> = (1..5)
+                        .map(|i| format!("{:08x}", img.w(r0 + i * 4)))
+                        .collect();
                     format!("req+4.. {}", ws.join(" "))
                 }
                 Some(off) => {
@@ -485,7 +509,9 @@ fn main() {
                             && img.w(v - 8) & 0x0fff_ffff == 0x01a0_e00f));
                 if call {
                     chain.push(match by_entry.range(..=v).next_back() {
-                        Some((&a, n)) if v - a <= 0x1000 && v != a => format!("{v:08x}<{n}+{:#x}>", v - a),
+                        Some((&a, n)) if v - a <= 0x1000 && v != a => {
+                            format!("{v:08x}<{n}+{:#x}>", v - a)
+                        }
                         Some((&a, n)) if v == a => format!("{v:08x}<{n}>"),
                         _ => format!("{v:08x}"),
                     });
@@ -493,7 +519,10 @@ fn main() {
                 p += 4;
             }
             if !chain.is_empty() {
-                println!("      stack {stk:#010x}+{size:#x} sp {ssp:#010x}: {}", chain.join(" "));
+                println!(
+                    "      stack {stk:#010x}+{size:#x} sp {ssp:#010x}: {}",
+                    chain.join(" ")
+                );
             }
         }
     }
@@ -521,7 +550,11 @@ fn main() {
         for o in (0..img.0.len().saturating_sub(8)).step_by(4) {
             let a = 0x1000_0000 + o as u32;
             if img.w(a + 4) == want && (img.w(a) as i32).abs() < 0x1000 {
-                println!("  obj {a:#010x}  counter {:#010x} ({})", img.w(a), img.w(a) as i32);
+                println!(
+                    "  obj {a:#010x}  counter {:#010x} ({})",
+                    img.w(a),
+                    img.w(a) as i32
+                );
                 n += 1;
                 if n > 32 {
                     println!("  … stopped at 32");

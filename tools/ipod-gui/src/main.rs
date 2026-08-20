@@ -60,14 +60,14 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use eapp_loader::WheelEvent;
 use eapp_loader::identity::Colour;
+use eapp_loader::WheelEvent;
 use eframe::egui;
 use egui::{Align2, Color32, CornerRadius, FontId, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
+use eapp_loader::settings::{Mode, Settings};
 use emu::{Link, Phase, FB_BACK, FB_FRONT, FB_H, FB_W};
 use inspect::Verdict;
-use eapp_loader::settings::{Mode, Settings};
 use wheel::{Button, Hit, WheelRing};
 
 // ---------------------------------------------------------------- the device's proportions
@@ -193,41 +193,6 @@ const HARDWARE_MIPS: f64 = 72e6;
 // number below and the content are checked against each other on every `cargo test` rather than
 // on somebody's laptop.
 
-/// The narrowest and shortest the window may be made.
-///
-/// **Height is the scarce axis; width is not.** That is the whole of this design, and it was
-/// learned the wrong way round. The settings page grew to 936 px stacked, `MIN_H` went to 960 to
-/// fit it, and 960 does not fit the machines people actually use:
-///
-/// ```text
-///   12" MacBook   1152 x 720    667 px of height once the menu bar and title bar are counted
-///   1366x768      1366 x 768    715
-///   13" Air       1440 x 900    847
-///   13" Pro       1512 x 982    929
-/// ```
-///
-/// Every one of them has **1152 px or more of width going spare.** So the settings page spends
-/// width instead: a rail of sections down the left and one pane at a time on the right, which makes
-/// it as tall as its tallest single section rather than the sum of six. Measured by the test below,
-/// at `MIN_W`, in pixels of content:
-///
-/// ```text
-///   first run,  nothing chosen        542   <- the tallest page this program has
-///   first run,  two files chosen      542
-///   first run,  two files refused     541
-///   settings,   two files chosen      266     (was 781 stacked)
-///   settings,   two files refused     466     (was 936 stacked, and it set the old minimum)
-///   help                              470
-///   details                           230
-///   firmware                          164
-/// ```
-///
-/// 600 leaves the tallest 58 px, which is the room a different font or a translated string would
-/// want, and fits a 12" MacBook with 67 px to spare. The first run is now the page that sets the
-/// floor — which is the right page to be bounded by, because it is the one nobody can skip.
-///
-/// `MIN_W` is 1000 for the rail plus a pane wide enough for a file path. That is more than the old
-
 /// The window's own colours.
 ///
 /// **The background is a cool charcoal, not near-black.** It used to be `0x12`, which meant a
@@ -266,7 +231,11 @@ const UI_WARN: Color32 = Color32::from_rgb(0xE0, 0xA0, 0x40);
 fn luminance(c: Color32) -> f32 {
     let f = |v: u8| {
         let s = v as f32 / 255.0;
-        if s <= 0.03928 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        if s <= 0.03928 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
     };
     0.2126 * f(c.r()) + 0.7152 * f(c.g()) + 0.0722 * f(c.b())
 }
@@ -279,12 +248,63 @@ fn contrast(a: Color32, b: Color32) -> f32 {
     (hi + 0.05) / (lo + 0.05)
 }
 
-
+/// The narrowest the window may be made: the rail plus a pane wide enough for a file path.
+///
+/// **Height is the scarce axis; width is not.** That is the whole of this design, and it was
+/// learned the wrong way round. The settings page grew to 936 px stacked, `MIN_H` went to 960 to
+/// fit it, and 960 does not fit the machines people actually use:
+///
+/// ```text
+///   12" MacBook   1152 x 720    667 px of height once the menu bar and title bar are counted
+///   1366x768      1366 x 768    715
+///   13" Air       1440 x 900    847
+///   13" Pro       1512 x 982    929
+/// ```
+///
+/// Every one of them has **1152 px or more of width going spare.** So the settings page spends
+/// width instead: a rail of sections down the left and one pane at a time on the right, which makes
+/// it as tall as its tallest single section rather than the sum of six. Measured by the test below,
+/// at `MIN_W`, in pixels of content:
+///
+/// ```text
+///   first run,  nothing chosen        542   <- the tallest page this program has
+///   first run,  two files chosen      542
+///   first run,  two files refused     541
+///   settings,   two files chosen      266     (was 781 stacked)
+///   settings,   two files refused     466     (was 936 stacked, and it set the old minimum)
+///   help                              470
+///   details                           230
+///   firmware                          164
+/// ```
 const MIN_W: f32 = 1000.0;
+/// 600 leaves the tallest page 58 px, which is the room a different font or a translated string
+/// would want, and fits a 12" MacBook with 67 px to spare. The first run is the page that sets this
+/// floor — the right page to be bounded by, because it is the one nobody can skip.
+///
+/// **This is a floor, not an opening size.** See [`DEFAULT_H`].
 const MIN_H: f32 = 600.0;
-/// What the window opens at. Comfortably above the minimum, and the device gets the difference.
 /// The rail down the left of the settings page.
 const RAIL_W: f32 = 132.0;
+
+/// The two strips below the device, both **fixed**, so the iPod above them never resizes.
+///
+/// Neither used to be. Measured with `IPOD_LAYOUT=1`, the pair took anywhere from 46 px to 147 px
+/// depending on what the machine was doing — a progress bar that exists only during a boot, an
+/// update line that exists only when there is an update, and up to four condition lines one of
+/// which wraps. The device's scale is a floored integer, so that range straddles a scale step: the
+/// iPod halved in size when a warning appeared. See [`DEFAULT_H`] for why the step is there.
+///
+/// The numbers are the observed worst cases, rounded up, not budgets picked in advance:
+///
+/// ```text
+///   footer      23 .. 47 px   -> 48   progress bar while booting, update line when there is one
+///   controls    23 .. 59 px   -> 68   conditions, buttons, notice, the top log line
+/// ```
+const CONTROLS_H: f32 = 68.0;
+/// See [`CONTROLS_H`].
+const FOOTER_H: f32 = 48.0;
+/// Two lines of condition text. Beyond that the region scrolls — see [`App::device_controls`].
+const CONDITIONS_H: f32 = 34.0;
 
 /// The settings page's sections, in the order they are offered.
 ///
@@ -311,8 +331,28 @@ enum SettingsTab {
     About,
 }
 
+/// What the window opens at. Above the minimum on both axes, and the device gets the difference.
 const DEFAULT_W: f32 = 1100.0;
-const DEFAULT_H: f32 = 720.0;
+/// **The device's size is a floored integer, so height buys it in steps, not smoothly.** One
+/// emulator pixel is a whole number of physical pixels — that is what makes the panel exact rather
+/// than resampled — and the case is derived from the panel, so the whole iPod jumps between sizes:
+///
+/// ```text
+///   x1    665 physical px tall     332 logical on a retina Mac
+///   x2   1329                      665
+///   x3   1994                      997
+/// ```
+///
+/// The consequence bit once. `DEFAULT_H` was cut 800 → 720 to fit a 13" laptop, which left the
+/// device 593 logical px where x2 needs 681 — so it silently fell to x1 and the iPod drew at half
+/// size. Nothing failed; it just got small. `default_window_is_tall_enough_for_a_full_size_ipod`
+/// is the guard, and it is the whole reason that test exists.
+///
+/// 830 clears x2 with 30 px to spare against the chrome this window actually has, and still fits a
+/// 13" Air's 847 px. 800 also cleared it — by **three pixels**, which is not a margin, it is a
+/// coincidence waiting for a system whose UI font is a point larger. A **12" MacBook cannot reach
+/// x2 at all**: 667 px of screen against 681 needed before any chrome exists.
+const DEFAULT_H: f32 = 830.0;
 /// The reading column. Capped so prose does not run the full width of a maximised window.
 const COLUMN_W: f32 = 620.0;
 /// The space above a page's first line and below its last.
@@ -341,10 +381,15 @@ fn make_app(out: &str, icon: Option<&str>) -> Result<String, String> {
     std::fs::copy(&me, macos.join("ipod-emulator")).map_err(|e| format!("copying self: {e}"))?;
 
     if let Some(icon) = icon.filter(|p| std::path::Path::new(p).is_file()) {
-        let set = std::env::temp_dir().join(format!("ipod-iconset-{}", std::process::id())).join("icon.iconset");
+        let set = std::env::temp_dir()
+            .join(format!("ipod-iconset-{}", std::process::id()))
+            .join("icon.iconset");
         if std::fs::create_dir_all(&set).is_ok() {
             for s in [16u32, 32, 128, 256, 512] {
-                for (px, name) in [(s, format!("icon_{s}x{s}.png")), (s * 2, format!("icon_{s}x{s}@2x.png"))] {
+                for (px, name) in [
+                    (s, format!("icon_{s}x{s}.png")),
+                    (s * 2, format!("icon_{s}x{s}@2x.png")),
+                ] {
                     let _ = std::process::Command::new("sips")
                         .args(["-z", &px.to_string(), &px.to_string(), icon, "--out"])
                         .arg(set.join(&name))
@@ -354,7 +399,11 @@ fn make_app(out: &str, icon: Option<&str>) -> Result<String, String> {
                 }
             }
             let _ = std::process::Command::new("iconutil")
-                .arg("-c").arg("icns").arg(&set).arg("-o").arg(res.join("icon.icns"))
+                .arg("-c")
+                .arg("icns")
+                .arg(&set)
+                .arg("-o")
+                .arg(res.join("icon.icns"))
                 .stderr(std::process::Stdio::null())
                 .status();
             let _ = std::fs::remove_dir_all(set.parent().unwrap());
@@ -453,8 +502,10 @@ fn main() -> eframe::Result {
     };
     settings.mode = mode;
 
-    let headless =
-        cfg.headless.is_some() || cfg.selftest || cfg.probe.is_some() || cfg.power_cycle_at.is_some();
+    let headless = cfg.headless.is_some()
+        || cfg.selftest
+        || cfg.probe.is_some()
+        || cfg.power_cycle_at.is_some();
 
     let missing = missing_images(&cfg);
     if headless {
@@ -478,7 +529,11 @@ fn main() -> eframe::Result {
     // physical pixels on a Retina display, and a 64-pixel source upscaled four times is what
     // "low-res icon" looks like. Measured, after shipping exactly that mistake.
     const ICON_RGBA: &[u8] = include_bytes!("../../../docs/media/icon-512.rgba");
-    let icon = egui::IconData { rgba: ICON_RGBA.to_vec(), width: 512, height: 512 };
+    let icon = egui::IconData {
+        rgba: ICON_RGBA.to_vec(),
+        width: 512,
+        height: 512,
+    };
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -717,7 +772,9 @@ struct Cache {
 /// tests racing over one process-wide value. Passing it in is also the honest signature: this
 /// function's answer is entirely about one directory.
 fn reclaimable(dir: &Path, keep: &Cache, work_on_copy: bool) -> (u64, Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return (0, Vec::new()) };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return (0, Vec::new());
+    };
     let mut total = 0;
     let mut paths = Vec::new();
     for e in rd.flatten() {
@@ -735,7 +792,10 @@ fn reclaimable(dir: &Path, keep: &Cache, work_on_copy: bool) -> (u64, Vec<PathBu
         }
         // Real blocks, not the logical length: these are sparse clones, and their length is a
         // number about the emulated drive rather than about this disk.
-        total += e.metadata().map(|m| settings::on_disk_size(&m)).unwrap_or(0);
+        total += e
+            .metadata()
+            .map(|m| settings::on_disk_size(&m))
+            .unwrap_or(0);
         paths.push(p);
     }
     (total, paths)
@@ -745,7 +805,9 @@ fn reclaimable(dir: &Path, keep: &Cache, work_on_copy: bool) -> (u64, Vec<PathBu
 fn reclaim(paths: &[PathBuf]) -> u64 {
     let mut freed = 0;
     for p in paths {
-        let n = std::fs::metadata(p).map(|m| settings::on_disk_size(&m)).unwrap_or(0);
+        let n = std::fs::metadata(p)
+            .map(|m| settings::on_disk_size(&m))
+            .unwrap_or(0);
         if std::fs::remove_file(p).is_ok() {
             freed += n;
         }
@@ -832,10 +894,14 @@ impl WriteTo {
     /// One line for the row, in the user's terms.
     fn line(self) -> &'static str {
         match self {
-            WriteTo::OursDirect => "The iPod writes to this drive. It was built here and can be rebuilt.",
+            WriteTo::OursDirect => {
+                "The iPod writes to this drive. It was built here and can be rebuilt."
+            }
             WriteTo::YoursDirect => "The iPod writes to this drive — your file will change.",
             WriteTo::ChosenCopy => "The iPod writes to a copy. Your file is untouched.",
-            WriteTo::TheirsByDefault => "The iPod writes to a copy, so your file is untouched. It is yours, not ours.",
+            WriteTo::TheirsByDefault => {
+                "The iPod writes to a copy, so your file is untouched. It is yours, not ours."
+            }
             WriteTo::ReadOnly => "This file is read-only, so the iPod writes to a copy.",
         }
     }
@@ -861,7 +927,11 @@ fn write_target(disk: &Path, chosen: Option<bool>) -> WriteTo {
         (true, _) => WriteTo::ReadOnly,
         (false, Some(true)) => WriteTo::ChosenCopy,
         (false, Some(false)) => {
-            if ours { WriteTo::OursDirect } else { WriteTo::YoursDirect }
+            if ours {
+                WriteTo::OursDirect
+            } else {
+                WriteTo::YoursDirect
+            }
         }
         (false, None) if ours => WriteTo::OursDirect,
         (false, None) => WriteTo::TheirsByDefault,
@@ -899,9 +969,15 @@ fn human(n: u64) -> String {
 }
 
 fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
-    let get = |k: &str| args.iter().find_map(|a| a.strip_prefix(k)).map(|s| s.to_string());
+    let get = |k: &str| {
+        args.iter()
+            .find_map(|a| a.strip_prefix(k))
+            .map(|s| s.to_string())
+    };
     let num = |k: &str, d: u64| -> u64 {
-        get(k).and_then(|v| v.replace('_', "").parse().ok()).unwrap_or(d)
+        get(k)
+            .and_then(|v| v.replace('_', "").parse().ok())
+            .unwrap_or(d)
     };
 
     // Three sources, in order: the command line, what the window last recorded, and the
@@ -918,7 +994,9 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
     } else if let Some(p) = saved.flash() {
         eapp_loader::nor::Source::File(p)
     } else if matches!(saved.nor, eapp_loader::nor::Source::Synthetic { .. })
-        && res.join("roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin").is_file()
+        && res
+            .join("roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin")
+            .is_file()
     {
         // The gitignored `resources/` tree the recipes use, and only when it is actually there.
         // This is `retail-boot.sh`'s default verbatim, because a checkout that quietly booted a
@@ -1028,7 +1106,10 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         }),
         regs_at: get("--regs-at=").and_then(|s| {
             let (a, n) = s.split_once(':').unwrap_or((s.as_str(), "1"));
-            Some((u32::from_str_radix(a.trim_start_matches("0x"), 16).ok()?, n.parse().ok()?))
+            Some((
+                u32::from_str_radix(a.trim_start_matches("0x"), 16).ok()?,
+                n.parse().ok()?,
+            ))
         }),
         profile: args.iter().any(|a| a == "--profile"),
         no_idle_stop: args.iter().any(|a| a == "--no-idle-stop"),
@@ -1057,10 +1138,14 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
         // figure is 15x the old one because the clock it is divided by went up by 15.
         click_gap: num("--wheel-click-instr=", 300_000).max(1),
         headless: get("--headless=").and_then(|v| v.replace('_', "").parse().ok()),
-        selftest: args.iter().any(|a| a == "--selftest" || a == "--selftest-control"),
+        selftest: args
+            .iter()
+            .any(|a| a == "--selftest" || a == "--selftest-control"),
         selftest_control: args.iter().any(|a| a == "--selftest-control"),
         shots: root.join("_out"),
-        boot: get("--boot=").map(|v| emu::BootTarget::parse(&v)).unwrap_or_default(),
+        boot: get("--boot=")
+            .map(|v| emu::BootTarget::parse(&v))
+            .unwrap_or_default(),
         second_core: args.iter().any(|a| a == "--second-core"),
         presses: args
             .iter()
@@ -1071,7 +1156,9 @@ fn config(args: &[String], saved: &Settings) -> Result<emu::Config, String> {
             })
             .collect(),
         window_shot: get("--window-shot=").map(PathBuf::from),
-        shot_after: get("--shot-after=").and_then(|v| v.parse().ok()).unwrap_or(25.0),
+        shot_after: get("--shot-after=")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(25.0),
         probe: match get("--probe=").as_deref() {
             None => None,
             Some("menu") => Some(emu::Probe::Menu),
@@ -1120,7 +1207,6 @@ fn missing_images(cfg: &emu::Config) -> Option<String> {
     );
     Some(out)
 }
-
 
 /// A short hash over everything that decides what the snapshot *is*. Not cryptographic — this is a
 /// cache key, and its only job is to change whenever the machine would.
@@ -1203,8 +1289,11 @@ struct App {
     /// The region the device is drawn in, remembered from the last frame so that input handling —
     /// which runs before the device is painted — can ask whether the pointer is over it.
     dev_area: Rect,
-    /// `None` = no check has finished. `Some(None)` = a check ran and found nothing, which is what
-    /// offline looks like and is never shown.
+    /// The chrome height `IPOD_LAYOUT=1` last printed, so it reports a *change* rather than
+    /// once per frame. The chrome is not constant — a running machine adds condition lines and
+    /// two more buttons to the controls panel — and the moment it grows past a scale step is
+    /// exactly the moment worth seeing.
+    said_layout: i32,
     /// An install running on another thread. `None` = nothing started; `Some(None)` = running;
     /// `Some(Some(..))` = finished, with the new drive and its report or the reason it failed.
     ///
@@ -1218,6 +1307,8 @@ struct App {
     new_machine_name: String,
     /// The phase at the previous frame, so the boot→running edge can be seen.
     last_phase: Phase,
+    /// `None` = no check has finished. `Some(None)` = a check ran and found nothing, which is what
+    /// offline looks like and is never shown.
     update_slot: Arc<Mutex<Option<Option<update::Found>>>>,
     update_line: Option<String>,
     update_asked: bool,
@@ -1487,8 +1578,9 @@ impl Images {
         // 5G Rev A, so a correct 5.5G pair — family 25 — would have been warned as wrong the moment
         // 5.5G was supported. A 5G and a 5.5G share FamilyID 6; only the UPDATER family separates
         // them, which is why this had to move off a fixed number.
-        self.mismatch =
-            rom_ok.then(|| inspect::generation_mismatch(self.model, family)).flatten();
+        self.mismatch = rom_ok
+            .then(|| inspect::generation_mismatch(self.model, family))
+            .flatten();
     }
 
     /// The IPSW is checked separately because checking it means inflating 13.9 MB and hashing it,
@@ -1499,9 +1591,9 @@ impl Images {
         // Only when it is a firmware bundle at all: hashing something that failed to parse would
         // be reading 100 MB to answer a question already answered.
         self.ipsw_provenance = match &self.ipsw_verdict {
-            Some(v) if v.ok() => {
-                std::fs::read(&p).ok().map(|b| eapp_loader::firmware::identify(&b))
-            }
+            Some(v) if v.ok() => std::fs::read(&p)
+                .ok()
+                .map(|b| eapp_loader::firmware::identify(&b)),
             _ => None,
         };
         self.built = None;
@@ -1532,7 +1624,10 @@ impl Images {
     /// screen had steps.
     fn accept(&mut self, path: &Path, into_dir: &Path, sectors: u64) -> String {
         self.rejected = None;
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         match inspect::classify(path) {
             inspect::Kind::Rom => {
                 self.flash = path.to_string_lossy().into_owned();
@@ -1549,8 +1644,7 @@ impl Images {
             // because before this arm existed `rockbox.ipod` was 7.5 MB and fell through to the
             // size test, and the window called an operating system a drive.
             inspect::Kind::Os => {
-                let (model, len) = inspect::os_checksum(path)
-                    .unwrap_or_else(|| ("????".into(), 0));
+                let (model, len) = inspect::os_checksum(path).unwrap_or_else(|| ("????".into(), 0));
                 self.pending_os = Some(path.to_string_lossy().into_owned());
                 if self.disk.is_empty() {
                     format!(
@@ -1611,7 +1705,10 @@ impl Images {
                     Ok(what) => {
                         self.disk = out.to_string_lossy().into_owned();
                         self.revalidate();
-                        format!("built a drive from {name} — {}{provenance}", first_line(what))
+                        format!(
+                            "built a drive from {name} — {}{provenance}",
+                            first_line(what)
+                        )
                     }
                     Err(e) => format!("{name}: {e}"),
                 };
@@ -1619,7 +1716,9 @@ impl Images {
                 line
             }
             inspect::Kind::Unknown => {
-                let size = std::fs::metadata(path).map(|m| human(m.len())).unwrap_or_default();
+                let size = std::fs::metadata(path)
+                    .map(|m| human(m.len()))
+                    .unwrap_or_default();
                 let line = format!(
                     "{name} is not a boot ROM, an iPod software update or a drive image ({size})."
                 );
@@ -1637,12 +1736,7 @@ impl App {
     /// and taking the smaller one is what lets the screens be laid out with no window at all. That
     /// is what `every_screen_fits_the_smallest_window` needs, and a rule about the size of the UI
     /// that could not be checked without a person looking at it is a rule that would rot.
-    fn new(
-        ctx: &egui::Context,
-        cfg: emu::Config,
-        settings: Settings,
-        ipsw: String,
-    ) -> Self {
+    fn new(ctx: &egui::Context, cfg: emu::Config, settings: Settings, ipsw: String) -> Self {
         theme(ctx);
         let tex = ctx.load_texture(
             "panel",
@@ -1701,6 +1795,7 @@ impl App {
             scale: 1,
             hold_slot: Rect::NOTHING,
             dev_area: Rect::NOTHING,
+            said_layout: -1,
             notice: None,
             update_slot,
             install_slot: Arc::new(Mutex::new(None)),
@@ -1736,7 +1831,12 @@ impl App {
         self.cfg.disk = PathBuf::from(self.images.disk.trim());
         // The cache key includes both paths, so a different pair of images gets a different
         // snapshot rather than restoring one taken on the other machine.
-        let cache = cache_paths(&self.cfg.nor.cache_tag(), &self.cfg.disk, self.cfg.clock, self.cfg.snap_at);
+        let cache = cache_paths(
+            &self.cfg.nor.cache_tag(),
+            &self.cfg.disk,
+            self.cfg.clock,
+            self.cfg.snap_at,
+        );
         // Measured, not deleted. Anything cached for a different pair of images -- or for an
         // older build of this emulator, which is the common case -- is reported and left alone.
         let (stale, paths) = reclaimable(&settings::data_dir(), &cache, self.cfg.work_on_copy);
@@ -1756,8 +1856,11 @@ impl App {
         // mode would name a file this mode never writes and never reads, and name it as the thing
         // `build` clones *from* — a value that is inert only for as long as nobody adds a caller.
         self.cfg.frozen = cache.frozen;
-        self.cfg.workdisk =
-            if self.cfg.work_on_copy { cache.work } else { self.cfg.disk.clone() };
+        self.cfg.workdisk = if self.cfg.work_on_copy {
+            cache.work
+        } else {
+            self.cfg.disk.clone()
+        };
         self.notice = self.inspect_drive();
 
         // Remember what worked, so the next launch opens straight into the iPod.
@@ -1837,7 +1940,11 @@ impl App {
         self.say(format!(
             "drive: firmware images [{}]{}",
             state.tags.join(", "),
-            if state.aupd_armed { ", updater armed" } else { "" }
+            if state.aupd_armed {
+                ", updater armed"
+            } else {
+                ""
+            }
         ));
         if !state.has_os {
             return Some("There is no operating system on this drive.".into());
@@ -1845,7 +1952,10 @@ impl App {
         if state.aupd_armed {
             // Real hardware runs the updater, reboots itself, and runs the OS on the second boot.
             // Nothing here power-cycles the machine, so this drive stops at the updater.
-            return Some("The flash updater is armed, so this drive boots the updater instead of the OS.".into());
+            return Some(
+                "The flash updater is armed, so this drive boots the updater instead of the OS."
+                    .into(),
+            );
         }
         None
     }
@@ -2026,7 +2136,10 @@ impl App {
         if let Ok(flash) = std::fs::read(&self.cfg.flash) {
             for e in eapp_loader::inspect::nor_images(&flash) {
                 let at = e.offset as usize;
-                if !flash.get(at..at + 4).is_some_and(eapp_loader::inspect::is_bootable) {
+                if !flash
+                    .get(at..at + 4)
+                    .is_some_and(eapp_loader::inspect::is_bootable)
+                {
                     continue; // `logo` and `vmcs` are data.
                 }
                 let hint = match e.tag.as_str() {
@@ -2039,7 +2152,10 @@ impl App {
         }
         let root = settings::repo_root();
         for (path, hint) in [
-            ("resources/vendor/rockbox/bin/rb-main.raw", "Rockbox 4.0 itself."),
+            (
+                "resources/vendor/rockbox/bin/rb-main.raw",
+                "Rockbox 4.0 itself.",
+            ),
             (
                 "resources/vendor/rockbox/bin/bootloader-ipodvideo.ipod",
                 "Rockbox's bootloader. It expects to be installed in the firmware partition and \
@@ -2092,53 +2208,62 @@ impl App {
         // checks. A machine list has no such bound: it is as tall as the number of machines, and
         // no window minimum can be chosen for a number the person picks. Bounding the list keeps
         // the page a measurable height and keeps the rule the test enforces.
-        egui::ScrollArea::vertical().max_height(112.0).show(ui, |ui| {
-        for m in self.settings.machines.clone() {
-            ui.horizontal(|ui| {
-                let live = current.as_deref() == Some(m.name.as_str());
-                let dot = if live { "●" } else { "○" };
-                ui.label(
-                    egui::RichText::new(format!("{dot} {}", m.name))
-                        .color(if live { UI_TEXT } else { UI_TEXT_DIM }),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("forget").clicked() {
-                        forget = Some(m.name.clone());
-                    }
-                    if !live && ui.small_button("switch to").clicked() {
-                        switch_to = Some(m.name.clone());
-                    }
-                });
+        egui::ScrollArea::vertical()
+            .max_height(112.0)
+            .show(ui, |ui| {
+                for m in self.settings.machines.clone() {
+                    ui.horizontal(|ui| {
+                        let live = current.as_deref() == Some(m.name.as_str());
+                        let dot = if live { "●" } else { "○" };
+                        ui.label(
+                            egui::RichText::new(format!("{dot} {}", m.name)).color(if live {
+                                UI_TEXT
+                            } else {
+                                UI_TEXT_DIM
+                            }),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("forget").clicked() {
+                                forget = Some(m.name.clone());
+                            }
+                            if !live && ui.small_button("switch to").clicked() {
+                                switch_to = Some(m.name.clone());
+                            }
+                        });
+                    });
+                    // What it is, under the name, so the list can be read without opening anything.
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "     {} · {}",
+                            match &m.nor {
+                                eapp_loader::nor::Source::File(p) => p
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|| "a boot ROM".into()),
+                                eapp_loader::nor::Source::Synthetic { model, .. } =>
+                                    format!("{model}, synthesised"),
+                            },
+                            m.disk
+                                .as_ref()
+                                .and_then(|d| d
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned()))
+                                .unwrap_or_else(|| "no drive".into()),
+                        ))
+                        .small()
+                        .color(UI_TEXT_FAINT),
+                    );
+                    ui.add_space(4.0);
+                }
+                if self.settings.machines.is_empty() {
+                    ui.label(
+                        egui::RichText::new("None saved yet.")
+                            .small()
+                            .color(UI_TEXT_FAINT),
+                    );
+                    ui.add_space(4.0);
+                }
             });
-            // What it is, under the name, so the list can be read without opening anything.
-            ui.label(
-                egui::RichText::new(format!(
-                    "     {} · {}",
-                    match &m.nor {
-                        eapp_loader::nor::Source::File(p) => p
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "a boot ROM".into()),
-                        eapp_loader::nor::Source::Synthetic { model, .. } =>
-                            format!("{model}, synthesised"),
-                    },
-                    m.disk
-                        .as_ref()
-                        .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
-                        .unwrap_or_else(|| "no drive".into()),
-                ))
-                .small()
-                .color(UI_TEXT_FAINT),
-            );
-            ui.add_space(4.0);
-        }
-        if self.settings.machines.is_empty() {
-            ui.label(
-                egui::RichText::new("None saved yet.").small().color(UI_TEXT_FAINT),
-            );
-            ui.add_space(4.0);
-        }
-        });
 
         ui.horizontal(|ui| {
             let name = self.new_machine_name.clone();
@@ -2179,8 +2304,12 @@ impl App {
                     // always spelled that.
                     eapp_loader::nor::Source::Synthetic { .. } => String::new(),
                 };
-                self.images.disk =
-                    self.settings.disk.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
+                self.images.disk = self
+                    .settings
+                    .disk
+                    .as_ref()
+                    .map(|d| d.display().to_string())
+                    .unwrap_or_default();
                 self.images.revalidate();
                 self.settings.save();
                 self.say(format!("switched to “{n}” — restart the iPod to boot it"));
@@ -2335,7 +2464,9 @@ impl App {
     }
 
     fn window_shot_step(&mut self, ctx: &egui::Context) {
-        let Some(path) = self.cfg.window_shot.clone() else { return };
+        let Some(path) = self.cfg.window_shot.clone() else {
+            return;
+        };
 
         // Collect first: if the picture has arrived, this frame's job is to write it.
         let shot = ctx.input(|i| {
@@ -2427,12 +2558,23 @@ fn device_at_rest(
     // The hold switch first, so the case's rounded corner covers the half that is inside it.
     let sw = Rect::from_min_max(
         Pos2::new(o.x + SWITCH_X * k, o.y),
-        Pos2::new(o.x + (SWITCH_X + SWITCH_W) * k, o.y + SWITCH_PROUD * 2.0 * k),
+        Pos2::new(
+            o.x + (SWITCH_X + SWITCH_W) * k,
+            o.y + SWITCH_PROUD * 2.0 * k,
+        ),
     );
     // Two tones, because the switch is a slider: the pale half is the travel it sits in.
-    p.rect_filled(sw, CornerRadius::from((1.0 * k) as u8), Color32::from_gray(0x9C));
+    p.rect_filled(
+        sw,
+        CornerRadius::from((1.0 * k) as u8),
+        Color32::from_gray(0x9C),
+    );
     let half = Rect::from_min_max(sw.min, Pos2::new(sw.min.x + sw.width() * 0.5, sw.max.y));
-    p.rect_filled(half, CornerRadius::from((1.0 * k) as u8), Color32::from_gray(0xD8));
+    p.rect_filled(
+        half,
+        CornerRadius::from((1.0 * k) as u8),
+        Color32::from_gray(0xD8),
+    );
 
     let face = Rect::from_min_max(at(0.0, 0.0), at(d.case_w, d.case_h));
     p.rect_filled(face, CornerRadius::from((5.5 * k) as u8), body);
@@ -2441,10 +2583,17 @@ fn device_at_rest(
     let sx = o.x + (d.case_w - d.screen_w) / 2.0 * k;
     let sy = o.y + (SWITCH_PROUD + d.screen_top) * k;
     let glass = Rect::from_min_size(Pos2::new(sx, sy), Vec2::new(d.screen_w * k, d.screen_h * k));
-    p.rect_filled(glass.expand(1.2 * k), CornerRadius::from((0.8 * k) as u8), Color32::from_gray(0x24));
+    p.rect_filled(
+        glass.expand(1.2 * k),
+        CornerRadius::from((0.8 * k) as u8),
+        Color32::from_gray(0x24),
+    );
     p.rect_filled(glass, CornerRadius::ZERO, Color32::from_gray(0x0C));
 
-    let c = Pos2::new(o.x + d.case_w / 2.0 * k, o.y + (SWITCH_PROUD + d.wheel_cy) * k);
+    let c = Pos2::new(
+        o.x + d.case_w / 2.0 * k,
+        o.y + (SWITCH_PROUD + d.wheel_cy) * k,
+    );
     let r = d.wheel_d / 2.0 * k;
     p.circle_filled(c, r, wheel);
     p.circle_filled(c, r * 0.34, body);
@@ -2496,9 +2645,13 @@ impl eframe::App for App {
         // window is a rectangle somebody has to find; the window itself is the thing they are
         // already aiming at. Read once here, because `dropped_files` is reported to every widget
         // that asks and an earlier version delivered one dropped file into every slot at once.
-        let dropped: Vec<PathBuf> = ui
-            .ctx()
-            .input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
+        let dropped: Vec<PathBuf> = ui.ctx().input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_path_buf())
+                .collect()
+        });
         if !dropped.is_empty() {
             let before = self.cold();
             for p in dropped {
@@ -2550,8 +2703,11 @@ impl eframe::App for App {
             let img = match lit {
                 None => egui::ColorImage::from_rgb([FB_W, FB_H], &out.fb),
                 Some(f) => {
-                    let dimmed: Vec<u8> =
-                        out.fb.iter().map(|v| (*v as f32 * f).round() as u8).collect();
+                    let dimmed: Vec<u8> = out
+                        .fb
+                        .iter()
+                        .map(|v| (*v as f32 * f).round() as u8)
+                        .collect();
                     egui::ColorImage::from_rgb([FB_W, FB_H], &dimmed)
                 }
             };
@@ -2626,8 +2782,8 @@ impl App {
     fn first_run(&mut self, ui: &mut egui::Ui) {
         self.column(ui, |app, ui| {
             let dev = IPOD_VIDEO;
-            let (rect, _) =
-                ui.allocate_exact_size(Vec2::new(ui.available_width(), 118.0), egui::Sense::hover());
+            let (rect, _) = ui
+                .allocate_exact_size(Vec2::new(ui.available_width(), 118.0), egui::Sense::hover());
             device_at_rest(ui.painter(), &dev, rect.center(), 108.0, app.chassis());
             ui.add_space(6.0);
 
@@ -2658,7 +2814,10 @@ impl App {
                     .color(UI_TEXT_FAINT),
                 );
                 ui.add_space(2.0);
-                if ui.link("What are these, and where do I get them?").clicked() {
+                if ui
+                    .link("What are these, and where do I get them?")
+                    .clicked()
+                {
                     app.open_help();
                 }
             });
@@ -2669,7 +2828,11 @@ impl App {
             ui.vertical_centered(|ui| {
                 // A generated ROM needs no file, so readiness is only ever about the software.
                 let ready = app.images.disk_good();
-                let label = if ready { "   Build my iPod   " } else { "   Build my iPod   " };
+                let label = if ready {
+                    "   Build my iPod   "
+                } else {
+                    "   Build my iPod   "
+                };
                 if ui.add_enabled(ready, egui::Button::new(label)).clicked() {
                     app.start();
                 }
@@ -2735,9 +2898,13 @@ impl App {
         // Everything but the model is carried, so changing an iPod's colour keeps its identity and
         // its splash rather than quietly resetting them.
         let (seed, serial, guid, splash) = match &self.settings.nor {
-            eapp_loader::nor::Source::Synthetic { seed, serial, guid, splash, .. } => {
-                (*seed, serial.clone(), *guid, splash.clone())
-            }
+            eapp_loader::nor::Source::Synthetic {
+                seed,
+                serial,
+                guid,
+                splash,
+                ..
+            } => (*seed, serial.clone(), *guid, splash.clone()),
             eapp_loader::nor::Source::File(_) => (0, None, None, None),
         };
         self.settings.nor = eapp_loader::nor::Source::Synthetic {
@@ -2767,7 +2934,8 @@ impl App {
         let current = self.synthetic_model();
 
         // (generation, capacity) is what a person thinks of as "which iPod".
-        let mut kinds: Vec<(Generation, u16)> = all.iter().map(|m| (m.generation, m.capacity_gb)).collect();
+        let mut kinds: Vec<(Generation, u16)> =
+            all.iter().map(|m| (m.generation, m.capacity_gb)).collect();
         kinds.dedup();
         let mut chosen_kind = (current.generation, current.capacity_gb);
 
@@ -2803,9 +2971,15 @@ impl App {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label("Colour");
-            for m in all.iter().filter(|m| (m.generation, m.capacity_gb) == chosen_kind) {
+            for m in all
+                .iter()
+                .filter(|m| (m.generation, m.capacity_gb) == chosen_kind)
+            {
                 let mut sel = m.number == current.number;
-                if ui.selectable_value(&mut sel, true, m.colour().label()).clicked() {
+                if ui
+                    .selectable_value(&mut sel, true, m.colour().label())
+                    .clicked()
+                {
                     pick = Some(m);
                 }
             }
@@ -2912,7 +3086,10 @@ impl App {
             self.take(&pick_files("Boot ROM", &["bin"]));
         }
         if want_own_software {
-            self.take(&pick_files("Software", &["img", "bin", "dmg", "iso", "ipsw", "zip"]));
+            self.take(&pick_files(
+                "Software",
+                &["img", "bin", "dmg", "iso", "ipsw", "zip"],
+            ));
         }
         self.install_row(ui);
         if want_firmware {
@@ -3084,7 +3261,11 @@ impl App {
     fn file_rows(&mut self, ui: &mut egui::Ui) {
         let rows: [(&str, &str, &[&str]); 2] = [
             ("Boot ROM", "flash", &["bin"]),
-            ("Software", "disk", &["img", "bin", "dmg", "iso", "ipsw", "zip"]),
+            (
+                "Software",
+                "disk",
+                &["img", "bin", "dmg", "iso", "ipsw", "zip"],
+            ),
         ];
         let mut pick: Option<(&str, &[&str])> = None;
         let mut show_details: Option<usize> = None;
@@ -3220,7 +3401,11 @@ impl App {
         }
         if let Some(r) = self.images.rejected.clone() {
             ui.add_space(6.0);
-            ui.label(egui::RichText::new(r).small().color(Color32::from_rgb(0xD0, 0x6C, 0x6C)));
+            ui.label(
+                egui::RichText::new(r)
+                    .small()
+                    .color(Color32::from_rgb(0xD0, 0x6C, 0x6C)),
+            );
         }
         if let Some(Err(e)) = self.images.built.clone() {
             ui.add_space(6.0);
@@ -3320,11 +3505,23 @@ impl App {
         }
         let row = self.details_row;
         let (heading, path, facts) = if row == 0 {
-            ("Boot ROM", self.images.flash.clone(), self.images.flash_facts.clone())
+            (
+                "Boot ROM",
+                self.images.flash.clone(),
+                self.images.flash_facts.clone(),
+            )
         } else {
-            ("Software", self.images.disk.clone(), self.images.disk_facts.clone())
+            (
+                "Software",
+                self.images.disk.clone(),
+                self.images.disk_facts.clone(),
+            )
         };
-        let described = if row == 0 { self.images.flash_name.clone() } else { self.images.disk_name.clone() };
+        let described = if row == 0 {
+            self.images.flash_name.clone()
+        } else {
+            self.images.disk_name.clone()
+        };
         self.column(ui, |app, ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(heading).heading());
@@ -3350,9 +3547,7 @@ impl App {
             ui.add_space(6.0);
             // Last, small, and selectable: the path is the least interesting true thing about a
             // file and the one people occasionally need to copy.
-            ui.label(
-                egui::RichText::new("Where it is").small().color(UI_HEADING),
-            );
+            ui.label(egui::RichText::new("Where it is").small().color(UI_HEADING));
             ui.label(egui::RichText::new(path).small().monospace());
         });
     }
@@ -3373,9 +3568,15 @@ impl App {
         ui.label("and copy the internal_rom_… file off when you plug it in.");
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.hyperlink_to("Rockbox Utility", "https://www.rockbox.org/wiki/RockboxUtility");
+            ui.hyperlink_to(
+                "Rockbox Utility",
+                "https://www.rockbox.org/wiki/RockboxUtility",
+            );
             ui.label("·");
-            ui.hyperlink_to("the flash guide", "https://www.rockbox.org/wiki/IpodFlash.html");
+            ui.hyperlink_to(
+                "the flash guide",
+                "https://www.rockbox.org/wiki/IpodFlash.html",
+            );
         });
         ui.add_space(6.0);
         ui.label(
@@ -3456,7 +3657,10 @@ impl App {
                 ui.label(egui::RichText::new("Settings").heading());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let ready = app.images.both_good();
-                    if ui.add_enabled(ready, egui::Button::new("  Done  ")).clicked() {
+                    if ui
+                        .add_enabled(ready, egui::Button::new("  Done  "))
+                        .clicked()
+                    {
                         app.close_settings();
                     }
                     if !ready {
@@ -3534,7 +3738,10 @@ impl App {
                 // validate is a machine that stops during `build` and a window showing a
                 // stopped iPod nobody asked for.
                 if ui
-                    .add_enabled(self.images.both_good(), egui::Button::new("Restart the iPod"))
+                    .add_enabled(
+                        self.images.both_good(),
+                        egui::Button::new("Restart the iPod"),
+                    )
                     .on_hover_text(
                         "A booted RetailOS read its partition table at startup and has been \
                          writing to that drive since, so there is no honest way to hand it \
@@ -3593,7 +3800,9 @@ impl App {
         let mut debug = self.settings.mode == Mode::Debug;
         if ui
             .checkbox(&mut debug, "Show the readout over the device")
-            .on_hover_text("Instruction counts, the clocks, the wheel and the panel. `D` toggles it.")
+            .on_hover_text(
+                "Instruction counts, the clocks, the wheel and the panel. `D` toggles it.",
+            )
             .changed()
         {
             self.set_mode(if debug { Mode::Debug } else { Mode::User });
@@ -3610,8 +3819,15 @@ impl App {
         // -- copy mode re-freezes its working drive on the way out -- so the only difference
         // that was ever real is this one, and it is the one a person needs to see before the
         // machine starts rather than after.
-        let target = write_target(Path::new(self.images.disk.trim()), self.settings.work_on_copy);
-        ui.label(egui::RichText::new(target.line()).small().color(UI_TEXT_DIM));
+        let target = write_target(
+            Path::new(self.images.disk.trim()),
+            self.settings.work_on_copy,
+        );
+        ui.label(
+            egui::RichText::new(target.line())
+                .small()
+                .color(UI_TEXT_DIM),
+        );
         ui.add_space(4.0);
         if target == WriteTo::ReadOnly {
             ui.label(
@@ -3656,16 +3872,23 @@ impl App {
         self.section(ui, "SOFTWARE");
         self.software_rows(ui);
         ui.add_space(14.0);
-
     }
 
     fn pane_machines(&mut self, ui: &mut egui::Ui) {
         self.machines_section(ui);
-
     }
 
     fn pane_about(&mut self, ui: &mut egui::Ui) {
         self.section(ui, "ABOUT");
+        // **The repository, where somebody looking for it looks.** This program has no other way of
+        // saying where it comes from — the licence is in the source, the research is in the source,
+        // and the only copy anyone runs is a binary. A version number with nowhere to go is a
+        // version number you cannot act on.
+        ui.hyperlink_to(
+            egui::RichText::new("github.com/siggifly/ipod-emulator").small(),
+            "https://github.com/siggifly/ipod-emulator",
+        );
+        ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(format!("ipod-emulator {}", update::VERSION)).small());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -3694,11 +3917,13 @@ impl App {
         }
     }
 
-
     /// A section heading: the one piece of chrome that makes a long page scannable.
     fn section(&mut self, ui: &mut egui::Ui, title: &str) {
         ui.label(
-            egui::RichText::new(title).small().strong().color(UI_HEADING),
+            egui::RichText::new(title)
+                .small()
+                .strong()
+                .color(UI_HEADING),
         );
         ui.add_space(2.0);
         ui.separator();
@@ -3728,7 +3953,9 @@ impl App {
     /// ROM decides, on every launch and on every settings close. The cost is one read of a 1 MiB
     /// file at two moments a person is already waiting through.
     fn adopt_chassis_from_nor(&mut self, nor: &std::path::Path) {
-        let Ok(bytes) = std::fs::read(nor) else { return };
+        let Ok(bytes) = std::fs::read(nor) else {
+            return;
+        };
         if let Some(m) = eapp_loader::inspect::syscfg(&bytes).and_then(|c| c.model_info()) {
             self.derived_chassis = m.colour();
         }
@@ -3746,7 +3973,11 @@ impl App {
         }
         self.settings.disk = Some(PathBuf::from(self.images.disk.trim()));
         self.settings.save();
-        self.screen = if self.link.is_some() { Screen::Device } else { Screen::FirstRun };
+        self.screen = if self.link.is_some() {
+            Screen::Device
+        } else {
+            Screen::FirstRun
+        };
     }
 
     /// Park the machine and build a new one from what the settings now say.
@@ -3772,114 +4003,109 @@ impl App {
     fn footer(&mut self, ui: &mut egui::Ui, out: &emu::Out) {
         let s = out.stats;
         let pct = s.executed_here as f64 / s.wall_secs.max(1e-6) / HARDWARE_MIPS * 100.0;
-        egui::Panel::bottom("footer").show(ui, |ui| {
-            // A cold boot spends most of its time on a white screen, because that is what the
-            // hardware shows too — the Apple logo is drawn early and then RetailOS does several
-            // minutes of simulated work before it draws anything else. Without this, user mode
-            // gives no evidence the machine is doing anything at all, and a blank window that is
-            // busy is indistinguishable from a blank window that has hung. The same bar has been
-            // in the debug panel all along; there was no reason it was only there.
-            if let Phase::Booting { .. } = &out.phase {
-                // A bar with no text in it. At 6 points there is no room for a label inside,
-                // and shrinking the label to fit is how it became unreadable — so the words go
-                // in the row below, at the left, where the rest of the footer's text already is.
-                ui.add_space(4.0);
-                match self.settings.expected_boot() {
-                    Some(n) => {
-                        let f = (s.executed as f32 / n as f32).min(1.0);
-                        ui.add(egui::ProgressBar::new(f).desired_height(6.0).corner_radius(3));
-                    }
-                    // **No fraction until this machine has finished a boot once.** The denominator
-                    // used to be `snap_at`, a constant tuned to RetailOS, so the bar lied about
-                    // every other operating system: Rockbox reaches its menu in about 100 M and
-                    // barely moved it, iPodLinux takes 21.5 G and pinned it at 100 % for twenty
-                    // billion instructions — which is worse than no bar, because a full bar that
-                    // never finishes reads as a hang.
-                    None => {
-                        ui.add(
-                            egui::ProgressBar::new(0.0)
-                                .desired_height(6.0)
-                                .corner_radius(3)
-                                .animate(true),
-                        );
-                    }
-                }
-                ui.add_space(3.0);
-            }
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                // During a cold boot the useful number is how much of it is left, not how fast
-                // it is going, so that is what the leftmost slot says while it lasts.
-                let badge = if let Phase::Booting { .. } = &out.phase {
-                    // **An estimate against this machine's own last boot, and it says so.** The
-                    // boot ends when the machine asks for wheel frames — which any operating
-                    // system does — so the *end* was always honest; it was the denominator that
-                    // was RetailOS-shaped. A machine that has not finished a boot yet gets a count
-                    // rather than a percentage, because a percentage would be invented.
+        egui::Panel::bottom("footer")
+            .exact_size(FOOTER_H)
+            .show(ui, |ui| {
+                // A cold boot spends most of its time on a white screen, because that is what the
+                // hardware shows too — the Apple logo is drawn early and then RetailOS does several
+                // minutes of simulated work before it draws anything else. Without this, user mode
+                // gives no evidence the machine is doing anything at all, and a blank window that is
+                // busy is indistinguishable from a blank window that has hung. The same bar has been
+                // in the debug panel all along; there was no reason it was only there.
+                if let Phase::Booting { .. } = &out.phase {
+                    // A bar with no text in it. At 6 points there is no room for a label inside,
+                    // and shrinking the label to fit is how it became unreadable — so the words go
+                    // in the row below, at the left, where the rest of the footer's text already is.
+                    ui.add_space(4.0);
                     match self.settings.expected_boot() {
                         Some(n) => {
                             let f = (s.executed as f32 / n as f32).min(1.0);
-                            format!("cold boot — roughly {:.0} %", f * 100.0)
+                            ui.add(
+                                egui::ProgressBar::new(f)
+                                    .desired_height(6.0)
+                                    .corner_radius(3),
+                            );
                         }
-                        None => format!(
-                            "cold boot — {:.1} G instructions so far",
-                            s.executed as f64 / 1e9
-                        ),
+                        // **No fraction until this machine has finished a boot once.** The denominator
+                        // used to be `snap_at`, a constant tuned to RetailOS, so the bar lied about
+                        // every other operating system: Rockbox reaches its menu in about 100 M and
+                        // barely moved it, iPodLinux takes 21.5 G and pinned it at 100 % for twenty
+                        // billion instructions — which is worse than no bar, because a full bar that
+                        // never finishes reads as a hang.
+                        None => {
+                            ui.add(
+                                egui::ProgressBar::new(0.0)
+                                    .desired_height(6.0)
+                                    .corner_radius(3)
+                                    .animate(true),
+                            );
+                        }
                     }
-                } else if s.executed_here == 0 {
-                    "≈30 % of real-time — emulated".to_string()
-                } else {
-                    format!("{pct:.0} % of real-time — emulated")
-                };
-                ui.label(egui::RichText::new(badge).monospace().size(11.0))
-                    .on_hover_text(
-                        "The interpreter executes about 21 M instructions a second; a PP5021C \
+                    ui.add_space(3.0);
+                }
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    // During a cold boot the useful number is how much of it is left, not how fast
+                    // it is going, so that is what the leftmost slot says while it lasts.
+                    let badge = if let Phase::Booting { .. } = &out.phase {
+                        // **An estimate against this machine's own last boot, and it says so.** The
+                        // boot ends when the machine asks for wheel frames — which any operating
+                        // system does — so the *end* was always honest; it was the denominator that
+                        // was RetailOS-shaped. A machine that has not finished a boot yet gets a count
+                        // rather than a percentage, because a percentage would be invented.
+                        match self.settings.expected_boot() {
+                            Some(n) => {
+                                let f = (s.executed as f32 / n as f32).min(1.0);
+                                format!("cold boot — roughly {:.0} %", f * 100.0)
+                            }
+                            None => format!(
+                                "cold boot — {:.1} G instructions so far",
+                                s.executed as f64 / 1e9
+                            ),
+                        }
+                    } else if s.executed_here == 0 {
+                        "≈30 % of real-time — emulated".to_string()
+                    } else {
+                        format!("{pct:.0} % of real-time — emulated")
+                    };
+                    ui.label(egui::RichText::new(badge).monospace().size(11.0))
+                        .on_hover_text(
+                            "The interpreter executes about 21 M instructions a second; a PP5021C \
                          does about 72 M. So everything here happens at roughly a third of the \
                          speed the real device would. The emulator's own microsecond clock is a \
                          different number again — the readout shows both.",
-                    );
-                if self.link.as_ref().is_some_and(|l| l.saving.load(Ordering::Relaxed)) {
-                    ui.separator();
-                    ui.label(egui::RichText::new("parking the machine…").size(11.0));
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // **Settings, not setup, and it no longer ends anything.** The images chosen
-                    // on the first run used to be the images for ever unless you were willing to
-                    // reboot to look at them, because this button and the first-run screen were
-                    // the same screen.
-                    if ui
-                        .button("settings…")
-                        .on_hover_text("The iPod keeps running. Esc comes back.")
-                        .clicked()
+                        );
+                    if self
+                        .link
+                        .as_ref()
+                        .is_some_and(|l| l.saving.load(Ordering::Relaxed))
                     {
-                        self.open_settings();
-                    }
-                    // **Here and not in the settings, because the settings screen is full.** It was
-                    // tried three ways there — its own section (+72 px), a line of its own (+58),
-                    // and a link on a heading's row (+22) — against a screen already within 700 px
-                    // of the smallest window this program supports, and the guard says lose a
-                    // section rather than gain a scrollbar. This strip has horizontal room and
-                    // costs nothing vertically. It is also arguably the better home: installing an
-                    // operating system is something you do to the machine, not a preference.
-                    if ui
-                        .button("software…")
-                        .on_hover_text(
-                            "Install Rockbox onto a copy of this drive, or open the drive on this \
-                             computer and put your own files on it.",
-                        )
-                        .clicked()
-                    {
-                        self.back_to = self.screen;
-                        self.screen = Screen::Settings;
-                    }
-                    if let Some(line) = self.update_line.clone() {
                         ui.separator();
-                        ui.label(egui::RichText::new(line).size(11.0));
+                        ui.label(egui::RichText::new("parking the machine…").size(11.0));
                     }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // **Settings, not setup, and it no longer ends anything.** The images chosen
+                        // on the first run used to be the images for ever unless you were willing to
+                        // reboot to look at them, because this button and the first-run screen were
+                        // the same screen.
+                        if ui
+                            .button("settings…")
+                            .on_hover_text(
+                                "The machine, the software on its drive, and this window's own \
+                             preferences. The iPod keeps running; Esc comes back.",
+                            )
+                            .clicked()
+                        {
+                            self.open_settings();
+                        }
+                        if let Some(line) = self.update_line.clone() {
+                            ui.separator();
+                            ui.label(egui::RichText::new(line).size(11.0));
+                        }
+                    });
                 });
+                ui.add_space(2.0);
             });
-            ui.add_space(2.0);
-        });
     }
 
     fn keyboard(&mut self, ctx: &egui::Context) {
@@ -3929,10 +4155,7 @@ impl App {
             // — the panel moved and RetailOS's menu moved with it. The pointer decides whose scroll
             // it is, and `dev_area` is last frame's rectangle because input is read before the
             // device is painted.
-            let over_device = i
-                .pointer
-                .latest_pos()
-                .is_some_and(|p| dev_area.contains(p));
+            let over_device = i.pointer.latest_pos().is_some_and(|p| dev_area.contains(p));
             let dy = i.smooth_scroll_delta.y;
             if dy != 0.0 && over_device {
                 wheel_units += dy;
@@ -3972,7 +4195,11 @@ impl App {
             self.set_hold(on);
         }
         if toggle_mode {
-            let m = if self.settings.mode == Mode::Debug { Mode::User } else { Mode::Debug };
+            let m = if self.settings.mode == Mode::Debug {
+                Mode::User
+            } else {
+                Mode::Debug
+            };
             self.set_mode(m);
         }
         // A screenshot is an instrument, so it is a debug-mode action. The device is still there in
@@ -3990,7 +4217,6 @@ impl App {
     }
 
     // ------------------------------------------------------------ drawing the device
-
 
     /// The key list, drawn into the empty column left of the device.
     ///
@@ -4031,8 +4257,20 @@ impl App {
         let dim = UI_TEXT_DIM;
         let dimmer = UI_TEXT_FAINT;
         for (k, what) in KEYS {
-            p.text(Pos2::new(x, y), egui::Align2::LEFT_TOP, k, font.clone(), dim);
-            p.text(Pos2::new(x + 92.0, y), egui::Align2::LEFT_TOP, what, font.clone(), dimmer);
+            p.text(
+                Pos2::new(x, y),
+                egui::Align2::LEFT_TOP,
+                k,
+                font.clone(),
+                dim,
+            );
+            p.text(
+                Pos2::new(x + 92.0, y),
+                egui::Align2::LEFT_TOP,
+                what,
+                font.clone(),
+                dimmer,
+            );
             y += line;
         }
     }
@@ -4052,6 +4290,36 @@ impl App {
         let k = by_w.min(by_h).floor().max(1.0);
         self.scale = k as u32;
 
+        // **How the chrome gets measured instead of guessed.** `DEFAULT_H` has to clear the ×2
+        // step, and the only unknown in that sum is how much height the footer and the controls
+        // panel take — which depends on the font, so it cannot be worked out from constants. This
+        // prints it, once, from the running window:
+        //
+        // ```text
+        //   IPOD_LAYOUT=1 ipod-emulator
+        //   layout: window 1100x800 @2 ppp · device area 1084x670 · chrome 130 px · scale x1
+        // ```
+        //
+        // `default_window_is_tall_enough_for_a_full_size_ipod` carries the number this prints. One
+        // line behind an environment variable, because a constant nobody can re-measure is a
+        // constant that goes stale the first time the layout moves.
+        if std::env::var_os("IPOD_LAYOUT").is_some() {
+            let screen = ui.ctx().input(|i| i.raw.screen_rect).unwrap_or(area);
+            let chrome = (screen.height() - area.height()).round() as i32;
+            if chrome != self.said_layout {
+                self.said_layout = chrome;
+                println!(
+                "layout: window {:.0}x{:.0} @{ppp} ppp · device area {:.0}x{:.0} · chrome {:.0} px \
+                 · scale x{k}",
+                screen.width(),
+                screen.height(),
+                area.width(),
+                area.height(),
+                chrome,
+            );
+            }
+        }
+
         let px_per_mm = FB_W as f32 * k / SCREEN_W;
         let dev_w = CASE_W * px_per_mm;
         let dev_h = (CASE_H + SWITCH_PROUD) * px_per_mm;
@@ -4065,7 +4333,10 @@ impl App {
         // `y` is measured from the top of the CASE; the switch protrudes into negative y, which is
         // the room `SWITCH_PROUD` reserves above it.
         let at = |xmm: f32, ymm: f32| -> Pos2 {
-            Pos2::new((ox + xmm * px_per_mm) / ppp, (oy + (ymm + SWITCH_PROUD) * px_per_mm) / ppp)
+            Pos2::new(
+                (ox + xmm * px_per_mm) / ppp,
+                (oy + (ymm + SWITCH_PROUD) * px_per_mm) / ppp,
+            )
         };
         let mm = |v: f32| v * px_per_mm / ppp;
 
@@ -4154,16 +4425,30 @@ impl App {
         let c = at(CASE_W / 2.0, WHEEL_CY);
         let ring = WheelRing::new(c.x, c.y, mm(WHEEL_D / 2.0));
         p.circle_filled(c, ring.outer, wheel_fill);
-        p.circle_stroke(c, ring.outer, Stroke::new(1.0, Color32::from_black_alpha(30)));
+        p.circle_stroke(
+            c,
+            ring.outer,
+            Stroke::new(1.0, Color32::from_black_alpha(30)),
+        );
         for b in Button::ALL {
             let Some(cl) = b.centre_click() else { continue };
             let (lx, ly) = ring.point_at(cl as u8);
             let lit = self.down.contains(&b);
-            let ink = if lit { Color32::from_rgb(0x2f, 0x6f, 0xd0) } else { ring_text };
+            let ink = if lit {
+                Color32::from_rgb(0x2f, 0x6f, 0xd0)
+            } else {
+                ring_text
+            };
             let at = Pos2::new(lx, ly);
             let size = (ring.outer * 0.19).max(7.0);
             if b == Button::Menu {
-                p.text(at, Align2::CENTER_CENTER, "MENU", FontId::proportional(size), ink);
+                p.text(
+                    at,
+                    Align2::CENTER_CENTER,
+                    "MENU",
+                    FontId::proportional(size),
+                    ink,
+                );
             } else {
                 transport(&p, b, at, size, ink);
             }
@@ -4176,7 +4461,11 @@ impl App {
         p.circle_filled(
             c,
             ring.select,
-            if select_lit { wheel_fill.gamma_multiply(0.82) } else { wheel_fill.gamma_multiply(0.94) },
+            if select_lit {
+                wheel_fill.gamma_multiply(0.82)
+            } else {
+                wheel_fill.gamma_multiply(0.94)
+            },
         );
         p.circle_stroke(
             c,
@@ -4279,12 +4568,14 @@ impl App {
         let (_, items, total) = self.fw_cache.as_ref().expect("just filled");
         let held = items.len();
         let bytes = *total;
-        let corrupt = items.iter().filter(|c| c.state == CacheState::Corrupt).count();
+        let corrupt = items
+            .iter()
+            .filter(|c| c.state == CacheState::Corrupt)
+            .count();
         let junk: Vec<PathBuf> = items
             .iter()
             .filter(|c| {
-                c.state == CacheState::Corrupt
-                    || c.path.extension().is_some_and(|e| e == "part")
+                c.state == CacheState::Corrupt || c.path.extension().is_some_and(|e| e == "part")
             })
             .map(|c| c.path.clone())
             .collect();
@@ -4323,7 +4614,10 @@ impl App {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             let busy = self.fw_busy.is_some();
-            let have = releases.get(self.fw_pick).map(|r| dir.join(r.file).exists()).unwrap_or(false);
+            let have = releases
+                .get(self.fw_pick)
+                .map(|r| dir.join(r.file).exists())
+                .unwrap_or(false);
             let text = if busy {
                 "Downloading…".to_string()
             } else if have {
@@ -4331,7 +4625,10 @@ impl App {
             } else {
                 "Download".to_string()
             };
-            if ui.add_enabled(!busy && !have, egui::Button::new(text)).clicked() {
+            if ui
+                .add_enabled(!busy && !have, egui::Button::new(text))
+                .clicked()
+            {
                 if let Some(rel) = releases.get(self.fw_pick).copied() {
                     self.fw_busy = Some(rel.file.to_string());
                     self.fw_note = None;
@@ -4448,12 +4745,10 @@ impl App {
     ) {
         // The slot runs from `SWITCH_PROUD` above the case down to 1.2 mm inside it. The lower part
         // is hidden by the body, which is the overlap that seats it.
-        let slot = Rect::from_min_max(
-            at(SWITCH_X, -SWITCH_PROUD),
-            at(SWITCH_X + SWITCH_W, 1.2),
-        );
+        let slot = Rect::from_min_max(at(SWITCH_X, -SWITCH_PROUD), at(SWITCH_X + SWITCH_W, 1.2));
         // The hit region is the visible part only, expanded a little for a fingertip.
-        self.hold_slot = Rect::from_min_max(at(SWITCH_X, -SWITCH_PROUD), at(SWITCH_X + SWITCH_W, 0.4));
+        self.hold_slot =
+            Rect::from_min_max(at(SWITCH_X, -SWITCH_PROUD), at(SWITCH_X + SWITCH_W, 0.4));
         let r = CornerRadius::from(mm(0.7) as u8);
 
         // The recess the switch travels in, a shade darker than the case.
@@ -4462,25 +4757,47 @@ impl App {
         // when the switch is toward the outside of the case, which is `hold` engaged.
         if self.hold {
             let orange = Rect::from_min_max(
-                Pos2::new(slot.min.x + slot.width() * 0.08, slot.min.y + slot.height() * 0.18),
-                Pos2::new(slot.min.x + slot.width() * 0.46, slot.min.y + slot.height() * 0.72),
+                Pos2::new(
+                    slot.min.x + slot.width() * 0.08,
+                    slot.min.y + slot.height() * 0.18,
+                ),
+                Pos2::new(
+                    slot.min.x + slot.width() * 0.46,
+                    slot.min.y + slot.height() * 0.72,
+                ),
             );
-            p.rect_filled(orange, CornerRadius::from(1u8), Color32::from_rgb(0xe0, 0x6c, 0x18));
+            p.rect_filled(
+                orange,
+                CornerRadius::from(1u8),
+                Color32::from_rgb(0xe0, 0x6c, 0x18),
+            );
         }
         // The knob: half the slot wide, travelling the other half. The travel is the whole point —
         // a switch that only changed colour would not read as a switch.
         let w = slot.width() * 0.5;
-        let x = if self.hold { slot.max.x - w } else { slot.min.x };
+        let x = if self.hold {
+            slot.max.x - w
+        } else {
+            slot.min.x
+        };
         let knob = Rect::from_min_max(
             Pos2::new(x, slot.min.y),
             Pos2::new(x + w, slot.min.y + slot.height() * 0.82),
         );
         p.rect_filled(knob, r, body.gamma_multiply(0.94));
-        p.rect_stroke(knob, r, Stroke::new(1.0, Color32::from_black_alpha(55)), StrokeKind::Inside);
+        p.rect_stroke(
+            knob,
+            r,
+            Stroke::new(1.0, Color32::from_black_alpha(55)),
+            StrokeKind::Inside,
+        );
         // A grip line, so the knob is legible as a thing to push at small scales.
         let g = knob.center();
         p.line_segment(
-            [Pos2::new(g.x, knob.min.y + knob.height() * 0.28), Pos2::new(g.x, knob.max.y - knob.height() * 0.18)],
+            [
+                Pos2::new(g.x, knob.min.y + knob.height() * 0.28),
+                Pos2::new(g.x, knob.max.y - knob.height() * 0.18),
+            ],
             Stroke::new(1.0, Color32::from_black_alpha(45)),
         );
     }
@@ -4505,27 +4822,46 @@ impl App {
                     self.set_hold(on);
                     // A latch, not a press: the gesture is marked consumed so the release below
                     // has something to close and the switch does not throw again next frame.
-                    self.drag = Some(Drag { last: 0, button: None, consumed: true });
+                    self.drag = Some(Drag {
+                        last: 0,
+                        button: None,
+                        consumed: true,
+                    });
                     return;
                 }
                 match ring.hit(p.x, p.y) {
                     Hit::Select => {
                         self.press(Button::Select);
-                        self.drag =
-                            Some(Drag { last: 0, button: Some(Button::Select), consumed: false });
+                        self.drag = Some(Drag {
+                            last: 0,
+                            button: Some(Button::Select),
+                            consumed: false,
+                        });
                     }
                     Hit::RingButton(b, pos) => {
                         self.press(b);
-                        self.drag = Some(Drag { last: pos, button: Some(b), consumed: false });
+                        self.drag = Some(Drag {
+                            last: pos,
+                            button: Some(b),
+                            consumed: false,
+                        });
                     }
                     Hit::Ring(pos) => {
                         self.touch();
-                        self.drag = Some(Drag { last: pos, button: None, consumed: false });
+                        self.drag = Some(Drag {
+                            last: pos,
+                            button: None,
+                            consumed: false,
+                        });
                     }
                     // A press off the device is still a gesture — recorded, so that dragging back
                     // onto the wheel does not start a scroll from a stale angle.
                     Hit::None => {
-                        self.drag = Some(Drag { last: 0, button: None, consumed: true });
+                        self.drag = Some(Drag {
+                            last: 0,
+                            button: None,
+                            consumed: true,
+                        });
                     }
                 }
             }
@@ -4584,21 +4920,44 @@ impl App {
     /// it from exactly the person who needs it. What is *not* here is every counter that produced
     /// them, which is what the readout is for.
     fn device_controls(&mut self, ui: &mut egui::Ui, out: &emu::Out) {
-        egui::Panel::bottom("controls").show(ui, |ui| {
-            ui.add_space(4.0);
-            for (colour, text) in self.conditions(out) {
-                ui.colored_label(colour, text);
-            }
-            ui.horizontal_wrapped(|ui| {
-                if out.phase == Phase::Off {
-                    if ui.button("power on").clicked() {
-                        if let Some(l) = &self.link {
-                            l.command(emu::Cmd::PowerOn);
+        // **Exactly this tall, whatever is in it.** The panel used to size to its contents, so the
+        // height it left the device changed with the machine's state: 46 px with the machine off,
+        // 99 px once it was running and had conditions to report. The device's scale is a floored
+        // integer, so a panel that grows can push the iPod down a whole step — it would halve in
+        // size because a warning appeared, which reads as the emulator breaking rather than as a
+        // notice being shown. Measured with `IPOD_LAYOUT=1`; see [`DEFAULT_H`].
+        //
+        // The cost is unused panel when the machine is quiet. That buys an iPod that never resizes,
+        // and there is no version of this where both are true.
+        egui::Panel::bottom("controls")
+            .exact_size(CONTROLS_H)
+            .show(ui, |ui| {
+                ui.add_space(4.0);
+                // **Bounded, and scrolls rather than hides.** Four conditions can be live at once and
+                // the halt one wraps to two lines, so "just show them all" is what made this panel's
+                // height a function of the machine's state. Two lines is what the strip has room for;
+                // a fifth line is reachable, not dropped.
+                egui::ScrollArea::vertical()
+                    .id_salt("conditions")
+                    .max_height(CONDITIONS_H)
+                    .show(ui, |ui| {
+                        for (colour, text) in self.conditions(out) {
+                            ui.colored_label(colour, text);
                         }
-                        self.say("power on: cold boot from the reset vector");
-                    }
-                } else {
-                    if ui
+                        // Holds the region open when nothing is wrong, so the buttons below it do not
+                        // move as conditions come and go.
+                        ui.allocate_space(egui::vec2(ui.available_width(), 0.0));
+                    });
+                ui.horizontal_wrapped(|ui| {
+                    if out.phase == Phase::Off {
+                        if ui.button("power on").clicked() {
+                            if let Some(l) = &self.link {
+                                l.command(emu::Cmd::PowerOn);
+                            }
+                            self.say("power on: cold boot from the reset vector");
+                        }
+                    } else {
+                        if ui
                         .button("power off")
                         .on_hover_text(
                             "Drops the machine — the equivalent of pulling the battery out, not \
@@ -4613,7 +4972,7 @@ impl App {
                         }
                         self.say("power off: the machine is dropped");
                     }
-                    if ui
+                        if ui
                         .button("restart")
                         .on_hover_text(
                             "A cold boot from the reset vector — about 75 seconds. Not the reset \
@@ -4628,87 +4987,96 @@ impl App {
                         }
                         self.say("power cycle: rebuilding at the reset vector (~75 s)");
                     }
-                }
-                ui.separator();
-                // **Apple's service diagnostics**, which on the real device is reached by holding
-                // SELECT+REW at power-on. So it is a power cycle into a different program in the
-                // **An instrument, and only in debug mode.** `docs/ideas/run-any-os.md` argued
-                // against a boot picker before one existed, and it was right: entering an image
-                // directly means the machine's own bootloader never chose it, so any divergence
-                // afterwards is un-attributable between "the OS does this" and "we started it a
-                // way nothing starts it". The honest ways in are to **install** an operating
-                // system onto the drive, which the row on the setup screen now does, and to hold
-                // the **chord** at power-on for the boot ROM's own images, which research/07
-                // measures working.
-                //
-                // So this lives beside the readout and the framebuffer inspector as the window's
-                // `ipod-boot flsh`: a way to enter an image directly, for looking at it. It is
-                // still how diagnostics is reached today, because releasing the chord afterwards
-                // storms the interrupt controller — and when that is fixed this stops being how
-                // anybody reaches diagnostics either.
-                //
-                // It replaced two latched chord buttons, `hold MENU+SELECT` and `hold PLAY`. Both
-                // were reachable from the keyboard and the wheel already, and neither did anything
-                // a person could see.
-                let mut want = self.cfg.boot.clone();
-                let boots = self.boot_targets();
-                if self.settings.mode == Mode::Debug {
-                ui.label(egui::RichText::new("boots").color(UI_TEXT_DIM));
-                egui::ComboBox::from_id_salt("boot-target")
-                    .selected_text(want.label())
-                    .show_ui(ui, |ui| {
-                        for (t, hint) in &boots {
-                            ui.selectable_value(&mut want, t.clone(), t.label()).on_hover_text(*hint);
-                        }
-                        if ui
-                            .selectable_label(false, "Choose an image…")
-                            .on_hover_text(
-                                "Any raw ARM image that expects to be loaded at 0x10000000 — \
+                    }
+                    ui.separator();
+                    // **Apple's service diagnostics**, which on the real device is reached by holding
+                    // SELECT+REW at power-on. So it is a power cycle into a different program in the
+                    // **An instrument, and only in debug mode.** `docs/ideas/run-any-os.md` argued
+                    // against a boot picker before one existed, and it was right: entering an image
+                    // directly means the machine's own bootloader never chose it, so any divergence
+                    // afterwards is un-attributable between "the OS does this" and "we started it a
+                    // way nothing starts it". The honest ways in are to **install** an operating
+                    // system onto the drive, which the row on the setup screen now does, and to hold
+                    // the **chord** at power-on for the boot ROM's own images, which research/07
+                    // measures working.
+                    //
+                    // So this lives beside the readout and the framebuffer inspector as the window's
+                    // `ipod-boot flsh`: a way to enter an image directly, for looking at it. It is
+                    // still how diagnostics is reached today, because releasing the chord afterwards
+                    // storms the interrupt controller — and when that is fixed this stops being how
+                    // anybody reaches diagnostics either.
+                    //
+                    // It replaced two latched chord buttons, `hold MENU+SELECT` and `hold PLAY`. Both
+                    // were reachable from the keyboard and the wheel already, and neither did anything
+                    // a person could see.
+                    let mut want = self.cfg.boot.clone();
+                    let boots = self.boot_targets();
+                    if self.settings.mode == Mode::Debug {
+                        ui.label(egui::RichText::new("boots").color(UI_TEXT_DIM));
+                        egui::ComboBox::from_id_salt("boot-target")
+                            .selected_text(want.label())
+                            .show_ui(ui, |ui| {
+                                for (t, hint) in &boots {
+                                    ui.selectable_value(&mut want, t.clone(), t.label())
+                                        .on_hover_text(*hint);
+                                }
+                                if ui
+                                .selectable_label(false, "Choose an image…")
+                                .on_hover_text(
+                                    "Any raw ARM image that expects to be loaded at 0x10000000 — \
                                  Rockbox, its bootloader, ipodloader2, an iPodLinux kernel.",
-                            )
+                                )
+                                .clicked()
+                            {
+                                if let Some(p) = pick_files(
+                                    "An ARM image this iPod can enter at 0x10000000",
+                                    &["raw", "ipod", "bin", "img", "elf"],
+                                )
+                                .first()
+                                {
+                                    want = emu::BootTarget::Image(PathBuf::from(p));
+                                }
+                            }
+                            });
+                    }
+                    if want != self.cfg.boot {
+                        self.down.clear();
+                        self.touching = false;
+                        self.cfg.boot = want.clone();
+                        self.say(format!("power cycle: into {}", want.label()));
+                        if let Some(l) = &self.link {
+                            l.command(emu::Cmd::Boot(want));
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button("screenshot")
+                            .on_hover_text("Also the S key.")
                             .clicked()
                         {
-                            if let Some(p) = pick_files(
-                                "An ARM image this iPod can enter at 0x10000000",
-                                &["raw", "ipod", "bin", "img", "elf"],
-                            )
-                            .first()
-                            {
-                                want = emu::BootTarget::Image(PathBuf::from(p));
-                            }
+                            let (fb, addr) = match &self.link {
+                                Some(l) => {
+                                    let o = l.out.lock().unwrap();
+                                    (o.fb.clone(), o.fb_addr)
+                                }
+                                None => (vec![0u8; FB_W * FB_H * 3], FB_FRONT),
+                            };
+                            self.screenshot(&fb, addr);
                         }
                     });
-                }
-                if want != self.cfg.boot {
-                    self.down.clear();
-                    self.touching = false;
-                    self.cfg.boot = want.clone();
-                    self.say(format!("power cycle: into {}", want.label()));
-                    if let Some(l) = &self.link {
-                        l.command(emu::Cmd::Boot(want));
-                    }
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("screenshot").on_hover_text("Also the S key.").clicked() {
-                        let (fb, addr) = match &self.link {
-                            Some(l) => {
-                                let o = l.out.lock().unwrap();
-                                (o.fb.clone(), o.fb_addr)
-                            }
-                            None => (vec![0u8; FB_W * FB_H * 3], FB_FRONT),
-                        };
-                        self.screenshot(&fb, addr);
-                    }
                 });
+                if let Some(n) = self.notice.clone() {
+                    ui.label(
+                        egui::RichText::new(n)
+                            .small()
+                            .color(Color32::from_rgb(0xE0, 0xA0, 0x40)),
+                    );
+                }
+                if let Some(l) = self.log.front() {
+                    ui.label(egui::RichText::new(l.as_str()).small().color(UI_TEXT_FAINT));
+                }
+                ui.add_space(4.0);
             });
-            if let Some(n) = self.notice.clone() {
-                ui.label(egui::RichText::new(n).small().color(Color32::from_rgb(0xE0, 0xA0, 0x40)));
-            }
-            if let Some(l) = self.log.front() {
-                ui.label(egui::RichText::new(l.as_str()).small().color(UI_TEXT_FAINT));
-            }
-            ui.add_space(4.0);
-        });
     }
 
     /// The states that make a working emulator look broken, each with the sentence that explains it.
@@ -4719,7 +5087,10 @@ impl App {
     fn conditions(&self, out: &emu::Out) -> Vec<(Color32, String)> {
         let mut v = Vec::new();
         if let Phase::Stopped(why) = &out.phase {
-            v.push((Color32::from_rgb(0xd0, 0x50, 0x40), format!("stopped: {why}")));
+            v.push((
+                Color32::from_rgb(0xd0, 0x50, 0x40),
+                format!("stopped: {why}"),
+            ));
         }
         // A machine that has stopped is not a machine that is drawing slowly, and the difference is
         // invisible without this line.
@@ -4767,19 +5138,44 @@ impl App {
         let s = out.stats;
         let ips = s.executed_here as f64 / s.wall_secs.max(1e-6);
         let lines = [
-            format!("{:.1} M/s   {:.0} % of hardware", ips / 1e6, ips / HARDWARE_MIPS * 100.0),
+            format!(
+                "{:.1} M/s   {:.0} % of hardware",
+                ips / 1e6,
+                ips / HARDWARE_MIPS * 100.0
+            ),
             format!("{} instructions", fmt_u64(s.executed)),
-            format!("{:.1} s wall   {:.1} s simulated", s.wall_secs, s.sim_usec as f64 / 1e6),
+            format!(
+                "{:.1} s wall   {:.1} s simulated",
+                s.wall_secs,
+                s.sim_usec as f64 / 1e6
+            ),
             format!(
                 "wheel {} / 96   {}   {}",
                 s.position,
                 if s.touched { "touched" } else { "—" },
-                if s.reporting { "reporting" } else { "NOT reporting" }
+                if s.reporting {
+                    "reporting"
+                } else {
+                    "NOT reporting"
+                }
             ),
-            format!("frames {} posted, {} dropped", fmt_u64(s.frames_posted), fmt_u64(s.frames_dropped)),
-            format!("panel {:#010x}   {} / {} lit", out.fb_addr, out.fb_nonzero, FB_W * FB_H),
+            format!(
+                "frames {} posted, {} dropped",
+                fmt_u64(s.frames_posted),
+                fmt_u64(s.frames_dropped)
+            ),
+            format!(
+                "panel {:#010x}   {} / {} lit",
+                out.fb_addr,
+                out.fb_nonzero,
+                FB_W * FB_H
+            ),
             format!("backlight {} / 32", out.backlight),
-            format!("bcm {} frames, {} commands", fmt_u64(s.bcm_frames), s.bcm_commands),
+            format!(
+                "bcm {} frames, {} commands",
+                fmt_u64(s.bcm_frames),
+                s.bcm_commands
+            ),
         ];
         egui::Area::new("readout".into())
             .fixed_pos(Pos2::new(area.right() - 232.0, area.top() + 12.0))
@@ -4817,7 +5213,6 @@ impl App {
                     });
             });
     }
-
 }
 
 /// The platform's own file-open dialog, through the tool every platform already has.
@@ -4872,7 +5267,10 @@ fn pick_files(title: &str, exts: &[&str]) -> Vec<String> {
     } else if cfg!(windows) {
         let filter = format!(
             "{title}|{}|All files|*.*",
-            exts.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(";")
+            exts.iter()
+                .map(|e| format!("*.{e}"))
+                .collect::<Vec<_>>()
+                .join(";")
         );
         Command::new("powershell")
             .args([
@@ -4908,7 +5306,14 @@ fn pick_files(title: &str, exts: &[&str]) -> Vec<String> {
             // stripping quotes from a path is how a file legitimately named `'demo'.bin` stops
             // being findable. With it, one path per line and nothing added.
             _ => Command::new("kdialog")
-                .args(["--getopenfilename", ".", "--multiple", "--separate-output", "--title", title])
+                .args([
+                    "--getopenfilename",
+                    ".",
+                    "--multiple",
+                    "--separate-output",
+                    "--title",
+                    title,
+                ])
                 .stderr(Stdio::null())
                 .output()
                 .ok(),
@@ -4949,10 +5354,7 @@ fn transport(p: &egui::Painter, b: Button, at: Pos2, h: f32, ink: Color32) {
     };
     let bar = |cx: f32| {
         p.rect_filled(
-            Rect::from_center_size(
-                Pos2::new(cx, at.y),
-                Vec2::new(h * 0.20, h * 0.90),
-            ),
+            Rect::from_center_size(Pos2::new(cx, at.y), Vec2::new(h * 0.20, h * 0.90)),
             CornerRadius::ZERO,
             ink,
         );
@@ -5027,7 +5429,6 @@ fn palette_for(chassis: Colour) -> (Color32, Color32, Color32, Color32) {
     }
 }
 
-
 /// Bytes, in something a person reads.
 fn human_bytes(n: u64) -> String {
     const U: [&str; 4] = ["B", "KB", "MB", "GB"];
@@ -5037,7 +5438,11 @@ fn human_bytes(n: u64) -> String {
         v /= 1024.0;
         i += 1;
     }
-    if i == 0 { format!("{n} B") } else { format!("{v:.1} {}", U[i]) }
+    if i == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", U[i])
+    }
 }
 
 #[cfg(test)]
@@ -5098,10 +5503,19 @@ mod tests {
         // the build rather than this test refusing a run. Geometry that is wrong should not be able
         // to ship just because nobody ran the suite.
         const {
-            assert!(SWITCH_PROUD > 0.0, "the switch has to stand proud of the case to be visible");
-            assert!(SWITCH_PROUD < 3.0, "a 5G's hold switch is a nub, not a second device");
+            assert!(
+                SWITCH_PROUD > 0.0,
+                "the switch has to stand proud of the case to be visible"
+            );
+            assert!(
+                SWITCH_PROUD < 3.0,
+                "a 5G's hold switch is a nub, not a second device"
+            );
             // On the top edge, inside the width, toward the right where the real one is.
-            assert!(SWITCH_X > CASE_W / 2.0, "the 5G's hold switch is right of centre");
+            assert!(
+                SWITCH_X > CASE_W / 2.0,
+                "the 5G's hold switch is right of centre"
+            );
             assert!(SWITCH_X + SWITCH_W < CASE_W, "and inside the case");
         }
     }
@@ -5137,13 +5551,22 @@ mod tests {
         // file of that name anywhere.
         let c = config(&[], &Settings::default()).unwrap();
         assert!(
-            c.flash.ends_with("retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin"),
+            c.flash
+                .ends_with("retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin"),
             "{:?}",
             c.flash
         );
         assert!(c.disk.ends_with("ipod8g-retail.img"), "{:?}", c.disk);
-        assert!(c.flash.parent().is_some_and(|p| p.ends_with("roms")), "{:?}", c.flash);
-        assert!(c.disk.parent().is_some_and(|p| p.ends_with("drives")), "{:?}", c.disk);
+        assert!(
+            c.flash.parent().is_some_and(|p| p.ends_with("roms")),
+            "{:?}",
+            c.flash
+        );
+        assert!(
+            c.disk.parent().is_some_and(|p| p.ends_with("drives")),
+            "{:?}",
+            c.disk
+        );
     }
 
     /// A different pair of images must get a different snapshot. Restoring one machine's snapshot
@@ -5222,19 +5645,43 @@ mod tests {
         // occupies a whole block -- so the only honest assertions here are that something was
         // found and that it is at least as large as the bytes written. Asserting 600 would be
         // asserting that the measurement is the wrong one.
-        assert!(stale >= 600, "the stale set must account for at least the bytes written");
+        assert!(
+            stale >= 600,
+            "the stale set must account for at least the bytes written"
+        );
         // Measuring must not delete: this is the assertion that would have caught the old
         // behaviour if the old behaviour had ever been questioned.
-        assert!(dir.join("idle-OLD1.img").exists(), "reclaimable() deleted something");
+        assert!(
+            dir.join("idle-OLD1.img").exists(),
+            "reclaimable() deleted something"
+        );
 
         let freed = reclaim(&paths);
         assert_eq!(freed, stale, "reclaim must free exactly what was offered");
-        assert!(keep.snap.exists() && keep.work.exists(), "the set in use must survive");
-        assert!(keep.frozen.exists(), "the frozen drive belongs to the set and must survive");
-        assert!(dir.join("settings.txt").exists(), "a non-cache file must not be touched");
-        assert!(!dir.join("idle-OLD1.img").exists(), "a stale working disk must be gone");
-        assert!(!dir.join("idle-OLD2.frozen").exists(), "a stale frozen drive must be gone");
-        assert!(!dir.join("idle-OLD2.snap").exists(), "a stale snapshot must be gone");
+        assert!(
+            keep.snap.exists() && keep.work.exists(),
+            "the set in use must survive"
+        );
+        assert!(
+            keep.frozen.exists(),
+            "the frozen drive belongs to the set and must survive"
+        );
+        assert!(
+            dir.join("settings.txt").exists(),
+            "a non-cache file must not be touched"
+        );
+        assert!(
+            !dir.join("idle-OLD1.img").exists(),
+            "a stale working disk must be gone"
+        );
+        assert!(
+            !dir.join("idle-OLD2.frozen").exists(),
+            "a stale frozen drive must be gone"
+        );
+        assert!(
+            !dir.join("idle-OLD2.snap").exists(),
+            "a stale snapshot must be gone"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -5262,15 +5709,33 @@ mod tests {
         }
 
         let (_, offered) = reclaimable(&dir, &keep, false);
-        assert!(offered.contains(&keep.frozen), "the frozen drive is dead weight in direct mode");
-        assert!(offered.contains(&keep.work), "the working copy is dead weight in direct mode");
-        assert!(!offered.contains(&keep.snap), "the snapshot is in use in both modes");
-        assert!(!offered.contains(&keep.stamp), "the stamp is what makes the snapshot restorable");
+        assert!(
+            offered.contains(&keep.frozen),
+            "the frozen drive is dead weight in direct mode"
+        );
+        assert!(
+            offered.contains(&keep.work),
+            "the working copy is dead weight in direct mode"
+        );
+        assert!(
+            !offered.contains(&keep.snap),
+            "the snapshot is in use in both modes"
+        );
+        assert!(
+            !offered.contains(&keep.stamp),
+            "the stamp is what makes the snapshot restorable"
+        );
 
         // And the mirror image, so this asserts a rule rather than a direction.
         let (_, offered) = reclaimable(&dir, &keep, true);
-        assert!(offered.contains(&keep.stamp), "the stamp is dead weight in copy mode");
-        assert!(!offered.contains(&keep.frozen), "the frozen drive is the pair's other half");
+        assert!(
+            offered.contains(&keep.stamp),
+            "the stamp is dead weight in copy mode"
+        );
+        assert!(
+            !offered.contains(&keep.frozen),
+            "the frozen drive is the pair's other half"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -5308,7 +5773,11 @@ mod tests {
                 im.accept(p, &unused, eapp_loader::ipsw::DEFAULT_SECTORS);
             }
             assert_eq!(im.flash, rom.to_string_lossy(), "the ROM went to the ROM");
-            assert_eq!(im.disk, drive.to_string_lossy(), "the drive went to the drive");
+            assert_eq!(
+                im.disk,
+                drive.to_string_lossy(),
+                "the drive went to the drive"
+            );
             assert!(im.rejected.is_none());
         }
 
@@ -5320,7 +5789,10 @@ mod tests {
         let said = im.accept(&junk, &unused, eapp_loader::ipsw::DEFAULT_SECTORS);
         assert!(said.contains("notes.txt"), "it says which file: {said}");
         assert!(im.rejected.is_some());
-        assert!(im.flash.is_empty() && im.disk.is_empty(), "and it lands in neither row");
+        assert!(
+            im.flash.is_empty() && im.disk.is_empty(),
+            "and it lands in neither row"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -5337,17 +5809,30 @@ mod tests {
             disk: "/a/disk.img".into(),
             work_on_copy: false,
         };
-        assert!(before.differences(&before).is_empty(), "looking is not changing");
+        assert!(
+            before.differences(&before).is_empty(),
+            "looking is not changing"
+        );
 
-        let other_drive = Cold { disk: "/a/other.img".into(), ..before.clone() };
+        let other_drive = Cold {
+            disk: "/a/other.img".into(),
+            ..before.clone()
+        };
         assert_eq!(before.differences(&other_drive), vec!["the drive"]);
 
-        let copy = Cold { work_on_copy: true, ..before.clone() };
+        let copy = Cold {
+            work_on_copy: true,
+            ..before.clone()
+        };
         assert_eq!(before.differences(&copy), vec!["where the iPod writes"]);
 
         // Named in full when more than one moved, because "something changed" is not a sentence
         // anybody can act on.
-        let both = Cold { flash: "/a/other.bin".into(), disk: "/a/other.img".into(), work_on_copy: true };
+        let both = Cold {
+            flash: "/a/other.bin".into(),
+            disk: "/a/other.img".into(),
+            work_on_copy: true,
+        };
         assert_eq!(
             before.differences(&both),
             vec!["the boot ROM", "the drive", "where the iPod writes"]
@@ -5356,12 +5841,18 @@ mod tests {
 
     #[test]
     fn a_missing_image_produces_an_actionable_message() {
-        let cfg = config(&["--flash=/nope/a.bin".into(), "--disk=/nope/b.img".into()], &Settings::default())
-            .unwrap();
+        let cfg = config(
+            &["--flash=/nope/a.bin".into(), "--disk=/nope/b.img".into()],
+            &Settings::default(),
+        )
+        .unwrap();
         let m = missing_images(&cfg).expect("both are missing");
         assert!(m.contains("/nope/a.bin") && m.contains("/nope/b.img"));
         assert!(m.contains("README"), "it has to point somewhere");
-        assert!(m.contains("--check-images"), "and offer the check that needs no window");
+        assert!(
+            m.contains("--check-images"),
+            "and offer the check that needs no window"
+        );
     }
 
     /// Lay a screen out at a given size, with no window, no GPU and no eframe, and report how tall
@@ -5452,11 +5943,18 @@ mod tests {
                             ("Size", "8.6 GB".into()),
                             ("Firmware images", "osos · rsrc · aupd".into()),
                             ("Operating system", "present".into()),
-                            ("Flash updater", "armed — this drive boots the updater, not the OS".into()),
+                            (
+                                "Flash updater",
+                                "armed — this drive boots the updater, not the OS".into(),
+                            ),
                             ("Updater family", "24".into()),
                         ];
-                        a.images.mismatch = inspect::family_mismatch(IPOD_VIDEO.short, 20, Some(24));
-                        assert!(a.images.mismatch.is_some(), "the tallest case needs its warning");
+                        a.images.mismatch =
+                            inspect::family_mismatch(IPOD_VIDEO.short, 20, Some(24));
+                        assert!(
+                            a.images.mismatch.is_some(),
+                            "the tallest case needs its warning"
+                        );
                     }
                     if screen == Screen::Settings {
                         // As `open_settings` leaves it, plus a change to restart for — the tallest
@@ -5531,7 +6029,10 @@ mod tests {
             ("UI_WARN", UI_WARN),
         ] {
             let r = contrast(c, UI_BG);
-            assert!(r >= AA, "{name} on the background is {r:.2}:1, below AA's {AA}");
+            assert!(
+                r >= AA,
+                "{name} on the background is {r:.2}:1, below AA's {AA}"
+            );
             // And on the deeper wells, which are darker still — so this cannot regress either.
             let r = contrast(c, UI_BG_DEEP);
             assert!(r >= AA, "{name} on a well is {r:.2}:1, below AA's {AA}");
@@ -5542,19 +6043,28 @@ mod tests {
         for chassis in [Colour::White, Colour::Black, Colour::U2] {
             let (body, wheel, ring_text, _glass) = palette_for(chassis);
             let r = contrast(ring_text, wheel);
-            assert!(r >= AA, "{chassis:?}: wheel lettering is {r:.2}:1, below AA's {AA}");
+            assert!(
+                r >= AA,
+                "{chassis:?}: wheel lettering is {r:.2}:1, below AA's {AA}"
+            );
             // And the case has to be visible against the window, or the device vanishes into it.
             let r = contrast(body, UI_BG);
             // A filled shape, not text, so not the 4.5 bar — but it still has to be a shape you
             // can see. This is the constraint that decides how light the background can be: too
             // dark and a black iPod vanishes into it, which is the whole reason it moved.
-            assert!(r >= 1.75, "{chassis:?}: the case is {r:.2}:1 against the window — too close");
+            assert!(
+                r >= 1.75,
+                "{chassis:?}: the case is {r:.2}:1 against the window — too close"
+            );
         }
 
         // The point of the whole change: black is BLACK, and clearly darker than the window.
         let (black_body, _, _, _) = palette_for(Colour::Black);
         assert!(luminance(black_body) < 0.01, "the black iPod is not black");
-        assert!(luminance(UI_BG) > luminance(black_body) * 3.0, "the window is not lighter than it");
+        assert!(
+            luminance(UI_BG) > luminance(black_body) * 3.0,
+            "the window is not lighter than it"
+        );
     }
 
     /// **No text colour is a raw grey**, because the test above can only check colours it is told
@@ -5592,6 +6102,45 @@ mod tests {
             offenders.is_empty(),
             "text drawn in a colour no contrast test knows about:\n  {}",
             offenders.join("\n  ")
+        );
+    }
+
+    /// **The window must open tall enough to draw the iPod at ×2.**
+    ///
+    /// The device's scale is `floor`ed to whole physical pixels, so height buys size in steps. Cut
+    /// `DEFAULT_H` below the ×2 threshold and nothing fails — no panic, no warning, no error in the
+    /// log. The iPod simply comes up at half size, which is how it shipped once.
+    ///
+    /// This reproduces [`Emu::device`]'s arithmetic rather than calling it, because that function
+    /// needs a live `egui::Ui`. The two are kept honest by using the same constants; if the
+    /// derivation there changes, this number changes with it and the test says so.
+    #[test]
+    fn default_window_is_tall_enough_for_a_full_size_ipod() {
+        // A retina Mac, which is the demanding case: twice the physical pixels for the same window.
+        let ppp = 2.0;
+        // The chrome the device screen actually has — both strips are pinned, so this is the
+        // whole of it and it does not vary with the machine's state.
+        let avail_h = (DEFAULT_H - CONTROLS_H - FOOTER_H) * ppp - 16.0 * ppp;
+        let by_h = avail_h / (FB_W as f32 * (CASE_H + SWITCH_PROUD) / SCREEN_W);
+        // **2.05, not 2.0.** Passing by three pixels is how this got shipped at x1 in the first
+        // place: the arithmetic said x2 and any small change in font metrics took it back.
+        assert!(
+            by_h >= 2.05,
+            "DEFAULT_H of {DEFAULT_H} draws the iPod at ×{} on a retina display. ×2 needs {:.0} px \
+             of window. Raise DEFAULT_H or take height out of the chrome; do not just accept the \
+             smaller iPod, because nothing else will tell you it got smaller.",
+            by_h.floor().max(1.0),
+            (FB_W as f32 * (CASE_H + SWITCH_PROUD) / SCREEN_W) * 2.0 / ppp + CONTROLS_H + FOOTER_H + 16.0
+        );
+        // And the floor still has to fit the laptops in `MIN_H`'s table, or the fix for one
+        // complaint is a window that will not open on a 12" MacBook.
+        assert!(
+            MIN_H <= 667.0,
+            "MIN_H of {MIN_H} does not fit a 12\" MacBook's 667 px"
+        );
+        assert!(
+            DEFAULT_H > MIN_H,
+            "the window must not open at its own minimum"
         );
     }
 
@@ -5654,7 +6203,10 @@ mod tests {
     fn the_layout_measurement_tracks_the_content_and_not_the_window() {
         let short = lay_out(Screen::Details, MIN_W, MIN_H, Files::Rejected);
         let long = lay_out(Screen::FirstRun, MIN_W, MIN_H, Files::None);
-        assert!(short > 0.0, "a height of zero passes every other assertion for the wrong reason");
+        assert!(
+            short > 0.0,
+            "a height of zero passes every other assertion for the wrong reason"
+        );
         assert!(
             long > short + 40.0,
             "the first run is a much longer page than the details; measured {long:.0} vs {short:.0}"
@@ -5678,8 +6230,12 @@ mod tests {
             for _ in 0..2 {
                 let mut out = ctx.run_ui(input.clone(), |ui| {
                     let app = app.get_or_insert_with(|| {
-                        let mut a =
-                            App::new(&ui.ctx().clone(), cfg.clone(), Settings::default(), String::new());
+                        let mut a = App::new(
+                            &ui.ctx().clone(),
+                            cfg.clone(),
+                            Settings::default(),
+                            String::new(),
+                        );
                         a.screen = Screen::Settings;
                         a.cold_at_open = Some(a.cold());
                         a
@@ -5708,11 +6264,18 @@ mod tests {
     /// A device drawn anywhere is a device that boots. `ROADMAP.md` Ⅳ.
     #[test]
     fn nothing_offers_a_model_it_cannot_run() {
-        assert!(MODELS.iter().any(|d| d.boots), "at least one, or the program has nothing to do");
+        assert!(
+            MODELS.iter().any(|d| d.boots),
+            "at least one, or the program has nothing to do"
+        );
         for d in bootable() {
             assert!(d.boots);
             assert!(!d.name.is_empty() && !d.model_no.is_empty());
-            assert!(d.rom_len > 0, "{}: a model whose ROM length is unknown cannot be identified", d.name);
+            assert!(
+                d.rom_len > 0,
+                "{}: a model whose ROM length is unknown cannot be identified",
+                d.name
+            );
         }
         // The Video's ROM is 1 MiB, and `inspect` leads its verdict with that length. The two
         // numbers being the same number is what makes identifying a dump by model possible at all.

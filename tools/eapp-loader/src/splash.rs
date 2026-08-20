@@ -44,7 +44,9 @@ fn decode_ppm(d: &[u8]) -> Result<Image, String> {
     let mut cur = String::new();
     let mut at = 2;
     while fields.len() < 3 {
-        let Some((i, c)) = it.next() else { return Err("truncated PPM header".into()) };
+        let Some((i, c)) = it.next() else {
+            return Err("truncated PPM header".into());
+        };
         at = i + 3;
         if c == b'#' {
             for (_, c) in it.by_ref() {
@@ -62,13 +64,19 @@ fn decode_ppm(d: &[u8]) -> Result<Image, String> {
             cur.push(c as char);
         }
     }
-    let n = |s: &String| s.parse::<usize>().map_err(|_| format!("bad PPM header field {s}"));
+    let n = |s: &String| {
+        s.parse::<usize>()
+            .map_err(|_| format!("bad PPM header field {s}"))
+    };
     let (w, h, max) = (n(&fields[0])?, n(&fields[1])?, n(&fields[2])?);
     if max != 255 {
         return Err(format!("PPM maxval is {max}; only 8-bit (255) is read"));
     }
     let want = w * h * 3;
-    let rgb = d.get(at..at + want).ok_or("PPM pixel data is short")?.to_vec();
+    let rgb = d
+        .get(at..at + want)
+        .ok_or("PPM pixel data is short")?
+        .to_vec();
     Ok(Image { w, h, rgb })
 }
 
@@ -121,7 +129,10 @@ fn decode_png(d: &[u8]) -> Result<Image, String> {
         return Err("PNG is palette-coloured but carries no PLTE".into());
     }
     // zlib: two header bytes, then the deflate stream.
-    let raw = inflate(idat.get(2..).ok_or("PNG IDAT is empty")?, h * (1 + w * channels))?;
+    let raw = inflate(
+        idat.get(2..).ok_or("PNG IDAT is empty")?,
+        h * (1 + w * channels),
+    )?;
 
     // Un-filter, per PNG's five filter types.
     let stride = w * channels;
@@ -129,12 +140,21 @@ fn decode_png(d: &[u8]) -> Result<Image, String> {
     for y in 0..h {
         let base = y * (stride + 1);
         let ft = *raw.get(base).ok_or("PNG data is short")?;
-        let line = raw.get(base + 1..base + 1 + stride).ok_or("PNG data is short")?;
+        let line = raw
+            .get(base + 1..base + 1 + stride)
+            .ok_or("PNG data is short")?;
         for x in 0..stride {
-            let a = if x >= channels { out[y * stride + x - channels] } else { 0 } as i32;
+            let a = if x >= channels {
+                out[y * stride + x - channels]
+            } else {
+                0
+            } as i32;
             let b = if y > 0 { out[(y - 1) * stride + x] } else { 0 } as i32;
-            let c = if x >= channels && y > 0 { out[(y - 1) * stride + x - channels] } else { 0 }
-                as i32;
+            let c = if x >= channels && y > 0 {
+                out[(y - 1) * stride + x - channels]
+            } else {
+                0
+            } as i32;
             let v = line[x] as i32;
             out[y * stride + x] = match ft {
                 0 => v,
@@ -145,7 +165,13 @@ fn decode_png(d: &[u8]) -> Result<Image, String> {
                     // Paeth.
                     let p = a + b - c;
                     let (pa, pb, pc) = ((p - a).abs(), (p - b).abs(), (p - c).abs());
-                    v + if pa <= pb && pa <= pc { a } else if pb <= pc { b } else { c }
+                    v + if pa <= pb && pa <= pc {
+                        a
+                    } else if pb <= pc {
+                        b
+                    } else {
+                        c
+                    }
                 }
                 other => return Err(format!("PNG filter type {other} is not valid")),
             } as u8;
@@ -162,7 +188,9 @@ fn decode_png(d: &[u8]) -> Result<Image, String> {
             2 | 6 => (s[0], s[1], s[2]),
             3 => {
                 let o = s[0] as usize * 3;
-                let p = palette.get(o..o + 3).ok_or("PNG palette index out of range")?;
+                let p = palette
+                    .get(o..o + 3)
+                    .ok_or("PNG palette index out of range")?;
                 (p[0], p[1], p[2])
             }
             _ => unreachable!("colour type was checked above"),
@@ -192,7 +220,10 @@ pub fn fit(img: &Image, bw: usize, bh: usize) -> (Vec<u16>, Vec<bool>) {
     }
     // The largest scale that fits both ways.
     let s = (bw as f32 / img.w as f32).min(bh as f32 / img.h as f32);
-    let (dw, dh) = (((img.w as f32 * s).round() as usize).max(1), ((img.h as f32 * s).round() as usize).max(1));
+    let (dw, dh) = (
+        ((img.w as f32 * s).round() as usize).max(1),
+        ((img.h as f32 * s).round() as usize).max(1),
+    );
     let (ox, oy) = ((bw - dw.min(bw)) / 2, (bh - dh.min(bh)) / 2);
 
     for dy in 0..dh.min(bh) {
@@ -253,9 +284,15 @@ mod tests {
         let (px, mask) = fit(&img, 62, 78);
         assert_eq!(px.len(), 62 * 78);
         // It fits by width, so 62 wide and 31 tall, centred vertically.
-        let rows: Vec<usize> = (0..78).filter(|&y| (0..62).any(|x| mask[y * 62 + x])).collect();
+        let rows: Vec<usize> = (0..78)
+            .filter(|&y| (0..62).any(|x| mask[y * 62 + x]))
+            .collect();
         assert_eq!(rows.len(), 31, "a 2:1 image in a 62x78 box is 31 rows");
-        assert!(rows[0] >= 22 && rows[0] <= 24, "centred vertically, got row {}", rows[0]);
+        assert!(
+            rows[0] >= 22 && rows[0] <= 24,
+            "centred vertically, got row {}",
+            rows[0]
+        );
         // Every covered pixel is white; nothing outside is claimed.
         assert!(mask.iter().zip(&px).all(|(&m, &p)| !m || p == 0xffff));
     }
@@ -266,14 +303,21 @@ mod tests {
     #[test]
     fn downscaling_averages_instead_of_sampling() {
         let img = decode(&ppm(62 * 4, 78 * 4, |x, y| {
-            if (x + y) % 2 == 0 { (255, 255, 255) } else { (0, 0, 0) }
+            if (x + y) % 2 == 0 {
+                (255, 255, 255)
+            } else {
+                (0, 0, 0)
+            }
         }))
         .expect("decodes");
         let (px, _) = fit(&img, 62, 78);
         // Every pixel should be mid-grey, not black or white.
         for (i, &p) in px.iter().enumerate() {
             let r = (p >> 11) & 0x1f;
-            assert!(r > 5 && r < 26, "pixel {i} is {r}/31 — that is a sample, not an average");
+            assert!(
+                r > 5 && r < 26,
+                "pixel {i} is {r}/31 — that is a sample, not an average"
+            );
         }
     }
 

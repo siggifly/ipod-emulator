@@ -23,7 +23,10 @@ fn main() {
         "run" => run(&rest),
         "asset" => asset(&rest),
         "concat" => {
-            let d = rest.first().map(PathBuf::from).ok_or("usage: ipod-film concat DIR".to_string());
+            let d = rest
+                .first()
+                .map(PathBuf::from)
+                .ok_or("usage: ipod-film concat DIR".to_string());
             d.and_then(|d| concat(&d).map(|_| ()))
         }
         _ => {
@@ -63,7 +66,12 @@ usage:
                                     the budget ends, which is a fact about the budget";
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf()
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 /// `ipod-boot`, beside this binary — the same sibling rule the recipes use, so an unpacked archive
@@ -77,7 +85,13 @@ fn ipod_boot() -> PathBuf {
 }
 
 fn have_ffmpeg() -> bool {
-    Command::new("ffmpeg").arg("-version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
+    Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// Suffixed counts: `2M`, `100k`, `2600000000`.
@@ -88,7 +102,9 @@ fn count(s: &str) -> Result<u64, String> {
         Some('k') | Some('K') => (&t[..t.len() - 1], 1_000),
         _ => (t, 1),
     };
-    n.parse::<u64>().map(|v| v * mul).map_err(|_| format!("{s}: not a count"))
+    n.parse::<u64>()
+        .map(|v| v * mul)
+        .map_err(|_| format!("{s}: not a count"))
 }
 
 fn arg<'a>(args: &'a [String], key: &str) -> Option<&'a str> {
@@ -115,7 +131,10 @@ struct Pace {
 }
 
 impl Pace {
-    const NATURAL: Pace = Pace { realtime: false, cap: None };
+    const NATURAL: Pace = Pace {
+        realtime: false,
+        cap: None,
+    };
 
     /// Seconds on screen for a frame the firmware held for `held_instr` instructions, in a film
     /// sampled every `rate` instructions.
@@ -147,7 +166,10 @@ fn concat_paced(dir: &Path, pace: Pace) -> Result<f64, String> {
     // `# film of …, sampled every N instructions` — the rate the durations are expressed against.
     let rate: f64 = text
         .lines()
-        .find_map(|l| l.strip_prefix("# film of ").and_then(|_| l.split("every ").nth(1)))
+        .find_map(|l| {
+            l.strip_prefix("# film of ")
+                .and_then(|_| l.split("every ").nth(1))
+        })
         .and_then(|s| s.split_whitespace().next())
         .and_then(|s| s.parse::<f64>().ok())
         .ok_or("frames.tsv has no `sampled every N instructions` header to scale durations by")?;
@@ -163,7 +185,10 @@ fn concat_paced(dir: &Path, pace: Pace) -> Result<f64, String> {
         if f.len() < 7 {
             continue;
         }
-        let held: f64 = f[6].trim().parse().map_err(|_| format!("bad held_instr: {}", f[6]))?;
+        let held: f64 = f[6]
+            .trim()
+            .parse()
+            .map_err(|_| format!("bad held_instr: {}", f[6]))?;
         let d = pace.of(held, rate);
         out.push_str(&format!("file '{}'\nduration {d:.4}\n", f[1]));
         total += d;
@@ -183,13 +208,23 @@ fn run(args: &[String]) -> Result<(), String> {
     let every = arg(args, "--every").unwrap_or("2M");
     let fps = arg(args, "--fps").unwrap_or("30");
     let from = arg(args, "--from").map(count).transpose()?.unwrap_or(0);
-    let scale: u32 = arg(args, "--scale").unwrap_or("1").parse().map_err(|_| "--scale wants a number")?;
+    let scale: u32 = arg(args, "--scale")
+        .unwrap_or("1")
+        .parse()
+        .map_err(|_| "--scale wants a number")?;
     let pace = Pace {
         realtime: args.iter().any(|a| a == "--realtime"),
-        cap: arg(args, "--cap").map(|s| s.parse::<f64>()).transpose().map_err(|_| "--cap wants seconds")?,
+        cap: arg(args, "--cap")
+            .map(|s| s.parse::<f64>())
+            .transpose()
+            .map_err(|_| "--cap wants seconds")?,
     };
-    let pass: Vec<String> =
-        args.iter().skip_while(|a| *a != "--").skip(1).cloned().collect();
+    let pass: Vec<String> = args
+        .iter()
+        .skip_while(|a| *a != "--")
+        .skip(1)
+        .cloned()
+        .collect();
 
     let _ = std::fs::create_dir_all(&out);
     for e in std::fs::read_dir(&out).into_iter().flatten().flatten() {
@@ -215,19 +250,29 @@ fn run(args: &[String]) -> Result<(), String> {
     let mut c = Command::new(ipod_boot());
     c.arg(&recipe);
     if recipe == "retail" {
-        c.arg(format!("--stop-when-idle={idle}")).arg("--bcm-registry");
+        c.arg(format!("--stop-when-idle={idle}"))
+            .arg("--bcm-registry");
     }
-    c.arg(format!("--bcm-film=0xE0000:140:F0:{every}:{}", out.display()))
-        .arg(format!("--bcm-film-from={from}"))
-        .args(&pass);
-    let st = c.status().map_err(|e| format!("{}: {e}", ipod_boot().display()))?;
+    c.arg(format!(
+        "--bcm-film=0xE0000:140:F0:{every}:{}",
+        out.display()
+    ))
+    .arg(format!("--bcm-film-from={from}"))
+    .args(&pass);
+    let st = c
+        .status()
+        .map_err(|e| format!("{}: {e}", ipod_boot().display()))?;
     if !st.success() {
         return Err("the run failed; no film written".into());
     }
 
     let total = concat_paced(&out, pace)?;
     let pngs = std::fs::read_dir(&out)
-        .map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().starts_with("frame-")).count())
+        .map(|d| {
+            d.flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with("frame-"))
+                .count()
+        })
         .unwrap_or(0);
     println!("assembled a {pngs}-frame concat list ({total:.2}s)");
 
@@ -252,10 +297,19 @@ fn run(args: &[String]) -> Result<(), String> {
     };
     let gif = out.join("film.gif");
     ffmpeg(&[
-        "-f", "concat", "-safe", "0", "-i", &out.join("frames.concat").display().to_string(),
-        "-t", &format!("{total:.4}"), "-vf",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        &out.join("frames.concat").display().to_string(),
+        "-t",
+        &format!("{total:.4}"),
+        "-vf",
         &format!("{vf},split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none"),
-        "-loop", "0", &gif.display().to_string(),
+        "-loop",
+        "0",
+        &gif.display().to_string(),
     ])?;
     println!("film -> {} ({total:.2}s)", gif.display());
     Ok(())
@@ -267,7 +321,11 @@ fn ffmpeg(args: &[&str]) -> Result<(), String> {
         .args(args)
         .status()
         .map_err(|e| format!("ffmpeg: {e}"))?;
-    if st.success() { Ok(()) } else { Err("ffmpeg failed".into()) }
+    if st.success() {
+        Ok(())
+    } else {
+        Err("ffmpeg failed".into())
+    }
 }
 
 /// How a film's frames become a gif. The two published films want opposite answers and the reason
@@ -324,8 +382,23 @@ fn publish(dir: &Path, name: &str, fps: u32, mode: Palette, post: &Path) -> Resu
                       [b][p]paletteuse=dither=none:new=1";
             let fd = final_delay(dir)?;
             ffmpeg(&[
-                "-f", "concat", "-safe", "0", "-i", &cp, "-t", &total, "-vf", vf,
-                "-fps_mode", "vfr", "-final_delay", &fd, "-loop", "0", &gif,
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                &cp,
+                "-t",
+                &total,
+                "-vf",
+                vf,
+                "-fps_mode",
+                "vfr",
+                "-final_delay",
+                &fd,
+                "-loop",
+                "0",
+                &gif,
             ])?;
         }
         Palette::Resampled => {
@@ -333,7 +406,10 @@ fn publish(dir: &Path, name: &str, fps: u32, mode: Palette, post: &Path) -> Resu
                 "scale=iw*2:ih*2:flags=neighbor,fps={fps},split[a][b];\
                  [a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none"
             );
-            ffmpeg(&["-f", "concat", "-safe", "0", "-i", &cp, "-t", &total, "-vf", &vf, "-loop", "0", &gif])?;
+            ffmpeg(&[
+                "-f", "concat", "-safe", "0", "-i", &cp, "-t", &total, "-vf", &vf, "-loop", "0",
+                &gif,
+            ])?;
         }
     }
     println!("  -> {gif}   (640x480, {total}s, {fps} fps)");
@@ -361,7 +437,13 @@ fn still(dir: &Path, frame: &str, name: &str, post: &Path) -> Result<(), String>
     }
     std::fs::create_dir_all(post).map_err(|e| e.to_string())?;
     let out = post.join(format!("{name}.png")).display().to_string();
-    ffmpeg(&["-i", &src.display().to_string(), "-vf", "scale=iw*2:ih*2:flags=neighbor", &out])?;
+    ffmpeg(&[
+        "-i",
+        &src.display().to_string(),
+        "-vf",
+        "scale=iw*2:ih*2:flags=neighbor",
+        &out,
+    ])?;
     println!("  -> {out}");
     Ok(())
 }
@@ -557,9 +639,18 @@ mod tests {
         .unwrap();
         let total = concat(&d).unwrap();
         let c = std::fs::read_to_string(d.join("frames.concat")).unwrap();
-        assert_eq!(c.matches("file 'frame-00001.png'").count(), 2, "last frame must be listed twice");
-        assert!((total - 3.0).abs() < 1e-6, "durations total 1s + 2s, got {total}");
-        assert!(std::fs::read_to_string(d.join("frames.total")).unwrap().starts_with("3.0"));
+        assert_eq!(
+            c.matches("file 'frame-00001.png'").count(),
+            2,
+            "last frame must be listed twice"
+        );
+        assert!(
+            (total - 3.0).abs() < 1e-6,
+            "durations total 1s + 2s, got {total}"
+        );
+        assert!(std::fs::read_to_string(d.join("frames.total"))
+            .unwrap()
+            .starts_with("3.0"));
         let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -64,7 +64,8 @@ pub const CATALOGUE: &[Piece] = &[
         bytes: 51_996,
         sha256: "19dfa0e930689f5afdeaae18f4c56b472cbed9c6c3a7039bb32b646d8040298f",
         goes: Where::FirmwarePartition,
-        about: "Rockbox's bootloader — what Apple's boot ROM runs. Chains back to Apple's own \
+        about:
+            "Rockbox's bootloader — what Apple's boot ROM runs. Chains back to Apple's own \
                 software when you hold MENU, so installing it does not take the iPod away from you.",
     },
     Piece {
@@ -102,7 +103,10 @@ pub fn verify(p: &Piece, data: &[u8]) -> Result<(), String> {
     }
     let got = crate::firmware::sha256(data);
     if got != p.sha256 {
-        return Err(format!("{}: sha256 is {got}, expected {}", p.file, p.sha256));
+        return Err(format!(
+            "{}: sha256 is {got}, expected {}",
+            p.file, p.sha256
+        ));
     }
     Ok(())
 }
@@ -115,7 +119,10 @@ pub fn download(p: &Piece, dir: &std::path::Path) -> Result<std::path::PathBuf, 
             return Ok(dest);
         }
         // Present but wrong: say so rather than silently re-using or silently clobbering.
-        eprintln!("{}: already here but does not verify — downloading again", dest.display());
+        eprintln!(
+            "{}: already here but does not verify — downloading again",
+            dest.display()
+        );
     }
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let part = dir.join(format!("{}.part", p.file));
@@ -140,10 +147,18 @@ mod tests {
     fn every_piece_can_be_checked_before_it_is_installed() {
         for p in CATALOGUE {
             assert_eq!(p.sha256.len(), 64, "{}: not a sha256", p.file);
-            assert!(p.sha256.chars().all(|c| c.is_ascii_hexdigit()), "{}", p.file);
+            assert!(
+                p.sha256.chars().all(|c| c.is_ascii_hexdigit()),
+                "{}",
+                p.file
+            );
             assert!(p.bytes > 0, "{}: no size", p.file);
             assert!(p.url.starts_with("https://"), "{}: not https", p.file);
-            assert!(p.url.ends_with(p.file), "{}: url and filename disagree", p.file);
+            assert!(
+                p.url.ends_with(p.file),
+                "{}: url and filename disagree",
+                p.file
+            );
             assert!(!p.about.is_empty());
         }
     }
@@ -167,7 +182,9 @@ mod tests {
         let root = crate::settings::repo_root().join("resources/vendor/rockbox/bin");
         for p in CATALOGUE {
             let path = root.join(p.file);
-            let Ok(bytes) = std::fs::read(&path) else { continue }; // resources/ is not shipped.
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            }; // resources/ is not shipped.
             assert!(
                 verify(p, &bytes).is_ok(),
                 "{} in the repository does not match the catalogue: {:?}",

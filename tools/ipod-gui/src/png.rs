@@ -16,7 +16,11 @@ fn crc32(data: &[u8]) -> u32 {
     for (i, e) in table.iter_mut().enumerate() {
         let mut c = i as u32;
         for _ in 0..8 {
-            c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0xedb8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
         }
         *e = c;
     }
@@ -108,9 +112,21 @@ mod tests {
         let img = encode(&[0u8; 4 * 3 * 3], 4, 3);
         assert_eq!(&img[..8], &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
         assert_eq!(&img[12..16], b"IHDR");
-        assert_eq!(u32::from_be_bytes(img[8..12].try_into().unwrap()), 13, "IHDR is 13 bytes");
-        assert_eq!(u32::from_be_bytes(img[16..20].try_into().unwrap()), 4, "width");
-        assert_eq!(u32::from_be_bytes(img[20..24].try_into().unwrap()), 3, "height");
+        assert_eq!(
+            u32::from_be_bytes(img[8..12].try_into().unwrap()),
+            13,
+            "IHDR is 13 bytes"
+        );
+        assert_eq!(
+            u32::from_be_bytes(img[16..20].try_into().unwrap()),
+            4,
+            "width"
+        );
+        assert_eq!(
+            u32::from_be_bytes(img[20..24].try_into().unwrap()),
+            3,
+            "height"
+        );
         assert_eq!(&img[img.len() - 8..img.len() - 4], b"IEND");
     }
 
@@ -126,7 +142,12 @@ mod tests {
             let len = u32::from_be_bytes(img[p..p + 4].try_into().unwrap()) as usize;
             let kind = &img[p + 4..p + 8];
             let want = u32::from_be_bytes(img[p + 8 + len..p + 12 + len].try_into().unwrap());
-            assert_eq!(crc32(&img[p + 4..p + 8 + len]), want, "bad CRC on {:?}", kind);
+            assert_eq!(
+                crc32(&img[p + 4..p + 8 + len]),
+                want,
+                "bad CRC on {:?}",
+                kind
+            );
             kinds.push(String::from_utf8_lossy(kind).into_owned());
             p += 12 + len;
         }
@@ -140,7 +161,10 @@ mod tests {
     #[test]
     fn the_stored_stream_is_framed_correctly_across_block_boundaries() {
         let raw_len = 240 * (1 + 320 * 3);
-        assert!(raw_len > 0xffff * 3, "the fixture must span more than three blocks");
+        assert!(
+            raw_len > 0xffff * 3,
+            "the fixture must span more than three blocks"
+        );
         let img = encode(&[0u8; 320 * 240 * 3], 320, 240);
         // IDAT body: skip the 8-byte signature, the 25-byte IHDR chunk, and IDAT's own 8-byte head.
         let idat_len = u32::from_be_bytes(img[33..37].try_into().unwrap()) as usize;
@@ -167,10 +191,20 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(total, raw_len, "the blocks must cover every raw byte exactly once");
+        assert_eq!(
+            total, raw_len,
+            "the blocks must cover every raw byte exactly once"
+        );
         assert_eq!(blocks, raw_len.div_ceil(0xffff));
-        assert_eq!(p + 4, z.len(), "the Adler sum is the last four bytes and nothing follows it");
-        assert_eq!(u32::from_be_bytes(z[p..p + 4].try_into().unwrap()), adler32(&vec![0u8; raw_len]));
+        assert_eq!(
+            p + 4,
+            z.len(),
+            "the Adler sum is the last four bytes and nothing follows it"
+        );
+        assert_eq!(
+            u32::from_be_bytes(z[p..p + 4].try_into().unwrap()),
+            adler32(&vec![0u8; raw_len])
+        );
     }
 
     #[test]

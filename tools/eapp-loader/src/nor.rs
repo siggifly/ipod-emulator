@@ -82,7 +82,14 @@ impl Spec {
     pub fn new(model: &'static Model, identity: Identity) -> Spec {
         let mut region = [0u8; 16];
         region[..8].copy_from_slice(&[0x01, 0x00, 0x02, 0x00, 0x01, 0x00, 0x02, 0x00]);
-        Spec { identity, model, hw_id: 0, region, drm_version: 6, hw_vr: None }
+        Spec {
+            identity,
+            model,
+            hw_id: 0,
+            region,
+            drm_version: 6,
+            hw_vr: None,
+        }
     }
 
     /// Take the unexplained records from a real dump, so a ROM synthesised alongside real hardware
@@ -93,7 +100,9 @@ impl Spec {
     pub fn carry_from(mut self, source: &crate::inspect::SysCfg) -> Spec {
         for (tag, payload) in &source.records {
             match tag.as_str() {
-                "HwId" => self.hw_id = u32::from_le_bytes(payload[..4].try_into().unwrap_or([0; 4])),
+                "HwId" => {
+                    self.hw_id = u32::from_le_bytes(payload[..4].try_into().unwrap_or([0; 4]))
+                }
                 "Regn" => self.region = *payload,
                 "DrmV" => {
                     self.drm_version =
@@ -431,7 +440,13 @@ impl Source {
     pub fn bytes(&self) -> Result<Vec<u8>, String> {
         match self {
             Source::File(p) => std::fs::read(p).map_err(|e| format!("{}: {e}", p.display())),
-            Source::Synthetic { model, seed, serial, guid, .. } => {
+            Source::Synthetic {
+                model,
+                seed,
+                serial,
+                guid,
+                ..
+            } => {
                 let m = Model::lookup(model)
                     .ok_or_else(|| format!("{model} is not a model number this program knows"))?;
                 let identity = match guid {
@@ -449,7 +464,13 @@ impl Source {
     pub fn identity(&self) -> Result<Identity, String> {
         match self {
             Source::File(p) => Identity::from_nor(p),
-            Source::Synthetic { model, seed, serial, guid, .. } => {
+            Source::Synthetic {
+                model,
+                seed,
+                serial,
+                guid,
+                ..
+            } => {
                 let m = Model::lookup(model)
                     .ok_or_else(|| format!("{model} is not a model number this program knows"))?;
                 match guid {
@@ -479,10 +500,17 @@ impl Source {
     pub fn cache_tag(&self) -> String {
         match self {
             Source::File(p) => p.to_string_lossy().into_owned(),
-            Source::Synthetic { model, seed, serial, guid, .. } => format!(
+            Source::Synthetic {
+                model,
+                seed,
+                serial,
+                guid,
+                ..
+            } => format!(
                 "synthetic:{model}:{seed}:{}:{}",
                 serial.as_deref().unwrap_or("-"),
-                guid.map(|g| format!("{g:016X}")).unwrap_or_else(|| "-".into())
+                guid.map(|g| format!("{g:016X}"))
+                    .unwrap_or_else(|| "-".into())
             ),
         }
     }
@@ -493,12 +521,17 @@ impl Source {
     /// boot. A picture is decoration; failing to start an iPod over it would be the wrong trade.
     pub fn boot_screen(&self, w: usize, h: usize) -> Vec<u16> {
         let path = match self {
-            Source::Synthetic { splash: Some(p), .. } => Some(p.clone()),
+            Source::Synthetic {
+                splash: Some(p), ..
+            } => Some(p.clone()),
             _ => None,
         };
         match path {
             None => boot_screen(w, h),
-            Some(p) => match std::fs::read(&p).map_err(|e| e.to_string()).and_then(|b| crate::splash::decode(&b)) {
+            Some(p) => match std::fs::read(&p)
+                .map_err(|e| e.to_string())
+                .and_then(|b| crate::splash::decode(&b))
+            {
                 Ok(img) => boot_screen_with(w, h, &img),
                 Err(e) => {
                     eprintln!("{}: {e} — using the built-in mark", p.display());
@@ -572,9 +605,16 @@ mod tests {
 
         // The measured constants, exactly as the capture shows them.
         assert_eq!(&h[..4], b"IsyS");
-        assert_eq!(u32::from_le_bytes(h[4..8].try_into().unwrap()), 0xf8, "len must be 0xf8");
+        assert_eq!(
+            u32::from_le_bytes(h[4..8].try_into().unwrap()),
+            0xf8,
+            "len must be 0xf8"
+        );
         assert_eq!(&h[8..16], b"iPod M25");
-        assert_eq!(u32::from_le_bytes(h[0x84..0x88].try_into().unwrap()), 0x000B_0005);
+        assert_eq!(
+            u32::from_le_bytes(h[0x84..0x88].try_into().unwrap()),
+            0x000B_0005
+        );
         assert_eq!(&h[0x88..0x90], b"1.00    ");
         assert_eq!(&h[0x98..0x9d], b"MA146");
 
@@ -582,8 +622,14 @@ mod tests {
         let serial = cfg.serial.clone().expect("the dump has a serial");
         assert_eq!(&h[0x18..0x18 + serial.len()], serial.as_bytes());
         let guid = cfg.guid.expect("a GUID");
-        assert_eq!(u32::from_le_bytes(h[0x38..0x3c].try_into().unwrap()), guid as u32);
-        assert_eq!(u32::from_le_bytes(h[0x3c..0x40].try_into().unwrap()), (guid >> 32) as u32);
+        assert_eq!(
+            u32::from_le_bytes(h[0x38..0x3c].try_into().unwrap()),
+            guid as u32
+        );
+        assert_eq!(
+            u32::from_le_bytes(h[0x3c..0x40].try_into().unwrap()),
+            (guid >> 32) as u32
+        );
 
         // And the SysCfg copied in directly after the struct, byte for byte.
         assert_eq!(&h[HANDOFF_LEN..HANDOFF_LEN + 4], b"gfCS");
@@ -599,7 +645,10 @@ mod tests {
         let nor = synthesise(&spec);
 
         assert_eq!(nor.len(), NOR_LEN as usize);
-        assert_eq!(u32::from_le_bytes(nor[..4].try_into().unwrap()), RESET_VECTOR);
+        assert_eq!(
+            u32::from_le_bytes(nor[..4].try_into().unwrap()),
+            RESET_VECTOR
+        );
         assert!(is_synthetic(&nor));
 
         let c = crate::inspect::syscfg(&nor).expect("a synthesised ROM must parse");
@@ -610,7 +659,10 @@ mod tests {
         assert_eq!(c.model.as_deref(), Some("MA146"));
         assert_eq!(c.model_info().expect("still resolves").number, "A146");
         assert_eq!(c.hw_vr, Some(0x000B_0005));
-        assert_eq!(c.tags, ["SrNm", "FwId", "HwId", "HwVr", "Regn", "Mod#", "DrmV"]);
+        assert_eq!(
+            c.tags,
+            ["SrNm", "FwId", "HwId", "HwVr", "Regn", "Mod#", "DrmV"]
+        );
 
         // And it identifies as what it claims to be.
         let info = c.model_info().expect("A146 resolves");
@@ -623,9 +675,11 @@ mod tests {
     /// `SysCfg`, so this is the only lever there is — and it works.
     #[test]
     fn choosing_the_model_number_chooses_the_colour() {
-        for (num, want) in
-            [("A146", Colour::Black), ("A002", Colour::White), ("A452", Colour::U2)]
-        {
+        for (num, want) in [
+            ("A146", Colour::Black),
+            ("A002", Colour::White),
+            ("A452", Colour::U2),
+        ] {
             let nor = synthesise(&Spec::new(model(num), Identity::generate(model(num), 7)));
             let got = crate::inspect::syscfg(&nor)
                 .and_then(|c| c.model_info())
@@ -679,7 +733,11 @@ mod tests {
                 }
             }
         }
-        let img = crate::splash::Image { w: iw, h: ih, rgb: rgb.clone() };
+        let img = crate::splash::Image {
+            w: iw,
+            h: ih,
+            rgb: rgb.clone(),
+        };
         let (w, h) = (320usize, 240usize);
         let fb = boot_screen_with(w, h, &img);
 
@@ -687,20 +745,33 @@ mod tests {
         let c = (h / 2) * w + w / 2;
         let lum = |p: u16| ((p >> 11) & 0x1f) as u32 + ((p >> 5) & 0x3f) as u32 + (p & 0x1f) as u32;
         assert!(lum(fb[c]) > 80, "the mark should be bright");
-        assert_ne!(fb[c], fb[0], "the mark is invisible against its own background");
+        assert_ne!(
+            fb[c], fb[0],
+            "the mark is invisible against its own background"
+        );
 
         // The polarity of the source does not matter, because it is a mask: inverting the image
         // inverts which pixels are ink, and the blob's centre goes dark while the corner lights up.
         let inverted: Vec<u8> = rgb.iter().map(|v| 255 - v).collect();
-        let img2 = crate::splash::Image { w: iw, h: ih, rgb: inverted };
+        let img2 = crate::splash::Image {
+            w: iw,
+            h: ih,
+            rgb: inverted,
+        };
         let fb2 = boot_screen_with(w, h, &img2);
-        assert!(lum(fb2[c]) < 30, "an inverted source should leave the centre dark");
+        assert!(
+            lum(fb2[c]) < 30,
+            "an inverted source should leave the centre dark"
+        );
     }
 
     /// A generated ROM must be recognisable as generated, and a real one must not trip the check.
     #[test]
     fn the_synthetic_mark_is_present_and_specific() {
-        let nor = synthesise(&Spec::new(model("A146"), Identity::generate(model("A146"), 1)));
+        let nor = synthesise(&Spec::new(
+            model("A146"),
+            Identity::generate(model("A146"), 1),
+        ));
         assert!(is_synthetic(&nor));
         // A real dump has code at 0x40, not our sentence.
         let mut real_ish = nor.clone();
@@ -715,11 +786,17 @@ mod tests {
     fn a_generation_with_no_known_gestalt_id_omits_the_record() {
         // Nano 1G — in the table, and its Gestalt ID has never been sourced here.
         let nano = model("A004");
-        assert!(nano.generation.gestalt().is_none(), "precondition: still unsourced");
+        assert!(
+            nano.generation.gestalt().is_none(),
+            "precondition: still unsourced"
+        );
         let nor = synthesise(&Spec::new(nano, Identity::generate(nano, 2)));
         let c = crate::inspect::syscfg(&nor).expect("parses");
         assert_eq!(c.hw_vr, None);
-        assert!(!c.tags.contains(&"HwVr".to_string()), "no HwVr record at all");
+        assert!(
+            !c.tags.contains(&"HwVr".to_string()),
+            "no HwVr record at all"
+        );
         // And the cross-check reports "not checked" rather than a false agreement.
         assert_eq!(c.generation_agrees(), None);
     }
@@ -736,7 +813,8 @@ mod tests {
         });
         let parsed = crate::inspect::syscfg(&source).expect("parses");
 
-        let spec = Spec::new(model("A002"), Identity::generate(model("A002"), 99)).carry_from(&parsed);
+        let spec =
+            Spec::new(model("A002"), Identity::generate(model("A002"), 99)).carry_from(&parsed);
         assert_eq!(spec.hw_id, 0x8201_763A);
         assert_eq!(spec.region, [9; 16]);
         assert_eq!(spec.drm_version, 42);

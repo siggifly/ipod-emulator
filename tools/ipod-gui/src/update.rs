@@ -59,7 +59,9 @@ pub enum Found {
 impl Found {
     pub fn line(&self) -> String {
         match self {
-            Found::Current(tag) => format!("Up to date — this is {VERSION}, latest release is {tag}."),
+            Found::Current(tag) => {
+                format!("Up to date — this is {VERSION}, latest release is {tag}.")
+            }
             Found::Newer { tag, url } => format!("{tag} is available. You have {VERSION}. {url}"),
         }
     }
@@ -70,13 +72,20 @@ impl Found {
 /// Blocking, and expected to be called off the UI thread. The five-second cap is `curl`'s, not a
 /// timer here, so a hung connection cannot outlive the call.
 pub fn check() -> Option<Found> {
-    let body = fetch(&format!("https://api.github.com/repos/{}/releases/latest", repo()))?;
+    let body = fetch(&format!(
+        "https://api.github.com/repos/{}/releases/latest",
+        repo()
+    ))?;
     let tag = json_string(&body, "tag_name")?;
     let url = json_string(&body, "html_url")
         .unwrap_or_else(|| format!("https://github.com/{}/releases/latest", repo()));
     let mine = parse_version(VERSION)?;
     let theirs = parse_version(&tag)?;
-    Some(if theirs > mine { Found::Newer { tag, url } } else { Found::Current(tag) })
+    Some(if theirs > mine {
+        Found::Newer { tag, url }
+    } else {
+        Found::Current(tag)
+    })
 }
 
 /// The GET. Two attempts, both of them a system tool that already exists.
@@ -183,8 +192,10 @@ pub fn parse_version(tag: &str) -> Option<(u32, u32, u32)> {
         Some(i) if s[i + 1..].starts_with(|c: char| c.is_ascii_digit()) => &s[i + 1..],
         _ => s,
     };
-    let core: String =
-        s.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+    let core: String = s
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
     let mut it = core.split('.');
     let major = it.next()?.parse().ok()?;
     let minor = it.next().unwrap_or("0").parse().unwrap_or(0);
@@ -234,7 +245,10 @@ mod tests {
 
     #[test]
     fn ordering_is_numeric_not_lexicographic() {
-        assert!(parse_version("v0.10.0") > parse_version("v0.9.0"), "10 > 9, not '1' < '9'");
+        assert!(
+            parse_version("v0.10.0") > parse_version("v0.9.0"),
+            "10 > 9, not '1' < '9'"
+        );
         assert!(parse_version("v1.0.0") > parse_version("v0.99.99"));
         assert_eq!(parse_version("v1.2.3"), parse_version("1.2.3"));
     }
@@ -263,7 +277,10 @@ mod tests {
     #[test]
     fn escapes_in_a_value_are_unescaped() {
         let body = r#"{"html_url":"https:\/\/example.com\/a\"b"}"#;
-        assert_eq!(json_string(body, "html_url").as_deref(), Some("https://example.com/a\"b"));
+        assert_eq!(
+            json_string(body, "html_url").as_deref(),
+            Some("https://example.com/a\"b")
+        );
     }
 
     /// Truncated JSON — the shape a half-received response has — must be `None`, never a partial
@@ -295,6 +312,8 @@ mod tests {
         assert!(n.line().contains("v9.9.9"));
         assert!(n.line().contains(VERSION));
         assert!(n.line().contains("https://example.com/r"));
-        assert!(Found::Current("v0.1.0".into()).line().contains("Up to date"));
+        assert!(Found::Current("v0.1.0".into())
+            .line()
+            .contains("Up to date"));
     }
 }

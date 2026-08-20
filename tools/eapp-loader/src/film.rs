@@ -95,12 +95,19 @@ impl Film {
             u32::from_str_radix(t.trim_start_matches("0x"), 16)
                 .map_err(|_| format!("--bcm-film: {what} {t:?} is not hex"))
         };
-        let (base, w, h) = (hex(p[0], "address")?, hex(p[1], "width")?, hex(p[2], "height")?);
+        let (base, w, h) = (
+            hex(p[0], "address")?,
+            hex(p[1], "width")?,
+            hex(p[2], "height")?,
+        );
         if w == 0 || h == 0 {
             return Err("--bcm-film: width and height must be non-zero".into());
         }
         let every = parse_count(p[3]).ok_or_else(|| {
-            format!("--bcm-film: cadence {:?} is not a number (try 2M, 500k, 250000)", p[3])
+            format!(
+                "--bcm-film: cadence {:?} is not a number (try 2M, 500k, 250000)",
+                p[3]
+            )
         })?;
         if every == 0 {
             return Err("--bcm-film: a cadence of 0 would sample every instruction forever".into());
@@ -192,7 +199,8 @@ impl Film {
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:#018x}\n",
                 f.index,
                 f.file,
-                f.repeat_of.map_or_else(|| "-".to_string(), |i| i.to_string()),
+                f.repeat_of
+                    .map_or_else(|| "-".to_string(), |i| i.to_string()),
                 f.first_at,
                 f.last_at,
                 f.samples,
@@ -322,7 +330,10 @@ mod tests {
     #[test]
     fn the_spec_parses_the_same_way_bcm_dump_does() {
         let f = Film::parse(&format!("0xE0000:140:F0:2M:{}", tmp("parse").display())).unwrap();
-        assert_eq!((f.base, f.w, f.h, f.every), (0x000e_0000, 320, 240, 2_000_000));
+        assert_eq!(
+            (f.base, f.w, f.h, f.every),
+            (0x000e_0000, 320, 240, 2_000_000)
+        );
         // Widths are hex, exactly as --bcm-dump reads them. 320 decimal would be 0x320 = 800.
         // The directory has to be one this test may create: `Film::parse` calls `create_dir_all`,
         // and a literal `/tmp/x` here made a directory at the filesystem root — on Windows, at
@@ -335,10 +346,22 @@ mod tests {
 
     #[test]
     fn a_malformed_spec_is_refused_rather_than_half_applied() {
-        assert!(Film::parse("0xE0000:140:F0:2M").is_err(), "four fields is not five");
-        assert!(Film::parse("0xE0000:140:F0:nope:/tmp/x").is_err(), "cadence must be a number");
-        assert!(Film::parse("0xE0000:140:F0:0:/tmp/x").is_err(), "a zero cadence is refused");
-        assert!(Film::parse("0xE0000:0:F0:2M:/tmp/x").is_err(), "a zero width is refused");
+        assert!(
+            Film::parse("0xE0000:140:F0:2M").is_err(),
+            "four fields is not five"
+        );
+        assert!(
+            Film::parse("0xE0000:140:F0:nope:/tmp/x").is_err(),
+            "cadence must be a number"
+        );
+        assert!(
+            Film::parse("0xE0000:140:F0:0:/tmp/x").is_err(),
+            "a zero cadence is refused"
+        );
+        assert!(
+            Film::parse("0xE0000:0:F0:2M:/tmp/x").is_err(),
+            "a zero width is refused"
+        );
     }
 
     /// The property the whole tool exists for: a long stretch of an unchanging screen is one frame
@@ -357,7 +380,11 @@ mod tests {
         assert_eq!(f.frames[0].first_at, 0);
         assert_eq!(f.frames[0].last_at, 4_000_000);
         assert_eq!(f.frames[0].nonblack, 8);
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "one PNG on disk");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "one PNG on disk"
+        );
     }
 
     /// A picture that comes back is a new frame with its own span, pointing at the file it already

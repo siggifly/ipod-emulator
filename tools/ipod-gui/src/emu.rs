@@ -331,9 +331,10 @@ impl BootTarget {
             BootTarget::Nor(t) if t == "diag" => "Diagnostics".into(),
             BootTarget::Nor(t) if t == "disk" => "Disk mode".into(),
             BootTarget::Nor(t) => t.clone(),
-            BootTarget::Image(p) => {
-                p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
-            }
+            BootTarget::Image(p) => p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
         }
     }
 
@@ -426,7 +427,9 @@ pub struct Out {
 pub enum Phase {
     /// Cold-booting. The number is the instruction count the snapshot will be taken at, so the UI
     /// can show a progress bar that means something.
-    Booting { target: u64 },
+    Booting {
+        target: u64,
+    },
     Running,
     /// Power is off: no machine exists, nothing is executing, and the panel is dark. The state a
     /// 5G is in with a flat battery and no charger, and the one an emulator that "paused" would be
@@ -705,7 +708,9 @@ impl Config {
         if self.work_on_copy {
             return self.frozen.exists();
         }
-        let Some(stamp) = self.stamp() else { return false };
+        let Some(stamp) = self.stamp() else {
+            return false;
+        };
         match std::fs::read_to_string(&stamp) {
             Ok(text) => text.trim() == self.stamp_line(),
             Err(_) => false,
@@ -793,12 +798,17 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         BootTarget::Os => None,
         BootTarget::Nor(tag) => {
             let img = eapp_loader::inspect::nor_image(&flash, tag).ok_or_else(|| {
-                let have: Vec<String> =
-                    eapp_loader::inspect::nor_images(&flash).iter().map(|e| e.tag.clone()).collect();
+                let have: Vec<String> = eapp_loader::inspect::nor_images(&flash)
+                    .iter()
+                    .map(|e| e.tag.clone())
+                    .collect();
                 if have.is_empty() {
                     "this boot ROM carries no images at all".to_string()
                 } else {
-                    format!("this boot ROM has no `{tag}` image. It has: {}", have.join(" · "))
+                    format!(
+                        "this boot ROM has no `{tag}` image. It has: {}",
+                        have.join(" · ")
+                    )
                 }
             })?;
             Some((tag.clone(), img))
@@ -843,7 +853,10 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         // offset** — non-zero once a bootloader has been appended to `osos`, and mirroring low
         // would then start the OS behind the loader rather than the loader.
         if entry != 0 {
-            println!("  entry offset {entry:#x} — starting at {:#010x}", load_at + entry);
+            println!(
+                "  entry offset {entry:#x} — starting at {:#010x}",
+                load_at + entry
+            );
         }
         // **The low mirror is the OS's, not every image's.** RetailOS is linked to run at 0 and
         // Apple's boot code jumps to physical 0x23c, so the OS has to answer there. A `flsh` image
@@ -851,7 +864,11 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         // it at 0 as well would shadow the low window it expects to be memory, and the command
         // line's `ipod-boot flsh` does not do it either.
         if cfg.boot.is_os() {
-            m.mem.regions.push(Region { name: "osos-low", base: 0, data: osos.clone() });
+            m.mem.regions.push(Region {
+                name: "osos-low",
+                base: 0,
+                data: osos.clone(),
+            });
         }
         // **A boot image is inserted at the front; the OS is pushed.** Region lookup is
         // first-match and SDRAM is already registered at 0x10000000, so a pushed image sits behind
@@ -872,10 +889,15 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
             for (i, chunk) in osos.chunks(4).enumerate() {
                 let mut w = [0u8; 4];
                 w[..chunk.len()].copy_from_slice(chunk);
-                m.mem.write32(load_at + (i as u32) * 4, u32::from_le_bytes(w));
+                m.mem
+                    .write32(load_at + (i as u32) * 4, u32::from_le_bytes(w));
             }
         } else {
-            m.mem.regions.push(Region { name: "osos", base: load_at, data: osos });
+            m.mem.regions.push(Region {
+                name: "osos",
+                base: load_at,
+                data: osos,
+            });
         }
 
         // The handoff, byte for byte as a cold boot leaves it.
@@ -898,7 +920,10 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         for (i, chunk) in block.chunks(4).enumerate() {
             let mut w = [0u8; 4];
             w[..chunk.len()].copy_from_slice(chunk);
-            m.mem.write32(eapp_loader::nor::HANDOFF_AT + (i as u32) * 4, u32::from_le_bytes(w));
+            m.mem.write32(
+                eapp_loader::nor::HANDOFF_AT + (i as u32) * 4,
+                u32::from_le_bytes(w),
+            );
         }
         // The scaffolding a real ROM would already have done — see `install_sysinfo` in trace.rs,
         // where the same reasoning is spelled out and bisected.
@@ -928,8 +953,14 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         hw(&mut m, 0xa8, 0x0002_0000);
         hw(&mut m, 0xe0, MEASURED_SDRAM_WORD);
         hw(&mut m, 0x128, 0x0005_0014);
-        m.mem.write32(eapp_loader::nor::HANDOFF_TAG_AT, u32::from_le_bytes(*b"IsyS"));
-        m.mem.write32(eapp_loader::nor::HANDOFF_TAG_AT + 4, eapp_loader::nor::HANDOFF_AT);
+        m.mem.write32(
+            eapp_loader::nor::HANDOFF_TAG_AT,
+            u32::from_le_bytes(*b"IsyS"),
+        );
+        m.mem.write32(
+            eapp_loader::nor::HANDOFF_TAG_AT + 4,
+            eapp_loader::nor::HANDOFF_AT,
+        );
         println!(
             "  identity: {} · {}",
             identity.serial.as_deref().unwrap_or("(no serial)"),
@@ -951,17 +982,29 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // front so it wins the first-match lookup for low addresses.
     if flash_answers_low {
         m.mem.readonly.push("flash-low");
-        m.mem
-            .regions
-            .insert(0, Region { name: "flash-low", base: 0, data: flash.clone() });
+        m.mem.regions.insert(
+            0,
+            Region {
+                name: "flash-low",
+                base: 0,
+                data: flash.clone(),
+            },
+        );
     }
     m.mem.readonly.push("flash");
-    m.mem.regions.push(Region { name: "flash", base: 0x2000_0000, data: flash });
+    m.mem.regions.push(Region {
+        name: "flash",
+        base: 0x2000_0000,
+        data: flash,
+    });
     m.mem.nor = Some(if !flash_answers_low {
         // No low mirror on a high-level boot: address 0 is the OS, or the image's own memory.
         Nor::sst39wf800a(vec![(0x2000_0000, size)], vec!["flash"])
     } else {
-        Nor::sst39wf800a(vec![(0x2000_0000, size), (0, size)], vec!["flash", "flash-low"])
+        Nor::sst39wf800a(
+            vec![(0x2000_0000, size), (0, size)],
+            vec!["flash", "flash-low"],
+        )
     });
 
     // The co-processor, with the GENCMD registry published. Without `registry` RetailOS never gets
@@ -1003,7 +1046,11 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // sync rounds to build. A mis-wired `frozen` would then restore a stale drive over it, silently,
     // before the machine even starts. Reaching that line requires copy mode to be on, so the
     // destructive branch cannot be entered by a path bug alone.
-    let source = if cfg.work_on_copy && cfg.may_restore(first) { &cfg.frozen } else { &cfg.disk };
+    let source = if cfg.work_on_copy && cfg.may_restore(first) {
+        &cfg.frozen
+    } else {
+        &cfg.disk
+    };
     clone_disk(source, &cfg.workdisk)?;
     let d = Ata::open(&cfg.workdisk, true).map_err(|e| format!("disk: {e}"))?;
     m.mem.ata = Some((0xc300_0000, d));
@@ -1036,7 +1083,11 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // investigating exactly that will stop early and report an instruction count that is the
     // heuristic's, not the budget's -- which reads as "still running at N" when N never happened.
     if cfg.headless.is_some() {
-        m.stop_when_idle = if cfg.no_idle_stop { None } else { Some(400_000_000) };
+        m.stop_when_idle = if cfg.no_idle_stop {
+            None
+        } else {
+            Some(400_000_000)
+        };
         m.novelty = Some(Default::default());
         m.arm_novelty();
     }
@@ -1176,7 +1227,9 @@ pub const fn instructions_for_ms(ms: u64) -> u64 {
 /// been held for [`MIN_BUTTON_HOLD`]. The hold is measured from the button's own down event in the
 /// script, so the two cannot disagree the way a separate ledger could.
 fn schedule_at(script: &[WheelStep], ev: eapp_loader::WheelEvent, earliest: u64) -> u64 {
-    let eapp_loader::WheelEvent::Button(mask, false) = ev else { return earliest };
+    let eapp_loader::WheelEvent::Button(mask, false) = ev else {
+        return earliest;
+    };
     match script
         .iter()
         .rev()
@@ -1189,7 +1242,9 @@ fn schedule_at(script: &[WheelStep], ev: eapp_loader::WheelEvent, earliest: u64)
 
 fn drain(m: &mut Machine, inbox: &Mutex<Inbox>, next_at: &mut u64, gap: u64) -> usize {
     let now = m.executed as u64;
-    let Some(w) = m.mem.clickwheel.as_mut() else { return 0 };
+    let Some(w) = m.mem.clickwheel.as_mut() else {
+        return 0;
+    };
     let mut inbox = inbox.lock().unwrap();
     while let Some(&ev) = inbox.events.front() {
         let at = schedule_at(&w.script, ev, (*next_at).max(now));
@@ -1343,7 +1398,10 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                     // that chose the frozen one, which is the point of routing both through
                     // `may_restore`: there is no second place that has to be kept in step.
                     eprintln!("{}: not a valid snapshot; cold-booting", path.display());
-                    let cold = Config { cold: true, ..cfg.clone() };
+                    let cold = Config {
+                        cold: true,
+                        ..cfg.clone()
+                    };
                     match build(&cold, first) {
                         Ok(fresh) => m = fresh,
                         Err(e) => {
@@ -1397,7 +1455,13 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
 
     {
         let mut out = link.out.lock().unwrap();
-        out.phase = if restored { Phase::Running } else { Phase::Booting { target: cfg.snap_at } };
+        out.phase = if restored {
+            Phase::Running
+        } else {
+            Phase::Booting {
+                target: cfg.snap_at,
+            }
+        };
     }
 
     let started = Instant::now();
@@ -1421,7 +1485,10 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
     let (mut shown_moved, mut other_moved) = (false, false);
     let mut want_snapshot = first && !restored && cfg.snapshot.is_some();
     let mut entered = restored;
-    let mut test = SelfTest { shots: cfg.shots.clone(), ..SelfTest::default() };
+    let mut test = SelfTest {
+        shots: cfg.shots.clone(),
+        ..SelfTest::default()
+    };
     let mut probe = Probing::new(cfg);
     // `None` means "not yet sampled", which is distinct from an unmapped address.
     let mut watched: Vec<Option<u32>> = vec![None; cfg.watch.len()];
@@ -1485,10 +1552,14 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                         "power cycle: cutting power at {executed} instructions, {} µs simulated, \
                          {} non-black on the panel. The machine is dropped here.",
                         m.mem.usec,
-                        m.mem.bcm.as_ref().map(|b| {
-                            let mut buf = vec![0u8; FB_W * FB_H * 3];
-                            read_framebuffer(b, FB_FRONT, &mut buf)
-                        }).unwrap_or(0)
+                        m.mem
+                            .bcm
+                            .as_ref()
+                            .map(|b| {
+                                let mut buf = vec![0u8; FB_W * FB_H * 3];
+                                read_framebuffer(b, FB_FRONT, &mut buf)
+                            })
+                            .unwrap_or(0)
                     );
                     return Outcome::ColdBoot;
                 }
@@ -1527,7 +1598,10 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                 *link.ata_answer.lock().unwrap() = Some(if hits == 0 {
                     format!("ok ata {from}..{to}: NEVER READ")
                 } else {
-                    format!("ok ata {from}..{to}: {hits} command(s) [{}]", first.join(" "))
+                    format!(
+                        "ok ata {from}..{to}: {hits} command(s) [{}]",
+                        first.join(" ")
+                    )
                 });
                 *link.ata_query.lock().unwrap() = None;
             }
@@ -1551,12 +1625,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                         Some(m.mem.unmapped.len() as u32)
                     } else if a == crate::control::BUS_SENTINEL {
                         let mut out = link.out.lock().unwrap();
-                        out.bus_log = m
-                            .mem
-                            .watch_range_log
-                            .drain()
-                            .into_iter()
-                            .collect();
+                        out.bus_log = m.mem.watch_range_log.drain().into_iter().collect();
                         Some(out.bus_log.len() as u32)
                     } else if a == crate::control::WRITES_SENTINEL {
                         let mut out = link.out.lock().unwrap();
@@ -1599,9 +1668,13 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                     match now {
                         Some(v) => eprintln!(
                             "watch {addr:#010x} = {v:#010x}  (was {})  at {executed} instructions",
-                            watched[i].map(|w| format!("{w:#010x}")).unwrap_or_else(|| "unmapped".into())
+                            watched[i]
+                                .map(|w| format!("{w:#010x}"))
+                                .unwrap_or_else(|| "unmapped".into())
                         ),
-                        None => eprintln!("watch {addr:#010x} became unmapped at {executed} instructions"),
+                        None => eprintln!(
+                            "watch {addr:#010x} became unmapped at {executed} instructions"
+                        ),
                     }
                     watched[i] = now;
                 }
@@ -1657,7 +1730,10 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                     read_framebuffer(b, addr, &mut fb),
                     // Counted, not converted: the other surface needs a number, not a picture, and
                     // a second full conversion per frame would cost more than the emulation.
-                    b.mem.range(other..other + (FB_W * FB_H * 2) as u32).filter(|(_, &p)| p != 0).count() as u32,
+                    b.mem
+                        .range(other..other + (FB_W * FB_H * 2) as u32)
+                        .filter(|(_, &p)| p != 0)
+                        .count() as u32,
                 ),
                 None => (0, 0),
             }
@@ -1686,7 +1762,11 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
 
         let mut out = link.out.lock().unwrap();
         let dropped = out.stats.input_dropped;
-        out.stats = Stats { input_dropped: dropped, queued, ..stats };
+        out.stats = Stats {
+            input_dropped: dropped,
+            queued,
+            ..stats
+        };
         if refresh {
             out.fb.copy_from_slice(&fb);
             out.fb_nonzero = nonzero;
@@ -1732,7 +1812,10 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         // `snap_at` stays as a fallback for the case the signal never comes: a boot that fails
         // before the UI should not leave the window claiming to be booting for ever, and the old
         // behaviour is the honest thing to fall back *to*.
-        if out.phase == (Phase::Booting { target: cfg.snap_at })
+        if out.phase
+            == (Phase::Booting {
+                target: cfg.snap_at,
+            })
             && (stats.asked_for_frames || executed >= cfg.snap_at)
         {
             out.phase = Phase::Running;
@@ -1847,7 +1930,10 @@ impl SelfTest {
         }
         let _ = std::fs::create_dir_all(shots);
         let name = tag.replace(' ', "-");
-        let _ = std::fs::write(shots.join(format!("selftest-{name}.png")), crate::png::encode(&buf, FB_W, FB_H));
+        let _ = std::fs::write(
+            shots.join(format!("selftest-{name}.png")),
+            crate::png::encode(&buf, FB_W, FB_H),
+        );
         (n, h)
     }
 
@@ -1856,7 +1942,11 @@ impl SelfTest {
         let now = m.executed as u64;
         // Whether RetailOS has ASKED, not whether the stream is on: reporting is on at reset now,
         // so the flag no longer marks the moment the firmware is ready for input.
-        let reporting = m.mem.clickwheel.as_ref().is_some_and(|w| w.set_commands > 0);
+        let reporting = m
+            .mem
+            .clickwheel
+            .as_ref()
+            .is_some_and(|w| w.set_commands > 0);
         match self.stage {
             0 => {
                 // Wait for the firmware to open the gate itself.
@@ -1884,7 +1974,11 @@ impl SelfTest {
                 self.gate_at = now;
                 println!(
                     "selftest [{}]: reporting enabled by the firmware at {now} instructions",
-                    if control { "CONTROL — no input" } else { "driving the wheel" }
+                    if control {
+                        "CONTROL — no input"
+                    } else {
+                        "driving the wheel"
+                    }
                 );
                 self.arm = if control { "control" } else { "driven" };
                 let arm = self.arm;
@@ -1940,7 +2034,10 @@ fn report_selftest(
     panel: &[(&'static str, u64, u32, u64)],
 ) {
     let s = collect(m, started, (gate_at, 0));
-    println!("selftest: {} instructions after the gate opened", m.executed as u64 - gate_at);
+    println!(
+        "selftest: {} instructions after the gate opened",
+        m.executed as u64 - gate_at
+    );
     println!(
         "  wheel: position {}, {} frames posted, {} dropped, {} suppressed",
         s.position, s.frames_posted, s.frames_dropped, s.frames_suppressed
@@ -1949,7 +2046,11 @@ fn report_selftest(
         "  DATA reads {} ({} with a frame waiting), IRQ 40 asserted {} times",
         s.data_reads, s.data_reads_ready, s.irqs
     );
-    println!("  queue drained: {} left, {} dropped", link.inbox.lock().unwrap().events.len(), s.input_dropped);
+    println!(
+        "  queue drained: {} left, {} dropped",
+        link.inbox.lock().unwrap().events.len(),
+        s.input_dropped
+    );
     println!("  arrivals in RetailOS:");
     for (i, (pc, name)) in WATCHED.iter().enumerate() {
         println!("    {pc:#010x}  {:<24} {}", name, s.enters[i]);
@@ -1976,7 +2077,14 @@ const COMBO_HOLD: u64 = 400_000_000;
 /// Where the panel is sampled after the probe acts, in instructions past the anchor. `--samples=`
 /// replaces this, which is how an interval that falls between two of these is narrowed without
 /// rebuilding.
-const PROBE_SAMPLES: [u64; 6] = [8_000_000, 40_000_000, 100_000_000, 200_000_000, 400_000_000, 800_000_000];
+const PROBE_SAMPLES: [u64; 6] = [
+    8_000_000,
+    40_000_000,
+    100_000_000,
+    200_000_000,
+    400_000_000,
+    800_000_000,
+];
 
 /// A scripted measurement with no window: act at a fixed instruction anchor, then watch the panel.
 ///
@@ -2012,7 +2120,11 @@ impl Probing {
             panel: Vec::new(),
             combo_down: false,
             combo_up: false,
-            samples: if cfg.samples.is_empty() { PROBE_SAMPLES.to_vec() } else { cfg.samples.clone() },
+            samples: if cfg.samples.is_empty() {
+                PROBE_SAMPLES.to_vec()
+            } else {
+                cfg.samples.clone()
+            },
             shots: cfg.shots.clone(),
             arm: match cfg.probe {
                 Some(Probe::Menu) => "menu",
@@ -2048,10 +2160,19 @@ impl Probing {
             hb = hb.wrapping_mul(0x100_0000_01b3);
         }
         let _ = std::fs::write(
-            self.shots.join(format!("probe-{}-{label}-back.png", self.arm)),
+            self.shots
+                .join(format!("probe-{}-{label}-back.png", self.arm)),
             crate::png::encode(&buf, FB_W, FB_H),
         );
-        self.panel.push((label.to_string(), m.executed as u64, m.mem.usec, n, h, back, hb));
+        self.panel.push((
+            label.to_string(),
+            m.executed as u64,
+            m.mem.usec,
+            n,
+            h,
+            back,
+            hb,
+        ));
     }
 
     /// Returns true when the probe is finished and the run should stop.
@@ -2162,18 +2283,29 @@ impl Probing {
 
     fn report(&self, m: &Machine, link: &Arc<Link>) {
         let s = collect(m, Instant::now(), (self.act_at, 0));
-        println!("probe [{}]: {} instructions after acting", self.arm, m.executed as u64 - self.act_at);
+        println!(
+            "probe [{}]: {} instructions after acting",
+            self.arm,
+            m.executed as u64 - self.act_at
+        );
         println!(
             "  wheel: buttons {:#07b}, {} frames posted, {} dropped, {} suppressed",
             s.buttons, s.frames_posted, s.frames_dropped, s.frames_suppressed
         );
-        println!("  queue: {} left, {} dropped", link.inbox.lock().unwrap().events.len(), s.input_dropped);
+        println!(
+            "  queue: {} left, {} dropped",
+            link.inbox.lock().unwrap().events.len(),
+            s.input_dropped
+        );
         // The output stage, counted **in this session**: `Machine::restore` builds a fresh `Bcm`, so
         // on a restored run these start at zero even though the surface they filled is on screen.
         // That is exactly what makes them useful here — they say whether the co-processor was asked
         // to present anything *after* the input, which is a different question from whether
         // RetailOS received it.
-        println!("  co-processor this session: {} commands kicked, {} frame updates", s.bcm_commands, s.bcm_frames);
+        println!(
+            "  co-processor this session: {} commands kicked, {} frame updates",
+            s.bcm_commands, s.bcm_frames
+        );
         // Pixels, not commands. The UI is drawn by writing halfwords into the co-processor's
         // internal memory, not by a GENCMD — so `commands`/`frames` cannot tell "RetailOS drew
         // nothing" from "RetailOS drew and did not present". This can.
@@ -2229,12 +2361,17 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
         let w = &m.mem.backlight.widths;
         if w.seen() > 0 {
             let rows = w.sample();
-            let (lo, hi): (Vec<u32>, Vec<u32>) =
-                rows.iter().partition(|&&u| u < eapp_loader::BACKLIGHT_STEP_USEC);
+            let (lo, hi): (Vec<u32>, Vec<u32>) = rows
+                .iter()
+                .partition(|&&u| u < eapp_loader::BACKLIGHT_STEP_USEC);
             println!(
                 "    pulse widths: {} pulses{} — {} under {} µs, {} over{}",
                 w.seen(),
-                if rows.len() as u64 == w.seen() { "" } else { " (SAMPLE, NOT A CENSUS)" },
+                if rows.len() as u64 == w.seen() {
+                    ""
+                } else {
+                    " (SAMPLE, NOT A CENSUS)"
+                },
                 lo.len(),
                 eapp_loader::BACKLIGHT_STEP_USEC,
                 hi.len(),
@@ -2251,14 +2388,31 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
             );
         }
     }
-    println!("  ata commands: {}", m.mem.ata.as_ref().map(|(_, d)| d.commands.seen()).unwrap_or(0));
+    println!(
+        "  ata commands: {}",
+        m.mem
+            .ata
+            .as_ref()
+            .map(|(_, d)| d.commands.seen())
+            .unwrap_or(0)
+    );
     if let Some((_, d)) = &m.mem.ata {
         let names = |c: u8| match c {
-            0x20 => "READ SECTORS", 0x24 => "READ SECTORS EXT", 0x25 => "READ DMA EXT",
-            0xc8 => "READ DMA", 0x30 => "WRITE SECTORS", 0x34 => "WRITE SECTORS EXT",
-            0x35 => "WRITE DMA EXT", 0xca => "WRITE DMA", 0xe7 => "FLUSH CACHE",
-            0xea => "FLUSH CACHE EXT", 0xec => "IDENTIFY", 0xef => "SET FEATURES",
-            0xe0 => "STANDBY IMMEDIATE", 0xe1 => "IDLE IMMEDIATE", _ => "",
+            0x20 => "READ SECTORS",
+            0x24 => "READ SECTORS EXT",
+            0x25 => "READ DMA EXT",
+            0xc8 => "READ DMA",
+            0x30 => "WRITE SECTORS",
+            0x34 => "WRITE SECTORS EXT",
+            0x35 => "WRITE DMA EXT",
+            0xca => "WRITE DMA",
+            0xe7 => "FLUSH CACHE",
+            0xea => "FLUSH CACHE EXT",
+            0xec => "IDENTIFY",
+            0xef => "SET FEATURES",
+            0xe0 => "STANDBY IMMEDIATE",
+            0xe1 => "IDLE IMMEDIATE",
+            _ => "",
         };
         let census: Vec<String> = d
             .cmd_census
@@ -2278,14 +2432,21 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
         }
         (mm, mw)
     };
-    println!("  unmapped: {reads} reads, {writes} writes across {} pages", m.mem.unmapped.len());
+    println!(
+        "  unmapped: {reads} reads, {writes} writes across {} pages",
+        m.mem.unmapped.len()
+    );
     // Printed unconditionally when a range was asked for, including when it is empty. "Nothing was
     // recorded" and "nothing was asked" must not look the same, because an instrument that stays
     // silent when it found nothing is indistinguishable from one that is not running.
     if let Some((name, path)) = save {
         match m.mem.region_named(name) {
             Some(r) => match std::fs::write(path, &r.data) {
-                Ok(()) => println!("  saved region {name}: {} bytes -> {}", r.data.len(), path.display()),
+                Ok(()) => println!(
+                    "  saved region {name}: {} bytes -> {}",
+                    r.data.len(),
+                    path.display()
+                ),
                 Err(e) => println!("  saved region {name}: {e}"),
             },
             None => println!(
@@ -2340,8 +2501,11 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
             if m.mem.watch_range_words.len() > 1 {
                 println!("    by word:");
                 for (addr, w) in m.mem.watch_range_words.iter() {
-                    let who: Vec<String> =
-                        w.pcs.iter().map(|(pc, n)| format!("{pc:#010x} x{n}")).collect();
+                    let who: Vec<String> = w
+                        .pcs
+                        .iter()
+                        .map(|(pc, n)| format!("{pc:#010x} x{n}"))
+                        .collect();
                     println!(
                         "      {addr:#010x}  {} byte-writes, first @{}  [{}]",
                         w.writes,
@@ -2362,14 +2526,19 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
         }
     }
     if !m.mem.regs_seen.is_empty() {
-        println!("  registers at {:#010x}:", m.mem.regs_at.map(|(a, _)| a).unwrap_or(0));
+        println!(
+            "  registers at {:#010x}:",
+            m.mem.regs_at.map(|(a, _)| a).unwrap_or(0)
+        );
         for (at, r) in m.mem.regs_seen.iter() {
             println!("    at {at}:");
             for row in 0..4 {
-                let cells: Vec<String> = (0..4).map(|c| {
-                    let i = row * 4 + c;
-                    format!("r{i:<2}={:#010x}", r[i])
-                }).collect();
+                let cells: Vec<String> = (0..4)
+                    .map(|c| {
+                        let i = row * 4 + c;
+                        format!("r{i:<2}={:#010x}", r[i])
+                    })
+                    .collect();
                 println!("      {}", cells.join("  "));
             }
         }
@@ -2403,15 +2572,27 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
         // An edge taken once per account is the one worth finding, and twelve accounts is the
         // number this drive carries. Widened either side so an off-by-a-few still shows.
         println!("    taken 8..20 times (candidates for once-per-account):");
-        let mut per: Vec<_> = count.iter().filter(|(_, c)| (8..=20).contains(*c)).collect();
+        let mut per: Vec<_> = count
+            .iter()
+            .filter(|(_, c)| (8..=20).contains(*c))
+            .collect();
         per.sort_by_key(|((f, _), _)| *f);
         for ((f, to), c) in per.iter().take(24) {
-            println!("      {f:#010x} -> {to:#010x}  x{c}  first at {}", first[&(*f, *to)]);
+            println!(
+                "      {f:#010x} -> {to:#010x}  x{c}  first at {}",
+                first[&(*f, *to)]
+            );
         }
     }
     if let Some((lo, hi)) = m.mem.trace_pc {
         let n = m.mem.pc_trace.len();
-        let distinct = m.mem.pc_trace.iter().map(|(pc, _)| *pc).collect::<std::collections::BTreeSet<_>>().len();
+        let distinct = m
+            .mem
+            .pc_trace
+            .iter()
+            .map(|(pc, _)| *pc)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
         println!("  trace {lo:#010x}..{hi:#010x}: {n} executed, {distinct} distinct addresses");
         if let Some((first, at)) = m.mem.pc_trace.first() {
             println!("    first {first:#010x} at {at} instructions");
@@ -2425,17 +2606,29 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
         println!("    entered {entries} time(s)");
         // The tail is the interesting end. A flattened function is entered and left many times;
         // where it stops going round is where it decided.
-        let tail: Vec<String> = m.mem.pc_trace.iter().rev().take(24).rev()
-            .map(|(pc, _)| format!("{pc:x}")).collect();
+        let tail: Vec<String> = m
+            .mem
+            .pc_trace
+            .iter()
+            .rev()
+            .take(24)
+            .rev()
+            .map(|(pc, _)| format!("{pc:x}"))
+            .collect();
         if !tail.is_empty() {
             println!("    last: {}", tail.join(" "));
         }
         // And the distinct addresses in first-seen order, which for a dispatch table is the state
         // sequence rather than the instruction stream.
         let mut seen = std::collections::BTreeSet::new();
-        let order: Vec<String> = m.mem.pc_trace.iter()
+        let order: Vec<String> = m
+            .mem
+            .pc_trace
+            .iter()
             .filter(|(pc, _)| seen.insert(*pc))
-            .map(|(pc, _)| format!("{pc:x}")).take(60).collect();
+            .map(|(pc, _)| format!("{pc:x}"))
+            .take(60)
+            .collect();
         println!("    order: {}", order.join(" "));
     }
     if let Some(n) = &m.novelty {
@@ -2444,8 +2637,15 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
     if let Some(b) = &m.mem.bcm {
         let mut buf = vec![0u8; FB_W * FB_H * 3];
         let n = read_framebuffer(b, FB_FRONT, &mut buf);
-        println!("  bcm: {} kicked, {} frame updates", b.commands.len(), b.frames);
-        println!("  framebuffer 0x000e0000: {n} non-black pixels of {}", FB_W * FB_H);
+        println!(
+            "  bcm: {} kicked, {} frame updates",
+            b.commands.len(),
+            b.frames
+        );
+        println!(
+            "  framebuffer 0x000e0000: {n} non-black pixels of {}",
+            FB_W * FB_H
+        );
     }
     // The wheel's own gate, because a run where no input could have been delivered looks exactly
     // like a run where input was delivered and ignored.
@@ -2459,14 +2659,17 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
             w.frames_suppressed
         );
     }
-    println!("  {:.1} s wall, {:.2} M instructions/s", secs, m.executed as f64 / secs / 1e6);
+    println!(
+        "  {:.1} s wall, {:.2} M instructions/s",
+        secs,
+        m.executed as f64 / secs / 1e6
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use eapp_loader::{WheelEvent, WheelStep};
-
 
     /// **A press has a duration, and the duration is the machine's, not the operator's.**
     ///
@@ -2478,8 +2681,16 @@ mod tests {
     fn a_button_is_held_long_enough_for_a_polling_reader() {
         // Worked out by hand, so that the conversion is checked against something other than
         // itself: 75 instructions per simulated microsecond is 75 000 per millisecond.
-        assert_eq!(instructions_for_ms(1), 75_000, "CLOCK is {} — has the part changed?", eapp_loader::CLOCK);
-        assert_eq!(MIN_BUTTON_HOLD, 22_500_000, "300 ms at 75 000 instructions per ms");
+        assert_eq!(
+            instructions_for_ms(1),
+            75_000,
+            "CLOCK is {} — has the part changed?",
+            eapp_loader::CLOCK
+        );
+        assert_eq!(
+            MIN_BUTTON_HOLD, 22_500_000,
+            "300 ms at 75 000 instructions per ms"
+        );
         // Apple's diagnostics polls at 150 ms; the hold has to clear that with room. Asserted in a
         // `const` block so it is the *compiler* that refuses, not this test: both sides are
         // constants, so a regression here should not be able to wait for someone to run the suite.
@@ -2508,14 +2719,20 @@ mod tests {
             WheelEvent::Touch,
             WheelEvent::Release,
         ] {
-            assert_eq!(schedule_at(&script, ev, 1_300), 1_300, "{ev:?} should not be delayed");
+            assert_eq!(
+                schedule_at(&script, ev, 1_300),
+                1_300,
+                "{ev:?} should not be delayed"
+            );
         }
 
         // A release with no press in the script is not delayed either — there is nothing to hold.
         assert_eq!(schedule_at(&[], up, 1_300), 1_300);
         // And it is *this* button's press that counts, not any press.
-        let other =
-            vec![WheelStep::instr(1_000, WheelEvent::Button(eapp_loader::WHEEL_PLAY, true))];
+        let other = vec![WheelStep::instr(
+            1_000,
+            WheelEvent::Button(eapp_loader::WHEEL_PLAY, true),
+        )];
         assert_eq!(schedule_at(&other, up, 1_300), 1_300);
     }
 
@@ -2546,15 +2763,24 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(!cfg.may_restore(true), "a snapshot with no frozen drive is half a pair");
+        assert!(
+            !cfg.may_restore(true),
+            "a snapshot with no frozen drive is half a pair"
+        );
         std::fs::write(&frozen, b"drive").unwrap();
         assert!(cfg.may_restore(true), "both halves present");
-        assert!(!cfg.may_restore(false), "a power cycle inside a session never restores");
+        assert!(
+            !cfg.may_restore(false),
+            "a power cycle inside a session never restores"
+        );
         cfg.cold = true;
         assert!(!cfg.may_restore(true), "--cold overrides a complete pair");
         cfg.cold = false;
         std::fs::remove_file(&snap).unwrap();
-        assert!(!cfg.may_restore(true), "a frozen drive with no snapshot is the other half");
+        assert!(
+            !cfg.may_restore(true),
+            "a frozen drive with no snapshot is the other half"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2596,18 +2822,28 @@ mod tests {
         };
 
         assert!(!cfg.may_restore(true), "no stamp yet, so there is no pair");
-        cfg.pair_with_drive().expect("stamping a drive that exists must work");
-        assert!(cfg.may_restore(true), "stamped, and nothing has touched the drive since");
+        cfg.pair_with_drive()
+            .expect("stamping a drive that exists must work");
+        assert!(
+            cfg.may_restore(true),
+            "stamped, and nothing has touched the drive since"
+        );
 
         // What iTunes, `make-disk` or a second window does to it.
         std::fs::write(&drive, b"the drive after something else wrote to it").unwrap();
-        assert!(!cfg.may_restore(true), "the drive moved, so the snapshot no longer describes it");
+        assert!(
+            !cfg.may_restore(true),
+            "the drive moved, so the snapshot no longer describes it"
+        );
 
         // And the case where the stamp itself is unreadable or from another build.
         cfg.pair_with_drive().unwrap();
         assert!(cfg.may_restore(true), "re-stamped");
         std::fs::write(cfg.stamp().unwrap(), b"not a fingerprint").unwrap();
-        assert!(!cfg.may_restore(true), "a stamp that does not parse is not a match");
+        assert!(
+            !cfg.may_restore(true),
+            "a stamp that does not parse is not a match"
+        );
 
         // The stamp lives beside the snapshot, not beside the drive: a hand-given `--snapshot=`
         // has to bring its own, exactly as the frozen drive does.
@@ -2650,7 +2886,11 @@ mod tests {
         // Cloning a path onto itself is the one case that must not delete anything: it is what
         // `--workdisk=` pointed straight at the frozen drive would do.
         clone_disk(&work, &work).unwrap();
-        assert_eq!(std::fs::read(&work).unwrap(), b"PRISTINE", "self-clone must not empty the drive");
+        assert_eq!(
+            std::fs::read(&work).unwrap(),
+            b"PRISTINE",
+            "self-clone must not empty the drive"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

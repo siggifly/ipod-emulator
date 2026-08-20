@@ -20,23 +20,23 @@ use arm7tdmi::{Bus, Cpu, Mode};
 /// emulated CPU nothing. See `tools/ipod-film/README.md`.
 pub mod fat;
 pub mod film;
-pub mod png;
-pub mod ghidra;
 pub mod firmware;
+pub mod ghidra;
 pub mod identity;
-pub mod nor;
-pub mod splash;
 pub mod models;
+pub mod nor;
+pub mod png;
 pub mod rsrc;
+pub mod splash;
 
+pub mod inspect;
+pub mod install;
+pub mod ipodlinux;
 /// Building a drive image from an IPSW, so nobody has to be handed 8 GB of somebody else's iPod.
 /// A zip reader, an inflate, and an MBR + FAT32 writer — none of which touches the machine.
 pub mod ipsw;
-pub mod install;
 pub mod mount;
-pub mod ipodlinux;
 pub mod rockbox;
-pub mod inspect;
 pub mod settings;
 
 pub const EAPP_MAGIC: &[u8; 4] = b"eapp";
@@ -90,7 +90,11 @@ pub struct Capped<T> {
 
 impl<T> Capped<T> {
     pub const fn new(cap: usize) -> Self {
-        Self { cap, kept: Vec::new(), seen: 0 }
+        Self {
+            cap,
+            kept: Vec::new(),
+            seen: 0,
+        }
     }
 
     /// Record an entry. The count always rises; the row is kept only while there is room.
@@ -796,8 +800,12 @@ fn manifest_paths(path: &std::path::Path) -> Option<Vec<String>> {
     let mut rest = text.as_str();
     while let Some(i) = rest.find("<key>Path</key>") {
         rest = &rest[i + 15..];
-        let Some(a) = rest.find("<string>") else { break };
-        let Some(b) = rest[a + 8..].find("</string>") else { break };
+        let Some(a) = rest.find("<string>") else {
+            break;
+        };
+        let Some(b) = rest[a + 8..].find("</string>") else {
+            break;
+        };
         out.push(rest[a + 8..a + 8 + b].to_string());
         rest = &rest[a + 8 + b..];
     }
@@ -807,11 +815,23 @@ fn manifest_paths(path: &std::path::Path) -> Option<Vec<String>> {
 /// Expand a 16-bit A1R5G5B5 or RGB565 pixel to RGBA8, colour-keying magenta.
 fn expand16(v: u16, rgb565: bool) -> [u8; 4] {
     let (r, g, b) = if rgb565 {
-        (((v >> 11) & 0x1F) as u8, ((v >> 5) & 0x3F) as u8, (v & 0x1F) as u8)
+        (
+            ((v >> 11) & 0x1F) as u8,
+            ((v >> 5) & 0x3F) as u8,
+            (v & 0x1F) as u8,
+        )
     } else {
-        (((v >> 10) & 0x1F) as u8, ((v >> 5) & 0x1F) as u8, (v & 0x1F) as u8)
+        (
+            ((v >> 10) & 0x1F) as u8,
+            ((v >> 5) & 0x1F) as u8,
+            (v & 0x1F) as u8,
+        )
     };
-    let g8 = if rgb565 { (g << 2) | (g >> 4) } else { (g << 3) | (g >> 2) };
+    let g8 = if rgb565 {
+        (g << 2) | (g >> 4)
+    } else {
+        (g << 3) | (g >> 2)
+    };
     // 0xF83E is the colour key in both encodings the games use.
     let a = if v == 0xF83E { 0 } else { 255 };
     [(r << 3) | (r >> 2), g8, (b << 3) | (b >> 2), a]
@@ -920,7 +940,9 @@ pub fn peek_regions(regions: &[Region], addr: u32) -> Option<u32> {
     // would report "unmapped" for the address this facility exists to watch.
     for candidate in [a, a ^ 0x0400_0000] {
         for r in regions {
-            let Some(off) = candidate.checked_sub(r.base) else { continue };
+            let Some(off) = candidate.checked_sub(r.base) else {
+                continue;
+            };
             let off = off as usize;
             if off + 4 <= r.data.len() {
                 return Some(u32::from_le_bytes(r.data[off..off + 4].try_into().ok()?));
@@ -955,7 +977,11 @@ struct FastPage {
 
 impl FastPage {
     // Tag 1 is never a page base (pages are 4 KiB-aligned), so an empty slot can never match.
-    const EMPTY: FastPage = FastPage { tag: 1, r: u32::MAX, w: u32::MAX };
+    const EMPTY: FastPage = FastPage {
+        tag: 1,
+        r: u32::MAX,
+        w: u32::MAX,
+    };
 }
 
 impl Memory {
@@ -1118,7 +1144,11 @@ impl Memory {
         let slot = ((page >> 12) as usize) & (FAST_SLOTS - 1);
         let e = self.fast[slot];
         let idx = if e.tag == page {
-            if write { e.w } else { e.r }
+            if write {
+                e.w
+            } else {
+                e.r
+            }
         } else {
             let (r, w) = if self.page_is_plain(page) {
                 let t = self.translate(page);
@@ -1138,9 +1168,17 @@ impl Memory {
                 let cacheable = |i: usize| {
                     let r = &self.regions[i];
                     let off = t.wrapping_sub(r.base) as usize;
-                    if r.data.len() - off >= PAGE as usize { i as u32 } else { u32::MAX }
+                    if r.data.len() - off >= PAGE as usize {
+                        i as u32
+                    } else {
+                        u32::MAX
+                    }
                 };
-                let rd = self.regions.iter().position(contains).map_or(u32::MAX, cacheable);
+                let rd = self
+                    .regions
+                    .iter()
+                    .position(contains)
+                    .map_or(u32::MAX, cacheable);
                 let wr = self
                     .regions
                     .iter()
@@ -1151,23 +1189,31 @@ impl Memory {
                 (u32::MAX, u32::MAX)
             };
             self.fast[slot] = FastPage { tag: page, r, w };
-            if write { w } else { r }
+            if write {
+                w
+            } else {
+                r
+            }
         };
         // Agreement with the slow path is the invariant; check it rather than trust it.
         if self.verify_memory && idx != u32::MAX {
             let t = self.translate(addr);
             let slow = if write {
                 self.regions.iter().position(|r| {
-                    (t.wrapping_sub(r.base) as usize) < r.data.len() && !self.readonly.contains(&r.name)
+                    (t.wrapping_sub(r.base) as usize) < r.data.len()
+                        && !self.readonly.contains(&r.name)
                 })
             } else {
-                self.regions.iter().position(|r| (t.wrapping_sub(r.base) as usize) < r.data.len())
+                self.regions
+                    .iter()
+                    .position(|r| (t.wrapping_sub(r.base) as usize) < r.data.len())
             };
             if slow != Some(idx as usize) {
                 let fast_name = self.regions[idx as usize].name;
                 let slow_name = slow.map_or("(none)", |i| self.regions[i].name);
                 let pc = self.pc;
-                self.verify_mismatches.push((pc, addr, fast_name, slow_name));
+                self.verify_mismatches
+                    .push((pc, addr, fast_name, slow_name));
             }
         }
         if idx == u32::MAX {
@@ -1222,7 +1268,11 @@ impl Memory {
                 continue;
             }
             // The window spans everything below its lowest compared bit.
-            let size = if mask == 0 { 0x4000_0000 } else { mask & mask.wrapping_neg() };
+            let size = if mask == 0 {
+                0x4000_0000
+            } else {
+                mask & mask.wrapping_neg()
+            };
             // Above that, compared bits are fixed and uncompared ones are free; every combination
             // of the free ones is another range this window answers for.
             let free = !tested & 0x3fff_ffff & !(size - 1);
@@ -1300,11 +1350,13 @@ impl Memory {
         rows.iter()
             .map(|&(i, r, w)| {
                 let reg = &self.regions[i];
-                format!("{:<12} {:#010x}  {r:>12} reads {w:>12} writes", reg.name, reg.base)
+                format!(
+                    "{:<12} {:#010x}  {r:>12} reads {w:>12} writes",
+                    reg.name, reg.base
+                )
             })
             .collect()
     }
-
 
     /// `wval` is the byte **being written**, and is meaningless on a read.
     ///
@@ -1336,10 +1388,13 @@ impl Memory {
             if let Some((base, len)) = self.watch_range {
                 if !self.internal && addr.wrapping_sub(base) < len {
                     let (pc, v, n) = (self.pc, wval, self.icount);
-                    let e = self.watch_range_words.entry(addr & !3).or_insert(WatchWord {
-                        first_at: n,
-                        ..Default::default()
-                    });
+                    let e = self
+                        .watch_range_words
+                        .entry(addr & !3)
+                        .or_insert(WatchWord {
+                            first_at: n,
+                            ..Default::default()
+                        });
                     e.writes += 1;
                     *e.pcs.entry(pc).or_insert(0) += 1;
                     let now = self.usec;
@@ -1351,7 +1406,11 @@ impl Memory {
             if !self.internal && addr.wrapping_sub(base) < size {
                 let pc = self.pc;
                 let e = self.input_regs.entry(addr & !3).or_insert((0, 0, pc));
-                if write { e.1 += 1 } else if e.1 == 0 { e.0 += 1 }
+                if write {
+                    e.1 += 1
+                } else if e.1 == 0 {
+                    e.0 += 1
+                }
             }
         }
         // The emulator's own device servicing must not appear in a report about what the
@@ -1366,20 +1425,38 @@ impl Memory {
         if !self.accounting {
             if let Some((base, size)) = self.page_log {
                 if addr.wrapping_sub(base) < size {
-                    let e = self.page_counts.entry(addr & !(self.page_gran - 1)).or_insert((0, 0));
-                    if write { e.1 += 1 } else { e.0 += 1 }
+                    let e = self
+                        .page_counts
+                        .entry(addr & !(self.page_gran - 1))
+                        .or_insert((0, 0));
+                    if write {
+                        e.1 += 1
+                    } else {
+                        e.0 += 1
+                    }
                 }
             }
             return;
         }
         if let Some((base, size)) = self.page_log {
             if addr.wrapping_sub(base) < size {
-                let e = self.page_counts.entry(addr & !(self.page_gran - 1)).or_insert((0, 0));
-                if write { e.1 += 1 } else { e.0 += 1 }
+                let e = self
+                    .page_counts
+                    .entry(addr & !(self.page_gran - 1))
+                    .or_insert((0, 0));
+                if write {
+                    e.1 += 1
+                } else {
+                    e.0 += 1
+                }
             }
         }
         if let Some(i) = self.locate_idx(addr) {
-            let v = if write { &mut self.region_writes } else { &mut self.region_reads };
+            let v = if write {
+                &mut self.region_writes
+            } else {
+                &mut self.region_reads
+            };
             if v.len() <= i {
                 v.resize(i + 1, 0);
             }
@@ -1496,7 +1573,6 @@ impl Memory {
         }
         None
     }
-
 }
 
 impl Bus for Memory {
@@ -1563,7 +1639,11 @@ impl Bus for Memory {
         if self.second_core && addr & !3 == Core::Cop.ctrl() {
             let now = val & 0x8000_0000 != 0;
             if now != self.cop_asleep {
-                if now { self.cop_sleeps += 1 } else { self.cop_wakes += 1 }
+                if now {
+                    self.cop_sleeps += 1
+                } else {
+                    self.cop_wakes += 1
+                }
                 // **A wake ends the running core's turn immediately**, and this is a statement
                 // about concurrency rather than a scheduling tweak.
                 //
@@ -1600,7 +1680,10 @@ impl Bus for Memory {
         // before it are named in the comment below and cost two retractions in research/09 — so it
         // is routed to the byte path rather than reimplemented here. Duplicating the effect inside
         // the hoist is exactly how the first two were lost.
-        if let Some((idx, off)) = self.fast_region(a, true).filter(|_| Mbx::strobe(a).is_none()) {
+        if let Some((idx, off)) = self
+            .fast_region(a, true)
+            .filter(|_| Mbx::strobe(a).is_none())
+        {
             // `watch_range` and `input_probe` were missing from this hoist, and `count` is the only
             // thing that feeds them — so `--watch-range` saw *byte* writes (write8_inner calls
             // `count` unconditionally) and no word writes at all, unless some other flag happened to
@@ -1769,7 +1852,11 @@ impl Memory {
                 // the same delay every other completion gets — the drive does not finish inside the
                 // instruction that asked. The latch itself is left alone, because the polling
                 // firmware reads it through this very path.
-                if self.ata.as_mut().is_some_and(|(_, d)| std::mem::take(&mut d.pio_block_ready)) {
+                if self
+                    .ata
+                    .as_mut()
+                    .is_some_and(|(_, d)| std::mem::take(&mut d.pio_block_ready))
+                {
                     self.arm_ide_irq();
                 }
                 return v;
@@ -2177,7 +2264,11 @@ impl Memory {
         // Captured BEFORE the filter below eats the bit, because the reset is also what starts the
         // clock: the firmware writes 2, waits for the bit to clear, then waits for clock-ready.
         let usb_reset = addr == 0xc500_0140 && val & 0x02 != 0;
-        let val = if addr == 0xc500_0140 { val & !0x02 } else { val };
+        let val = if addr == 0xc500_0140 {
+            val & !0x02
+        } else {
+            val
+        };
         // The external memory bus filters what it keeps: a ready bit the firmware cannot clear, and
         // a completion bit that follows the command bit written beside it.
         let val = match self.xmb.as_ref().map(|x| x.owns(addr)) {
@@ -2408,7 +2499,6 @@ pub enum Stub {
 /// It is a constant rather than a literal in each place because it had drifted into three: the
 /// library's default, the window's argument default, and two test fixtures still carrying the old 5.
 pub const CLOCK: usize = 75;
-
 
 pub struct Machine {
     pub cpu: Cpu,
@@ -2929,7 +3019,9 @@ impl Machine {
     ///
     /// The files are 16-bit A1R5G5B5 with magenta (`0xF83E`) as the colour key.
     pub fn preload_textures(&mut self) -> Vec<String> {
-        let Some(root) = self.game_dir.clone() else { return Vec::new() };
+        let Some(root) = self.game_dir.clone() else {
+            return Vec::new();
+        };
 
         // Texture order comes from `Manifest.plist`, not the filesystem.
         //
@@ -2948,7 +3040,9 @@ impl Machine {
                 let mut v = Vec::new();
                 let mut stack = vec![root.clone()];
                 while let Some(d) = stack.pop() {
-                    let Ok(entries) = std::fs::read_dir(&d) else { continue };
+                    let Ok(entries) = std::fs::read_dir(&d) else {
+                        continue;
+                    };
                     for e in entries.flatten() {
                         let p = e.path();
                         if p.is_dir() {
@@ -2983,7 +3077,9 @@ impl Machine {
                 "bin" => decode_raw_rgb565(&d),
                 _ => None,
             };
-            let Some((w, h, rgba)) = decoded else { continue };
+            let Some((w, h, rgba)) = decoded else {
+                continue;
+            };
             let name = next;
             next += 1;
             loaded.push(format!(
@@ -3001,15 +3097,23 @@ impl Machine {
     /// for paths as they appeared on a FAT32 volume and the layout on disk here is not
     /// guaranteed to match byte for byte.
     fn open_file(&mut self, name: &str) -> u32 {
-        let Some(root) = self.game_dir.clone() else { return 0 };
+        let Some(root) = self.game_dir.clone() else {
+            return 0;
+        };
         let rel = name.replace('\\', "/");
         let target = rel.trim_start_matches('/');
-        let base = target.rsplit('/').next().unwrap_or(target).to_ascii_lowercase();
+        let base = target
+            .rsplit('/')
+            .next()
+            .unwrap_or(target)
+            .to_ascii_lowercase();
 
         let mut found = None;
         let mut stack = vec![root];
         while let Some(dir) = stack.pop() {
-            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
             for e in entries.flatten() {
                 let p = e.path();
                 if p.is_dir() {
@@ -3029,7 +3133,9 @@ impl Machine {
         }
 
         let Some(path) = found else { return 0 };
-        let Ok(data) = std::fs::read(&path) else { return 0 };
+        let Ok(data) = std::fs::read(&path) else {
+            return 0;
+        };
         self.open_files.push((data, 0));
         self.open_files.len() as u32 // handles are 1-based; 0 means failure
     }
@@ -3074,14 +3180,21 @@ impl Machine {
         let opaque = rgba.chunks_exact(4).filter(|p| p[3] >= 8).count();
         self.tex_log.push(format!(
             "upload tex#{} {}x{} opaque={}/{}",
-            self.bound_texture, w, h, opaque, w * h
+            self.bound_texture,
+            w,
+            h,
+            opaque,
+            w * h
         ));
-        self.textures.insert(self.bound_texture, Texture { w, h, rgba });
+        self.textures
+            .insert(self.bound_texture, Texture { w, h, rgba });
     }
 
     /// Read one attribute component as 16.16 fixed point, in pixels.
     fn attr(&mut self, index: usize, vertex: u32, comp: usize) -> f32 {
-        let Some(a) = self.arrays[index].as_ref() else { return 0.0 };
+        let Some(a) = self.arrays[index].as_ref() else {
+            return 0.0;
+        };
         if comp >= a.size {
             return 0.0;
         }
@@ -3164,7 +3277,14 @@ impl Machine {
         self.quads_drawn += 1;
     }
 
-    fn fill_triangle(&mut self, a: &Vertex, b: &Vertex, c: &Vertex, colour: [u8; 3], textured: bool) {
+    fn fill_triangle(
+        &mut self,
+        a: &Vertex,
+        b: &Vertex,
+        c: &Vertex,
+        colour: [u8; 3],
+        textured: bool,
+    ) {
         let area = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
         if area.abs() < 1e-6 {
             return; // degenerate
@@ -3441,7 +3561,9 @@ impl Machine {
             if only.is_none_or(|o| o == fw.name) {
                 if let Some(exports) = self.find_exports(&fw.hash, fw.thunks.len()) {
                     for (i, &thunk) in fw.thunks.iter().enumerate() {
-                        let Some(&target) = exports.get(i) else { continue };
+                        let Some(&target) = exports.get(i) else {
+                            continue;
+                        };
                         let instr = self.mem.read32(thunk);
                         let literal = thunk.wrapping_add(8).wrapping_add(instr & 0xFFF);
                         self.mem.write32(literal, target);
@@ -3498,7 +3620,6 @@ impl Machine {
         self.mem.internal = true;
         self.service_interrupts_inner();
         self.mem.internal = false;
-        
     }
 
     /// Run whatever the two PP502x DMA controllers have been armed to do, and hold their
@@ -3516,7 +3637,11 @@ impl Machine {
     fn service_pp_dma(&mut self) {
         let (mut set, mut touched) = (0u32, 0u32);
         for (i, c) in PP_DMA.iter().enumerate() {
-            let irq = if i == 0 { self.mem.pp_dma_irq.unwrap_or(c.irq) } else { c.irq };
+            let irq = if i == 0 {
+                self.mem.pp_dma_irq.unwrap_or(c.irq)
+            } else {
+                c.irq
+            };
             if self.mem.read32(c.master) & DMA_MASTER_CONTROL_EN == 0 {
                 continue;
             }
@@ -3536,7 +3661,8 @@ impl Machine {
                 // spinning until `DMA0_STATUS & (BUSY|INTR)` reads clear, so dropping CMD's
                 // interrupt bit has to drop the status latch too or that spin never ends.
                 if cmd & DMA_CMD_INTR == 0 {
-                    self.mem.write32(base + DMA_STATUS, status & !DMA_STATUS_INTR);
+                    self.mem
+                        .write32(base + DMA_STATUS, status & !DMA_STATUS_INTR);
                 } else {
                     line = true;
                     master |= 1 << (DMA_MASTER_STATUS_CH0 + ch);
@@ -3588,7 +3714,8 @@ impl Machine {
         // "DMA0_STATUS will have been reloaded automatically with size in DMA0_CMD" — Rockbox
         // `pcm-pp.c`. BUSY is never observable here: the copy is instantaneous, so the channel is
         // already idle by the time any instruction can look.
-        self.mem.write32(base + DMA_STATUS, DMA_STATUS_INTR | (cmd & DMA_SIZE_MASK));
+        self.mem
+            .write32(base + DMA_STATUS, DMA_STATUS_INTR | (cmd & DMA_SIZE_MASK));
     }
 
     fn service_interrupts_inner(&mut self) {
@@ -3634,13 +3761,27 @@ impl Machine {
             v
         };
         let enabled = consume(&mut self.mem, CPU_INT_EN_STAT, CPU_INT_EN, CPU_INT_DIS);
-        let enabled_hi = consume(&mut self.mem, CPU_HI_INT_EN_STAT, CPU_HI_INT_EN, CPU_HI_INT_DIS);
+        let enabled_hi = consume(
+            &mut self.mem,
+            CPU_HI_INT_EN_STAT,
+            CPU_HI_INT_EN,
+            CPU_HI_INT_DIS,
+        );
         // Identical set/clear/state shape to the enable trio, so the same consumer serves. The
         // kernel's own init writes `0xffffffff` to both CLR registers at 0x1618 and 0x160c, which
         // is what says these are write-to-clear rather than plain words.
-        let forced = consume(&mut self.mem, INT_FORCED_STAT, INT_FORCED_SET, INT_FORCED_CLR);
-        let forced_hi =
-            consume(&mut self.mem, HI_INT_FORCED_STAT, HI_INT_FORCED_SET, HI_INT_FORCED_CLR);
+        let forced = consume(
+            &mut self.mem,
+            INT_FORCED_STAT,
+            INT_FORCED_SET,
+            INT_FORCED_CLR,
+        );
+        let forced_hi = consume(
+            &mut self.mem,
+            HI_INT_FORCED_STAT,
+            HI_INT_FORCED_SET,
+            HI_INT_FORCED_CLR,
+        );
 
         self.service_pp_dma();
         // Before the `pending_hi` snapshot below, or a packet posted this tick would not reach
@@ -3660,8 +3801,11 @@ impl Machine {
             } else if now.wrapping_sub(self.timer_next[i]) < 0x8000_0000 {
                 self.mem.int_pending |= 1 << i;
                 // Repeat bit clear means one-shot: disarm rather than re-arming.
-                self.timer_next[i] =
-                    if cfg & 0x4000_0000 != 0 { now.wrapping_add(period) } else { u32::MAX };
+                self.timer_next[i] = if cfg & 0x4000_0000 != 0 {
+                    now.wrapping_add(period)
+                } else {
+                    u32::MAX
+                };
             }
         }
 
@@ -3694,9 +3838,12 @@ impl Machine {
         if self.mem.second_core {
             let (stat, en_stat, en, dis) = Core::Cop.int_regs();
             let cop_enabled = consume(&mut self.mem, en_stat, en, dis);
-            let cop_enabled_hi =
-                consume(&mut self.mem, en_stat + 0x100, en + 0x100, dis + 0x100);
-            let hi_agg = if pending_hi & cop_enabled_hi != 0 { 1 << 30 } else { 0 };
+            let cop_enabled_hi = consume(&mut self.mem, en_stat + 0x100, en + 0x100, dis + 0x100);
+            let hi_agg = if pending_hi & cop_enabled_hi != 0 {
+                1 << 30
+            } else {
+                0
+            };
             self.mem.write32(stat, (pending & cop_enabled) | hi_agg);
             self.mem.write32(stat + 0x100, pending_hi & cop_enabled_hi);
             if pending & cop_enabled != 0 || pending_hi & cop_enabled_hi != 0 {
@@ -3709,8 +3856,13 @@ impl Machine {
                 self.cop.irq();
             }
         }
-        let hi_aggregate = if pending_hi & enabled_hi != 0 { 1 << 30 } else { 0 };
-        self.mem.write32(CPU_INT_STAT, (pending & enabled) | hi_aggregate);
+        let hi_aggregate = if pending_hi & enabled_hi != 0 {
+            1 << 30
+        } else {
+            0
+        };
+        self.mem
+            .write32(CPU_INT_STAT, (pending & enabled) | hi_aggregate);
         self.mem.write32(HI_INT_STAT, pending_hi);
         self.mem.write32(CPU_HI_INT_STAT, pending_hi & enabled_hi);
         if pending & enabled != 0 || pending_hi & enabled_hi != 0 {
@@ -3774,7 +3926,8 @@ impl Machine {
         // 0x40000050, and is therefore the one number that says whether the handshake worked.
         if self.cop_events.last().is_none_or(|e| !e.3) {
             let pc = self.cop.regs[15];
-            self.cop_events.push((self.executed as u64, self.cop_executed, pc, true));
+            self.cop_events
+                .push((self.executed as u64, self.cop_executed, pc, true));
         }
         self.mem.asking = Core::Cop;
         let mut ran = 0;
@@ -3787,12 +3940,14 @@ impl Machine {
                 // coprocessor path is seven instructions and the park is one of them; a run that
                 // parks somewhere else is running something else.
                 let pc = self.cop.regs[15];
-                self.cop_events.push((self.executed as u64, self.cop_executed, pc, false));
+                self.cop_events
+                    .push((self.executed as u64, self.cop_executed, pc, false));
                 break;
             }
             self.mem.pc = self.cop.regs[15];
             if let Some(n) = &mut self.cop_novelty {
-                n.entry(self.cop.regs[15] & !0xf).or_insert(self.cop_executed);
+                n.entry(self.cop.regs[15] & !0xf)
+                    .or_insert(self.cop_executed);
             }
             self.cop.step(&mut self.mem);
             self.cop_executed += 1;
@@ -3928,7 +4083,9 @@ impl Machine {
                     && self.cpu.regs[14] == prev_pc.wrapping_add(4)
                     && self.mem.call_trace.len() < PC_TRACE_CAP
                 {
-                    self.mem.call_trace.push((prev_pc, pc, self.executed as u64));
+                    self.mem
+                        .call_trace
+                        .push((prev_pc, pc, self.executed as u64));
                 }
             }
             prev_pc = pc;
@@ -4082,10 +4239,18 @@ impl Machine {
                         // Zero is success in the calling convention seen so far.
                         0
                     }
-                    Some(Stub::FileRead { handle, buffer, length, out }) => {
+                    Some(Stub::FileRead {
+                        handle,
+                        buffer,
+                        length,
+                        out,
+                    }) => {
                         let h = self.cpu.regs[*handle] as usize;
-                        let (buf, len, oa) =
-                            (self.cpu.regs[*buffer], self.cpu.regs[*length], self.cpu.regs[*out]);
+                        let (buf, len, oa) = (
+                            self.cpu.regs[*buffer],
+                            self.cpu.regs[*length],
+                            self.cpu.regs[*out],
+                        );
                         let got = self.read_file(h, buf, len);
                         if oa != 0 {
                             self.mem.write32(oa, got);
@@ -4104,7 +4269,8 @@ impl Machine {
                         self.mem.write32(dst, ev);
                         self.polls += 1;
                         if ev != 0 {
-                            self.file_log.push(format!("input event {ev:#010x} -> {dst:#010x}"));
+                            self.file_log
+                                .push(format!("input event {ev:#010x} -> {dst:#010x}"));
                         }
                         0
                     }
@@ -4130,7 +4296,12 @@ impl Machine {
                         self.frames_presented += 1;
                         0
                     }
-                    Some(Stub::WriteOut { arg, offset, value, ret }) => {
+                    Some(Stub::WriteOut {
+                        arg,
+                        offset,
+                        value,
+                        ret,
+                    }) => {
                         let (dst, off, value, ret) = (self.cpu.regs[*arg], *offset, *value, *ret);
                         self.mem.write32(dst.wrapping_add(off), value);
                         ret
@@ -4280,9 +4451,10 @@ impl Machine {
                 // `mov pc, rX` and friends: data-processing writing R15, register operand.
                 let dp_pc = (w >> 26) & 3 == 0 && (w >> 12) & 0xF == 0xF && (w >> 25) & 1 == 0;
                 // `ldr pc, [...]`, excluding the PC-relative import thunks already traced.
-                let ldr_pc =
-                    (w >> 26) & 3 == 1 && (w >> 20) & 1 == 1 && (w >> 12) & 0xF == 0xF
-                        && (w >> 16) & 0xF != 15;
+                let ldr_pc = (w >> 26) & 3 == 1
+                    && (w >> 20) & 1 == 1
+                    && (w >> 12) & 0xF == 0xF
+                    && (w >> 16) & 0xF != 15;
                 cond_ok && (bx || dp_pc || ldr_pc)
             } else {
                 false
@@ -4332,7 +4504,12 @@ impl Machine {
                 // by distinct edges — loop back-edges included — rather than by executed
                 // instructions.
                 if target != pc.wrapping_add(4) {
-                    *self.edges.as_mut().unwrap().entry((pc, target)).or_insert(0) += 1;
+                    *self
+                        .edges
+                        .as_mut()
+                        .unwrap()
+                        .entry((pc, target))
+                        .or_insert(0) += 1;
                 }
             }
             if indirect {
@@ -4463,7 +4640,13 @@ impl Xmb {
     const RAM_DONE: u8 = 0x80;
 
     pub fn new(base: u32) -> Self {
-        Self { base, gate_opens: 0, gate_closes: 0, ram_kicks: 0, usb_enables: 0 }
+        Self {
+            base,
+            gate_opens: 0,
+            gate_closes: 0,
+            ram_kicks: 0,
+            usb_enables: 0,
+        }
     }
 
     /// Byte 3 of `+0x20` — `DEV_INIT2`'s high byte, holding `INIT_USB` (bit 31).
@@ -4696,9 +4879,17 @@ pub struct ClickWheel {
     /// `0x052a` commands seen, and the payload of the last one.
     pub set_commands: u64,
     pub last_set: Option<(u64, u8)>,
-    /// Autonomous frames that were not posted because reporting was off. The only number that can
-    /// distinguish "the script did nothing" from "the script was refused".
+    /// Autonomous frames not posted because the firmware had switched reporting **off**. The only
+    /// number that can distinguish "the script did nothing" from "the script was refused".
     pub frames_suppressed: u64,
+    /// Autonomous frames not posted because the receiver was **not armed** — `CTRL`'s bit 30 clear.
+    ///
+    /// **Separate from [`Self::frames_suppressed`] because a run reported the wrong cause.** Both
+    /// halves of the gate fed one counter and the report described it as "suppressed while off",
+    /// so a machine with reporting ON and `CTRL` at zero printed `reporting ON` and
+    /// `12 frames suppressed while off` on consecutive lines and pointed at the half that was
+    /// innocent. Two counters cannot do that.
+    pub frames_unarmed: u64,
     /// Times the line went from clear to asserted.
     pub irqs: u64,
     /// Every frame posted, capped — the sequence is short by construction and its *order* is the
@@ -4736,11 +4927,19 @@ pub struct WheelStep {
 impl WheelStep {
     /// A step at an executed-instruction count.
     pub fn instr(at: u64, event: WheelEvent) -> WheelStep {
-        WheelStep { at, in_usec: false, event }
+        WheelStep {
+            at,
+            in_usec: false,
+            event,
+        }
     }
     /// A step at a moment in simulated microseconds.
     pub fn usec(at: u64, event: WheelEvent) -> WheelStep {
-        WheelStep { at, in_usec: true, event }
+        WheelStep {
+            at,
+            in_usec: true,
+            event,
+        }
     }
     /// Whether this step is due, given both clocks.
     pub fn due(&self, icount: u64, usec: u64) -> bool {
@@ -4870,6 +5069,7 @@ impl ClickWheel {
             set_commands: 0,
             last_set: None,
             frames_suppressed: 0,
+            frames_unarmed: 0,
             irqs: 0,
             log: Capped::new(256),
         }
@@ -5161,7 +5361,11 @@ pub fn parse_wheel_script(spec: &str, click_instr: u64) -> Result<Vec<WheelStep>
         // The gap between the clicks of a `rotate`, and between a `press`'s down and up, is
         // configured in instructions. In a time-anchored script it has to be the same unit as
         // everything else, or a rotation would land somewhere unrelated to where it was asked for.
-        let click_instr = if in_usec { (click_instr / CLOCK as u64).max(1) } else { click_instr };
+        let click_instr = if in_usec {
+            (click_instr / CLOCK as u64).max(1)
+        } else {
+            click_instr
+        };
         prev = at;
         let push = |at: u64, event: WheelEvent, out: &mut Vec<WheelStep>| {
             out.push(WheelStep { at, in_usec, event });
@@ -5386,7 +5590,9 @@ impl Memory {
     /// Driven from `service_interrupts` for the same reason the DMA controllers are: the tick is
     /// already there, it runs every 64 instructions, and it is the only place that knows the clock.
     fn service_clickwheel(&mut self) {
-        let Some(mut w) = self.clickwheel.take() else { return };
+        let Some(mut w) = self.clickwheel.take() else {
+            return;
+        };
         let now = self.icount;
         let mut hold_moved = None;
         // The reply to a transmit, back from the wheel. Ahead of the script so that a command and a
@@ -5429,8 +5635,12 @@ impl Memory {
             // end its cold-boot phase is the separate observation that RetailOS *sent* the
             // command at all (`set_commands`), which is the thing that actually says "this machine
             // has finished starting and wants input".
-            if !w.reporting || w.ctrl & ClickWheel::ARM == 0 {
+            if !w.reporting {
                 w.frames_suppressed += 1;
+                continue;
+            }
+            if w.ctrl & ClickWheel::ARM == 0 {
+                w.frames_unarmed += 1;
                 continue;
             }
             let f = w.stream_frame();
@@ -5439,7 +5649,8 @@ impl Memory {
         // Level, not pulse: the line follows the receive-ready flag, so a handler that returns
         // without acknowledging is re-entered rather than losing the packet — which is what the
         // drive's INTRQ does here and what the write-1-to-clear acknowledgement implies.
-        let assert = w.irq_enabled && w.status & ClickWheel::RX_READY != 0 && w.ctrl & ClickWheel::ARM != 0;
+        let assert =
+            w.irq_enabled && w.status & ClickWheel::RX_READY != 0 && w.ctrl & ClickWheel::ARM != 0;
         if assert {
             if self.int_pending_hi & (1 << OPTO_IRQ_HI) == 0 {
                 w.irqs += 1;
@@ -5731,13 +5942,19 @@ impl Nor {
                 self.seq = 0;
                 self.erases += 1;
                 self.set_mode(NorMode::Array);
-                return Some(NorOp::Erase { start: 0, len: 0x10_0000 });
+                return Some(NorOp::Erase {
+                    start: 0,
+                    len: 0x10_0000,
+                });
             }
             (5, _, 0x30) => {
                 self.seq = 0;
                 self.erases += 1;
                 self.set_mode(NorMode::Array);
-                return Some(NorOp::Erase { start: off & !(self.sector - 1), len: self.sector });
+                return Some(NorOp::Erase {
+                    start: off & !(self.sector - 1),
+                    len: self.sector,
+                });
             }
             _ => {
                 self.unknown.push((off, val));
@@ -5877,7 +6094,6 @@ impl Default for Pcf50605 {
 impl Pcf50605 {
     /// I²C address, from Rockbox's `pcf50605_read`/`_write`, which pass `0x8`.
     pub const ADDR: u8 = 0x08;
-
 
     pub fn new() -> Self {
         let mut regs = [0u8; 0x40];
@@ -6060,7 +6276,9 @@ impl Pcf50605 {
     /// Split per Rockbox: `ADCS1` holds bits 9:2 and `ADCS2` the low two plus the ready bit in
     /// bit 7, so a driver recombines them as `ADCS1 << 2 | (ADCS2 & 3)`.
     fn latch(&mut self) {
-        let Some(value) = self.pending.take() else { return };
+        let Some(value) = self.pending.take() else {
+            return;
+        };
         self.regs[0x30] = (value >> 2) as u8;
         self.regs[0x31] = (value & 3) as u8 | 0x80;
         // ADCS3 bit 0 read as a conversion-ready flag. **Unverified** — the bit that the firmware
@@ -6296,8 +6514,18 @@ pub struct PpDmaCtl {
 /// back to back at @51 762 895 / @51 763 063, immediately before it configures this controller's
 /// two channels. See `research/10` Addendum 8.
 pub const PP_DMA: [PpDmaCtl; 2] = [
-    PpDmaCtl { master: 0x6000_8000, chans: 0x6000_9000, n: 2, irq: 27 },
-    PpDmaCtl { master: 0x6000_a000, chans: 0x6000_b000, n: 4, irq: 26 },
+    PpDmaCtl {
+        master: 0x6000_8000,
+        chans: 0x6000_9000,
+        n: 2,
+        irq: 27,
+    },
+    PpDmaCtl {
+        master: 0x6000_a000,
+        chans: 0x6000_b000,
+        n: 4,
+        irq: 26,
+    },
 ];
 
 /// Channel register offsets and command bits, all from Rockbox `pp5020.h`.
@@ -6335,10 +6563,20 @@ impl Ata {
     /// path, so a snapshot is only valid against the same disk image.
     pub fn save(&self) -> Vec<u32> {
         let mut v = vec![
-            self.features as u32, self.nsector as u32, self.sector as u32, self.lcyl as u32,
-            self.hcyl as u32, self.select as u32, self.status as u32, self.error as u32,
-            self.pos as u32, self.remaining, self.next_lba as u32, (self.next_lba >> 32) as u32,
-            self.irq_pending as u32, self.buf.len() as u32,
+            self.features as u32,
+            self.nsector as u32,
+            self.sector as u32,
+            self.lcyl as u32,
+            self.hcyl as u32,
+            self.select as u32,
+            self.status as u32,
+            self.error as u32,
+            self.pos as u32,
+            self.remaining,
+            self.next_lba as u32,
+            (self.next_lba >> 32) as u32,
+            self.irq_pending as u32,
+            self.buf.len() as u32,
         ];
         v.extend(self.buf.iter().map(|b| *b as u32));
         v.extend(self.cfg.iter().map(|b| *b as u32));
@@ -6346,16 +6584,26 @@ impl Ata {
     }
 
     pub fn load(&mut self, v: &[u32]) -> bool {
-        if v.len() < 14 { return false; }
+        if v.len() < 14 {
+            return false;
+        }
         let g = |i: usize| v[i];
-        self.features = g(0) as u8; self.nsector = g(1) as u8; self.sector = g(2) as u8;
-        self.lcyl = g(3) as u8; self.hcyl = g(4) as u8; self.select = g(5) as u8;
-        self.status = g(6) as u8; self.error = g(7) as u8;
-        self.pos = g(8) as usize; self.remaining = g(9);
+        self.features = g(0) as u8;
+        self.nsector = g(1) as u8;
+        self.sector = g(2) as u8;
+        self.lcyl = g(3) as u8;
+        self.hcyl = g(4) as u8;
+        self.select = g(5) as u8;
+        self.status = g(6) as u8;
+        self.error = g(7) as u8;
+        self.pos = g(8) as usize;
+        self.remaining = g(9);
         self.next_lba = g(10) as u64 | ((g(11) as u64) << 32);
         self.irq_pending = g(12) != 0;
         let bl = g(13) as usize;
-        if v.len() < 14 + bl + 0x100 { return false; }
+        if v.len() < 14 + bl + 0x100 {
+            return false;
+        }
         self.buf = v[14..14 + bl].iter().map(|x| *x as u8).collect();
         for (i, x) in v[14 + bl..14 + bl + 0x100].iter().enumerate() {
             self.cfg[i] = *x as u8;
@@ -6367,7 +6615,10 @@ impl Ata {
     /// the alternative is an emulator bug quietly rewriting the one disk image this project has.
     pub fn open(path: &std::path::Path, writable: bool) -> std::io::Result<Self> {
         let file = if writable {
-            std::fs::OpenOptions::new().read(true).write(true).open(path)?
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)?
         } else {
             std::fs::File::open(path)?
         };
@@ -6455,50 +6706,52 @@ impl Ata {
         w[49] = 0x0200; // LBA supported
         w[51] = 0x0200;
         w[53] = 0x0007; // words 54-58, 64-70, 88 are valid
-        // **And they have to actually be there, because bit 0 of word 53 says they are.**
-        //
-        // These were left zero while word 53 advertised them, which is the same defect shape as a
-        // config option with no mechanism behind it: a driver that believes the validity bit reads
-        // a geometry of nothing. Linux's `ide` driver is the one that does — 2.4.32-ipod2 prints
-        // `INVALID GEOMETRY: 63 PHYSICAL HEADS?` and then fails every read of sectors 0, 2, 4 and 6,
-        // which is the MBR, which is why it cannot find a partition table on a disk whose partition
-        // table three other firmwares here read without complaint.
-        //
-        // **The current geometry is whatever INITIALIZE DEVICE PARAMETERS last set.**
-        //
-        // This used to read "nothing ever issues INITIALIZE DEVICE PARAMETERS to this drive, so
-        // there is no second answer to keep in step" — true only for as long as the one firmware
-        // that sends it could not get far enough to send it. iPodLinux issues `0x91` as soon as it
-        // can read its own IDENTIFY, and a drive that answers the command and then reports the old
-        // geometry back is contradicting itself.
-        // With no such command issued the current geometry IS the default one, cylinder count
-        // included — 16383 is the legacy ceiling word 1 reports, not a figure derived from capacity.
+                        // **And they have to actually be there, because bit 0 of word 53 says they are.**
+                        //
+                        // These were left zero while word 53 advertised them, which is the same defect shape as a
+                        // config option with no mechanism behind it: a driver that believes the validity bit reads
+                        // a geometry of nothing. Linux's `ide` driver is the one that does — 2.4.32-ipod2 prints
+                        // `INVALID GEOMETRY: 63 PHYSICAL HEADS?` and then fails every read of sectors 0, 2, 4 and 6,
+                        // which is the MBR, which is why it cannot find a partition table on a disk whose partition
+                        // table three other firmwares here read without complaint.
+                        //
+                        // **The current geometry is whatever INITIALIZE DEVICE PARAMETERS last set.**
+                        //
+                        // This used to read "nothing ever issues INITIALIZE DEVICE PARAMETERS to this drive, so
+                        // there is no second answer to keep in step" — true only for as long as the one firmware
+                        // that sends it could not get far enough to send it. iPodLinux issues `0x91` as soon as it
+                        // can read its own IDENTIFY, and a drive that answers the command and then reports the old
+                        // geometry back is contradicting itself.
+                        // With no such command issued the current geometry IS the default one, cylinder count
+                        // included — 16383 is the legacy ceiling word 1 reports, not a figure derived from capacity.
         let (cur_heads, cur_sectors) = current.unwrap_or((w[3], w[6]));
         // Once the host has chosen heads and sectors, cylinders follow from them: the drive divides
         // its capacity by the translation it was given. Keeping the default cylinder count against
         // host-chosen heads and sectors would describe a disk of a different size.
         let cur_cyls = match current {
             None => w[1],
-            Some(_) => (sectors / (cur_heads.max(1) as u64 * cur_sectors.max(1) as u64)).min(65535) as u16,
+            Some(_) => {
+                (sectors / (cur_heads.max(1) as u64 * cur_sectors.max(1) as u64)).min(65535) as u16
+            }
         };
         w[54] = cur_cyls; // current cylinders
         w[55] = cur_heads; // current heads
         w[56] = cur_sectors; // current sectors per track
-        // Current capacity in sectors, and it is NOT the disk's size: CHS addressing tops out at
-        // 16383*16*63, so a drive larger than that reports the ceiling here and the true figure in
-        // words 60/61. Reporting the LBA size in a CHS field is how you get a geometry that
-        // multiplies out to more sectors than the heads/sectors fields can reach.
+                             // Current capacity in sectors, and it is NOT the disk's size: CHS addressing tops out at
+                             // 16383*16*63, so a drive larger than that reports the ceiling here and the true figure in
+                             // words 60/61. Reporting the LBA size in a CHS field is how you get a geometry that
+                             // multiplies out to more sectors than the heads/sectors fields can reach.
         let chs_capacity = w[54] as u32 * w[55] as u32 * w[56] as u32;
         w[57] = (chs_capacity & 0xffff) as u16;
         w[58] = (chs_capacity >> 16) as u16;
         w[60] = (sectors & 0xffff) as u16; // LBA28 capacity, low
         w[61] = ((sectors >> 16) & 0xffff) as u16; // ...and high
-        // Transfer modes. Word 53 above claims words 64-70 and 88 are valid, so leaving them zero
-        // was a drive that advertises no DMA capability at all while answering SET FEATURES
-        // "transfer mode = Multiword DMA 2" with success — which is not a drive that exists.
-        //
-        // Low byte = modes supported, high byte = mode currently selected. The selected bits are
-        // the standard way a driver confirms the mode it just asked for actually took.
+                                                   // Transfer modes. Word 53 above claims words 64-70 and 88 are valid, so leaving them zero
+                                                   // was a drive that advertises no DMA capability at all while answering SET FEATURES
+                                                   // "transfer mode = Multiword DMA 2" with success — which is not a drive that exists.
+                                                   //
+                                                   // Low byte = modes supported, high byte = mode currently selected. The selected bits are
+                                                   // the standard way a driver confirms the mode it just asked for actually took.
         w[62] = 0x0000; // single-word DMA: obsolete since ATA-3, correctly absent
         w[63] = 0x0007 | ((mwdma_selected as u16) << 8); // multiword DMA 0-2 supported
         w[64] = 0x0003; // PIO modes 3 and 4
@@ -6572,7 +6825,8 @@ impl Ata {
         let len = word(0x08).wrapping_add(4) as usize;
         let mut data = std::mem::take(&mut self.dma_staged);
         data.truncate(len.min(data.len()));
-        self.dma_transfers.push((self.dma_lba, dest, data.len() as u32));
+        self.dma_transfers
+            .push((self.dma_lba, dest, data.len() as u32));
         self.dma_ready = Some((dest, data));
         self.status = ATA_DRDY | ATA_DSC;
         self.irq_pending = true;
@@ -6624,7 +6878,8 @@ impl Ata {
 
     fn command(&mut self, cmd: u8) {
         {
-            self.commands.push((cmd, self.features, self.nsector, self.lba()));
+            self.commands
+                .push((cmd, self.features, self.nsector, self.lba()));
         }
         // Uncapped, because the sample above is capped at 256 and a capped log is how this project
         // once published "LBA 22169 is never read" about a sector read at command #342. Whether the
@@ -6658,7 +6913,11 @@ impl Ata {
             // DRDY or ERR, saw DRQ instead, and returned error `0x58` — which is what stopped the
             // `osos` load. Nothing is committed until the GO bit arrives.
             0xc8 | 0xc9 | 0x25 => {
-                let n = if self.nsector == 0 { 256 } else { self.nsector as u32 };
+                let n = if self.nsector == 0 {
+                    256
+                } else {
+                    self.nsector as u32
+                };
                 self.next_lba = self.lba();
                 self.dma_staged = self.read_sectors(self.next_lba, n);
                 self.dma_lba = self.next_lba;
@@ -6675,7 +6934,11 @@ impl Ata {
             }
             0x20 | 0x21 | 0xc4 => {
                 // READ SECTOR(S) / READ MULTIPLE
-                self.remaining = if self.nsector == 0 { 256 } else { self.nsector as u32 };
+                self.remaining = if self.nsector == 0 {
+                    256
+                } else {
+                    self.nsector as u32
+                };
                 self.next_lba = self.lba();
                 self.load_sector();
                 self.remaining = self.remaining.saturating_sub(1);
@@ -6691,19 +6954,23 @@ impl Ata {
                 } else {
                     self.status = ATA_DRDY | ATA_DSC | ATA_ERR;
                     self.error = 0x04; // ABRT — a write-protected drive
-                    // A real drive asserts INTRQ when it clears BSY, and it does that whether the
-                    // command succeeded or aborted — refusing is a *completion*, not a silence.
-                    // Without this the driver is told nothing at all: RetailOS blocked on RTXC
-                    // semaphore 0xd1 waiting for this exact command (a 1-sector WRITE DMA to
-                    // LBA 32894, the first sector of FAT #1) and only its own 3.9 s timeout ever
-                    // ended the wait, 21 times over. See research/10 Addendum 15.
+                                       // A real drive asserts INTRQ when it clears BSY, and it does that whether the
+                                       // command succeeded or aborted — refusing is a *completion*, not a silence.
+                                       // Without this the driver is told nothing at all: RetailOS blocked on RTXC
+                                       // semaphore 0xd1 waiting for this exact command (a 1-sector WRITE DMA to
+                                       // LBA 32894, the first sector of FAT #1) and only its own 3.9 s timeout ever
+                                       // ended the wait, 21 times over. See research/10 Addendum 15.
                     self.irq_pending = true;
                 }
             }
             // WRITE SECTOR(S) / WRITE MULTIPLE — PIO, the driver feeds the data register.
             0x30 | 0x31 | 0xc5 => {
                 if self.writable {
-                    self.remaining = if self.nsector == 0 { 256 } else { self.nsector as u32 };
+                    self.remaining = if self.nsector == 0 {
+                        256
+                    } else {
+                        self.nsector as u32
+                    };
                     self.next_lba = self.lba();
                     self.buf = vec![0u8; 512];
                     self.pos = 0;
@@ -6720,7 +6987,8 @@ impl Ata {
             // from the sector-count register. Accepting it and then reporting the old geometry in
             // IDENTIFY is a drive disagreeing with itself, so the answer moves with the command.
             0x91 => {
-                self.current_geometry = Some(((self.select & 0x0f) as u16 + 1, self.nsector as u16));
+                self.current_geometry =
+                    Some(((self.select & 0x0f) as u16 + 1, self.nsector as u16));
                 self.status = ATA_DRDY | ATA_DSC;
                 self.irq_pending = true;
             }
@@ -6822,24 +7090,23 @@ impl Ata {
             // each is 512 bytes — exactly one sector. Two words each is 1024, which is twice the
             // response it asked for.
             0x1e2..=0x1e3 => 0,
-            0x1e0..=0x1e1
-                if self.pos < self.buf.len() => {
-                    let b = self.buf[self.pos];
-                    if self.id_watch && self.id_handover.len() < 24 {
-                        self.id_handover.push((self.pos as u32, b));
-                    }
-                    self.pos += 1;
-                    self.bytes_read += 1;
-                    if self.pos == self.buf.len() {
-                        if self.remaining > 0 {
-                            self.remaining -= 1;
-                            self.load_sector();
-                        } else {
-                            self.status = ATA_DRDY | ATA_DSC;
-                        }
-                    }
-                    b
+            0x1e0..=0x1e1 if self.pos < self.buf.len() => {
+                let b = self.buf[self.pos];
+                if self.id_watch && self.id_handover.len() < 24 {
+                    self.id_handover.push((self.pos as u32, b));
                 }
+                self.pos += 1;
+                self.bytes_read += 1;
+                if self.pos == self.buf.len() {
+                    if self.remaining > 0 {
+                        self.remaining -= 1;
+                        self.load_sector();
+                    } else {
+                        self.status = ATA_DRDY | ATA_DSC;
+                    }
+                }
+                b
+            }
             0x1e4..=0x1e7 => self.error,
             0x1e8..=0x1eb => self.nsector,
             0x1ec..=0x1ef => self.sector,
@@ -7068,7 +7335,13 @@ pub enum BcmOp {
     Command { cmd: u16 },
     /// A command that moved pixels into the frame store. `x1`/`y1` are inclusive, matching the
     /// header; `src` is where the tile was read from.
-    Blit { x0: u32, y0: u32, x1: u32, y1: u32, src: u32 },
+    Blit {
+        x0: u32,
+        y0: u32,
+        x1: u32,
+        y1: u32,
+        src: u32,
+    },
 }
 
 // ---- the GENCMD service registry, derived from RetailOS's reader ------------------------------
@@ -7100,7 +7373,11 @@ const REG_SURFACE_BASE: u32 = 0x000e_0000;
 
 /// Bytes between `rd` and `wr` in a ring `[lo, hi)` — RetailOS's own `FUN_000f5834`.
 fn ring_used(lo: u32, hi: u32, rd: u32, wr: u32) -> u32 {
-    if wr < rd { (hi - rd) + (wr - lo) } else { wr - rd }
+    if wr < rd {
+        (hi - rd) + (wr - lo)
+    } else {
+        wr - rd
+    }
 }
 
 impl Bcm {
@@ -7222,7 +7499,11 @@ impl Bcm {
     /// second-sourced implementation.
     fn lcd_update(&mut self) {
         for i in 0..PANEL_W * PANEL_H {
-            self.panel[i] = self.mem.get(&(BCMA_CMDPARAM + i as u32 * 2)).copied().unwrap_or(0);
+            self.panel[i] = self
+                .mem
+                .get(&(BCMA_CMDPARAM + i as u32 * 2))
+                .copied()
+                .unwrap_or(0);
         }
         self.publish_panel();
     }
@@ -7250,7 +7531,10 @@ impl Bcm {
     fn lcd_update_rect(&mut self) {
         let hdr: [u32; 8] = std::array::from_fn(|i| self.get32(BCMA_CMDPARAM + i as u32 * 4));
         let (x0, y0, x1, y1, len) = (hdr[1], hdr[2], hdr[3], hdr[4], hdr[7]);
-        let (w, h) = (x1.wrapping_sub(x0).wrapping_add(1), y1.wrapping_sub(y0).wrapping_add(1));
+        let (w, h) = (
+            x1.wrapping_sub(x0).wrapping_add(1),
+            y1.wrapping_sub(y0).wrapping_add(1),
+        );
         let sane = x0 <= x1
             && y0 <= y1
             && (x1 as usize) < PANEL_W
@@ -7271,7 +7555,13 @@ impl Bcm {
                 self.panel[(y0 + row) as usize * PANEL_W + (x0 + col) as usize] = px;
             }
         }
-        self.timeline.push(BcmOp::Blit { x0, y0, x1, y1, src });
+        self.timeline.push(BcmOp::Blit {
+            x0,
+            y0,
+            x1,
+            y1,
+            src,
+        });
         self.publish_panel();
     }
 
@@ -7356,10 +7646,9 @@ impl Bcm {
                 };
                 self.rd_phase_high = !hi;
             }
-            0x3_0000 | 0x7_0000
-                if val == 0x31 => {
-                    self.kick();
-                }
+            0x3_0000 | 0x7_0000 if val == 0x31 => {
+                self.kick();
+            }
             _ => {}
         }
     }
@@ -7398,7 +7687,8 @@ impl Bcm {
         self.set32(BCMA_COMMAND, 1); // "firmware up" — FUN_00288058 requires exactly 1
         self.set32(BCMA_STATUS, REG_BASE); // the directory pointer; non-zero, 4-aligned
         for i in 0..8u32 {
-            self.mem.insert(REG_BASE + i * 2, if i == 0 { REG_REC2 as u16 } else { 0 });
+            self.mem
+                .insert(REG_BASE + i * 2, if i == 0 { REG_REC2 as u16 } else { 0 });
         }
         let r = REG_BASE + REG_REC2;
         self.set32(r, 0); //        +0x00  read by every scanner, examined by none
@@ -7510,7 +7800,8 @@ impl Bcm {
             if p >= REG_RX_HI {
                 p = REG_RX_LO;
             }
-            self.mem.insert(REG_BASE + p, pair[0] as u16 | ((pair[1] as u16) << 8));
+            self.mem
+                .insert(REG_BASE + p, pair[0] as u16 | ((pair[1] as u16) << 8));
             p += 2;
         }
         if p >= REG_RX_HI {
@@ -7522,7 +7813,12 @@ impl Bcm {
     /// Byte-level bus access, since the interpreter decomposes `ldrh`/`strh` into byte accesses.
     /// Latches and phase, for a snapshot. `mem` is saved separately because it is sparse.
     pub fn save_scalars(&self) -> [u32; 4] {
-        [self.wr_addr, self.rd_addr, self.wr_phase_high as u32, self.rd_phase_high as u32]
+        [
+            self.wr_addr,
+            self.rd_addr,
+            self.wr_phase_high as u32,
+            self.rd_phase_high as u32,
+        ]
     }
 
     pub fn load_scalars(&mut self, v: [u32; 4]) {
@@ -7595,18 +7891,29 @@ impl Bcm {
 /// restored run measures itself. The ATA *backing file* is not saved either — it is reopened by
 /// path, so a snapshot is only valid against the same disk image.
 ///
-/// **The click wheel is not saved**, and that has a consequence worth stating rather than
-/// discovering: a restored run replays its injected script from the first step, against a machine
-/// that is already past the instruction counts those steps are anchored to — so every step fires at
-/// once, on the first tick. `--restore` and `--wheel` are not usefully combined until the script is
-/// re-anchored; the injection is meant for a run from reset.
+/// **The click wheel's state is saved; its script and counters are not.** This paragraph used to
+/// say the wheel was not saved at all, and by the time it was read that was false — the block below
+/// carries `ctrl`, `status`, `reporting` and the pending reply, because a restored machine that
+/// came back with an unarmed receiver had a dead wheel and no error. What stays out is the
+/// instrumentation and the injected script, the latter for a reason worth stating rather than
+/// discovering: a replayed script fires from its first step against a machine already past the
+/// instruction counts those steps are anchored to, so every step lands at once on the first tick.
+/// `--restore` and `--wheel` are not usefully combined until the script is re-anchored; the
+/// injection is meant for a run from reset.
+///
+/// **A snapshot is only valid against a machine built the same way.** Nothing in the format records
+/// which peripherals were installed, so restoring an image taken from a machine without a click
+/// wheel into one that has a wheel leaves the wheel at its power-on defaults — unarmed, with the
+/// firmware long past the point where it would have armed it. `ipod-boot from-idle` did exactly
+/// that: it built its cached snapshot through `cold_argv`, which has no `--clickwheel`, and every
+/// restored run silently ignored the wheel. See its cache key.
 impl Machine {
     pub fn snapshot(&self) -> Vec<u8> {
         let mut o = Vec::new();
         let w32 = |o: &mut Vec<u8>, v: u32| o.extend_from_slice(&v.to_le_bytes());
         let w64 = |o: &mut Vec<u8>, v: u64| o.extend_from_slice(&v.to_le_bytes());
 
-        o.extend_from_slice(b"IPODSNP6");
+        o.extend_from_slice(b"IPODSNP7");
         let cpu = self.cpu.save();
         w32(&mut o, cpu.len() as u32);
         for x in &cpu {
@@ -7638,6 +7945,15 @@ impl Machine {
             w32(&mut o, *b);
             w32(&mut o, *s);
             w32(&mut o, *t);
+        }
+        // **The MMAP window registers.** The aliases above are *derived* from these by
+        // `rebuild_mmap_aliases`, and saving only the derivation was the defect that made every
+        // restored machine dead on arrival: the firmware's first write to any window truncated the
+        // alias list back to the floor and re-derived it from sixteen zeros, unmapping the low view
+        // RetailOS executes in. Saving the source of truth and re-deriving on the way in is what
+        // makes the restored machine the same machine.
+        for r in &self.mem.mmap_regs {
+            w32(&mut o, *r);
         }
         w32(&mut o, self.mem.read_overrides.len() as u32);
         for (a, v) in &self.mem.read_overrides {
@@ -7721,11 +8037,27 @@ impl Machine {
     /// Regions are replaced wholesale rather than merged: a partial restore would leave the machine
     /// in a state that never existed, which is worse than refusing.
     pub fn restore(&mut self, b: &[u8]) -> bool {
-        if b.len() < 8 || &b[..8] != b"IPODSNP6" {
+        if b.len() < 8 || &b[..8] != b"IPODSNP7" {
             return false;
         }
         let mut p = 8usize;
+        // **Every read is bounds-checked, and a short image is refused rather than fatal.** These
+        // used to index `b` directly, so a truncated snapshot did not return false — it *panicked*,
+        // taking the whole emulator with it. The doc comment above has always promised the opposite.
+        // A snapshot is written by a background thread as the window closes, so a truncated one is
+        // exactly what a crash or a full disk leaves behind, and that is the moment when killing
+        // the program is least helpful.
+        //
+        // A read past the end yields zero and sets `short`; the run continues so the caller gets a
+        // single `false` rather than a first-difference dance, and `short` is checked before the
+        // one `true` at the end. Partly-loaded state is fine: every caller rebuilds the machine
+        // when this returns false, which the GUI's `not a valid snapshot; cold-booting` path does.
+        let short = std::cell::Cell::new(false);
         let r32 = |p: &mut usize| -> u32 {
+            if *p + 4 > b.len() {
+                short.set(true);
+                return 0;
+            }
             let v = u32::from_le_bytes(b[*p..*p + 4].try_into().unwrap());
             *p += 4;
             v
@@ -7736,6 +8068,10 @@ impl Machine {
             return false;
         }
         let r64 = |p: &mut usize| -> u64 {
+            if *p + 8 > b.len() {
+                short.set(true);
+                return 0;
+            }
             let v = u64::from_le_bytes(b[*p..*p + 8].try_into().unwrap());
             *p += 8;
             v
@@ -7764,20 +8100,33 @@ impl Machine {
         self.mem.regions.clear();
         for _ in 0..nregions {
             let nl = r32(&mut p) as usize;
+            if p + nl > b.len() {
+                return false;
+            }
             let name = String::from_utf8_lossy(&b[p..p + nl]).into_owned();
             p += nl;
             let base = r32(&mut p);
             let dl = r32(&mut p) as usize;
+            if p + dl > b.len() {
+                return false;
+            }
             let data = b[p..p + dl].to_vec();
             p += dl;
             // Region names are &'static str; a restored name is leaked deliberately — there are a
             // dozen of them per run and they must outlive the machine.
-            self.mem.regions.push(Region { name: Box::leak(name.into_boxed_str()), base, data });
+            self.mem.regions.push(Region {
+                name: Box::leak(name.into_boxed_str()),
+                base,
+                data,
+            });
         }
         self.mem.aliases.clear();
         for _ in 0..r32(&mut p) as usize {
             let (x, y, z) = (r32(&mut p), r32(&mut p), r32(&mut p));
             self.mem.aliases.push((x, y, z));
+        }
+        for r in self.mem.mmap_regs.iter_mut() {
+            *r = r32(&mut p);
         }
         self.mem.read_overrides.clear();
         for _ in 0..r32(&mut p) as usize {
@@ -7814,7 +8163,11 @@ impl Machine {
             let (position, buttons) = (r32(&mut p) as u8, r32(&mut p) as u8);
             let (ctrl, status, tx, rx) = (r32(&mut p), r32(&mut p), r32(&mut p), r32(&mut p));
             let (reporting, irq_enabled) = (r32(&mut p) != 0, r32(&mut p) != 0);
-            let reply = if r32(&mut p) == 1 { Some((r32(&mut p), r32(&mut p))) } else { None };
+            let reply = if r32(&mut p) == 1 {
+                Some((r32(&mut p), r32(&mut p)))
+            } else {
+                None
+            };
             if let Some(w) = &mut self.mem.clickwheel {
                 w.base = base;
                 w.hold = hold;
@@ -7835,7 +8188,34 @@ impl Machine {
         if (1..=32).contains(&level) {
             self.mem.backlight.level = level as u8;
         }
-        true
+        // **Re-derive the address map from the registers that define it.**
+        //
+        // `translate` resolves a logical address through the MMAP windows before any region is
+        // looked up, and RetailOS runs entirely in the low window — a resumed PC of `0x002079dc` is
+        // SDRAM at `0x102079dc` seen through it. Restoring the derived alias list was not enough to
+        // put that window back; deriving it here from the restored `mmap_regs` is.
+        //
+        // Measured, on a snapshot taken at 1.6 G instructions and restored by the same binary:
+        //
+        // ```text
+        //   before   pc 0x002079dc reads 00 00 00 00 …   Lost after 223 instructions
+        //   after    pc 0x002079dc reads 04 00 00 1a …   3 000 000 instructions, still running
+        // ```
+        //
+        // `04 00 00 1a` is the `bne` that is genuinely there at `0x102079dc`; the zeros were the
+        // absence of a mapping. And the failure was **silent**: the CPU executed `andeq r0, r0, r0`
+        // — a NOP — through address space until it was declared Lost a few hundred instructions
+        // later, while the panel still held the last picture the co-processor had been given. The
+        // window showed a normal-looking iPod that ignored every button, which is how this arrived:
+        // as "the restored machine will not take input".
+        //
+        // This also invalidates the fast lookup cache, which `rebuild_mmap_aliases` does last.
+        // `run` clears that cache at every call as well, so this is belt-and-braces rather than the
+        // load-bearing half — the load-bearing half is `mmap_regs` being in the image at all.
+        self.mem.rebuild_mmap_aliases();
+        // The image ran out somewhere above. Everything read past that point was a zero this
+        // function invented, so the machine is not the one that was saved.
+        !short.get()
     }
 }
 
@@ -7897,7 +8277,10 @@ pub fn extract_symbols(image: &[u8], base: u32) -> BTreeMap<u32, String> {
         let p = after + (4 - after % 4) % 4;
         let clean = std::str::from_utf8(&image[start..start + len])
             .ok()
-            .filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ' '));
+            .filter(|s| {
+                s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ' ')
+            });
         if let Some(name) = clean {
             if p + 4 <= n {
                 // Pattern A — the RTXC task registry: the name is followed by a POINTER to the
@@ -7938,7 +8321,11 @@ impl Machine {
         if off > 0x1000 {
             return None;
         }
-        Some(if off == 0 { n.clone() } else { format!("{n}+{off:#x}") })
+        Some(if off == 0 {
+            n.clone()
+        } else {
+            format!("{n}+{off:#x}")
+        })
     }
 }
 
@@ -7985,7 +8372,15 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
         // writes went elsewhere. `osos` checksummed the NOR reset vectors and failed. Bypass #11
         // in the ledger predicted exactly this. So in cold boot SDRAM is a region where the
         // hardware actually has it, and address 0 belongs to NOR until the MMAP remap is honoured.
-        (if cold_boot { "sdram" } else { "sdram-low" }, if cold_boot { 0x1000_0000 } else { 0x0000_0000u32 }, 0x0400_0000usize),
+        (
+            if cold_boot { "sdram" } else { "sdram-low" },
+            if cold_boot {
+                0x1000_0000
+            } else {
+                0x0000_0000u32
+            },
+            0x0400_0000usize,
+        ),
         // 128 KB, and **measured rather than chosen** (2026-08-18). This line carried no
         // justification while every region around it did, and the identity argument below leaned on
         // it, so it was tested: shrink IRAM to 0x18000 (96 KB) and Apple's own bootloader writes
@@ -8013,7 +8408,11 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
         if m.mem.regions.iter().any(|r| r.name == name) {
             continue;
         }
-        m.mem.regions.push(Region { name, base, data: vec![0; size] });
+        m.mem.regions.push(Region {
+            name,
+            base,
+            data: vec![0; size],
+        });
     }
     // The LCD controller, at 0x30020000/0x30030000/0x30060000/0x30070000. Filled with 0xFF
     // rather than zeros because the driver spins on a ready bit:
@@ -8080,24 +8479,24 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
     // otherwise, it would spin forever waiting for a COP that never reports sleeping. Every
     // boot before this was a coprocessor boot. Report CPU, and report the COP already asleep.
     m.mem.write32(0x6000_0000, 0x0000_0055); // PROC_ID (read as a byte; 0x55 = CPU)
-    // **The chip-id register is NOT seeded here, and that is a decision.** `trace.rs` seeds
-    // `0x70000000` with `0x00360000`, and its comment records the measurement behind it: Apple's
-    // bootloader reads bits 16..23 and compares against **`0x36`**, taking its PP5021C path when it
-    // matches and a fallback when it does not.
-    //
-    // `ipodloader2` reads the *same bits* and compares against **`0x32`** (`ipodhw.c:27`), which is
-    // its test for a PP5022. **Two drivers want different answers from one register**, and Apple's
-    // is the one measured off real firmware, so it wins: writing `'2'` here to satisfy the loader
-    // would break the bootloader that has to run first.
-    //
-    // The conclusion is about `ipodloader2`, not about us: this is a **PP5021C**, its byte is `'6'`,
-    // `ipod_is_pp5022()` correctly answers false, and the loader then falls back to **PP5002**
-    // addressing — 1G/2G/3G hardware — because it only distinguishes PP5022 from everything-else
-    // and has no PP5021C path at all. See [research/16].
-    // COP_STATUS must *stay* COPSLEEPING. `COP_CTRL` is the same address, and firmware wakes the
-    // coprocessor by writing WAKE (0) to it before waiting for the sleep bit to come back — so a
-    // plain seeded value gets cleared by the very code that then waits for it. We do not emulate
-    // the second core, so on this machine the COP is always asleep.
+                                             // **The chip-id register is NOT seeded here, and that is a decision.** `trace.rs` seeds
+                                             // `0x70000000` with `0x00360000`, and its comment records the measurement behind it: Apple's
+                                             // bootloader reads bits 16..23 and compares against **`0x36`**, taking its PP5021C path when it
+                                             // matches and a fallback when it does not.
+                                             //
+                                             // `ipodloader2` reads the *same bits* and compares against **`0x32`** (`ipodhw.c:27`), which is
+                                             // its test for a PP5022. **Two drivers want different answers from one register**, and Apple's
+                                             // is the one measured off real firmware, so it wins: writing `'2'` here to satisfy the loader
+                                             // would break the bootloader that has to run first.
+                                             //
+                                             // The conclusion is about `ipodloader2`, not about us: this is a **PP5021C**, its byte is `'6'`,
+                                             // `ipod_is_pp5022()` correctly answers false, and the loader then falls back to **PP5002**
+                                             // addressing — 1G/2G/3G hardware — because it only distinguishes PP5022 from everything-else
+                                             // and has no PP5021C path at all. See [research/16].
+                                             // COP_STATUS must *stay* COPSLEEPING. `COP_CTRL` is the same address, and firmware wakes the
+                                             // coprocessor by writing WAKE (0) to it before waiting for the sleep bit to come back — so a
+                                             // plain seeded value gets cleared by the very code that then waits for it. We do not emulate
+                                             // the second core, so on this machine the COP is always asleep.
     if m.mem.read_overrides.is_empty() {
         // Ledger #7, and until now unconditional — which meant nothing that depends on the second
         // core could be A/B'd, because there was no arm B. RetailOS reads this address 5 470 times
@@ -8239,9 +8638,7 @@ mod nor_tests {
         }
 
         fn read16(&self, off: u32) -> u16 {
-            let byte = |o: u32| {
-                self.nor.read(o).unwrap_or_else(|| self.data[o as usize])
-            };
+            let byte = |o: u32| self.nor.read(o).unwrap_or_else(|| self.data[o as usize]);
             u16::from_le_bytes([byte(off), byte(off + 1)])
         }
     }
@@ -8249,13 +8646,25 @@ mod nor_tests {
     #[test]
     fn autoselect_answers_the_jedec_pair_and_reset_restores_the_array() {
         let mut c = Chip::new();
-        assert_eq!(c.read16(0), 0x5a5a, "read-array must answer the image before any command");
+        assert_eq!(
+            c.read16(0),
+            0x5a5a,
+            "read-array must answer the image before any command"
+        );
         c.unlock(0x9090);
         assert_eq!(c.read16(0), 0x00bf, "manufacturer");
         assert_eq!(c.read16(2), 0x273f, "device");
-        assert_eq!(c.read16(4), 0x0000, "sector protect: the driver refuses to erase otherwise");
+        assert_eq!(
+            c.read16(4),
+            0x0000,
+            "sector protect: the driver refuses to erase otherwise"
+        );
         c.cycle(0, 0xf0f0);
-        assert_eq!(c.read16(0), 0x5a5a, "reset must put the chip back into read-array");
+        assert_eq!(
+            c.read16(0),
+            0x5a5a,
+            "reset must put the chip back into read-array"
+        );
     }
 
     #[test]
@@ -8287,15 +8696,27 @@ mod nor_tests {
         c.cycle(0x1000, 0xffff);
         c.unlock(0xa0a0);
         c.cycle(0x1002, 0x1234);
-        assert_eq!(c.read16(0x1000), 0xffff, "0xffff data must be programmed, not read as a reset");
+        assert_eq!(
+            c.read16(0x1000),
+            0xffff,
+            "0xffff data must be programmed, not read as a reset"
+        );
         assert_eq!(c.read16(0x1002), 0x1234);
 
         c.unlock(0xa0a0);
         c.cycle(0x1002, 0xffff);
-        assert_eq!(c.read16(0x1002), 0x1234, "a program can only clear bits, never set them");
+        assert_eq!(
+            c.read16(0x1002),
+            0x1234,
+            "a program can only clear bits, never set them"
+        );
 
         assert_eq!(c.nor.programs, 3);
-        assert!(c.nor.unknown.is_empty(), "undecoded cycles: {:?}", c.nor.unknown);
+        assert!(
+            c.nor.unknown.is_empty(),
+            "undecoded cycles: {:?}",
+            c.nor.unknown
+        );
     }
 }
 
@@ -8318,14 +8739,25 @@ mod bcm_command_tests {
     #[test]
     fn the_co_processor_answers_at_both_of_its_addresses() {
         let b = Bcm::new(Bcm::HOST_BASE);
-        assert_eq!(b.window(Bcm::HOST_BASE), Some(0), "the address Rockbox documents");
-        assert_eq!(b.window(Bcm::DIAG_BASE), Some(0), "the address Apple's diagnostics uses");
+        assert_eq!(
+            b.window(Bcm::HOST_BASE),
+            Some(0),
+            "the address Rockbox documents"
+        );
+        assert_eq!(
+            b.window(Bcm::DIAG_BASE),
+            Some(0),
+            "the address Apple's diagnostics uses"
+        );
         // `CONTROL` and `ALT_CONTROL`, through the second window.
         assert_eq!(b.window(Bcm::DIAG_BASE + 0x3_0000), Some(0x3_0000));
         assert_eq!(b.window(Bcm::DIAG_BASE + 0x7_0000), Some(0x7_0000));
         // And it is one chip: both windows resolve to the same register file, so a write through
         // either lands in the same place.
-        assert_eq!(b.window(Bcm::HOST_BASE + 0x3_0000), b.window(Bcm::DIAG_BASE + 0x3_0000));
+        assert_eq!(
+            b.window(Bcm::HOST_BASE + 0x3_0000),
+            b.window(Bcm::DIAG_BASE + 0x3_0000)
+        );
         // Nothing outside them.
         assert_eq!(b.window(Bcm::HOST_BASE - 1), None);
         assert_eq!(b.window(Bcm::DIAG_BASE + Bcm::WINDOW), None);
@@ -8335,7 +8767,9 @@ mod bcm_command_tests {
 
     impl Host {
         fn new() -> Self {
-            Host { bcm: Bcm::new(Bcm::HOST_BASE) }
+            Host {
+                bcm: Bcm::new(Bcm::HOST_BASE),
+            }
         }
         fn addr(&mut self, a: u32) {
             self.bcm.write16(0x1_0000, a as u16, false);
@@ -8386,10 +8820,18 @@ mod bcm_command_tests {
 
         assert_eq!(h.panel(129, 81), 0xffff, "the rectangle's top-left corner");
         assert_eq!(h.panel(190, 158), 0xffff, "and its bottom-right, inclusive");
-        assert_eq!(h.panel(128, 81), 0x0000, "one pixel left of it is untouched");
+        assert_eq!(
+            h.panel(128, 81),
+            0x0000,
+            "one pixel left of it is untouched"
+        );
         assert_eq!(h.panel(191, 158), 0x0000, "and one pixel right of it");
         assert_eq!(h.panel(129, 80), 0x0000, "and the row above");
-        assert_eq!(h.panel(0, 0), 0x0000, "and above all, NOT at the panel origin");
+        assert_eq!(
+            h.panel(0, 0),
+            0x0000,
+            "and above all, NOT at the panel origin"
+        );
 
         let lit = h.bcm.panel.iter().filter(|&&p| p == 0xffff).count();
         assert_eq!(lit, 62 * 78, "exactly the rectangle, no more and no less");
@@ -8496,7 +8938,11 @@ mod pcf_adc_tests {
         let (adcs1, adcs2) = read2(&mut p, 0x30);
         let value = ((adcs1 as u16) << 2) | (adcs2 as u16 & 3);
         assert_eq!(value, 0x2c0, "ADCS1={adcs1:#04x} ADCS2={adcs2:#04x}");
-        assert_eq!(adcs2 & 0x80, 0x80, "ready bit must be set once a result is published");
+        assert_eq!(
+            adcs2 & 0x80,
+            0x80,
+            "ready bit must be set once a result is published"
+        );
     }
 
     /// The other stack's pattern, so a fix for Rockbox cannot silently break Apple: start a
@@ -8518,7 +8964,11 @@ mod pcf_adc_tests {
                 break;
             }
         }
-        assert_eq!(seen, Some(0x2c0), "polling never saw a published conversion");
+        assert_eq!(
+            seen,
+            Some(0x2c0),
+            "polling never saw a published conversion"
+        );
     }
 }
 
@@ -8534,8 +8984,16 @@ mod xmb_usb_tests {
         let mut x = Xmb::new(0x7000_0000);
         // Reads before any enable, and writes that are not INIT_USB, produce nothing.
         assert_eq!(x.usb_clock(0x7000_0023, 0x00), None);
-        assert_eq!(x.usb_clock(0x7000_0023, 0x40), None, "bit 30 is not INIT_USB");
-        assert_eq!(x.usb_clock(0x7000_0033, 0x80), None, "a different register entirely");
+        assert_eq!(
+            x.usb_clock(0x7000_0023, 0x40),
+            None,
+            "bit 30 is not INIT_USB"
+        );
+        assert_eq!(
+            x.usb_clock(0x7000_0033, 0x80),
+            None,
+            "a different register entirely"
+        );
         assert_eq!(x.usb_enables, 0);
 
         // `DEV_INIT2 |= INIT_USB` is bit 31, which is bit 7 of the byte at +0x23.
@@ -8548,7 +9006,9 @@ mod xmb_usb_tests {
     #[test]
     fn the_ready_bit_lands_where_rockbox_polls() {
         let mut x = Xmb::new(0x7000_0000);
-        let (at, bit) = x.usb_clock(0x7000_0023, 0x80).expect("enable is recognised");
+        let (at, bit) = x
+            .usb_clock(0x7000_0023, 0x80)
+            .expect("enable is recognised");
         assert_eq!(at, 0x7000_0028);
         assert_eq!(bit & 0x80, 0x80, "Rockbox tests `& 0x80`");
     }
@@ -8559,12 +9019,19 @@ mod peek_tests {
     use super::*;
 
     fn regions(base: u32, bytes: &[u8]) -> Vec<Region> {
-        vec![Region { name: "sdram", base, data: bytes.to_vec() }]
+        vec![Region {
+            name: "sdram",
+            base,
+            data: bytes.to_vec(),
+        }]
     }
 
     #[test]
     fn a_word_is_read_from_its_region() {
-        let r = regions(0x1000_0000, &[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
+        let r = regions(
+            0x1000_0000,
+            &[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88],
+        );
         assert_eq!(peek_regions(&r, 0x1000_0000), Some(0x4433_2211));
         assert_eq!(peek_regions(&r, 0x1000_0004), Some(0x8877_6655));
     }
@@ -8577,8 +9044,16 @@ mod peek_tests {
         let mut data = vec![0u8; 0x100];
         data[0x40..0x44].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
         let r = regions(0x1000_0000, &data);
-        assert_eq!(peek_regions(&r, 0x1000_0040), Some(0xDEAD_BEEF), "cached view");
-        assert_eq!(peek_regions(&r, 0x1400_0040), Some(0xDEAD_BEEF), "uncached alias");
+        assert_eq!(
+            peek_regions(&r, 0x1000_0040),
+            Some(0xDEAD_BEEF),
+            "cached view"
+        );
+        assert_eq!(
+            peek_regions(&r, 0x1400_0040),
+            Some(0xDEAD_BEEF),
+            "uncached alias"
+        );
     }
 
     #[test]
@@ -8595,8 +9070,16 @@ mod peek_tests {
     #[test]
     fn an_address_outside_every_region_is_none() {
         let r = regions(0x1000_0000, &[0u8; 16]);
-        assert_eq!(peek_regions(&r, 0x7000_0000), None, "an MMIO window is not backing store");
-        assert_eq!(peek_regions(&r, 0x1000_0020), None, "past the end of the region");
+        assert_eq!(
+            peek_regions(&r, 0x7000_0000),
+            None,
+            "an MMIO window is not backing store"
+        );
+        assert_eq!(
+            peek_regions(&r, 0x1000_0020),
+            None,
+            "past the end of the region"
+        );
     }
 
     #[test]

@@ -70,8 +70,13 @@ pub enum Button {
 }
 
 impl Button {
-    pub const ALL: [Button; 5] =
-        [Button::Menu, Button::Next, Button::Prev, Button::Play, Button::Select];
+    pub const ALL: [Button; 5] = [
+        Button::Menu,
+        Button::Next,
+        Button::Prev,
+        Button::Play,
+        Button::Select,
+    ];
 
     /// A button by name, using the same spellings the command line's `--wheel` scripts accept —
     /// `eapp_loader::wheel_button` is the one place those live, so the two cannot drift.
@@ -149,7 +154,13 @@ impl WheelRing {
     /// `select` and `inner` is the bezel line on the real part, and a press landing in it is a press
     /// on neither — which is the honest answer, since on the hardware it is the moulding.
     pub fn new(cx: f32, cy: f32, outer: f32) -> Self {
-        WheelRing { cx, cy, outer, inner: outer * 0.52, select: outer * 0.465 }
+        WheelRing {
+            cx,
+            cy,
+            outer,
+            inner: outer * 0.52,
+            select: outer * 0.465,
+        }
     }
 
     /// Where a point falls. The ring's four labels are wide zones centred on the printed glyph
@@ -292,7 +303,11 @@ mod tests {
         // And the wrap: 95 is one click anticlockwise of Menu's centre, so it is still Menu.
         assert_eq!(quadrant(95), Some(Button::Menu));
         assert_eq!(quadrant(88), Some(Button::Menu));
-        assert_eq!(quadrant(87), None, "the eighth click out is the edge of the band");
+        assert_eq!(
+            quadrant(87),
+            None,
+            "the eighth click out is the edge of the band"
+        );
     }
 
     #[test]
@@ -315,9 +330,17 @@ mod tests {
     fn the_centre_is_select_and_outside_the_ring_is_nothing() {
         let w = WheelRing::new(100.0, 100.0, 50.0);
         assert_eq!(w.hit(100.0, 100.0), Hit::Select);
-        assert_eq!(w.hit(100.0, 80.0), Hit::Select, "inside the select radius (23 of 23.25)");
+        assert_eq!(
+            w.hit(100.0, 80.0),
+            Hit::Select,
+            "inside the select radius (23 of 23.25)"
+        );
         assert_eq!(w.hit(100.0, 40.0), Hit::None, "outside the outer radius");
-        assert_eq!(w.hit(100.0, 75.25), Hit::None, "the bezel line between button and ring");
+        assert_eq!(
+            w.hit(100.0, 75.25),
+            Hit::None,
+            "the bezel line between button and ring"
+        );
         // Twelve o'clock on the ring itself is the Menu label.
         assert_eq!(w.hit(100.0, 62.0), Hit::RingButton(Button::Menu, 0));
         // And 45 degrees round from it is bare ring.

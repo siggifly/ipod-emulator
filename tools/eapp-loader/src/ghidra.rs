@@ -31,7 +31,9 @@ fn url() -> String {
 
 /// `host:port` out of a `http://host:port` base.
 fn authority(base: &str) -> String {
-    base.trim_start_matches("http://").trim_end_matches('/').to_string()
+    base.trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_string()
 }
 
 /// The smallest HTTP/1.1 client that can talk to a plugin on loopback.
@@ -55,7 +57,9 @@ fn request(method: &str, path: &str, body: Option<&str>, timeout_s: u64) -> Resu
         path.trim_start_matches('/'),
         b.len()
     );
-    stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| e.to_string())?;
     let mut raw = String::new();
     // A closed connection is the end of the body; `Connection: close` above is what makes that true.
     let _ = stream.read_to_string(&mut raw);
@@ -71,13 +75,17 @@ fn get(path: &str, timeout_s: u64) -> Result<String, String> {
 
 /// Is anything answering at all?
 fn up() -> bool {
-    get("check_connection", 5).map(|b| !b.trim().is_empty()).unwrap_or(false)
+    get("check_connection", 5)
+        .map(|b| !b.trim().is_empty())
+        .unwrap_or(false)
 }
 
 /// Is a program actually **loaded**? This is the question `check_connection` cannot answer, and the
 /// difference between the two is the whole reason `serve` exists.
 fn loaded() -> bool {
-    get("get_metadata", 10).map(|b| b.contains("\"program_name\"")).unwrap_or(false)
+    get("get_metadata", 10)
+        .map(|b| b.contains("\"program_name\""))
+        .unwrap_or(false)
 }
 
 /// Pull one string field out of a JSON object.
@@ -111,9 +119,8 @@ fn json_str(body: &str, key: &str) -> Option<String> {
 /// Execs rather than spawns: the bridge speaks MCP over this process's stdin and stdout, and the
 /// fewer processes in that path the better.
 pub fn bridge(args: &[String]) -> Result<(), String> {
-    let home = std::env::var("GHIDRA_MCP_HOME").unwrap_or_else(|_| {
-        format!("{}/resources/vendor/ghidra-mcp", repo_root().display())
-    });
+    let home = std::env::var("GHIDRA_MCP_HOME")
+        .unwrap_or_else(|_| format!("{}/resources/vendor/ghidra-mcp", repo_root().display()));
     if !std::path::Path::new(&home).is_dir() {
         return Err(format!(
             "ghidra-mcp checkout not found at {home}\n\
@@ -121,7 +128,8 @@ pub fn bridge(args: &[String]) -> Result<(), String> {
         ));
     }
     let mut cmd = std::process::Command::new("uv");
-    cmd.args(["run", "--project", &home, "bridge-mcp-ghidra"]).args(args);
+    cmd.args(["run", "--project", &home, "bridge-mcp-ghidra"])
+        .args(args);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -138,7 +146,12 @@ pub fn bridge(args: &[String]) -> Result<(), String> {
 fn repo_root() -> std::path::PathBuf {
     // The binary lives in a target directory; the tree is found from the source path at build time,
     // which is stable for a developer tool and is how the scripts resolved it too.
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf()
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 /// `ipod-boot ghidra serve [--status]`
@@ -163,7 +176,10 @@ pub fn serve(status_only: bool) -> Result<(), String> {
 
     if !up() {
         let project = std::env::var("PROJECT").unwrap_or_else(|_| {
-            format!("{}/resources/derived/ghidra/retailos.gpr", repo_root().display())
+            format!(
+                "{}/resources/derived/ghidra/retailos.gpr",
+                repo_root().display()
+            )
         });
         if !std::path::Path::new(&project).is_file() {
             return Err(format!(
@@ -242,13 +258,25 @@ pub fn query(args: &[String]) -> Result<(), String> {
     let cmd = args.first().map(String::as_str).ok_or(USAGE)?;
     let arg = args.get(1).map(String::as_str);
     match cmd {
-        "xref" => println!("{}", get(&format!("get_xrefs_to?address={}", arg.ok_or(USAGE)?), 10)?),
+        "xref" => println!(
+            "{}",
+            get(&format!("get_xrefs_to?address={}", arg.ok_or(USAGE)?), 10)?
+        ),
         "fn" => {
-            println!("{}", get(&format!("get_function_by_address?address={}", arg.ok_or(USAGE)?), 10)?)
+            println!(
+                "{}",
+                get(
+                    &format!("get_function_by_address?address={}", arg.ok_or(USAGE)?),
+                    10
+                )?
+            )
         }
         "dec" => {
             let b = get(
-                &format!("decompile_function_by_address?address={}", arg.ok_or(USAGE)?),
+                &format!(
+                    "decompile_function_by_address?address={}",
+                    arg.ok_or(USAGE)?
+                ),
                 30,
             )?;
             println!("{}", json_str(&b, "decompiled").unwrap_or(b));
@@ -266,7 +294,10 @@ mod tests {
     #[test]
     fn a_json_string_field_is_extracted_with_its_escapes() {
         let b = r#"{"ok":true,"decompiled":"void f(void)\n{\n  return;\n}","n":2}"#;
-        assert_eq!(json_str(b, "decompiled").unwrap(), "void f(void)\n{\n  return;\n}");
+        assert_eq!(
+            json_str(b, "decompiled").unwrap(),
+            "void f(void)\n{\n  return;\n}"
+        );
     }
 
     /// The negative control: a missing key returns None rather than a guess, so the caller can fall

@@ -55,7 +55,11 @@ fn main() {
     // `--print` anywhere means "compose the argv and show it, run nothing". The recipes that build
     // something first (a disk clone, a snapshot) do not build it either.
     let dry = argv.iter().any(|a| a == "--print");
-    let rest: Vec<String> = argv[1..].iter().filter(|a| *a != "--print").cloned().collect();
+    let rest: Vec<String> = argv[1..]
+        .iter()
+        .filter(|a| *a != "--print")
+        .cloned()
+        .collect();
 
     // The same two questions the window's setup screen asks, on stdin, for a machine with no
     // window to open one on — a headless Linux box, or an ssh session. Writes the same file the
@@ -123,8 +127,11 @@ fn main() {
         // is" and quietly dropping it — and it is what makes a dump from an unfamiliar iPod worth
         // sending us.
         const DECODED: &[&str] = &["SrNm", "FwId", "Mod#", "HwVr"];
-        let undecoded: Vec<_> =
-            c.records.iter().filter(|(t, _)| !DECODED.contains(&t.as_str())).collect();
+        let undecoded: Vec<_> = c
+            .records
+            .iter()
+            .filter(|(t, _)| !DECODED.contains(&t.as_str()))
+            .collect();
         if !undecoded.is_empty() {
             println!("  not decoded (payload bytes, as stored):");
             for (tag, payload) in undecoded {
@@ -305,8 +312,10 @@ fn main() {
             .unwrap_or_else(|| src.with_file_name("rockbox.img"));
         let cache = eapp_loader::rockbox::cache_dir();
         let r = (|| -> Result<(), String> {
-            let boot = eapp_loader::rockbox::download(eapp_loader::rockbox::FULL_INSTALL[0], &cache)?;
-            let zip = eapp_loader::rockbox::download(eapp_loader::rockbox::FULL_INSTALL[1], &cache)?;
+            let boot =
+                eapp_loader::rockbox::download(eapp_loader::rockbox::FULL_INSTALL[0], &cache)?;
+            let zip =
+                eapp_loader::rockbox::download(eapp_loader::rockbox::FULL_INSTALL[1], &cache)?;
             println!("  verified {} and {}", boot.display(), zip.display());
             for l in eapp_loader::install::install_os(&src, &boot, &out)? {
                 println!("{l}");
@@ -314,7 +323,10 @@ fn main() {
             for l in eapp_loader::install::put_zip(&out, &zip)? {
                 println!("{l}");
             }
-            println!("{} — cold boot it and Apple's bootloader runs Rockbox.", out.display());
+            println!(
+                "{} — cold boot it and Apple's bootloader runs Rockbox.",
+                out.display()
+            );
             println!("  Hold MENU while it starts and Rockbox's bootloader hands back to Apple's software.");
             Ok(())
         })();
@@ -330,7 +342,9 @@ fn main() {
             .map(PathBuf::from)
             .or_else(|| eapp_loader::settings::Settings::load().disk.clone());
         let Some(disk) = disk else {
-            eprintln!("usage: ipod-boot open-drive [DISK.img]   (defaults to the configured drive)");
+            eprintln!(
+                "usage: ipod-boot open-drive [DISK.img]   (defaults to the configured drive)"
+            );
             std::process::exit(2);
         };
         println!("  {}", disk.display());
@@ -484,14 +498,14 @@ impl Recipe {
             _ => return None,
         })
     }
-
 }
 
 // ---------------------------------------------------------------- where things are
 
-
 fn env_path(key: &str) -> Option<PathBuf> {
-    std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from)
+    std::env::var_os(key)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
 }
 
 /// Where a path came from. Carried so `--print` can say, because a recipe whose behaviour depends
@@ -537,7 +551,10 @@ fn resolve(env_key: &str, from_setup: Option<PathBuf>, repo_default: PathBuf) ->
 }
 
 fn env_u64(key: &str, default: u64) -> u64 {
-    std::env::var(key).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(default)
 }
 
 /// The `trace` beside this binary. `cargo build --release` puts both in the same directory, and a
@@ -648,7 +665,6 @@ fn clone_file_inner(from: &Path, to: &Path) -> Result<(), String> {
     std::fs::copy(from, to)
         .map(|_| ())
         .map_err(|e| format!("copying {} -> {}: {e}", from.display(), to.display()))
-
 }
 
 // ---------------------------------------------------------------- the recipes
@@ -713,12 +729,15 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         || res.join("roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin");
 
     match recipe {
-
         // retail-boot.sh: the retail defaults, a writable per-run clone, then cold-boot.sh
         // --disk-writable "$@" — so --disk-writable lands ahead of the caller's own flags.
         Recipe::Retail => {
             let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
-            let (src, disk_from) = resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g-retail.img"));
+            let (src, disk_from) = resolve(
+                "DISK",
+                saved.disk.clone(),
+                res.join("drives/ipod8g-retail.img"),
+            );
             let budget = env_u64("BUDGET", 150_000_000);
             let (work, cleanup) = match env_path("WORKDISK") {
                 Some(w) => (w, None),
@@ -735,7 +754,10 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             }
             Ok(Plan {
                 trace,
-                sources: vec![("NOR dump", flash.clone(), flash_from), ("drive", src.clone(), disk_from)],
+                sources: vec![
+                    ("NOR dump", flash.clone(), flash_from),
+                    ("drive", src.clone(), disk_from),
+                ],
                 runs: vec![cold_argv(
                     budget,
                     &flash,
@@ -751,7 +773,8 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         //       --bcm --pmu "$@"
         Recipe::Warm => {
             let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
-            let (disk, disk_from) = resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
+            let (disk, disk_from) =
+                resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
             let osos = env_path("OSOS").unwrap_or_else(|| res.join("derived/fw/OSOS_correct.bin"));
             let budget = env_u64("BUDGET", 600_000_000);
             if !dry {
@@ -769,7 +792,15 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             a.push("--bcm".into());
             a.push("--pmu".into());
             a.extend(user.iter().cloned());
-            Ok(Plan { trace, sources: vec![("NOR dump", flash.clone(), flash_from), ("drive", disk.clone(), disk_from)], runs: vec![a], cleanup: None })
+            Ok(Plan {
+                trace,
+                sources: vec![
+                    ("NOR dump", flash.clone(), flash_from),
+                    ("drive", disk.clone(), disk_from),
+                ],
+                runs: vec![a],
+                cleanup: None,
+            })
         }
 
         // trace BUDGET --osos=<IMG cut out of FLASH> --boot-osos --flash= --disk= --sysinfo
@@ -785,9 +816,10 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         Recipe::Flsh => {
             let img = std::env::var("IMG").unwrap_or_else(|_| "diag".into());
             let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
-            let (disk, disk_from) = resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
-            let osos = std::env::temp_dir()
-                .join(format!("ipod-flsh-{}-{img}.bin", std::process::id()));
+            let (disk, disk_from) =
+                resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
+            let osos =
+                std::env::temp_dir().join(format!("ipod-flsh-{}-{img}.bin", std::process::id()));
             let budget = env_u64("BUDGET", 200_000_000);
             if !dry {
                 require(&flash, "NOR dump (FLASH=)")?;
@@ -816,7 +848,13 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
                     let what: String = bytes[..4]
                         .iter()
                         .rev()
-                        .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' })
+                        .map(|&b| {
+                            if (0x20..0x7f).contains(&b) {
+                                b as char
+                            } else {
+                                '.'
+                            }
+                        })
                         .collect();
                     return Err(format!(
                         "`{img}` is data, not a program: word 0 is {head:#010x} (\"{what}\"), not \
@@ -836,8 +874,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
                             .join(" · ")
                     ));
                 }
-                std::fs::write(&osos, &bytes)
-                    .map_err(|e| format!("{}: {e}", osos.display()))?;
+                std::fs::write(&osos, &bytes).map_err(|e| format!("{}: {e}", osos.display()))?;
                 println!(
                     "  {img}: {} bytes cut out of {}",
                     bytes.len(),
@@ -854,7 +891,15 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             a.push("--pmu".into());
             a.push("--nor".into());
             a.extend(user.iter().cloned());
-            Ok(Plan { trace, sources: vec![("NOR dump", flash.clone(), flash_from), ("drive", disk.clone(), disk_from)], runs: vec![a], cleanup: Some(osos) })
+            Ok(Plan {
+                trace,
+                sources: vec![
+                    ("NOR dump", flash.clone(), flash_from),
+                    ("drive", disk.clone(), disk_from),
+                ],
+                runs: vec![a],
+                cleanup: Some(osos),
+            })
         }
 
         // trace BUDGET --osos=$RB/$IMG --boot-osos --flash= --disk= --sysinfo --bcm --pmu "$@"
@@ -870,7 +915,8 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         Recipe::Rockbox => {
             let img = std::env::var("IMG").unwrap_or_else(|_| "rb-main.raw".into());
             let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
-            let (src, disk_from) = resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
+            let (src, disk_from) =
+                resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
             let osos = res.join("vendor/rockbox/bin").join(&img);
             let budget = env_u64("BUDGET", 200_000_000);
             let (work, cleanup) = match env_path("WORKDISK") {
@@ -897,7 +943,15 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             a.push("--bcm".into());
             a.push("--pmu".into());
             a.extend(user.iter().cloned());
-            Ok(Plan { trace, sources: vec![("NOR dump", flash.clone(), flash_from), ("drive", src.clone(), disk_from)], runs: vec![a], cleanup })
+            Ok(Plan {
+                trace,
+                sources: vec![
+                    ("NOR dump", flash.clone(), flash_from),
+                    ("drive", src.clone(), disk_from),
+                ],
+                runs: vec![a],
+                cleanup,
+            })
         }
 
         // **`ipodloader2`, out of the drive's own firmware partition — the iPodLinux path.**
@@ -926,7 +980,8 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         // `PP_VER1` be answered for `ipodloader2` without anything else reading it.
         Recipe::Loader => {
             let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
-            let (disk, disk_from) = resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
+            let (disk, disk_from) =
+                resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
             let budget = env_u64("BUDGET", 4_000_000_000);
             if !dry {
                 require(&flash, "NOR dump (FLASH=)")?;
@@ -941,17 +996,25 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             a.push("--bcm".into());
             a.push("--pmu".into());
             a.extend(user.iter().cloned());
-            Ok(Plan { trace, sources: vec![("NOR dump", flash.clone(), flash_from), ("drive", disk.clone(), disk_from)], runs: vec![a], cleanup: None })
+            Ok(Plan {
+                trace,
+                sources: vec![
+                    ("NOR dump", flash.clone(), flash_from),
+                    ("drive", disk.clone(), disk_from),
+                ],
+                runs: vec![a],
+                cleanup: None,
+            })
         }
 
         // Two boots of the same argv, against a disk whose firmware partition was written from the
         // pristine bundle. The first is the update; the second is the proof that the update took.
         Recipe::FlashUpdate => {
             let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
-            let srcdisk =
-                env_path("SRCDISK").unwrap_or_else(|| res.join("drives/ipod8g.img"));
+            let srcdisk = env_path("SRCDISK").unwrap_or_else(|| res.join("drives/ipod8g.img"));
             let fw = env_path("FW").unwrap_or_else(|| res.join("derived/fw/Firmware-20.6.3"));
-            let work = env_path("WORK").unwrap_or_else(|| std::env::temp_dir().join("ipod-flash-update"));
+            let work =
+                env_path("WORK").unwrap_or_else(|| std::env::temp_dir().join("ipod-flash-update"));
             let budget = env_u64("BUDGET", 600_000_000);
             let disk = work.join("disk.img");
             if !dry {
@@ -961,7 +1024,11 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
                 if !disk.exists() {
                     clone_file(&srcdisk, &disk)?;
                     write_firmware_partition(&disk, &fw)?;
-                    println!("built {} — firmware partition written from {}", disk.display(), fw.display());
+                    println!(
+                        "built {} — firmware partition written from {}",
+                        disk.display(),
+                        fw.display()
+                    );
                 }
             }
             // NOT `cold_argv` + an extra. `flash-update.sh` puts `--disk-writable` immediately
@@ -978,16 +1045,26 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             argv.push("--pmu".into());
             argv.push("--nor".into());
             argv.extend(user.iter().cloned());
-            Ok(Plan { trace, sources: vec![("NOR dump", flash.clone(), flash_from)], runs: vec![argv.clone(), argv], cleanup: None })
+            Ok(Plan {
+                trace,
+                sources: vec![("NOR dump", flash.clone(), flash_from)],
+                runs: vec![argv.clone(), argv],
+                cleanup: None,
+            })
         }
 
         // Restore a cached snapshot instead of replaying 1.6 G instructions of boot.
         Recipe::FromIdle => {
             let snap_at = env_u64("SNAP_AT", 1_600_000_000);
             let budget = env_u64("BUDGET", 60_000_000);
-            let cache = env_path("CACHE").unwrap_or_else(|| std::env::temp_dir().join("ipod-from-idle"));
+            let cache =
+                env_path("CACHE").unwrap_or_else(|| std::env::temp_dir().join("ipod-from-idle"));
             let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
-            let (src, disk_from) = resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g-retail.img"));
+            let (src, disk_from) = resolve(
+                "DISK",
+                saved.disk.clone(),
+                res.join("drives/ipod8g-retail.img"),
+            );
 
             // Keyed on the emulator binary, and this is the load-bearing line in the file: a
             // snapshot restored under a different build is a hybrid machine whose numbers stay
@@ -997,8 +1074,36 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             // Computed under `--print` too, whenever the binary is there to read: a printed
             // command line with a placeholder in it is not a command line, and the whole point of
             // `--print` is that it can be pasted.
+            // **The machine's shape is part of the key, not just the binary's.** Keying on the
+            // build alone was not enough, and the failure was silent in exactly the way this
+            // comment warns about. The snapshot is built by `cold_argv`, which installs no click
+            // wheel; a caller who passed `--clickwheel` got that wheel-less machine restored
+            // underneath it, so `CTRL` came back at zero, the receiver was never armed, and every
+            // frame was refused. Measured: a cold boot posts 12 frames, takes 12 interrupts and
+            // ends with `CTRL 0x600a1f00`; the same script through `from-idle` posted **0**, with
+            // no error anywhere. The window was unusable and nothing said why.
+            //
+            // So the flags that shape the machine are hashed in too, and the snapshot is built
+            // with them. A different flag set is a different cache entry rather than the same one
+            // reused for a machine it does not describe.
+            let shaping: Vec<String> = user
+                .iter()
+                .filter(|a| {
+                    MACHINE_SHAPING
+                        .iter()
+                        .any(|f| a == f || a.starts_with(&format!("{f}=")))
+                })
+                .cloned()
+                .collect();
             let key = match std::fs::read(&trace) {
-                Ok(bytes) => sha256_hex(&bytes)[..16].to_string(),
+                Ok(bytes) => {
+                    let mut h = sha256_hex(&bytes)[..16].to_string();
+                    if !shaping.is_empty() {
+                        h.push('-');
+                        h.push_str(&sha256_hex(shaping.join(" ").as_bytes())[..8]);
+                    }
+                    h
+                }
                 Err(e) if dry => {
                     eprintln!("(no trace binary at {}: {e})", trace.display());
                     "<sha256 of the trace binary, first 16 hex>".to_string()
@@ -1015,12 +1120,14 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
                 require(&flash, "NOR dump (FLASH=)")?;
                 require(&src, "disk image (DISK=)")?;
                 clone_file(&src, &disk)?;
+                let mut build_tail = shaping.clone();
+                build_tail.push(format!("--snapshot={}:{}", snap_at, snap.display()));
                 let build = cold_argv(
                     snap_at + 1_000_000,
                     &flash,
                     &disk,
                     &["--disk-writable".into()],
-                    &[format!("--snapshot={}:{}", snap_at, snap.display())],
+                    &build_tail,
                 );
                 let status = Command::new(&trace)
                     .args(&build)
@@ -1030,7 +1137,9 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
                     return Err("the snapshot build did not finish".into());
                 }
                 // A partial snapshot is worse than none — it would restore and quietly under-run.
-                let ok = std::fs::metadata(&snap).map(|m| m.len() > 0).unwrap_or(false);
+                let ok = std::fs::metadata(&snap)
+                    .map(|m| m.len() > 0)
+                    .unwrap_or(false);
                 if !ok {
                     return Err("snapshot was not written; refusing to continue".into());
                 }
@@ -1040,7 +1149,10 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             tail.extend(user.iter().cloned());
             Ok(Plan {
                 trace,
-                sources: vec![("NOR dump", flash.clone(), flash_from), ("drive", src.clone(), disk_from)],
+                sources: vec![
+                    ("NOR dump", flash.clone(), flash_from),
+                    ("drive", src.clone(), disk_from),
+                ],
                 runs: vec![cold_argv(
                     budget,
                     &flash,
@@ -1074,7 +1186,10 @@ fn setup() -> Result<(), String> {
     );
 
     // The NOR dump. No way to build one — it comes off an iPod, or an archive of one.
-    let flash = ask("NOR dump (1 MB, e.g. internal_rom_000000-0FFFFF.bin)", s.flash().as_deref())?;
+    let flash = ask(
+        "NOR dump (1 MB, e.g. internal_rom_000000-0FFFFF.bin)",
+        s.flash().as_deref(),
+    )?;
     if let Some(p) = &flash {
         let v = inspect::flash(p);
         println!("  {}\n", v.text());
@@ -1090,11 +1205,19 @@ fn setup() -> Result<(), String> {
 
     // The drive, or the .ipsw one is built from. `make-disk` is right here, so offer it rather
     // than making somebody run a second command they have not been told about yet.
-    let disk = ask("drive image, or an .ipsw to build one from", s.disk.as_deref())?;
+    let disk = ask(
+        "drive image, or an .ipsw to build one from",
+        s.disk.as_deref(),
+    )?;
     if let Some(p) = &disk {
-        if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ipsw")) {
+        if p.extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("ipsw"))
+        {
             let out = p.with_extension("img");
-            println!("  That is an .ipsw. Building a drive at {} …", out.display());
+            println!(
+                "  That is an .ipsw. Building a drive at {} …",
+                out.display()
+            );
             make_disk(&[p.display().to_string(), out.display().to_string()])?;
             s.disk = Some(out);
         } else {
@@ -1105,7 +1228,10 @@ fn setup() -> Result<(), String> {
 
     s.save();
     match Settings::path() {
-        Some(p) => println!("\nSaved to {}. Every recipe here and the window both use it.", p.display()),
+        Some(p) => println!(
+            "\nSaved to {}. Every recipe here and the window both use it.",
+            p.display()
+        ),
         None => println!("\nSaved."),
     }
     Ok(())
@@ -1121,7 +1247,9 @@ fn ask(what: &str, current: Option<&Path>) -> Result<Option<PathBuf>, String> {
     print!("  path: ");
     let _ = std::io::stdout().flush();
     let mut line = String::new();
-    std::io::stdin().read_line(&mut line).map_err(|e| e.to_string())?;
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| e.to_string())?;
     println!();
     let line = line.trim().trim_matches('\'').trim_matches('"');
     let p = match line {
@@ -1150,7 +1278,9 @@ fn shellexpand_tilde(p: &str) -> String {
 
 fn yes() -> Result<bool, String> {
     let mut line = String::new();
-    std::io::stdin().read_line(&mut line).map_err(|e| e.to_string())?;
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| e.to_string())?;
     Ok(matches!(line.trim(), "y" | "Y" | "yes"))
 }
 
@@ -1160,12 +1290,18 @@ fn make_disk(args: &[String]) -> Result<(), String> {
          IPSW is an iPod software-update bundle — a zip holding `Firmware-<version>` and \
          `manifest.plist`. It is not distributed with this project.",
     )?;
-    let out = args.get(1).ok_or("usage: ipod-boot make-disk IPSW OUT.img [SECTORS]")?;
+    let out = args
+        .get(1)
+        .ok_or("usage: ipod-boot make-disk IPSW OUT.img [SECTORS]")?;
     let with_aupd = args.iter().any(|a| a == "--with-aupd");
     let sectors = args
         .get(2)
         .filter(|s| !s.starts_with("--"))
-        .map(|s| s.replace('_', "").parse::<u64>().map_err(|e| format!("SECTORS: {e}")))
+        .map(|s| {
+            s.replace('_', "")
+                .parse::<u64>()
+                .map_err(|e| format!("SECTORS: {e}"))
+        })
         .transpose()?
         .unwrap_or(eapp_loader::ipsw::DEFAULT_SECTORS);
 
@@ -1174,9 +1310,7 @@ fn make_disk(args: &[String]) -> Result<(), String> {
             println!("{src}\n  {what}");
             fw
         }
-        eapp_loader::ipsw::Ipsw::Wrong(why) | eapp_loader::ipsw::Ipsw::Bad(why) => {
-            return Err(why)
-        }
+        eapp_loader::ipsw::Ipsw::Wrong(why) | eapp_loader::ipsw::Ipsw::Bad(why) => return Err(why),
     };
     if with_aupd {
         println!(
@@ -1214,6 +1348,27 @@ fn opt(flag: &str, p: &Path) -> String {
     format!("{flag}{}", p.display())
 }
 
+/// Flags that change **what hardware the machine has**, as opposed to what is measured about it.
+///
+/// `from-idle` hashes these into its cache key and passes them to the snapshot build, so a restored
+/// machine has the same peripherals as the one that was frozen. Everything else a caller passes —
+/// `--norlog`, `--enterlog=`, `--dump=`, every instrument — is deliberately *not* here: those
+/// change the report, not the machine, and keying on them would rebuild an 80-second snapshot for
+/// each one.
+///
+/// **The list is the risk.** A peripheral flag left off it restores a machine that lacks the
+/// hardware the caller asked for, and nothing reports that: the missing device simply never
+/// responds. That is how `--clickwheel` was found — 12 frames posted cold, 0 restored, no error.
+/// A new peripheral flag belongs here on the day it is added.
+const MACHINE_SHAPING: &[&str] = &[
+    "--clickwheel",
+    "--wheel-no-irq",
+    "--bcm-registry",
+    "--sysinfo",
+    "--second-core",
+    "--no-second-core",
+];
+
 /// `cold-boot.sh`'s argv, which `retail-boot.sh`, `flash-update.sh` and `from-idle.sh` all reach
 /// through. `extra` is what the calling recipe inserts ahead of the caller's own flags, exactly
 /// where `"$@"` puts it when one script `exec`s another.
@@ -1248,8 +1403,10 @@ fn write_firmware_partition(disk: &Path, fw: &Path) -> Result<(), String> {
         .write(true)
         .open(disk)
         .map_err(|e| format!("{}: {e}", disk.display()))?;
-    f.seek(SeekFrom::Start(63 * 512)).map_err(|e| format!("{}: {e}", disk.display()))?;
-    f.write_all(&bytes).map_err(|e| format!("{}: {e}", disk.display()))?;
+    f.seek(SeekFrom::Start(63 * 512))
+        .map_err(|e| format!("{}: {e}", disk.display()))?;
+    f.write_all(&bytes)
+        .map_err(|e| format!("{}: {e}", disk.display()))?;
     f.flush().map_err(|e| format!("{}: {e}", disk.display()))
 }
 
@@ -1266,7 +1423,10 @@ fn shell_quote(trace: &Path, args: &[String]) -> String {
 }
 
 fn quote_one(s: &str) -> String {
-    if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_=./:+,@".contains(c)) {
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_=./:+,@".contains(c))
+    {
         s.to_string()
     } else {
         format!("'{}'", s.replace('\'', r"'\''"))
@@ -1371,8 +1531,11 @@ fn fat_cmd(args: &[String]) -> Result<(), String> {
     match cmd {
         "tree" => {
             for e in v.walk()? {
-                let lba0 =
-                    if e.first >= 2 { v.cluster_lba(e.first) as i64 } else { -1 };
+                let lba0 = if e.first >= 2 {
+                    v.cluster_lba(e.first) as i64
+                } else {
+                    -1
+                };
                 println!(
                     "{}{}\tclus={}\tsize={}\tlba0={}",
                     e.path,
@@ -1427,7 +1590,9 @@ fn fat_cmd(args: &[String]) -> Result<(), String> {
                     }
                     None => {
                         use std::io::Write as _;
-                        std::io::stdout().write_all(&buf).map_err(|x| x.to_string())?;
+                        std::io::stdout()
+                            .write_all(&buf)
+                            .map_err(|x| x.to_string())?;
                     }
                 }
                 return Ok(());
@@ -1456,7 +1621,11 @@ fn fat_cmd(args: &[String]) -> Result<(), String> {
                 .iter()
                 .map(|a| {
                     let t = a.trim_start_matches("0x");
-                    let r = if t.len() == a.len() { a.parse() } else { u64::from_str_radix(t, 16) };
+                    let r = if t.len() == a.len() {
+                        a.parse()
+                    } else {
+                        u64::from_str_radix(t, 16)
+                    };
                     r.map_err(|_| format!("{a}: not a number"))
                 })
                 .collect::<Result<_, _>>()?;
@@ -1490,7 +1659,12 @@ fn rsrc_cmd(args: &[String]) -> Result<(), String> {
     let val = |k: &str| -> Option<String> {
         args.iter()
             .find_map(|a| a.strip_prefix(&format!("{k}=")).map(str::to_string))
-            .or_else(|| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned())
+            .or_else(|| {
+                args.iter()
+                    .position(|a| a == k)
+                    .and_then(|i| args.get(i + 1))
+                    .cloned()
+            })
     };
     let get = val("--get");
     let volume = val("--volume");
@@ -1499,11 +1673,16 @@ fn rsrc_cmd(args: &[String]) -> Result<(), String> {
     let disk = std::fs::read(disk_path).map_err(|e| format!("{disk_path}: {e}"))?;
     let dir =
         eapp_loader::rsrc::read_directory(&disk, 63).map_err(|e| format!("{disk_path}: {e}"))?;
-    let img =
-        dir.iter().find(|i| i.tag == "rsrc").ok_or("no `rsrc` image in the firmware directory")?;
+    let img = dir
+        .iter()
+        .find(|i| i.tag == "rsrc")
+        .ok_or("no `rsrc` image in the firmware directory")?;
     let (a, b) = (img.offset as usize, img.offset as usize + img.len as usize);
     if b > disk.len() {
-        return Err(format!("`rsrc` claims {} bytes at {a:#x}, past the end of the image", img.len));
+        return Err(format!(
+            "`rsrc` claims {} bytes at {a:#x}, past the end of the image",
+            img.len
+        ));
     }
     let vol = &disk[a..b];
 
@@ -1570,10 +1749,6 @@ mod tests {
         );
     }
 
-
-
-
-
     /// `flash-update` boots twice with an identical argv. That is the measurement — the second boot
     /// proves the first one's write took, and it only proves it if nothing differs between them.
     #[test]
@@ -1598,8 +1773,7 @@ mod tests {
     #[test]
     fn the_per_run_disk_lives_under_the_platform_temp_dir() {
         let p = plan(Recipe::Retail, &[], true).unwrap();
-        let disk = p
-            .runs[0]
+        let disk = p.runs[0]
             .iter()
             .find_map(|a| a.strip_prefix("--disk="))
             .expect("retail passes --disk=");
@@ -1617,7 +1791,10 @@ mod tests {
     fn print_quotes_paths_with_spaces() {
         let q = shell_quote(
             Path::new("/x/trace"),
-            &["/res/My Firmware Dumps/t.bin".to_string(), "--clock=5".to_string()],
+            &[
+                "/res/My Firmware Dumps/t.bin".to_string(),
+                "--clock=5".to_string(),
+            ],
         );
         assert_eq!(q, "/x/trace '/res/My Firmware Dumps/t.bin' --clock=5");
     }
@@ -1636,17 +1813,14 @@ mod tests {
         }
         assert_eq!(Recipe::parse("nonsense"), None);
     }
-
 }
 
 // ---------------------------------------------------------------- installing an OS
 
-
-
 #[cfg(test)]
 mod install_tests {
-    use std::io::Read as _;
     use super::*;
+    use std::io::Read as _;
 
     /// A minimal drive image with a firmware partition: MBR, a directory of two images, and their
     /// bytes at `partition + 512 + devOffset` — the layout `fwoffset = start + sector_size` means,
@@ -1683,7 +1857,8 @@ mod install_tests {
 
     fn dir_entry(path: &Path, i: usize) -> [u32; 8] {
         let mut f = std::fs::File::open(path).unwrap();
-        f.seek(SeekFrom::Start(63 * 512 + 0x4200 + (i * 40) as u64)).unwrap();
+        f.seek(SeekFrom::Start(63 * 512 + 0x4200 + (i * 40) as u64))
+            .unwrap();
         let mut b = [0u8; 40];
         f.read_exact(&mut b).unwrap();
         let mut out = [0u32; 8];
@@ -1726,14 +1901,19 @@ mod install_tests {
 
         // The new checksum has to describe what is actually on the disk, at fwoffset + devOffset.
         let mut f = std::fs::File::open(&out).unwrap();
-        f.seek(SeekFrom::Start(63 * 512 + 512 + e0[1] as u64)).unwrap();
+        f.seek(SeekFrom::Start(63 * 512 + 512 + e0[1] as u64))
+            .unwrap();
         let mut body = vec![0u8; e0[2] as usize];
         f.read_exact(&mut body).unwrap();
         let sum = body.iter().fold(0u32, |a, &x| a.wrapping_add(x as u32));
-        assert_eq!(sum, e0[5], "the directory checksum does not describe the bytes written");
+        assert_eq!(
+            sum, e0[5],
+            "the directory checksum does not describe the bytes written"
+        );
 
         // And `rsrc` survived the move intact.
-        f.seek(SeekFrom::Start(63 * 512 + 512 + e1[1] as u64)).unwrap();
+        f.seek(SeekFrom::Start(63 * 512 + 512 + e1[1] as u64))
+            .unwrap();
         let mut moved = vec![0u8; rsrc.len()];
         f.read_exact(&mut moved).unwrap();
         assert_eq!(moved, rsrc, "rsrc was corrupted by the move");
@@ -1775,8 +1955,6 @@ mod install_tests {
     }
 }
 
-
-
 /// `ipod-boot firmware list | get`.
 /// `ipod-boot install-os SRC.img OS.ipod OUT.img` — argv, then [`eapp_loader::install::install_os`].
 fn install_os(args: &[String]) -> Result<(), String> {
@@ -1807,7 +1985,10 @@ fn install_linux(args: &[String]) -> Result<(), String> {
         .or_else(|| eapp_loader::settings::Settings::load().disk.clone())
         .ok_or(USAGE)?;
     let out = args.get(1).map(PathBuf::from).unwrap_or_else(|| {
-        let stem = src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let stem = src
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
         src.with_file_name(format!("{stem}-linux.img"))
     });
     let root = eapp_loader::settings::repo_root();
@@ -1858,7 +2039,9 @@ fn put_files(args: &[String]) -> Result<(), String> {
         (Some(a), Some(b)) => (Path::new(a), Path::new(b)),
         _ => return Err(USAGE.into()),
     };
-    for line in eapp_loader::install::put_files(disk, src, args.get(2).map(String::as_str).unwrap_or(""))? {
+    for line in
+        eapp_loader::install::put_files(disk, src, args.get(2).map(String::as_str).unwrap_or(""))?
+    {
         println!("{line}");
     }
     Ok(())
@@ -1897,7 +2080,9 @@ fn firmware_cmd(sub: &str, args: &[String]) -> Result<(), String> {
             if shown == 0 {
                 println!("  nothing matches");
             } else {
-                println!("\n{shown} release(s). The left column is the UpdaterFamilyID, which is the");
+                println!(
+                    "\n{shown} release(s). The left column is the UpdaterFamilyID, which is the"
+                );
                 println!("stable key -- FamilyID is NOT stable across firmware versions.");
                 println!("`gone` means Apple's URL now returns 403; another release in the same");
                 println!("updater family will do instead.");
@@ -1905,9 +2090,9 @@ fn firmware_cmd(sub: &str, args: &[String]) -> Result<(), String> {
             Ok(())
         }
         "get" => {
-            let what = args.first().ok_or(
-                "usage: ipod-boot firmware get <UpdaterFamilyID | filename> [--dir DIR]",
-            )?;
+            let what = args
+                .first()
+                .ok_or("usage: ipod-boot firmware get <UpdaterFamilyID | filename> [--dir DIR]")?;
             let dir = args
                 .iter()
                 .position(|a| a == "--dir")
@@ -1986,9 +2171,17 @@ fn firmware_cmd(sub: &str, args: &[String]) -> Result<(), String> {
             let total: u64 = doomed.iter().map(|c| c.bytes).sum();
             println!("{}", dir.display());
             for c in &doomed {
-                println!("  {:>9}  {}", human(c.bytes), c.path.file_name().unwrap_or_default().to_string_lossy());
+                println!(
+                    "  {:>9}  {}",
+                    human(c.bytes),
+                    c.path.file_name().unwrap_or_default().to_string_lossy()
+                );
             }
-            println!("\n{} in {} file(s) would be removed.", human(total), doomed.len());
+            println!(
+                "\n{} in {} file(s) would be removed.",
+                human(total),
+                doomed.len()
+            );
             // **Nothing is deleted without being asked for.** These are files somebody waited on,
             // and a `clean` that acts on sight is one nobody can run twice.
             if !yes {
@@ -2016,7 +2209,6 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-
 /// Bytes, in something a person reads.
 fn human(n: u64) -> String {
     const U: [&str; 4] = ["B", "KB", "MB", "GB"];
@@ -2026,9 +2218,12 @@ fn human(n: u64) -> String {
         v /= 1024.0;
         i += 1;
     }
-    if i == 0 { format!("{n} B") } else { format!("{v:.1} {}", U[i]) }
+    if i == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", U[i])
+    }
 }
-
 
 /// `ipod-boot make-nor` — build a boot ROM from a model, a colour and an identity.
 fn make_nor_cmd(args: &[String]) -> Result<(), String> {
@@ -2036,7 +2231,9 @@ fn make_nor_cmd(args: &[String]) -> Result<(), String> {
     use eapp_loader::nor;
 
     let flag = |name: &str| -> Option<&String> {
-        args.iter().position(|a| a == name).and_then(|i| args.get(i + 1))
+        args.iter()
+            .position(|a| a == name)
+            .and_then(|i| args.get(i + 1))
     };
     let out = args
         .iter()
@@ -2046,8 +2243,9 @@ fn make_nor_cmd(args: &[String]) -> Result<(), String> {
     // The model decides the colour, the capacity and the generation — there is no separate colour
     // setting because no SysCfg has ever carried one.
     let model_num = flag("--model").map(String::as_str).unwrap_or("A146");
-    let model = Model::lookup(model_num)
-        .ok_or_else(|| format!("{model_num} is not a model number I know — try `A146`, `A446`, `A002`"))?;
+    let model = Model::lookup(model_num).ok_or_else(|| {
+        format!("{model_num} is not a model number I know — try `A146`, `A446`, `A002`")
+    })?;
 
     // `--from` is "make one like this iPod": identity and the records nobody understands both come
     // off real hardware, which is what somebody with a drive image actually wants.
@@ -2072,7 +2270,9 @@ fn make_nor_cmd(args: &[String]) -> Result<(), String> {
     };
 
     let seed: u64 = match flag("--seed") {
-        Some(v) => v.parse().map_err(|_| format!("--seed wants a number, got {v}"))?,
+        Some(v) => v
+            .parse()
+            .map_err(|_| format!("--seed wants a number, got {v}"))?,
         None => 0,
     };
 
@@ -2111,19 +2311,31 @@ fn make_nor_cmd(args: &[String]) -> Result<(), String> {
     std::fs::write(out, &image).map_err(|e| format!("{out}: {e}"))?;
 
     println!("{out}");
-    println!("  model    {} — {} GB, {}, {}", model.number, model.capacity_gb,
-             match model.colour() {
-                 Colour::White => "white", Colour::Black => "black", Colour::U2 => "U2",
-                 other => Box::leak(other.as_str().to_string().into_boxed_str()),
-             },
-             model.generation.label());
-    println!("  serial   {}", identity.serial.as_deref().unwrap_or("(none)"));
+    println!(
+        "  model    {} — {} GB, {}, {}",
+        model.number,
+        model.capacity_gb,
+        match model.colour() {
+            Colour::White => "white",
+            Colour::Black => "black",
+            Colour::U2 => "U2",
+            other => Box::leak(other.as_str().to_string().into_boxed_str()),
+        },
+        model.generation.label()
+    );
+    println!(
+        "  serial   {}",
+        identity.serial.as_deref().unwrap_or("(none)")
+    );
     println!("  GUID     {}", identity.guid_hex());
-    println!("  identity {}", match identity.source {
-        eapp_loader::identity::Source::Generated => "generated from a seed",
-        eapp_loader::identity::Source::Provided => "provided",
-        eapp_loader::identity::Source::RealDevice => "read from real hardware",
-    });
+    println!(
+        "  identity {}",
+        match identity.source {
+            eapp_loader::identity::Source::Generated => "generated from a seed",
+            eapp_loader::identity::Source::Provided => "provided",
+            eapp_loader::identity::Source::RealDevice => "read from real hardware",
+        }
+    );
     println!("  {} bytes, marked as synthetic", image.len());
 
     // --preview=PATH.png : what this iPod shows while it boots. The same picture on every case --

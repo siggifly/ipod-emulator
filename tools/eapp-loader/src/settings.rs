@@ -138,7 +138,9 @@ impl Settings {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let Some((k, v)) = line.split_once('=') else { continue };
+            let Some((k, v)) = line.split_once('=') else {
+                continue;
+            };
             let (k, v) = (k.trim(), v.trim());
             match k {
                 "mode" => s.mode = Mode::parse(v).unwrap_or_default(),
@@ -164,9 +166,7 @@ impl Settings {
                 "chassis" => s.chassis = crate::identity::Colour::parse(v),
                 // The key this replaced. Honoured so that anyone who had already chosen black does
                 // not silently get a white iPod back on the next launch.
-                "black_device" if v == "true" => {
-                    s.chassis = Some(crate::identity::Colour::Black)
-                }
+                "black_device" if v == "true" => s.chassis = Some(crate::identity::Colour::Black),
                 "check_updates_on_start" => s.check_updates_on_start = v == "true",
                 "work_on_copy" => s.work_on_copy = Some(v == "true"),
                 "current" if !v.is_empty() => s.current = Some(v.to_string()),
@@ -176,8 +176,12 @@ impl Settings {
                 _ if k.starts_with("machine.") => {
                     let mut it = k.splitn(3, '.');
                     let (_, idx, field) = (it.next(), it.next(), it.next());
-                    let (Some(idx), Some(field)) = (idx, field) else { continue };
-                    let Ok(i) = idx.parse::<usize>() else { continue };
+                    let (Some(idx), Some(field)) = (idx, field) else {
+                        continue;
+                    };
+                    let Ok(i) = idx.parse::<usize>() else {
+                        continue;
+                    };
                     while s.machines.len() <= i {
                         s.machines.push(Machine::default());
                     }
@@ -236,7 +240,13 @@ fn render_nor_of(nor: &crate::nor::Source) -> String {
     {
         match nor {
             crate::nor::Source::File(p) => format!("flash = {}\n", p.display()),
-            crate::nor::Source::Synthetic { model, seed, serial, guid, splash } => {
+            crate::nor::Source::Synthetic {
+                model,
+                seed,
+                serial,
+                guid,
+                splash,
+            } => {
                 let mut out = format!("nor_model = {model}\nnor_seed = {seed}\n");
                 if let Some(p) = splash {
                     out.push_str(&format!("nor_splash = {}\n", p.display()));
@@ -256,7 +266,9 @@ fn render_nor_of(nor: &crate::nor::Source) -> String {
 impl Settings {
     pub fn render(&self) -> String {
         let p = |o: &Option<PathBuf>| {
-            o.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+            o.as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default()
         };
         format!(
             "# ipod-gui settings. Hand-editable; unknown keys are ignored.\n\
@@ -362,7 +374,9 @@ impl Settings {
     /// have been editing does not discard the edits — which is what every person switching between
     /// two of anything expects, and what they never say out loud.
     pub fn switch_to(&mut self, name: &str) -> bool {
-        let Some(i) = self.machines.iter().position(|m| m.name == name) else { return false };
+        let Some(i) = self.machines.iter().position(|m| m.name == name) else {
+            return false;
+        };
         if let Some(c) = self.current.clone() {
             if c != name && self.machines.iter().any(|m| m.name == c) {
                 let live = self.as_machine(&c);
@@ -391,7 +405,9 @@ impl Settings {
 
     /// Record how long this machine's cold boot took, for the next one's progress bar.
     pub fn record_boot(&mut self, instructions: u64) {
-        let Some(c) = self.current.clone() else { return };
+        let Some(c) = self.current.clone() else {
+            return;
+        };
         if let Some(m) = self.machines.iter_mut().find(|m| m.name == c) {
             m.boot_instructions = Some(instructions);
         }
@@ -429,7 +445,9 @@ const APP: &str = "ipod-emulator";
 const APP_WAS: &str = "ipod-gui";
 
 fn env_dir(key: &str) -> Option<PathBuf> {
-    std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from)
+    std::env::var_os(key)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
 }
 
 /// **One directory for everything this program writes**, and where it is depends on how the program
@@ -472,7 +490,9 @@ pub fn data_dir() -> PathBuf {
 /// nothing above it is a target directory — and that case is the whole point of beside-the-
 /// executable, so it has to keep working.
 fn in_build_tree(exe: &std::path::Path) -> bool {
-    let Some(parent) = exe.parent() else { return false };
+    let Some(parent) = exe.parent() else {
+        return false;
+    };
     let leaf = parent.file_name().and_then(|n| n.to_str());
     if !matches!(leaf, Some("debug" | "release")) {
         return false;
@@ -492,7 +512,10 @@ fn beside_executable() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     // Inside a macOS bundle this would put user data in `Contents/MacOS/data`, which is both wrong
     // and signature-breaking. Recognise it and decline.
-    if exe.components().any(|c| c.as_os_str().to_string_lossy().ends_with(".app")) {
+    if exe
+        .components()
+        .any(|c| c.as_os_str().to_string_lossy().ends_with(".app"))
+    {
         return None;
     }
     if in_build_tree(&exe) {
@@ -531,8 +554,16 @@ fn legacy_dirs() -> Vec<PathBuf> {
             v.push(h.join("Library/Caches").join(APP_WAS));
         }
     } else {
-        v.extend(env_dir("XDG_CONFIG_HOME").or_else(|| home().map(|h| h.join(".config"))).map(|d| d.join(APP_WAS)));
-        v.extend(env_dir("XDG_CACHE_HOME").or_else(|| home().map(|h| h.join(".cache"))).map(|d| d.join(APP_WAS)));
+        v.extend(
+            env_dir("XDG_CONFIG_HOME")
+                .or_else(|| home().map(|h| h.join(".config")))
+                .map(|d| d.join(APP_WAS)),
+        );
+        v.extend(
+            env_dir("XDG_CACHE_HOME")
+                .or_else(|| home().map(|h| h.join(".cache")))
+                .map(|d| d.join(APP_WAS)),
+        );
     }
     v
 }
@@ -577,7 +608,9 @@ pub fn legacy_leftovers() -> Vec<(PathBuf, u64)> {
 /// largest files in the folder, on the screen whose whole job is telling somebody what this program
 /// is costing them, is the kind of wrong that reads as reassuring.
 pub fn dir_size(d: &Path) -> u64 {
-    let Ok(rd) = std::fs::read_dir(d) else { return 0 };
+    let Ok(rd) = std::fs::read_dir(d) else {
+        return 0;
+    };
     rd.flatten()
         .map(|e| match e.metadata() {
             Ok(m) if m.is_dir() => dir_size(&e.path()),
@@ -659,20 +692,27 @@ pub fn repo_root() -> PathBuf {
     PathBuf::from(".")
 }
 
-
 // Small helpers so a settings file can set the synthetic fields in any order, and so a `flash =`
 // line followed by `nor_model =` does the obvious thing rather than half of each.
 type Synth = (String, u64, Option<String>, Option<u64>, Option<PathBuf>);
 
 fn as_synth(src: crate::nor::Source) -> Synth {
     match src {
-        crate::nor::Source::Synthetic { model, seed, serial, guid, splash } => {
-            (model, seed, serial, guid, splash)
-        }
+        crate::nor::Source::Synthetic {
+            model,
+            seed,
+            serial,
+            guid,
+            splash,
+        } => (model, seed, serial, guid, splash),
         crate::nor::Source::File(_) => match crate::nor::Source::default() {
-            crate::nor::Source::Synthetic { model, seed, serial, guid, splash } => {
-                (model, seed, serial, guid, splash)
-            }
+            crate::nor::Source::Synthetic {
+                model,
+                seed,
+                serial,
+                guid,
+                splash,
+            } => (model, seed, serial, guid, splash),
             crate::nor::Source::File(_) => unreachable!("the default is synthetic"),
         },
     }
@@ -680,25 +720,55 @@ fn as_synth(src: crate::nor::Source) -> Synth {
 
 fn with_model(src: crate::nor::Source, v: &str) -> crate::nor::Source {
     let (_, seed, serial, guid, splash) = as_synth(src);
-    crate::nor::Source::Synthetic { model: v.to_string(), seed, serial, guid, splash }
+    crate::nor::Source::Synthetic {
+        model: v.to_string(),
+        seed,
+        serial,
+        guid,
+        splash,
+    }
 }
 fn with_seed(src: crate::nor::Source, n: u64) -> crate::nor::Source {
     let (model, _, serial, guid, splash) = as_synth(src);
-    crate::nor::Source::Synthetic { model, seed: n, serial, guid, splash }
+    crate::nor::Source::Synthetic {
+        model,
+        seed: n,
+        serial,
+        guid,
+        splash,
+    }
 }
 fn with_serial(src: crate::nor::Source, v: &str) -> crate::nor::Source {
     let (model, seed, _, guid, splash) = as_synth(src);
     let serial = (!v.trim().is_empty()).then(|| v.trim().to_string());
-    crate::nor::Source::Synthetic { model, seed, serial, guid, splash }
+    crate::nor::Source::Synthetic {
+        model,
+        seed,
+        serial,
+        guid,
+        splash,
+    }
 }
 fn with_guid(src: crate::nor::Source, g: u64) -> crate::nor::Source {
     let (model, seed, serial, _, splash) = as_synth(src);
-    crate::nor::Source::Synthetic { model, seed, serial, guid: Some(g), splash }
+    crate::nor::Source::Synthetic {
+        model,
+        seed,
+        serial,
+        guid: Some(g),
+        splash,
+    }
 }
 fn with_splash(src: crate::nor::Source, v: &str) -> crate::nor::Source {
     let (model, seed, serial, guid, _) = as_synth(src);
     let splash = (!v.trim().is_empty()).then(|| PathBuf::from(v.trim()));
-    crate::nor::Source::Synthetic { model, seed, serial, guid, splash }
+    crate::nor::Source::Synthetic {
+        model,
+        seed,
+        serial,
+        guid,
+        splash,
+    }
 }
 
 #[cfg(test)]
@@ -752,7 +822,10 @@ mod tests {
     fn the_chassis_colour_round_trips_and_the_old_key_still_works() {
         use crate::identity::Colour;
         for c in [Colour::White, Colour::Black, Colour::U2] {
-            let s = Settings { chassis: Some(c), ..Settings::default() };
+            let s = Settings {
+                chassis: Some(c),
+                ..Settings::default()
+            };
             assert_eq!(Settings::parse(&s.render()).chassis, Some(c), "{c:?}");
         }
         // The default is "ask the ROM", and it survives a write-then-read rather than collapsing
@@ -762,7 +835,10 @@ mod tests {
         assert_eq!(Settings::parse(&Settings::default().render()).chassis, None);
         assert_eq!(Settings::parse("chassis = auto").chassis, None);
 
-        assert_eq!(Settings::parse("black_device = true").chassis, Some(Colour::Black));
+        assert_eq!(
+            Settings::parse("black_device = true").chassis,
+            Some(Colour::Black)
+        );
         // An unreadable value falls back to the ROM rather than picking a colour at random.
         assert_eq!(Settings::parse("chassis = chartreuse").chassis, None);
     }
@@ -786,7 +862,10 @@ mod tests {
         assert!(text.contains("nor_model = A446"), "{text}");
         assert!(text.contains("nor_seed = 987654321"), "{text}");
         assert!(text.contains("nor_guid = 000A270011223344"), "{text}");
-        assert!(!text.contains("flash ="), "a synthetic ROM has no path: {text}");
+        assert!(
+            !text.contains("flash ="),
+            "a synthetic ROM has no path: {text}"
+        );
         assert_eq!(Settings::parse(&text).nor, s.nor);
     }
 
@@ -796,8 +875,14 @@ mod tests {
     fn an_older_settings_file_keeps_its_dump() {
         use crate::nor::Source;
         let s = Settings::parse("flash = /somewhere/internal_rom.bin\ndisk = /somewhere/d.img\n");
-        assert_eq!(s.nor, Source::File(PathBuf::from("/somewhere/internal_rom.bin")));
-        assert_eq!(s.flash(), Some(PathBuf::from("/somewhere/internal_rom.bin")));
+        assert_eq!(
+            s.nor,
+            Source::File(PathBuf::from("/somewhere/internal_rom.bin"))
+        );
+        assert_eq!(
+            s.flash(),
+            Some(PathBuf::from("/somewhere/internal_rom.bin"))
+        );
     }
 
     /// With nothing configured the ROM is generated rather than missing — which is the whole point
@@ -834,7 +919,10 @@ mod tests {
     #[test]
     fn a_path_with_spaces_survives() {
         let p = PathBuf::from("/some where/My iPod Backups/x.img");
-        let s = Settings { disk: Some(p.clone()), ..Default::default() };
+        let s = Settings {
+            disk: Some(p.clone()),
+            ..Default::default()
+        };
         assert_eq!(Settings::parse(&s.render()).disk, Some(p));
     }
 
@@ -851,8 +939,15 @@ mod tests {
              disk =\n\
              check_updates_on_start = maybe\n",
         );
-        assert_eq!(s.mode, Mode::User, "an unknown mode falls back to the default");
-        assert_eq!(s.disk, None, "an empty value is `not set`, not `the empty path`");
+        assert_eq!(
+            s.mode,
+            Mode::User,
+            "an unknown mode falls back to the default"
+        );
+        assert_eq!(
+            s.disk, None,
+            "an empty value is `not set`, not `the empty path`"
+        );
         assert!(!s.check_updates_on_start, "anything but `true` is off");
     }
 
@@ -894,7 +989,10 @@ mod machine_tests {
     /// **A machine list has to survive the round trip, or it is not storage.**
     #[test]
     fn machines_survive_render_and_parse() {
-        let mut s = Settings { nor: synth("A146", 5), ..Default::default() };
+        let mut s = Settings {
+            nor: synth("A146", 5),
+            ..Default::default()
+        };
         s.disk = Some(PathBuf::from("/drives/one.img"));
         s.remember_as("Video 5G");
         s.nor = crate::nor::Source::File(PathBuf::from("/roms/real.bin"));
@@ -904,8 +1002,15 @@ mod machine_tests {
         let back = Settings::parse(&s.render());
         assert_eq!(back.machines.len(), 2, "both machines came back");
         assert_eq!(back.machines[0].name, "Video 5G");
-        assert_eq!(back.machines[0].nor, synth("A146", 5), "a synthesised ROM is a recipe");
-        assert_eq!(back.machines[1].disk, Some(PathBuf::from("/drives/two.img")));
+        assert_eq!(
+            back.machines[0].nor,
+            synth("A146", 5),
+            "a synthesised ROM is a recipe"
+        );
+        assert_eq!(
+            back.machines[1].disk,
+            Some(PathBuf::from("/drives/two.img"))
+        );
         assert_eq!(back.current.as_deref(), Some("my own iPod"));
     }
 
@@ -913,7 +1018,10 @@ mod machine_tests {
     /// that started this: one boot from a dump used to make "generate one" unreachable.
     #[test]
     fn switching_restores_a_synthesised_rom() {
-        let mut s = Settings { nor: synth("A146", 7), ..Default::default() };
+        let mut s = Settings {
+            nor: synth("A146", 7),
+            ..Default::default()
+        };
         s.remember_as("generated");
         s.nor = crate::nor::Source::File(PathBuf::from("/roms/real.bin"));
         s.remember_as("real dump");
@@ -928,7 +1036,10 @@ mod machine_tests {
     /// Switching away from a machine you have edited keeps the edits.
     #[test]
     fn switching_writes_back_what_you_were_editing() {
-        let mut s = Settings { nor: synth("A146", 1), ..Default::default() };
+        let mut s = Settings {
+            nor: synth("A146", 1),
+            ..Default::default()
+        };
         s.remember_as("a");
         s.remember_as("b");
         s.switch_to("a");
@@ -946,14 +1057,22 @@ mod machine_tests {
     #[test]
     fn the_expected_boot_is_learned_not_assumed() {
         let mut s = Settings::default();
-        assert_eq!(s.expected_boot(), None, "nothing is known before the first boot");
+        assert_eq!(
+            s.expected_boot(),
+            None,
+            "nothing is known before the first boot"
+        );
         s.remember_as("one");
         assert_eq!(s.expected_boot(), None);
         s.record_boot(1_600_000_000);
         assert_eq!(s.expected_boot(), Some(1_600_000_000));
         s.remember_as("two");
         s.record_boot(21_500_000_000);
-        assert_eq!(s.expected_boot(), Some(21_500_000_000), "each machine learns its own");
+        assert_eq!(
+            s.expected_boot(),
+            Some(21_500_000_000),
+            "each machine learns its own"
+        );
         s.switch_to("one");
         assert_eq!(s.expected_boot(), Some(1_600_000_000), "and keeps it");
     }
@@ -964,7 +1083,10 @@ mod machine_tests {
     fn a_settings_file_from_before_machines_still_loads() {
         let old = "mode = user\nflash = /roms/mine.bin\ndisk = /drives/mine.img\nchassis = black\n";
         let s = Settings::parse(old);
-        assert_eq!(s.nor, crate::nor::Source::File(PathBuf::from("/roms/mine.bin")));
+        assert_eq!(
+            s.nor,
+            crate::nor::Source::File(PathBuf::from("/roms/mine.bin"))
+        );
         assert_eq!(s.disk, Some(PathBuf::from("/drives/mine.img")));
         assert!(s.machines.is_empty(), "no list, and that is not an error");
         assert_eq!(s.current, None);

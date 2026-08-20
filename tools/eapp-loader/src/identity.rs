@@ -100,7 +100,10 @@ impl Identity {
             )
         })?;
         let guid = c.guid.ok_or_else(|| {
-            format!("{}: SysCfg has no FwId record, so there is no GUID", path.display())
+            format!(
+                "{}: SysCfg has no FwId record, so there is no GUID",
+                path.display()
+            )
         })?;
         if !c.guid_looks_apple() {
             // Warn, do not refuse: this is evidence of a bad parse, not a permission decision.
@@ -109,7 +112,11 @@ impl Identity {
                  \x20        Either this is not an iPod NOR, or it did not parse."
             );
         }
-        Ok(Identity { serial: c.serial, guid, source: Source::RealDevice })
+        Ok(Identity {
+            serial: c.serial,
+            guid,
+            source: Source::RealDevice,
+        })
     }
 
     /// Read a real device's `iPod_Control/Device/SysInfo`.
@@ -136,12 +143,18 @@ impl Identity {
         const ROOTS: &[&str] = &["/Volumes", "/media", "/run/media"];
         let mut out = Vec::new();
         for root in ROOTS {
-            let Ok(entries) = std::fs::read_dir(root) else { continue };
+            let Ok(entries) = std::fs::read_dir(root) else {
+                continue;
+            };
             for e in entries.flatten() {
                 let vol = e.path();
                 // One level on macOS (`/Volumes/<volume>`), two on Linux (`/media/<user>/<volume>`).
                 // Checking the entry and then its children covers both without knowing which we are.
-                let nested = std::fs::read_dir(&vol).into_iter().flatten().flatten().map(|c| c.path());
+                let nested = std::fs::read_dir(&vol)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|c| c.path());
                 for c in std::iter::once(vol.clone()).chain(nested) {
                     if c.join("iPod_Control/Device/SysInfo").is_file() {
                         let id = Identity::from_volume(&c);
@@ -166,7 +179,11 @@ impl Identity {
                 "warning: {guid:016X} does not carry Apple's FireWire OUI ({APPLE_OUI:06X})."
             );
         }
-        Ok(Identity { serial, guid, source: Source::RealDevice })
+        Ok(Identity {
+            serial,
+            guid,
+            source: Source::RealDevice,
+        })
     }
 
     /// The user's own values, typed in or edited from a generated pair.
@@ -189,7 +206,10 @@ impl Identity {
                         s.chars().count()
                     ));
                 }
-                if !s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) {
+                if !s
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                {
                     return Err(format!("a serial is letters and digits only: {s}"));
                 }
                 Some(s)
@@ -200,7 +220,11 @@ impl Identity {
                 "warning: {guid:016X} does not start with Apple's FireWire OUI ({APPLE_OUI:06X})."
             );
         }
-        Ok(Identity { serial, guid, source: Source::Provided })
+        Ok(Identity {
+            serial,
+            guid,
+            source: Source::Provided,
+        })
     }
 
     /// Deterministic from `seed` — the same seed always yields the same iPod.
@@ -244,7 +268,9 @@ impl Identity {
 
         let mut st = seed;
         let pick = |st: &mut u64, n: usize| -> String {
-            (0..n).map(|_| A[(mix(st) % A.len() as u64) as usize] as char).collect()
+            (0..n)
+                .map(|_| A[(mix(st) % A.len() as u64) as usize] as char)
+                .collect()
         };
 
         let loc = LOCATIONS[(mix(&mut st) % LOCATIONS.len() as u64) as usize];
@@ -275,7 +301,11 @@ impl Identity {
         // Apple's OUI in the top 24 bits, 40 bits of uniqueness below — the structure every real
         // GUID has.
         let guid = (APPLE_OUI << 40) | (mix(&mut st) & 0x00_FF_FF_FF_FF_FF);
-        Identity { serial: Some(serial), guid, source: Source::Generated }
+        Identity {
+            serial: Some(serial),
+            guid,
+            source: Source::Generated,
+        }
     }
 
     /// `000A270014EFE726` — the form iTunes, `SysInfo` and a USB descriptor all use.
@@ -355,9 +385,20 @@ impl Colour {
     pub fn parse(s: &str) -> Option<Colour> {
         let s = s.trim().to_ascii_lowercase();
         [
-            Colour::White, Colour::Black, Colour::U2, Colour::Silver, Colour::Blue, Colour::Gold,
-            Colour::Green, Colour::Pink, Colour::Orange, Colour::Purple, Colour::Red,
-            Colour::Yellow, Colour::Stainless, Colour::Unspecified,
+            Colour::White,
+            Colour::Black,
+            Colour::U2,
+            Colour::Silver,
+            Colour::Blue,
+            Colour::Gold,
+            Colour::Green,
+            Colour::Pink,
+            Colour::Orange,
+            Colour::Purple,
+            Colour::Red,
+            Colour::Yellow,
+            Colour::Stainless,
+            Colour::Unspecified,
         ]
         .into_iter()
         .find(|c| c.as_str() == s)
@@ -425,8 +466,7 @@ impl Generation {
         const VIDEO: &[&str] = &[
             // Apple's published 5th-generation endings.
             "V9K", "V9P", "V9M", "V9R", "V9L", "V9N", "V9Q", "V9S", "WU9", "WUA", "WUB", "WUC",
-            "X3N",
-            // Observed here on real hardware, on no published list.
+            "X3N", // Observed here on real hardware, on no published list.
             "TXK", "TXM",
         ];
         match self {
@@ -482,7 +522,14 @@ impl Model {
     /// and rejects strings that are not model numbers.
     pub fn lookup(model_num_str: &str) -> Option<&'static Model> {
         let s = model_num_str.trim().to_ascii_uppercase();
-        let key: String = s.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+        let key: String = s
+            .chars()
+            .rev()
+            .take(4)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         if key.len() != 4 || !key[1..].chars().all(|c| c.is_ascii_digit()) {
             return None;
         }
@@ -555,7 +602,10 @@ mod tests {
     fn generation_is_stable_for_a_seed_and_different_across_seeds() {
         let m = Model::lookup("MA146").expect("MA146");
         assert_eq!(Identity::generate(m, 42), Identity::generate(m, 42));
-        assert_ne!(Identity::generate(m, 42).guid, Identity::generate(m, 43).guid);
+        assert_ne!(
+            Identity::generate(m, 42).guid,
+            Identity::generate(m, 43).guid
+        );
     }
 
     /// **A generated serial has to look like one a factory stamped.** Every field is checked
@@ -571,9 +621,16 @@ mod tests {
             assert_eq!(id.guid >> 40, APPLE_OUI, "seed {seed}");
             let s = id.serial.clone().expect("generate always makes one");
             assert_eq!(s.len(), 11, "seed {seed}: {s}");
-            assert!(s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()), "{s}");
+            assert!(
+                s.chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()),
+                "{s}"
+            );
 
-            assert!(LOCATIONS.contains(&&s[0..2]), "seed {seed}: {s} — not a real factory prefix");
+            assert!(
+                LOCATIONS.contains(&&s[0..2]),
+                "seed {seed}: {s} — not a real factory prefix"
+            );
             let year: u8 = s[2..3].parse().expect("the year is a digit");
             assert!(
                 video.generation.year_digits().contains(&year),
@@ -626,7 +683,11 @@ mod tests {
         assert!(nano.generation.serial_codes().is_empty(), "precondition");
         let s = Identity::generate(nano, 3).serial.expect("a serial");
         assert_eq!(s.len(), 11);
-        assert!(s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()), "{s}");
+        assert!(
+            s.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()),
+            "{s}"
+        );
         let week: u32 = s[3..5].parse().expect("week digits");
         assert!((1..=52).contains(&week));
     }
@@ -639,7 +700,9 @@ mod tests {
         let m = Model::lookup("MA146").expect("MA146");
         assert_eq!(Identity::generate(m, 1).title_auth(), TitleAuth::Never);
         assert_eq!(
-            Identity::provided(Some("AB1234XYZQR"), 0x000A_2700_1122_3344).unwrap().title_auth(),
+            Identity::provided(Some("AB1234XYZQR"), 0x000A_2700_1122_3344)
+                .unwrap()
+                .title_auth(),
             TitleAuth::IfGenuine
         );
         let real = Identity::from_sysinfo(
@@ -656,8 +719,18 @@ mod tests {
     /// usable identity, and an empty string is not a serial.
     #[test]
     fn a_blank_serial_is_none_not_an_empty_string() {
-        assert_eq!(Identity::provided(Some("   "), 0x000A_2700_0000_0001).unwrap().serial, None);
-        assert_eq!(Identity::provided(None, 0x000A_2700_0000_0001).unwrap().serial, None);
+        assert_eq!(
+            Identity::provided(Some("   "), 0x000A_2700_0000_0001)
+                .unwrap()
+                .serial,
+            None
+        );
+        assert_eq!(
+            Identity::provided(None, 0x000A_2700_0000_0001)
+                .unwrap()
+                .serial,
+            None
+        );
     }
 
     /// Malformed serials are refused; a non-Apple OUI is *not*, per the rule adopted from
@@ -665,7 +738,10 @@ mod tests {
     #[test]
     fn malformed_serials_are_refused_but_a_foreign_oui_is_allowed() {
         for bad in ["TOOSHORT", "WAYTOOLONGSERIAL", "AB1234-YZQR"] {
-            assert!(Identity::provided(Some(bad), 0x000A_2700_0000_0001).is_err(), "must reject {bad:?}");
+            assert!(
+                Identity::provided(Some(bad), 0x000A_2700_0000_0001).is_err(),
+                "must reject {bad:?}"
+            );
         }
         assert!(Identity::provided(None, 0xDEAD_BEEF_DEAD_BEEF).is_ok());
         assert!(Identity::from_sysinfo("nothing useful here").is_err());
@@ -683,7 +759,10 @@ mod tests {
             assert_eq!(m.generation, Generation::Video1, "{form}");
         }
         // The 80 GB models exist only as 5.5G, which is the table's own consistency check.
-        assert_eq!(Model::lookup("MA448").unwrap().generation, Generation::Video2);
+        assert_eq!(
+            Model::lookup("MA448").unwrap().generation,
+            Generation::Video2
+        );
         assert_eq!(Model::lookup("MA448").unwrap().colour(), Colour::White);
         assert_eq!(Model::lookup("MA450").unwrap().colour(), Colour::Black);
         // Negative controls: things that are not model numbers must not resolve to one.

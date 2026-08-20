@@ -69,15 +69,24 @@ pub fn install_os(src: &Path, os: &Path, out: &Path) -> Result<Vec<String>, Stri
                 os.display()
             ));
         }
-        report.push(format!("  {} — `{model}`, {} bytes, checksum OK", os.display(), body.len()));
+        report.push(format!(
+            "  {} — `{model}`, {} bytes, checksum OK",
+            os.display(),
+            body.len()
+        ));
         body.to_vec()
     } else {
-        report.push(format!("  {} — {} bytes, raw (no `.ipod` header)", os.display(), raw.len()));
+        report.push(format!(
+            "  {} — {} bytes, raw (no `.ipod` header)",
+            os.display(),
+            raw.len()
+        ));
         raw
     };
 
     // The destination, as a copy. Sparse-aware on APFS and harmless elsewhere.
-    std::fs::copy(src, out).map_err(|e| format!("copying {} -> {}: {e}", src.display(), out.display()))?;
+    std::fs::copy(src, out)
+        .map_err(|e| format!("copying {} -> {}: {e}", src.display(), out.display()))?;
     // **`copy` carries the source's mode, and the sources here are deliberately read-only.**
     // `drives/*.PRISTINE.img` is `chmod 444` so a bug cannot damage it, which meant installing FROM
     // it produced an output that could not be written and failed with a bare `Permission denied`
@@ -103,9 +112,14 @@ pub fn install_os(src: &Path, os: &Path, out: &Path) -> Result<Vec<String>, Stri
 
     // Where the firmware partition is. Type 0x00 is Apple's, and it is the first entry.
     let mut mbr = [0u8; 512];
-    f.seek(SeekFrom::Start(0)).and_then(|_| f.read_exact(&mut mbr)).map_err(|e| e.to_string())?;
+    f.seek(SeekFrom::Start(0))
+        .and_then(|_| f.read_exact(&mut mbr))
+        .map_err(|e| e.to_string())?;
     if mbr[510] != 0x55 || mbr[511] != 0xAA {
-        return Err(format!("{}: no MBR signature — is this a drive image?", src.display()));
+        return Err(format!(
+            "{}: no MBR signature — is this a drive image?",
+            src.display()
+        ));
     }
     if mbr[446 + 4] != 0x00 {
         return Err(format!(
@@ -127,7 +141,9 @@ pub fn install_os(src: &Path, os: &Path, out: &Path) -> Result<Vec<String>, Stri
 
     // The directory.
     let mut dir = vec![0u8; FW_SECTOR as usize];
-    f.seek(SeekFrom::Start(part + FW_DIRECTORY)).and_then(|_| f.read_exact(&mut dir)).map_err(|e| e.to_string())?;
+    f.seek(SeekFrom::Start(part + FW_DIRECTORY))
+        .and_then(|_| f.read_exact(&mut dir))
+        .map_err(|e| e.to_string())?;
     let mut images = Vec::new();
     for i in 0..(FW_SECTOR as usize / 40) {
         let r = &dir[i * 40..i * 40 + 40];
@@ -142,7 +158,9 @@ pub fn install_os(src: &Path, os: &Path, out: &Path) -> Result<Vec<String>, Stri
             chksum: le(r, 0x1c),
         });
     }
-    let first = images.first().ok_or("no images in the firmware directory")?;
+    let first = images
+        .first()
+        .ok_or("no images in the firmware directory")?;
     if first.tag != "osos" {
         return Err(format!("image 0 is `{}`, expected `osos`", first.tag));
     }
@@ -162,7 +180,9 @@ pub fn install_os(src: &Path, os: &Path, out: &Path) -> Result<Vec<String>, Stri
             let mut sum = 0u32;
             let mut left = first.len as usize;
             let mut buf = vec![0u8; 1 << 20];
-            if f.seek(SeekFrom::Start(part + candidate + first.dev_offset as u64)).is_err() {
+            if f.seek(SeekFrom::Start(part + candidate + first.dev_offset as u64))
+                .is_err()
+            {
                 continue;
             }
             let mut ok = true;
@@ -202,7 +222,8 @@ pub fn install_os(src: &Path, os: &Path, out: &Path) -> Result<Vec<String>, Stri
         let mut sum = 0u32;
         let mut left = img.len as usize;
         let mut buf = vec![0u8; 1 << 20];
-        f.seek(SeekFrom::Start(fw + img.dev_offset as u64)).map_err(|e| e.to_string())?;
+        f.seek(SeekFrom::Start(fw + img.dev_offset as u64))
+            .map_err(|e| e.to_string())?;
         while left > 0 {
             let n = left.min(buf.len());
             f.read_exact(&mut buf[..n]).map_err(|e| e.to_string())?;
@@ -220,14 +241,21 @@ pub fn install_os(src: &Path, os: &Path, out: &Path) -> Result<Vec<String>, Stri
     report.push(format!(
         "  firmware partition at {part:#x}, {} image(s): {}",
         images.len(),
-        images.iter().map(|i| i.tag.as_str()).collect::<Vec<_>>().join(" · ")
+        images
+            .iter()
+            .map(|i| i.tag.as_str())
+            .collect::<Vec<_>>()
+            .join(" · ")
     ));
 
     // Where the new image goes. Re-installing over a previous one reuses the same slot rather than
     // pushing everything along again, which is what `entryOffset > 0` means.
     let align = |n: u32| (n + FW_SECTOR - 1) & !(FW_SECTOR - 1);
-    let entry_offset =
-        if first.entry_offset > 0 { first.entry_offset } else { align(first.len) };
+    let entry_offset = if first.entry_offset > 0 {
+        first.entry_offset
+    } else {
+        align(first.len)
+    };
     let length = payload.len() as u32;
     let padded = align(length);
 
@@ -247,7 +275,10 @@ pub fn install_os(src: &Path, os: &Path, out: &Path) -> Result<Vec<String>, Stri
                     part_sectors * 512
                 ));
             }
-            report.push(format!("  moving {} later image(s) on by {delta} bytes", images.len() - 1));
+            report.push(format!(
+                "  moving {} later image(s) on by {delta} bytes",
+                images.len() - 1
+            ));
             // Backwards, so a shift never overwrites the source of a later block.
             for img in images[1..].iter().rev() {
                 let n = align(img.len) as usize;
@@ -263,7 +294,8 @@ pub fn install_os(src: &Path, os: &Path, out: &Path) -> Result<Vec<String>, Stri
     }
 
     // The combined image, and its checksum over every byte of it.
-    f.seek(SeekFrom::Start(fw + first.dev_offset as u64)).map_err(|e| e.to_string())?;
+    f.seek(SeekFrom::Start(fw + first.dev_offset as u64))
+        .map_err(|e| e.to_string())?;
     let mut combined = vec![0u8; entry_offset as usize];
     f.read_exact(&mut combined).map_err(|e| e.to_string())?;
     combined.extend_from_slice(&payload);
@@ -311,8 +343,16 @@ pub fn put_files(disk: &Path, src: &Path, dest: &str) -> Result<Vec<String>, Str
     }
 
     let mut vol = crate::fat::Fat32::open(disk)?;
-    let root = if dest.is_empty() { vol.root() } else { vol.mkdir_p(dest)? };
-    report.push(format!("  {} — writing into {}", disk.display(), if dest.is_empty() { "/" } else { dest }));
+    let root = if dest.is_empty() {
+        vol.root()
+    } else {
+        vol.mkdir_p(dest)?
+    };
+    report.push(format!(
+        "  {} — writing into {}",
+        disk.display(),
+        if dest.is_empty() { "/" } else { dest }
+    ));
 
     // Breadth-first, so a directory exists before anything is written into it.
     let mut queue = vec![(src.to_path_buf(), root)];
@@ -340,7 +380,9 @@ pub fn put_files(disk: &Path, src: &Path, dest: &str) -> Result<Vec<String>, Str
         }
     }
     vol.flush()?;
-    report.push(format!("  {files} file(s) in {dirs} directory(ies), {bytes} bytes"));
+    report.push(format!(
+        "  {files} file(s) in {dirs} directory(ies), {bytes} bytes"
+    ));
     Ok(report)
 }
 
@@ -393,7 +435,9 @@ pub fn put_zip(disk: &Path, zip: &Path) -> Result<Vec<String>, String> {
         bytes += body.len() as u64;
     }
     vol.flush()?;
-    report.push(format!("  {files} file(s) in {dirs} directory(ies), {bytes} bytes"));
+    report.push(format!(
+        "  {files} file(s) in {dirs} directory(ies), {bytes} bytes"
+    ));
     Ok(report)
 }
 
@@ -447,8 +491,11 @@ pub fn install_linux(
             return Err(format!("{what}: {} does not exist", p.display()));
         }
     }
-    let missing: Vec<&str> =
-        ZEROSLACKR_DIRS.iter().copied().filter(|d| !tree.join(d).is_dir()).collect();
+    let missing: Vec<&str> = ZEROSLACKR_DIRS
+        .iter()
+        .copied()
+        .filter(|d| !tree.join(d).is_dir())
+        .collect();
     if !missing.is_empty() {
         return Err(format!(
             "{}: not a ZeroSlackr tree — missing {}. IPOD_LINUX_INSTALL.md lists five directories \
@@ -503,10 +550,18 @@ pub fn install_linux(
 
     let mut vol = crate::fat::Fat32::open(out)?;
     let names: Vec<String> = vol.walk()?.into_iter().map(|f| f.path).collect();
-    let has_rockbox = names.iter().any(|p| p.eq_ignore_ascii_case("/.rockbox/rockbox.ipod"));
-    let has_apple = names.iter().any(|p| p.to_ascii_lowercase().starts_with("/ipod_control"));
+    let has_rockbox = names
+        .iter()
+        .any(|p| p.eq_ignore_ascii_case("/.rockbox/rockbox.ipod"));
+    let has_apple = names
+        .iter()
+        .any(|p| p.to_ascii_lowercase().starts_with("/ipod_control"));
     let root = vol.root();
-    vol.write_file(root, "ipodloader.conf", loader_menu(has_rockbox, has_apple).as_bytes())?;
+    vol.write_file(
+        root,
+        "ipodloader.conf",
+        loader_menu(has_rockbox, has_apple).as_bytes(),
+    )?;
     vol.flush()?;
     report.push(format!(
         "  ipodloader.conf — ZeroSlackr{}{}",

@@ -113,10 +113,24 @@ fn add_family_matches_widening_arithmetic() {
         let carry = rng.next_u32() & 1 != 0;
 
         // ADDS r2, r0, r1 — carry-in is architecturally ignored.
-        compare("ADDS", a, b, carry, arm_op(0xE090_2001, a, b, carry), oracle_add(a, b, false));
+        compare(
+            "ADDS",
+            a,
+            b,
+            carry,
+            arm_op(0xE090_2001, a, b, carry),
+            oracle_add(a, b, false),
+        );
 
         // ADCS r2, r0, r1
-        compare("ADCS", a, b, carry, arm_op(0xE0B0_2001, a, b, carry), oracle_add(a, b, carry));
+        compare(
+            "ADCS",
+            a,
+            b,
+            carry,
+            arm_op(0xE0B0_2001, a, b, carry),
+            oracle_add(a, b, carry),
+        );
     }
 }
 
@@ -129,10 +143,38 @@ fn subtract_family_matches_widening_arithmetic() {
 
         // Subtraction is defined as a + !b + 1, so the same oracle covers it — which is
         // exactly the identity the implementation relies on, checked independently.
-        compare("SUBS", a, b, carry, arm_op(0xE050_2001, a, b, carry), oracle_add(a, !b, true));
-        compare("SBCS", a, b, carry, arm_op(0xE0D0_2001, a, b, carry), oracle_add(a, !b, carry));
-        compare("RSBS", a, b, carry, arm_op(0xE070_2001, a, b, carry), oracle_add(b, !a, true));
-        compare("RSCS", a, b, carry, arm_op(0xE0F0_2001, a, b, carry), oracle_add(b, !a, carry));
+        compare(
+            "SUBS",
+            a,
+            b,
+            carry,
+            arm_op(0xE050_2001, a, b, carry),
+            oracle_add(a, !b, true),
+        );
+        compare(
+            "SBCS",
+            a,
+            b,
+            carry,
+            arm_op(0xE0D0_2001, a, b, carry),
+            oracle_add(a, !b, carry),
+        );
+        compare(
+            "RSBS",
+            a,
+            b,
+            carry,
+            arm_op(0xE070_2001, a, b, carry),
+            oracle_add(b, !a, true),
+        );
+        compare(
+            "RSCS",
+            a,
+            b,
+            carry,
+            arm_op(0xE0F0_2001, a, b, carry),
+            oracle_add(b, !a, carry),
+        );
     }
 }
 
@@ -225,10 +267,7 @@ fn register_shifts_match_widening_oracle() {
                 got.result, want_result,
                 "{name} {value:#010x} by {amount}: result"
             );
-            assert_eq!(
-                got.c, want_carry,
-                "{name} {value:#010x} by {amount}: carry"
-            );
+            assert_eq!(got.c, want_carry, "{name} {value:#010x} by {amount}: carry");
             assert_eq!(got.n, want_result & 0x8000_0000 != 0, "{name}: N");
             assert_eq!(got.z, want_result == 0, "{name}: Z");
         }

@@ -514,14 +514,18 @@ fn block_data_transfer(cpu: &mut Cpu, bus: &mut impl Bus, instr: u32) {
     let (regs, bytes): (Vec<usize>, u32) = if list == 0 {
         (vec![15], 0x40)
     } else {
-        ((0..16).filter(|i| bit(list, *i as u32)).collect(), count * 4)
+        (
+            (0..16).filter(|i| bit(list, *i as u32)).collect(),
+            count * 4,
+        )
     };
 
     // Registers always map lowest-to-lowest-address regardless of direction.
     let start = if up {
         base.wrapping_add(if pre { 4 } else { 0 })
     } else {
-        base.wrapping_sub(bytes).wrapping_add(if pre { 0 } else { 4 })
+        base.wrapping_sub(bytes)
+            .wrapping_add(if pre { 0 } else { 4 })
     };
     let final_base = if up {
         base.wrapping_add(bytes)

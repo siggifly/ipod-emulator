@@ -161,8 +161,9 @@ pub fn by_file(name: &str) -> Option<&'static Release> {
 // subtly wrong does not fail loudly — it silently rejects every file, or worse, accepts one.
 // ---------------------------------------------------------------------------------------------
 
-const H0: [u32; 8] =
-    [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+const H0: [u32; 8] = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+];
 
 #[rustfmt::skip]
 const K: [u32; 64] = [
@@ -184,7 +185,10 @@ fn compress(h: &mut [u32; 8], block: &[u8]) {
     for i in 16..64 {
         let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
         let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-        w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+        w[i] = w[i - 16]
+            .wrapping_add(s0)
+            .wrapping_add(w[i - 7])
+            .wrapping_add(s1);
     }
     let (mut a, mut b, mut c, mut d) = (h[0], h[1], h[2], h[3]);
     let (mut e, mut f, mut g, mut hh) = (h[4], h[5], h[6], h[7]);
@@ -254,7 +258,10 @@ pub fn download(rel: &Release, dir: &std::path::Path) -> Result<std::path::PathB
             return Ok(dest);
         }
         // Present but wrong: say so rather than silently re-using or silently clobbering.
-        eprintln!("{}: already here but does not verify — downloading again", dest.display());
+        eprintln!(
+            "{}: already here but does not verify — downloading again",
+            dest.display()
+        );
     }
     if !rel.served {
         return Err(format!(
@@ -302,7 +309,10 @@ pub fn verify(rel: &Release, data: &[u8]) -> Result<(), String> {
                     rel.file
                 ));
             }
-            eprintln!("{}: size matches; no sha256 on record for this release yet", rel.file);
+            eprintln!(
+                "{}: size matches; no sha256 on record for this release yet",
+                rel.file
+            );
             Ok(())
         }
     }
@@ -465,7 +475,9 @@ pub struct Cached {
 /// the full catalogue is 2.7 GB, and a listing that silently spends thirty seconds hashing is a
 /// listing people learn not to run.
 pub fn cached(dir: &std::path::Path, verify_hashes: bool) -> Vec<Cached> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
     let mut out: Vec<Cached> = entries
         .flatten()
         .filter(|e| e.path().is_file())
@@ -491,7 +503,12 @@ pub fn cached(dir: &std::path::Path, verify_hashes: bool) -> Vec<Cached> {
                     }
                 }
             };
-            Some(Cached { path, bytes, release, state })
+            Some(Cached {
+                path,
+                bytes,
+                release,
+                state,
+            })
         })
         .collect();
     out.sort_by(|a, b| a.path.cmp(&b.path));
@@ -526,8 +543,14 @@ mod tests {
     /// **A hash that is subtly wrong fails silently**, so these are the whole safety net.
     #[test]
     fn sha256_matches_the_published_vectors() {
-        assert_eq!(sha256(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
-        assert_eq!(sha256(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(
+            sha256(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
         assert_eq!(
             sha256(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
             "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
@@ -538,10 +561,7 @@ mod tests {
             "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
         );
         // Exactly one block, and one byte over — the boundary the padding branch turns on.
-        assert_eq!(
-            sha256(&[b'x'; 64]),
-            sha256(&[b'x'; 64]),
-        );
+        assert_eq!(sha256(&[b'x'; 64]), sha256(&[b'x'; 64]),);
         assert_ne!(sha256(&[b'x'; 55]), sha256(&[b'x'; 56]));
     }
 
@@ -557,11 +577,17 @@ mod tests {
 
         for r in CATALOGUE {
             assert!(r.url.starts_with("https://"), "{} is not https", r.file);
-            assert!(r.url.ends_with(r.file), "{}: url and filename disagree", r.file);
+            assert!(
+                r.url.ends_with(r.file),
+                "{}: url and filename disagree",
+                r.file
+            );
             assert!(r.updater_family > 0, "{} has no updater family", r.file);
             if let Some(sha) = r.sha256 {
                 assert_eq!(sha.len(), 64, "{}: sha256 is not 64 hex chars", r.file);
-                assert!(sha.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+                assert!(sha
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
                 assert!(r.bytes > 0, "{}: hashed but no size", r.file);
             }
         }
@@ -594,9 +620,17 @@ mod tests {
             assert!(r.bytes > 0, "{} is served but has no size", r.file);
         }
         for r in &gone {
-            assert!(r.sha256.is_none(), "{} is not served yet claims a hash", r.file);
+            assert!(
+                r.sha256.is_none(),
+                "{} is not served yet claims a hash",
+                r.file
+            );
             let e = download(r, std::path::Path::new("/nonexistent")).unwrap_err();
-            assert!(e.contains("403"), "{}: should explain, not just fail: {e}", r.file);
+            assert!(
+                e.contains("403"),
+                "{}: should explain, not just fail: {e}",
+                r.file
+            );
         }
     }
 
@@ -619,11 +653,22 @@ mod tests {
         let items = cached(&dir, false);
         assert_eq!(items.len(), 3);
         let by = |n: &str| items.iter().find(|c| c.path.ends_with(n)).expect(n).state;
-        assert_eq!(by(rel.file), CacheState::Corrupt, "wrong size must not read as fine");
+        assert_eq!(
+            by(rel.file),
+            CacheState::Corrupt,
+            "wrong size must not read as fine"
+        );
         assert_eq!(by("somebody-elses.ipsw"), CacheState::Unknown);
-        assert_eq!(by("iPod_13.1.3.ipsw.part"), CacheState::Unknown, "a .part is not a release");
+        assert_eq!(
+            by("iPod_13.1.3.ipsw.part"),
+            CacheState::Unknown,
+            "a .part is not a release"
+        );
 
-        assert_eq!(cache_bytes(&dir), items.iter().map(|c| c.bytes).sum::<u64>());
+        assert_eq!(
+            cache_bytes(&dir),
+            items.iter().map(|c| c.bytes).sum::<u64>()
+        );
 
         // Removal reports what it actually freed, and takes an explicit list rather than a wildcard.
         let doomed = vec![dir.join("somebody-elses.ipsw")];
@@ -652,15 +697,26 @@ mod tests {
             println!("SKIPPED: {} is not downloaded here", path.display());
             return;
         };
-        assert_eq!(identify(&real), Provenance::Apple(rel), "renaming changes nothing");
+        assert_eq!(
+            identify(&real),
+            Provenance::Apple(rel),
+            "renaming changes nothing"
+        );
         assert!(identify(&real).warning().is_none());
 
         // One byte different, same length: must NOT be vouched for.
         let mut tweaked = real.clone();
         let last = tweaked.len() - 1;
         tweaked[last] ^= 0xff;
-        assert_eq!(identify(&tweaked), Provenance::Unrecognised, "a modified build is not Apple's");
-        assert!(identify(&tweaked).warning().is_some(), "and it has to say so");
+        assert_eq!(
+            identify(&tweaked),
+            Provenance::Unrecognised,
+            "a modified build is not Apple's"
+        );
+        assert!(
+            identify(&tweaked).warning().is_some(),
+            "and it has to say so"
+        );
     }
 
     /// Runs with no corpus present, so there is always a live assertion here rather than only
@@ -687,10 +743,16 @@ mod tests {
     fn verification_rejects_the_wrong_bytes() {
         let rel = by_file("iPod_20.1.3.ipsw").expect("the 5G Rev A release");
         assert!(rel.is_verifiable(), "this one should have a hash on record");
-        assert!(verify(rel, b"not an ipsw").is_err(), "a short file must be refused");
+        assert!(
+            verify(rel, b"not an ipsw").is_err(),
+            "a short file must be refused"
+        );
         let mut right_size = vec![0u8; rel.bytes as usize];
         right_size[0] = 1;
         let e = verify(rel, &right_size).unwrap_err();
-        assert!(e.contains("sha256"), "size-correct rubbish must fail on the hash: {e}");
+        assert!(
+            e.contains("sha256"),
+            "size-correct rubbish must fail on the hash: {e}"
+        );
     }
 }

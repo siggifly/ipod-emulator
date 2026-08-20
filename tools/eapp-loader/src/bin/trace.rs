@@ -103,7 +103,10 @@ fn main() {
                 "  {:<14} {:>3} imports   hash {}",
                 fw.name,
                 fw.thunks.len(),
-                fw.hash.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                fw.hash
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
             );
         }
         println!("total imports {}", app.import_count());
@@ -113,16 +116,23 @@ fn main() {
     // Identified from its own call pattern: sizes in, pointer immediately dereferenced.
     m.set_stub("miscTBD", 0, Stub::Alloc);
     // Identified from the FPS calculation it feeds; see Stub::Clock. ~60 fps worth per call.
-    m.set_stub("miscTBD", 9, Stub::Clock { arg: 0, step: 16_667 });
+    m.set_stub(
+        "miscTBD",
+        9,
+        Stub::Clock {
+            arg: 0,
+            step: 16_667,
+        },
+    );
     // Same pointers back in reverse order — see the identification table in the README.
     m.set_stub("miscTBD", 1, Stub::Free { arg: 0 });
     // GL entry points identified from their argument enums — see research/02.
-    m.set_stub("OpenGLES", 12, Stub::GlClear);        // r0 = 0x4000 = GL_COLOR_BUFFER_BIT
-    m.set_stub("OpenGLES", 13, Stub::GlClearColor);   // r0 = 0x3f800000 = 1.0f
-    m.set_stub("OpenGLES", 157, Stub::GlSwap);        // brackets every frame
-    // #137 takes six arguments (stride and pointer on the stack); #40 takes one and is
-    // glEnableVertexAttribArray. Wiring the pointer stub to #40 "worked" only because the
-    // stale stack still held #137's arguments — correct output, wrong reason.
+    m.set_stub("OpenGLES", 12, Stub::GlClear); // r0 = 0x4000 = GL_COLOR_BUFFER_BIT
+    m.set_stub("OpenGLES", 13, Stub::GlClearColor); // r0 = 0x3f800000 = 1.0f
+    m.set_stub("OpenGLES", 157, Stub::GlSwap); // brackets every frame
+                                               // #137 takes six arguments (stride and pointer on the stack); #40 takes one and is
+                                               // glEnableVertexAttribArray. Wiring the pointer stub to #40 "worked" only because the
+                                               // stale stack still held #137's arguments — correct output, wrong reason.
     m.set_stub("OpenGLES", 137, Stub::GlVertexAttribPointer);
     m.set_stub("OpenGLES", 37, Stub::GlDrawArrays);
     m.set_stub("OpenGLES", 4, Stub::GlBindTexture);
@@ -131,7 +141,12 @@ fn main() {
     m.set_stub("Filesytem", 0, Stub::FileOpen { path: 1, out: 3 });
     m.set_stub("AsyncFileIO", 0, Stub::FileOpen { path: 1, out: 3 });
     // read(handle, buffer, length, &bytesRead) — the game allocates exactly `length` first.
-    let rd = Stub::FileRead { handle: 0, buffer: 1, length: 2, out: 3 };
+    let rd = Stub::FileRead {
+        handle: 0,
+        buffer: 1,
+        length: 2,
+        out: 3,
+    };
     m.set_stub("Filesytem", 2, rd.clone());
     m.set_stub("AsyncFileIO", 2, rd.clone());
     // AsyncFileIO #3 takes a filename in r1 — Pac-Man passes "pac_man.dat", its save file.
@@ -193,7 +208,10 @@ fn main() {
         let (a, n) = spec.split_once(':').unwrap_or((spec, "8"));
         if let Some(addr) = parse_addr(a) {
             m.mem.regs_at = Some((addr, n.parse().unwrap_or(8)));
-            println!("  regs-at {addr:#010x}, first {} arrivals", n.parse().unwrap_or(8));
+            println!(
+                "  regs-at {addr:#010x}, first {} arrivals",
+                n.parse().unwrap_or(8)
+            );
         }
     }
     // --stop-at=ADDR[:N] : halt on the Nth arrival at ADDR (default the 1st), so --history
@@ -205,7 +223,13 @@ fn main() {
         }
     }
     if !m.stop_at.is_empty() {
-        println!("stop-at: {:?}", m.stop_at.iter().map(|(a, n)| format!("{a:#010x} hit {n}")).collect::<Vec<_>>());
+        println!(
+            "stop-at: {:?}",
+            m.stop_at
+                .iter()
+                .map(|(a, n)| format!("{a:#010x} hit {n}"))
+                .collect::<Vec<_>>()
+        );
     }
     for spec in args.iter().filter_map(|a| a.strip_prefix("--sum-at=")) {
         let p: Vec<&str> = spec.split(':').collect();
@@ -224,17 +248,23 @@ fn main() {
     // rather than on an address. Heap addresses move between runs; the instruction that writes them
     // does not.
     for spec in args.iter().filter_map(|a| a.strip_prefix("--storelog=")) {
-        m.mem.store_pcs.extend(spec.split(',').filter_map(parse_addr));
+        m.mem
+            .store_pcs
+            .extend(spec.split(',').filter_map(parse_addr));
     }
     for spec in args.iter().filter_map(|a| a.strip_prefix("--storeaddr=")) {
         // A file of addresses, one per line, is the usable form: the interesting sets come out of a
         // previous run's dump and run to hundreds of entries.
         let body = std::fs::read_to_string(spec).unwrap_or_else(|_| spec.replace(',', "\n"));
-        m.mem.store_addrs.extend(body.split_whitespace().filter_map(parse_addr));
+        m.mem
+            .store_addrs
+            .extend(body.split_whitespace().filter_map(parse_addr));
     }
     for spec in args.iter().filter_map(|a| a.strip_prefix("--readlog=")) {
         let body = std::fs::read_to_string(spec).unwrap_or_else(|_| spec.replace(',', "\n"));
-        m.mem.read_addrs.extend(body.split_whitespace().filter_map(parse_addr));
+        m.mem
+            .read_addrs
+            .extend(body.split_whitespace().filter_map(parse_addr));
     }
     // --norlog : a histogram of which flash pages the firmware read. The question a synthesised
     // NOR raises is "what was it looking for that is not there", and this is what answers it.
@@ -244,9 +274,15 @@ fn main() {
     m.mem.ide_cfg_ack_off = args.iter().any(|a| a == "--no-cfg-ack");
     m.mem.ide_irq_latch_off = args.iter().any(|a| a == "--no-ide-irq-latch");
     // --pp-dma-irq=N : which interrupt line the 0x60008000 DMA controller's completion drives.
-    m.mem.pp_dma_irq = args.iter().find_map(|a| a.strip_prefix("--pp-dma-irq=")).and_then(|v| v.parse().ok());
+    m.mem.pp_dma_irq = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--pp-dma-irq="))
+        .and_then(|v| v.parse().ok());
     // Implies --novelty: the idle test is "no bucket was new", and only novelty tracking knows.
-    if let Some(v) = args.iter().find_map(|a| a.strip_prefix("--stop-when-idle=")) {
+    if let Some(v) = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--stop-when-idle="))
+    {
         m.stop_when_idle = v.replace('_', "").parse::<u64>().ok();
         if m.novelty.is_none() {
             m.novelty = Some(Default::default());
@@ -272,7 +308,10 @@ fn main() {
     for spec in args.iter().filter_map(|a| a.strip_prefix("--force-sem=")) {
         m.force_sems.extend(spec.split(',').filter_map(parse_addr));
     }
-    if let Some(pc) = args.iter().find_map(|a| a.strip_prefix("--force-sem-pc=")).and_then(parse_addr)
+    if let Some(pc) = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--force-sem-pc="))
+        .and_then(parse_addr)
     {
         m.force_sem_pend_pc = pc;
     }
@@ -290,7 +329,13 @@ fn main() {
         m.enter_bloom |= 1u64 << ((pc >> 2) & 63);
     }
     if !m.breakpoints.is_empty() {
-        println!("breakpoints: {:?}", m.breakpoints.iter().map(|a| format!("{a:#010x}")).collect::<Vec<_>>());
+        println!(
+            "breakpoints: {:?}",
+            m.breakpoints
+                .iter()
+                .map(|a| format!("{a:#010x}"))
+                .collect::<Vec<_>>()
+        );
     }
     if let Some(w) = m.watch {
         println!("watching word at {w:#010x}");
@@ -329,7 +374,16 @@ fn main() {
         .map(std::path::PathBuf::from);
     for (fw, idx, arg, off, v) in &writes {
         println!("write-out: {fw}#{idx} *(r{arg}+{off}) <- {v}");
-        m.set_stub(fw, *idx, Stub::WriteOut { arg: *arg, offset: *off, value: *v, ret: 0 });
+        m.set_stub(
+            fw,
+            *idx,
+            Stub::WriteOut {
+                arg: *arg,
+                offset: *off,
+                value: *v,
+                ret: 0,
+            },
+        );
     }
     for (fw, idx, v) in &overrides {
         println!("stub override: {fw}#{idx} -> {v:#x}");
@@ -352,38 +406,48 @@ fn main() {
         .find_map(|a| a.strip_prefix("--osos-from-disk="))
         .unwrap_or("osos")
         .to_string();
-    if args.iter().any(|a| a == "--osos-from-disk" || a.starts_with("--osos-from-disk=")) {
+    if args
+        .iter()
+        .any(|a| a == "--osos-from-disk" || a.starts_with("--osos-from-disk="))
+    {
         match args.iter().find_map(|a| a.strip_prefix("--disk=")) {
             None => {
                 eprintln!("--osos-from-disk needs --disk=PATH to read it out of");
                 std::process::exit(1);
             }
-            Some(disk) => match eapp_loader::ipsw::image_from_drive(std::path::Path::new(disk), &fw_tag) {
-                Ok((d, at, entry)) => {
-                    let n = d.len();
-                    m.symbols = eapp_loader::extract_symbols(&d, 0);
-                    match m.map_osos(d) {
-                        Ok(()) => {
-                            println!("mapped `{fw_tag}` from the drive: {n} bytes at {at:#010x}");
-                            // **Honour the entry offset.** Zero for a stock image, non-zero once a
-                            // bootloader has been appended -- and ignoring it boots the OS sitting
-                            // behind the loader instead of the loader.
-                            if entry != 0 {
-                                println!("  entry offset {entry:#x} -> starting at {:#010x}", at + entry);
-                                osos_entry = Some(at + entry);
+            Some(disk) => {
+                match eapp_loader::ipsw::image_from_drive(std::path::Path::new(disk), &fw_tag) {
+                    Ok((d, at, entry)) => {
+                        let n = d.len();
+                        m.symbols = eapp_loader::extract_symbols(&d, 0);
+                        match m.map_osos(d) {
+                            Ok(()) => {
+                                println!(
+                                    "mapped `{fw_tag}` from the drive: {n} bytes at {at:#010x}"
+                                );
+                                // **Honour the entry offset.** Zero for a stock image, non-zero once a
+                                // bootloader has been appended -- and ignoring it boots the OS sitting
+                                // behind the loader instead of the loader.
+                                if entry != 0 {
+                                    println!(
+                                        "  entry offset {entry:#x} -> starting at {:#010x}",
+                                        at + entry
+                                    );
+                                    osos_entry = Some(at + entry);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("cannot map OSOS: {e}");
+                                std::process::exit(1);
                             }
                         }
-                        Err(e) => {
-                            eprintln!("cannot map OSOS: {e}");
-                            std::process::exit(1);
-                        }
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
                     }
                 }
-                Err(e) => {
-                    eprintln!("{e}");
-                    std::process::exit(1);
-                }
-            },
+            }
         }
     }
     if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--osos=")) {
@@ -393,7 +457,10 @@ fn main() {
                 // RetailOS executes aliased at 0, so the symbol keys match trace PCs directly.
                 m.symbols = eapp_loader::extract_symbols(&d, 0);
                 if args.iter().any(|a| a == "--symbols") {
-                    println!("recovered {} function names from RetailOS's own labels:", m.symbols.len());
+                    println!(
+                        "recovered {} function names from RetailOS's own labels:",
+                        m.symbols.len()
+                    );
                     for (a, nm) in &m.symbols {
                         println!("  {a:#010x}  {nm}");
                     }
@@ -417,7 +484,11 @@ fn main() {
         // where the firmware's own boot executes. Without this region they resolve to nothing.
         if let Some(osos) = m.mem.regions.iter().find(|r| r.name == "osos") {
             let mirror = osos.data.clone();
-            m.mem.regions.push(eapp_loader::Region { name: "osos-low", base: 0, data: mirror });
+            m.mem.regions.push(eapp_loader::Region {
+                name: "osos-low",
+                base: 0,
+                data: mirror,
+            });
         } else {
             eprintln!("--native needs --osos=FILE");
             std::process::exit(1);
@@ -427,7 +498,13 @@ fn main() {
         map_hardware(&mut m, args.iter().any(|a| a == "--cold-boot"));
         println!("binding imports to RetailOS implementations:");
         for (name, bound, total) in m.bind_native(&app, only) {
-            let mark = if bound == total { "✅" } else if bound == 0 { "·" } else { "⚠️" };
+            let mark = if bound == total {
+                "✅"
+            } else if bound == 0 {
+                "·"
+            } else {
+                "⚠️"
+            };
             println!("  {mark} {name:<14} {bound:>3}/{total}");
         }
     }
@@ -469,7 +546,11 @@ fn main() {
         let stop = m.call_with(target, &cargs, 2_000_000);
         println!(
             "call {fname}#{idx} @{target:#010x}({}) -> {stop:?}  r0={:#x}  {} instructions",
-            cargs.iter().map(|a| format!("{a:#x}")).collect::<Vec<_>>().join(", "),
+            cargs
+                .iter()
+                .map(|a| format!("{a:#x}"))
+                .collect::<Vec<_>>()
+                .join(", "),
             m.cpu.regs[0],
             m.executed - before
         );
@@ -512,7 +593,11 @@ fn main() {
         // usual ARM arrangement where the vector table is mirrored into low memory.
         if let Some(osos) = m.mem.regions.iter().find(|r| r.name == "osos") {
             let mirror = osos.data.clone();
-            m.mem.regions.push(eapp_loader::Region { name: "osos-low", base: 0, data: mirror });
+            m.mem.regions.push(eapp_loader::Region {
+                name: "osos-low",
+                base: 0,
+                data: mirror,
+            });
         }
         // --osos-at=ADDR : an additional mirror of the image at ADDR.
         //
@@ -531,7 +616,11 @@ fn main() {
             if let Some(osos) = m.mem.regions.iter().find(|r| r.name == "osos") {
                 let mirror = osos.data.clone();
                 println!("  osos mirror at {base:#010x} ({} bytes)", mirror.len());
-                m.mem.regions.push(eapp_loader::Region { name: "osos-alias", base, data: mirror });
+                m.mem.regions.push(eapp_loader::Region {
+                    name: "osos-alias",
+                    base,
+                    data: mirror,
+                });
             }
         }
         map_hardware(&mut m, args.iter().any(|a| a == "--cold-boot"));
@@ -548,28 +637,39 @@ fn main() {
         // stops being a hole. **The generation is inferred from Apple's own comparison, not from a
         // datasheet**: the ROM's name table at `0x10ae4` lists `PP5020`, `PP5022` and `PP5026` and
         // no `PP5021`, and its bootloader tests for `'6'`.
-        for (i, b) in 0x3232_432Du32.to_le_bytes().iter().enumerate() {  // PROBE
+        for (i, b) in 0x3232_432Du32.to_le_bytes().iter().enumerate() {
+            // PROBE
             m.mem.write8(0x7000_0000 + i as u32, *b);
         }
-        for (i, b) in 0x5050_3530u32.to_le_bytes().iter().enumerate() {  // 'P','P','5','0'
+        for (i, b) in 0x5050_3530u32.to_le_bytes().iter().enumerate() {
+            // 'P','P','5','0'
             m.mem.write8(0x7000_0004 + i as u32, *b);
         }
         for (base, size) in &maps {
             m.mem.regions.push(eapp_loader::Region {
-                name: "extra", base: *base, data: vec![0; *size],
+                name: "extra",
+                base: *base,
+                data: vec![0; *size],
             });
             println!("  map  {base:#010x} .. {:#010x}", base + *size as u32 - 1);
         }
         // --sysinfo[=SIZE] : install the bootloader's IRAM handoff block, SIZE bytes of SDRAM.
         if let Some(spec) = args.iter().find_map(|a| {
-            a.strip_prefix("--sysinfo=").map(Some).or(if a == "--sysinfo" { Some(None) } else { None })
+            a.strip_prefix("--sysinfo=")
+                .map(Some)
+                .or(if a == "--sysinfo" { Some(None) } else { None })
         }) {
             let size = spec.and_then(parse_addr).unwrap_or(0x0400_0000);
             // The NOR, when one was given: the handoff's identity, model and Gestalt all come out
             // of its SysCfg rather than out of constants. `--flash=` is parsed further down, so it
             // is read from the arguments directly here.
             let flash_for_sysinfo = args.iter().find_map(|a| a.strip_prefix("--flash="));
-            install_sysinfo(&mut m, eapp_loader::nor::HANDOFF_AT, size, flash_for_sysinfo);
+            install_sysinfo(
+                &mut m,
+                eapp_loader::nor::HANDOFF_AT,
+                size,
+                flash_for_sysinfo,
+            );
         }
         // --input-regs=BASE:SIZE : which addresses are read before ever being written.
         if let Some(spec) = args.iter().find_map(|a| a.strip_prefix("--input-regs=")) {
@@ -603,10 +703,18 @@ fn main() {
             let parts: Vec<&str> = spec.split(':').collect();
             if parts.len() >= 2 {
                 if let (Some(b), Some(n)) = (parse_addr(parts[0]), parse_addr(parts[1])) {
-                    let g = parts.get(2).and_then(|s| parse_addr(s)).unwrap_or(0x100).max(4);
+                    let g = parts
+                        .get(2)
+                        .and_then(|s| parse_addr(s))
+                        .unwrap_or(0x100)
+                        .max(4);
                     m.mem.page_log = Some((b, n));
                     m.mem.page_gran = g.next_power_of_two();
-                    println!("  pagelog {b:#010x} .. {:#010x} by {}", b + n - 1, m.mem.page_gran);
+                    println!(
+                        "  pagelog {b:#010x} .. {:#010x} by {}",
+                        b + n - 1,
+                        m.mem.page_gran
+                    );
                 }
             }
         }
@@ -629,7 +737,11 @@ fn main() {
                         m.mem.readonly.push("flash-low");
                         m.mem.regions.insert(
                             0,
-                            eapp_loader::Region { name: "flash-low", base: 0, data: data.clone() },
+                            eapp_loader::Region {
+                                name: "flash-low",
+                                base: 0,
+                                data: data.clone(),
+                            },
                         );
                     }
                     let size = data.len() as u32;
@@ -713,7 +825,11 @@ fn main() {
             println!(
                 "  clickwheel model at 0x7000c100/0x104/0x120/0x140, irq {} ({})",
                 eapp_loader::OPTO_IRQ_HI + 32,
-                if w.irq_enabled { "enabled" } else { "ablated by --wheel-no-irq" }
+                if w.irq_enabled {
+                    "enabled"
+                } else {
+                    "ablated by --wheel-no-irq"
+                }
             );
             if w.script.is_empty() {
                 println!("  wheel script: none — the device is modelled, nothing is injected");
@@ -723,7 +839,11 @@ fn main() {
                     w.script.len()
                 );
                 for s in &w.script {
-                    println!("    @{:<14} {}", s.when(), eapp_loader::wheel_step_name(s.event));
+                    println!(
+                        "    @{:<14} {}",
+                        s.when(),
+                        eapp_loader::wheel_step_name(s.event)
+                    );
                 }
             }
             m.mem.clickwheel = Some(w);
@@ -735,16 +855,13 @@ fn main() {
         // disk, no filesystem and no OSOS, and it draws to the screen — which makes it the natural
         // first target for the display path.
         let flash_image = args.iter().find_map(|a| a.strip_prefix("--boot-flash="));
-        if let (Some(name), Some(path)) =
-            (flash_image, args.iter().find_map(|a| a.strip_prefix("--flash=")))
-        {
+        if let (Some(name), Some(path)) = (
+            flash_image,
+            args.iter().find_map(|a| a.strip_prefix("--flash=")),
+        ) {
             if let Ok(rom) = std::fs::read(path) {
-                let want = u32::from_be_bytes(
-                    name.as_bytes()[..4].try_into().unwrap_or([0; 4]),
-                );
-                let rd = |o: usize| {
-                    u32::from_le_bytes(rom[o..o + 4].try_into().unwrap_or([0; 4]))
-                };
+                let want = u32::from_be_bytes(name.as_bytes()[..4].try_into().unwrap_or([0; 4]));
+                let rd = |o: usize| u32::from_le_bytes(rom[o..o + 4].try_into().unwrap_or([0; 4]));
                 for i in 0..12 {
                     let e = 0xffe00 + i * 40;
                     if e + 40 > rom.len() || rd(e) != u32::from_be_bytes(*b"flsh") {
@@ -806,9 +923,16 @@ fn main() {
         }
         // --disk=PATH : attach the image as the ATA drive, so RetailOS can read its own filesystem.
         if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--disk=")) {
-            match eapp_loader::Ata::open(std::path::Path::new(path), args.iter().any(|a| a == "--disk-writable")) {
+            match eapp_loader::Ata::open(
+                std::path::Path::new(path),
+                args.iter().any(|a| a == "--disk-writable"),
+            ) {
                 Ok(d) => {
-                    println!("  disk {path} — {} sectors ({} MB)", d.sectors, d.sectors / 2048);
+                    println!(
+                        "  disk {path} — {} sectors ({} MB)",
+                        d.sectors,
+                        d.sectors / 2048
+                    );
                     m.mem.ata = Some((0xc300_0000, d));
                 }
                 Err(e) => println!("  disk {path}: {e}"),
@@ -867,7 +991,9 @@ fn main() {
         for spec in args.iter().filter_map(|a| a.strip_prefix("--rdtoggle=")) {
             if let Some((a, rest)) = spec.split_once('=') {
                 if let Some((x, y)) = rest.split_once(':') {
-                    if let (Some(a), Some(x), Some(y)) = (parse_addr(a), parse_addr(x), parse_addr(y)) {
+                    if let (Some(a), Some(x), Some(y)) =
+                        (parse_addr(a), parse_addr(x), parse_addr(y))
+                    {
                         m.mem.read_toggle.push((a, x, y));
                         println!("  rdtoggle {a:#010x} alternates {x:#010x} / {y:#010x}");
                     }
@@ -907,6 +1033,21 @@ fn main() {
                         "  restored {path} — {} instructions already executed, pc {:#010x}",
                         m.executed, m.cpu.regs[15]
                     );
+                    // **Whether the restored PC is executable, checked before running.** A restored
+                    // machine whose address map did not come back reads zeros at its own PC and
+                    // NOP-slides until it is declared Lost, hundreds of instructions later, with
+                    // the panel still holding the last picture — which looks exactly like a working
+                    // iPod that ignores input. One word, read where the CPU is about to fetch, turns
+                    // that into a sentence at the point of failure.
+                    let pc = m.cpu.regs[15];
+                    let at_pc = m.mem.read32(pc);
+                    if at_pc == 0 {
+                        println!(
+                            "  restore {path}: NOTHING IS MAPPED AT THE RESTORED PC {pc:#010x} — \
+                             it reads 0, which the CPU will execute as a NOP until it runs off the \
+                             end. The snapshot's memory is present but its address map is not."
+                        );
+                    }
                 }
                 Ok(_) => println!("  restore {path}: not a valid snapshot"),
                 Err(e) => println!("  restore {path}: {e}"),
@@ -919,7 +1060,9 @@ fn main() {
         // would be indistinguishable from a screen that never changed.
         if let Some(spec) = args.iter().find_map(|a| a.strip_prefix("--bcm-film=")) {
             if m.mem.bcm.is_none() {
-                eprintln!("--bcm-film needs a co-processor to read: add --bcm (and --bcm-registry).");
+                eprintln!(
+                    "--bcm-film needs a co-processor to read: add --bcm (and --bcm-registry)."
+                );
                 std::process::exit(2);
             }
             match eapp_loader::film::Film::parse(spec) {
@@ -931,7 +1074,9 @@ fn main() {
                         match eapp_loader::film::parse_count(v) {
                             Some(n) => f.from = n,
                             None => {
-                                println!("  --bcm-film-from={v:?} is not a number (try 2400M, 500k)");
+                                println!(
+                                    "  --bcm-film-from={v:?} is not a number (try 2400M, 500k)"
+                                );
                                 std::process::exit(2);
                             }
                         }
@@ -942,7 +1087,11 @@ fn main() {
                         f.w,
                         f.h,
                         f.every,
-                        if f.from > 0 { format!(", from {}", f.from) } else { String::new() },
+                        if f.from > 0 {
+                            format!(", from {}", f.from)
+                        } else {
+                            String::new()
+                        },
                         f.dir.display()
                     );
                     film = Some(f);
@@ -960,15 +1109,18 @@ fn main() {
             m.call_log_on = true;
         }
         if args.iter().any(|a| a.starts_with("--novelty")) {
-        m.novelty = Some(Default::default());
-        m.arm_novelty();
-    }
-    if args.iter().any(|a| a.starts_with("--profile")) {
+            m.novelty = Some(Default::default());
+            m.arm_novelty();
+        }
+        if args.iter().any(|a| a.starts_with("--profile")) {
             m.profile = Some(std::collections::HashMap::new());
         }
         // --profile-window=FROM:TO : sample only inside an instruction range, so a phase that is
         // outnumbered 4:1 by the loop the boot ends in can still be read.
-        if let Some(spec) = args.iter().find_map(|a| a.strip_prefix("--profile-window=")) {
+        if let Some(spec) = args
+            .iter()
+            .find_map(|a| a.strip_prefix("--profile-window="))
+        {
             if let Some((a, b)) = spec.split_once(':') {
                 if let (Ok(a), Ok(b)) = (a.parse::<u64>(), b.parse::<u64>()) {
                     m.profile_window = Some((a, b));
@@ -985,7 +1137,11 @@ fn main() {
         // of a hardcoded 200M, so a sweep across six budgets produced six identical runs and read
         // as steady progress. A flag that is accepted and ignored is worse than one that is
         // rejected, so honour it — falling back to 200M only when nothing was asked for.
-        let boot_budget = if budget == DEFAULT_BUDGET { 200_000_000 } else { budget };
+        let boot_budget = if budget == DEFAULT_BUDGET {
+            200_000_000
+        } else {
+            budget
+        };
         // A cold boot enters Apple's first-stage bootloader at 0 and lets *it* set the machine up
         // — the sysinfo block, the Gestalt ID, the memory-bank sizes — instead of us reconstructing
         // that state by hand. It then loads OSOS off the firmware partition itself.
@@ -994,9 +1150,10 @@ fn main() {
         // to be a constant — but `install-os` appends a bootloader to the end of `osos` and records
         // its position there, and Apple's bootloader honours it (`Running 'osos' 0 from
         // 0x10735A00`). Starting at the load address instead runs the OS sitting behind the loader.
-        let entry = flash_entry
-            .or(osos_entry)
-            .unwrap_or(if cold { 0x0000_0000 } else { 0x1000_0000 });
+        let entry =
+            flash_entry
+                .or(osos_entry)
+                .unwrap_or(if cold { 0x0000_0000 } else { 0x1000_0000 });
         // A restored machine continues from where it was; only a fresh one enters at `entry`.
         let restored = args.iter().any(|a| a.starts_with("--restore="));
         // What `--boot-osos` actually requires is an image at the entry — which is NOT the same as
@@ -1118,10 +1275,20 @@ fn main() {
         // back in scope.
         if m.symbols.is_empty() {
             let sdram = m.mem.regions.iter().find(|r| r.name == "sdram").map(|r| {
-                (r.base, r.base.wrapping_add(r.data.len() as u32), r.data.clone())
+                (
+                    r.base,
+                    r.base.wrapping_add(r.data.len() as u32),
+                    r.data.clone(),
+                )
             });
             let recovered = sdram.and_then(|(base, end, data)| {
-                let top = m.mem.ata.as_ref()?.1.dma_transfers.iter()
+                let top = m
+                    .mem
+                    .ata
+                    .as_ref()?
+                    .1
+                    .dma_transfers
+                    .iter()
                     .filter(|(_, dest, _)| (base..end).contains(dest))
                     .map(|(_, dest, n)| dest.wrapping_add(*n))
                     .max()?;
@@ -1129,7 +1296,10 @@ fn main() {
                 Some(eapp_loader::extract_symbols(&data[..n], 0))
             });
             if let Some(syms) = recovered {
-                println!("  recovered {} function names from loaded SDRAM", syms.len());
+                println!(
+                    "  recovered {} function names from loaded SDRAM",
+                    syms.len()
+                );
                 if args.iter().any(|a| a == "--symbols") {
                     for (a, nm) in &syms {
                         println!("    {a:#010x}  {nm}");
@@ -1139,11 +1309,17 @@ fn main() {
             }
         }
         if let Some(nov) = &m.novelty {
-            let n: usize = args.iter().find_map(|a| a.strip_prefix("--novelty="))
-                .and_then(|v| v.parse().ok()).unwrap_or(24);
+            let n: usize = args
+                .iter()
+                .find_map(|a| a.strip_prefix("--novelty="))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(24);
             let mut rows: Vec<_> = nov.iter().map(|(a, t)| (*t, *a)).collect();
             rows.sort_unstable();
-            println!("\n{} code buckets executed; last {n} to run for the FIRST time:", rows.len());
+            println!(
+                "\n{} code buckets executed; last {n} to run for the FIRST time:",
+                rows.len()
+            );
             for (t, a) in rows.iter().rev().take(n).rev() {
                 let name = m.symbolise(*a).unwrap_or_default();
                 println!("  at {t:>13} instructions  {a:#010x}  {name}");
@@ -1207,7 +1383,10 @@ fn main() {
             if let Some(nov) = &m.cop_novelty {
                 let mut rows: Vec<_> = nov.iter().map(|(a, t)| (*t, *a)).collect();
                 rows.sort_unstable();
-                println!("\n  cop: {} code buckets executed, first 16 in order:", rows.len());
+                println!(
+                    "\n  cop: {} code buckets executed, first 16 in order:",
+                    rows.len()
+                );
                 for (t, a) in rows.iter().take(16) {
                     let name = m.symbolise(*a).unwrap_or_default();
                     println!("    at {t:>12} cop-instructions  {a:#010x}  {name}");
@@ -1222,7 +1401,11 @@ fn main() {
         // The drive's line specifically. "Interrupts are being taken" is a statement about the
         // timers; whether the disk's completion ever reaches the CPU is a different question and
         // has to be counted separately.
-        let (raised, acked, deliv) = (m.mem.ide_irq_raised, m.mem.ide_irq_acked, m.mem.ide_irq_delivered);
+        let (raised, acked, deliv) = (
+            m.mem.ide_irq_raised,
+            m.mem.ide_irq_acked,
+            m.mem.ide_irq_delivered,
+        );
         let en = m.mem.read32(0x6000_4020) >> eapp_loader::IDE_IRQ & 1;
         let pend = m.mem.int_pending >> eapp_loader::IDE_IRQ & 1;
         if m.mem.dma_dropped > 0 {
@@ -1291,7 +1474,11 @@ fn main() {
             println!("  {l}");
         }
         for (i, c) in eapp_loader::PP_DMA.iter().enumerate() {
-            let irq = if i == 0 { m.mem.pp_dma_irq.unwrap_or(c.irq) } else { c.irq };
+            let irq = if i == 0 {
+                m.mem.pp_dma_irq.unwrap_or(c.irq)
+            } else {
+                c.irq
+            };
             let en = m.mem.read32(0x6000_4020) >> irq & 1;
             let pend = m.mem.int_pending >> irq & 1;
             println!(
@@ -1349,7 +1536,10 @@ fn main() {
             }
             println!("  address latches: {}", b.latch_log.census());
             for (kind, off, val, high) in b.latch_log.iter().take(12) {
-                println!("  latch {kind} off {off:#07x} val {val:#06x} {}", if *high { "HI" } else { "lo" });
+                println!(
+                    "  latch {kind} off {off:#07x} val {val:#06x} {}",
+                    if *high { "HI" } else { "lo" }
+                );
             }
             if let Some(l) = b.latch_log.more_line(12) {
                 println!("{l}");
@@ -1375,12 +1565,22 @@ fn main() {
             // put it; the write-run report names it. Rockbox lands a full 320x240 RGB565 frame at
             // 0x000e0000, which is the default.
             for (flag, png) in [("--bcm-ppm=", false), ("--bcm-png=", true)] {
-                let Some(spec) = args.iter().find_map(|a| a.strip_prefix(flag)) else { continue };
+                let Some(spec) = args.iter().find_map(|a| a.strip_prefix(flag)) else {
+                    continue;
+                };
                 // `rsplit_once(':')` and not `split_once`: a Windows path carries a colon after
                 // the drive letter, and splitting at the first one takes `C` as the whole path.
                 let (path, base) = match spec.rsplit_once(':') {
-                    Some((p, b)) if !b.is_empty() && b.chars().all(|c| c.is_ascii_hexdigit() || c == 'x') =>
-                        (p, u32::from_str_radix(b.trim_start_matches("0x"), 16).unwrap_or(0x000e_0000)),
+                    Some((p, b))
+                        if !b.is_empty()
+                            && b.chars().all(|c| c.is_ascii_hexdigit() || c == 'x') =>
+                    {
+                        (
+                            p,
+                            u32::from_str_radix(b.trim_start_matches("0x"), 16)
+                                .unwrap_or(0x000e_0000),
+                        )
+                    }
                     _ => (spec, 0x000e_0000),
                 };
                 let (w, h) = (320usize, 240usize);
@@ -1388,7 +1588,9 @@ fn main() {
                 let mut nonzero = 0u32;
                 for i in 0..w * h {
                     let px = *b.mem.get(&(base + (i as u32) * 2)).unwrap_or(&0);
-                    if px != 0 { nonzero += 1; }
+                    if px != 0 {
+                        nonzero += 1;
+                    }
                     // RGB565 -> RGB888, replicating high bits into the low ones so white is 0xff.
                     let (r, g, bl) = ((px >> 11) & 0x1f, (px >> 5) & 0x3f, px & 0x1f);
                     rgb.push(((r << 3) | (r >> 2)) as u8);
@@ -1425,7 +1627,13 @@ fn main() {
                         println!("    command {cmd:#x}");
                         i += 1;
                     }
-                    eapp_loader::BcmOp::Blit { x0, y0, x1, y1, src } => {
+                    eapp_loader::BcmOp::Blit {
+                        x0,
+                        y0,
+                        x1,
+                        y1,
+                        src,
+                    } => {
                         println!(
                             "      -> blit {}x{} to ({x0},{y0})-({x1},{y1}) from {src:#010x}",
                             x1 - x0 + 1,
@@ -1479,7 +1687,10 @@ fn main() {
             }
             println!("  internal write runs (largest first):");
             for (start, end, n) in runs.iter().take(6) {
-                println!("    {start:#010x}..{end:#010x}  {n} halfwords ({} bytes)", n * 2);
+                println!(
+                    "    {start:#010x}..{end:#010x}  {n} halfwords ({} bytes)",
+                    n * 2
+                );
             }
             // Every distinct offset, not the top 6, and a reconciliation line against the total.
             //
@@ -1556,7 +1767,11 @@ fn main() {
                 for (r, n) in &d.cfg_writes_by_reg {
                     println!("  IDE_BASE+{r:#05x}  {n} byte-writes");
                 }
-                println!("  first 24 in order ({} kept of {} — SAMPLE):", d.cfg_writes.sample().len(), d.cfg_writes.seen());
+                println!(
+                    "  first 24 in order ({} kept of {} — SAMPLE):",
+                    d.cfg_writes.sample().len(),
+                    d.cfg_writes.seen()
+                );
                 let mut line = String::new();
                 for (o, v) in d.cfg_writes.iter().take(24) {
                     line.push_str(&format!("{o:#05x}={v:02x} "));
@@ -1573,8 +1788,11 @@ fn main() {
                     .collect();
                 println!("  {}", got.join(" "));
                 // And the same bytes as WE laid them out, so a shift is visible rather than inferred.
-                let mine: Vec<String> =
-                    want.iter().take(d.id_handover.len()).map(|b| format!("{b:02x}")).collect();
+                let mine: Vec<String> = want
+                    .iter()
+                    .take(d.id_handover.len())
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
                 println!("  ours, in order:  {}", mine.join("    "));
                 let delivered: Vec<u8> = d.id_handover.iter().map(|(_, b)| *b).collect();
                 match (0..16).find(|k| want.get(*k..*k + delivered.len()) == Some(&delivered[..])) {
@@ -1610,7 +1828,10 @@ fn main() {
                 }
                 // `dma_transfers` is uncapped, but this print is not. Say which is which.
                 if d.dma_transfers.len() > 64 {
-                    println!("  … and {} more (log is complete; this print shows 64)", d.dma_transfers.len() - 64);
+                    println!(
+                        "  … and {} more (log is complete; this print shows 64)",
+                        d.dma_transfers.len() - 64
+                    );
                 }
                 if let Some((lba, l, n)) = d.dma_transfers.last() {
                     println!("  last: lba {lba} -> {l:#010x} + {n} = {:#010x}", l + n);
@@ -1684,9 +1905,16 @@ fn main() {
                     // rather than letting a truncated set read as the whole vocabulary.
                     format!(
                         ": {}{}",
-                        w.unknown.iter().map(|c| format!("{c:#010x}")).collect::<Vec<_>>().join(" "),
+                        w.unknown
+                            .iter()
+                            .map(|c| format!("{c:#010x}"))
+                            .collect::<Vec<_>>()
+                            .join(" "),
                         if w.unknown.truncated() {
-                            format!(" (+{} further distinct words dropped — SAMPLE)", w.unknown.seen() - w.unknown.sample().len() as u64)
+                            format!(
+                                " (+{} further distinct words dropped — SAMPLE)",
+                                w.unknown.seen() - w.unknown.sample().len() as u64
+                            )
                         } else {
                             String::new()
                         }
@@ -1698,14 +1926,16 @@ fn main() {
             // A/B: a run whose script fires before the firmware's own enable reports frames it
             // refused to post, and a run whose script fires after it reports none.
             println!(
-                "  reporting {} ({} `0x052a` set commands{}); {} autonomous frames suppressed while off",
+                "  reporting {} ({} `0x052a` set commands{}); {} frames refused for reporting-off, \
+                 {} for an unarmed receiver",
                 if w.reporting { "ON" } else { "OFF" },
                 w.set_commands,
                 match w.last_set {
                     Some((n, v)) => format!(", last payload {v} @{n}"),
                     None => ", never set".into(),
                 },
-                w.frames_suppressed
+                w.frames_suppressed,
+                w.frames_unarmed
             );
             println!(
                 "  irq {} asserted {} times; CTRL now {:#010x} (receiver {}), STATUS {:#010x}, last frame {:#010x}",
@@ -1725,7 +1955,11 @@ fn main() {
                             "stream  pos {:>2}  buttons {:#04x}  {}",
                             (f >> 16) & 0x7f,
                             (f >> 8) & 0x1f,
-                            if f & 0x4000_0000 != 0 { "touched" } else { "released" }
+                            if f & 0x4000_0000 != 0 {
+                                "touched"
+                            } else {
+                                "released"
+                            }
                         )
                     } else if f & 0x8000_ffff == 0x8000_023a {
                         format!("query   buttons {:#04x}", (f >> 16) & 0x1f)
@@ -1744,8 +1978,16 @@ fn main() {
             let init1 = m.mem.read32(0x7000_0010);
             println!(
                 "  DEV_EN {dev_en:#010x} (DEV_OPTO {}), DEV_INIT1 {init1:#010x} (INIT_BUTTONS {})",
-                if dev_en & 0x0001_0000 != 0 { "set" } else { "CLEAR" },
-                if init1 & 0x0004_0000 != 0 { "set" } else { "CLEAR" }
+                if dev_en & 0x0001_0000 != 0 {
+                    "set"
+                } else {
+                    "CLEAR"
+                },
+                if init1 & 0x0004_0000 != 0 {
+                    "set"
+                } else {
+                    "CLEAR"
+                }
             );
         }
         if let Some(pmu) = &m.mem.pmu {
@@ -1770,7 +2012,10 @@ fn main() {
                 "\npcf50605: {} read transfers, {} write transfers; data registers now [{}]",
                 pmu.reads,
                 pmu.writes,
-                (0..4).map(|i| format!("{:#04x}", pmu.data_byte(i))).collect::<Vec<_>>().join(" ")
+                (0..4)
+                    .map(|i| format!("{:#04x}", pmu.data_byte(i)))
+                    .collect::<Vec<_>>()
+                    .join(" ")
             );
             // The read half of "did the device's answer reach the guest". A conversion that is
             // computed correctly and then copied nowhere is indistinguishable, from the CPU's side,
@@ -1794,7 +2039,10 @@ fn main() {
             // `polled` is a map and cannot saturate, so the tally IS complete — but this print was
             // taking 8 rows under a header that said "all of them", which is the same lie one level
             // out. Print all of them, since the header promises it.
-            println!("  registers read, busiest first ({} distinct, all shown):", by_reg.len());
+            println!(
+                "  registers read, busiest first ({} distinct, all shown):",
+                by_reg.len()
+            );
             for (r, n) in by_reg.iter() {
                 println!("    reg {r:#04x}  x{n}");
             }
@@ -1808,7 +2056,10 @@ fn main() {
             // for channel 0 or a bus that lost the byte, which are different bugs.
             let mut by_wreg: Vec<_> = pmu.written.iter().collect();
             by_wreg.sort_by_key(|&(r, (n, _))| (std::cmp::Reverse(*n), *r));
-            println!("  registers written, busiest first ({} distinct, all shown):", by_wreg.len());
+            println!(
+                "  registers written, busiest first ({} distinct, all shown):",
+                by_wreg.len()
+            );
             for (r, (n, last)) in by_wreg.iter() {
                 println!("    reg {r:#04x}  x{n}  last value {last:#04x}");
             }
@@ -1823,7 +2074,11 @@ fn main() {
             // keeps every writer.
             println!(
                 "\nwrites into the watched range: {} byte-writes across {} words (uncapped census)",
-                m.mem.watch_range_words.values().map(|w| w.writes).sum::<u64>(),
+                m.mem
+                    .watch_range_words
+                    .values()
+                    .map(|w| w.writes)
+                    .sum::<u64>(),
                 m.mem.watch_range_words.len()
             );
             println!("  ordered sample: {}", m.mem.watch_range_log.census());
@@ -1833,8 +2088,11 @@ fn main() {
                 // Eight, not four. The question this instrument is asked is "who ELSE wrote here",
                 // and the answer is routinely the writer with the smallest count — RetailOS's ten
                 // stores next to the bootloader's eighty thousand.
-                let shown: Vec<String> =
-                    pcs.iter().take(8).map(|(pc, n)| format!("{pc:#010x} x{n}")).collect();
+                let shown: Vec<String> = pcs
+                    .iter()
+                    .take(8)
+                    .map(|(pc, n)| format!("{pc:#010x} x{n}"))
+                    .collect();
                 println!(
                     "  {a:#010x}  {:>7} byte-writes from {} pc{}, first @{}: {}{}",
                     w.writes,
@@ -1842,7 +2100,11 @@ fn main() {
                     if w.pcs.len() == 1 { "" } else { "s" },
                     w.first_at,
                     shown.join("  "),
-                    if w.pcs.len() > 8 { format!("  … and {} more", w.pcs.len() - 8) } else { String::new() }
+                    if w.pcs.len() > 8 {
+                        format!("  … and {} more", w.pcs.len() - 8)
+                    } else {
+                        String::new()
+                    }
                 );
             }
         }
@@ -1852,7 +2114,10 @@ fn main() {
             // is a set of real entry points, which is strictly better evidence about function
             // boundaries than the "nearest preceding push-lr" heuristic — that one demonstrably
             // split 0x002100f4/0x002102bc into two.
-            if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--callgraph-dump=")) {
+            if let Some(path) = args
+                .iter()
+                .find_map(|a| a.strip_prefix("--callgraph-dump="))
+            {
                 let mut out = String::new();
                 for ((site, tgt), n) in edges {
                     out.push_str(&format!("{site:08x} {tgt:08x} {n}\n"));
@@ -1862,14 +2127,16 @@ fn main() {
                     Err(e) => println!("  {path}: {e}"),
                 }
             }
-            let targets: Vec<u32> = args.iter()
+            let targets: Vec<u32> = args
+                .iter()
                 .filter_map(|a| a.strip_prefix("--callgraph="))
                 .filter_map(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok())
                 .collect();
             for t in &targets {
                 // Callers of the function containing `t`, not just of `t` exactly: a virtual call
                 // lands on the entry point, while the address of interest is usually inside.
-                let mut hits: Vec<_> = edges.iter()
+                let mut hits: Vec<_> = edges
+                    .iter()
                     .filter(|((_, tgt), _)| *tgt <= *t && t.wrapping_sub(*tgt) < 0x400)
                     .collect();
                 hits.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
@@ -1883,8 +2150,11 @@ fn main() {
         if !m.mem.input_regs.is_empty() {
             let mut rows: Vec<_> = m.mem.input_regs.iter().filter(|(_, v)| v.0 > 0).collect();
             rows.sort_by_key(|(_, v)| std::cmp::Reverse(v.0));
-            println!("\nregisters READ BEFORE EVER BEING WRITTEN ({} of {} touched):",
-                     rows.len(), m.mem.input_regs.len());
+            println!(
+                "\nregisters READ BEFORE EVER BEING WRITTEN ({} of {} touched):",
+                rows.len(),
+                m.mem.input_regs.len()
+            );
             println!("  these are values the firmware expects hardware to supply, and we invent");
             for (a, (r, w, pc)) in rows.iter() {
                 println!("  {a:#010x}  {r:>10} reads before write, {w:>8} writes after, first pc {pc:#010x}");
@@ -1912,12 +2182,24 @@ fn main() {
             // "How many stores were DROPPED" is the question this instrument exists for, so it comes
             // from the uncapped per-region tally rather than from the 8 192-entry log.
             let dropped = m.mem.write_log_regions.get("DROPPED").copied().unwrap_or(0);
-            println!("\nwrite log: {} stores, {dropped} DROPPED (uncapped census)", e.seen());
-            for (r, n) in &m.mem.write_log_regions { println!("  -> {r:<12} {n}"); }
+            println!(
+                "\nwrite log: {} stores, {dropped} DROPPED (uncapped census)",
+                e.seen()
+            );
+            for (r, n) in &m.mem.write_log_regions {
+                println!("  -> {r:<12} {n}");
+            }
             println!("  ordered sample: {}", e.census());
             println!("  first 4 and last 4 OF THE SAMPLE (pc, addr, value, region):");
-            for x in e.iter().take(4).chain(e.iter().rev().take(4).collect::<Vec<_>>().into_iter().rev()) {
-                println!("    pc {:#010x}  {:#010x} = {:#010x}  {}", x.0, x.1, x.2, x.3);
+            for x in e
+                .iter()
+                .take(4)
+                .chain(e.iter().rev().take(4).collect::<Vec<_>>().into_iter().rev())
+            {
+                println!(
+                    "    pc {:#010x}  {:#010x} = {:#010x}  {}",
+                    x.0, x.1, x.2, x.3
+                );
             }
             // The "last 4" is the last 4 KEPT, which on a truncated log is not the last 4 that
             // happened. That distinction is exactly what made a head-of-log ATA sample misleading.
@@ -1998,14 +2280,23 @@ fn main() {
             }
         }
         if !m.print_sites.is_empty() {
-            println!("\nconsole writes (caller -> string): {}", m.print_sites.census());
+            println!(
+                "\nconsole writes (caller -> string): {}",
+                m.print_sites.census()
+            );
             for (lr, p) in m.print_sites.iter() {
                 let mut txt = String::new();
                 let mut a = *p;
                 for _ in 0..48 {
                     let c = m.mem.read8(a);
-                    if c == 0 { break }
-                    txt.push(if (0x20..0x7f).contains(&c) { c as char } else { '.' });
+                    if c == 0 {
+                        break;
+                    }
+                    txt.push(if (0x20..0x7f).contains(&c) {
+                        c as char
+                    } else {
+                        '.'
+                    });
                     a += 1;
                 }
                 println!("  from {lr:#010x}  str {p:#010x}  {txt:?}");
@@ -2014,30 +2305,33 @@ fn main() {
         report_bcm_dump(&args, &m);
         report_bcm_peek(&args, &m);
         if let Some(h) = &m.mem.nor_reads {
-        let total: u64 = h.values().sum();
-        // **This counter sits on the `Nor` model's path, and not every recipe installs one.**
-        // Without `--nor` the flash is a plain backing region, the guest reads it perfectly well,
-        // and nothing here sees any of it — so a bare `0` would be a blind instrument reporting a
-        // measurement it never took. It said exactly that once, and "Rockbox never reads the NOR"
-        // was believed for ten minutes on the strength of it.
-        if m.mem.nor.is_none() {
-            println!(
-                "\nflash reads: NOT MEASURED — this recipe installs no flash model, so the \n\
+            let total: u64 = h.values().sum();
+            // **This counter sits on the `Nor` model's path, and not every recipe installs one.**
+            // Without `--nor` the flash is a plain backing region, the guest reads it perfectly well,
+            // and nothing here sees any of it — so a bare `0` would be a blind instrument reporting a
+            // measurement it never took. It said exactly that once, and "Rockbox never reads the NOR"
+            // was believed for ten minutes on the strength of it.
+            if m.mem.nor.is_none() {
+                println!(
+                    "\nflash reads: NOT MEASURED — this recipe installs no flash model, so the \n\
                  counter cannot see array-mode reads. Add `--nor` and run it again."
-            );
-        } else {
-            println!("\nflash reads: {total} across {} pages of 256 bytes", h.len());
-        let mut rows: Vec<(u32, u64)> = h.iter().map(|(a, n)| (*a, *n)).collect();
-        rows.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
-        for (page, n) in rows.iter().take(16) {
-            println!("  {:#08x}..{:#08x}  {n}", page << 8, (page << 8) + 0xff);
+                );
+            } else {
+                println!(
+                    "\nflash reads: {total} across {} pages of 256 bytes",
+                    h.len()
+                );
+                let mut rows: Vec<(u32, u64)> = h.iter().map(|(a, n)| (*a, *n)).collect();
+                rows.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+                for (page, n) in rows.iter().take(16) {
+                    println!("  {:#08x}..{:#08x}  {n}", page << 8, (page << 8) + 0xff);
+                }
+                if rows.len() > 16 {
+                    println!("  … and {} more pages", rows.len() - 16);
+                }
+            }
         }
-        if rows.len() > 16 {
-            println!("  … and {} more pages", rows.len() - 16);
-        }
-        }
-    }
-    report_findptr(&args, &m);
+        report_findptr(&args, &m);
         report_dumps(&args, &mut m);
         report_profile(&m);
         report_unmapped(&mut m);
@@ -2067,7 +2361,9 @@ fn main() {
         }
         const RETAILOS_EAPP_LOADER: u32 = 0x1012_24C4;
         let before = m.thunk_targets(&app);
-        println!("\nrunning RetailOS's eApp loader at {RETAILOS_EAPP_LOADER:#010x} with r0 = image base");
+        println!(
+            "\nrunning RetailOS's eApp loader at {RETAILOS_EAPP_LOADER:#010x} with r0 = image base"
+        );
         let ctx1 = m.scratch(0x1000);
         let ctx2 = m.scratch(0x1000);
         let r2 = args
@@ -2077,7 +2373,11 @@ fn main() {
             .unwrap_or(ctx2);
         println!("  args: r0={:#x} r1={ctx1:#x} r2={r2:#x}", app.load_base);
         let before_steps = m.trace.len();
-        let stop = m.call_with(RETAILOS_EAPP_LOADER, &[app.load_base, ctx1, r2, 0], 20_000_000);
+        let stop = m.call_with(
+            RETAILOS_EAPP_LOADER,
+            &[app.load_base, ctx1, r2, 0],
+            20_000_000,
+        );
         println!(
             "  -> {stop:?}   r0 = {:#010x}   framework calls during load: {}",
             m.cpu.regs[0],
@@ -2168,16 +2468,30 @@ fn main() {
     println!("calls made: {}", m.trace.len());
     println!("heap used:  {} bytes", m.heap_used());
     println!("instructions executed: {}", m.executed);
-    println!("input polls: {}  queue remaining: {}", m.polls, m.input_queue.len());
-    println!("frames presented: {}  clears: {}  quads drawn: {}", m.frames_presented, m.clears, m.quads_drawn);
+    println!(
+        "input polls: {}  queue remaining: {}",
+        m.polls,
+        m.input_queue.len()
+    );
+    println!(
+        "frames presented: {}  clears: {}  quads drawn: {}",
+        m.frames_presented, m.clears, m.quads_drawn
+    );
     if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--ppm=")) {
         match fs::write(path, m.framebuffer_ppm()) {
-            Ok(()) => println!("wrote {path} ({}x{})", eapp_loader::FB_WIDTH, eapp_loader::FB_HEIGHT),
+            Ok(()) => println!(
+                "wrote {path} ({}x{})",
+                eapp_loader::FB_WIDTH,
+                eapp_loader::FB_HEIGHT
+            ),
             Err(e) => eprintln!("{path}: {e}"),
         }
     }
     if !m.output.is_empty() {
-        println!("\n--- the game's own debug output ---\n{}", m.output.trim_end());
+        println!(
+            "\n--- the game's own debug output ---\n{}",
+            m.output.trim_end()
+        );
         println!("--- end ---");
     }
 
@@ -2201,7 +2515,6 @@ fn main() {
 
     report_break_watch(&mut m);
 
-
     if !m.file_log.is_empty() {
         println!("\n--- file activity: {} ---", m.file_log.census());
         for l in m.file_log.iter().take(14) {
@@ -2213,7 +2526,10 @@ fn main() {
     }
 
     if !m.tex_log.is_empty() {
-        println!("\n--- texture / draw diagnostics: {} ---", m.tex_log.census());
+        println!(
+            "\n--- texture / draw diagnostics: {} ---",
+            m.tex_log.census()
+        );
         for l in m.tex_log.iter().take(14) {
             println!("  {l}");
         }
@@ -2283,13 +2599,17 @@ fn report_dumps(args: &[String], m: &mut eapp_loader::Machine) {
     // --disasm=ADDR:COUNT — read code out of the running machine. The alternative is dumping hex
     // and decoding ARM by eye, which is where guesses come from.
     for spec in args.iter().filter_map(|a| a.strip_prefix("--disasm=")) {
-        let Some((a, n)) = spec.split_once(':') else { continue };
+        let Some((a, n)) = spec.split_once(':') else {
+            continue;
+        };
         let parse = |t: &str| {
             t.strip_prefix("0x")
                 .and_then(|h| u32::from_str_radix(h, 16).ok())
                 .or_else(|| t.parse().ok())
         };
-        let (Some(addr), Some(count)) = (parse(a), parse(n)) else { continue };
+        let (Some(addr), Some(count)) = (parse(a), parse(n)) else {
+            continue;
+        };
         println!("\ndisassembly at {addr:#010x}:");
         for i in 0..count {
             let at = addr + i * 4;
@@ -2355,7 +2675,9 @@ fn report_dumps(args: &[String], m: &mut eapp_loader::Machine) {
     // file on disk is not what executes. Dumping it once makes it a file — instantly
     // disassemblable, greppable, and openable by any external tool, with no run at all.
     for spec in args.iter().filter_map(|a| a.strip_prefix("--save-region=")) {
-        let Some((name, path)) = spec.split_once(':') else { continue };
+        let Some((name, path)) = spec.split_once(':') else {
+            continue;
+        };
         match m.mem.regions.iter().find(|r| r.name == name) {
             Some(r) => match std::fs::write(path, &r.data) {
                 Ok(()) => println!(
@@ -2373,13 +2695,17 @@ fn report_dumps(args: &[String], m: &mut eapp_loader::Machine) {
     }
 
     for spec in args.iter().filter_map(|a| a.strip_prefix("--dump=")) {
-        let Some((a, l)) = spec.split_once(':') else { continue };
+        let Some((a, l)) = spec.split_once(':') else {
+            continue;
+        };
         let parse = |t: &str| {
             t.strip_prefix("0x")
                 .and_then(|h| u32::from_str_radix(h, 16).ok())
                 .or_else(|| t.parse().ok())
         };
-        let (Some(addr), Some(len)) = (parse(a), parse(l)) else { continue };
+        let (Some(addr), Some(len)) = (parse(a), parse(l)) else {
+            continue;
+        };
         println!("\nmemory at {addr:#010x}:");
         for row in (0..len).step_by(16) {
             let base = addr + row;
@@ -2387,7 +2713,13 @@ fn report_dumps(args: &[String], m: &mut eapp_loader::Machine) {
             let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
             let ascii: String = bytes
                 .iter()
-                .map(|&c| if (0x20..0x7f).contains(&c) { c as char } else { '.' })
+                .map(|&c| {
+                    if (0x20..0x7f).contains(&c) {
+                        c as char
+                    } else {
+                        '.'
+                    }
+                })
                 .collect();
             println!("  {base:08x}  {}  |{ascii}|", hex.join(" "));
         }
@@ -2406,12 +2738,18 @@ fn report_profile(m: &eapp_loader::Machine) {
     // 15 rows covered 79% of a whole-run profile but only 41% of a windowed one — a tail that long
     // is a finding, not noise, so let the caller ask for it.
     let want = std::env::args()
-        .find_map(|a| a.strip_prefix("--profile=").and_then(|n| n.parse::<usize>().ok()))
+        .find_map(|a| {
+            a.strip_prefix("--profile=")
+                .and_then(|n| n.parse::<usize>().ok())
+        })
         .unwrap_or(15);
     println!("\nprofile: {total} samples over {} buckets", p.len());
     for (addr, n) in rows.iter().take(want) {
         let name = m.symbolise(**addr).unwrap_or_default();
-        println!("  {addr:#010x}  {:>5.1}%  {n:<9} {name}", **n as f64 * 100.0 / total as f64);
+        println!(
+            "  {addr:#010x}  {:>5.1}%  {n:<9} {name}",
+            **n as f64 * 100.0 / total as f64
+        );
     }
 }
 
@@ -2434,12 +2772,7 @@ fn report_profile(m: &eapp_loader::Machine) {
 /// plausibly carry it — including `+0xe0`, which the firmware demonstrably reads and which falls
 /// inside the region iPodLinux calls `pad7[120]`, i.e. bytes they never identified. That one is a
 /// deliberate guess, and the run either clears the assertion or it does not.
-fn install_sysinfo(
-    m: &mut eapp_loader::Machine,
-    base: u32,
-    sdram_size: u32,
-    flash: Option<&str>,
-) {
+fn install_sysinfo(m: &mut eapp_loader::Machine, base: u32, sdram_size: u32, flash: Option<&str>) {
     // **The co-processor is powered, and the pin that says so has to say so.**
     //
     // `GPO32_VAL` bit 14 is a general-purpose output Apple's bootloader drives when it brings the
@@ -2485,8 +2818,8 @@ fn install_sysinfo(
                 // A dump whose Mod# we cannot resolve still has a serial and a GUID worth passing
                 // through; only the model-derived fields go missing.
                 None => {
-                    let fallback = eapp_loader::identity::Model::lookup("A146")
-                        .expect("A146 is in the table");
+                    let fallback =
+                        eapp_loader::identity::Model::lookup("A146").expect("A146 is in the table");
                     eapp_loader::nor::handoff(&identity, fallback, syscfg)
                 }
             }
@@ -2529,7 +2862,10 @@ fn install_sysinfo(
     w(m, 0xe0, sdram_size);
     w(m, 0x128, 0x0005_0014);
 
-    m.mem.write32(eapp_loader::nor::HANDOFF_TAG_AT, u32::from_le_bytes(*b"IsyS"));
+    m.mem.write32(
+        eapp_loader::nor::HANDOFF_TAG_AT,
+        u32::from_le_bytes(*b"IsyS"),
+    );
     m.mem.write32(eapp_loader::nor::HANDOFF_TAG_AT + 4, base);
     let who = match &from_nor {
         Some((_, c)) => c.model.clone().unwrap_or_else(|| "unknown model".into()),
@@ -2622,7 +2958,11 @@ fn report_bcm_dump(args: &[String], m: &eapp_loader::Machine) {
             let r = ((px >> 11) & 0x1f) as u8;
             let g = ((px >> 5) & 0x3f) as u8;
             let bl = (px & 0x1f) as u8;
-            out.extend_from_slice(&[(r << 3) | (r >> 2), (g << 2) | (g >> 4), (bl << 3) | (bl >> 2)]);
+            out.extend_from_slice(&[
+                (r << 3) | (r >> 2),
+                (g << 2) | (g >> 4),
+                (bl << 3) | (bl >> 2),
+            ]);
         }
         match std::fs::write(p[3], &out) {
             Ok(()) => println!(
@@ -2642,7 +2982,9 @@ fn report_bcm_peek(args: &[String], m: &eapp_loader::Machine) {
     let Some(b) = &m.mem.bcm else { return };
     for spec in args.iter().filter_map(|a| a.strip_prefix("--bcm-peek=")) {
         let (a, n) = spec.split_once(':').unwrap_or((spec, "4"));
-        let Ok(addr) = u32::from_str_radix(a.trim_start_matches("0x"), 16) else { continue };
+        let Ok(addr) = u32::from_str_radix(a.trim_start_matches("0x"), 16) else {
+            continue;
+        };
         let n: u32 = n.parse().unwrap_or(4);
         println!("\nbcm peek {addr:#010x} +{n} words:");
         for i in 0..n {
@@ -2673,19 +3015,26 @@ fn report_unmapped(m: &mut eapp_loader::Machine) {
     }
     // `unmapped` is a per-page map and cannot saturate; this print can. Say which.
     if report.len() > 12 {
-        println!("  … and {} more pages (the totals above are complete)", report.len() - 12);
+        println!(
+            "  … and {} more pages (the totals above are complete)",
+            report.len() - 12
+        );
     }
     // The register file at the fault, which is the only thing that names *where the bad address
     // came from*. A PC plus an address cannot distinguish "firmware computed this" from "our
     // emulator handed it back", and that distinction was the whole question for 0xea000078.
-    println!("  register files captured at the fault: {}", m.unmapped_regs.census());
+    println!(
+        "  register files captured at the fault: {}",
+        m.unmapped_regs.census()
+    );
     let faults: Vec<_> = m.unmapped_regs.iter().take(8).cloned().collect();
     for (pc, r) in faults {
         let w = m.mem.read32(pc);
         println!("  at {pc:#010x}  {}", disasm::arm(w, pc, None));
         for row in 0..4 {
-            let c: Vec<String> =
-                (0..4).map(|i| format!("r{:<2}={:08x}", row * 4 + i, r[row * 4 + i])).collect();
+            let c: Vec<String> = (0..4)
+                .map(|i| format!("r{:<2}={:08x}", row * 4 + i, r[row * 4 + i]))
+                .collect();
             println!("       {}", c.join("  "));
         }
     }
@@ -2723,18 +3072,27 @@ fn report_break_watch(m: &mut eapp_loader::Machine) {
             println!("  at {pc:#010x}");
             for row in 0..4 {
                 let cells: Vec<String> = (0..4)
-                    .map(|c| { let i = row * 4 + c; format!("r{i:<2}={:#010x}", regs[i]) })
+                    .map(|c| {
+                        let i = row * 4 + c;
+                        format!("r{i:<2}={:#010x}", regs[i])
+                    })
                     .collect();
                 println!("    {}", cells.join("  "));
             }
         }
         if m.break_log.len() > 64 {
-            println!("  … {} more register dumps elided (tally above is complete)", m.break_log.len() - 64);
+            println!(
+                "  … {} more register dumps elided (tally above is complete)",
+                m.break_log.len() - 64
+            );
         }
     }
     for (pc, addr, sum, head) in &m.sum_at_log {
         let h: Vec<String> = head.iter().map(|b| format!("{b:02x}")).collect();
-        println!("\nat {pc:#010x}: sum over {addr:#010x} = {sum:#010x}\n  first 16: {}", h.join(" "));
+        println!(
+            "\nat {pc:#010x}: sum over {addr:#010x} = {sum:#010x}\n  first 16: {}",
+            h.join(" ")
+        );
     }
     if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--storelog-dump=")) {
         let mut out = String::from("pc\taddr\tvalue\ticount\n");
@@ -2764,21 +3122,31 @@ fn report_break_watch(m: &mut eapp_loader::Machine) {
         // This is the instrument whose 2 000 000-entry cap turned a control read 9 588 012 times
         // into a clean zero for four fifths of a run — a "confirmation" that read as a measurement.
         // The per-reader table now comes from `read_sites`, which cannot saturate.
-        println!("\n--- reads of watched addresses: {} ---", m.mem.read_log.census());
+        println!(
+            "\n--- reads of watched addresses: {} ---",
+            m.mem.read_log.census()
+        );
         for ((addr, pc), (n, first)) in &m.mem.read_sites {
             println!("  [{addr:#010x}] read by {pc:#010x}  x{n}  first @{first}");
         }
     }
     if !m.mem.store_pc_log.is_empty() {
         let l = m.mem.store_pc_log.sample();
-        println!("\n--- stores by watched instructions: {} ---", m.mem.store_pc_log.census());
+        println!(
+            "\n--- stores by watched instructions: {} ---",
+            m.mem.store_pc_log.census()
+        );
         // Consecutive targets, with the gap between them. An object array shows up as a constant
         // gap; a heap allocation shows up as an irregular one. That distinction is the whole reason
         // this instrument exists, so it is computed rather than left to be eyeballed.
         let mut prev: Option<u32> = None;
         for &(pc, addr, val, n) in l.iter().take(400) {
             let gap = prev.map(|p| addr.wrapping_sub(p) as i32).unwrap_or(0);
-            let g = if prev.is_some() { format!("{gap:+#x}") } else { "-".into() };
+            let g = if prev.is_some() {
+                format!("{gap:+#x}")
+            } else {
+                "-".into()
+            };
             println!("  {pc:#010x} -> [{addr:#010x}] = {val:#010x}   gap {g:>8}   @{n}");
             prev = Some(addr);
         }
@@ -2793,25 +3161,35 @@ fn report_break_watch(m: &mut eapp_loader::Machine) {
         }
         let mut top: Vec<_> = strides.into_iter().collect();
         top.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
-        let s: Vec<String> =
-            top.iter().take(6).map(|(d, n)| format!("{d:+#x} x{n}")).collect();
+        let s: Vec<String> = top
+            .iter()
+            .take(6)
+            .map(|(d, n)| format!("{d:+#x} x{n}"))
+            .collect();
         println!("  strides: {}", s.join("  "));
     }
     // The other half of `--regs-at`, and it was missing too: the collector existed, the printer did
     // not, so even a caller who set the field by hand would have seen nothing.
     if !m.mem.regs_seen.is_empty() {
-        println!("\n--- registers at the watched pc: {} arrivals ---", m.mem.regs_seen.len());
+        println!(
+            "\n--- registers at the watched pc: {} arrivals ---",
+            m.mem.regs_seen.len()
+        );
         for (at, r) in &m.mem.regs_seen {
             println!("  @{at}");
             for row in 0..4 {
-                let cells: Vec<String> =
-                    (0..4).map(|c| format!("r{:<2}={:#010x}", row * 4 + c, r[row * 4 + c])).collect();
+                let cells: Vec<String> = (0..4)
+                    .map(|c| format!("r{:<2}={:#010x}", row * 4 + c, r[row * 4 + c]))
+                    .collect();
                 println!("    {}", cells.join("  "));
             }
         }
     }
     if !m.force_sem_log.is_empty() {
-        println!("\n--- pends satisfied without a producer: {} ---", m.force_sem_log.len());
+        println!(
+            "\n--- pends satisfied without a producer: {} ---",
+            m.force_sem_log.len()
+        );
         for &(lr, sem, n) in m.force_sem_log.iter().take(64) {
             println!("  sem={sem:#04x}  returned to lr={lr:#010x}  @{n}");
         }
@@ -2845,28 +3223,40 @@ fn report_break_watch(m: &mut eapp_loader::Machine) {
         // shape this is looking for. Tallied on arrival rather than from the rows above, so this
         // stays a true census after the 65 536-entry log has filled — which is what the instrument
         // table has been telling readers it already was.
-        println!("  callers (uncapped census, {} distinct):", m.enter_callers.len());
+        println!(
+            "  callers (uncapped census, {} distinct):",
+            m.enter_callers.len()
+        );
         for ((pc, lr), n) in &m.enter_callers {
             println!("    {pc:#010x} from lr={lr:#010x}  x{n}");
         }
     }
     if !m.retwatch_log.is_empty() {
         let v = m.retwatch.unwrap_or(0);
-        println!("\n--- r0 became {v:#x}: {} times ---", m.retwatch_log.census());
+        println!(
+            "\n--- r0 became {v:#x}: {} times ---",
+            m.retwatch_log.census()
+        );
         // Distinct producing instructions, with how often each fired: one site repeated in a loop
         // is one answer, not a hundred. From `retwatch_sites`, which is uncapped.
         let sites: Vec<(u32, (u64, u32))> =
             m.retwatch_sites.iter().map(|(pc, e)| (*pc, *e)).collect();
         for (pc, (n, lr)) in sites {
             let w = m.mem.read32(pc);
-            println!("  at {pc:#010x}  {:<28} lr={lr:#010x}  x{n}", disasm::arm(w, pc, None));
+            println!(
+                "  at {pc:#010x}  {:<28} lr={lr:#010x}  x{n}",
+                disasm::arm(w, pc, None)
+            );
         }
     }
     if !m.watch_log.is_empty() {
         println!("\n--- watch: {} changes ---", m.watch_log.census());
         for (pc, old, new) in m.watch_log.iter().take(24) {
             let w = m.mem.read32(*pc);
-            println!("  {pc:#010x}  {old:#010x} -> {new:#010x}   {}", disasm::arm(w, *pc, None));
+            println!(
+                "  {pc:#010x}  {old:#010x} -> {new:#010x}   {}",
+                disasm::arm(w, *pc, None)
+            );
         }
         if let Some(x) = m.watch_log.more_line(24) {
             println!("{x}");

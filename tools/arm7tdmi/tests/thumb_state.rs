@@ -281,7 +281,10 @@ fn long_branch_with_link_is_two_instructions() {
         2,
     );
     assert_eq!(cpu.regs[15], 0x1008, "LR base 0x1004 plus 4");
-    assert_eq!(cpu.regs[14], 0x1005, "return address with the Thumb bit set");
+    assert_eq!(
+        cpu.regs[14], 0x1005,
+        "return address with the Thumb bit set"
+    );
 }
 
 #[test]

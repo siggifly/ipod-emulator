@@ -31,7 +31,7 @@ fn synth_eapp() -> Vec<u8> {
     put32(&mut img, 0x04, 0x1000_1000); // version
     put32(&mut img, 0x08, 1); // one framework block
     put32(&mut img, 0x0c, ENTRY_OFF as u32); // ignored by the loader — see lib.rs
-    // Real entry: absolute pointer in the vector table at +0x14.
+                                             // Real entry: absolute pointer in the vector table at +0x14.
     put32(&mut img, 0x14, LOAD_BASE + ENTRY_OFF as u32);
     // +0x10 points at the PRIMARY framework descriptor — a bare descriptor with no magic,
     // exactly as real binaries do for OpenGLES. Load-base derivation keys off it too.
@@ -80,7 +80,10 @@ fn rejects_input_that_is_not_an_eapp() {
         EApp::parse(b"definitely not an eapp image".to_vec()).unwrap_err(),
         LoadError::NotAnEApp
     );
-    assert_eq!(EApp::parse(b"eapp".to_vec()).unwrap_err(), LoadError::NotAnEApp);
+    assert_eq!(
+        EApp::parse(b"eapp".to_vec()).unwrap_err(),
+        LoadError::NotAnEApp
+    );
 }
 
 #[test]
@@ -101,7 +104,11 @@ fn discovers_frameworks_and_their_thunks() {
     assert_eq!(fw.thunks.len(), 2);
     assert_eq!(fw.thunks[0], LOAD_BASE + THUNK_A as u32);
     assert_eq!(fw.thunks[1], LOAD_BASE + THUNK_B as u32);
-    assert_eq!(app.import_count(), 2, "OpenGLES declares none in this fixture");
+    assert_eq!(
+        app.import_count(),
+        2,
+        "OpenGLES declares none in this fixture"
+    );
 }
 
 #[test]
@@ -114,7 +121,10 @@ fn loader_rewrites_the_thunk_literals() {
     // Audio is framework index 1 — OpenGLES occupies index 0 — so its traps sit one stride up.
     const AUDIO_TRAPS: u32 = TRAP_BASE + 0x1000;
     assert_eq!(m.mem.read32(LOAD_BASE + THUNK_A as u32 + 8), AUDIO_TRAPS);
-    assert_eq!(m.mem.read32(LOAD_BASE + THUNK_B as u32 + 8), AUDIO_TRAPS + 4);
+    assert_eq!(
+        m.mem.read32(LOAD_BASE + THUNK_B as u32 + 8),
+        AUDIO_TRAPS + 4
+    );
 }
 
 #[test]
@@ -198,10 +208,7 @@ fn unmapped_data_accesses_are_recorded_as_findings() {
     m.run(1000);
 
     assert!(
-        m.mem
-            .unmapped
-            .values()
-            .any(|p| p.lo < 0x100 && p.reads > 0),
+        m.mem.unmapped.values().any(|p| p.lo < 0x100 && p.reads > 0),
         "a read from unmapped space must be recorded, not silently zeroed: {:?}",
         m.mem.unmapped_report()
     );
@@ -218,9 +225,14 @@ fn the_memory_bus_completes_a_configuration_only_when_it_is_kicked() {
     use arm7tdmi::Bus as _;
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    m.mem.regions.push(eapp_loader::Region { name: "mmio-7", base: 0x7000_0000, data: vec![0; 0x100] });
+    m.mem.regions.push(eapp_loader::Region {
+        name: "mmio-7",
+        base: 0x7000_0000,
+        data: vec![0; 0x100],
+    });
     m.mem.xmb = Some(eapp_loader::Xmb::new(0x7000_0000));
-    m.mem.write8(0x7000_0033, eapp_loader::Xmb::ctrl_hi_at_reset());
+    m.mem
+        .write8(0x7000_0033, eapp_loader::Xmb::ctrl_hi_at_reset());
 
     // Bit 27 answers ready out of reset, and the firmware cannot clear it — the enable path waits
     // for it while bit 30 is still clear, so a bit that echoed anything would deadlock there.
@@ -236,9 +248,17 @@ fn the_memory_bus_completes_a_configuration_only_when_it_is_kicked() {
 
     // Staging a configuration is not executing it.
     m.mem.write32(0x7000_003c, 0x2007_16d0);
-    assert_eq!(m.mem.read32(0x7000_003c) & (1 << 31), 0, "done before the command was given");
+    assert_eq!(
+        m.mem.read32(0x7000_003c) & (1 << 31),
+        0,
+        "done before the command was given"
+    );
     m.mem.write32(0x7000_003c, 0x2107_16d0);
-    assert_eq!(m.mem.read32(0x7000_003c) & (1 << 31), 1 << 31, "the kick must complete");
+    assert_eq!(
+        m.mem.read32(0x7000_003c) & (1 << 31),
+        1 << 31,
+        "the kick must complete"
+    );
 
     let x = m.mem.xmb.as_ref().unwrap();
     assert_eq!((x.gate_opens, x.gate_closes, x.ram_kicks), (1, 1, 1));
@@ -253,11 +273,18 @@ fn sleeping_advances_the_clock_and_not_the_instruction_count() {
     use arm7tdmi::Bus as _;
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    m.mem.regions.push(eapp_loader::Region { name: "mmio-6", base: 0x6000_0000, data: vec![0; 0x8000] });
+    m.mem.regions.push(eapp_loader::Region {
+        name: "mmio-6",
+        base: 0x6000_0000,
+        data: vec![0; 0x8000],
+    });
 
     // Only bit 31 is the sleep request; the register carries other fields the firmware writes.
     m.mem.write32(eapp_loader::CPU_CTRL, 0x0000_0001);
-    assert!(!m.mem.cpu_sleep, "a write without bit 31 is not a sleep request");
+    assert!(
+        !m.mem.cpu_sleep,
+        "a write without bit 31 is not a sleep request"
+    );
     m.mem.write32(eapp_loader::CPU_CTRL, 0x8000_0000);
     assert!(m.mem.cpu_sleep);
 
@@ -272,9 +299,21 @@ fn sleeping_advances_the_clock_and_not_the_instruction_count() {
 fn wheel_machine() -> Machine {
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    m.mem.regions.push(eapp_loader::Region { name: "mmio-6", base: 0x6000_0000, data: vec![0; 0x1_0000] });
-    m.mem.regions.push(eapp_loader::Region { name: "mmio-6d", base: 0x6000_d000, data: vec![0; 0x1000] });
-    m.mem.regions.push(eapp_loader::Region { name: "mmio-7", base: 0x7000_0000, data: vec![0; 0x1_0000] });
+    m.mem.regions.push(eapp_loader::Region {
+        name: "mmio-6",
+        base: 0x6000_0000,
+        data: vec![0; 0x1_0000],
+    });
+    m.mem.regions.push(eapp_loader::Region {
+        name: "mmio-6d",
+        base: 0x6000_d000,
+        data: vec![0; 0x1000],
+    });
+    m.mem.regions.push(eapp_loader::Region {
+        name: "mmio-7",
+        base: 0x7000_0000,
+        data: vec![0; 0x1_0000],
+    });
     m.mem.clickwheel = Some(eapp_loader::ClickWheel::new(0x7000_c000));
     m
 }
@@ -296,7 +335,10 @@ fn enable_reporting(m: &mut Machine) {
     // on `0x052a` alone; now that the gate is the pair (reporting AND armed), which is what the
     // interrupt below was always gated on, the helper has to be the whole sequence.
     m.mem.write32(0x7000_c100, 0x6000_0000);
-    assert!(m.mem.clickwheel.as_ref().unwrap().reporting, "the enable did not take");
+    assert!(
+        m.mem.clickwheel.as_ref().unwrap().reporting,
+        "the enable did not take"
+    );
 }
 
 /// Apple's own query sequence, register for register — including the acknowledgement that comes
@@ -334,7 +376,11 @@ fn the_wheel_answers_the_command_retailos_sends_and_refuses_ones_it_does_not() {
     m.mem.write32(0x7000_c100, 0x8000_0000);
     // 0x00283ffc spins while STATUS bit 31 is set. A transmit that completes inside the store is
     // never busy, so that spin must fall through immediately or the driver sits out its timeout.
-    assert_eq!(m.mem.read32(0x7000_c104) & 0x8000_0000, 0, "transmit reported still busy");
+    assert_eq!(
+        m.mem.read32(0x7000_c104) & 0x8000_0000,
+        0,
+        "transmit reported still busy"
+    );
     assert_eq!(
         m.mem.read32(0x7000_c104) & 0x0400_0000,
         0,
@@ -343,12 +389,28 @@ fn the_wheel_answers_the_command_retailos_sends_and_refuses_ones_it_does_not() {
     // 0x00284054: the sender's own acknowledgement, which must not be able to lose the answer.
     m.mem.write32(0x7000_c104, 0x0c00_0000);
     settle(&mut m);
-    assert_ne!(m.mem.read32(0x7000_c104) & 0x0400_0000, 0, "the reply never arrived");
+    assert_ne!(
+        m.mem.read32(0x7000_c104) & 0x0400_0000,
+        0,
+        "the reply never arrived"
+    );
 
     let frame = m.mem.read32(0x7000_c140);
-    assert_eq!(frame & 0x8000_ffff, 0x8000_023a, "RetailOS's check at 0x002813c4");
-    assert_ne!(frame & 0x8000_00ff, 0x8000_001a, "must not also read as the streaming frame");
-    assert_eq!(frame >> 16 & 0x1f, 0, "no button is held, so every button bit is clear");
+    assert_eq!(
+        frame & 0x8000_ffff,
+        0x8000_023a,
+        "RetailOS's check at 0x002813c4"
+    );
+    assert_ne!(
+        frame & 0x8000_00ff,
+        0x8000_001a,
+        "must not also read as the streaming frame"
+    );
+    assert_eq!(
+        frame >> 16 & 0x1f,
+        0,
+        "no button is held, so every button bit is clear"
+    );
 
     // Hold a button and ask again. RetailOS takes bits 21:16 (`lsl #10; lsr #26`) as the answer.
     m.mem.clickwheel.as_mut().unwrap().buttons = WHEEL_SELECT | WHEEL_MENU;
@@ -367,10 +429,17 @@ fn the_wheel_answers_the_command_retailos_sends_and_refuses_ones_it_does_not() {
     m.mem.write32(0x7000_c100, 0x8000_0000);
     settle(&mut m);
     let w = m.mem.clickwheel.as_ref().unwrap();
-    assert_eq!(w.frames_posted, before, "an unmodelled command was given an invented reply");
+    assert_eq!(
+        w.frames_posted, before,
+        "an unmodelled command was given an invented reply"
+    );
     assert_eq!(w.unknown.sample(), &[0x1234_5678]);
     assert_eq!(w.unknown.seen(), 1);
-    assert_eq!(m.mem.read32(0x7000_c104) & 0x0400_0000, 0, "receive-ready with nothing received");
+    assert_eq!(
+        m.mem.read32(0x7000_c104) & 0x0400_0000,
+        0,
+        "receive-ready with nothing received"
+    );
 
     // The control: the same stores with the command we do model still post.
     m.mem.write32(0x7000_c120, 0x8000_023a);
@@ -408,8 +477,20 @@ fn the_set_reporting_command_is_answered_with_silence_and_gates_the_stream() {
     {
         let w = m.mem.clickwheel.as_ref().unwrap();
         assert_eq!(w.frames_posted, 0, "a wheel nobody armed reported anyway");
-        assert_eq!(w.frames_suppressed, 1);
-        assert_eq!(m.mem.read32(0x7000_c104) & 0x0400_0000, 0, "receive-ready with nothing received");
+        // **`frames_unarmed`, not `frames_suppressed`.** This assertion used to name the
+        // reporting-off counter while its own comment said "a wheel nobody armed" — the two
+        // reasons a frame can be refused fed one number, and a run reported the wrong one:
+        // `reporting ON` on one line and `12 frames suppressed while off` on the next.
+        assert_eq!(w.frames_unarmed, 1, "refused for the wrong reason");
+        assert_eq!(
+            w.frames_suppressed, 0,
+            "reporting is on out of reset; nothing turned it off"
+        );
+        assert_eq!(
+            m.mem.read32(0x7000_c104) & 0x0400_0000,
+            0,
+            "receive-ready with nothing received"
+        );
     }
 
     // (1) + (2) The enable itself: Apple's three stores, and no reply to them.
@@ -421,19 +502,27 @@ fn the_set_reporting_command_is_answered_with_silence_and_gates_the_stream() {
         assert_eq!(w.frames_posted, 0, "0x052a was given an invented reply");
         assert_eq!(w.set_commands, 1);
         assert_eq!(w.last_set.map(|(_, v)| v), Some(1));
-        assert_eq!(w.unknown_commands, 0, "0x052a is evidence-backed, not unknown");
+        assert_eq!(
+            w.unknown_commands, 0,
+            "0x052a is evidence-backed, not unknown"
+        );
         assert!(w.unknown.is_empty());
     }
 
     // (3b) The same script step, now that the wheel has been told to report.
-    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@100:rotate=+1", 10).expect("script");
+    m.mem.clickwheel.as_mut().unwrap().script =
+        parse_wheel_script("@100:rotate=+1", 10).expect("script");
     m.mem.clickwheel.as_mut().unwrap().next = 0;
     m.mem.icount = 100;
     m.service_interrupts();
     {
         let w = m.mem.clickwheel.as_ref().unwrap();
         assert_eq!(w.frames_posted, 1, "an armed wheel refused to report");
-        assert_eq!(w.frames_suppressed, 1, "and nothing new was refused");
+        assert_eq!(
+            w.frames_unarmed, 1,
+            "the unarmed refusal from (3a), and no second one"
+        );
+        assert_eq!(w.frames_suppressed, 0, "nothing has turned reporting off");
         assert_eq!(w.log.sample().last().unwrap().1 & 0xbc00_00ff, 0x8000_001a);
     }
 
@@ -443,15 +532,27 @@ fn the_set_reporting_command_is_answered_with_silence_and_gates_the_stream() {
     m.mem.write32(0x7000_c120, 0x8000_052a);
     m.mem.write32(0x7000_c100, 0);
     m.mem.write32(0x7000_c100, 0x8000_0000);
-    assert!(!m.mem.clickwheel.as_ref().unwrap().reporting, "payload 0 did not turn reporting off");
-    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@200:rotate=+1", 10).expect("script");
+    assert!(
+        !m.mem.clickwheel.as_ref().unwrap().reporting,
+        "payload 0 did not turn reporting off"
+    );
+    m.mem.clickwheel.as_mut().unwrap().script =
+        parse_wheel_script("@200:rotate=+1", 10).expect("script");
     m.mem.clickwheel.as_mut().unwrap().next = 0;
     m.mem.icount = 200;
     m.service_interrupts();
     {
         let w = m.mem.clickwheel.as_ref().unwrap();
         assert_eq!(w.frames_posted, 1, "a disabled wheel reported");
-        assert_eq!(w.frames_suppressed, 2);
+        // **One of each, where this used to assert a combined 2.** (3a) was refused because the
+        // receiver was not armed and this one because reporting was switched off — two different
+        // facts about the hardware that shared a counter until a run printed `reporting ON` beside
+        // `12 frames suppressed while off` and sent the diagnosis to the wrong register.
+        assert_eq!(
+            w.frames_suppressed, 1,
+            "the reporting-off refusal, this one"
+        );
+        assert_eq!(w.frames_unarmed, 1, "the unarmed refusal, from (3a)");
         assert_eq!(w.set_commands, 2);
         assert_eq!(w.last_set.map(|(_, v)| v), Some(0));
         assert_eq!(w.unknown_commands, 0);
@@ -466,7 +567,11 @@ fn the_set_reporting_command_is_answered_with_silence_and_gates_the_stream() {
     m.mem.write32(0x7000_c104, 0x0c00_0000);
     m.mem.usec = m.mem.usec.wrapping_add(OPTO_REPLY_USEC);
     m.service_interrupts();
-    assert_ne!(m.mem.read32(0x7000_c104) & 0x0400_0000, 0, "the control query never answered");
+    assert_ne!(
+        m.mem.read32(0x7000_c104) & 0x0400_0000,
+        0,
+        "the control query never answered"
+    );
     assert_eq!(m.mem.read32(0x7000_c140) & 0x8000_ffff, 0x8000_023a);
 }
 
@@ -485,7 +590,10 @@ fn a_scripted_rotation_posts_one_frame_per_click_and_wraps_at_96() {
     let steps = parse_wheel_script("@100:touch,+50:rotate=+3,+50:release", 10).expect("script");
     // touch, three clicks 10 apart, release 50 after the last of them.
     assert_eq!(steps.len(), 5);
-    assert_eq!(steps.iter().map(|s| s.at).collect::<Vec<_>>(), vec![100, 150, 160, 170, 220]);
+    assert_eq!(
+        steps.iter().map(|s| s.at).collect::<Vec<_>>(),
+        vec![100, 150, 160, 170, 220]
+    );
     m.mem.clickwheel.as_mut().unwrap().script = steps;
     m.mem.clickwheel.as_mut().unwrap().position = 95;
 
@@ -499,14 +607,22 @@ fn a_scripted_rotation_posts_one_frame_per_click_and_wraps_at_96() {
     let frames: Vec<u32> = w.log.iter().map(|&(_, f)| f).collect();
     assert_eq!(frames.len(), 5);
     for f in &frames {
-        assert_eq!(f & 0xbc00_00ff, 0x8000_001a, "RetailOS's mask at 0x00281370");
+        assert_eq!(
+            f & 0xbc00_00ff,
+            0x8000_001a,
+            "RetailOS's mask at 0x00281370"
+        );
         assert_eq!(f & 0x8000_00ff, 0x8000_001a, "Rockbox's mask");
     }
     // Position wraps 95 -> 0 -> 1 -> 2; the touch flag follows the finger.
     let pos: Vec<u32> = frames.iter().map(|f| f >> 16 & 0x7f).collect();
     assert_eq!(pos, vec![95, 0, 1, 2, 2]);
     let touched: Vec<bool> = frames.iter().map(|f| f & 0x4000_0000 != 0).collect();
-    assert_eq!(touched, vec![true, true, true, true, false], "the release frame is what ends a scroll");
+    assert_eq!(
+        touched,
+        vec![true, true, true, true, false],
+        "the release frame is what ends a scroll"
+    );
     // Nothing read them, so every frame after the first overwrote an unread one. Counting that is
     // the only way an injected sequence the driver kept up with is distinguishable from one it did not.
     assert_eq!(w.frames_dropped, 4);
@@ -514,12 +630,21 @@ fn a_scripted_rotation_posts_one_frame_per_click_and_wraps_at_96() {
     // Anticlockwise wraps the other way.
     let mut m = wheel_machine();
     enable_reporting(&mut m);
-    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@0:rotate=-2", 10).expect("script");
+    m.mem.clickwheel.as_mut().unwrap().script =
+        parse_wheel_script("@0:rotate=-2", 10).expect("script");
     for n in (0..=20).step_by(10) {
         m.mem.icount = n;
         m.service_interrupts();
     }
-    let pos: Vec<u32> = m.mem.clickwheel.as_ref().unwrap().log.iter().map(|&(_, f)| f >> 16 & 0x7f).collect();
+    let pos: Vec<u32> = m
+        .mem
+        .clickwheel
+        .as_ref()
+        .unwrap()
+        .log
+        .iter()
+        .map(|&(_, f)| f >> 16 & 0x7f)
+        .collect();
     assert_eq!(pos, vec![95, 94]);
 }
 
@@ -558,7 +683,11 @@ fn receive_ready_is_write_one_to_clear_and_the_line_follows_it() {
         0,
         "an unarmed receiver accepted a frame"
     );
-    assert_eq!(m.mem.int_pending_hi & line, 0, "an unarmed receiver must not interrupt");
+    assert_eq!(
+        m.mem.int_pending_hi & line,
+        0,
+        "an unarmed receiver must not interrupt"
+    );
     assert_eq!(m.mem.clickwheel.as_ref().unwrap().frames_posted, 0);
 
     // 0x002813f0 / Rockbox's ISR tail: arm the receiver, then let the next step through.
@@ -567,8 +696,16 @@ fn receive_ready_is_write_one_to_clear_and_the_line_follows_it() {
     m.mem.clickwheel.as_mut().unwrap().next = 0;
     m.mem.icount = 1;
     m.service_interrupts();
-    assert_ne!(m.mem.read32(0x7000_c104) & 0x0400_0000, 0, "the frame did not set receive-ready");
-    assert_eq!(m.mem.int_pending_hi & line, line, "arming did not raise the pending frame's line");
+    assert_ne!(
+        m.mem.read32(0x7000_c104) & 0x0400_0000,
+        0,
+        "the frame did not set receive-ready"
+    );
+    assert_eq!(
+        m.mem.int_pending_hi & line,
+        line,
+        "arming did not raise the pending frame's line"
+    );
     assert_eq!(m.mem.clickwheel.as_ref().unwrap().irqs, 1);
 
     // Delivery is not acknowledgement — the line is a level, so it survives until the flag is cleared.
@@ -576,9 +713,17 @@ fn receive_ready_is_write_one_to_clear_and_the_line_follows_it() {
     assert_eq!(m.mem.int_pending_hi & line, line);
 
     m.mem.write32(0x7000_c104, 0x0400_0000);
-    assert_eq!(m.mem.read32(0x7000_c104) & 0x0400_0000, 0, "write-1-to-clear did not clear");
+    assert_eq!(
+        m.mem.read32(0x7000_c104) & 0x0400_0000,
+        0,
+        "write-1-to-clear did not clear"
+    );
     m.service_interrupts();
-    assert_eq!(m.mem.int_pending_hi & line, 0, "the line survived its acknowledgement");
+    assert_eq!(
+        m.mem.int_pending_hi & line,
+        0,
+        "the line survived its acknowledgement"
+    );
 }
 
 /// Hold reaches the line `button_hold()` actually reads, not only the frame's bit 31.
@@ -598,19 +743,35 @@ fn engaging_hold_moves_both_the_frame_bit_and_the_gpio_line() {
 
     m.mem.icount = 0;
     m.service_interrupts();
-    assert_ne!(m.mem.clickwheel.as_ref().unwrap().log.sample()[0].1 & 0x8000_0000, 0, "bit 31 set with hold off");
+    assert_ne!(
+        m.mem.clickwheel.as_ref().unwrap().log.sample()[0].1 & 0x8000_0000,
+        0,
+        "bit 31 set with hold off"
+    );
     assert_eq!(m.mem.read32(GPIOA_INPUT_VAL) & GPIOA_HOLD, GPIOA_HOLD);
 
     m.mem.icount = 10;
     m.service_interrupts();
     let f = m.mem.clickwheel.as_ref().unwrap().log.sample()[1].1;
     assert_eq!(f & 0x8000_0000, 0, "hold must clear frame bit 31");
-    assert_ne!(f & 0x8000_00ff, 0x8000_001a, "and so must fail both drivers' frame checks");
-    assert_eq!(m.mem.read32(GPIOA_INPUT_VAL) & GPIOA_HOLD, 0, "hold is active low on GPIOA");
+    assert_ne!(
+        f & 0x8000_00ff,
+        0x8000_001a,
+        "and so must fail both drivers' frame checks"
+    );
+    assert_eq!(
+        m.mem.read32(GPIOA_INPUT_VAL) & GPIOA_HOLD,
+        0,
+        "hold is active low on GPIOA"
+    );
 
     m.mem.icount = 20;
     m.service_interrupts();
-    assert_eq!(m.mem.read32(GPIOA_INPUT_VAL) & GPIOA_HOLD, GPIOA_HOLD, "releasing hold must restore it");
+    assert_eq!(
+        m.mem.read32(GPIOA_INPUT_VAL) & GPIOA_HOLD,
+        GPIOA_HOLD,
+        "releasing hold must restore it"
+    );
 }
 
 /// A script means exactly what the run prints, and a step it cannot parse stops the run.
@@ -622,20 +783,45 @@ fn a_script_expands_to_the_steps_it_prints_and_a_bad_one_is_refused() {
     use eapp_loader::*;
     let s = parse_wheel_script("@1000:press=select", 25).expect("script");
     assert_eq!(s.len(), 2);
-    assert_eq!(s[0], WheelStep::instr(1000, WheelEvent::Button(WHEEL_SELECT, true)));
-    assert_eq!(s[1], WheelStep::instr(1025, WheelEvent::Button(WHEEL_SELECT, false)));
+    assert_eq!(
+        s[0],
+        WheelStep::instr(1000, WheelEvent::Button(WHEEL_SELECT, true))
+    );
+    assert_eq!(
+        s[1],
+        WheelStep::instr(1025, WheelEvent::Button(WHEEL_SELECT, false))
+    );
     assert_eq!(wheel_step_name(s[0].event), "down=select");
 
     // `+N` is relative to the previous step's *last* expanded click, so a sequence stays in order.
     let s = parse_wheel_script("@0:rotate=+3,+5:touch", 10).expect("script");
-    assert_eq!(s.iter().map(|x| x.at).collect::<Vec<_>>(), vec![0, 10, 20, 25]);
+    assert_eq!(
+        s.iter().map(|x| x.at).collect::<Vec<_>>(),
+        vec![0, 10, 20, 25]
+    );
 
     // Suffixes and separators, because instruction counts in this project are eight digits long.
-    assert_eq!(parse_wheel_script("@49_700k:touch", 1).unwrap()[0].at, 49_700_000);
-    assert_eq!(parse_wheel_script("@50M:touch", 1).unwrap()[0].at, 50_000_000);
+    assert_eq!(
+        parse_wheel_script("@49_700k:touch", 1).unwrap()[0].at,
+        49_700_000
+    );
+    assert_eq!(
+        parse_wheel_script("@50M:touch", 1).unwrap()[0].at,
+        50_000_000
+    );
 
-    for bad in ["50:touch", "@50:wiggle", "@50:down=knob", "@50", "", "@50:rotate=0"] {
-        assert!(parse_wheel_script(bad, 10).is_err(), "{bad:?} should not parse");
+    for bad in [
+        "50:touch",
+        "@50:wiggle",
+        "@50:down=knob",
+        "@50",
+        "",
+        "@50:rotate=0",
+    ] {
+        assert!(
+            parse_wheel_script(bad, 10).is_err(),
+            "{bad:?} should not parse"
+        );
     }
 }
 
@@ -653,7 +839,11 @@ fn pp_dma_moves_bytes_to_a_fixed_port_and_posts_a_read_to_clear_completion() {
     use eapp_loader::*;
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    m.mem.regions.push(eapp_loader::Region { name: "mmio-6", base: 0x6000_0000, data: vec![0; 0x1_0000] });
+    m.mem.regions.push(eapp_loader::Region {
+        name: "mmio-6",
+        base: 0x6000_0000,
+        data: vec![0; 0x1_0000],
+    });
 
     let c = &PP_DMA[0];
     let ch = c.chans; // channel 0
@@ -675,11 +865,17 @@ fn pp_dma_moves_bytes_to_a_fixed_port_and_posts_a_read_to_clear_completion() {
     // before it enables either master, and a model that ran them would fire on the clearing pass.
     m.mem.write32(c.master, 0);
     m.service_interrupts();
-    assert_eq!(m.mem.pp_dma_transfers, 0, "a disabled controller ran a transfer");
+    assert_eq!(
+        m.mem.pp_dma_transfers, 0,
+        "a disabled controller ran a transfer"
+    );
     m.mem.write32(c.master, DMA_MASTER_CONTROL_EN);
 
     m.service_interrupts();
-    assert_eq!((m.mem.pp_dma_transfers, m.mem.pp_dma_bytes), (1, LEN as u64));
+    assert_eq!(
+        (m.mem.pp_dma_transfers, m.mem.pp_dma_bytes),
+        (1, LEN as u64)
+    );
 
     // The peripheral side is a port, not a window. Every word landed on the same address, so what
     // survives is the *last* one — which is precisely what distinguishes a fixed destination from
@@ -692,8 +888,15 @@ fn pp_dma_moves_bytes_to_a_fixed_port_and_posts_a_read_to_clear_completion() {
     let cmd = m.mem.read32(ch + DMA_CMD);
     assert_eq!(cmd & DMA_CMD_START, 0);
     assert_eq!((cmd & DMA_SIZE_MASK) + 4, LEN);
-    assert_eq!(m.mem.read32(c.master + DMA_MASTER_STATUS), 1 << DMA_MASTER_STATUS_CH0);
-    assert_eq!(m.mem.int_pending >> c.irq & 1, 1, "the completion line is not asserted");
+    assert_eq!(
+        m.mem.read32(c.master + DMA_MASTER_STATUS),
+        1 << DMA_MASTER_STATUS_CH0
+    );
+    assert_eq!(
+        m.mem.int_pending >> c.irq & 1,
+        1,
+        "the completion line is not asserted"
+    );
 
     // Read-to-clear, and the reader still sees the bit. That this assertion has to come *first* is
     // the point: an earlier `read32(STATUS)` here consumed the latch and made the next line fail,
@@ -703,9 +906,17 @@ fn pp_dma_moves_bytes_to_a_fixed_port_and_posts_a_read_to_clear_completion() {
     // that actually carries bit 30. Clearing on byte 0 would hand the handler a status with the
     // bit already gone, and RetailOS's ISR would dispatch to nothing.
     assert_eq!(m.mem.read32(ch + DMA_STATUS), DMA_STATUS_INTR | (LEN - 4));
-    assert_eq!(m.mem.read32(ch + DMA_STATUS) & DMA_STATUS_INTR, 0, "the latch was not read-to-clear");
+    assert_eq!(
+        m.mem.read32(ch + DMA_STATUS) & DMA_STATUS_INTR,
+        0,
+        "the latch was not read-to-clear"
+    );
     m.service_interrupts();
-    assert_eq!(m.mem.int_pending >> c.irq & 1, 0, "the line survived its acknowledgement");
+    assert_eq!(
+        m.mem.int_pending >> c.irq & 1,
+        0,
+        "the line survived its acknowledgement"
+    );
 
     // RetailOS's DMA ISR ends by raising a software interrupt so the completion callback runs at
     // task level — `INT_FORCED_SET = 1 << 13` at 0x001fc840. Unmodelled, the ISR fires, posts, and
@@ -713,10 +924,18 @@ fn pp_dma_moves_bytes_to_a_fixed_port_and_posts_a_read_to_clear_completion() {
     m.mem.write32(0x6000_4024, 1 << 13); // CPU_INT_EN
     m.mem.write32(0x6000_4018, 1 << 13); // INT_FORCED_SET
     m.service_interrupts();
-    assert_eq!(m.mem.read32(0x6000_4000) >> 13 & 1, 1, "a forced interrupt did not reach CPU_INT_STAT");
+    assert_eq!(
+        m.mem.read32(0x6000_4000) >> 13 & 1,
+        1,
+        "a forced interrupt did not reach CPU_INT_STAT"
+    );
     m.mem.write32(0x6000_401c, 1 << 13); // INT_FORCED_CLR
     m.service_interrupts();
-    assert_eq!(m.mem.read32(0x6000_4000) >> 13 & 1, 0, "a forced interrupt could not be retired");
+    assert_eq!(
+        m.mem.read32(0x6000_4000) >> 13 & 1,
+        0,
+        "a forced interrupt could not be retired"
+    );
 }
 
 // ---------------------------------------------------------------- video co-processor
@@ -780,17 +999,32 @@ fn a_halfword_read_from_the_co_processor_consumes_exactly_one_internal_halfword(
     }
     {
         let held = &m.mem.bcm.as_ref().unwrap().mem;
-        assert_eq!(held.get(&0x1f0), Some(&1), "the write side did not land where addressed");
-        assert_eq!(held.get(&0x1fe), Some(&8), "eight halfwords in must occupy eight halfwords");
+        assert_eq!(
+            held.get(&0x1f0),
+            Some(&1),
+            "the write side did not land where addressed"
+        );
+        assert_eq!(
+            held.get(&0x1fe),
+            Some(&8),
+            "eight halfwords in must occupy eight halfwords"
+        );
     }
 
     bcm_seek(&mut m, 0x1f0, false);
     let got: Vec<u16> = (0..8).map(|_| bcm_get16(&mut m)).collect();
-    assert_eq!(got, vec![1, 2, 3, 4, 5, 6, 7, 8], "the read FIFO advanced twice per halfword");
+    assert_eq!(
+        got,
+        vec![1, 2, 3, 4, 5, 6, 7, 8],
+        "the read FIFO advanced twice per halfword"
+    );
 
     bcm_seek(&mut m, 0x1f0, false);
     let words: Vec<u32> = (0..4).map(|_| bcm_get32(&mut m)).collect();
-    assert_eq!(words, vec![0x0002_0001, 0x0004_0003, 0x0006_0005, 0x0008_0007]);
+    assert_eq!(
+        words,
+        vec![0x0002_0001, 0x0004_0003, 0x0006_0005, 0x0008_0007]
+    );
 }
 
 /// The registry RetailOS looks for, as its own reader defines it.
@@ -807,7 +1041,10 @@ fn the_co_processor_publishes_a_service_directory_its_reader_would_accept() {
     // Negative control: before the firmware is started the block is zero, which is what the
     // uploaded image genuinely contains at that offset.
     bcm_seek(&mut m, 0x1f0, false);
-    assert_eq!((0..4).map(|_| bcm_get32(&mut m)).collect::<Vec<_>>(), vec![0, 0, 0, 0]);
+    assert_eq!(
+        (0..4).map(|_| bcm_get32(&mut m)).collect::<Vec<_>>(),
+        vec![0, 0, 0, 0]
+    );
 
     // The host starts the firmware exactly as Rockbox's `bcm_init` does.
     bcm_seek(&mut m, 0x1000_0400, true);
@@ -818,22 +1055,38 @@ fn the_co_processor_publishes_a_service_directory_its_reader_would_accept() {
     let hdr: Vec<u32> = (0..4).map(|_| bcm_get32(&mut m)).collect();
     assert_eq!(hdr[2], 1, "FUN_00288058 requires word 2 to be exactly 1");
     assert_ne!(hdr[3], 0, "the directory pointer must be non-zero");
-    assert_eq!(hdr[3] & 3, 0, "the directory pointer must be 4-byte aligned");
+    assert_eq!(
+        hdr[3] & 3,
+        0,
+        "the directory pointer must be 4-byte aligned"
+    );
 
     // Eight u16 slots. A zero slot means "no service" and is skipped.
     let base = hdr[3];
     bcm_seek(&mut m, base, false);
     let slots: Vec<u16> = (0..8).map(|_| bcm_get16(&mut m)).collect();
     assert_ne!(slots[0], 0, "no service was published");
-    assert!(slots[1..].iter().all(|&s| s == 0), "only the display service is modelled");
+    assert!(
+        slots[1..].iter().all(|&s| s == 0),
+        "only the display service is modelled"
+    );
 
     // The record, read the way FUN_002882c0 reads it: 0x50 bytes at base + slot.
     bcm_seek(&mut m, base + slots[0] as u32, false);
     let rec: Vec<u16> = (0..0x28).map(|_| bcm_get16(&mut m)).collect();
-    assert_eq!(rec[2], 2, "record +0x04 is the tag, and the display service is tag 2");
+    assert_eq!(
+        rec[2], 2,
+        "record +0x04 is the tag, and the display service is tag 2"
+    );
     let (tx_lo, tx_hi, rx_lo, rx_hi) = (rec[3], rec[4], rec[5], rec[6]);
-    assert!(tx_lo < tx_hi && rx_lo < rx_hi, "a ring must have a non-empty span");
-    assert_eq!(rec[8], tx_lo, "+0x10 is the TX read pointer, and starts at the ring base");
+    assert!(
+        tx_lo < tx_hi && rx_lo < rx_hi,
+        "a ring must have a non-empty span"
+    );
+    assert_eq!(
+        rec[8], tx_lo,
+        "+0x10 is the TX read pointer, and starts at the ring base"
+    );
     assert_eq!(rec[0x10], tx_lo, "+0x20 is the TX write pointer");
     assert_eq!(rec[0x18], rx_lo, "+0x30 is the RX read pointer");
     assert_eq!(rec[0x20], rx_lo, "+0x40 is the RX write pointer");
@@ -876,7 +1129,11 @@ fn a_request_written_into_the_ring_is_answered_only_once_the_doorbell_is_rung() 
     for c in msg.chunks(2) {
         bcm_put16(&mut m, c[0] as u16 | ((c[1] as u16) << 8));
     }
-    assert_eq!(m.mem.bcm.as_ref().unwrap().gencmd.len(), 0, "answered before the doorbell");
+    assert_eq!(
+        m.mem.bcm.as_ref().unwrap().gencmd.len(),
+        0,
+        "answered before the doorbell"
+    );
 
     // The doorbell is the 16-byte block at record +0x20, whose first halfword is the pointer.
     bcm_seek(&mut m, rec + 0x20, true);
@@ -894,15 +1151,21 @@ fn a_request_written_into_the_ring_is_answered_only_once_the_doorbell_is_rung() 
     assert_eq!(r[0], 0xf1a5_5a1f, "FUN_002872fc would reject this reply");
     assert_eq!(r[1], 7, "the sequence must come back");
     assert_eq!(r[2], 8, "the opcode must come back");
-    assert_eq!(r[3] & 0xffff, 0x10, "the payload length must be the 16 bytes every caller reads");
+    assert_eq!(
+        r[3] & 0xffff,
+        0x10,
+        "the payload length must be the 16 bytes every caller reads"
+    );
     assert_ne!(r[4], 0, "reply +0x10 is the handle FUN_00286ca8 stores");
-    assert_ne!(r[5], 0, "reply +0x14 is the address FUN_00164450 refuses to proceed without");
+    assert_ne!(
+        r[5], 0,
+        "reply +0x14 is the address FUN_00164450 refuses to proceed without"
+    );
 
     // And the co-processor's read pointer moved past exactly one message.
     bcm_seek(&mut m, rec + 0x10, false);
     assert_eq!(bcm_get16(&mut m) as u32, tx_lo + 0x30);
 }
-
 
 // ---------------------------------------------------------------- §10 saturation
 //
@@ -921,19 +1184,34 @@ fn a_saturated_log_reports_the_census_and_says_the_rows_are_a_sample() {
         c.push(i);
     }
     assert_eq!(c.seen(), 10, "the count must not stop at the cap");
-    assert_eq!(c.sample(), &[0, 1, 2], "the kept rows are the first ones, not the last");
+    assert_eq!(
+        c.sample(),
+        &[0, 1, 2],
+        "the kept rows are the first ones, not the last"
+    );
     assert!(c.truncated());
     let line = c.census();
     assert!(line.starts_with("10"), "the census is the headline: {line}");
-    assert!(line.contains("SAMPLE, NOT A CENSUS"), "saturation must announce itself: {line}");
+    assert!(
+        line.contains("SAMPLE, NOT A CENSUS"),
+        "saturation must announce itself: {line}"
+    );
 
     // The control: below the cap, the same call is a bare number with no warning at all.
     let mut quiet: eapp_loader::Capped<u32> = eapp_loader::Capped::new(3);
     quiet.push(1);
     quiet.push(2);
     assert!(!quiet.truncated());
-    assert_eq!(quiet.census(), "2", "an unsaturated instrument must not cry wolf");
-    assert_eq!(quiet.more_line(2), None, "nothing is hidden, so nothing is claimed to be");
+    assert_eq!(
+        quiet.census(),
+        "2",
+        "an unsaturated instrument must not cry wolf"
+    );
+    assert_eq!(
+        quiet.more_line(2),
+        None,
+        "nothing is hidden, so nothing is claimed to be"
+    );
 }
 
 #[test]
@@ -960,7 +1238,11 @@ fn the_i2c_census_keeps_counting_after_its_ordered_log_has_filled() {
     use arm7tdmi::Bus as _;
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    m.mem.regions.push(eapp_loader::Region { name: "mmio-7", base: 0x7000_0000, data: vec![0; 0x1_0000] });
+    m.mem.regions.push(eapp_loader::Region {
+        name: "mmio-7",
+        base: 0x7000_0000,
+        data: vec![0; 0x1_0000],
+    });
     m.mem.i2c_base = Some(0x7000_c000);
 
     // 5 000 transfers to one device, which is past the 4 096-entry log cap. Device 0x34 is the
@@ -971,12 +1253,32 @@ fn the_i2c_census_keeps_counting_after_its_ordered_log_has_filled() {
         m.mem.write32(0x7000_c000, 0x80);
     }
 
-    assert!(m.mem.i2c_log.truncated(), "the log did not saturate, so this proves nothing");
-    assert_eq!(m.mem.i2c_log.sample().len(), 4096, "the cap moved; update this test's premise");
-    assert_eq!(m.mem.i2c_log.seen(), 5000, "the log's own count stopped at the cap");
+    assert!(
+        m.mem.i2c_log.truncated(),
+        "the log did not saturate, so this proves nothing"
+    );
+    assert_eq!(
+        m.mem.i2c_log.sample().len(),
+        4096,
+        "the cap moved; update this test's premise"
+    );
+    assert_eq!(
+        m.mem.i2c_log.seen(),
+        5000,
+        "the log's own count stopped at the cap"
+    );
 
-    let per_dev: u64 = m.mem.i2c_tally.iter().filter(|((d, _, _), _)| *d == 0x34).map(|(_, n)| n).sum();
-    assert_eq!(per_dev, 5000, "the per-device census is still a tally of the capped log");
+    let per_dev: u64 = m
+        .mem
+        .i2c_tally
+        .iter()
+        .filter(|((d, _, _), _)| *d == 0x34)
+        .map(|(_, n)| n)
+        .sum();
+    assert_eq!(
+        per_dev, 5000,
+        "the per-device census is still a tally of the capped log"
+    );
     assert_eq!(
         m.mem.i2c_tally.get(&(0x34, 0x80, 0x6f)).copied(),
         Some(5000),
@@ -1003,11 +1305,26 @@ fn watch_range_names_every_writer_of_a_word_not_just_the_first() {
     m.mem.pc = 0x0016_4f44;
     m.mem.write32(span, 2);
 
-    assert!(m.mem.watch_range_log.truncated(), "the log did not saturate, so this proves nothing");
-    let w = m.mem.watch_range_words.get(&span).expect("the word was not accounted for");
+    assert!(
+        m.mem.watch_range_log.truncated(),
+        "the log did not saturate, so this proves nothing"
+    );
+    let w = m
+        .mem
+        .watch_range_words
+        .get(&span)
+        .expect("the word was not accounted for");
     assert_eq!(w.writes, 5001 * 4, "byte-granular writes are undercounted");
-    assert_eq!(w.pcs.len(), 2, "the late writer is invisible — the original defect");
-    assert_eq!(w.pcs.get(&0x0016_4f44).copied(), Some(4), "the late writer's own count is wrong");
+    assert_eq!(
+        w.pcs.len(),
+        2,
+        "the late writer is invisible — the original defect"
+    );
+    assert_eq!(
+        w.pcs.get(&0x0016_4f44).copied(),
+        Some(4),
+        "the late writer's own count is wrong"
+    );
 
     // The control: a word nobody touched must not appear at all, or "every writer" would be
     // satisfied by a table that lists everything.
@@ -1051,7 +1368,9 @@ fn pmu_read(m: &mut Machine, reg: u8, len: usize) -> Vec<u8> {
     m.mem.write8(I2C, 0x80); // one-byte write: move the pointer
     m.mem.write8(I2C + 4, 0x11); // and now read
     m.mem.write8(I2C, 0xa0 | ((len as u8 - 1) << 1));
-    (0..len).map(|i| m.mem.read8(I2C + 0x0c + 4 * i as u32)).collect()
+    (0..len)
+        .map(|i| m.mem.read8(I2C + 0x0c + 4 * i as u32))
+        .collect()
 }
 
 /// A conversion that reports itself complete must report its VALUE, not a zero.
@@ -1072,7 +1391,11 @@ fn a_completed_adc_conversion_reports_the_value_it_converted() {
 
     // Control first: a register pair that has nothing to do with the converter.
     pmu_write(&mut m, 0x0a, &[0x21, 0x43]);
-    assert_eq!(pmu_read(&mut m, 0x0a, 2), vec![0x21, 0x43], "the harness cannot move bytes");
+    assert_eq!(
+        pmu_read(&mut m, 0x0a, 2),
+        vec![0x21, 0x43],
+        "the harness cannot move bytes"
+    );
 
     // ADCC2: channel 0 (battery volts) in bits 4:1. ADCC1 bit 0 starts it.
     pmu_write(&mut m, 0x2f, &[0x00]);
@@ -1088,7 +1411,11 @@ fn a_completed_adc_conversion_reports_the_value_it_converted() {
         }
     }
     let (hi, lo) = *seen.last().unwrap();
-    assert_ne!(lo & 0x80, 0, "the conversion never reported ready: {seen:?}");
+    assert_ne!(
+        lo & 0x80,
+        0,
+        "the conversion never reported ready: {seen:?}"
+    );
     assert_eq!(
         (hi as u16) << 2 | (lo & 3) as u16,
         0x2c0,
@@ -1192,7 +1519,10 @@ fn a_snapshot_round_trips_the_simulated_clock() {
     let (executed, usec, slept) = (m.executed, m.mem.usec, m.mem.slept_usec);
 
     // The fixture must be unsaturated in both directions, or what follows is vacuous.
-    assert!(slept > 0, "the fixture never slept, so it cannot tell the two formats apart");
+    assert!(
+        slept > 0,
+        "the fixture never slept, so it cannot tell the two formats apart"
+    );
     assert_ne!(
         usec,
         (executed / m.instr_per_usec) as u32,
@@ -1203,9 +1533,18 @@ fn a_snapshot_round_trips_the_simulated_clock() {
     let img = m.snapshot();
     let mut restored = sleeping_machine();
     assert!(restored.restore(&img), "the snapshot was refused");
-    assert_eq!(restored.mem.usec, usec, "the restore itself did not carry the clock");
-    assert_eq!(restored.mem.slept_usec, slept, "the sleep accumulator was not carried");
-    assert_eq!(restored.executed, executed, "the instruction count was not carried");
+    assert_eq!(
+        restored.mem.usec, usec,
+        "the restore itself did not carry the clock"
+    );
+    assert_eq!(
+        restored.mem.slept_usec, slept,
+        "the sleep accumulator was not carried"
+    );
+    assert_eq!(
+        restored.executed, executed,
+        "the instruction count was not carried"
+    );
 
     // And it must survive the recomputation, which is what actually broke. One instruction was all
     // it took to lose it.
@@ -1232,7 +1571,10 @@ fn dropping_the_sleep_accumulator_moves_the_clock_backwards() {
     restored.mem.slept_usec = 0;
     restored.run(1);
 
-    assert!(restored.mem.usec < usec, "the control did not reproduce the defect");
+    assert!(
+        restored.mem.usec < usec,
+        "the control did not reproduce the defect"
+    );
     assert_eq!(
         usec - restored.mem.usec,
         slept,
@@ -1249,14 +1591,21 @@ fn dropping_the_sleep_accumulator_moves_the_clock_backwards() {
 ///
 /// v4 -> v5 added the click wheel: a v4 image read as v5 comes back with `reporting` false, which
 /// is the state where the wheel is dead and says nothing about it. v5 -> v6 added the backlight
-/// dimmer, whose absence shows up only as a screen at the wrong brightness.
+/// dimmer, whose absence shows up only as a screen at the wrong brightness. **v6 -> v7 added
+/// `mmap_regs`**, and that one was not hypothetical: without those sixteen words a restored machine
+/// has no address map, reads zeros at its own PC, and dies within a few hundred instructions while
+/// the panel still shows the last picture it drew. See `tests/snapshot_round_trip.rs`.
 #[test]
 fn an_older_snapshot_is_refused() {
     let m = sleeping_machine();
     let mut img = m.snapshot();
-    assert_eq!(&img[..8], b"IPODSNP6", "the format moved past v6; update this test");
+    assert_eq!(
+        &img[..8],
+        b"IPODSNP7",
+        "the format moved past v7; update this test"
+    );
 
-    for old in [b"IPODSNP3", b"IPODSNP4", b"IPODSNP5"] {
+    for old in [b"IPODSNP3", b"IPODSNP4", b"IPODSNP5", b"IPODSNP6"] {
         img[..8].copy_from_slice(old);
         let mut into = sleeping_machine();
         assert!(
@@ -1268,9 +1617,12 @@ fn an_older_snapshot_is_refused() {
 
     // Positive control: the same bytes with the current magic still restore, so what is refused is
     // the version and not the image.
-    img[..8].copy_from_slice(b"IPODSNP6");
+    img[..8].copy_from_slice(b"IPODSNP7");
     let mut into = sleeping_machine();
-    assert!(into.restore(&img), "the harness cannot restore a valid snapshot at all");
+    assert!(
+        into.restore(&img),
+        "the harness cannot restore a valid snapshot at all"
+    );
 }
 
 /// The wheel's `reporting` flag must survive a snapshot round trip.
@@ -1295,8 +1647,14 @@ fn a_restored_wheel_is_still_reporting() {
     into.mem.clickwheel = Some(eapp_loader::ClickWheel::new(0x7000_c000));
     assert!(into.restore(&img), "the snapshot did not restore");
     let w = into.mem.clickwheel.as_ref().expect("wheel");
-    assert!(w.reporting, "reporting was lost -- the wheel comes back dead");
-    assert_eq!(w.position, 42, "the wheel came back at a different position");
+    assert!(
+        w.reporting,
+        "reporting was lost -- the wheel comes back dead"
+    );
+    assert_eq!(
+        w.position, 42,
+        "the wheel came back at a different position"
+    );
     assert!(w.touched, "the finger was lost");
 }
 
@@ -1340,8 +1698,16 @@ fn a_read_or_mask_is_observed_through_the_ordinary_read_path() {
     );
 
     // Neighbouring words are untouched: the window is four bytes wide, not a page.
-    assert_eq!(m.mem.read32(0x6000_6038), 0, "the mask leaked into the word below");
-    assert_eq!(m.mem.read32(0x6000_6040), 0, "the mask leaked into the word above");
+    assert_eq!(
+        m.mem.read32(0x6000_6038),
+        0,
+        "the mask leaked into the word below"
+    );
+    assert_eq!(
+        m.mem.read32(0x6000_6040),
+        0,
+        "the mask leaked into the word above"
+    );
 }
 
 // ---------------------------------------------------------------- the backlight dimmer
@@ -1357,7 +1723,10 @@ fn a_read_or_mask_is_observed_through_the_ordinary_read_path() {
 fn the_dimmer_counts_short_pulses_up_and_long_pulses_down() {
     use eapp_loader::{Backlight, BACKLIGHT_PIN};
     let mut b = Backlight::default();
-    assert_eq!(b.level, 16, "the circuit is assumed to wake at the driver's midpoint");
+    assert_eq!(
+        b.level, 16,
+        "the circuit is assumed to wake at the driver's midpoint"
+    );
 
     // One short pulse: low at t, high 10 us later.
     let mut t = 1_000u32;
@@ -1388,8 +1757,15 @@ fn the_dimmer_counts_short_pulses_up_and_long_pulses_down() {
     let before = b.level;
     b.port_written(BACKLIGHT_PIN, t);
     b.port_written(BACKLIGHT_PIN | 0x21, t + 5);
-    assert_eq!(b.level, before, "a write with the pin already high is not a pulse");
-    assert_eq!(b.steps_up + b.steps_down, 82, "and it was not counted as one");
+    assert_eq!(
+        b.level, before,
+        "a write with the pin already high is not a pulse"
+    );
+    assert_eq!(
+        b.steps_up + b.steps_down,
+        82,
+        "and it was not counted as one"
+    );
 }
 
 /// `thread-pp.c`'s `core_sleep` sets a mailbox bit and reads it back. Ours returned zero for ever,
@@ -1400,11 +1776,19 @@ fn setting_a_mailbox_bit_makes_it_readable_and_clearing_it_removes_it() {
     use arm7tdmi::Bus as _;
     use eapp_loader::Mbx;
     let mut m = wheel_machine();
-    assert_eq!(m.mem.read32(Mbx::BASE), 0, "the mailbox does not start with bits raised");
+    assert_eq!(
+        m.mem.read32(Mbx::BASE),
+        0,
+        "the mailbox does not start with bits raised"
+    );
 
     // core_wake(0): MBX_MSG_SET = 0x11 << 0
     m.mem.write32(Mbx::BASE + Mbx::SET, 0x11);
-    assert_eq!(m.mem.read32(Mbx::BASE), 0x11, "a set bit did not appear in STAT");
+    assert_eq!(
+        m.mem.read32(Mbx::BASE),
+        0x11,
+        "a set bit did not appear in STAT"
+    );
 
     // core_sleep(0): MBX_MSG_SET = 0x4 << 0, on top of what is already raised.
     m.mem.write32(Mbx::BASE + Mbx::SET, 0x4);
@@ -1412,11 +1796,19 @@ fn setting_a_mailbox_bit_makes_it_readable_and_clearing_it_removes_it() {
 
     // core_sleep(0): MBX_MSG_CLR = 0x14 << 0 — drops two of the three.
     m.mem.write32(Mbx::BASE + Mbx::CLR, 0x14);
-    assert_eq!(m.mem.read32(Mbx::BASE), 0x01, "CLR must clear only the bits written");
+    assert_eq!(
+        m.mem.read32(Mbx::BASE),
+        0x01,
+        "CLR must clear only the bits written"
+    );
 
     // The loop `core_sleep` ends on: `while (MBX_MSG_STAT & (0x1 << core));`
     m.mem.write32(Mbx::BASE + Mbx::CLR, 0x1);
-    assert_eq!(m.mem.read32(Mbx::BASE) & 0x1, 0, "the wait loop would never terminate");
+    assert_eq!(
+        m.mem.read32(Mbx::BASE) & 0x1,
+        0,
+        "the wait loop would never terminate"
+    );
 }
 
 /// Bits above the low byte must survive, because a 32-bit store arrives as four byte writes and
@@ -1460,12 +1852,20 @@ fn the_core_registers_answer_at_both_widths() {
     // The CPU still reads what it always did — the byte AND the word.
     m.mem.asking = Core::Cpu;
     assert_eq!(m.mem.read8(PROC_ID), 0x55);
-    assert_eq!(m.mem.read32(PROC_ID) & 0xff, 0x55, "Apple reads this as a word");
+    assert_eq!(
+        m.mem.read32(PROC_ID) & 0xff,
+        0x55,
+        "Apple reads this as a word"
+    );
 
     // And the coprocessor reads its own id, the byte AND the word. The word is the one that broke.
     m.mem.asking = Core::Cop;
     assert_eq!(m.mem.read8(PROC_ID), 0xaa, "Rockbox reads this as a byte");
-    assert_eq!(m.mem.read32(PROC_ID) & 0xff, 0xaa, "Apple reads this as a word");
+    assert_eq!(
+        m.mem.read32(PROC_ID) & 0xff,
+        0xaa,
+        "Apple reads this as a word"
+    );
     m.mem.asking = Core::Cpu;
 
     // `COP_CTRL` and `COP_STATUS` are one address: written to park the core, read to see it parked.
@@ -1475,8 +1875,16 @@ fn the_core_registers_answer_at_both_widths() {
     assert_eq!(m.mem.read32(ctl), 0, "awake");
     m.mem.write32(ctl, 0x8000_0000); // PROC_SLEEP, as Apple's COP path does at 0x805c
     assert!(m.mem.cop_asleep);
-    assert_eq!(m.mem.read32(ctl), 0x8000_0000, "the CPU waits for exactly this");
-    assert_eq!(m.mem.read8(ctl + 3), 0x80, "and the same value one byte at a time");
+    assert_eq!(
+        m.mem.read32(ctl),
+        0x8000_0000,
+        "the CPU waits for exactly this"
+    );
+    assert_eq!(
+        m.mem.read8(ctl + 3),
+        0x80,
+        "and the same value one byte at a time"
+    );
     m.mem.write32(ctl, 0); // PROC_WAKE, as Rockbox's `wake_core` does
     assert!(!m.mem.cop_asleep);
     assert_eq!(m.mem.read32(ctl), 0);
@@ -1507,15 +1915,31 @@ fn the_device_window_is_mirrored_where_the_kernel_reads_it() {
     // CPU_INT_STAT and its high bank — the two the kernel actually holds in its pool.
     for (real, mirror) in [(0x6000_4000u32, 0x6400_4000u32), (0x6000_4100, 0x6400_4100)] {
         m.mem.write32(real, 0xdead_beef);
-        assert_eq!(m.mem.read32(mirror), 0xdead_beef, "{mirror:#x} is not a view of {real:#x}");
-        assert_eq!(m.mem.read8(mirror), 0xef, "{mirror:#x} disagrees on the byte path");
+        assert_eq!(
+            m.mem.read32(mirror),
+            0xdead_beef,
+            "{mirror:#x} is not a view of {real:#x}"
+        );
+        assert_eq!(
+            m.mem.read8(mirror),
+            0xef,
+            "{mirror:#x} disagrees on the byte path"
+        );
         // A mirror is the same storage, not a copy: a write through it is visible at the original.
         m.mem.write32(mirror, 0x0000_0100);
-        assert_eq!(m.mem.read32(real), 0x0000_0100, "the mirror kept its own buffer");
+        assert_eq!(
+            m.mem.read32(real),
+            0x0000_0100,
+            "the mirror kept its own buffer"
+        );
     }
     // And it is bounded — the mirror is the 1 MB device window, not the whole 64 MB above it.
     assert_eq!(m.mem.translate(0x6400_0000), 0x6000_0000);
-    assert_eq!(m.mem.translate(0x6410_0000), 0x6410_0000, "past the window, no translation");
+    assert_eq!(
+        m.mem.translate(0x6410_0000),
+        0x6410_0000,
+        "past the window, no translation"
+    );
 }
 
 /// **A validity bit has to be backed by the fields it validates.**
@@ -1536,13 +1960,23 @@ fn identify_does_not_advertise_fields_it_leaves_empty() {
     assert_eq!(w(54), w(1), "current cylinders");
     assert_eq!(w(55), w(3), "current heads");
     assert_eq!(w(56), w(6), "current sectors per track");
-    assert!(w(55) <= 16, "more than 16 heads is what Linux rejects outright");
+    assert!(
+        w(55) <= 16,
+        "more than 16 heads is what Linux rejects outright"
+    );
 
     let chs = w(54) as u32 * w(55) as u32 * w(56) as u32;
-    assert_eq!(w(57) as u32 | ((w(58) as u32) << 16), chs, "current capacity is C*H*S");
+    assert_eq!(
+        w(57) as u32 | ((w(58) as u32) << 16),
+        chs,
+        "current capacity is C*H*S"
+    );
     let lba = w(60) as u32 | ((w(61) as u32) << 16);
     assert_eq!(lba, 16_777_216, "the true size still lives in words 60/61");
-    assert!(chs < lba, "an 8 GiB disk is larger than CHS can address; that is the point");
+    assert!(
+        chs < lba,
+        "an 8 GiB disk is larger than CHS can address; that is the point"
+    );
 }
 
 /// **A wake ends the running core's turn — because two cores are concurrent, not alternating.**
@@ -1570,7 +2004,10 @@ fn waking_the_coprocessor_yields_to_it_immediately() {
     // And wake it, the way Apple's bootloader does: PROC_WAKE is zero.
     m.mem.write32(eapp_loader::Core::Cop.ctrl(), 0);
     assert!(!m.mem.cop_asleep, "PROC_WAKE should start it");
-    assert!(m.mem.yield_to_cop, "a wake must end the running core's turn at once");
+    assert!(
+        m.mem.yield_to_cop,
+        "a wake must end the running core's turn at once"
+    );
 
     // Re-writing the same state is not an edge and must not yield: firmware polls this register,
     // and a yield per poll would hand the coprocessor a turn thousands of times for nothing.
@@ -1605,7 +2042,10 @@ fn a_byte_store_lands_where_a_word_store_does() {
     // **The flash model has to be present or this test proves nothing** — with `nor` unset the
     // branch that swallowed the store is never entered and the assertion passes against the bug.
     // Confirmed: without this line the test is green either way.
-    m.mem.nor = Some(eapp_loader::Nor::sst39wf800a(vec![(0, 0x10_0000)], vec!["flash-low"]));
+    m.mem.nor = Some(eapp_loader::Nor::sst39wf800a(
+        vec![(0, 0x10_0000)],
+        vec!["flash-low"],
+    ));
 
     // Stand in for the MMAP remap the firmware performs: low addresses become SDRAM.
     m.mem.aliases.push((0x0000_0000, 0x0400_0000, 0x1000_0000));
@@ -1617,7 +2057,11 @@ fn a_byte_store_lands_where_a_word_store_does() {
     m.mem.write8(ty, 0x0c);
 
     assert_eq!(m.mem.read32(start), 0x0000_8000, "the word store");
-    assert_eq!(m.mem.read8(ty), 0x0c, "the byte store was swallowed by the flash");
+    assert_eq!(
+        m.mem.read8(ty),
+        0x0c,
+        "the byte store was swallowed by the flash"
+    );
 
     // And the flash must still be reachable where it really is, or this trades one bug for another:
     // the updater writes the chip at 0x20000000 and the reset-time view at 0 must still fetch.
@@ -1667,13 +2111,20 @@ fn a_32_bit_read_of_the_data_register_yields_one_ata_word() {
     }
 
     let want = eapp_loader::Ata::identify_sector(sectors, 0, 0);
-    assert_eq!(got.len(), want.len(), "256 32-bit reads have to cover one sector");
+    assert_eq!(
+        got.len(),
+        want.len(),
+        "256 32-bit reads have to cover one sector"
+    );
     assert_eq!(
         &got[..16],
         &want[..16],
         "the first eight words the guest keeps must be our first eight words, in order"
     );
-    assert_eq!(got, want, "the whole IDENTIFY response, not every second word of it");
+    assert_eq!(
+        got, want,
+        "the whole IDENTIFY response, not every second word of it"
+    );
 }
 
 /// **A drive that accepts INITIALIZE DEVICE PARAMETERS has to answer with the geometry it accepted.**
@@ -1708,7 +2159,11 @@ fn initialize_device_parameters_moves_the_current_geometry() {
     };
 
     // Before the command: the current geometry is the default one, cylinders included.
-    assert_eq!(word(&mut m, 54), word(&mut m, 1), "default current cylinders");
+    assert_eq!(
+        word(&mut m, 54),
+        word(&mut m, 1),
+        "default current cylinders"
+    );
     assert_eq!(word(&mut m, 55), 16, "default current heads");
     assert_eq!(word(&mut m, 56), 63, "default current sectors");
 

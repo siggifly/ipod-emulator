@@ -256,7 +256,11 @@ fn branch_uses_pc_plus_eight() {
 #[test]
 fn branch_and_link_stores_the_return_address() {
     let (cpu, _) = run(&[0xEB00_0000, 0xE3A0_0001], 1);
-    assert_eq!(cpu.regs[14], CODE + 4, "LR points at the following instruction");
+    assert_eq!(
+        cpu.regs[14],
+        CODE + 4,
+        "LR points at the following instruction"
+    );
     assert_eq!(cpu.regs[15], CODE + 8);
 }
 
@@ -334,12 +338,16 @@ fn post_indexed_store_writes_back_the_base() {
         &[
             0xE3A0_0C02, // mov r0, #0x200
             0xE3A0_10AA, // mov r1, #0xAA
-            0xE4801004, // str r1, [r0], #4
+            0xE4801004,  // str r1, [r0], #4
         ],
         3,
     );
     assert_eq!(cpu.regs[0], 0x204, "post-index writes the base back");
-    assert_eq!(mem.read32(0x200), 0xAA, "stored at the pre-increment address");
+    assert_eq!(
+        mem.read32(0x200),
+        0xAA,
+        "stored at the pre-increment address"
+    );
 }
 
 #[test]
@@ -356,7 +364,11 @@ fn byte_access_touches_one_byte() {
         6,
     );
     assert_eq!(cpu.regs[3], 0xFF);
-    assert_eq!(mem.read32(0x200), 0x0000_FF00, "only the addressed bytes changed");
+    assert_eq!(
+        mem.read32(0x200),
+        0x0000_FF00,
+        "only the addressed bytes changed"
+    );
 }
 
 #[test]

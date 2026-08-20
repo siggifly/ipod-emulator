@@ -25,7 +25,11 @@ struct Img {
 
 impl Bus for Img {
     fn read8(&mut self, addr: u32) -> u8 {
-        let off = if addr >= 0x1000_0000 { addr - 0x1000_0000 } else { addr } as usize;
+        let off = if addr >= 0x1000_0000 {
+            addr - 0x1000_0000
+        } else {
+            addr
+        } as usize;
         self.d.get(off).copied().unwrap_or(0)
     }
     fn write8(&mut self, _addr: u32, _val: u8) {}
@@ -33,19 +37,36 @@ impl Bus for Img {
 
 impl Img {
     fn w(&self, addr: u32) -> u32 {
-        let off = if addr >= 0x1000_0000 { addr - 0x1000_0000 } else { addr } as usize;
+        let off = if addr >= 0x1000_0000 {
+            addr - 0x1000_0000
+        } else {
+            addr
+        } as usize;
         if off + 4 > self.d.len() {
             return 0;
         }
-        u32::from_le_bytes([self.d[off], self.d[off + 1], self.d[off + 2], self.d[off + 3]])
+        u32::from_le_bytes([
+            self.d[off],
+            self.d[off + 1],
+            self.d[off + 2],
+            self.d[off + 3],
+        ])
     }
     fn has(&self, addr: u32) -> bool {
-        let off = if addr >= 0x1000_0000 { addr - 0x1000_0000 } else { addr } as usize;
+        let off = if addr >= 0x1000_0000 {
+            addr - 0x1000_0000
+        } else {
+            addr
+        } as usize;
         off + 4 <= self.d.len()
     }
     /// The NUL-terminated string at `addr`, if the bytes there look like one.
     fn cstr(&self, addr: u32) -> Option<String> {
-        let base = if addr >= 0x1000_0000 { addr - 0x1000_0000 } else { addr } as usize;
+        let base = if addr >= 0x1000_0000 {
+            addr - 0x1000_0000
+        } else {
+            addr
+        } as usize;
         if base >= self.d.len() {
             return None;
         }
@@ -139,7 +160,11 @@ fn main() {
     });
     let syms = eapp_loader::extract_symbols(&d, 0);
     let mut img = Img { d };
-    println!("image {path} ({} bytes), {} symbols", img.d.len(), syms.len());
+    println!(
+        "image {path} ({} bytes), {} symbols",
+        img.d.len(),
+        syms.len()
+    );
 
     if args.iter().any(|a| a == "--verify") {
         verify(&mut img);
@@ -147,7 +172,9 @@ fn main() {
 
     for spec in args.iter().filter_map(|a| a.strip_prefix("--dis=")) {
         let (a, n) = spec.split_once(':').unwrap_or((spec, "40"));
-        let (Some(addr), Some(count)) = (parse(a), parse(n)) else { continue };
+        let (Some(addr), Some(count)) = (parse(a), parse(n)) else {
+            continue;
+        };
         println!("\n=== disassembly at {addr:#010x} ===");
         dump(&mut img, &syms, addr, count);
     }
@@ -164,7 +191,9 @@ fn main() {
     // particular run did not happen to take.
     for spec in args.iter().filter_map(|a| a.strip_prefix("--walk=")) {
         let (a, dep) = spec.split_once(':').unwrap_or((spec, "3"));
-        let (Some(addr), Some(depth)) = (parse(a), parse(dep)) else { continue };
+        let (Some(addr), Some(depth)) = (parse(a), parse(dep)) else {
+            continue;
+        };
         println!("\n=== call tree from {addr:#010x}, depth {depth} ===");
         let mut seen = BTreeSet::new();
         walk(&img, &syms, addr, depth, 0, &mut seen);
@@ -257,7 +286,11 @@ fn main() {
                 // ldr rD, [pc, #imm] — rD is bits 15..12.
                 if iw & 0x0f7f_0000 == 0x051f_0000 && (iw >> 12) & 0xf == reg {
                     let o = iw & 0xfff;
-                    let pool = if iw & (1 << 23) != 0 { at + 8 + o } else { at + 8 - o };
+                    let pool = if iw & (1 << 23) != 0 {
+                        at + 8 + o
+                    } else {
+                        at + 8 - o
+                    };
                     found = Some(match img.cstr(img.w(pool)) {
                         Some(s) => format!("{s:?}"),
                         None => format!("<pointer {:#010x}, not a literal string>", img.w(pool)),
@@ -275,10 +308,15 @@ fn main() {
                 }
                 // Any other unconditional write to the format register ends the search: the
                 // command is computed, and claiming a literal past this point would be a guess.
-                let writes = (iw & 0x0c00_0000 == 0 && (iw >> 12) & 0xf == reg && (0x8..0xb).contains(&((iw >> 21) & 0xf)).eq(&false))
+                let writes = (iw & 0x0c00_0000 == 0
+                    && (iw >> 12) & 0xf == reg
+                    && (0x8..0xb).contains(&((iw >> 21) & 0xf)).eq(&false))
                     || (iw & 0x0c50_0000 == 0x0410_0000 && (iw >> 12) & 0xf == reg);
                 if cond_always && writes {
-                    found = Some(format!("<computed at {at:#010x}: {}>", disasm::arm(iw, at, None)));
+                    found = Some(format!(
+                        "<computed at {at:#010x}: {}>",
+                        disasm::arm(iw, at, None)
+                    ));
                     break;
                 }
             }
@@ -286,15 +324,25 @@ fn main() {
             println!("  {pc:#010x}  {s}");
             vocab.entry(s).or_default().push(pc);
         }
-        println!("\n  {sites} call sites, {} distinct format strings:", vocab.len());
+        println!(
+            "\n  {sites} call sites, {} distinct format strings:",
+            vocab.len()
+        );
         for (s, at) in &vocab {
-            println!("    {:<52} x{}  {:#010x}", format!("{s:?}"), at.len(), at[0]);
+            println!(
+                "    {:<52} x{}  {:#010x}",
+                format!("{s:?}"),
+                at.len(),
+                at[0]
+            );
         }
     }
 
     for spec in args.iter().filter_map(|a| a.strip_prefix("--hex=")) {
         let (a, n) = spec.split_once(':').unwrap_or((spec, "64"));
-        let (Some(addr), Some(count)) = (parse(a), parse(n)) else { continue };
+        let (Some(addr), Some(count)) = (parse(a), parse(n)) else {
+            continue;
+        };
         println!("\n=== bytes at {addr:#010x} ===");
         for row in 0..count.div_ceil(16) {
             let at = addr + row * 16;
@@ -303,7 +351,11 @@ fn main() {
             for i in 0..16 {
                 let b = img.read8(at + i);
                 hexs.push_str(&format!("{b:02x} "));
-                asc.push(if (0x20..0x7f).contains(&b) { b as char } else { '.' });
+                asc.push(if (0x20..0x7f).contains(&b) {
+                    b as char
+                } else {
+                    '.'
+                });
             }
             println!("  {at:08x}  {hexs} |{asc}|");
         }
@@ -323,7 +375,9 @@ fn main() {
     //   --iscan=0xe3a0007f:0xffffffff:2   mov r0, #0x7f, and what follows it
     for spec in args.iter().filter_map(|a| a.strip_prefix("--iscan=")) {
         let mut p = spec.split(':');
-        let Some(want) = p.next().and_then(parse) else { continue };
+        let Some(want) = p.next().and_then(parse) else {
+            continue;
+        };
         let mask = p.next().and_then(parse).unwrap_or(0xffff_ffff);
         let follow = p.next().and_then(parse).unwrap_or(0);
         println!("\n=== words matching {want:#010x} under mask {mask:#010x} ===");
@@ -399,7 +453,9 @@ fn dump(img: &mut Img, syms: &BTreeMap<u32, String>, addr: u32, count: u32) {
             break;
         }
         let w = img.w(at);
-        let mut bus = Img { d: std::mem::take(&mut img.d) };
+        let mut bus = Img {
+            d: std::mem::take(&mut img.d),
+        };
         let text = disasm::arm(w, at, Some(&mut bus));
         img.d = std::mem::take(&mut bus.d);
         // A literal pool constant that points at a string is almost always a command name or a
@@ -422,13 +478,20 @@ fn dump(img: &mut Img, syms: &BTreeMap<u32, String>, addr: u32, count: u32) {
         // Resolve `ldr rN, [pc, ...]` one more hop: the pool word may itself be a string pointer.
         if w & 0x0f7f_0000 == 0x051f_0000 {
             let off = w & 0xfff;
-            let pool = if w & (1 << 23) != 0 { at + 8 + off } else { at + 8 - off };
+            let pool = if w & (1 << 23) != 0 {
+                at + 8 + off
+            } else {
+                at + 8 - off
+            };
             let v = img.w(pool);
             if let Some(s) = img.cstr(v) {
                 note = format!("   ; -> {s:?}");
             }
         }
-        let sym = syms.get(&at).map(|s| format!("  <{s}>")).unwrap_or_default();
+        let sym = syms
+            .get(&at)
+            .map(|s| format!("  <{s}>"))
+            .unwrap_or_default();
         println!("  {at:08x}  {w:08x}  {text}{note}{sym}");
     }
 }
@@ -483,20 +546,32 @@ fn verify(img: &mut Img) {
     let mut ok = true;
     for (at, want) in EXPECT {
         let w = img.w(*at);
-        let mut bus = Img { d: std::mem::take(&mut img.d) };
+        let mut bus = Img {
+            d: std::mem::take(&mut img.d),
+        };
         let text = disasm::arm(w, *at, Some(&mut bus));
         img.d = std::mem::take(&mut bus.d);
         let got = text.split_whitespace().next().unwrap_or("");
         let hit = got == *want;
         ok &= hit;
-        println!("  {} {at:08x}  {w:08x}  {text}", if hit { "ok  " } else { "FAIL" });
+        println!(
+            "  {} {at:08x}  {w:08x}  {text}",
+            if hit { "ok  " } else { "FAIL" }
+        );
     }
     // The two constants the trace read out of that function, both one hop through a literal pool.
     let pool = img.w(0x000c_d7cc & !3);
     let _ = pool;
     let obj_ptr = 0x1081_eaf4u32;
     println!("  [{obj_ptr:#010x}] = {:#010x}   (trace: 0x13ef29a0 at runtime; image holds the initialiser)", img.w(obj_ptr));
-    println!("  self-check {}", if ok { "PASSED" } else { "FAILED — do not trust anything below" });
+    println!(
+        "  self-check {}",
+        if ok {
+            "PASSED"
+        } else {
+            "FAILED — do not trust anything below"
+        }
+    );
     if !ok {
         std::process::exit(2);
     }
