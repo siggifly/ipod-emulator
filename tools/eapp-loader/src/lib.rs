@@ -1887,12 +1887,30 @@ impl Memory {
     /// Assert the drive's completion: the controller latch the driver reads back, plus both
     /// interrupt-controller lines it enabled for the drive.
     pub fn fire_ide_irq(&mut self) {
-        // Whether the controller would let this through, recorded at the moment it goes up. An
-        // assertion nobody can take and an assertion nobody happened to take look identical in a
-        // timeline that does not say which.
+        // **A completion is a level the drive holds, not a pulse it emits — so it waits for the
+        // mask.**
+        //
+        // ATA's INTRQ stays asserted until the host reads the Status register or writes the
+        // Command register. Masking the interrupt *controller* does not discard it: the drive is
+        // still driving the pin, and unmasking exposes it.
+        //
+        // This model asserted into a masked line and then let the driver's own housekeeping sweep
+        // it away — a write of IDE0_CFG's clear bits, which a driver issues while arming its next
+        // wait, drops the line whether or not a handler ever ran. Measured on iPodLinux: three
+        // completions asserted while IRQ 23 was disabled, sat up for 1.9 ms, and were cleared by a
+        // config write with nothing having taken them. The kernel then retried every ten seconds
+        // for the rest of the boot, reporting exactly what happened — `hda: lost interrupt`.
+        //
+        // Holding it instead is both simpler and truer: while the line is masked the completion
+        // stays due, and the first tick after the mask lifts delivers it. Nothing else in the
+        // machine can lose it in the meantime, because there is nothing to lose yet.
         let (_, en_stat, _, _) = Core::Cpu.int_regs();
-        let masked = self.read32(en_stat) & (1 << IDE_IRQ) == 0;
-        self.note_ide_event(if masked { IDE_EV_ASSERTED_MASKED } else { IDE_EV_ASSERTED });
+        if self.read32(en_stat) & (1 << IDE_IRQ) == 0 {
+            self.note_ide_event(IDE_EV_ASSERTED_MASKED);
+            self.ide_irq_due = Some(self.usec.wrapping_add(IDE_COMPLETION_USEC));
+            return;
+        }
+        self.note_ide_event(IDE_EV_ASSERTED);
         self.ide_irq_due = None;
         self.int_pending |= 1 << IDE_IRQ;
         self.int_pending_hi |= 1 << IDE_DMA_IRQ_HI;
