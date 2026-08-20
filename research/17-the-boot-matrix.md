@@ -66,10 +66,38 @@ re-run says.
 
 | | real 5G dump | synthetic 5G | synthetic 5.5G |
 |---|---|---|---|
-| **RetailOS**, cold | boots — 611 READ DMA, 4 WRITE DMA | — | — |
-| **Rockbox**, warm | **main menu, 3 858 lit pixels** | **main menu, 3 858** ✅ | **main menu, 3 858** ✅ |
-| **ipodloader2** | draws its own console | not yet run | not yet run |
-| **iPodLinux** | **boots to ZeroSlackr's userland** | **boots — same dmesg** ✅ | not yet run |
+| **RetailOS**, cold | ✅ boots — 611 READ DMA, 4 WRITE DMA | — *needs Apple's bootloader* | — |
+| **RetailOS**, high-level | ✅ | ✅ | ✅ |
+| **Rockbox**, warm | ✅ **main menu, 74 057 lit pixels** | ✅ **74 057** | ✅ **74 057** |
+| **ipodloader2** | ✅ its own console, `Found 1 valid partitions` | ✅ *(reached, via the loader recipe)* | ✅ |
+| **iPodLinux** | ✅ **boots to ZeroSlackr's userland** | ✅ **same dmesg** | ✅ **same dmesg** |
+| **diag** (service diagnostics) | ✅ **draws, and is drivable** | ⛔ **impossible** | ⛔ |
+| **disk** (target disk mode) | ⚠️ faults — USB unmodelled | ⛔ | ⛔ |
+| **aupd** (`flash-update`) | ✅ | ⛔ | ⛔ |
+
+**Read the three columns as two questions, not one.** A synthesised NOR carries an identity block
+and a reset vector and **none of Apple's code**. So:
+
+- Anything **entered directly** — RetailOS high-level, Rockbox, `ipodloader2`, iPodLinux — does not
+  care which column it is in, and after 2026-08-20 the numbers are identical across all three.
+- Anything that **is** Apple's ROM cannot be synthesised. `diag`, `disk` and the `aupd` updater are
+  images inside the NOR; a synthesised one has no `flsh` directory at all, and `ipod-boot flsh` says
+  exactly that rather than failing obscurely:
+
+  ```
+  ipod-boot flsh: synth-5g.bin has no `flsh` image directory at all
+  ```
+
+  ⛔ in this table means *cannot, by construction* — not *broken*, and not *unimplemented*. Apple's
+  service diagnostics needs a real dump and always will.
+- **Cold RetailOS** is the third case: the image is on the drive, but reaching it means running
+  Apple's bootloader, which is in the ROM.
+
+**Rockbox's pixel count depends on the drive, not the ROM.** 74 057 is Rockbox with its own
+`.rockbox/` resources on the volume — icons, backdrop, fonts. Against a drive without them it falls
+back to the built-in 8 px font and draws 3 858, which is a complete and correct boot that merely
+looks bare. An earlier version of this table recorded 3 858 as the number without saying which drive
+it came from, which made a resource question look like a ROM question.
 
 ### FIXED the same day: the pin that says the co-processor is powered
 
