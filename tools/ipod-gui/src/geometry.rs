@@ -170,16 +170,64 @@ geometry! {
     /// a border, and a focus ring has to be visible against the material as well as against the
     /// page.
     FOCUS_RING_W:     Px = 2.0;
+    /// §10.1's ghost: the drawn iPod, in `Colour::Unspecified`, at 45 % — **an iPod that has not
+    /// been decided yet**, which is what an empty bench has.
+    ///
+    /// A `Ratio` rather than a `Px` because it is a fraction and not a length; the `Unit` table has
+    /// no third kind and does not need one, exactly as [`DRAWER_MAX_DEPTH`] is a `Ratio` for being
+    /// a count. It emits `out property <float> ghost-opacity: 0.45;`.
+    ///
+    /// **It is a number about the BODY and not about the glass**, and that is measured rather than
+    /// argued: Slint composites an `opacity` over the whole subtree at once, so putting this on the
+    /// device as a whole lifts the `#08080a` glass toward the well and drops it under the 3:1 bar
+    /// `the_cradle_colours_clear_three_to_one_against_the_well` already holds everything on that
+    /// surface to. §10.1's own next sentence is *the glass is dark* and §12.2 gives `Off` a
+    /// `#08080a` glass; one `opacity` cannot honour both, and the sentence with a number behind it
+    /// wins. So the markup puts this on the shell and declares the glass after it.
+    ///
+    /// **Nothing in markup may type this number** — [`GEOMETRY_PROPS`] does not list `opacity`,
+    /// because four cosmetic opacities in `ipod.slint` and one in `primitives.slint` are literals
+    /// that belong where they are; `no_opacity_literal_outside_the_cosmetic_set` is the narrower
+    /// sweep that keeps 0.45 out instead.
+    GHOST_OPACITY:    Ratio = 0.45;
     /// §7.5's 3 px accent bar. **One constant** — the shelf's bar and the Rail's bar are the same
     /// bar at two sizes of surface, and two names for one number is how they come to disagree.
     PROGRESS_H:       Px = 3.0;
     /// The Rail's verb column, so a plan reads as a column rather than as a paragraph.
     ///
-    /// **The one measurement nobody has taken.** Every other constant here is quoted from the
-    /// design or derived from one that is. The longest verb is `synthesise`, and it appears at
-    /// first-run step 1 — the first thing a new user ever sees this program do — so if it elides,
-    /// it elides there. Take it with `slint-viewer` at `body` 14 px before shipping.
-    RAIL_VERB_W:      Px = 64.0;
+    /// **64 was the value nobody had measured, and it would have elided.** Every other constant here
+    /// is quoted from the design or derived from one that is. The longest verb is `synthesise` — ten
+    /// characters, `ui/rail.slint`'s own six-verb list — and it appears at first-run step 1, the
+    /// first thing a new user ever sees this program do. So if it elides, it elides there.
+    ///
+    /// **MEASURED 2026-08-21, macOS 27.0, scale 2**: `synthesise` draws **67.0 logical px** at
+    /// `BODY_SIZE` 14 in the face this platform gives a `Text` with no `font-family` binding. So
+    /// 64 was three pixels short and this column is comfortable. The recipe is
+    /// `IPOD_LAYOUT=1 ipod-emulator`, whose `verb` line prints it — the measurement is taken by a
+    /// `Text` in `ui/window.slint` (`verb-probe`, `visible: false`, outside every layout) and read
+    /// back through `MainWindow.verb-width`, because Slint 1.17 exposes no Rust-side way to measure
+    /// text and the only place the answer exists is the renderer.
+    /// `the_verb_column_holds_the_verb_this_platform_draws` in `tests/startup_fit.rs` asserts it
+    /// against the real binary on a real display.
+    ///
+    /// **The budget**: `10 chars × BODY_SIZE 14 px × BODY_ADVANCE 0.62 = 86.8`, rounded up to a
+    /// whole logical pixel. Written as a round number rather than as that product because a column
+    /// width is a whole number of pixels and `86.80000000000001` is what the product actually is;
+    /// `the_rail_verb_column_holds_the_longest_verb` is what re-derives it, out of the verb list in
+    /// `ui/rail.slint` rather than out of a second copy here, so a seventh and longer verb fails
+    /// this rather than eliding in the drawer.
+    ///
+    /// **[`BODY_ADVANCE`] stays the conservative 0.62 rather than the measured 0.479**, and that is
+    /// deliberate: one platform's face is not every platform's, and the budget is also what derives
+    /// [`CRADLE_LABEL_MAX_CHARS`] — where being generous would let a longer sentence through onto a
+    /// row that then elides. A budget above the measurement errs toward columns that are too wide
+    /// and sentences that are too short, which is the safe direction for both.
+    ///
+    /// **It does not squeeze the Rail.** The drawer body is `DRAWER_W − 2 × PAGE_MARGIN` = 372;
+    /// the entry row is a 16 px marker, `s2`, this column, `s2`, then `what` — which carries
+    /// `horizontal-stretch: 1; min-width: 0px;` (`ui/rail.slint:167-168`) — and a measure. The 24
+    /// px comes out of `what`.
+    RAIL_VERB_W:      Px = 88.0;
     /// §6.2's `label` line box.
     ///
     /// **`Text` has no `line-height` in Slint 1.17** — the property does not exist — so a line box
@@ -261,6 +309,73 @@ pub const K_MAX: i32 = 8;
 /// The asymmetry is the whole point — a symmetric comparison flutters under a drag exactly at the
 /// boundary, which is a window that flickers between two layouts while the mouse is down.
 pub const HYSTERESIS: f64 = 20.0;
+
+// ── Two type budgets, and neither is emitted ────────────────────────────────────────────────────
+//
+// The rule at the top of this section is *not scalars Slint can hold, or not read by markup*, and
+// these are the second kind. Emitting them would be worse than useless: nothing in `.slint` can ask
+// how long a string is, so `cradle-label-max-chars` would be a property no expression could use,
+// and `body-advance` would be a bare multiplier sitting in the same global as the lengths — an
+// invitation to write `width: Geometry.body-advance * something` in markup, which the literal sweep
+// cannot catch because a name is not a number.
+//
+// They are budgets rather than measurements. Both say so, and both name the command that settles
+// them.
+
+/// §6.2's `body` size, 14 px. **A duplicate of `Metric.body-size`, bounded and asserted** — the
+/// same arrangement [`PAGE_MARGIN`] has with `Metric.s5`, and for the same reason: `ui/tokens.slint`
+/// owns §6.2's type scale, this file owns geometry, and a column width derived from a type size has
+/// to name one. `the_rail_verb_column_holds_the_longest_verb` reads `body-size` out of
+/// `ui/tokens.slint` as text, so the two cannot drift.
+pub const BODY_SIZE: f64 = 14.0;
+
+/// A conservative average glyph advance, as a fraction of [`BODY_SIZE`].
+///
+/// **Unmeasured, and it is in [`RAIL_VERB_W`]'s shape rather than in the design's**: no constant in
+/// this program is allowed to be a number somebody liked, so this one carries what it is. It exists
+/// so that a column width and a label budget can be checked with no renderer running — Slint 1.17
+/// exposes no text-measurement API to Rust, and `i-slint-core`'s own `text_size` needs a live
+/// window adapter.
+///
+/// 0.62 is deliberately **pessimistic** for mixed-case English prose in a system UI face, where the
+/// true average is nearer 0.5: a budget that over-estimates how wide a string is refuses strings
+/// that would have fitted, and a budget that under-estimates ships one that elides. Of the two, the
+/// first is the failure that can be seen in a test.
+///
+/// **MEASURED 2026-08-21, macOS 27.0, scale 2: 0.479.** `synthesise` — ten characters — draws
+/// 67.0 logical px at 14 px, through `MainWindow.verb-width`, which `IPOD_LAYOUT=1` prints on its
+/// `verb` line. So the true average on this platform is nearer 0.48 than 0.5, and the pessimism
+/// above is real pessimism rather than a hope.
+///
+/// **It stays 0.62 anyway.** One platform's system face is not every platform's, and the two things
+/// derived from this fail in opposite directions: a column narrower than the text **elides**, and a
+/// label budget wider than the row **elides**. A single number above the measured advance is
+/// conservative for both. [`RAIL_VERB_W`] is now checked against the platform's own answer as well,
+/// by `the_verb_column_holds_the_verb_this_platform_draws`; this stays the floor under it.
+pub const BODY_ADVANCE: f64 = 0.62;
+
+/// How many characters §7.3's cradle label may carry before it elides.
+///
+/// **Written as the expression rather than as 48**, so a re-measured [`BODY_ADVANCE`] or a
+/// re-measured body moves every sentence that has to fit rather than leaving a stale number here.
+/// The label is `width: frame.width` (`ui/bench.slint:481`), and the frame is the body plus one
+/// [`CRADLE_BAND`] on each side:
+///
+/// ```text
+/// (BODY_ASPECT × HERO_PHYS_1X + 2 × CRADLE_BAND) / (BODY_ADVANCE × BODY_SIZE)
+///  = (388.0 + 32.0) / 8.68
+///  = 48.4  →  48
+/// ```
+///
+/// **It is a floor and not a ceiling.** `hero` is the *logical* body height, which is
+/// `HERO_PHYS_1X` only at `k = 1, sf = 1`; every larger window draws a wider label. So a sentence
+/// that fits this fits everywhere, and one that does not elides on the smallest window that draws
+/// the device at all — which is the case worth refusing.
+///
+/// Truncating rather than rounding is the same conservatism: 48.4 characters is 48 characters.
+#[allow(dead_code)]  // retired when: a first-run cradle label is composed at run time rather than typed — the shipped labels are checked against this budget by `every_typed_cradle_label_fits_its_own_row`, and the shipped binary consults it nowhere yet
+pub const CRADLE_LABEL_MAX_CHARS: usize =
+    ((BODY_ASPECT * HERO_PHYS_1X + 2.0 * CRADLE_BAND) / (BODY_ADVANCE * BODY_SIZE)) as usize;
 
 /// `SCREEN_W` → `"screen-w"`. The only mangling, and it is total.
 pub fn slint_name(rust_name: &str) -> String {
@@ -1196,6 +1311,21 @@ mod tests {
                 out.push(stmt[i + j + 1..].to_string());
             }
         }
+        out.extend(bound_values(stmt, |bare| {
+            GEOMETRY_PROPS.contains(&bare) || extra.contains(bare)
+        }));
+        out
+    }
+
+    /// The value side of every binding or assignment in one statement whose property name `want`
+    /// accepts.
+    ///
+    /// **One parser, two sweeps.** [`geometry_values`] and [`opacity_values`] ask different
+    /// questions about the same grammar, and a second hand-rolled walk of `ident : value` is a
+    /// second place for `Metric.s7`-is-not-a-7 to be got wrong. `the_literal_sweep_can_see_a_literal`
+    /// is the control that keeps this honest for both of them.
+    fn bound_values(stmt: &str, want: impl Fn(&str) -> bool) -> Vec<String> {
+        let mut out = Vec::new();
         let bytes: Vec<char> = stmt.chars().collect();
         let is_ident = |c: char| c.is_alphanumeric() || c == '_' || c == '-' || c == '.';
         let mut i = 0;
@@ -1227,11 +1357,143 @@ mod tests {
                 continue;
             }
             let bare = ident.rsplit('.').next().unwrap_or(&ident);
-            if GEOMETRY_PROPS.contains(&bare) || extra.contains(bare) {
+            if want(bare) {
                 out.push(bytes[j + 1..].iter().collect());
             }
         }
         out
+    }
+
+    /// The value side of every `opacity` binding — including a declared one such as
+    /// `material-opacity`, matched by suffix so a new name cannot slip the sweep.
+    fn opacity_values(stmt: &str) -> Vec<String> {
+        bound_values(stmt, |bare| bare == "opacity" || bare.ends_with("-opacity"))
+    }
+
+    /// **The closed set of opacities the markup is allowed to type**, each one cited.
+    ///
+    /// `opacity` is deliberately **not** in [`GEOMETRY_PROPS`]: it is not a position and not a size,
+    /// and putting it there would force `0.55`, `0.82` and `0.86` into [`ALLOWED`] — where they
+    /// would then silently permit `width: 0.55 * hero`, which is the one thing that sweep exists to
+    /// stop. A narrower list for a narrower question keeps both strict.
+    ///
+    /// Everything here is a **cosmetic press or hold state**, decided in the drawing and belonging
+    /// to it. [`GHOST_OPACITY`] is the other kind — a fraction the window computes and pushes — and
+    /// it is deliberately absent, so `opacity: 0.45` cannot be written back into markup.
+    const COSMETIC_OPACITIES: &[&str] = &[
+        "0.0", // off — `ipod.slint`'s dark panel and unlit hold switch
+        "1.0", // on, and the identity every ternary above returns to
+        "0.55", // §7.4's four held wheel marks (`ipod.slint:350-381`)
+        "0.82", // the held centre button (`ipod.slint:403`)
+        "0.86", // §5's `Pressable` press state (`primitives.slint:163`)
+    ];
+
+    /// **T-20. The ghost's 45 % cannot be typed into the markup.**
+    ///
+    /// §10.1's ghost is a number the window decides — an emptiness state, pushed in — so it lives in
+    /// [`GHOST_OPACITY`] and reaches the drawing as `Geometry.ghost-opacity`. A second copy typed
+    /// into `ipod.slint` is the same defect a typed `0.5917` was, one property along, and the
+    /// literal sweep does not cover it because `opacity` is not geometry.
+    ///
+    /// The cosmetic literals stay literals. That is the boundary, and it is the same one
+    /// `ui/tokens.slint`'s type scale gets: a press state is the drawing's own decision; a fraction
+    /// the program computes is not.
+    #[test]
+    fn no_opacity_literal_outside_the_cosmetic_set() {
+        let mut seen = 0usize;
+        for (name, text) in markup() {
+            for tok in tokens(&text) {
+                let (Tok::Stmt(n, stmt) | Tok::Open(n, stmt)) = tok else { continue };
+                for value in opacity_values(&stmt) {
+                    for num in numbers(&value) {
+                        seen += 1;
+                        assert!(
+                            COSMETIC_OPACITIES.contains(&num.as_str()),
+                            "ui/{name}:{n}: `{num}` is an opacity nobody declared. §10.1's ghost is \
+                             `Geometry.ghost-opacity`; a cosmetic press state goes in \
+                             COSMETIC_OPACITIES with the line that uses it\n  {stmt}"
+                        );
+                    }
+                }
+            }
+        }
+        // The control for the sweep's own reach, in the shape `AGENTS.md` §6 asks for: a sweep that
+        // found no opacity at all looks exactly like one that found nothing wrong, and this markup
+        // has fourteen of them.
+        assert!(
+            seen > 5,
+            "the opacity sweep found {seen} literals in the whole markup, so it is reading nothing"
+        );
+    }
+
+    /// **The control that makes the sweep above produce a non-zero.**
+    #[test]
+    fn the_opacity_sweep_can_see_a_literal() {
+        let caught = |stmt: &str| -> Vec<String> {
+            opacity_values(stmt)
+                .iter()
+                .flat_map(|v| numbers(v))
+                .filter(|n| !COSMETIC_OPACITIES.contains(&n.as_str()))
+                .collect()
+        };
+
+        // The exact line this sweep exists to refuse.
+        assert_eq!(caught("opacity: root.ghost ? 0.45 : 1.0"), vec!["0.45".to_string()]);
+        // …and the line it exists to permit.
+        assert!(caught("opacity: root.ghost ? Geometry.ghost-opacity : 1.0").is_empty());
+        // A declared one is matched by suffix, so a new name cannot slip it.
+        assert_eq!(caught("in property <float> material-opacity: 0.45"), vec!["0.45".to_string()]);
+        // The four real cosmetic states in this markup pass, or the sweep is refusing the drawing.
+        for ok in [
+            "opacity: screen-lit ? 1.0 : 0.0",
+            "opacity: root.held-menu ? 0.55 : 1.0",
+            "opacity: (centre-touch.pressed || root.held-select) ? 0.82 : 1.0",
+            "opacity: root.material-opacity * (touch.pressed ? 0.86 : 1.0)",
+        ] {
+            assert!(caught(ok).is_empty(), "the sweep refuses a shipped cosmetic state: {ok}");
+        }
+        // `animate opacity { … }` is a block, not a binding, and carries no number of its own.
+        assert!(caught("animate background, opacity").is_empty());
+        // A property whose name merely CONTAINS the word is not one of them.
+        assert!(caught("opacityish: 0.45").is_empty());
+        // And the geometry sweep is not weakened by any of this: 0.55 is still a geometry literal.
+        let none = std::collections::BTreeSet::new();
+        assert_eq!(
+            geometry_values("width: 0.55 * hero", &none)
+                .iter()
+                .flat_map(|v| numbers(v))
+                .filter(|n| !ALLOWED.contains(&n.as_str()))
+                .collect::<Vec<_>>(),
+            vec!["0.55".to_string()],
+            "putting `opacity` in GEOMETRY_PROPS would have had to allow 0.55 everywhere; that is \
+             the trade this second sweep exists to avoid"
+        );
+    }
+
+    /// **§10.1's ghost is a ghost.** A `GHOST_OPACITY` of 1.0 draws a solid iPod and every
+    /// contrast assertion about it passes vacuously; one of 0 draws nothing and the bench is empty
+    /// twice over.
+    //
+    // A declared constant checked against the range it has to be in, which is the point rather than
+    // a defect; left as a run-time assertion so a failure names the value instead of stopping the
+    // build. Same arrangement `the_drawer_fits_its_own_furniture_at_the_window_minimum` has.
+    #[allow(clippy::assertions_on_constants)]
+    #[test]
+    fn the_ghost_opacity_is_a_fraction_and_is_emitted_as_one() {
+        assert!(
+            GHOST_OPACITY > 0.0 && GHOST_OPACITY < 1.0,
+            "GHOST_OPACITY is {GHOST_OPACITY}; at 1.0 nothing is ghosted and at 0 nothing is drawn"
+        );
+        let (_, unit, value) = ALL
+            .iter()
+            .find(|(n, _, _)| *n == "GHOST_OPACITY")
+            .expect("GHOST_OPACITY is emitted, or the markup cannot read it");
+        assert_eq!(*unit, Unit::Ratio, "a fraction emitted as a length is `0.45px`");
+        assert_eq!(*value, GHOST_OPACITY);
+        assert!(
+            slint_source().contains("out property <float> ghost-opacity: 0.45;"),
+            "the generated global does not carry the ghost's opacity"
+        );
     }
 
     /// **The hole this whole item exists to close.**
@@ -1528,6 +1790,130 @@ mod tests {
             s5, PAGE_MARGIN,
             "Metric.s5 is {s5}px and PAGE_MARGIN is {PAGE_MARGIN}; the drawer's page margin IS the \
              space scale's 24 and two spellings of one number is how they come to disagree"
+        );
+    }
+
+    /// §6.2's `body` size has one source, and [`BODY_SIZE`] is the bounded duplicate of it.
+    ///
+    /// Same arrangement `the_row_value_column_fits_the_drawer` gives `Metric.s5` and
+    /// [`PAGE_MARGIN`]: `ui/tokens.slint` owns the type scale, this file owns geometry, and the two
+    /// numbers this file derives from a type size read the type size out of the markup as text.
+    fn markup_body_size() -> f64 {
+        read("tokens.slint")
+            .lines()
+            .map(str::trim)
+            .find_map(|l| l.strip_prefix("out property <length> body-size: "))
+            .and_then(|v| v.strip_suffix("px;"))
+            .and_then(|v| v.parse::<f64>().ok())
+            .expect("ui/tokens.slint declares body-size")
+    }
+
+    /// Every verb the Rail can draw, **read out of `ui/rail.slint`'s own list** rather than out of a
+    /// second copy here.
+    ///
+    /// `RailRow.verb`'s comment is the declaration — *fetch | build | copy | install | start |
+    /// synthesise* — and it is the set the markup itself claims to draw. A seventh verb added there
+    /// widens this automatically, which is the whole reason the list is not typed into this module.
+    fn declared_verbs() -> Vec<String> {
+        let text = read("rail.slint");
+        let line = text
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("//") && l.contains("Step::verb()") && l.contains('|'))
+            .expect("ui/rail.slint's RailRow.verb names the verbs it can draw");
+        let list = line.rsplit('`').next().unwrap_or(line);
+        let verbs: Vec<String> = list
+            .split('|')
+            .map(|v| v.trim().trim_end_matches('.').trim().to_string())
+            .filter(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_lowercase()))
+            .collect();
+        assert!(
+            verbs.len() >= 4,
+            "only {verbs:?} parsed out of ui/rail.slint's verb list; the sweep is reading nothing"
+        );
+        verbs
+    }
+
+    /// **T-18. The Rail's verb column holds the longest verb this program can draw.**
+    ///
+    /// §17.Q12 named this as the one constant nobody had measured and predicted its failure exactly:
+    /// *the longest verb is `synthesise` and it appears at first-run step 1, the first thing a new
+    /// user ever sees this program do. If it elides, it elides there.* Phase 5 is what puts
+    /// `synthesise` on screen, so the prediction becomes a test.
+    ///
+    /// **Still a budget, not a measurement.** [`BODY_ADVANCE`] is an estimate about a system UI face
+    /// this program cannot interrogate — Slint 1.17 gives Rust no text-measurement API — so this
+    /// bounds the column from below and says so. What it does mechanically is stop a seventh, longer
+    /// verb from arriving without the column moving.
+    #[test]
+    fn the_rail_verb_column_holds_the_longest_verb() {
+        let size = markup_body_size();
+        assert_eq!(
+            size, BODY_SIZE,
+            "Metric.body-size is {size}px and geometry::BODY_SIZE is {BODY_SIZE}; the verb column \
+             is derived from the type size and two spellings of one number is how they disagree"
+        );
+
+        let verbs = declared_verbs();
+        let longest = verbs
+            .iter()
+            .max_by_key(|v| v.chars().count())
+            .expect("at least one verb");
+        let need = longest.chars().count() as f64 * size * BODY_ADVANCE;
+        assert!(
+            RAIL_VERB_W >= need,
+            "`{longest}` needs about {need:.1} px at {size} px body and RAIL_VERB_W is \
+             {RAIL_VERB_W}; it elides at first-run step 1, which is the first thing a new user \
+             ever sees this program do"
+        );
+
+        // **Proof the budget can refuse something**, which is the only thing that makes it worth
+        // having: the 64 px that shipped does not hold `synthesise`, and this is the arithmetic
+        // that says so.
+        const SHIPPED: f64 = 64.0;
+        assert!(
+            SHIPPED < need,
+            "64 px was enough for `{longest}` after all, so widening the column bought nothing and \
+             this check cannot fail"
+        );
+
+        // …and the column still leaves the subject line something to be. `what` carries
+        // `horizontal-stretch: 1`, so it absorbs the widening — but not below nothing.
+        let row = DRAWER_W - 2.0 * PAGE_MARGIN;
+        let furniture = 16.0 + 8.0 + RAIL_VERB_W + 8.0;
+        assert!(
+            row - furniture >= 4.0 * ROW_H,
+            "the verb column and its furniture leave {:.0} px for the subject inside a {row:.0} px \
+             row",
+            row - furniture
+        );
+    }
+
+    /// **§7.3's cradle label budget is derived from the row it has to fit, and is a floor.**
+    ///
+    /// [`CRADLE_LABEL_MAX_CHARS`] is the expression rather than 48, so a re-measured
+    /// [`BODY_ADVANCE`] moves every sentence that has to fit. This checks the derivation is the one
+    /// the markup draws — `width: frame.width`, and the frame is the body plus a [`CRADLE_BAND`] a
+    /// side — and that the budget is the *smallest* window's, which is the case worth refusing.
+    #[test]
+    fn the_cradle_label_budget_is_derived_from_the_row_it_has_to_fit() {
+        let frame = BODY_ASPECT * HERO_PHYS_1X + 2.0 * CRADLE_BAND;
+        let want = (frame / (BODY_ADVANCE * markup_body_size())) as usize;
+        assert_eq!(
+            CRADLE_LABEL_MAX_CHARS, want,
+            "the budget is {CRADLE_LABEL_MAX_CHARS} characters and the {frame:.0} px row it has to \
+             fit holds about {want}"
+        );
+        // A budget of zero, or of a whole paragraph, is a budget that refuses nothing.
+        assert!(
+            (24..=120).contains(&CRADLE_LABEL_MAX_CHARS),
+            "{CRADLE_LABEL_MAX_CHARS} characters is not a sentence-sized budget"
+        );
+        // **The label is the cradle's, not the well's**, which is what makes `frame.width` the
+        // right measure — see `ui/bench.slint`'s own note on why it moves with the frame's x.
+        assert!(
+            frame > BODY_ASPECT * HERO_PHYS_1X,
+            "the label is measured against the body rather than against the fixture that holds it"
         );
     }
 

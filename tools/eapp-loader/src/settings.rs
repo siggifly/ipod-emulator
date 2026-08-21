@@ -481,6 +481,21 @@ pub struct Device {
     pub parked_at: Option<u64>,
 }
 
+impl Device {
+    /// Whether this device names a drive at all.
+    ///
+    /// **`false` is *unfinished*, not *broken*.** `Settings::disk_of` already draws that line —
+    /// `missing()` returns nothing for such a device and `run_device` accepts it — and a first run
+    /// that failed at the fetch leaves exactly this shape. The cradle must then say *press the
+    /// centre button to finish making My 5.5G* rather than promise a start.
+    ///
+    /// A name that resolves to nothing is `true` here: the device *names* a disk, and whether the
+    /// name resolves is [`Settings::missing`]'s question, answered as `Absent::Unlisted`.
+    pub fn names_a_disk(&self) -> bool {
+        self.disk.is_some() || self.disk_path.is_some()
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Settings {
     pub mode: Mode,
@@ -533,6 +548,21 @@ pub struct Settings {
     /// for no benefit, and this audience notices. The menu item works either way — this only
     /// decides whether the check happens on its own.
     pub check_updates_on_start: bool,
+    /// Whether the first-run screen has ever been drawn for this installation.
+    ///
+    /// **The old window inferred *offer me* from *the device list is empty*, and a cancelled or
+    /// failed build empties the list** — so it re-opened its wizard for ever, returning a person to
+    /// step one with no error shown and no way past. That shipped. Emptiness is a state of the
+    /// library; this is a fact about the person, and the two are not the same question.
+    ///
+    /// It sits in the **main** block of [`Settings::render`] rather than in `render_resources`,
+    /// which returns early on `resources.is_empty() && !library_seeded` — every first launch — so a
+    /// key written there would not survive the one file that matters.
+    ///
+    /// Written once, by the window. **Nothing in this program ever clears it**: not a cancel, not a
+    /// failure, not `forget`, not an empty library. A person who wants the welcome back sets it to
+    /// false by hand, which is what the comment above the key says.
+    pub welcomed: bool,
     /// Run on a copy of the drive image rather than on the image itself.
     ///
     /// **`None` means "nobody has said", and that is not the same as "no".** With no answer the
@@ -703,6 +733,9 @@ impl Settings {
                 // not silently get a white iPod back on the next launch.
                 "black_device" if v == "true" => s.chassis = Some(crate::identity::Colour::Black),
                 "check_updates_on_start" => s.check_updates_on_start = v == "true",
+                // Anything but the literal `true` is false, matching `check_updates_on_start` — a
+                // half-written file must not suppress the one screen that explains the program.
+                "welcomed" => s.welcomed = v == "true",
                 "work_on_copy" => s.work_on_copy = Some(v == "true"),
                 "current" if !v.is_empty() => s.current = Some(v.to_string()),
                 "library_seeded" => s.library_seeded = v == "true",
@@ -982,6 +1015,104 @@ fn suggest_nor_name(src: &crate::nor::Source) -> String {
     }
 }
 
+/// What to call the iPod a source describes, in the words a person would use: `Black 5.5G`.
+///
+/// **Not [`suggest_nor_name`]**, which is `A446, seed 12873491` — a recipe, and the right name for
+/// a row in a list of recipes. This is what first run puts on the shelf, and `seed 12873491` is not
+/// something anybody would say out loud.
+///
+/// An unknown model falls back to the number itself rather than to a placeholder: a name nobody
+/// recognises is still a name, and `unnamed` is not.
+pub fn suggest_ipod_name(src: &crate::nor::Source) -> String {
+    match model_of(src) {
+        Some(m) => format!("{} {}", m.colour().label(), m.generation.label()),
+        None => suggest_nor_name(src),
+    }
+}
+
+/// What to call the device made out of that iPod: `My 5.5G`.
+pub fn suggest_device_name(src: &crate::nor::Source) -> String {
+    match model_of(src) {
+        Some(m) => format!("My {}", m.generation.label()),
+        None => "My iPod".into(),
+    }
+}
+
+/// What to call its drive image, as a filename stem: `my-5.5g`.
+///
+/// **It must produce a filename on every platform this program runs on**, so `\ / : * ? " < > |`,
+/// control characters and newlines cannot survive it, and it is never empty — an empty stem
+/// produces `.img`, a hidden file nobody can find.
+pub fn suggest_disk_stem(src: &crate::nor::Source) -> String {
+    file_stem_of(&suggest_device_name(src))
+}
+
+/// Any name at all, as a filename stem.
+///
+/// **A separate function because it is the part with a hostile input.** `suggest_disk_stem` can
+/// only ever hand it `My 5.5G`-shaped text, so a test that went through that door could never see
+/// a `/` and would pass whatever this did. A person renaming a device can type anything.
+///
+/// Everything outside `[a-z0-9.]` becomes one `-`, runs collapse, and leading or trailing `-` and
+/// `.` go — so `\ / : * ? " < > |`, control characters and newlines cannot survive, and the result
+/// is never a hidden file. Never empty: an empty stem produces `.img`, which nobody can find.
+pub fn file_stem_of(name: &str) -> String {
+    let name = name.to_lowercase();
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let trimmed = out.trim_matches(['-', '.']).to_string();
+    if trimmed.is_empty() {
+        "ipod".into()
+    } else {
+        trimmed
+    }
+}
+
+/// The model a source describes, when this build knows it.
+fn model_of(src: &crate::nor::Source) -> Option<&'static crate::identity::Model> {
+    match src {
+        crate::nor::Source::Synthetic { model, .. } => crate::identity::Model::lookup(model),
+        crate::nor::Source::File(_) => None,
+    }
+}
+
+/// Where drives this program builds land.
+///
+/// Under [`data_dir`], so `IPOD_EMULATOR_DATA` moves them — which is what makes it safe for a test
+/// or an agent to run a build without landing an 8 GiB file in somebody's real library.
+pub fn drives_dir() -> PathBuf {
+    data_dir().join("drives")
+}
+
+/// A path in `dir` named `<stem>.<ext>` that **nothing already occupies**, suffixing ` (2)`,
+/// ` (3)` … the way [`Settings::unique_name`] does for names in a list.
+///
+/// `fs::rename` overwrites silently, so without this a first run could destroy a drive the operator
+/// already had and named the same thing. `AGENTS.md` §3: never overwrite a disk image.
+pub fn free_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+    let stem = one_line(stem);
+    let stem = if stem.is_empty() { "ipod" } else { stem.as_str() };
+    let first = dir.join(format!("{stem}.{ext}"));
+    if !first.exists() {
+        return first;
+    }
+    // Bounded rather than unbounded: a directory holding four billion `my-5.5g (n).img` is a
+    // different problem, and a loop with no end is how a UI thread stops answering.
+    for n in 2..10_000u32 {
+        let p = dir.join(format!("{stem} ({n}).{ext}"));
+        if !p.exists() {
+            return p;
+        }
+    }
+    dir.join(format!("{stem} ({}).{ext}", now_unix()))
+}
+
 /// One [`crate::nor::Source`] as settings lines. Shared by the live machine and every saved one, so
 /// the two can never drift into different spellings of the same recipe.
 fn render_nor_of(nor: &crate::nor::Source) -> String {
@@ -1040,6 +1171,11 @@ impl Settings {
              # An HTTPS GET of the GitHub releases API and a version comparison, on launch.\n\
              # Off by default on purpose. The menu item works whatever this says.\n\
              check_updates_on_start = {}\n\
+             # Whether the first-run screen has been shown. Once true it never goes back: a\n\
+             # cancelled or failed build empties the device list, and a program that read\n\
+             # emptiness as \"offer the welcome again\" returns you to step one for ever. Set\n\
+             # it to false to see it again.\n\
+             welcomed = {}\n\
              # Run on a COPY of the drive, leaving the original untouched. Absent means \"decide\n\
              # from where the drive came from\": a drive this program built is written to directly,\n\
              # one you supplied is copied. Set it to true or false to answer for both.\n\
@@ -1049,6 +1185,7 @@ impl Settings {
             self.render_nor(),
             p(&self.disk),
             self.check_updates_on_start,
+            self.welcomed,
             match self.work_on_copy {
                 Some(v) => format!("work_on_copy = {v}\n"),
                 None => String::new(),
@@ -2118,6 +2255,7 @@ mod tests {
             nor: crate::nor::Source::File(PathBuf::from("/a/b/rom.bin")),
             disk: Some(PathBuf::from("/a/b/disk.img")),
             check_updates_on_start: true,
+            welcomed: true,
             work_on_copy: Some(true),
             devices: Vec::new(),
             current: None,
@@ -3659,5 +3797,172 @@ mod device_tests {
         assert!(!text.contains("device.0.flash"), "{text}");
         assert!(!text.contains("device.0.nor_model"), "{text}");
         assert!(!text.contains("device.0.nor_seed"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod first_run_naming_tests {
+    use super::*;
+
+    /// A scratch directory of this module's own. `tests::temp_dir` is private to that module, and a
+    /// sibling cannot reach it — copying four lines is cheaper than widening a test helper.
+    fn temp_dir(what: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let d = std::env::temp_dir().join(format!(
+            "ipod-emulator-first-run-{what}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&d).expect("a temp directory");
+        d
+    }
+
+    fn an_ipod() -> crate::nor::Source {
+        crate::nor::Source::Synthetic {
+            model: crate::nor::DEFAULT_MODEL.into(),
+            seed: 7,
+            serial: None,
+            guid: None,
+            splash: None,
+        }
+    }
+
+    /// The names first run puts on the shelf are the words a person would use, not the recipe.
+    ///
+    /// `suggest_nor_name` is `A446, seed 7` — right for a row in a list of recipes, and not
+    /// something anybody would say out loud about the iPod on the bench.
+    #[test]
+    fn the_suggested_names_are_the_words_a_person_would_use() {
+        let src = an_ipod();
+        assert_eq!(suggest_ipod_name(&src), "Black 5.5G");
+        assert_eq!(suggest_device_name(&src), "My 5.5G");
+        assert_eq!(suggest_disk_stem(&src), "my-5.5g");
+        assert!(
+            !suggest_ipod_name(&src).contains("seed"),
+            "the shelf is being shown a recipe: {}",
+            suggest_ipod_name(&src)
+        );
+        // The device name and the design's own word for it are one string.
+        assert_eq!(suggest_device_name(&src), crate::compose::FIRST_RUN_DEVICE);
+    }
+
+    /// **A stem has to be a filename on every platform this program runs on**, and it is never
+    /// empty: an empty stem produces `.img`, a hidden file nobody can find.
+    #[test]
+    fn a_disk_stem_is_a_filename_on_every_platform() {
+        let banned = ['\\', '/', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\0'];
+        // **The hostile input goes through the sanitiser directly.** A person can rename a device
+        // to anything; going in through `suggest_disk_stem` would only ever offer it `My 5.5G`, and
+        // a sweep that cannot see a `/` cannot tell you whether `/` is handled.
+        for name in [
+            "My / iPod: \"the\" <one>|\\ *?",
+            "  ..  ",
+            "\n\r\0",
+            "....",
+            "-----",
+            "My 5.5G",
+            "",
+        ] {
+            let stem = file_stem_of(name);
+            assert!(!stem.is_empty(), "{name:?} produced an empty stem");
+            for c in banned {
+                assert!(
+                    !stem.contains(c),
+                    "{name:?} produced {stem:?}, which carries {c:?}"
+                );
+            }
+            assert!(!stem.starts_with('.'), "{name:?} produced the hidden file {stem:?}");
+            assert!(!stem.ends_with('.'), "{name:?} produced {stem:?}, which Windows will not take");
+        }
+        assert_eq!(file_stem_of("My / iPod"), "my-ipod");
+        assert_eq!(file_stem_of("\n\r\0"), "ipod");
+
+        for model in ["A446", "A146", "not-a-model", "", "  ", "8513"] {
+            let src = crate::nor::Source::Synthetic {
+                model: model.into(),
+                seed: 1,
+                serial: None,
+                guid: None,
+                splash: None,
+            };
+            let stem = suggest_disk_stem(&src);
+            assert!(!stem.is_empty(), "{model:?} produced an empty stem");
+            for c in banned {
+                assert!(
+                    !stem.contains(c),
+                    "{model:?} produced {stem:?}, which carries {c:?}"
+                );
+            }
+            assert!(!stem.starts_with('.'), "{stem:?} is a hidden file");
+        }
+        // A dump has no model to read, and still gets a name.
+        let file = crate::nor::Source::File(PathBuf::from("/roms/My Dump (2).bin"));
+        assert_eq!(suggest_disk_stem(&file), "my-ipod");
+    }
+
+    /// **A build never takes a name something already occupies.** `fs::rename` overwrites silently,
+    /// so without this a first run could destroy a drive the operator already had.
+    #[test]
+    fn a_build_never_takes_a_name_something_already_occupies() {
+        let dir = temp_dir("free-path");
+        let first = free_path(&dir, "my-5.5g", "img");
+        assert_eq!(first.file_name().unwrap(), "my-5.5g.img");
+        std::fs::write(&first, b"somebody's only copy of an iPod").unwrap();
+
+        let second = free_path(&dir, "my-5.5g", "img");
+        assert_ne!(second, first, "the second build would have overwritten the first");
+        assert_eq!(second.file_name().unwrap(), "my-5.5g (2).img");
+        std::fs::write(&second, b"and another").unwrap();
+        assert_eq!(
+            free_path(&dir, "my-5.5g", "img").file_name().unwrap(),
+            "my-5.5g (3).img"
+        );
+        // The one that was already there is untouched.
+        assert_eq!(
+            std::fs::read(&first).unwrap(),
+            b"somebody's only copy of an iPod"
+        );
+        // An empty stem is a name, not a hidden file.
+        assert_eq!(free_path(&dir, "", "img").file_name().unwrap(), "ipod.img");
+    }
+
+    /// Drives land under the data directory, so `IPOD_EMULATOR_DATA` moves them — which is what
+    /// makes it safe to run a build without landing 8 GiB in somebody's real library.
+    #[test]
+    fn drives_live_under_the_data_directory() {
+        let _guard = env_lock();
+        let dir = temp_dir("drives-dir");
+        let before = std::env::var_os("IPOD_EMULATOR_DATA");
+        // SAFETY: `env_lock` serialises every test in this crate that touches this variable.
+        unsafe { std::env::set_var("IPOD_EMULATOR_DATA", &dir) };
+        assert_eq!(drives_dir(), dir.join("drives"));
+        // SAFETY: still holding the lock.
+        unsafe {
+            match before {
+                Some(v) => std::env::set_var("IPOD_EMULATOR_DATA", v),
+                None => std::env::remove_var("IPOD_EMULATOR_DATA"),
+            }
+        }
+    }
+
+    /// A device that names no drive is **unfinished**, not broken — which is what tells a first run
+    /// that failed at the fetch from a device whose drive has gone.
+    #[test]
+    fn a_device_with_no_drive_is_unfinished_rather_than_broken() {
+        let mut d = Device {
+            name: "My 5.5G".into(),
+            firmware: "an iPod".into(),
+            ..Device::default()
+        };
+        assert!(!d.names_a_disk());
+        d.disk = Some("my-5.5g".into());
+        assert!(d.names_a_disk(), "a device naming a disk read as unfinished");
+        d.disk = None;
+        d.disk_path = Some(PathBuf::from("/drives/my-5.5g.img"));
+        assert!(
+            d.names_a_disk(),
+            "a device naming a drive by path read as unfinished"
+        );
     }
 }

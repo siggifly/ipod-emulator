@@ -162,6 +162,12 @@ export component Bench inherits Rectangle {
     // would invent a fact about somebody's iPod, and the model already refuses to (§7.2).
     in property <color> chassis: #e4e4e2;
     in property <bool> dark-chassis: false;
+    // §10.1: **the drawing at `Geometry.ghost-opacity`, which is an iPod that has not been decided
+    // yet.** It is an *emptiness* state and not a first-run one — §9.1 gives the later-empty bench
+    // the same ghost — so it is pushed in from Rust rather than derived here from `device-name`
+    // being blank or from anything else this file can see. `IPod` decides what it dims; the glass
+    // is deliberately not in it.
+    in property <bool> ghost: false;
     in property <image> screen-source;
     in property <bool> screen-lit: false;
     in property <string> panel-description;
@@ -441,6 +447,7 @@ export component Bench inherits Rectangle {
                 body-height: root.hero;
                 chassis: root.chassis;
                 dark-chassis: root.dark-chassis;
+                ghost: root.ghost;
                 screen-source: root.screen-source;
                 screen-lit: root.screen-lit;
                 panel-description: root.panel-description;
@@ -528,7 +535,15 @@ export component Bench inherits Rectangle {
             visible: root.progress >= 0;
             accessible-role: AccessibleRole.progress-indicator;
             accessible-label: "progress";
-            accessible-value: root.shelf-facts;
+            // **The Rail's line, not the device's facts.** It read `shelf-facts` — the device
+            // summary — which is not what this bar is about and was never going to be: an
+            // assistive technology asking a progress indicator for its value would have been told
+            // `A 5.5G, 30 GB, black · Apple 25.1.3`. `ui/rail.slint`'s own bar answers
+            // `root.e.measure`, and `shelf-rail-line` is the same sentence at bench scale — real
+            // bytes, `4.1 MB of 6.5 MB`, which is what §9.2 asks the bench to mirror in one line.
+            //
+            // Invisible until now, because nothing bound `progress` and the bar was never drawn.
+            accessible-value: root.shelf-rail-line;
             accessible-value-minimum: 0;
             accessible-value-maximum: 1;
         }

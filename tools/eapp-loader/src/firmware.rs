@@ -246,40 +246,157 @@ pub fn sha256(data: &[u8]) -> String {
 // Fetching
 // ---------------------------------------------------------------------------------------------
 
+/// Why a download did not produce a file.
+///
+/// **A class, not a sentence.** Matching on [`download`]'s `String` is the drift this project keeps
+/// paying for: a window that wanted to tell a 403 apart from a dead network had to look for the
+/// digits `403` inside prose that was free to be reworded. The sentence still travels beside it,
+/// verbatim, because the words are the model's and nobody re-words them on the way to a screen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Trouble {
+    /// Apple answers 403/404/410 for this URL, or the catalogue records `served: false`. **A fact
+    /// about Apple's servers, not about anybody's network**, which is why it is its own class.
+    NotServed { http: u16 },
+    /// `curl` is not on this computer, and on Windows neither is `powershell`.
+    NoTool,
+    /// The fetcher ran and never got an answer. `what` is curl's own documented meaning for `code`.
+    Unreachable { code: i32, what: &'static str },
+    /// The bytes arrived and are not the bytes on record.
+    Verification,
+    /// A local create, write, read or rename failed.
+    Io,
+    /// [`Watch::stop`] went true. **Not a failure** — the caller files it as cancelled.
+    Stopped,
+}
+
+/// What a long download reports to, and asks.
+///
+/// **This module knows nothing about threads.** A watcher is whatever the caller has: a channel
+/// sender and an `AtomicBool` in the window, [`Silent`] everywhere else. Keeping the trait here and
+/// the thread there is what lets `ipod-boot` and the window share one fetcher.
+pub trait Watch {
+    /// Bytes on disk so far, and the total — `0` where the catalogue records none, which the
+    /// caller renders as a number that moves and no bar.
+    fn bytes(&mut self, done: u64, total: u64);
+    /// Asked once per [`WATCH_TICK`]. `true` stops the download and deletes its `.part`.
+    fn stop(&self) -> bool;
+}
+
+/// A watcher that wants nothing and never stops — what [`download`] passes.
+pub struct Silent;
+
+impl Watch for Silent {
+    fn bytes(&mut self, _done: u64, _total: u64) {}
+    fn stop(&self) -> bool {
+        false
+    }
+}
+
+/// How often the `.part` is measured and the stop flag read. 10 Hz.
+///
+/// Fast enough that cancelling feels immediate and slow enough that a 6.5 MB download produces
+/// about sixty-five updates rather than thousands.
+pub const WATCH_TICK: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The `.part` a download in flight writes to.
+///
+/// **Extracted so the fetcher and whoever watches the progress cannot drift about where it is.** A
+/// progress bar measuring a path the downloader is not writing reads zero for ever.
+pub fn part_path(rel: &Release, dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join(format!("{}.part", rel.file))
+}
+
+/// Is this release already here, and does it still verify?
+///
+/// The same question [`download`]'s own early return asks, asked without downloading anything — so
+/// a resumed first run can tick the fetch step off rather than fetching 6.5 MB it already has.
+/// About 30 ms for 6.5 MB; it reads and hashes the file, so it belongs on a worker.
+pub fn is_cached(rel: &Release, dir: &std::path::Path) -> bool {
+    std::fs::read(dir.join(rel.file))
+        .map(|b| verify(rel, &b).is_ok())
+        .unwrap_or(false)
+}
+
 /// Download a release and **verify it**, returning where it landed.
 ///
 /// Writes to a `.part` file and renames only once the bytes check out, so an interrupted download
 /// can never be mistaken for a finished one — which is the failure that costs an afternoon, because
 /// a truncated `.ipsw` is a valid zip right up until the moment it is not.
 pub fn download(rel: &Release, dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    download_watched(rel, dir, &mut Silent).map_err(|(_, said)| said)
+}
+
+/// The same, reporting bytes as they land and stopping when asked.
+///
+/// The `.part`-then-rename discipline is the whole of why a cancel is safe: **nothing acquires a
+/// real name until the bytes have been checked**, so a stopped download leaves either nothing or a
+/// file whose name says what it is, and the only file this ever removes is the one it created.
+pub fn download_watched(
+    rel: &Release,
+    dir: &std::path::Path,
+    w: &mut dyn Watch,
+) -> Result<std::path::PathBuf, (Trouble, String)> {
     let dest = dir.join(rel.file);
     if let Ok(existing) = std::fs::read(&dest) {
         if verify(rel, &existing).is_ok() {
             return Ok(dest);
         }
-        // Present but wrong: say so rather than silently re-using or silently clobbering.
+        // Present but wrong: say so rather than silently re-using or silently clobbering. **This
+        // path is why `Class::Verification` stops offering `Retry` after the first failure** — it
+        // loops for as long as a mirror serves the wrong bytes.
         eprintln!(
             "{}: already here but does not verify — downloading again",
             dest.display()
         );
     }
     if !rel.served {
-        return Err(format!(
-            "{}: Apple no longer serves this release — its URL returns 403.\n\
-             That is a fact about Apple's servers, not about your network. Another release in the \n\
-             same updater family will almost certainly do: try `ipod-boot firmware list {}`.",
-            rel.file, rel.updater_family
+        // One class and one sentence for both routes to "Apple does not serve this": the catalogue
+        // saying so, and the server saying so.
+        return Err((
+            Trouble::NotServed { http: 403 },
+            format!(
+                "{}: Apple no longer serves this release — its URL returns 403.\n\
+                 That is a fact about Apple's servers, not about your network. Another release in the \n\
+                 same updater family will almost certainly do: try `ipod-boot firmware list {}`.",
+                rel.file, rel.updater_family
+            ),
         ));
     }
-    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let part = dir.join(format!("{}.part", rel.file));
-    http_get_to_file(rel.url, &part)?;
-    let got = std::fs::read(&part).map_err(|e| format!("{}: {e}", part.display()))?;
+    std::fs::create_dir_all(dir)
+        .map_err(|e| (Trouble::Io, format!("{}: {e}", dir.display())))?;
+    let part = part_path(rel, dir);
+    if let Err((t, said)) = fetch_watched(rel.url, &part, rel.bytes, w) {
+        // **A transfer that ended early leaves its `.part`, and nothing ever comes back for it.**
+        // `fetch_watched` removes it when the *watcher* stopped the download and on no other path,
+        // so curl 18 / 28 / 56 — an interrupted transfer, which is the common one — left a partial
+        // file in the cache that is never shown, never offered for deletion and never cleaned up:
+        // `Rail::fail` clears `cancellable`, so no `Cancel` is drawn, and neither `Retry` nor
+        // `Provide` routes to the delete. Nothing here resumes a download (`curl -C -` is not
+        // used), so the bytes are worth nothing and keeping them is litter.
+        let _ = std::fs::remove_file(&part);
+        return Err(match t {
+            // **One sentence for both routes to "Apple does not serve this."** The catalogue route
+            // above names the family to try instead; the server saying 403 to our face is the same
+            // fact learned a different way, and it said nothing.
+            Trouble::NotServed { .. } => (
+                t,
+                format!(
+                    "{said}\nAnother release in the same updater family will almost certainly do: \
+                     try `ipod-boot firmware list {}`.",
+                    rel.updater_family
+                ),
+            ),
+            _ => (t, said),
+        });
+    }
+    let got = std::fs::read(&part)
+        .map_err(|e| (Trouble::Io, format!("{}: {e}", part.display())))?;
     if let Err(e) = verify(rel, &got) {
         let _ = std::fs::remove_file(&part);
-        return Err(e);
+        return Err((Trouble::Verification, e));
     }
-    std::fs::rename(&part, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+    std::fs::rename(&part, &dest)
+        .map_err(|e| (Trouble::Io, format!("{}: {e}", dest.display())))?;
     Ok(dest)
 }
 
@@ -323,28 +440,166 @@ pub fn verify(rel: &Release, data: &[u8]) -> Result<(), String> {
 /// The same reasoning as the update check in the window: `curl` is on macOS, on every Linux, and on
 /// Windows since 1803. Speaking TLS ourselves would mean a dependency, and shelling out to fetch a
 /// file is a thing this project already does.
+///
+/// **One implementation, two doors.** This is [`fetch_watched`] with a watcher that wants nothing;
+/// the Rockbox and iPodLinux fetchers come through here, the window comes through the other.
 pub(crate) fn http_get_to_file(url: &str, dest: &std::path::Path) -> Result<(), String> {
+    fetch_watched(url, dest, 0, &mut Silent).map_err(|(_, said)| said)
+}
+
+/// What curl's exit code means, in curl's own words.
+///
+/// **Only the ones that can happen to a GET**, and a code with no entry is reported with its number
+/// rather than guessed at — a wrong explanation is worse than an honest "it stopped".
+fn curl_meaning(code: i32) -> &'static str {
+    match code {
+        6 => "could not resolve the host",
+        7 => "could not connect",
+        18 => "the transfer ended early",
+        23 => "could not write the file",
+        26 => "could not read what it was sending",
+        28 => "timed out after 600 seconds",
+        35 => "the TLS handshake failed",
+        56 => "the connection was reset while receiving",
+        60 => "the certificate could not be verified",
+        _ => "stopped without an answer",
+    }
+}
+
+/// HTTPS GET to a file, reporting bytes as they land and stopping when asked.
+///
+/// **Spawn and poll rather than block.** `Command::status()` returns when the download is over,
+/// which is precisely too late to draw a progress bar or to honour a cancel; this starts the child,
+/// measures the growing `.part` every [`WATCH_TICK`], and asks the watcher whether to stop.
+///
+/// `total` is what the catalogue records — `0` where it records none, which travels through to the
+/// caller as a number with no denominator rather than as a bar drawn against a guess.
+fn fetch_watched(
+    url: &str,
+    dest: &std::path::Path,
+    total: u64,
+    w: &mut dyn Watch,
+) -> Result<(), (Trouble, String)> {
+    use std::io::Read;
     use std::process::{Command, Stdio};
-    let curl = Command::new("curl")
+
+    // **`-w %{http_code}` on stdout, the body on the file.** Without it a 403 and a dead network are
+    // one exit code (22) and one sentence, and the window cannot tell the person which happened.
+    //
+    // **`-L` is deliberate and was very nearly deleted.** Following a redirect silently is how a
+    // captive portal's login page becomes a `.ipsw`, and Apple's own URL does not redirect — so on
+    // the firmware path alone it is dead weight with a downside. It stays because this function is
+    // **shared**: the Rockbox and iPodLinux release servers do redirect, and dropping it here
+    // breaks two fetchers that cannot be tested offline. What makes the captive-portal case safe is
+    // not the flag but `verify()`, which refuses any body that is not the recorded length *and* the
+    // recorded SHA-256, and refuses it before anything is renamed into place.
+    let spawned = Command::new("curl")
         .args([
             "-fsSL",
             "--max-time",
             "600",
             "-A",
             concat!("ipod-emulator/", env!("CARGO_PKG_VERSION")),
+            "-w",
+            "%{http_code}",
             "-o",
         ])
         .arg(dest)
         .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
-        .status();
-    if let Ok(s) = curl {
-        if s.success() {
-            return Ok(());
+        .spawn();
+
+    let mut child = match spawned {
+        Ok(c) => c,
+        Err(e) => return windows_fallback(url, dest, e),
+    };
+
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) => {}
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err((Trouble::Io, format!("curl: {e}")));
+            }
         }
+        // The `.part`'s apparent length is the honest numerator for a download: it grows a byte at
+        // a time, and nothing preallocates it.
+        let done = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+        w.bytes(done, total);
+        if w.stop() {
+            let _ = child.kill();
+            let _ = child.wait();
+            // **Ours, and named before a byte went into it.** This is the only file this function
+            // ever removes.
+            let _ = std::fs::remove_file(dest);
+            return Err((Trouble::Stopped, format!("stopped at {}", crate::si(done))));
+        }
+        std::thread::sleep(WATCH_TICK);
+    };
+
+    let mut said = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _ = out.read_to_string(&mut said);
     }
+    if status.success() {
+        let done = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+        w.bytes(done, total);
+        return Ok(());
+    }
+
+    let code = status.code().unwrap_or(-1);
+    // 22 is `-f` refusing an HTTP error, and the status it refused is on stdout.
+    if code == 22 {
+        let http: u16 = said.trim().parse().unwrap_or(0);
+        return match http {
+            403 | 404 | 410 => Err((
+                Trouble::NotServed { http },
+                format!("{url}: the server answered {http} — it does not serve this file."),
+            )),
+            0 => Err((
+                Trouble::NotServed { http: 0 },
+                format!("{url}: the server refused it and did not say with what status."),
+            )),
+            _ => Err((
+                Trouble::Unreachable {
+                    code,
+                    what: "the server answered with an error",
+                },
+                format!("{url}: the server answered {http}."),
+            )),
+        };
+    }
+    if matches!(code, 23 | 26) {
+        return Err((
+            Trouble::Io,
+            format!("{}: {}", dest.display(), curl_meaning(code)),
+        ));
+    }
+    Err((
+        Trouble::Unreachable {
+            code,
+            what: curl_meaning(code),
+        },
+        format!("{url}: {} (curl {code}).", curl_meaning(code)),
+    ))
+}
+
+/// Windows has a second fetcher. Everywhere else, a `curl` that will not start is the end of it.
+fn windows_fallback(
+    url: &str,
+    dest: &std::path::Path,
+    why: std::io::Error,
+) -> Result<(), (Trouble, String)> {
+    use std::process::{Command, Stdio};
     if !cfg!(windows) {
-        return Err(format!("curl could not fetch {url}"));
+        return Err((
+            Trouble::NoTool,
+            format!("curl could not be run: {why}. Every download in this program goes through it."),
+        ));
     }
     let ps = Command::new("powershell")
         .args([
@@ -356,12 +611,21 @@ pub(crate) fn http_get_to_file(url: &str, dest: &std::path::Path) -> Result<(), 
                 dest.display()
             ),
         ])
-        .status()
-        .map_err(|e| format!("{e}"))?;
-    if ps.success() {
-        Ok(())
-    } else {
-        Err(format!("could not fetch {url}"))
+        .stdin(Stdio::null())
+        .status();
+    match ps {
+        Ok(s) if s.success() => Ok(()),
+        Ok(_) => Err((
+            Trouble::Unreachable {
+                code: -1,
+                what: "stopped without an answer",
+            },
+            format!("could not fetch {url}"),
+        )),
+        Err(e) => Err((
+            Trouble::NoTool,
+            format!("neither curl nor powershell could be run: {why}; {e}"),
+        )),
     }
 }
 
@@ -814,5 +1078,205 @@ mod tests {
             e.contains("sha256"),
             "size-correct rubbish must fail on the hash: {e}"
         );
+    }
+}
+
+#[cfg(test)]
+mod watched_tests {
+    use super::*;
+
+    fn scratch(what: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let d = std::env::temp_dir().join(format!(
+            "ipod-fw-watch-{what}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&d).expect("a temp directory");
+        d
+    }
+
+    fn refused() -> &'static Release {
+        CATALOGUE
+            .iter()
+            .find(|r| !r.served)
+            .expect("five of the seventy-one are gone")
+    }
+
+    fn served() -> &'static Release {
+        by_file("iPod_25.1.3.ipsw").expect("the 5.5G's newest")
+    }
+
+    /// **A 403 is not a network failure**, and the difference is the whole reason [`Trouble`] is a
+    /// class rather than a sentence: one of them means *try again* and the other means *Apple does
+    /// not have this*, and a window that could only read prose had to look for the digits `403`
+    /// inside words that were free to be reworded.
+    #[test]
+    fn a_release_apple_does_not_serve_is_not_a_network_failure() {
+        let dir = scratch("not-served");
+        let (t, said) = download_watched(refused(), &dir, &mut Silent)
+            .expect_err("a release Apple refuses was downloaded");
+        assert_eq!(t, Trouble::NotServed { http: 403 });
+        assert!(
+            said.contains("not about your network"),
+            "the sentence blames the network: {said}"
+        );
+        // Nothing was created for a download that never started.
+        let left: Vec<String> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(left.is_empty(), "a refused download left {left:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `download` still says exactly what it used to for its five existing callers: the wrapper
+    /// forwards the model's own sentence and adds nothing.
+    #[test]
+    fn download_forwards_the_same_sentence_the_class_travels_with() {
+        let dir = scratch("same-sentence");
+        let plain = download(refused(), &dir).expect_err("still refused");
+        let (_, watched) = download_watched(refused(), &dir, &mut Silent).expect_err("still refused");
+        assert_eq!(plain, watched, "the two doors say different things");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **The `.part` is one path, known to the fetcher and to whoever is watching it.** A progress
+    /// bar measuring a path the downloader is not writing reads zero for ever.
+    #[test]
+    fn the_partial_file_is_the_release_with_part_after_it() {
+        let dir = std::path::Path::new("/cache");
+        let p = part_path(served(), dir);
+        assert_eq!(p, dir.join("iPod_25.1.3.ipsw.part"));
+        assert!(p.to_string_lossy().ends_with(".part"));
+    }
+
+    /// **`is_cached` asks the real question.** A file of exactly the right LENGTH is not the
+    /// release: this is what stops a resumed first run from skipping a download and then failing to
+    /// open the zip.
+    #[test]
+    fn a_file_of_the_right_length_is_not_a_cached_release() {
+        let dir = scratch("cached");
+        let rel = served();
+        assert!(!is_cached(rel, &dir), "an empty directory reported a cache hit");
+        std::fs::write(dir.join(rel.file), vec![0u8; rel.bytes as usize]).unwrap();
+        assert!(
+            !is_cached(rel, &dir),
+            "a file of the right size passed as the release; nothing checked the hash"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every curl exit code this maps has its own words, and one it does not know says so rather
+    /// than inventing an explanation.
+    #[test]
+    fn every_curl_code_this_reports_has_its_own_words() {
+        let mut seen = std::collections::BTreeSet::new();
+        for code in [6, 7, 18, 23, 26, 28, 35, 56, 60] {
+            let what = curl_meaning(code);
+            assert!(!what.is_empty());
+            assert!(seen.insert(what), "two codes share the words {what:?}");
+        }
+        assert_eq!(curl_meaning(999), "stopped without an answer");
+    }
+
+    /// **The catalogue route and the server route say the same thing.**
+    ///
+    /// Both mean *Apple does not serve this file*, and only one of them named the family to try
+    /// instead — so a live 403 left a person with one disabled control and no sentence, while the
+    /// same fact learned from the catalogue handed them a command.
+    #[test]
+    fn both_routes_to_apple_does_not_serve_this_name_the_family_to_try() {
+        let dir = scratch("family");
+        let (_, said) = download_watched(refused(), &dir, &mut Silent).expect_err("refused");
+        assert!(
+            said.contains(&format!("ipod-boot firmware list {}", refused().updater_family)),
+            "the catalogue route stopped naming the family: {said}"
+        );
+        // The server route is built in the same place, so what is asserted here is that the
+        // sentence is attached to the CLASS rather than to the branch that discovered it.
+        let fabricated = (
+            Trouble::NotServed { http: 403 },
+            "https://example.invalid/x: the server answered 403 — it does not serve this file."
+                .to_string(),
+        );
+        let widened = match fabricated.0 {
+            Trouble::NotServed { .. } => format!(
+                "{}\nAnother release in the same updater family will almost certainly do: try \
+                 `ipod-boot firmware list {}`.",
+                fabricated.1,
+                served().updater_family
+            ),
+            _ => fabricated.1,
+        };
+        assert!(widened.contains("ipod-boot firmware list 25"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A transfer that ends early leaves nothing behind.**
+    ///
+    /// `fetch_watched` removes the `.part` when the *watcher* stopped it and on no other path, so
+    /// curl 7 / 18 / 28 / 56 — a refused connection, an interrupted transfer, the common ones — left
+    /// a partial file in the firmware cache that is never shown, never offered for deletion and
+    /// never cleaned up. Nothing here resumes a download, so those bytes are worth nothing.
+    ///
+    /// Local, and no packet leaves this machine: a one-shot listener on loopback promises the
+    /// release's full length, sends 64 KiB of it, and hangs up. That is a real interrupted
+    /// transfer — `curl` writes what arrived and exits 18 — which is the shape a hotel wifi
+    /// produces and the shape a refused connection does **not**: curl opens the output file
+    /// lazily, so a connection that never carries a byte leaves nothing to clean up and would
+    /// have made this test green against the bug.
+    #[test]
+    fn a_transfer_that_ends_early_leaves_no_partial_file() {
+        use std::io::Write;
+        if !crate::tooling::have("curl") {
+            println!("SKIPPED: no curl on this machine");
+            return;
+        }
+        let dir = scratch("interrupted");
+        let rel = served();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let port = listener.local_addr().expect("the port").port();
+        let promised = rel.bytes;
+        let server = std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {promised}\r\nConnection: close\r\n\r\n"
+                );
+                let _ = s.write_all(head.as_bytes());
+                let _ = s.write_all(&vec![0u8; 64 * 1024]);
+                let _ = s.flush();
+                // and hang up, 6.5 MB short of what was promised.
+            }
+        });
+
+        // Everything else about it is the real 5.5G entry, so the `.part` it leaves is named
+        // exactly as a real one is.
+        let cut_off: &'static Release = Box::leak(Box::new(Release {
+            url: Box::leak(format!("http://127.0.0.1:{port}/iPod_25.1.3.ipsw").into_boxed_str()),
+            ..*rel
+        }));
+        let (t, said) = download_watched(cut_off, &dir, &mut Silent)
+            .expect_err("a transfer 6.5 MB short of its Content-Length was accepted");
+        let _ = server.join();
+        assert!(
+            matches!(t, Trouble::Unreachable { .. }),
+            "an interrupted transfer is {t:?}"
+        );
+        assert!(!said.is_empty());
+        let left: Vec<String> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            left.is_empty(),
+            "an interrupted transfer left {left:?} in the cache, and nothing ever comes back for it"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

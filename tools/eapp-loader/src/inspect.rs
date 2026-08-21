@@ -890,10 +890,19 @@ pub fn build_from_ipsw_sized(src: &Path, out: &Path, sectors: u64) -> Result<Str
         let _ = std::fs::create_dir_all(d);
     }
     crate::ipsw::build_disk(&fw, out, sectors)?;
+    // **The size is the one asked for, and the cost is the one measured.** This said `8 GiB, about
+    // 20 MB` unconditionally while taking `sectors`, so a 30 GB drive reported itself as 8 GiB —
+    // the function's whole reason for existing, contradicted by its own report. The file is right
+    // here, so neither number has to be guessed.
+    let on_disk = std::fs::metadata(out)
+        .map(|m| crate::settings::on_disk_size(&m))
+        .unwrap_or(0);
     Ok(format!(
-        "built {} — 8 GiB, sparse, about 20 MB on disk. Apple's firmware partition byte for byte, \
+        "built {} — {}, sparse, {} on disk. Apple's firmware partition byte for byte, \
          and an empty FAT32 volume that RetailOS populates itself on first boot.",
-        out.display()
+        out.display(),
+        bytes(sectors * 512),
+        crate::si(on_disk)
     ))
 }
 

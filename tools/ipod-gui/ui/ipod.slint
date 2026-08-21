@@ -80,6 +80,19 @@ export component IPod inherits Rectangle {
     // Passed rather than computed: Slint has no luminance function, and the alternative is the
     // markup guessing at a colour's brightness with arithmetic that would be wrong for gold.
     in property <bool> dark-chassis: true;
+
+    // §10.1: **an iPod that has not been decided yet**, which is what an empty bench has. The full
+    // drawing in `Colour::Unspecified` `#E4E4E2` at `Geometry.ghost-opacity`. Not black — drawing
+    // an unknown chassis black invents a fact about somebody's iPod.
+    //
+    // **It is a state of its own and is never derived from the chassis colour.** A real device
+    // whose ROM did not state a colour is `#E4E4E2` too, and it is solid: `chassis` is what the
+    // device is made of, `ghost` is whether there is a device. Deriving one from the other would
+    // ghost every unspecified iPod in the library.
+    //
+    // What it dims is `shell` and not `glass` — see the body comment on `shell` for the
+    // arithmetic, which is measured rather than argued.
+    in property <bool> ghost: false;
     in property <image> screen-source;
     in property <bool> screen-lit: false;
     // The device is the control (§ the operator, 2026-08-21): pressing it is what starts it, so
@@ -157,24 +170,261 @@ export component IPod inherits Rectangle {
 
     width: Geometry.body-aspect * h;
     height: h;
-    border-radius: Geometry.corner-r * h;
 
-    // Glossy polycarbonate, not a flat fill. Two stops read as the real moulded face at every size;
-    // a third starts to look like a button.
-    background: @linear-gradient(180deg,
-        chassis.brighter(dark-chassis ? 0.22 : 0.06) 0%,
-        chassis 42%,
-        chassis.darker(dark-chassis ? 0.10 : 0.05) 100%);
+    // ── §10.1's ghost, and the one element it must not reach ────────────────────────────────────
+    //
+    // Everything the device is made of lives in here — the moulded face, the wheel, the four marks,
+    // the hold switch and every `TouchArea` — so that ONE `opacity` can dim the whole object at
+    // once. **`glass` is deliberately outside it**, and that is measured rather than argued.
+    //
+    // Slint composites `opacity` over the whole subtree as one group, so the literal reading of
+    // §10.1 — *the full drawing at 45 %* — would lift the glass from `#08080a` toward `bg-sunken`
+    // and land it at **2.97 : 1** against the well, under the 3 : 1 bar
+    // `the_cradle_colours_clear_three_to_one_against_the_well` holds everything on that surface to.
+    // Undimmed it is 12.65 : 1. §10.1's own next sentence is *the glass is dark and completely
+    // empty* and §12.2 gives `Off` a `#08080a` glass; one `opacity` cannot honour both sentences,
+    // and the one with a number behind it wins. `the_ghost_dims_the_body_and_not_the_glass`
+    // recomputes both figures from `ui/tokens.slint`'s palette rather than quoting these.
+    //
+    // Nothing moves and nothing is re-parented in the process: every child below is absolutely
+    // positioned off `root.h` and `Geometry.*`, and `shell` is the full body rectangle. `opacity`
+    // does not gate a `TouchArea`, so the hit test is untouched — a ghost is as pressable as a
+    // device, which is exactly what §10.1 asks of the empty bench.
+    shell := Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        border-radius: Geometry.corner-r * h;
 
-    // The other half of the cross-dissolve. The Screen is supposed to be unbound for its duration
-    // (§7.2) on a plain `settling: bool` Rust raises for 140 ms — that flag is **not** declared
-    // here, because a property nothing writes is the defect §20 item 15 names in a new place.
-    animate background { duration: Motion.tight; easing: ease-out-quad; }
+        // Glossy polycarbonate, not a flat fill. Two stops read as the real moulded face at every
+        // size; a third starts to look like a button.
+        background: @linear-gradient(180deg,
+            chassis.brighter(dark-chassis ? 0.22 : 0.06) 0%,
+            chassis 42%,
+            chassis.darker(dark-chassis ? 0.10 : 0.05) 100%);
 
-    // A hairline, not a drop shadow: nothing in this program floats (§2.4), and a shadow is the
-    // visual grammar of floating.
-    border-width: 1px;
-    border-color: dark-chassis ? #00000060 : #0000001f;
+        // §8.1 item 4, amended: the device cross-dissolve is now THREE properties — `chassis`,
+        // `marks` and this — and all three take `tight`. **Not `lively`**: §8.2 rule 2 confines
+        // `ease-out-back` to drawer page depth, and an overshoot on an opacity ramping to 1.0 is a
+        // value the compositor clamps, which is a curve lying about its own end.
+        //
+        // The Screen is supposed to be unbound for the dissolve's duration (§7.2) on a plain
+        // `settling: bool` Rust raises for 140 ms — that flag is **not** declared here, because a
+        // property nothing writes is the defect §20 item 15 names in a new place.
+        opacity: root.ghost ? Geometry.ghost-opacity : 1.0;
+        animate opacity { duration: Motion.tight; easing: ease-out-quad; }
+        animate background { duration: Motion.tight; easing: ease-out-quad; }
+
+        // A hairline, not a drop shadow: nothing in this program floats (§2.4), and a shadow is the
+        // visual grammar of floating.
+        border-width: 1px;
+        border-color: dark-chassis ? #00000060 : #0000001f;
+
+        // ── The hold switch (§7.4) ──
+        //
+        // Drawn on the top edge, where it is on the hardware. Its geometry is `HOLD_W` × `HOLD_H`,
+        // inset `HOLD_INSET` from the trailing edge — three ratios that have been in `geometry.rs`
+        // since the drawing was measured and that nothing drew until now.
+        hold-switch := Rectangle {
+            x: parent.width - self.width - Geometry.hold-inset * h;
+            y: 0;
+            width: Geometry.hold-w * h;
+            height: Geometry.hold-h * h;
+            border-radius: self.height / 2;
+            background: chassis.darker(dark-chassis ? 0.35 : 0.12);
+            border-width: 1px;
+            border-color: dark-chassis ? #00000080 : #00000024;
+
+            // The marker the switch uncovers. On the hardware it is orange; here it is `warn`,
+            // which is the same colour this program already uses for *you are about to be able to
+            // do damage*.
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: parent.width / 2;
+                height: 100%;
+                border-radius: parent.border-radius;
+                background: Ink.warn;
+                opacity: root.hold ? 1.0 : 0.0;
+                animate opacity { duration: Motion.tight; easing: ease-out-quad; }
+            }
+
+            // The nub. It slides; nothing else about the device moves.
+            nub := Rectangle {
+                x: root.hold ? parent.width - self.width : 0;
+                y: 0;
+                width: parent.width / 2;
+                height: 100%;
+                border-radius: parent.border-radius;
+                background: @linear-gradient(180deg,
+                    chassis.brighter(dark-chassis ? 0.26 : 0.08) 0%,
+                    chassis 100%);
+                border-width: 1px;
+                border-color: dark-chassis ? #ffffff1a : #00000014;
+                animate x { duration: Motion.tight; easing: ease-out-quad; }
+            }
+
+            // §16.5: **never `enabled:` on a `TouchArea`.** A disabled one forcibly clears
+            // `has_hover` and forwards the event to whatever is underneath, so a control that
+            // carries its own reason is unbuildable that way. The gate is a plain boolean inside
+            // the handler.
+            hold-touch := TouchArea {
+                pointer-event(ev) => {
+                    if (ev.kind == PointerEventKind.down) {
+                        if (root.has-machine) { root.hold-toggled(); }
+                        else { root.inert(root.hold-refusal); }
+                    }
+                    if (ev.kind == PointerEventKind.up && !root.has-machine) {
+                        root.inert-released();
+                    }
+                }
+            }
+
+            accessible-role: AccessibleRole.switch;
+            accessible-label: "hold";
+            accessible-checked: root.hold;
+            accessible-enabled: root.has-machine;
+            accessible-description: root.has-machine ? "" : root.hold-refusal;
+        }
+
+        // ── The click wheel ──
+        wheel := Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: Geometry.wheel-top * h;
+            width: Geometry.wheel-d * h;
+            height: Geometry.wheel-d * h;
+            border-radius: self.width / 2;
+            background: @linear-gradient(180deg,
+                chassis.brighter(dark-chassis ? 0.10 : 0.02) 0%,
+                chassis.darker(dark-chassis ? 0.04 : 0.03) 100%);
+            border-width: 1px;
+            border-color: dark-chassis ? #ffffff14 : #00000014;
+
+            // The ring's own pointer stream. It reports **where**, never **what** — `wheel.rs`
+            // owns the radii and the 96 detents, and a second hit test here is the disagreement
+            // §7.4 records. The centre button's own area is declared after this one and therefore
+            // sits on top of it, so a press inside `select-d` never reaches here.
+            ring-touch := TouchArea {
+                width: 100%;
+                height: 100%;
+                pointer-event(ev) => {
+                    if (ev.kind == PointerEventKind.down) {
+                        if (!root.pressable) { root.clicked(); return; }
+                        if (root.has-machine) {
+                            root.wheel-down(self.mouse-x - self.width / 2, self.mouse-y - self.height / 2);
+                        } else {
+                            root.inert(root.wheel-refusal);
+                        }
+                    }
+                    if (ev.kind == PointerEventKind.up && root.pressable) {
+                        if (root.has-machine) { root.wheel-up(); }
+                        else { root.inert-released(); }
+                    }
+                }
+                // Fires only while the pointer is down, which is exactly the drag a rotation is.
+                moved => {
+                    if (root.pressable && root.has-machine) {
+                        root.wheel-moved(self.mouse-x - self.width / 2, self.mouse-y - self.height / 2);
+                    }
+                }
+            }
+
+            // MENU is a word on the real device, so it is a word here. The other three are marks.
+            Text {
+                y: Geometry.menu-top * h;
+                width: 100%;
+                text: "MENU";
+                horizontal-alignment: center;
+                font-size: Geometry.menu-size * h;
+                font-weight: 600;
+                letter-spacing: Geometry.menu-track * h;
+                color: marks;
+                opacity: root.held-menu ? 0.55 : 1.0;
+                animate opacity { duration: Motion.tight; easing: ease-out-quad; }
+            }
+            WheelMark {
+                kind: "prev";
+                ink: marks;
+                x: Geometry.mark-inset * h;
+                y: (parent.height - self.height) / 2;
+                width: Geometry.mark-w * h;
+                height: Geometry.mark-h * h;
+                opacity: root.held-prev ? 0.55 : 1.0;
+                animate opacity { duration: Motion.tight; easing: ease-out-quad; }
+            }
+            WheelMark {
+                kind: "next";
+                ink: marks;
+                x: parent.width - self.width - Geometry.mark-inset * h;
+                y: (parent.height - self.height) / 2;
+                width: Geometry.mark-w * h;
+                height: Geometry.mark-h * h;
+                opacity: root.held-next ? 0.55 : 1.0;
+                animate opacity { duration: Motion.tight; easing: ease-out-quad; }
+            }
+            WheelMark {
+                kind: "play";
+                ink: marks;
+                x: (parent.width - self.width) / 2;
+                y: parent.height - self.height - Geometry.mark-inset * h;
+                width: Geometry.play-w * h;
+                height: Geometry.mark-h * h;
+                opacity: root.held-play ? 0.55 : 1.0;
+                animate opacity { duration: Motion.tight; easing: ease-out-quad; }
+            }
+
+            // The centre button — the one you press to start.
+            //
+            // **The material does not go here** (§6.5): a glossy blue disc is UI state painted on
+            // the object, and a screenshot of it is no longer a picture of an iPod. The cradle
+            // carries *press this* instead. What moves here is the moulding's own highlight, on
+            // hover and on press, which is what a real disc does under a finger.
+            centre := Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: Geometry.centre-d * h;
+                height: Geometry.centre-d * h;
+                border-radius: self.width / 2;
+                background: @linear-gradient(180deg,
+                    chassis.brighter(dark-chassis
+                        ? (centre-touch.has-hover && pressable ? 0.30 : 0.14)
+                        : 0.03) 0%,
+                    chassis 100%);
+                border-width: 1px;
+                border-color: dark-chassis ? #ffffff1a : #00000014;
+                opacity: (centre-touch.pressed || root.held-select) ? 0.82 : 1.0;
+                animate background, opacity { duration: Motion.tight; easing: ease-out-quad; }
+            }
+
+            // The centre button's **target**, which is bigger than its drawing and is not the same
+            // rectangle. Declared last so it is on top of `ring-touch`, and sized from the pushed
+            // `select-d` rather than from `CENTRE_D` — see the property's own note.
+            //
+            // §16.5 again: always enabled, gated inside the handler, so `has-hover` stays honest
+            // and the cradle can say why nothing happened.
+            centre-touch := TouchArea {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: root.select-d;
+                height: root.select-d;
+                mouse-cursor: root.pressable ? MouseCursor.pointer : MouseCursor.default;
+                clicked => {
+                    if (!root.pressable) { root.clicked(); return; }
+                    root.pressed-device();
+                }
+            }
+        }
+
+        // Anywhere else on the body focuses the fixture and does nothing else — which is what a
+        // fixture should do. It is **not** *select this one*: §7.2 deletes device-switching from
+        // the bench, so there is nothing else to select, and the carousel whose neighbours the
+        // earlier version of this comment described was deleted with the chrome bar (§18.1).
+        body-touch := TouchArea {
+            z: -1;
+            clicked => { root.clicked(); }
+        }
+    }
 
     // ── The screen ──
     //
@@ -228,207 +478,5 @@ export component IPod inherits Rectangle {
             opacity: screen-lit ? 1.0 : 0.0;
             animate opacity { duration: Motion.wake; easing: ease-out-quad; }
         }
-    }
-
-    // ── The hold switch (§7.4) ──
-    //
-    // Drawn on the top edge, where it is on the hardware. Its geometry is `HOLD_W` × `HOLD_H`,
-    // inset `HOLD_INSET` from the trailing edge — three ratios that have been in `geometry.rs`
-    // since the drawing was measured and that nothing drew until now.
-    hold-switch := Rectangle {
-        x: parent.width - self.width - Geometry.hold-inset * h;
-        y: 0;
-        width: Geometry.hold-w * h;
-        height: Geometry.hold-h * h;
-        border-radius: self.height / 2;
-        background: chassis.darker(dark-chassis ? 0.35 : 0.12);
-        border-width: 1px;
-        border-color: dark-chassis ? #00000080 : #00000024;
-
-        // The marker the switch uncovers. On the hardware it is orange; here it is `warn`, which
-        // is the same colour this program already uses for *you are about to be able to do damage*.
-        Rectangle {
-            x: 0;
-            y: 0;
-            width: parent.width / 2;
-            height: 100%;
-            border-radius: parent.border-radius;
-            background: Ink.warn;
-            opacity: root.hold ? 1.0 : 0.0;
-            animate opacity { duration: Motion.tight; easing: ease-out-quad; }
-        }
-
-        // The nub. It slides; nothing else about the device moves.
-        nub := Rectangle {
-            x: root.hold ? parent.width - self.width : 0;
-            y: 0;
-            width: parent.width / 2;
-            height: 100%;
-            border-radius: parent.border-radius;
-            background: @linear-gradient(180deg,
-                chassis.brighter(dark-chassis ? 0.26 : 0.08) 0%,
-                chassis 100%);
-            border-width: 1px;
-            border-color: dark-chassis ? #ffffff1a : #00000014;
-            animate x { duration: Motion.tight; easing: ease-out-quad; }
-        }
-
-        // §16.5: **never `enabled:` on a `TouchArea`.** A disabled one forcibly clears `has_hover`
-        // and forwards the event to whatever is underneath, so a control that carries its own
-        // reason is unbuildable that way. The gate is a plain boolean inside the handler.
-        hold-touch := TouchArea {
-            pointer-event(ev) => {
-                if (ev.kind == PointerEventKind.down) {
-                    if (root.has-machine) { root.hold-toggled(); }
-                    else { root.inert(root.hold-refusal); }
-                }
-                if (ev.kind == PointerEventKind.up && !root.has-machine) {
-                    root.inert-released();
-                }
-            }
-        }
-
-        accessible-role: AccessibleRole.switch;
-        accessible-label: "hold";
-        accessible-checked: root.hold;
-        accessible-enabled: root.has-machine;
-        accessible-description: root.has-machine ? "" : root.hold-refusal;
-    }
-
-    // ── The click wheel ──
-    wheel := Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: Geometry.wheel-top * h;
-        width: Geometry.wheel-d * h;
-        height: Geometry.wheel-d * h;
-        border-radius: self.width / 2;
-        background: @linear-gradient(180deg,
-            chassis.brighter(dark-chassis ? 0.10 : 0.02) 0%,
-            chassis.darker(dark-chassis ? 0.04 : 0.03) 100%);
-        border-width: 1px;
-        border-color: dark-chassis ? #ffffff14 : #00000014;
-
-        // The ring's own pointer stream. It reports **where**, never **what** — `wheel.rs` owns
-        // the radii and the 96 detents, and a second hit test here is the disagreement §7.4
-        // records. The centre button's own area is declared after this one and therefore sits on
-        // top of it, so a press inside `select-d` never reaches here.
-        ring-touch := TouchArea {
-            width: 100%;
-            height: 100%;
-            pointer-event(ev) => {
-                if (ev.kind == PointerEventKind.down) {
-                    if (!root.pressable) { root.clicked(); return; }
-                    if (root.has-machine) {
-                        root.wheel-down(self.mouse-x - self.width / 2, self.mouse-y - self.height / 2);
-                    } else {
-                        root.inert(root.wheel-refusal);
-                    }
-                }
-                if (ev.kind == PointerEventKind.up && root.pressable) {
-                    if (root.has-machine) { root.wheel-up(); }
-                    else { root.inert-released(); }
-                }
-            }
-            // Fires only while the pointer is down, which is exactly the drag a rotation is.
-            moved => {
-                if (root.pressable && root.has-machine) {
-                    root.wheel-moved(self.mouse-x - self.width / 2, self.mouse-y - self.height / 2);
-                }
-            }
-        }
-
-        // MENU is a word on the real device, so it is a word here. The other three are marks.
-        Text {
-            y: Geometry.menu-top * h;
-            width: 100%;
-            text: "MENU";
-            horizontal-alignment: center;
-            font-size: Geometry.menu-size * h;
-            font-weight: 600;
-            letter-spacing: Geometry.menu-track * h;
-            color: marks;
-            opacity: root.held-menu ? 0.55 : 1.0;
-            animate opacity { duration: Motion.tight; easing: ease-out-quad; }
-        }
-        WheelMark {
-            kind: "prev";
-            ink: marks;
-            x: Geometry.mark-inset * h;
-            y: (parent.height - self.height) / 2;
-            width: Geometry.mark-w * h;
-            height: Geometry.mark-h * h;
-            opacity: root.held-prev ? 0.55 : 1.0;
-            animate opacity { duration: Motion.tight; easing: ease-out-quad; }
-        }
-        WheelMark {
-            kind: "next";
-            ink: marks;
-            x: parent.width - self.width - Geometry.mark-inset * h;
-            y: (parent.height - self.height) / 2;
-            width: Geometry.mark-w * h;
-            height: Geometry.mark-h * h;
-            opacity: root.held-next ? 0.55 : 1.0;
-            animate opacity { duration: Motion.tight; easing: ease-out-quad; }
-        }
-        WheelMark {
-            kind: "play";
-            ink: marks;
-            x: (parent.width - self.width) / 2;
-            y: parent.height - self.height - Geometry.mark-inset * h;
-            width: Geometry.play-w * h;
-            height: Geometry.mark-h * h;
-            opacity: root.held-play ? 0.55 : 1.0;
-            animate opacity { duration: Motion.tight; easing: ease-out-quad; }
-        }
-
-        // The centre button — the one you press to start.
-        //
-        // **The material does not go here** (§6.5): a glossy blue disc is UI state painted on the
-        // object, and a screenshot of it is no longer a picture of an iPod. The cradle carries
-        // *press this* instead. What moves here is the moulding's own highlight, on hover and on
-        // press, which is what a real disc does under a finger.
-        centre := Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: Geometry.centre-d * h;
-            height: Geometry.centre-d * h;
-            border-radius: self.width / 2;
-            background: @linear-gradient(180deg,
-                chassis.brighter(dark-chassis
-                    ? (centre-touch.has-hover && pressable ? 0.30 : 0.14)
-                    : 0.03) 0%,
-                chassis 100%);
-            border-width: 1px;
-            border-color: dark-chassis ? #ffffff1a : #00000014;
-            opacity: (centre-touch.pressed || root.held-select) ? 0.82 : 1.0;
-            animate background, opacity { duration: Motion.tight; easing: ease-out-quad; }
-        }
-
-        // The centre button's **target**, which is bigger than its drawing and is not the same
-        // rectangle. Declared last so it is on top of `ring-touch`, and sized from the pushed
-        // `select-d` rather than from `CENTRE_D` — see the property's own note.
-        //
-        // §16.5 again: always enabled, gated inside the handler, so `has-hover` stays honest and
-        // the cradle can say why nothing happened.
-        centre-touch := TouchArea {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: root.select-d;
-            height: root.select-d;
-            mouse-cursor: root.pressable ? MouseCursor.pointer : MouseCursor.default;
-            clicked => {
-                if (!root.pressable) { root.clicked(); return; }
-                root.pressed-device();
-            }
-        }
-    }
-
-    // Anywhere else on the body focuses the fixture and does nothing else — which is what a fixture
-    // should do. It is **not** *select this one*: §7.2 deletes device-switching from the bench, so
-    // there is nothing else to select, and the carousel whose neighbours the earlier version of this
-    // comment described was deleted with the chrome bar (§18.1).
-    body-touch := TouchArea {
-        z: -1;
-        clicked => { root.clicked(); }
     }
 }

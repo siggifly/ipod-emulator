@@ -643,6 +643,24 @@ pub const DEFAULT_SECTORS: u64 = 16_777_216;
 /// 27 140-sector firmware partition.
 pub const DATA_LBA: u32 = 32_768;
 
+/// 32 sectors per cluster — 16 KiB — which is what a drive this size gets and what keeps the FAT to
+/// a few megabytes.
+pub const FAT32_SPC: u32 = 32;
+/// Reserved sectors before the first FAT.
+const FAT32_RESERVED: u32 = 32;
+/// Two FATs, which is what every formatter writes.
+const FAT32_NFATS: u32 = 2;
+/// **The number below which a volume is FAT16 and not FAT32.** Microsoft's own boundary, and the
+/// reason a small drive is refused rather than quietly written as something no iPod will mount.
+pub const FAT32_MIN_CLUSTERS: u32 = 65_525;
+/// The smallest data partition [`fat32`] will produce a volume for.
+///
+/// Derived rather than typed: the clusters, the FAT that describes them, and the reserved sectors,
+/// with one cluster of slack so the ceiling division in `fat32` cannot land a sector short.
+pub const MIN_FAT32_SECTORS: u64 = (FAT32_MIN_CLUSTERS as u64 + 1) * FAT32_SPC as u64
+    + FAT32_RESERVED as u64
+    + 2 * FAT32_NFATS as u64 * (FAT32_MIN_CLUSTERS as u64 * FAT32_SPC as u64).div_ceil(4_097);
+
 /// Mark `aupd` as already applied, in place, and say whether there was one.
 ///
 /// **This is the difference between a disk that boots and one that sits in the bootloader**, and it
@@ -682,26 +700,58 @@ pub fn mark_aupd_applied(fw: &mut [u8]) -> bool {
 /// one that is formatted.
 ///
 /// The file is created **sparse** — `set_len` then seek-and-write — so an 8 GiB image costs about
-/// 14 MB on any filesystem that has holes, which is all three of ext4, APFS and NTFS.
+/// 21 MB on any filesystem that has holes, which is all three of ext4, APFS and NTFS. (Measured
+/// 2026-08-21 on APFS: apparent 8 589 934 592, on disk 20 987 904. The `about 14 MB` this comment
+/// carried was never measured; `compose::DRIVE_ON_DISK` is now the one place the number lives.)
+///
+/// **Two halves, and the split is what makes a build cancellable.** The container goes down first
+/// and Apple's bytes second, so a run that stops between them leaves a file with no real name and
+/// nothing that looks like a drive. Both halves are public and both re-run the refusals below.
 pub fn build_disk(fw: &[u8], out: &Path, sectors: u64) -> Result<(), String> {
-    if !fw.len().is_multiple_of(512) {
+    build_volume(out, sectors, fw.len())?;
+    write_firmware_partition(out, fw)
+}
+
+/// The three things that make a drive impossible, checked before anything is created.
+///
+/// `sectors` of `0` means "not being asked about the drive's size" — [`write_firmware_partition`]
+/// is checking the partition alone.
+fn refuse(fw_bytes: usize, sectors: u64) -> Result<u32, String> {
+    if !fw_bytes.is_multiple_of(512) {
         return Err(format!(
-            "the firmware partition is {} bytes, which is not a whole number of 512-byte sectors",
-            fw.len()
+            "the firmware partition is {fw_bytes} bytes, which is not a whole number of 512-byte sectors"
         ));
     }
-    let fw_sectors = (fw.len() / 512) as u32;
+    let fw_sectors = (fw_bytes / 512) as u32;
     if (FIRMWARE_LBA + fw_sectors) as u64 >= DATA_LBA as u64 {
         return Err(format!(
             "the firmware partition is {fw_sectors} sectors and would run past LBA {DATA_LBA}, \
              where the data partition starts"
         ));
     }
-    if sectors <= DATA_LBA as u64 + 65_536 {
+    // **The real floor, and this used to be 32× under it.** It read `DATA_LBA + 65_536`, which is
+    // one cluster count rather than one cluster count times [`FAT32_SPC`] sectors each — so a
+    // 65 537-sector volume passed the check that exists to catch exactly this and then failed
+    // inside `fat32` with *"2046 clusters, which is FAT16 territory"*, after the file had been
+    // created and sized. A pre-write refusal that lets the write start is not one.
+    if sectors != 0 && sectors < DATA_LBA as u64 + MIN_FAT32_SECTORS {
         return Err(format!(
-            "a {sectors}-sector drive is too small for a FAT32 volume"
+            "a {sectors}-sector drive is too small for a FAT32 volume: the data partition needs at \
+             least {MIN_FAT32_SECTORS} sectors to hold {FAT32_MIN_CLUSTERS} clusters of \
+             {FAT32_SPC} sectors"
         ));
     }
+    Ok(fw_sectors)
+}
+
+/// Lay out the drive's container: the MBR, the firmware partition's **extent**, and an empty FAT32
+/// volume. Apple's bytes are not written — [`write_firmware_partition`] does that.
+///
+/// `fw_bytes` is how long that partition will be, which the MBR has to state before the bytes
+/// exist. Splitting it out is what lets the two halves be two steps of a plan, each of which can be
+/// cancelled between.
+pub fn build_volume(out: &Path, sectors: u64, fw_bytes: usize) -> Result<(), String> {
+    let fw_sectors = refuse(fw_bytes, sectors)?;
 
     let mut f = std::fs::File::create(out).map_err(|e| format!("{}: {e}", out.display()))?;
     f.set_len(sectors * 512)
@@ -731,14 +781,29 @@ pub fn build_disk(fw: &[u8], out: &Path, sectors: u64) -> Result<(), String> {
     mbr[511] = 0xAA;
     write_at(&mut f, 0, &mbr)?;
 
-    // ---- Apple's firmware partition, byte for byte, exactly where `dd … seek=63` puts it.
-    write_at(&mut f, FIRMWARE_LBA as u64 * 512, fw)?;
-
     // ---- an empty FAT32 volume for the rest.
     let vol = fat32(sectors - DATA_LBA as u64)?;
     for (rel, block) in vol {
         write_at(&mut f, (DATA_LBA as u64 + rel) * 512, &block)?;
     }
+    f.flush().map_err(|e| format!("{}: {e}", out.display()))
+}
+
+/// Write Apple's firmware partition into a drive [`build_volume`] has already laid out.
+///
+/// **Opened for writing without truncating and without creating.** Writing Apple's bytes into a
+/// file nobody laid out would produce a "drive" with no MBR and no volume — one that looks finished
+/// to a listing and boots nothing — so a caller that got the order wrong gets an error instead of
+/// half a drive.
+pub fn write_firmware_partition(out: &Path, fw: &[u8]) -> Result<(), String> {
+    // Both halves are public doors, and a check on one door is not a check.
+    refuse(fw.len(), 0)?;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .open(out)
+        .map_err(|e| format!("{}: {e}", out.display()))?;
+    // Byte for byte, exactly where `dd … seek=63` puts it.
+    write_at(&mut f, FIRMWARE_LBA as u64 * 512, fw)?;
     f.flush().map_err(|e| format!("{}: {e}", out.display()))
 }
 
@@ -770,11 +835,9 @@ fn write_at(f: &mut std::fs::File, at: u64, data: &[u8]) -> Result<(), String> {
 /// 4 MB each and all but their first twelve bytes are zero — and the file is sparse, so a zero not
 /// written is a block not allocated.
 fn fat32(sectors: u64) -> Result<Vec<(u64, Vec<u8>)>, String> {
-    let reserved: u32 = 32;
-    let nfats: u32 = 2;
-    // 32 sectors per cluster — 16 KiB — which is what a drive this size gets and what keeps the FAT
-    // to a few megabytes.
-    let spc: u32 = 32;
+    let reserved: u32 = FAT32_RESERVED;
+    let nfats: u32 = FAT32_NFATS;
+    let spc: u32 = FAT32_SPC;
 
     // Microsoft's own sizing formula (FAT32 spec, "FatSz32"): solve for a FAT big enough to
     // describe the clusters that remain once the FAT itself is subtracted.
@@ -783,7 +846,7 @@ fn fat32(sectors: u64) -> Result<Vec<(u64, Vec<u8>)>, String> {
     let fat_sectors = tmp1.div_ceil(tmp2) as u32;
     let data_sectors = sectors - reserved as u64 - (nfats as u64 * fat_sectors as u64);
     let clusters = data_sectors / spc as u64;
-    if clusters < 65_525 {
+    if clusters < FAT32_MIN_CLUSTERS as u64 {
         return Err(format!(
             "a {sectors}-sector volume with {spc}-sector clusters gives {clusters} clusters, \
              which is FAT16 territory, not FAT32"
@@ -1334,5 +1397,155 @@ mod firmware_state_tests {
         std::fs::write(&p, b"not a drive").unwrap();
         assert!(firmware_state(&p).is_err());
         let _ = std::fs::remove_file(p);
+    }
+}
+
+#[cfg(test)]
+mod build_split_tests {
+    use super::*;
+
+    fn scratch(what: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let d = std::env::temp_dir().join(format!(
+            "ipod-build-split-{what}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&d).expect("a temp directory");
+        d
+    }
+
+    /// A firmware partition the size of a real one, with an `!ATA` directory in it so
+    /// `firmware_state` can read it back.
+    fn firmware() -> Vec<u8> {
+        let mut fw = vec![0u8; 27_140 * 512];
+        for (i, (tag, dev)) in [("osos", 0u32), ("rsrc", 0)].iter().enumerate() {
+            let at = DIRECTORY_AT + i * 40;
+            fw[at..at + 4].copy_from_slice(b"!ATA");
+            let t: Vec<u8> = tag.bytes().rev().collect();
+            fw[at + 4..at + 8].copy_from_slice(&t);
+            fw[at + 8..at + 12].copy_from_slice(&dev.to_le_bytes());
+        }
+        fw
+    }
+
+    /// **The split is transparent.** `build_disk` is the two halves in order, and the bytes it
+    /// produces are the bytes it produced before — otherwise every drive this program has ever
+    /// built would differ from the next one for a refactor's sake.
+    #[test]
+    fn build_disk_is_still_the_two_halves_in_order_and_nothing_else() {
+        let dir = scratch("halves");
+        let fw = firmware();
+        let whole = dir.join("whole.img");
+        build_disk(&fw, &whole, DEFAULT_SECTORS).expect("the drive");
+
+        let halves = dir.join("halves.img");
+        build_volume(&halves, DEFAULT_SECTORS, fw.len()).expect("the container");
+        write_firmware_partition(&halves, &fw).expect("Apple's bytes");
+
+        // **The three regions anything writes, plus what the two files cost.**
+        //
+        // Not `fs::read` of both: two 8 GiB images is a 16 GiB allocation, and `assert_eq!` on the
+        // result would try to *format* both of them on failure — a hung test rather than a red one,
+        // which is an instrument that cannot report its own failure. Not a streaming compare
+        // either: the holes are not free to read, and it took 107 seconds.
+        //
+        // The allocated-size equality is what covers "and nothing else was written": a byte written
+        // anywhere outside these three regions allocates a block, and the two files would differ.
+        let apparent = std::fs::metadata(&whole).unwrap().len();
+        assert_eq!(apparent, std::fs::metadata(&halves).unwrap().len());
+        assert_eq!(
+            crate::settings::on_disk_size(&std::fs::metadata(&whole).unwrap()),
+            crate::settings::on_disk_size(&std::fs::metadata(&halves).unwrap()),
+            "the two drives cost different amounts, so one of them wrote something the other did not"
+        );
+        for (what, at, len) in [
+            ("the MBR", 0u64, 512usize),
+            ("Apple's firmware partition", FIRMWARE_LBA as u64 * 512, fw.len()),
+            ("the FAT32 volume", DATA_LBA as u64 * 512, 4 << 20),
+        ] {
+            assert_eq!(
+                region(&whole, at, len),
+                region(&halves, at, len),
+                "{what} differs between `build_disk` and the two halves"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `len` bytes of `p` starting at `at`.
+    fn region(p: &std::path::Path, at: u64, len: usize) -> Vec<u8> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut f = std::fs::File::open(p).expect("the image");
+        f.seek(SeekFrom::Start(at)).expect("the offset");
+        let mut buf = vec![0u8; len];
+        f.read_exact(&mut buf).expect("the region");
+        buf
+    }
+
+    /// **A firmware partition written into no container is an error, not a half drive.**
+    ///
+    /// `write_firmware_partition` opens without creating and without truncating, so a caller that
+    /// gets the order wrong gets a refusal — rather than a file with Apple's bytes at LBA 63, no
+    /// MBR, no volume, and every appearance of being a finished drive.
+    #[test]
+    fn a_firmware_partition_written_into_no_container_is_an_error() {
+        let dir = scratch("no-container");
+        let nowhere = dir.join("nothing-here.img");
+        let e = write_firmware_partition(&nowhere, &firmware())
+            .expect_err("writing into a file that does not exist succeeded");
+        assert!(e.contains("nothing-here.img"), "{e}");
+        assert!(
+            !nowhere.exists(),
+            "a half drive was created by the call that refused"
+        );
+
+        // And the refusals are on both doors: a partition that is not a whole number of sectors is
+        // refused by the second half as well as by the first.
+        let laid_out = dir.join("laid-out.img");
+        build_volume(&laid_out, DEFAULT_SECTORS, 27_140 * 512).expect("the container");
+        let ragged = vec![0u8; 27_140 * 512 + 1];
+        assert!(
+            write_firmware_partition(&laid_out, &ragged).is_err(),
+            "a ragged partition passed the second door"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **The plan's disk estimate is what a build actually costs**, within a quarter.
+    ///
+    /// The design this implements said `about 240 MB on disk` for a build that costs 21 MB — an
+    /// eleven-fold overstatement, in the direction of alarm, about somebody's own disk. This is the
+    /// measurement that keeps `compose::DRIVE_ON_DISK` honest.
+    ///
+    /// On a volume with no holes the apparent size is what it costs, and that is what is asserted
+    /// instead — so a CI runner on a filesystem without sparse files tests the other half rather
+    /// than passing vacuously.
+    #[test]
+    fn the_disk_estimate_is_what_a_build_actually_costs() {
+        let dir = scratch("estimate");
+        let out = dir.join("measure.img");
+        build_disk(&firmware(), &out, DEFAULT_SECTORS).expect("the drive");
+        let m = std::fs::metadata(&out).unwrap();
+        let apparent = m.len();
+        let on_disk = crate::settings::on_disk_size(&m);
+        assert_eq!(apparent, DEFAULT_SECTORS * 512);
+
+        let sparse = on_disk < apparent / crate::volume::SPARSE_RATIO;
+        let want = if sparse {
+            crate::compose::DRIVE_ON_DISK
+        } else {
+            apparent
+        };
+        let off = on_disk.abs_diff(want);
+        assert!(
+            off * 4 <= want,
+            "the plan bills {} and the build costs {} — {} out",
+            crate::si(want),
+            crate::si(on_disk),
+            crate::si(off)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -913,7 +913,7 @@ on either side. Its geometry is constant. Only its colour and its continuity cha
 | startable, parked | `accent` | `press ● to resume · about 3 s` |
 | **parked, pair broken** | `fg-dim` | `press ● to cold boot · the parked snapshot no longer matches this drive` |
 | a title | `accent` | `press ● to play · there is no boot` |
-| first run | `accent` | `press ● to make an iPod · 6.5 MB to download, about 240 MB on disk` |
+| first run | `accent` | `press ● to make an iPod · 6.5 MB to download, about 28 MB on disk` |
 | **first run, partly done** | `accent` | `press ● to finish making My 5.5G` |
 | **booting** | `fg-dim` | `booting · 62 %` — or `booting · 412 M instructions` with no denominator — **and always** ` · press ● to stop` |
 | running | `fg-dim` | `running` — or `running · wheel 41 queued` — or, where fullscreen is available and the strip is not drawable, `running · ⌃⌘F for 7× · Esc to come back` |
@@ -1216,7 +1216,7 @@ what to do next — with the next step as a **real pressable control**, never pr
 | **not served** | `Apple no longer serves this release (403). Five of the 71 are refused; that is a fact about Apple's servers, not about your network.` | `Provide the file yourself…` |
 | **verification** | `The SHA-256 does not match the one on record. That is interesting and should not be shrugged off.` | `Retry` · **`Copy the details`** |
 | **incompatible** | `Verdict::No.why`, verbatim | the `Fix` — one press, or two where it detaches a resource (§11.3) |
-| **space, pre-flight** | `8.02 GB needed · 4.1 GB free on /Volumes/Work. Nothing has been written.` | `Choose somewhere else…` |
+| **space, pre-flight** | `<dir> needs 95 MB to build in — 28 MB for the drive and 67 MB of room to work in — and /Volumes/Work has 51 MB free. Nothing has been written.` | `Choose somewhere else…` |
 | **space, mid-write** | `Stopped at 41.2 GB. my-5.5g.img.part is 41.2 GB and cancelling deletes it.` | `Choose somewhere else…` · `Cancel` |
 | **volume** | `That folder is on a FAT32 volume. FAT32 cannot hold a file larger than 4 GiB and has no sparse files, so an 8 GiB drive image would be written in full and would stop at exactly 4 294 967 296 bytes.` | `Choose somewhere else…` |
 | **permission** | the path, and what to change | `Reveal` |
@@ -1233,15 +1233,28 @@ filesystem it did not observe.
 draw that installs 7-Zip, so what it carries instead is a command a person can paste, in `mono`,
 under the paragraph. Second, `missing` currently resolves to **zero live controls**: `Provide the
 file yourself…` needs a file picker or a drop target and this build has neither, and `Devices` needs
-a drawer page that is not built. Both are drawn **disabled with their reason** per §14.1, and only
-`Devices` has a real escape hatch (`ipod-boot setup`). That is the honest state of the first failure
-anybody will see, and §17.Q3 is the operator's call that changes it.
+a drawer page that is not built. Both are drawn **disabled with their reason** per §14.1. That is
+the honest state of the first failure anybody will see, and §17.Q3 is the operator's call that
+changes it.
+
+**Both of them carry a real escape hatch now, and three classes had none at all.** §9.4's rule for a
+project state is *say what does work, and always name the escape hatch* — and after one retry
+`verification` offered `Provide the file yourself…` and `Copy the details`, both disabled, both with
+nothing behind them; a live `403` offered `Provide` alone on the same terms; and `permission`
+offered `Reveal`. Each of those is a person told *we have not built this* and given nothing else.
+The commands exist in `ipod-boot` today: `ipod-boot firmware get <family>` lands the bundle in the
+cache this program reads, which is what a picker would have done; `ipod-boot firmware cache
+--verify` hashes every cached bundle and prints exactly what `Copy the details` would copy; and
+`IPOD_EMULATOR_DATA=<path>` is what a person does after being shown a folder they cannot write in.
+`Retry` still carries none, and that is a different kind of absence: `firmware::download` **is**
+`curl`, so naming a command would be the phantom route in its original shape.
+`no_failure_class_is_a_dead_end_in_this_build` sweeps all ten classes across three retry counts.
 
 **`volume` is a class because free bytes are not the only thing a filesystem can refuse.** Unpack the
 release zip onto a FAT32 USB stick — which is what a stick that also has to work in a car is — and
 `settings.rs`'s first data-directory branch puts `data/` beside the executable, on FAT32. Then two
 independent things go wrong that a free-space check cannot see: the 16 777 216-sector image is written
-in full rather than "about 240 MB on disk", and the write dies at 4 GiB with an OS error that is none
+in full rather than "about 28 MB on disk", and the write dies at 4 GiB with an OS error that is none
 of the other classes. **Query the target filesystem before the plan is drawn**, not after.
 
 **`space` is split because a mid-write failure has a number and a consequence and the pre-flight one
@@ -1319,7 +1332,7 @@ window (§9.6, §16.1) with hysteresis, and re-evaluated on `Resized`, `Moved` a
  │        produced, so it is not drawn — but it still runs, and you start it            │
  │        from here. Nothing is wrong with your files.                                  │
  │                                                                                     │
- │      ▓▓▓▓▓  press ● to make an iPod · 6.5 MB to download, about 240 MB on disk  ▓▓▓▓ │  ← 44 px, the material,
+ │      ▓▓▓▓▓  press ● to make an iPod · 6.5 MB to download, about 28 MB on disk  ▓▓▓▓ │  ← 44 px, the material,
  │                                                                                     │     the cradle's own
  │        Fullscreen shows the panel at 3× — 960 × 720, exact.  [ Fullscreen  ⌃⌘F ]     │     label and callback
  │                                                                                     │
@@ -1467,29 +1480,67 @@ is a three-platform promise and Reference says so rather than pretending).
 - **The glass is dark and completely empty.** No welcome, no logo, no "press start". §6.1 has no
   first-run exemption.
 - **The cradle is `accent`** and its label reads
-  `press ● to make an iPod · 6.5 MB to download, about 240 MB on disk`.
+  `press ● to make an iPod · 6.5 MB to download, about 28 MB on disk`.
+
+  **What is drawn is `Press the centre button to make an iPod`, and the difference is two rules
+  this document sets elsewhere.** `·` is U+00B7, which is outside §16.6's closed glyph set — the set
+  is closed on purpose and widening it to make one label pass is the thing that rule forbids. And
+  the sentence above is 65 characters against a 420 px row: [`geometry::CRADLE_LABEL_MAX_CHARS`]
+  budgets 48, and even at the advance the renderer actually measured — 0.479, so about 62 — it
+  elides, taking the cost off the end. The cost is on the shelf's third row and in the ledger, both
+  of which are drawn on the same screen; the cradle says what pressing does. §7.3's table carries
+  the same wording and the same deviation applies to it.
 - **The shelf**:
 
 ```
- ├─────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+ ├──────────────────────────────────────────────────────────────────────────────────────────────────────────┤
  │  No iPod yet                                                                            nothing mounted  │
  │  You do not need an iPod, or any files off one. The centre button makes one: a 5.5G, 30 GB, black —      │
- │  6.5 MB to download, about 240 MB on disk.     MENU ›  Parts, if you have files  ·  or drop them here    │
- └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ │  6.5 MB to download, about 28 MB on disk.      MENU ›  Parts, if you have files  ·  or drop them here    │
+ └──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **One number per axis, and both come from `Recipe::steps()`.** The previous revision put three
 different sizes for one operation on the one screen principle 7 was written for: the shelf said
 `about 300 MB, and four minutes`, the plan said `8 GiB sparse` / `about 240 MB on disk today`, and
-the ledger said `8.02 GB needed`. The actual download is a single 6 500 352-byte `.ipsw` — **6.5 MB,
-not 300** — and the actual disk cost is about 240 MB. Worse, the free-space gate was written against
+the ledger said `8.02 GB needed`. *(Those three are quoted as they stood. A section that records
+what was wrong has to keep the wrong words, and a later pass corrected them in place — which made
+the paragraph accuse the old text of saying what the new text says.)* The actual download is a
+single 6 533 633-byte `.ipsw` — **6.5 MB, not 300** — and the actual disk cost is about 28 MB.
+Worse, the free-space gate was written against
 the *apparent* size of a sparse file, so a person with 4.1 GB free was refused with the `space` class
 on a machine with sixteen times the room the build needs, and the refusal was wrong.
 
-So: **`6.5 MB to download · about 240 MB on disk` everywhere**, the gate is against the
-**materialised** estimate, and 8 GiB appears exactly once — in the `build` step's own sub-line, as
-the volume's apparent size, where it is a fact about the drive rather than a bill. Where sparse files
-are not available (§9.3's `volume` class) the number *is* 8.02 GB and the sub-line says why.
+So: **`6.5 MB to download · about 28 MB on disk` wherever the bill appears** — the cradle, the
+shelf's third row and the ledger — the gate is against the **materialised** estimate, and 8 GiB
+appears exactly once, in the `build` step's own sub-line, as the volume's apparent size, where it is
+a fact about the drive rather than a bill.
+
+**A step's own sub-line states that step's own cost, and that is not a second bill.** The build
+costs `about 21 MB`; the bundle sitting in the firmware cache is the other 6.5 MB; 28 MB is the two
+together and is what a person is being asked to agree to. Putting 28 MB on the build row would
+attribute the download to the build, which is the same class of confusion this paragraph is about,
+one level down. `the_first_run_screen_carries_one_bill_and_one_step_cost` is what holds the line:
+**at most two distinct `… on disk` figures on the screen, the drive's drawn exactly once, and the
+bill in every place a bill is drawn.** Where sparse files
+are not available (§9.3's `volume` class) the number *is* 8.6 GB and the sub-line says why.
+
+> **Where these three numbers come from.** All of them were wrong in an earlier revision of this
+> section, in the direction of alarm, so each carries the recipe that produced it.
+>
+> - **28 MB on disk.** `compose::DRIVE_ON_DISK` is 20 987 904, measured on APFS: build a drive with
+>   `ipsw::build_disk(&fw, out, ipsw::DEFAULT_SECTORS)` and read `settings::on_disk_size` of its
+>   metadata. Add the 6 533 633-byte bundle, which stays in the firmware cache, and a completed first
+>   run costs 27 521 537 bytes. Confirmed end to end by running it: `du -k` over the data directory
+>   afterwards reports 20 496 KiB for the drive and 6 384 KiB for the bundle. The figure this replaced
+>   was **240 MB** — out by an order of magnitude, and quoted at a person before they agreed to
+>   anything.
+> - **6 533 633 B.** `firmware::CATALOGUE`'s entry for `iPod_25.1.3.ipsw`, which is what `verify()`
+>   refuses against; **6 500 352 matches no release in it**. Both render `6.5 MB` through `si`, which
+>   is why nobody noticed.
+> - **8.6 GB.** `ipsw::DEFAULT_SECTORS` is 16 777 216, and 16 777 216 × 512 is 8 589 934 592, which
+>   `si` renders `8.6 GB`. The figure this replaced was `8.02 GB`, which is that number read as
+>   gibibytes and printed with a decimal unit.
 
 - **The drawer is open, on Work, showing the plan — before anything is pressed.** This is principle 7
   taken literally, and it costs one call to `Recipe::steps()` that already exists:
@@ -1504,10 +1555,10 @@ are not available (§9.3's `volume` class) the number *is* 8.02 GB and the sub-l
  │      5.5G, 30 GB, black · A446       │
  │      instant, nothing downloaded     │
  │ ○ fetch       Apple's firmware       │
- │      iPod_25.1.3.ipsw · 6 500 352 B  │
+ │      iPod_25.1.3.ipsw · 6 533 633 B  │
  │      from Apple, SHA-256 checked     │
  │ ○ build       a drive                │
- │      8 GiB volume, about 240 MB on   │
+ │      8 GiB volume, about 21 MB on    │
  │      disk — the file is sparse       │
  │ ○ install     Apple's software       │
  │      from the bundle above           │
@@ -1515,7 +1566,7 @@ are not available (§9.3's `volume` class) the number *is* 8.02 GB and the sub-l
  │                                      │
  │ ──────────────────────────────────── │
  │ 6.5 MB to download                   │
- │ about 240 MB on disk · 312 GB free   │
+ │ about 28 MB on disk · 312 GB free    │
  │ on /Users/…/Application Support      │
  │                                      │
  │ Nothing has been downloaded yet.     │
@@ -1542,9 +1593,13 @@ In order, narrated in the Work Rail, as a `Recipe` with ticked `Step`s:
    moves**. **This step is idempotent**: if an in-flight first run already has a synthesised ROM, it is
    reused rather than re-minted.
 2. **The target volume is checked, then free space.** The volume check is §9.3's `volume` class — can
-   this filesystem hold the file at all, and does it do sparse — and it runs *before the plan is
-   drawn*, not after. Free space is then checked against the **materialised** estimate (about 240 MB,
-   or 8.02 GB where sparse is unavailable). A shortfall is the *space, pre-flight* class with both
+   this filesystem hold the file at all, and does it do sparse — and it runs *at the press, before
+   anything is fetched*. It cannot run before the plan is drawn, which is what this said first: the
+   only honest way to find out whether a filesystem does sparse files is to make one and measure it,
+   so the check itself writes an 8 GiB file — and §10.1's absolute is that nothing is written before
+   you agree. The plan is therefore drawn assuming sparse; if the probe then answers otherwise, the
+   gate refuses against the apparent size and the refusal carries the real number. Free space is then checked against the **materialised** estimate (about 28 MB,
+   or 8.6 GB where sparse is unavailable). A shortfall is the *space, pre-flight* class with both
    numbers and the path.
 3. `iPod_25.1.3.ipsw` is fetched to `<file>.part`, verified against the recorded size and SHA-256,
    and renamed into place **only then**.
@@ -1580,13 +1635,31 @@ boolean stops the wizard re-running; the boolean stopped the *welcome copy* retu
 retry path was minting a fresh one per press.** Step 1 is idempotent and `Settings::save()` moved to
 it, so the identity survives a crash as well as a retry.
 
-**`Settings` gains `welcomed: bool`, written the first time the bench is drawn.** The welcome copy
+**`Settings` gains `welcomed: bool`, written when the bench is wired, just before the first frame.** Not *the first time the bench is drawn*, which is what this said first: Slint 1.17 exposes no Rust-side first-render callback, so there is no "after it was drawn" moment to hook. The two failure modes are not symmetric — writing early loses one welcome if the process dies in between; writing late re-runs the welcome after any crash, which is this section's own bug verbatim. The welcome copy
 never returns; a later empty bench is the same ghost iPod with `No devices yet` and both routes
 offered equally, visibly the lesser of the two.
 
 That flag exists specifically because **the old wizard inferred "offer me" from "the list is
 empty", and a cancelled build empties the list** — so it re-opened itself forever. Inferring
 first-run from emptiness is the bug, and a boolean is the fix.
+
+**The flag chooses the copy and never the route, and the first implementation of it got that
+backwards.** `welcomed` is written when the bench is wired, before any press — so opening the
+program, looking at it and closing it was enough to reach the later-empty bench, and that bench was
+given no way to make an iPod at all: the plan was not filed, the drawer stayed shut, the cradle was
+drawn `fg-dim` and unpressable, and the press answered *there are no devices in the library yet, so
+there is nothing to start* while shelf row 2 went on saying *the centre button makes one*. That is
+this section's own bug inverted — not a wizard that returns to step one, but a bench with no step
+one — and it is reachable in the commonest possible way. **Emptiness may only ever suppress the
+welcome, never offer it; and the welcome may only ever be the copy.** `Offer` has four states for
+that reason — `Welcome`, `Again`, `Finish`, `Quiet` — and three of the four carry the plan.
+
+**Which row the press starts is asked per press, of the row that was pressed.** A session-wide
+boolean got it wrong in both directions: with an empty library and the welcome already shown it was
+false, and with a half-made first-run device sitting beside one somebody composed by hand it was
+true for **every** row, so pressing the composed device resumed the first run instead of starting
+it. Two rows route to the first run and no others: the empty bench, which has no device to start,
+and the minted-but-unfinished device, which is a run that stopped part way.
 
 ### 10.4 The escape hatches, and the one that had to be built
 
@@ -1654,8 +1727,8 @@ never changes shape as you decide"* — already implied:
  │  build    a drive, 8 GiB volume      │
  │  fetch    Rockbox 4.0        9.1 MB  │
  │  install  Rockbox and its bootloader │
- │  6.5 MB to download                  │
- │  about 240 MB on disk · 312 GB free  │
+ │  16 MB to download                   │
+ │  about 37 MB on disk · 312 GB free   │
  │▓▓▓▓▓▓▓▓▓▓▓▓ Create ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ │   ← the material, one per page
  └──────────────────────────────────────┘
 ```
@@ -3336,8 +3409,9 @@ has already been had.
   column; and nothing in the tree parses a `.ipg`, behind a claim about cover art. §3.3, §12.8 and
   §17.Q9.
 - **Three numbers for one operation, and a refusal computed from the wrong one.** The first-run screen
-  said 300 MB, 8 GiB and 8.02 GB for a 6.5 MB download and a 240 MB build, and gated free space on the
-  sparse file's apparent size. §10.1.
+  said 300 MB, 8 GiB and 8.02 GB for a 6.5 MB download and a 21 MB build, and gated free space on the
+  sparse file's apparent size. Those are the figures as they stood; the corrections are in §10.1
+  with the recipe that measured each. §10.1.
 - **The retry path re-minted the identity.** Three failed first runs left three iPods with three
   FireWire GUIDs. Identity is the one permanent decision in this program. §10.2, §10.3.
 - **A one-press `Fix` detached a 55.9 GB reference with no sentence.** §11.3.
@@ -3572,6 +3646,10 @@ In order, because each depends on the one before it.
     written. One constraint nothing enforces: `load_and_seed` writes only into a file that already
     existed, because `migrate_legacy` declines the moment one exists here and a minted file would
     block a carry-forward for ever.
+    **The first-run save points are built** (2026-08-21): at step 1, where the identity is minted
+    and filed — and the ordering there is load-bearing, because a save that fails must leave the
+    same iPod for the next press — and after every completed step, in `Queue::pump`. The Composer
+    and Parts ones wait on those surfaces.
     **`migrate_legacy` has its first caller as of 2026-08-21**, and it runs before the first read, in
     `fn main`, ahead of `load_and_seed`. **Two of the window's save points are built**: after a
     successful resolve — where the window is still on screen and a failure becomes a Rail entry — and
@@ -3619,16 +3697,50 @@ In order, because each depends on the one before it.
     writer of where you are, and §8.4's reduced motion read per platform into one global.
 
     **Deferred with what each waits on**, so that none of them is mistaken for finished: `bench.rs`'s
-    cradle-state table and `machine.rs` (Phase 5, and every §7.3 row but two needs a `Config` this
-    window does not hold); `work.rs` and its queue (nothing produces work, so the shelf's 3 px bar and
-    `Rail::line`'s working half have no producer); `drops.rs` (§16.4's winit hook, which is why
-    `Provide the file yourself…` is disabled with **no** escape hatch rather than pointing at a drop
-    target that does not exist); `keys.rs` (§16.8's bare-letter half needs a `field-focused` property,
-    and declaring one nothing writes is item 15's defect in a new place); `persist.rs`; and §9.5's
-    pane. Of §16.8's eleven keyboard rows, five are wired — `Tab`, `Esc`, `←`/`→`, `Enter`/`Space`,
-    `⌘\` — and `⌘,` opens the **menu** rather than Reference, because pointing it at a page that does
-    not exist landed on a blank panel with no header and no way out, bypassing the very row that
-    states the gap. That table should be read as the design and not as a description of the program.
+    cradle-state table and `machine.rs` (every §7.3 row but three needs a `Config` this window does
+    not hold); `drops.rs` (§16.4's winit hook); `keys.rs` (§16.8's bare-letter half needs a
+    `field-focused` property, and declaring one nothing writes is item 15's defect in a new place);
+    `persist.rs`; and §9.5's pane. Of §16.8's eleven keyboard rows, five are wired — `Tab`, `Esc`,
+    `←`/`→`, `Enter`/`Space`, `⌘\` — and `⌘,` opens the **menu** rather than Reference, because
+    pointing it at a page that does not exist landed on a blank panel with no header and no way out,
+    bypassing the very row that states the gap. That table should be read as the design and not as a
+    description of the program.
+
+18. **DONE 2026-08-21. §10's first run runs**, end to end, from the drawn centre button: a boot ROM
+    minted once, Apple's firmware fetched and SHA-256 checked, a drive built, Apple's software
+    installed and read back as bootable, and the boot handed off to Phase 7. `work.rs` is the queue
+    and it is toolkit-free; `volume.rs` measures what a filesystem will do with an 8 GiB file by
+    making one; `tooling.rs` asks whether this computer can fetch anything by running the tool.
+    The shelf's 3 px bar, `Rail::line`'s working half and `RailRow.sub` all have producers now, and
+    the two live-but-inert next steps — `Cancel` and the `Fix` — are wired or disabled with a
+    reason.
+
+    Six things the doing found, each of which had shipped green:
+    - **The later-empty bench had no route to an iPod.** §10.3's third paragraph is the whole of it.
+    - **The press was routed by a session-wide boolean rather than by the row that was pressed**, so
+      a device somebody composed by hand resumed the first run instead of starting it.
+    - **A resumed run ticked nothing it skipped.** The bundle was in the cache, the build and the
+      install ran, and `fetch Apple's firmware` sat `Planned` for ever — which left `first_unticked`
+      stuck behind it, so §12.2's handoff could never fire and the window said nothing at all when
+      the drive was finished.
+    - **A `Done` sent on the worker's way out could be dropped**, after which `pump_once` stopped the
+      timer and nothing ever drained again: a finished drive on disk that the library never learned
+      about, and a next press building `my-5.5g (2).img` beside the orphan. `Queue::stop` threw the
+      same report away on the close path.
+    - **The whole worked run executed in no test a release run performs.** All six tests that reached
+      a worker were `#[ignore]`d because they reach Apple's servers, so the build, the install, the
+      `aupd` marking, the rename, the read-back and both cancellation boundaries were reached by
+      nothing. They run offline now, against a synthetic `.ipsw` the test module builds, in about
+      160 ms; only the download is still behind `#[ignore]`.
+    - **`build_volume`'s own pre-write refusal was 32× under the real FAT32 floor**, so a drive too
+      small to hold a FAT32 volume passed the check that exists to catch exactly that and failed
+      afterwards, with the file already created and sized.
+
+    **Still open**, and none of them is this phase's to close: §9.5's pane, so a 1280 × 800 display
+    still has no drawn route to a press (§10.4 calls it the escape hatch that matters); `Verb::Start`
+    itself, which hands off rather than booting; `geometry::BODY_ADVANCE`, which is a budget rather
+    than a measurement and which `RAIL_VERB_W` and `CRADLE_LABEL_MAX_CHARS` are both derived from;
+    and the 8 GiB-versus-30 GB question in §10.1, which is an operator decision.
 
 **Conditional on §17.Q10**: `Stats::enters_by_core: [[u64; WATCHED.len()]; 2]`, if the run loop can
 attribute an arrival to a core. Until it is answered, §12.8 draws one column.

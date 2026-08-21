@@ -7,6 +7,13 @@
 //! the pointer mean the same thing by a press, and that the wheel's hit test is `wheel.rs`'s and is
 //! not re-derived in markup.
 //!
+//! §10.1's first run added four more, and each one guards a defect that is easy to reach for: that
+//! the ghost dims the **body** and not the glass, that the ghost is a state of its own rather than
+//! something inferred from an unspecified chassis or an empty library, that **nothing** is drawn
+//! inside the 320 × 240 panel, that an empty bench is pressable rather than dimmed and broken, and
+//! that every property the bench declares has a producer — which `progress` did not, for as long as
+//! the drawer has existed.
+//!
 //! One test here is a literal sweep, and it survives its own retirement condition because it is
 //! **stricter** than the general one rather than a duplicate of it — see its own note.
 //!
@@ -32,6 +39,10 @@ fn bench() -> String {
 
 fn ipod() -> String {
     ui("ipod.slint")
+}
+
+fn window() -> String {
+    ui("window.slint")
 }
 
 /// Strip `//` comments and string literals, so neither can hide or invent a token.
@@ -72,6 +83,56 @@ fn statement(text: &str, head: &str) -> String {
         stmt.push_str(&lines[at]);
     }
     stmt
+}
+
+/// The element block beginning at the line whose stripped form starts with `head`, down to its
+/// matching closing brace, as stripped lines.
+///
+/// **Brace depth, never indentation.** Indentation is not syntax in Slint, so a test that read it
+/// could be made to pass or fail by a re-indent — and moving a subtree one level deeper is exactly
+/// the change §10.1's ghost required, so this had to be immune to it.
+fn block(text: &str, head: &str) -> Vec<String> {
+    let lines = code(text);
+    let from = lines
+        .iter()
+        .position(|l| l.starts_with(head))
+        .unwrap_or_else(|| panic!("no block starting `{head}`"));
+    assert!(lines[from].contains('{'), "`{head}` does not open a block: {}", lines[from]);
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    for line in &lines[from..] {
+        out.push(line.clone());
+        depth += line.matches('{').count() as i32;
+        depth -= line.matches('}').count() as i32;
+        if depth <= 0 && out.len() > 1 {
+            return out;
+        }
+    }
+    panic!("`{head}` is never closed");
+}
+
+/// Every ELEMENT declared anywhere inside a block, in order, by type: `Image`, `Rectangle`,
+/// `TouchArea`. The whole subtree, not the direct children — *empty* has to mean empty all the way
+/// down or it means nothing.
+///
+/// A block head is an element only when it names a type, so `animate opacity {`, `clicked => {` and
+/// `if root.x: ` are not. The test is the same one `no_drawn_control_is_ever_disabled` makes — take
+/// what is left of `:=` and then the last word — plus a capital, because every element type in this
+/// markup has one and no property does.
+fn elements_in(b: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in b.iter().skip(1) {
+        if !line.ends_with('{') {
+            continue;
+        }
+        let head = line.trim_end_matches('{').trim();
+        let head = head.rsplit(":=").next().unwrap_or(head).trim();
+        let kind = head.split_whitespace().next_back().unwrap_or("");
+        if kind.chars().next().is_some_and(char::is_uppercase) {
+            out.push(kind.to_string());
+        }
+    }
+    out
 }
 
 // ── Colour ──────────────────────────────────────────────────────────────────────────────────────
@@ -119,6 +180,45 @@ fn contrast(a: (u8, u8, u8), b: (u8, u8, u8)) -> f64 {
     let (x, y) = (luminance(a), luminance(b));
     let (hi, lo) = if x > y { (x, y) } else { (y, x) };
     (hi + 0.05) / (lo + 0.05)
+}
+
+/// `#08080a` → `(8, 8, 10)`. Alpha is refused rather than dropped: `#ffffff14` is a hairline's
+/// colour, and silently reading it as opaque white would be a measurement of something else.
+fn hex(text: &str) -> (u8, u8, u8) {
+    let h = text.trim().trim_end_matches(';').trim_start_matches('#');
+    assert_eq!(h.len(), 6, "`{text}` is not an opaque #rrggbb colour");
+    let byte = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).expect("a colour is hex");
+    (byte(0), byte(2), byte(4))
+}
+
+/// What `opacity: a` on an opaque `fg` over an opaque `bg` actually puts on the screen. Slint
+/// composites an `opacity` over the whole subtree as one group, which is the entire reason
+/// §10.1's ghost is a subtree rather than the drawing.
+fn over(fg: (u8, u8, u8), bg: (u8, u8, u8), a: f64) -> (u8, u8, u8) {
+    let mix = |f: u8, b: u8| (a * f64::from(f) + (1.0 - a) * f64::from(b)).round() as u8;
+    (mix(fg.0, bg.0), mix(fg.1, bg.1), mix(fg.2, bg.2))
+}
+
+/// Every unitless `<float>` the markup can name, as `Geometry.ghost-opacity` → its value. Read out
+/// of the file `build.rs` generated, which is the file the markup itself reads.
+fn ratios() -> BTreeMap<String, f64> {
+    let mut out = BTreeMap::new();
+    for line in GEOMETRY.lines() {
+        let Some(rest) = line.trim().strip_prefix("out property <float> ") else {
+            continue;
+        };
+        let Some((name, value)) = rest.split_once(": ") else {
+            continue;
+        };
+        if let Ok(v) = value.trim().trim_end_matches(';').parse::<f64>() {
+            out.insert(format!("Geometry.{name}"), v);
+        }
+    }
+    assert!(
+        !out.is_empty(),
+        "the generated geometry.slint declares no float this test could read"
+    );
+    out
 }
 
 // ── A very small expression evaluator, for the derivations the shelf is built from ──────────────
@@ -761,4 +861,383 @@ fn the_keyboard_and_the_pointer_agree_about_what_pressing_means() {
         "the drawn centre button has grown a `startable` gate; the refusal is Rust's to make, and \
          it is the only thing that can name which part is gone:\n{touch}"
     );
+}
+
+// ── §10.1's first run: the ghost, the empty glass, the accent cradle ────────────────────────────
+
+/// **The ghost dims the body and not the glass** — §10.1, and the exclusion is measured.
+///
+/// §10.1 asks for two things in consecutive sentences: *the full drawing in `Colour::Unspecified`
+/// `#E4E4E2` at 45 % opacity*, and *the glass is dark and completely empty*. Slint composites an
+/// `opacity` over the whole subtree as one group, so **one `opacity` on the drawing cannot honour
+/// both** — it lifts `#08080a` toward the well and takes the panel with it. The sentence with a
+/// number behind it wins, so the body is a subtree and the glass is declared after it.
+///
+/// The two figures are **recomputed** from `ui/tokens.slint`'s palette and the generated
+/// `GHOST_OPACITY` rather than quoted, so re-measuring either moves the assertion rather than
+/// leaving a stale number in a comment. And `GHOST_OPACITY < 1.0` is checked first, because every
+/// contrast arm below passes trivially on a ghost that is not a ghost.
+#[test]
+fn the_ghost_dims_the_body_and_not_the_glass() {
+    let text = ipod();
+
+    // Exactly one opacity in the drawing is the ghost's. A second would be a second answer to
+    // *how faded is an undecided iPod*, and the two would drift.
+    let ghosted: Vec<String> = code(&text)
+        .into_iter()
+        .filter(|l| l.starts_with("opacity:") && l.contains("Geometry.ghost-opacity"))
+        .collect();
+    assert_eq!(
+        ghosted.len(),
+        1,
+        "ui/ipod.slint binds `Geometry.ghost-opacity` {} times; there is one ghost and it is the \
+         whole body: {ghosted:?}",
+        ghosted.len()
+    );
+
+    let shell = block(&text, "shell := Rectangle {");
+    assert!(
+        shell.contains(&ghosted[0]),
+        "the ghost's opacity is not on `shell`, so whatever it dims is not the body:\n  {}",
+        ghosted[0]
+    );
+    assert!(
+        shell.iter().any(|l| l.starts_with("wheel := Rectangle")),
+        "the wheel is outside the dimmed subtree, so a ghost iPod is drawn with a solid wheel on it"
+    );
+    assert!(
+        !shell.iter().any(|l| l.starts_with("glass := Rectangle")),
+        "the glass is INSIDE the dimmed subtree. §10.1 says the glass is dark; at \
+         `Geometry.ghost-opacity` it is not — see the figures below"
+    );
+
+    // …and it is declared after the shell, so it draws on top of it at its own full opacity.
+    let lines = code(&text);
+    let at = |head: &str| {
+        lines
+            .iter()
+            .position(|l| l.starts_with(head))
+            .unwrap_or_else(|| panic!("ui/ipod.slint no longer declares `{head}`"))
+    };
+    assert!(
+        at("glass := Rectangle") > at("shell := Rectangle"),
+        "the glass is declared before the shell, so the body is painted over the panel"
+    );
+
+    // ── The measurement the exclusion rests on ──
+    let ink = palette();
+    let well = ink["bg-sunken"];
+    let glass = block(&text, "glass := Rectangle {");
+    let dark = hex(
+        glass
+            .iter()
+            .find_map(|l| l.strip_prefix("background:"))
+            .expect("the glass no longer declares a background"),
+    );
+    let alpha = ratios()["Geometry.ghost-opacity"];
+    assert!(
+        (0.0..1.0).contains(&alpha),
+        "GHOST_OPACITY is {alpha}, which is not a ghost — every arm below passes trivially on a \
+         drawing that is not dimmed at all"
+    );
+
+    let solid = contrast(dark, well);
+    let dimmed = contrast(over(dark, well, alpha), well);
+    assert!(
+        solid >= 3.0,
+        "the undimmed glass is {solid:.2} : 1 on the well; §12.2's `Off` panel has to read as a \
+         dark panel and not as part of the fixture"
+    );
+    assert!(
+        dimmed < 3.0,
+        "at {alpha} the glass would still be {dimmed:.2} : 1 on the well, so the argument this \
+         file's `shell` comment makes for excluding it no longer holds ({solid:.2} : 1 undimmed). \
+         Re-read §10.1 before widening anything: the exclusion is the measurement, not the habit"
+    );
+}
+
+/// **The ghost is a state of its own and is never derived from the chassis or from the library.**
+///
+/// `Colour::Unspecified` is `#E4E4E2` for a **real** device whose ROM did not state a colour, and
+/// that device is solid. Deriving *ghost* from *unspecified chassis* would fade every one of them;
+/// deriving it from `has-devices` in markup would freeze §10.2's cross-dissolve, which happens the
+/// moment `Source::identity()` answers and **before** the device reaches the list.
+///
+/// So there is exactly one producer, in Rust, and every binding between it and the drawing is a
+/// plain forward. A ternary anywhere on this path is a second opinion.
+#[test]
+fn the_ghost_is_a_state_of_its_own_and_is_never_derived() {
+    let mut forwards = 0;
+    let mut declared = 0;
+    for (name, text) in [
+        ("ui/ipod.slint", ipod()),
+        ("ui/bench.slint", bench()),
+        ("ui/window.slint", window()),
+    ] {
+        for (n, line) in code(&text).iter().enumerate() {
+            if line.starts_with("in property <bool> ghost:") {
+                assert_eq!(
+                    line, "in property <bool> ghost: false;",
+                    "{name}:{}: the ghost's default is not `false`, so a build with nothing pushed \
+                     opens on a faded iPod",
+                    n + 1
+                );
+                declared += 1;
+            } else if line.starts_with("ghost:") {
+                assert_eq!(
+                    line,
+                    "ghost: root.ghost;",
+                    "{name}:{}: the ghost is decided here rather than forwarded. There is one \
+                     producer and it is in Rust — an expression on this path is a second opinion, \
+                     and the one it would reach for (`chassis`, or an empty list) is wrong for a \
+                     real Unspecified device and wrong for §10.2's dissolve",
+                    n + 1
+                );
+                forwards += 1;
+            }
+        }
+    }
+    assert_eq!(declared, 3, "the ghost is declared {declared} times, not once per file on the path");
+    assert_eq!(forwards, 2, "the ghost is forwarded {forwards} times; window → Bench → IPod is two");
+
+    // …and what it drives reads it and nothing else.
+    let opacity = code(&ipod())
+        .into_iter()
+        .find(|l| l.starts_with("opacity:") && l.contains("Geometry.ghost-opacity"))
+        .expect("ui/ipod.slint binds the ghost's opacity");
+    for forbidden in ["chassis", "has-devices", "length", "device-name"] {
+        assert!(
+            !opacity.contains(forbidden),
+            "the ghost's opacity reads `{forbidden}`: {opacity}"
+        );
+    }
+}
+
+/// **Nothing is drawn in the 320 × 240 rectangle** — §6.1, §10.1.
+///
+/// §6.1 has no first-run exemption and §10.1 is explicit: *the glass is dark and completely empty.
+/// No welcome, no logo, no "press start".* This is the one surface where being able to tell which
+/// layer a screenshot is of is the whole discipline, and a first-run window is exactly where
+/// somebody would reach for a friendly word inside the panel.
+///
+/// So the glass holds one element, it is the `Image`, and its source is the machine's own
+/// framebuffer. There is no room in that for a sentence.
+#[test]
+fn nothing_is_drawn_inside_the_glass_but_the_machines_own_panel() {
+    let glass = block(&ipod(), "glass := Rectangle {");
+    // The control: a block reader that found nothing would wave an empty glass through as empty.
+    assert!(glass.len() > 5, "the glass block read back as {} lines: {glass:?}", glass.len());
+
+    let inside = elements_in(&glass);
+    assert_eq!(
+        inside,
+        vec!["Image".to_string()],
+        "§10.1: the glass is dark and completely empty. It now holds {inside:?}"
+    );
+    assert!(
+        glass.iter().any(|l| l.starts_with("source: screen-source;")),
+        "the one thing inside the glass is no longer the machine's own framebuffer"
+    );
+    for (n, line) in glass.iter().enumerate() {
+        assert!(
+            !line.starts_with("text:"),
+            "ui/ipod.slint, {n} lines into the glass: `{line}` — §6.1 has no first-run exemption, \
+             and a word inside the panel is a word that will be mistaken for the emulated screen"
+        );
+    }
+}
+
+/// **An empty bench is pressable, and it is empty rather than broken** — §9.1, §10.1, §7.3.
+///
+/// Three expressions in `ui/window.slint` gate on the same two facts and must not gate the same
+/// way, and the first cut had two of them identical by accident:
+///
+///   - the **ring** is `accent` whenever the thing on the bench can be pressed, and on an empty
+///     bench that is §10.1's whole screen — one thing to press, and the fixture says so;
+///   - the **broken ring** is a *device* refusal (§7.3's three `cannot start` rows), so an empty
+///     bench keeps `has-devices` and is never drawn with gaps in the cradle;
+///   - the **shelf refusal** is the same: `why ›` on a row with nothing to explain is a control
+///     that teaches nothing.
+///
+/// The consequence of getting the first one wrong is that §10.1's one press is drawn `fg-dim`,
+/// which is the colour this design uses for *there is nothing to do here*.
+#[test]
+fn an_empty_bench_is_pressable_and_is_not_broken() {
+    let ring = statement(&window(), "cradle-ring:");
+    assert!(
+        ring.contains("startable"),
+        "the cradle's ring no longer reads startability, so it says nothing about whether the \
+         thing on the bench can be pressed:\n  {ring}"
+    );
+    assert!(
+        !ring.contains("has-devices"),
+        "the cradle's ring is gated on the library having something in it, so §10.1's one press is \
+         drawn `fg-dim` — the colour this design uses for *there is nothing to do here*:\n  {ring}"
+    );
+
+    for (what, head) in [
+        ("broken ring", "cradle-broken:"),
+        ("shelf's refusal", "shelf-refusal:"),
+    ] {
+        let stmt = statement(&window(), head);
+        assert!(
+            stmt.contains("has-devices"),
+            "the {what} no longer keeps `has-devices`, so an empty bench is drawn as a REFUSED \
+             one — gaps in the cradle and a `why ›` with nothing behind it:\n  {stmt}"
+        );
+    }
+
+    // One boolean drives the ring, the Button's announcement and what pressing does, so they
+    // cannot disagree about whether this bench can be pressed. Read out of the `Bench` use site
+    // rather than by `statement`, because `DeviceRow` declares a field of the same name three
+    // hundred lines above it and a head-of-line search finds that first — it did.
+    let at_use_site = block(&window(), "bench := Bench {");
+    assert!(
+        at_use_site.contains(&"startable: root.current.startable;".to_string()),
+        "the cradle's `accessible-enabled` is computed from something other than the model's own \
+         answer, so an assistive technology and the ring can now say different things:\n  {:?}",
+        at_use_site
+            .iter()
+            .filter(|l| l.starts_with("startable:"))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// **Every property the bench declares is driven by the window** — §16.9, §20 item 15.
+///
+/// This is the defect `Bench.progress` was: declared, drawn — `ui/bench.slint`'s 3 px `accent` bar
+/// reads it — and bound by nothing for as long as the drawer has existed. A drawn instrument with
+/// no producer is worse than a missing one, because it reports a state it can never be in.
+///
+/// The six exemptions are the machine's, and they carry their own retirement condition: `IPod`
+/// raises none of them without an `emu::Link`, and wiring a handler to a stream that cannot arrive
+/// is the phantom route §19.1 indicts. When Phase 7 lands the machine, they come off this list and
+/// the list goes with them.
+#[test]
+fn every_property_the_bench_declares_is_driven_by_the_window() {
+    /// Pushed by `emu::Link` in Phase 7, and inert until then (§7.4, §12.2).
+    const THE_MACHINES: &[&str] = &[
+        "hold",
+        "held-menu",
+        "held-next",
+        "held-prev",
+        "held-play",
+        "held-select",
+    ];
+
+    let declared: Vec<String> = block(&bench(), "export component Bench inherits Rectangle {")
+        .iter()
+        .filter_map(|l| l.strip_prefix("in property <"))
+        .filter_map(|rest| rest.split_once('>'))
+        .map(|(_, name)| {
+            name.trim()
+                .split([':', ';'])
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        })
+        .filter(|n| !n.is_empty())
+        .collect();
+    // Two controls: a parser that read no declarations, and a parser that read the wrong block —
+    // `ShelfControl` also declares `in property`, and it is in this same file.
+    assert!(
+        declared.len() > 20,
+        "only {} `in property` declarations were read out of `Bench`: {declared:?}",
+        declared.len()
+    );
+    assert!(
+        !declared.iter().any(|n| n == "a11y-label"),
+        "the block reader picked up `ShelfControl`'s properties, so it is not reading `Bench`"
+    );
+
+    let bound: Vec<String> = block(&window(), "bench := Bench {")
+        .iter()
+        .filter_map(|l| l.split_once(':'))
+        .map(|(name, _)| name.trim().to_string())
+        .collect();
+    assert!(bound.len() > 20, "only {} bindings were read at the Bench use site", bound.len());
+
+    let unbound: Vec<&String> = declared
+        .iter()
+        .filter(|n| !bound.contains(n) && !THE_MACHINES.contains(&n.as_str()))
+        .collect();
+    assert!(
+        unbound.is_empty(),
+        "ui/bench.slint declares {unbound:?} and ui/window.slint never binds them — a drawn \
+         instrument with no producer, which is what `progress` was from the day the drawer landed"
+    );
+
+    // The exemption list retires itself: a name on it that the bench no longer declares is a
+    // carve-out for nothing, which is how a list like this rots into a hole.
+    for machine in THE_MACHINES {
+        assert!(
+            declared.iter().any(|n| n == machine),
+            "`{machine}` is exempted from this sweep and `Bench` no longer declares it; delete it \
+             from the list"
+        );
+    }
+}
+
+/// **The body's cross-dissolve is `tight`, and it moves nothing** — §8.1 item 4, §8.2.
+///
+/// §10.2 cross-dissolves the body from 45 % `Unspecified` to solid the moment the identity is
+/// minted, and **nothing else moves**. Three rules meet on that one animation:
+///
+///   - `tight` with `ease-out-quad`, because §8.2 rule 2 confines `ease-out-back` to drawer page
+///     depth and an overshoot on an opacity ramping to 1.0 is a value the compositor clamps — a
+///     curve lying about its own end;
+///   - `Motion.lively` has **one** use site in the program and it is `strip.x` in the drawer, so a
+///     second one here is a design change rather than a convenience;
+///   - **no animation may feed the drawing's own size** (§8.2 rule 1). The shipped carousel
+///     animated `body-height` from `hero × 0.55` to `hero`, and every dimension of the device is a
+///     fraction of it — so a live framebuffer was drawn at a continuously varying non-integer
+///     scale for 320 ms. Positions are not on that list on purpose: the hold switch's nub slides,
+///     which is the hardware doing what it does, and it feeds nothing.
+#[test]
+fn the_bodys_cross_dissolve_is_tight_and_moves_nothing() {
+    let shell = block(&ipod(), "shell := Rectangle {");
+    for want in [
+        "opacity: root.ghost ? Geometry.ghost-opacity : 1.0;",
+        "animate opacity { duration: Motion.tight; easing: ease-out-quad; }",
+        "animate background { duration: Motion.tight; easing: ease-out-quad; }",
+    ] {
+        assert!(
+            shell.contains(&want.to_string()),
+            "the body's dissolve no longer says `{want}`; §8.1 item 4 gives all three of `chassis`, \
+             `marks` and the ghost the same `tight`"
+        );
+    }
+
+    const SIZES: &[&str] = &["width", "height", "body-height", "hero"];
+    let mut seen = 0;
+    for (name, text) in [("ui/ipod.slint", ipod()), ("ui/bench.slint", bench())] {
+        for (n, line) in code(&text).iter().enumerate() {
+            for banned in ["ease-out-back", "Motion.lively"] {
+                assert!(
+                    !line.contains(banned),
+                    "{name}:{}: `{banned}` — §8.2 rule 2 gives the overshoot exactly one use site \
+                     in this program, and it is the drawer's page strip\n  {line}",
+                    n + 1
+                );
+            }
+            let Some(rest) = line.strip_prefix("animate ") else {
+                continue;
+            };
+            seen += 1;
+            let props = rest.split_once('{').map_or(rest, |(p, _)| p);
+            for prop in props.split(',') {
+                assert!(
+                    !SIZES.contains(&prop.trim()),
+                    "{name}:{}: `{}` is animated. §8.2 rule 1: nothing that animates may feed the \
+                     drawing's own size — every dimension of the device is a fraction of it, and a \
+                     live framebuffer drawn at a varying non-integer scale is the carousel this \
+                     design deleted\n  {line}",
+                    n + 1,
+                    prop.trim()
+                );
+            }
+        }
+    }
+    assert!(seen >= 5, "only {seen} `animate` blocks were found across the two files");
 }

@@ -17,6 +17,16 @@ use std::path::PathBuf;
 
 use eapp_loader::compose;
 
+/// Bytes, in the units a person reads. **One formatter, and this is a re-export rather than a copy.**
+///
+/// It used to be a second implementation, byte for byte identical to `eapp_loader::si` and sitting
+/// two hundred lines below this one. Nothing had gone wrong yet, which is the only interesting thing
+/// about it: `Entry::measure` and `Entry::cancel_cost` render here, `compose::Step::sub` renders in
+/// the model — `21 MB` is built inside eapp-loader and cannot reach a formatter in this crate — and
+/// `push_ledger` renders in `main.rs`. Four surfaces, one number, and two functions that could drift
+/// on any edit to either. Two names for one number is how they come to disagree.
+use eapp_loader::si;
+
 /// What an entry is doing. §9.2's states, plus the two an entry can end in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
@@ -39,9 +49,9 @@ pub enum Kind {
 pub enum Progress {
     None,
     /// Real bytes, both halves. §9.2: the measure is `4.1 MB of 6.5 MB`, never a percentage alone.
-    #[allow(dead_code)]  // retired when: the first `Progress::Bytes` producer — `work.rs`, the fetcher
     Bytes { done: u64, total: u64 },
-    #[allow(dead_code)]  // retired when: the first `Progress::Fraction` producer — `work.rs`, the builder
+    /// A fraction somebody computed, where there are no bytes to count.
+    #[allow(dead_code)]  // retired when: a step reports progress that is not a byte count — the install of a directory tree, Phase 6
     Fraction(f32),
 }
 
@@ -50,18 +60,18 @@ pub enum Progress {
 /// **Named individually because the remedy is**: §9.3 gives each of the three its own command, and
 /// a bare "install the tool" is not a remedy — it is the shape of one. `Class::ToolMissing` carries
 /// which, so [`Class::mono_remedy`] can print something a person can paste.
-#[allow(dead_code)]  // retired when: `work.rs` shells out to one of these three
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
     /// Every download.
     Curl,
     /// ZeroSlackr only.
+    #[allow(dead_code)]  // retired when: the iPodLinux install lands — it is what unpacks a `.7z`
     SevenZip,
     /// GIFs only.
+    #[allow(dead_code)]  // retired when: `ipod-film`'s GIF path reaches the window
     Ffmpeg,
 }
 
-#[allow(dead_code)]  // retired when: `work.rs` shells out to one of these three
 impl Tool {
     pub fn name(self) -> &'static str {
         match self {
@@ -93,7 +103,6 @@ impl Tool {
 ///
 /// The class decides the wording and the next steps. It does **not** decide the sentence a
 /// [`Failure`] shows when there are numbers in it — see [`Failure::saying`].
-#[allow(dead_code)]  // retired when: `work.rs` and `machine.rs` construct a class other than `Missing` and `Permission`
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Class {
     Network,
@@ -115,7 +124,7 @@ impl Class {
     /// The length is written into the type, so an eleventh variant stops the crate compiling until
     /// somebody decides what it is called — and `every_failure_class_carries_a_next_step_and_its_own_words`
     /// then fails until it is swept too.
-    #[allow(dead_code)]  // retired when: a caller outside this module needs the closed set by name
+    #[allow(dead_code)]  // retired when: a caller outside this module needs the closed set by name; the sweep in this file's own tests does not count in a non-test build
     pub const ALL: [&'static str; 10] = [
         "network",
         "not served",
@@ -151,7 +160,6 @@ impl Class {
     /// numbers — [`Failure::saying`]. This is what a failure says when nobody did, and it is never
     /// empty, because an entry that says nothing is the "it boots to a white screen" non-diagnosis
     /// §20 item 1 exists to delete.
-    #[allow(dead_code)]  // retired when: `Failure::new` has a caller — the two are one mechanism
     pub fn wording(&self) -> String {
         match self {
             Class::Network => "Apple's server did not answer.".into(),
@@ -297,8 +305,17 @@ impl Next {
             Next::CopyDetails => caps.clipboard,
             Next::Reveal => caps.reveal,
             Next::Devices => caps.devices_page,
-            // Retrying, cancelling and applying a Fix are this program talking to itself.
-            Next::Retry | Next::CancelWrite | Next::Fix { .. } => true,
+            // **Retrying is downloading.** Every class that offers `Retry` — `Network`, and
+            // `Verification` on its first failure — failed while fetching something, so the control
+            // is exactly as real as the fetcher is. On a computer with no `curl` it is drawn
+            // disabled wearing that sentence, and `Class::ToolMissing`'s `mono_remedy` is the other
+            // half.
+            Next::Retry => caps.download,
+            // A `Fix` rewrites the recipe, and nothing in this build holds one.
+            Next::Fix { .. } => caps.composer,
+            // Cancelling really is this program talking to itself: the file is this program's, it
+            // is on this computer, and `cancel_write` is wired. It needs no capability.
+            Next::CancelWrite => true,
         }
     }
 
@@ -314,16 +331,30 @@ impl Next {
             Next::CopyDetails => "this build has no clipboard",
             Next::Reveal => "this build cannot open a file manager",
             Next::Devices => "the Devices page is not built yet",
-            Next::Retry | Next::CancelWrite | Next::Fix { .. } => "",
+            // **A machine rule, not a project state**, and the only one in this function. The other
+            // five say *we have not finished this*; this one says *your computer cannot do it*, and
+            // the difference matters because no amount of work on this program fixes it. The remedy
+            // is `Class::ToolMissing`'s command, not a control.
+            Next::Retry => "every download in this program goes through curl, and it is not on this \
+                            computer",
+            Next::Fix { .. } => "there is no Composer in this build yet",
+            Next::CancelWrite => "",
         }
     }
 
     /// The command that does the same job from a terminal, when there is one.
     ///
-    /// **Empty unless it is real.** `IPOD_EMULATOR_DATA` is read by `settings.rs:1638` today, so
-    /// `ChooseElsewhere` has a true escape hatch even with no picker. `Provide` has none: the
-    /// sentence *"drop the file anywhere on this window"* would name a mechanism §16.4 defers, and
-    /// that is the phantom route in its original shape.
+    /// **Empty unless it is real, and §9.4's rule is that a project state always names one.**
+    /// Three of these had none, so `verification` after one retry, a live `403` and a `permission`
+    /// failure each resolved to nothing but two greyed controls: the reason said *this is not
+    /// finished, by us* and then offered no way round it, which is a dead end wearing an apology.
+    /// Every command below exists in `ipod-boot` today and was run to check it.
+    ///
+    /// The one that stays empty is [`Next::Retry`], and that is a different kind of absence: no
+    /// command in this program downloads a `.ipsw` without `curl` — `firmware::download` **is**
+    /// `curl` — so naming one would be the phantom route in its original shape, offered on the one
+    /// failure where a person is least able to check. `Class::ToolMissing`'s `mono_remedy` is what
+    /// that failure carries instead.
     pub fn escape_hatch(&self, caps: Caps) -> String {
         if self.available(caps) {
             return String::new();
@@ -331,7 +362,28 @@ impl Next {
         match self {
             Next::ChooseElsewhere => "IPOD_EMULATOR_DATA=<path>".into(),
             Next::Devices => "ipod-boot setup".into(),
-            _ => String::new(),
+            // `ipod-boot setup` composes a recipe from a terminal, which is exactly the job a
+            // Composer would do from the window.
+            Next::Fix { .. } => "ipod-boot setup".into(),
+            // **Providing the file yourself, from a terminal.** `firmware get` takes an
+            // `UpdaterFamilyID` or a filename and lands the bundle in the same cache directory this
+            // program reads, which is precisely what a picker would have done. `<family>` is a
+            // placeholder in the shape `IPOD_EMULATOR_DATA=<path>` already uses; `firmware list`
+            // is how you find out which number to put there.
+            Next::Provide => "ipod-boot firmware get <family>".into(),
+            // **The details, from a terminal.** `Copy the details` puts the release, its sizes and
+            // both hashes on a clipboard this build has not got; `firmware cache --verify` hashes
+            // every cached bundle and prints exactly that, which is what a report about a SHA-256
+            // mismatch needs.
+            Next::CopyDetails => "ipod-boot firmware cache --verify".into(),
+            // **`Reveal` is offered on `permission` alone**, and what a person does after being
+            // shown a folder they cannot write in is put this program's files somewhere else. That
+            // is one variable, read by `settings::data_dir`, and it is the same escape
+            // `ChooseElsewhere` carries — the two controls are the same remedy seen from two
+            // failures.
+            Next::Reveal => "IPOD_EMULATOR_DATA=<path>".into(),
+            Next::Retry => String::new(),
+            Next::CancelWrite => String::new(),
         }
     }
 
@@ -370,10 +422,20 @@ impl Next {
 
 /// What this build can actually do, decided in `main.rs` and passed in.
 ///
-/// **Five booleans, not the three the design first named**, and the two extra ones are the same
-/// rule applied twice more: `Reveal` needs a file manager this build has no way to open and
-/// `Devices` needs a drawer page that is not written. A control whose mechanism does not exist is
-/// disabled and says so; it is never drawn live and never quietly dropped.
+/// **Seven booleans, not the three the design first named**, and every one past the third is the
+/// same rule applied again: `Reveal` needs a file manager this build has no way to open, `Devices`
+/// needs a drawer page that is not written, `Retry` needs a downloader, and `Fix` needs a surface
+/// that holds a recipe. A control whose mechanism does not exist is disabled and says so; it is
+/// never drawn live and never quietly dropped.
+///
+/// **Six of the seven are decided at compile time and one is measured.** `download` is the odd one:
+/// every download in this program goes through `curl`, and whether `curl` is on this computer is a
+/// fact about the computer rather than about the build — so `main::caps()` asks
+/// `eapp_loader::tooling::can_download()` once per launch and the other six are literals.
+///
+/// **There is deliberately no `build` cap.** It would be a lie the moment this phase landed: this
+/// build *can* build a drive, and a boolean claiming otherwise would disable the one control §10
+/// exists to make pressable.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Caps {
     pub file_picker: bool,
@@ -382,6 +444,14 @@ pub struct Caps {
     pub reveal: bool,
     /// The drawer's Devices page. `Work` is the only page this phase builds.
     pub devices_page: bool,
+    /// Whether anything on this computer can fetch a file. §10.4: *every download in this program
+    /// goes through curl.* **Probed once per launch, never assumed** — the other six are facts
+    /// about the build and this one is a fact about the machine it is running on.
+    pub download: bool,
+    /// The Composer. A [`Next::Fix`] changes a recipe, and there is no surface in this build that
+    /// holds one — so the control that offers to change it is drawn disabled, wearing that reason,
+    /// rather than drawn live and doing nothing.
+    pub composer: bool,
 }
 
 /// A failure, in three parts: what was attempted, what happened, and which kind of wrong it is.
@@ -397,7 +467,6 @@ pub struct Failure {
 
 impl Failure {
     /// A failure whose sentence is the class's own.
-    #[allow(dead_code)]  // retired when: `work.rs` files a failure whose sentence is the class's own
     pub fn new(class: Class, attempted: impl Into<String>) -> Failure {
         Failure {
             said: class.wording(),
@@ -487,27 +556,6 @@ impl Entry {
     }
 }
 
-/// Bytes, in the units a person reads. Decimal, because that is what Apple's own figures are in.
-fn si(n: u64) -> String {
-    const K: f64 = 1000.0;
-    let n = n as f64;
-    if n < K {
-        return format!("{n:.0} B");
-    }
-    for (i, unit) in ["kB", "MB", "GB", "TB"].iter().enumerate() {
-        let div = K.powi(i as i32 + 1);
-        if n < div * K || *unit == "TB" {
-            let v = n / div;
-            return if v < 10.0 {
-                format!("{v:.1} {unit}")
-            } else {
-                format!("{v:.0} {unit}")
-            };
-        }
-    }
-    unreachable!()
-}
-
 /// Every entry, in the order they were filed.
 ///
 /// **It does not grow without bound**, and that is a mechanism rather than a hope: a new plan
@@ -520,12 +568,15 @@ pub struct Rail {
 }
 
 impl Rail {
-    // **Not dead — not yet produced.** The Rail is wired as a CONSUMER today: `on_start_device`
-    // files a refusal, and the three controls under a failure dismiss, cancel and retry it. Its
-    // producer half is a work queue, a fetcher and a Composer, none of which exists yet, so nothing
-    // calls it. **Retirement condition**, in the shape research/04 uses for bypasses: the allow
-    // comes off when the work queue lands, and at that point anything still unreferenced is
-    // genuinely dead and gets deleted rather than allowed.
+    // **The producer landed, and the allows came off with it.** `work.rs` is the work queue this
+    // module was written ahead of: it files the plan, reports bytes, names the file it is writing,
+    // fills the detail line, finishes a step and fails one. Thirteen of the sixteen
+    // `#[allow(dead_code)]` markers here named *"when `work.rs` lands"* as their retirement
+    // condition; that has happened, so they are gone rather than left standing.
+    //
+    // Four remain, each on the one item that is still genuinely unreferenced, each carrying what
+    // would retire it. That is the difference the original note asked for: anything still
+    // unreferenced now is either named or deleted.
 
     pub fn new() -> Rail {
         Rail::default()
@@ -548,13 +599,19 @@ impl Rail {
         self.entries.iter_mut().find(|e| e.id == id)
     }
 
-    /// **§11.3's plan, and it is the model's own list.** `Recipe::steps()` mapped one to one, with
-    /// no string built here: the verb is `Step::verb()` and the subject is `Step::what()`. One list,
-    /// rendered twice — as what will happen, and as what is happening.
-    #[allow(dead_code)]  // retired when: `compose::Recipe` reaches the window — the Composer, Phase 5
-    pub fn plan(&mut self, r: &compose::Recipe) -> Vec<u64> {
+    /// **§11.3's plan, and it is the model's own list.** Mapped one to one, with no string built
+    /// here: the verb is `Step::verb()`, the subject is `Step::what()` and the detail line is
+    /// `Step::sub()`. One list, rendered twice — as what will happen, and as what is happening.
+    ///
+    /// **It takes the steps rather than a `Recipe`**, because a first run's plan is the recipe's
+    /// steps with a boot ROM in front and a cold boot behind, and a `Recipe` knows about neither.
+    ///
+    /// Every entry is `Planned` with `Progress::None`, so `Entry::fraction()` is negative and no
+    /// bar is drawn on any of them: §9.2's *never a spinner* holds by construction rather than by
+    /// the caller remembering.
+    pub fn plan(&mut self, steps: &[compose::Step]) -> Vec<u64> {
         self.collapse_finished();
-        r.steps()
+        steps
             .iter()
             .map(|s| {
                 let id = self.mint();
@@ -562,7 +619,7 @@ impl Rail {
                     id,
                     verb: s.verb().to_string(),
                     what: s.what().to_string(),
-                    sub: String::new(),
+                    sub: s.sub().to_string(),
                     kind: Kind::Planned,
                     progress: Progress::None,
                     retries: 0,
@@ -580,7 +637,6 @@ impl Rail {
     ///
     /// Only `Done` entries — a failure stays until it is dismissed and a cancellation is a fact
     /// somebody may want to read twice.
-    #[allow(dead_code)]  // retired when: `Rail::plan` has a caller; this is its only one
     fn collapse_finished(&mut self) {
         let done = self.entries.iter().filter(|e| e.kind == Kind::Done).count();
         if done == 0 {
@@ -642,7 +698,6 @@ impl Rail {
     }
 
     /// A planned or working step failed.
-    #[allow(dead_code)]  // retired when: `work.rs` fails a step that was already planned
     pub fn fail(&mut self, id: u64, f: Failure) {
         if let Some(e) = self.at(id) {
             e.kind = Kind::Failed;
@@ -687,7 +742,6 @@ impl Rail {
     }
 
     /// Move a step along. **The only method that does not change what the Rail announces.**
-    #[allow(dead_code)]  // retired when: `work.rs` reports bytes
     pub fn progress(&mut self, id: u64, p: Progress) {
         if let Some(e) = self.at(id) {
             e.kind = Kind::Working;
@@ -696,7 +750,6 @@ impl Rail {
     }
 
     /// Say which file this step is writing, so cancelling can say what it costs.
-    #[allow(dead_code)]  // retired when: `work.rs` names the partial file it is writing
     pub fn writing(&mut self, id: u64, temp: PathBuf) {
         if let Some(e) = self.at(id) {
             e.temp = Some(temp);
@@ -705,14 +758,12 @@ impl Rail {
     }
 
     /// Set the detail line — the release, where it came from, what was checked.
-    #[allow(dead_code)]  // retired when: `work.rs` fills the detail line
     pub fn detail(&mut self, id: u64, sub: &str) {
         if let Some(e) = self.at(id) {
             e.sub = sub.to_string();
         }
     }
 
-    #[allow(dead_code)]  // retired when: `work.rs` finishes a step
     pub fn done(&mut self, id: u64) {
         if let Some(e) = self.at(id) {
             e.kind = Kind::Done;
@@ -748,15 +799,62 @@ impl Rail {
     /// Stop a write. **Returns the file the caller must delete** — this module does not delete
     /// anything, because `AGENTS.md` §3 makes that the operator's decision and `cancel_cost` is
     /// where they were told which file and how big.
+    ///
+    /// **Two entries can release a file, and the second one is why this is not just `cancellable`.**
+    /// A step that is *writing* is the obvious one. The other is a step that **failed while
+    /// writing**: [`Rail::fail`] clears `cancellable` — correctly, since there is no longer a write
+    /// to stop — but it does **not** clear `temp`, because the partial file is still on the disk.
+    /// `Class::SpaceMidWrite` offers `Next::CancelWrite` on exactly such an entry, and its whole job
+    /// is *delete the partial this step left*. Gated on `cancellable` alone it could never do it:
+    /// the path was right there in `temp` and unreachable, so the one control offered under *the
+    /// disk filled up* was guaranteed to do nothing. That is the visible-control-that-does-nothing
+    /// defect, arrived at from the opposite direction — not an unwired arm, but a wired arm the
+    /// model refused to serve.
+    ///
+    /// **A failed entry stays failed.** It does not become `Cancelled`, and the [`Failure`] on it is
+    /// not cleared: releasing the file is not a retraction of what went wrong, and a person who
+    /// presses `Cancel` under *the disk filled up* must not thereby lose the sentence explaining it,
+    /// nor the other next step beside it. Only the file is given up, and `temp.take()` is what makes
+    /// pressing twice honest — the second press finds nothing to release and the caller says so.
     pub fn cancel(&mut self, id: u64) -> Option<PathBuf> {
         let e = self.at(id)?;
-        if !e.cancellable {
-            return None;
+        if e.cancellable {
+            e.kind = Kind::Cancelled;
+            e.cancellable = false;
+            e.dismissible = true;
+            return e.temp.take();
+        }
+        if e.kind == Kind::Failed {
+            return e.temp.take();
+        }
+        None
+    }
+
+    /// **The run stopped before this step finished — record it.** Not the same request as
+    /// [`Rail::cancel`], and separating them fixed a step that vanished from the narrative.
+    ///
+    /// `cancel` answers *somebody pressed Cancel; here is the file to delete*, and it is gated on
+    /// `cancellable`, which only [`Rail::writing`] ever sets. This answers *the worker reports that
+    /// this step was stopped*, which the queue knows for certain and which is true whether or not
+    /// the step got as far as opening a file.
+    ///
+    /// Routed through `cancel`, a stop that landed before the first `Writing` report left the entry
+    /// on `Kind::Planned` for ever: the run was over, nothing was running, and the Rail still said
+    /// the step was coming up. It reproduced only under load — with five other tests ahead of it,
+    /// the cancel beat the worker's first report — which is the shape of defect that ships.
+    ///
+    /// A step that already finished or already failed is left alone: those are outcomes, and a
+    /// cancellation arriving afterwards does not undo one.
+    pub fn stopped(&mut self, id: u64) {
+        let Some(e) = self.at(id) else { return };
+        if matches!(e.kind, Kind::Done | Kind::Failed | Kind::Cancelled | Kind::Note) {
+            return;
         }
         e.kind = Kind::Cancelled;
         e.cancellable = false;
         e.dismissible = true;
-        e.temp.take()
+        e.progress = Progress::None;
+        e.temp = None;
     }
 
     pub fn failures(&self) -> usize {
@@ -815,6 +913,14 @@ impl Rail {
         }
         let done = self.entries.iter().filter(|e| e.kind == Kind::Done).count();
         let planned = self.entries.iter().filter(|e| e.kind == Kind::Planned).count();
+        // **A plan nobody has agreed to is not work at zero per cent.** §10.1's whole argument is
+        // that the five steps are on screen *before* anything is downloaded — and this said
+        // `0 of 5 done.`, which tells an assistive technology that a job is under way on the one
+        // screen written to prove that none is. The heading beside it already made the distinction
+        // (*This is what pressing the centre button does*); the announcement did not.
+        if planned > 0 && done == 0 {
+            return format!("A plan of {planned} steps. Nothing has started.");
+        }
         if planned > 0 {
             return format!("{done} of {} done.", done + planned);
         }
@@ -864,15 +970,22 @@ mod tests {
         clipboard: true,
         reveal: true,
         devices_page: true,
+        download: true,
+        composer: true,
     };
 
-    /// This phase, exactly: no picker, no drop target, no clipboard, no file manager, no page.
+    /// This phase, exactly: no picker, no drop target, no clipboard, no file manager, no page, no
+    /// Composer — and, for the sweep's purposes, no downloader either. `download` is the one cap
+    /// that is measured rather than declared, so a machine **with** `curl` still has to leave
+    /// `Retry` swept as a disabled control somewhere, and this fixture is where.
     const THIS_PHASE: Caps = Caps {
         file_picker: false,
         drop_target: false,
         clipboard: false,
         reveal: false,
         devices_page: false,
+        download: false,
+        composer: false,
     };
 
     /// **T-11.** §9.3's table, swept: ten classes, each with its own words, each with a next step —
@@ -996,11 +1109,74 @@ mod tests {
             }
         }
 
+        // **The two that returned `true` unconditionally, named.** The loop above cannot catch
+        // either of them coming ungated: it only ever says *if this is available it must offer no
+        // way round it*, and `Retry` and `Fix` both have an empty hatch — so both would sweep clean
+        // while drawn live over a mechanism that does not exist. That is the shape they shipped in.
+        //
+        // This is also why it is asserted against `THIS_PHASE` rather than against `main::caps()`:
+        // `download` is measured on the machine the test runs on, and a gate whose verdict depends
+        // on whether the developer has `curl` installed reports on the computer instead of on the
+        // program.
+        assert!(
+            !Next::Retry.available(THIS_PHASE),
+            "`Retry` is live with no downloader. Every class that offers it failed while fetching \
+             something, and `firmware::download` IS curl"
+        );
+        assert!(
+            !Next::Fix { label: "build from Apple's firmware instead".into(), presses: 2 }
+                .available(THIS_PHASE),
+            "`Fix` is live with no Composer. It rewrites a recipe and there is no surface in this \
+             build that holds one"
+        );
+        // `Cancel` genuinely needs nothing: the file is this program's, in this run, on this
+        // computer. It is the control the other two were wrongly grouped with.
+        assert!(
+            Next::CancelWrite.available(THIS_PHASE),
+            "`Cancel` is refused, and it needs no mechanism this build lacks"
+        );
+
         // And with every mechanism present, nothing is disabled and nothing needs a way round it.
         for c in every_class() {
             for n in c.next(0, ALL_CAPS) {
                 assert!(n.available(ALL_CAPS), "{} is refused with every cap on", n.label());
                 assert!(n.escape_hatch(ALL_CAPS).is_empty());
+            }
+        }
+    }
+
+    /// **No failure in this build is a dead end**, which is §9.4's rule about a project state:
+    /// say what does work, and always name the escape hatch.
+    ///
+    /// Three classes had none. After one retry, `verification` offered `Provide the file
+    /// yourself…` and `Copy the details`, both disabled, both with an empty hatch and an empty
+    /// `mono`; a live `403` offered `Provide` alone on the same terms; and `permission` offered
+    /// `Reveal`. Each of those is a person told *we have not built this* and given nothing else —
+    /// a greyed row wearing an apology, on the failures somebody is most likely to hit first.
+    ///
+    /// What counts as a way out is deliberately narrow: **a live control, or a command**. A
+    /// `reason` is not one, which is the whole point — every one of the three had a reason.
+    #[test]
+    fn no_failure_class_is_a_dead_end_in_this_build() {
+        for c in every_class() {
+            // `retries` changes what `verification` offers, and the second failure is the one that
+            // had nothing left: `Retry` is replaced rather than repeated.
+            for retries in [0u8, 1, 2] {
+                let steps = c.next(retries, THIS_PHASE);
+                let live = steps.iter().any(|n| n.available(THIS_PHASE));
+                let hatch = steps
+                    .iter()
+                    .find(|n| !n.escape_hatch(THIS_PHASE).is_empty())
+                    .map(|n| n.escape_hatch(THIS_PHASE));
+                let mono = c.mono_remedy();
+                assert!(
+                    live || hatch.is_some() || !mono.is_empty(),
+                    "class `{}` after {retries} retries offers {:?} — every one of them disabled, \
+                     no command among them and no `mono` — so a person meeting it has a paragraph, \
+                     two greyed controls and nothing to do",
+                    c.as_str(),
+                    steps.iter().map(Next::label).collect::<Vec<_>>()
+                );
             }
         }
     }
@@ -1014,15 +1190,22 @@ mod tests {
             oses: [Os::Apple, Os::Rockbox].into_iter().collect(),
         };
         let mut rail = Rail::new();
-        let ids = rail.plan(&r);
-        let steps = r.steps();
+        let steps = r.steps(compose::Holes::Sparse);
+        let ids = rail.plan(&steps);
         assert_eq!(ids.len(), steps.len(), "the plan is not the model's list");
         for (id, s) in ids.iter().zip(steps.iter()) {
             let e = rail.find(*id).expect("the entry just filed");
             assert_eq!(e.verb, s.verb(), "the verb was written here rather than read");
             assert_eq!(e.what, s.what(), "the subject was written here rather than read");
+            assert_eq!(e.sub, s.sub(), "the detail line was dropped on the way in");
             assert_eq!(e.kind, Kind::Planned);
         }
+        // **The detail line reaches the Rail.** `RailRow.sub` has been drawn since the drawer
+        // landed with nothing behind it, because this filed `String::new()`.
+        assert!(
+            rail.entries().iter().any(|e| !e.sub.is_empty()),
+            "every planned step's detail line is empty, so the row that draws it draws nothing"
+        );
     }
 
     /// **T-14.** Two downloads that fail the same check stop offering `Retry`.
@@ -1148,6 +1331,41 @@ mod tests {
         assert!(rail.announce().starts_with("1 failed."), "{}", rail.announce());
     }
 
+    /// **A plan nobody has agreed to does not announce progress.**
+    ///
+    /// §10.1 puts five steps on screen *before* a byte is downloaded, and the whole argument of
+    /// that screen is that nothing has happened yet. `announce` had one arm for `planned > 0`, so
+    /// what a screen reader was told on it was `0 of 5 done.` — a job under way, on the one page
+    /// written to prove there is not one. The visible heading beside it said *This is what
+    /// pressing the centre button does*; the two disagreed.
+    #[test]
+    fn a_plan_nobody_has_agreed_to_does_not_announce_progress() {
+        let mut rail = Rail::new();
+        let steps = compose::Recipe {
+            start: compose::Start::FromIpsw("iPod_25.1.3.ipsw".into()),
+            loader: compose::Loader::Apple,
+            oses: [compose::Os::Apple].into_iter().collect(),
+        }
+        .steps(compose::Holes::Sparse);
+        let ids = rail.plan(&steps);
+        assert!(ids.len() >= 3, "the fixture filed {} steps", ids.len());
+
+        let said = rail.announce();
+        assert_eq!(
+            said,
+            format!("A plan of {} steps. Nothing has started.", ids.len()),
+            "a plan nobody has pressed announces {said:?}"
+        );
+        assert!(
+            !said.contains("done"),
+            "the live region says work is finished on a plan nothing has started: {said}"
+        );
+
+        // One step in, it goes back to counting — because now there is something to count.
+        rail.done(ids[0]);
+        assert_eq!(rail.announce(), format!("1 of {} done.", ids.len()));
+    }
+
     /// The announcement is a state transition, never a byte counter.
     #[test]
     fn the_announcement_does_not_read_out_the_progress_bar() {
@@ -1205,6 +1423,116 @@ mod tests {
         assert!(rail.cancel(id).is_none(), "cancelling twice handed the file back twice");
     }
 
+    /// **The one control offered under *the disk filled up* could never do the one thing it named.**
+    ///
+    /// §12.7 and §9.3's `space, mid-write` row. `Rail::fail` clears `cancellable` — there is no
+    /// write left to stop — but the partial file is still on the disk, and `Class::SpaceMidWrite`
+    /// answers `Next::CancelWrite`, whose whole job is to delete it. Gated on `cancellable` alone,
+    /// `cancel` handed back `None` for exactly that entry: the path sat in `temp`, named on screen
+    /// by `cancel_cost`, unreachable.
+    ///
+    /// This is the same defect as the two live-but-inert controls, reached from the other side. The
+    /// arm was wired; the model refused to serve it.
+    #[test]
+    fn a_step_that_failed_mid_write_can_still_release_the_file_it_left() {
+        let part = PathBuf::from("/tmp/my-5.5g.img.part");
+        let mut rail = Rail::new();
+        let id = rail.note("build");
+        rail.writing(id, part.clone());
+        rail.progress(id, Progress::Bytes { done: 9_000_000, total: 20_987_904 });
+        rail.fail(
+            id,
+            Failure::saying(
+                Class::SpaceMidWrite,
+                "building a drive",
+                "Stopped at 9 MB. my-5.5g.img.part is 9 MB and cancelling deletes it.",
+            ),
+        );
+
+        // The control really is offered here, and it really is pressable — otherwise this test
+        // would be about a route nobody can take.
+        let steps = Class::SpaceMidWrite.next(0, THIS_PHASE);
+        assert!(steps.contains(&Next::CancelWrite), "SpaceMidWrite stopped offering Cancel");
+        assert!(Next::CancelWrite.available(THIS_PHASE));
+
+        // And it is told what pressing costs BEFORE the press, which is what makes deleting it the
+        // operator's decision rather than this program's (`AGENTS.md` §3).
+        let cost = rail.find(id).unwrap().cancel_cost();
+        assert!(cost.contains("my-5.5g.img.part"), "{cost}");
+
+        assert_eq!(
+            rail.cancel(id),
+            Some(part),
+            "the partial file a failed write left could not be released, so the only control \
+             offered under `the disk filled up` was guaranteed to do nothing"
+        );
+
+        // **The failure survives the cancel.** Releasing the file is not a retraction of what went
+        // wrong: the sentence stays, the class stays, and the other next step beside it stays.
+        let e = rail.find(id).unwrap();
+        assert_eq!(e.kind, Kind::Failed, "pressing Cancel erased the failure that explained it");
+        assert_eq!(e.failure.as_ref().map(|f| f.class.clone()), Some(Class::SpaceMidWrite));
+        assert!(e.temp.is_none(), "the file was released and the entry still claims to hold it");
+        assert!(rail.cancel(id).is_none(), "a second press handed the same file back again");
+    }
+
+    /// **A step stopped before it opened a file still leaves the narrative.**
+    ///
+    /// The race that found this: `Queue::cancel` sets a flag, and the worker checks it at the top of
+    /// each step — so a cancel that lands in the first hundred milliseconds is answered *before* the
+    /// step reports `Writing`, which is the only thing that ever sets `cancellable`. Routed through
+    /// [`Rail::cancel`] that stop did nothing, and the entry sat on `Kind::Planned` with the run
+    /// over: the Rail saying a step was coming up that nothing was ever going to run.
+    ///
+    /// It reproduced only with five other tests ahead of it — fast machine, warm cache, the cancel
+    /// beating the worker — so the deterministic version is here rather than in the ignored test
+    /// that found it.
+    #[test]
+    fn a_step_stopped_before_it_opened_a_file_is_still_filed_as_cancelled() {
+        let steps = Recipe {
+            start: Start::FromIpsw("iPod_25.1.3".into()),
+            loader: Loader::Apple,
+            oses: [Os::Apple].into_iter().collect(),
+        }
+        .steps(compose::Holes::Sparse);
+        let mut rail = Rail::new();
+        let ids = rail.plan(&steps);
+
+        // Exactly the state a worker stopped at the top of its first step leaves behind: planned,
+        // never `writing`, so `cancellable` was never set.
+        let id = ids[0];
+        assert!(!rail.find(id).unwrap().cancellable, "the fixture is not the state this is about");
+        assert_eq!(
+            rail.cancel(id),
+            None,
+            "a planned step has no file to hand back, which is why `cancel` alone cannot file this"
+        );
+        assert_eq!(
+            rail.find(id).unwrap().kind,
+            Kind::Planned,
+            "the fixture is not the state this is about"
+        );
+
+        rail.stopped(id);
+        assert_eq!(
+            rail.find(id).unwrap().kind,
+            Kind::Cancelled,
+            "the run stopped and the Rail still says this step is coming up"
+        );
+        assert!(rail.find(id).unwrap().dismissible, "a cancelled step cannot be taken off the Rail");
+        assert!(rail.find(id).unwrap().fraction() < 0.0, "a cancelled step still draws a bar");
+
+        // **An outcome is not undone by a stop arriving afterwards.** A step that finished stays
+        // finished, and one that failed keeps the sentence explaining it.
+        rail.done(ids[1]);
+        rail.stopped(ids[1]);
+        assert_eq!(rail.find(ids[1]).unwrap().kind, Kind::Done, "a stop undid a finished step");
+        rail.fail(ids[2], Failure::new(Class::Network, "a download"));
+        rail.stopped(ids[2]);
+        assert_eq!(rail.find(ids[2]).unwrap().kind, Kind::Failed, "a stop erased a failure");
+        assert!(rail.find(ids[2]).unwrap().failure.is_some(), "a stop erased the sentence with it");
+    }
+
     /// A new plan folds the last one's finished steps into one line, so the Rail is bounded.
     #[test]
     fn a_new_plan_collapses_the_last_ones_finished_steps() {
@@ -1214,13 +1542,14 @@ mod tests {
             oses: [Os::Apple].into_iter().collect(),
         };
         let mut rail = Rail::new();
-        let first = rail.plan(&r);
+        let steps = r.steps(compose::Holes::Sparse);
+        let first = rail.plan(&steps);
         for id in &first {
             rail.done(*id);
         }
         assert_eq!(rail.entries().len(), first.len());
 
-        let second = rail.plan(&r);
+        let second = rail.plan(&steps);
         assert_eq!(
             rail.entries().len(),
             second.len() + 1,

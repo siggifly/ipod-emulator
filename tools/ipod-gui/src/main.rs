@@ -57,18 +57,144 @@ mod geometry;
 mod motion;
 mod nav;
 mod rail;
+mod work;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use eapp_loader::compose;
 use eapp_loader::identity::Colour;
 use eapp_loader::settings::{Absent, Device, Presence, Settings};
+use eapp_loader::volume;
 // Only for `on_winit_window_event`: `Resized`, `Moved` and `ScaleFactorChanged` are the three
 // moments §16.1 says the fit has to be recomputed at, and Slint exposes none of them.
 use i_slint_backend_winit::WinitWindowAccessor;
 use slint::{ComponentHandle, Model, ModelRc, SharedPixelBuffer, VecModel};
 
 slint::include_modules!();
+
+/// Where this test binary's data directory is redirected to. **Never the operator's.**
+///
+/// `AGENTS.md` §3. `Settings::save`, `Settings::load`, `settings::drives_dir` and
+/// `firmware::cache_dir` all resolve through `settings::data_dir`, which declines a cargo build tree
+/// and then lands on the **platform application-support directory** — `~/Library/Application
+/// Support/ipod-emulator` on macOS, which holds the devices the operator built by hand and, today,
+/// two 30 GB drive images. `wire` writes there: it saves, and it builds a `Queue` that names
+/// `drives/`.
+/// `IPOD_TEST_DATA` names it when the caller wants to keep what a run produced — the end-to-end
+/// first run is the reason, since a directory this deletes cannot be looked at afterwards. It is
+/// **not** `IPOD_EMULATOR_DATA`: this one is set deliberately, by somebody running the ignored
+/// tests, and pointing it at a real library would be a decision rather than an accident. With
+/// neither set, a per-process temp directory.
+#[cfg(test)]
+pub(crate) fn scratch_data_dir() -> &'static std::path::Path {
+    static WHERE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    WHERE.get_or_init(|| match std::env::var_os("IPOD_TEST_DATA") {
+        Some(d) if !d.is_empty() => std::path::PathBuf::from(d),
+        _ => std::env::temp_dir().join(format!("ipod-gui-data-{}", std::process::id())),
+    })
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// How many data-directory guards this thread already holds. Guards are locals and drop in
+    /// reverse order, so only the outermost one owns the mutex.
+    static DATA_DIR_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// **One lock for `IPOD_EMULATOR_DATA`, and it redirects before it hands the guard back.**
+///
+/// Two things, because they cannot safely be separate.
+///
+/// *The lock.* [`std::env::set_var`] is process-global and cargo runs tests on several threads. Two
+/// test modules in this binary redirect the data directory — this file's, to one fixed scratch
+/// directory, and `work.rs`'s, to a fresh one per test which it restores afterwards — and they used
+/// to do it under **two different locks**, which is the same as no lock at all. The flake it
+/// produced was a ledger test reporting a firmware bundle nobody had downloaded, because it read the
+/// other module's cache.
+///
+/// *The redirect.* It used to live in an opt-in helper that three tests called, and **six** call
+/// `wire`. Whether the operator's real library was written to therefore depended on which test the
+/// scheduler happened to run first — and worse, `work.rs`'s guard restored the variable to whatever
+/// it found, which on a run where nothing had redirected yet was *nothing at all*. Doing it here
+/// means the redirect is a precondition of holding the lock rather than a courtesy somebody
+/// remembers, and `every_test_that_reaches_the_data_directory_takes_the_lock` is what makes taking
+/// the lock non-optional.
+///
+/// **It is re-entrant, and that is not a convenience.** One test reaches this twice, through two
+/// helpers that each have every right to ask for it: `a_fresh_installation` claims the directory,
+/// and `a_window` needs the redirect in place before it builds anything that could resolve
+/// `data_dir()`. Taken twice on one thread a plain `std::sync::Mutex` deadlocks, and the test binary
+/// then hangs with no output and no failing test name — a worse failure than the flake this exists
+/// to fix, and the one it produced on the first attempt at this. `std::sync::ReentrantLock` is
+/// exactly this, and is still unstable, so it is fifteen lines here instead.
+///
+/// A test that panicked holding it must not poison every later one, hence the `into_inner`.
+#[cfg(test)]
+pub(crate) fn data_dir_lock() -> DataDirLock {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    let outermost = DATA_DIR_DEPTH.with(|d| {
+        let n = d.get();
+        d.set(n + 1);
+        n == 0
+    });
+    let held = outermost.then(|| LOCK.lock().unwrap_or_else(|e| e.into_inner()));
+    ONCE.call_once(|| {
+        // SAFETY: `Once::call_once` blocks every other thread until this returns, so no thread can
+        // observe the variable half-set, and it runs exactly once for the life of the process.
+        unsafe { std::env::set_var("IPOD_EMULATOR_DATA", scratch_data_dir()) };
+    });
+    // **Made on every claim rather than once**, because `DataDirGuard` takes it away again on the
+    // way out: a run used to leave one `ipod-gui-data-<pid>/` per process in the system temp
+    // directory for ever, and putting the creation inside the `Once` would mean the first test to
+    // clean up left every later one with no data directory at all.
+    std::fs::create_dir_all(scratch_data_dir()).expect("a scratch data directory");
+    DataDirLock { _held: held }
+}
+
+/// A held claim on the test binary's data directory. Re-entrant; see [`data_dir_lock`].
+///
+/// `!Send`, because it holds a `MutexGuard` — which is what makes the thread-local depth count
+/// correct: a guard cannot be dropped on a thread other than the one that took it.
+#[cfg(test)]
+pub(crate) struct DataDirLock {
+    /// `Some` only on the outermost guard, which is the one that owns the mutex.
+    _held: Option<std::sync::MutexGuard<'static, ()>>,
+}
+
+#[cfg(test)]
+impl DataDirLock {
+    /// Whether this is the guard that owns the mutex, rather than a re-entrant one nested inside it.
+    ///
+    /// **Anything that cleans up must ask.** A nested guard drops halfway through the test that
+    /// took the outer one — `a_window` takes one and lets it go before it returns — so a `Drop`
+    /// that deleted the data directory on every guard deleted it out from under the test that had
+    /// just set it up.
+    pub(crate) fn is_outermost(&self) -> bool {
+        self._held.is_some()
+    }
+}
+
+#[cfg(test)]
+impl Drop for DataDirLock {
+    fn drop(&mut self) {
+        DATA_DIR_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        // **The outermost guard puts the variable back, and only the outermost.**
+        //
+        // A test may point it at a subdirectory of its own for the length of its run — the ignored
+        // end-to-end tests do, because sharing one data directory makes them order-dependent, and an
+        // order-dependent test is a flake with a schedule. Restoring on *every* guard would break
+        // that the moment the test called `a_window`, whose nested guard would drop first and undo
+        // the redirect while the test was still running.
+        //
+        // SAFETY: the mutex is still held until this function returns, and a `DataDirLock` is
+        // `!Send`, so no other test can be reading the variable.
+        if self._held.is_some() {
+            unsafe { std::env::set_var("IPOD_EMULATOR_DATA", scratch_data_dir()) };
+        }
+    }
+}
 
 fn main() -> Result<(), slint::PlatformError> {
     opaque_window()?;
@@ -91,7 +217,12 @@ fn main() -> Result<(), slint::PlatformError> {
     // held across a `match` — and it was invisible because every test either called the helper
     // directly or replaced the closure with one of its own. A closure registered inside `fn main`
     // is reachable from nothing. `wire` registers the real ones on a window a test can make.
-    wire(&window, settings.clone());
+    //
+    // **And what it hands back is held for the life of the window, deliberately.** A
+    // `slint::Timer` stops the moment it is dropped (`i-slint-core-1.17.1/timers.rs:44`), so
+    // `wire(&window, …);` on its own would compile, run, register everything — and leave the first
+    // run with nothing moving it, with no error anywhere. `_wiring` is what stops that.
+    let _wiring = wire(&window, settings.clone());
 
     // ── The fit: what size the iPod is drawn at, and whether it can be drawn at all ──
     //
@@ -113,7 +244,13 @@ fn main() -> Result<(), slint::PlatformError> {
         sf,
     });
     push_fit(&window, &fitter.fit(), sf);
-    client_height::dump_layout(window.window(), &fitter.fit(), geometry::PREF_HEIGHT, sf);
+    client_height::dump_layout(
+        window.window(),
+        &fitter.fit(),
+        geometry::PREF_HEIGHT,
+        sf,
+        Some(window.get_verb_width()),
+    );
 
     // **And it is recomputed while you are looking at it**, which is the promise the previous
     // design made and the platform cannot keep. Drag the bottom edge up to make room for a
@@ -199,10 +336,14 @@ fn main() -> Result<(), slint::PlatformError> {
         let measured = moment_window_logical(&moment);
         let (fit, changed) = fitter.apply(moment);
         if changed {
+            let mut verb_width = None;
             if let Some(w) = weak.upgrade() {
                 push_fit(&w, &fit, sf);
+                // §17.Q12: the text renderer's answer, read off the composed window rather than
+                // computed from a budget. It is only available while the window is alive.
+                verb_width = Some(w.get_verb_width());
             }
-            client_height::dump_layout(win, &fit, measured, sf);
+            client_height::dump_layout(win, &fit, measured, sf, verb_width);
         }
         // An observer, never a filter: every arm propagates.
         i_slint_backend_winit::EventResult::Propagate
@@ -224,7 +365,27 @@ fn main() -> Result<(), slint::PlatformError> {
 ///
 /// The fit and the winit event filter stay in `main`: both need a window on a display, and the
 /// filter must be registered **exactly once** in the whole program.
-fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) {
+fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
+    // §10.4: **every download in this program goes through `curl`.** `caps()` measures it once per
+    // launch, by running the tool rather than by walking `PATH` — a `PATH` walk is a second
+    // implementation of what the OS is about to do, and it is wrong on Windows where the extension
+    // list is policy. It is carried on `Caps` from here, so the sentence the disabled `Retry` wears,
+    // the gate on the press and the empty cradle's `startable` are one measurement and cannot
+    // disagree.
+    let caps = caps();
+
+    // ── §10.3, and it is read BEFORE anything is written ────────────────────────────────────────
+    //
+    // The flag is what decides this, and the size of the library is not. That is the whole of
+    // §10.3: a build that is cancelled or fails empties the device list, and a window that read
+    // emptiness as *offer the welcome again* returned a person to step one for ever, with no error
+    // shown and no way past. That shipped.
+    let offer = first_run_offer(&settings.borrow());
+    // **A latch, and it goes one way.** `ghost` is recomputed from emptiness on every pass and goes
+    // both ways (§9.1 gives the later-empty bench the same drawing); the welcome copy does not come
+    // back. The drawing may key on emptiness; the welcome may not.
+    let showing_welcome = Rc::new(std::cell::Cell::new(offer == Offer::Welcome));
+
     // ── The library, and it is retained too (§16.9) ──
     //
     // **`set_devices` is called once.** It used to be called once because nothing re-read the
@@ -234,11 +395,6 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) {
     // which is what §16.9 asks for and what keeps focus, hover and the selection through a refresh.
     let devices: Rc<VecModel<DeviceRow>> = Rc::new(VecModel::default());
     window.set_devices(ModelRc::from(devices.clone()));
-    refresh_devices(window, &devices, &settings.borrow());
-    // §9.1: an empty library is a state with something to say. The window composes `current` out of
-    // this when there is no device, so every sentence on the bench stays the model's — a struct
-    // literal in the markup is how the previous revision came to invent a chassis colour there.
-    window.set_empty_device(empty_device());
     window.set_screen_source(dark_screen());
     window.set_panel_description(panel_description(&phase()).into());
 
@@ -261,11 +417,132 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) {
 
     let rail = Rc::new(RefCell::new(rail::Rail::new()));
     let stack = Rc::new(RefCell::new(nav::Stack::new()));
-    let caps = caps();
+    let work = Rc::new(RefCell::new(work::Queue::new()));
 
-    push_ledger(window);
-    sync_rail(window, &rows, &rail.borrow(), caps);
+    // ── §10.1: the plan, on screen BEFORE the press ─────────────────────────────────────────────
+    //
+    // Five rows, each with its own sub-line, filed as `Kind::Planned` — and **nothing is
+    // downloaded, minted, probed or written** to put them there. It costs one call to
+    // `Recipe::steps()`, which already existed. Nobody has ever been given that list before
+    // agreeing to a download.
+    //
+    // `Holes::Sparse` is the assumption the plan is drawn under; the volume is probed at the press,
+    // because probing writes an 8 GiB file and §10.1's absolute is that nothing is written before
+    // you agree. If the probe then answers `Full`, the gate refuses against the apparent size and
+    // says so — the plan is not re-filed underneath somebody.
+    let plan = work::plan(compose::Holes::Sparse);
+    let cost = work::cost(compose::Holes::Sparse);
+    // One `df`, synchronously, beside the `stat`s `Settings::missing` already does here — see
+    // `push_ledger` for why the clause is honest only when it was measured.
+    let space = volume::space(&eapp_loader::settings::drives_dir());
+
+    if offer.has_plan() {
+        work.borrow_mut().show(&mut rail.borrow_mut(), &plan);
+        // §10.4, and it is filed **on top of** the plan rather than instead of it: the five steps
+        // stay on screen, and the one that cannot run says why, with a command to paste.
+        //
+        // **Filed here and nowhere else.** `Queue::press` refuses the same way with the same class
+        // and the same sentence, under the verb `make`, so a person with no `curl` opened the
+        // window on *One thing failed.* and pressed once to reach *2 things failed.* — one absent
+        // tool counted twice, under two verbs, with two identical paragraphs. The press's refusal
+        // is now dropped when this one is already on the Rail; see `on_start_device`.
+        if !caps.download {
+            rail.borrow_mut().failed(
+                "fetch",
+                "Apple's firmware",
+                rail::Failure::new(rail::Class::ToolMissing(rail::Tool::Curl), "the download"),
+            );
+        }
+    }
+    if offer == Offer::Welcome {
+        // §10.1: the drawer is already open on Work, showing what pressing ● will do.
+        stack.borrow_mut().go(nav::Page::Work, 1);
+        // §10.3's flag, written **once**, before the first frame. Slint 1.17 exposes no Rust-side
+        // first-render callback, and the two failure modes are not symmetric: writing early loses
+        // one welcome if the process dies between here and the first frame; writing late re-runs
+        // the welcome after any crash, which is §10.3's bug verbatim.
+        welcome(&mut settings.borrow_mut());
+        // Its failure lands ON the plan, which is why the plan is filed first.
+        save(&settings.borrow(), &mut rail.borrow_mut());
+    }
+
+    refresh_devices(window, &devices, &settings.borrow(), &showing_welcome, caps, cost);
+    push_ledger(
+        window,
+        offer.has_plan().then_some(cost),
+        &eapp_loader::firmware::cache_dir(),
+        space.as_ref(),
+    );
+    sync_rail(window, &rows, &rail.borrow(), caps, work.borrow().shape());
     push_nav(window, &stack.borrow());
+
+    // ── The one timer, and the one place it is started ──────────────────────────────────────────
+    //
+    // **A `slint::Timer` stops the moment it is dropped** — `i-slint-core-1.17.1/timers.rs:44`:
+    // *"The timer will automatically stop when dropped. You must keep the Timer object around for
+    // as long as you want the timer to keep firing."* One started inside this function and dropped
+    // at its closing brace never fires once, which is why `wire` hands [`Wiring`] back.
+    //
+    // It is also `!Send` and thread-local (`_phantom: PhantomData<*mut ()>`, timers.rs:64), which is
+    // exactly why its callback may hold every `Rc` the window has — and why, under
+    // `i-slint-backend-testing`'s no-event-loop init, it never fires at all. So [`pump_once`] is a
+    // plain function a test can call directly and this closure is one line of it.
+    //
+    // **Started in exactly one place**, in the same class as
+    // `there_is_exactly_one_winit_event_filter_registration`: `ticking` is the only thing that ever
+    // calls `Timer::start`, both the press and a Retry go through it, and starting an already
+    // running timer restarts it rather than making a second one.
+    let timer = Rc::new(slint::Timer::default());
+
+    // **One tick, and the timer is one caller of it.** [`pump_once`]'s own doc says *a test drives
+    // exactly what the timer drives*, and that was only half true: the closure below was reachable
+    // from nothing but the timer, and under `i-slint-backend-testing` the timer never fires. So
+    // everything after the press — the download, the build, the install, the handoff — was
+    // unreachable from any test that went through `wire`, which is §20 item 12 one layer out.
+    // `Wiring` hands this back, so the same closure the timer runs is the one a caller runs.
+    let tick: Rc<dyn Fn()> = {
+        let timer = timer.clone();
+        let work = work.clone();
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let devices = devices.clone();
+        let settings = settings.clone();
+        let showing_welcome = showing_welcome.clone();
+        let weak = window.as_weak();
+        Rc::new(move || {
+            let Some(w) = weak.upgrade() else { return };
+            pump_once(
+                &w,
+                &work,
+                &rail,
+                &rows,
+                &devices,
+                &settings,
+                &showing_welcome,
+                &timer,
+                caps,
+                cost,
+            );
+        })
+    };
+    let ticking: Rc<dyn Fn()> = {
+        let timer = timer.clone();
+        let tick = tick.clone();
+        Rc::new(move || {
+            // **Idempotent, because `Timer::start` restarts a running timer.** `i-slint-core`'s own
+            // doc: *"If the timer has been started previously, then it will be restarted, no matter
+            // if it has already been fired or not."* Every `Press::Busy` came through here, so
+            // somebody mashing the centre button on a build that looked stuck pushed the next tick
+            // out indefinitely — progress froze on screen while the work carried on and the reports
+            // piled up in the channel. Which is precisely what a person does when a download looks
+            // stuck.
+            if timer.running() {
+                return;
+            }
+            let tick = tick.clone();
+            timer.start(slint::TimerMode::Repeated, work::TICK, move || tick());
+        })
+    };
 
     // ── The centre button, and §20 item 12's whole point ──
     {
@@ -274,21 +551,101 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) {
         let stack = stack.clone();
         let rows = rows.clone();
         let devices = devices.clone();
+        let work = work.clone();
+        let showing_welcome = showing_welcome.clone();
+        let ticking = ticking.clone();
         let weak = window.as_weak();
         window.on_start_device(move |index| {
             let Some(w) = weak.upgrade() else { return };
-            // **The borrow is scoped, and this line is why.** Written as
-            // `match resolve_for_start(&mut settings.borrow_mut(), …) { … }`, the `RefMut` is a
-            // temporary in the scrutinee and lives to the end of the whole `match` — so the `Ok`
-            // arm's `settings.borrow()` panicked with *already mutably borrowed*. Only the success
-            // path took it, which is why every refusal test stayed green: the press that WORKED was
-            // the one that took the program down, which is §20 item 12 exactly inverted.
+            // **Every borrow this press takes is scoped to this one block, and that line is why.**
+            // Written as `match resolve_for_start(&mut settings.borrow_mut(), …) { … }`, the
+            // `RefMut` is a temporary in the scrutinee and lives to the end of the whole `match` —
+            // so the `Ok` arm's `settings.borrow()` panicked with *already mutably borrowed*. Only
+            // the success path took it, which is why every refusal test stayed green: the press that
+            // WORKED was the one that took the program down, which is §20 item 12 exactly inverted.
+            //
+            // `Queue::press` takes four `&mut` for the same reason: everything it needs is borrowed
+            // here, once, and released before anything matches on what it said.
             let outcome = {
                 let mut s = settings.borrow_mut();
-                resolve_for_start(&mut s, index as usize)
+                let mut r = rail.borrow_mut();
+                // **§10.2, and the route is decided per press, by the row that was pressed.** An
+                // empty bench has no device to start, so it is always the first run's — §9.1 and
+                // §10.3 both give the later-empty bench the same one press. A half-made first-run
+                // device resumes. Everything else is a device's, which is the path that existed
+                // before.
+                //
+                // It used to be one boolean computed in `wire`: with an empty library and the
+                // welcome already shown it was **false**, so the promise §9.1 makes was drawn and
+                // then refused; and with a composed device sitting beside a half-made one it was
+                // **true for every row**, so pressing the composed device resumed the first run.
+                if press_is_first_run(&s, index as usize) {
+                    Route::First(work.borrow_mut().press(&mut s, &mut r, caps.download))
+                } else {
+                    Route::Existing(resolve_for_start(&mut s, index as usize))
+                }
             };
+            // **A refusal mutates nothing, so it must not rewrite the settings file.**
+            // `Settings::render` regenerates the whole file from the model and takes any comment
+            // the operator added with it (§20 item 13, one level up), so a save is something to do
+            // when there is something to save. Every other route may have moved the library: a
+            // first-run press mints the identity and files it away — *even the one that then
+            // refuses*, which is exactly the corner §10.3's argument turns on.
+            let mutated = !matches!(outcome, Route::Existing(Err(_)));
             match outcome {
-                Ok(name) => {
+                Route::First(work::Press::Running { from, embodied }) => {
+                    // **§10.3, said out loud.** A press that did not mint anything and did not
+                    // start at the beginning is a *resume*, and the whole reason identity is minted
+                    // once is that the iPod which comes back is the same iPod. Three failed first
+                    // runs used to leave three iPods with three different FireWire GUIDs; saying
+                    // which of the two this press was is how a person can see that it did not.
+                    if !embodied && from > 0 {
+                        rail.borrow_mut().note(&format!(
+                            "Carrying on from step {} — the same iPod, not a new one.",
+                            from + 1
+                        ));
+                    }
+                    // §12.3's bar and §9.2's Rail move from here on, and the timer is what moves
+                    // them. **A `slint::Timer` stops the moment it is dropped**, which is why
+                    // `Wiring` exists to hold it.
+                    ticking();
+                }
+                Route::First(work::Press::Busy) => ticking(),
+                Route::First(work::Press::Refused(f)) => {
+                    // Refused before anything was fetched or built. It goes on the plan, and the
+                    // drawer opens on the page that holds it.
+                    //
+                    // **Unless the Rail already says it.** `wire` files exactly this class with
+                    // exactly this sentence when `curl` is absent, under the verb `fetch`; filing
+                    // it again under `make` made one missing tool read as *2 things failed.*, with
+                    // two identical paragraphs and two copies of the same command. `Rail::note`
+                    // already folds a repeated sentence into one and failures deliberately do not,
+                    // because two different failures are two things — so the de-duplication has to
+                    // be here, where it is known that these two are one.
+                    let already = rail
+                        .borrow()
+                        .entries()
+                        .iter()
+                        .any(|e| {
+                            e.kind == rail::Kind::Failed
+                                && e.failure.as_ref().is_some_and(|g| g.class == f.class)
+                        });
+                    if !already {
+                        rail.borrow_mut().failed("make", "an iPod", f);
+                    }
+                    stack.borrow_mut().go(nav::Page::Work, 1);
+                    push_nav(&w, &stack.borrow());
+                }
+                Route::First(work::Press::HandOff(name)) => {
+                    // §12.2's handoff. Everything but the boot is done, and the boot is Phase 7 —
+                    // so this falls through to the same note the existing path files, which names
+                    // the escape hatch that does work today.
+                    rail.borrow_mut().note(&format!(
+                        "{name} is made and would start here. Running is not wired to the window \
+                         yet — `ipod-boot retail` boots it from a terminal today."
+                    ));
+                }
+                Route::Existing(Ok(name)) => {
                     // **Starting the machine is a later slice.** Until then this files a
                     // project-state note rather than an `eprintln!`, which is the whole reason the
                     // Rail exists before the first button is wired. The escape hatch is real:
@@ -297,16 +654,8 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) {
                         "{name} resolves and would start here. Running is not wired to the window \
                          yet — `ipod-boot retail` boots it from a terminal today."
                     ));
-                    // The resolution mutated the library: `run_device` makes this the live device.
-                    // Saving here rather than only on close is deliberate — a save that fails at
-                    // close has nowhere left to be shown (§20 item 13).
-                    save(&settings.borrow(), &mut rail.borrow_mut());
-                    // §7.3, §7.5: the library moved, so the bench's own account of it has to. The
-                    // list is a startup snapshot otherwise, and a drive deleted while the window was
-                    // open stayed invisible for the life of the process.
-                    refresh_devices(&w, &devices, &settings.borrow());
                 }
-                Err(f) => {
+                Route::Existing(Err(f)) => {
                     // **No machine is started, and nothing is mutated** — the resolution refuses
                     // before it touches anything.
                     rail.borrow_mut().failed("start", &f.0, f.1);
@@ -314,10 +663,31 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) {
                     // would carry it is not built, so the drawer opens on the page that is.
                     stack.borrow_mut().go(nav::Page::Work, 1);
                     push_nav(&w, &stack.borrow());
-                    refresh_devices(&w, &devices, &settings.borrow());
                 }
             }
-            sync_rail(&w, &rows, &rail.borrow(), caps);
+            // **§10.2's save point, and it is here rather than only at close.** The press mints the
+            // identity and files it away; a save that fails at close has nowhere left to be shown
+            // (§20 item 13), and an identity that is minted and not written is the corner §10.3's
+            // whole argument turns on — the next press must find the same iPod.
+            if mutated {
+                save(&settings.borrow(), &mut rail.borrow_mut());
+            }
+            // §7.3, §7.5: the library moved, so the bench's own account of it has to. The list is a
+            // startup snapshot otherwise, and a drive deleted while the window was open stayed
+            // invisible for the life of the process.
+            //
+            // **The bill is the measured one from here on.** The press probed the volume, and on
+            // one without sparse files the real cost is 8.6 GB rather than 28 MB — the shelf and
+            // the ledger were quoting the assumption the plan was drawn under, for the whole run.
+            let cost = work.borrow().measured_cost().unwrap_or(cost);
+            refresh_devices(&w, &devices, &settings.borrow(), &showing_welcome, caps, cost);
+            push_ledger(
+                &w,
+                Some(cost),
+                &eapp_loader::firmware::cache_dir(),
+                volume::space(&eapp_loader::settings::drives_dir()).as_ref(),
+            );
+            sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
         });
     }
 
@@ -327,6 +697,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) {
         let rail = rail.clone();
         let stack = stack.clone();
         let rows = rows.clone();
+        let work = work.clone();
         let weak = window.as_weak();
         window.on_explain(move |index| {
             let Some(w) = weak.upgrade() else { return };
@@ -348,7 +719,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) {
             }
             stack.borrow_mut().go(nav::Page::Work, 1);
             push_nav(&w, &stack.borrow());
-            sync_rail(&w, &rows, &rail.borrow(), caps);
+            sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
         });
     }
 
@@ -415,43 +786,31 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) {
     {
         let rail = rail.clone();
         let rows = rows.clone();
+        let work = work.clone();
         let weak = window.as_weak();
         window.on_rail_dismiss(move |id| {
             rail.borrow_mut().dismiss(id as u64);
             if let Some(w) = weak.upgrade() {
-                sync_rail(&w, &rows, &rail.borrow(), caps);
+                sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
             }
         });
     }
     {
         let rail = rail.clone();
         let rows = rows.clone();
+        let work = work.clone();
         let weak = window.as_weak();
         window.on_rail_cancel(move |id| {
-            // §12.7: the entry said which file this deletes and how big it is before the control
-            // was pressed, so pressing it is the consent `AGENTS.md` §3 requires. The Rail hands
-            // the path back rather than deleting it itself.
-            let doomed = rail.borrow_mut().cancel(id as u64);
-            if let Some(p) = doomed {
-                match std::fs::remove_file(&p) {
-                    Ok(()) => {
-                        rail.borrow_mut().note(&format!("deleted {}", p.display()));
-                    }
-                    Err(e) => {
-                        rail.borrow_mut().failed(
-                            "cancel",
-                            &p.display().to_string(),
-                            rail::Failure::saying(
-                                rail::Class::Permission,
-                                "deleting the partial file",
-                                format!("{}: {e}", p.display()),
-                            ),
-                        );
-                    }
-                }
+            // **The queue is asked first, and a file the worker owns is deleted by the worker.**
+            // A second `unlink` from this thread while a thread is still writing that path is a
+            // race, and `Queue::cancel` answers `false` for anything it is not running — in which
+            // case this falls through to the direct path, which is the one every entry outside a
+            // run uses.
+            if !work.borrow_mut().cancel(id as u64) {
+                cancel_write(&rail, id as u64);
             }
             if let Some(w) = weak.upgrade() {
-                sync_rail(&w, &rows, &rail.borrow(), caps);
+                sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
             }
         });
     }
@@ -459,12 +818,36 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) {
         let rail = rail.clone();
         let rows = rows.clone();
         let stack = stack.clone();
+        let settings = settings.clone();
+        let devices = devices.clone();
+        let work = work.clone();
+        let showing_welcome = showing_welcome.clone();
+        let ticking = ticking.clone();
         let weak = window.as_weak();
         window.on_rail_next(move |id, which| {
             let Some(w) = weak.upgrade() else { return };
-            take_next_step(&rail, &stack, id as u64, which, caps);
+            let retried = take_next_step(&rail, &stack, id as u64, which, caps);
+            // **§10.3: a retry resumes, and it goes through the same press the centre button
+            // goes through.** Two routes that both claim to retry and only one of which actually
+            // runs anything is how §10.3's bug came back the first time — `Rail::retry` alone puts
+            // the entry back to `Planned` and starts nothing, so the plan would sit there looking
+            // ready for ever.
+            if retried && work.borrow().owns(id as u64) {
+                let press = {
+                    let mut s = settings.borrow_mut();
+                    let mut r = rail.borrow_mut();
+                    work.borrow_mut().press(&mut s, &mut r, caps.download)
+                };
+                if let work::Press::Refused(f) = press {
+                    rail.borrow_mut().failed("make", "an iPod", f);
+                } else {
+                    ticking();
+                }
+                save(&settings.borrow(), &mut rail.borrow_mut());
+                refresh_devices(&w, &devices, &settings.borrow(), &showing_welcome, caps, cost);
+            }
             push_nav(&w, &stack.borrow());
-            sync_rail(&w, &rows, &rail.borrow(), caps);
+            sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
         });
     }
 
@@ -476,12 +859,13 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) {
     {
         let rail = rail.clone();
         let rows = rows.clone();
+        let work = work.clone();
         let weak = window.as_weak();
         window.on_copy_text(move |_| {
             rail.borrow_mut()
                 .note("this build has no clipboard, so nothing was copied");
             if let Some(w) = weak.upgrade() {
-                sync_rail(&w, &rows, &rail.borrow(), caps);
+                sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
             }
         });
     }
@@ -493,7 +877,23 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) {
     // it says so.
     {
         let settings = settings.clone();
+        let work = work.clone();
+        let rail = rail.clone();
         window.window().on_close_requested(move || {
+            // **Asked to stop BEFORE the save, and it does not join.** `JoinHandle::join` has no
+            // timeout, so a window that waited for a worker stuck on a hung network mount would
+            // refuse to close — which is worse than a stray `.part`. `Queue::stop` waits `GRACE`
+            // for an acknowledgement and abandons it after that.
+            //
+            // It takes the library and the Rail because a worker that finished in the last 100 ms
+            // has a `Done` still in the channel, and throwing it away is how a close lands a
+            // settings file that does not mention the drive on disk. Scoped, so the save below
+            // takes its own borrow.
+            {
+                let mut s = settings.borrow_mut();
+                let mut r = rail.borrow_mut();
+                work.borrow_mut().stop(&mut s, &mut r);
+            }
             if let Err(e) = settings.borrow().save() {
                 eprintln!(
                     "the settings could not be written on the way out ({e}); the window is closing \
@@ -502,6 +902,133 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) {
             }
             slint::CloseRequestResponse::HideWindow
         });
+    }
+
+    Wiring { _tick: timer, work, tick }
+}
+
+/// What [`wire`] hands back so it stays alive.
+///
+/// **A `slint::Timer` stops the moment it is dropped** — `i-slint-core-1.17.1/timers.rs:44`: *"The
+/// timer will automatically stop when dropped. You must keep the Timer object around for as long as
+/// you want the timer to keep firing."* A timer started inside `wire` and dropped at its closing
+/// brace never fires once, and nothing anywhere reports that.
+///
+/// `work` is handed back so a test can drive a press and a tick with no display, which is the only
+/// way to test either: the testing backend has no event loop, so the timer never fires there.
+struct Wiring {
+    _tick: Rc<slint::Timer>,
+    #[allow(dead_code)]  // retired when: a test outside this module drives the queue; today only `wire`'s own tests do, and they reach it through the returned struct
+    work: Rc<RefCell<work::Queue>>,
+    /// **One tick of the window, and it is the one the timer runs.**
+    ///
+    /// Not a convenience: under `i-slint-backend-testing`'s no-event-loop init a `slint::Timer`
+    /// never fires, so without this everything after the press is reachable from nothing that can
+    /// be driven without a display — the download, the build, the install and §12.2's handoff. That
+    /// is §20 item 12 one layer out from where it was found, and `pump_once`'s own doc claims the
+    /// opposite (*"a test drives exactly what the timer drives"*), which is now true because both
+    /// call this.
+    #[allow(dead_code)]  // retired when: `main` needs to tick by hand — it does not, the timer does it
+    tick: Rc<dyn Fn()>,
+}
+
+/// Which of the two things the centre button is, on this press.
+///
+/// Named rather than nested so that `on_start_device` can scope every borrow it takes to one block
+/// and then match on what came out — see the comment at the press, and §20 item 12.
+enum Route {
+    /// §10.2's first run, resumed or started.
+    First(work::Press),
+    /// A device already in the library, resolved (or refused) the way it always was.
+    Existing(Result<String, (String, rail::Failure)>),
+}
+
+/// **Everything one tick does to the window, in one function**, so a test drives exactly what the
+/// timer drives.
+///
+/// That is §20 item 12's lesson applied to the timer: a closure registered inside `wire` is
+/// reachable from nothing, and under `i-slint-backend-testing`'s no-event-loop init a `slint::Timer`
+/// never fires — so a test that could only get at this through the timer could not get at it at all.
+///
+/// **The queue is the only thing that writes the library during a run**, and it does it here, on
+/// this thread, in `pump`: §10.2 wants a save after every completed step, so a run interrupted
+/// between two of them resumes from the one it reached.
+#[allow(clippy::too_many_arguments)] // every one of these is a distinct thing the window owns; bundling them into a struct would be one indirection and the same nine fields
+fn pump_once(
+    window: &MainWindow,
+    work: &Rc<RefCell<work::Queue>>,
+    rail: &Rc<RefCell<rail::Rail>>,
+    rows: &Rc<VecModel<RailRow>>,
+    devices: &Rc<VecModel<DeviceRow>>,
+    settings: &Rc<RefCell<Settings>>,
+    showing_welcome: &Rc<std::cell::Cell<bool>>,
+    timer: &slint::Timer,
+    caps: rail::Caps,
+    cost: compose::Cost,
+) {
+    // Scoped exactly like the press, and for the same reason: nothing below re-enters a borrow.
+    let tick = {
+        let mut s = settings.borrow_mut();
+        let mut r = rail.borrow_mut();
+        work.borrow_mut().pump(&mut s, &mut r)
+    };
+
+    // **No file is deleted here, and that is `work.rs`'s decision rather than an omission.** A
+    // cancel is observed by the worker at a step boundary, and the worker removes the `.part` it
+    // itself created — deleting from this thread while that thread may still be writing the path is
+    // a race, and `AGENTS.md` §3 makes deletion the operator's decision, taken when they pressed a
+    // control that had already named the file and its size.
+    //
+    // **Retirement condition**, in the shape `research/04` uses: if `work::Tick` ever hands a path
+    // back — an abandoned worker's partial, which `Stopped::Abandoned` already names — it is
+    // deleted here, because that is the one case no worker is left to do it.
+
+    // §10.2: **`Settings::save()` after every completed step**, so a window closed mid-run resumes
+    // from the step it reached rather than from the beginning. `pump` has already written the
+    // library; this is what puts it on disk.
+    if !tick.completed.is_empty() || tick.library_changed {
+        save(&settings.borrow(), &mut rail.borrow_mut());
+    }
+    // **The bill, as measured.** The plan was drawn assuming a filesystem with holes, because the
+    // only honest way to find out is to write an 8 GiB file and §10.1 forbids writing before you
+    // agree. On a volume without them the real cost is 8.6 GB rather than 28 MB — 300× — and every
+    // figure on screen was the assumption. `Queue::measured_cost` is `None` until a press has
+    // probed, so nothing changes on the common path.
+    let cost = work.borrow().measured_cost().unwrap_or(cost);
+    if tick.library_changed {
+        refresh_devices(window, devices, &settings.borrow(), showing_welcome, caps, cost);
+    }
+    if tick.changed {
+        sync_rail(window, rows, &rail.borrow(), caps, work.borrow().shape());
+    }
+    // **§10.1's third ledger line is checked rather than asserted, and it was checked once.**
+    // `push_ledger` ran only in `wire`, so *Nothing has been downloaded yet.* stayed on screen
+    // after the bundle had arrived and been SHA-256 checked — the one line the design singles out
+    // as needing to be true, left asserting an absence the program had just disproved. A completed
+    // step is exactly when it can have changed.
+    if !tick.completed.is_empty() {
+        push_ledger(
+            window,
+            Some(cost),
+            &eapp_loader::firmware::cache_dir(),
+            volume::space(&eapp_loader::settings::drives_dir()).as_ref(),
+        );
+    }
+    // §12.2's handoff. Every step but the boot is done; the boot is Phase 7, so this says so once
+    // rather than starting a machine this build does not have.
+    if let Some(name) = tick.ready {
+        rail.borrow_mut().note(&format!(
+            "{name} is made and would start here. Running is not wired to the window yet — \
+             `ipod-boot retail` boots it from a terminal today."
+        ));
+        sync_rail(window, rows, &rail.borrow(), caps, work.borrow().shape());
+    }
+
+    // **Nothing is running, so stop looking.** A 10 Hz wakeup for the life of a window that is not
+    // building anything is a cost nobody agreed to, and `ticking` starts this again on the next
+    // press. `sync_rail` has already pushed the final `progress`, which is negative.
+    if !work.borrow().busy() {
+        timer.stop();
     }
 }
 
@@ -529,11 +1056,19 @@ fn is_running(p: &emu::Phase) -> bool {
 
 /// §9.3's next steps are only offered as live controls where the mechanism exists.
 ///
-/// **Every one of these is false in this build, and each is a fact rather than a policy**:
-/// `cargo tree -p ipod-gui | grep -iE "rfd|native-dialog|ashpd"` is empty, §16.4's winit drop hook
-/// is not written, nothing here reaches a pasteboard, nothing opens a file manager, and the
-/// drawer's Devices page does not exist. A control whose route does not exist is drawn disabled
-/// with its reason (§14.1), never live and never quietly dropped.
+/// **Six of these are compile-time facts about the build and one is measured about the machine.**
+/// The six: `cargo tree -p ipod-gui | grep -iE "rfd|native-dialog|ashpd"` is empty, §16.4's winit
+/// drop hook is not written, nothing here reaches a pasteboard, nothing opens a file manager, the
+/// drawer's Devices page does not exist, and there is no Composer crate or module. A control whose
+/// route does not exist is drawn disabled with its reason (§14.1), never live and never quietly
+/// dropped.
+///
+/// The seventh, `download`, is `eapp_loader::tooling::can_download()` — it runs `curl --version`,
+/// because a `PATH` walk is a second implementation of what the OS is about to do and is wrong on
+/// Windows, where the extension list is a policy rather than a suffix.
+///
+/// **It is called once per launch**, in [`wire`], and the answer is carried on `Caps` from there.
+/// Asking again per control would spawn a process inside a binding.
 fn caps() -> rail::Caps {
     rail::Caps {
         file_picker: false,
@@ -541,47 +1076,232 @@ fn caps() -> rail::Caps {
         clipboard: false,
         reveal: false,
         devices_page: false,
+        download: eapp_loader::tooling::can_download(),
+        composer: false,
     }
+}
+
+// ── §10.3: whether the first run is offered at all ───────────────────────────────────────────────
+
+/// What the bench should be, **decided from the flag and never from the size of a list**.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Offer {
+    /// §10.1 in full: the welcome copy, the plan in an already-open drawer, one press. Reached
+    /// exactly once per installation.
+    Welcome,
+    /// §9.1's later-empty bench: **the same ghost and the same press, without the welcome copy.**
+    ///
+    /// §10.3 is explicit — *"a later empty bench is the same ghost iPod with `No devices yet` and
+    /// both routes offered equally"* — and this variant exists because the code had no room for it.
+    /// `welcomed` is set when the bench is wired, before any press, so opening the program, looking
+    /// at it and closing it was enough to reach the state; and that state offered no route to an
+    /// iPod at all. The cradle was drawn `fg-dim` and unpressable, the plan was not filed, the
+    /// drawer stayed shut, and the press fell through to *"there are no devices in the library yet,
+    /// so there is nothing to start"* — while shelf row 2 went on saying *the centre button makes
+    /// one*. **The flag was meant to stop the welcome copy returning, not to disarm the button.**
+    Again,
+    /// A first run that did not get to the end. The identity is already minted, so pressing
+    /// **resumes**; it does not start over and it does not mint a second iPod.
+    Finish { device: String },
+    /// A library with devices in it. No plan, no ghost; the centre button is a device's.
+    Quiet,
+}
+
+impl Offer {
+    /// Whether the first run's plan belongs on the Rail and its bill in the ledger.
+    ///
+    /// Three of the four. Only [`Offer::Quiet`] — a library that already has devices in it — has
+    /// nothing to make.
+    fn has_plan(&self) -> bool {
+        !matches!(self, Offer::Quiet)
+    }
+}
+
+/// **The only function in this program that decides whether the first run is offered.**
+///
+/// It reads `Settings::welcomed` and the shape of the library. It does **not** read
+/// `Settings::devices.is_empty()`, and that is the entire point: the old window inferred *offer me*
+/// from *the device list is empty*, and a cancelled or failed build is exactly what empties it — so
+/// it re-opened its wizard for ever, returning a person to step one with no error shown and no way
+/// past. That bug shipped. Emptiness is a state of the library; this is a fact about the person.
+///
+/// **`Finish` outranks `Welcome` defensively.** It cannot be reached with `welcomed == false`,
+/// because nothing mints an identity without setting the flag first — but a hand-edited settings
+/// file with a half-made device in it must not be told to start over, because starting over is what
+/// would mint a second iPod.
+///
+/// **`Finish` is *unfinished*, never *broken*.** The discriminator is `names_a_disk` and nothing
+/// else: a device that names no drive at all is a run that stopped between the mint and the
+/// install, and pressing ● should carry it on. A device that names a drive whose **file** has gone
+/// is a different thing entirely — `Settings::missing` sees it, the cradle draws a broken ring, and
+/// `why ›` explains it (§7.3, §9.3). Offering to *finish* that one would promise to rebuild a drive
+/// this program did not decide to replace, which is not a decision a window makes on its own.
+///
+/// **Emptiness is consulted in one direction only, and that is the whole distinction.** A library
+/// with devices in it plainly is not somebody's first minute with this program, so a non-empty list
+/// **suppresses** the welcome — an existing library upgrading into this build must not be greeted
+/// and must not be offered a second iPod. What is banned is the other direction: an *empty* list
+/// must never be read as *offer the welcome*, because a cancelled or failed build is exactly what
+/// empties it. Suppressing cannot loop; offering did.
+fn first_run_offer(s: &Settings) -> Offer {
+    if let Some(d) = work::minted(s) {
+        if !d.names_a_disk() {
+            return Offer::Finish { device: d.name.clone() };
+        }
+    }
+    // A library with devices in it plainly is not somebody's first minute with this program.
+    if !s.devices.is_empty() {
+        return Offer::Quiet;
+    }
+    // **Empty, and the flag decides which of the two empty benches it is.** Both offer the press;
+    // only one carries §10.1's welcome copy, and `welcomed` is what stops that copy returning. The
+    // flag never removes the *action* — an empty library with no route to an iPod is §10.3's own
+    // bug inverted, and it is the state a cancelled build leaves you in.
+    if s.welcomed {
+        Offer::Again
+    } else {
+        Offer::Welcome
+    }
+}
+
+/// Whether the centre button on row `index` starts the **first run** rather than a device.
+///
+/// **Asked per press, against the library as it is now.** It used to be one boolean computed in
+/// `wire` and captured by the closure, which got two things wrong at once. With an empty library it
+/// was false whenever the welcome had already been shown, so the one press §9.1 promises did
+/// nothing; and with a half-made first-run device *plus* a device somebody composed by hand it was
+/// true for **every** row, so pressing the composed one resumed the first run instead of starting
+/// it.
+///
+/// Two rows route to the first run and no others: the empty bench, which has no device to start,
+/// and the minted-but-unfinished device, which is a run that stopped part way.
+fn press_is_first_run(s: &Settings, index: usize) -> bool {
+    if s.devices.is_empty() {
+        return true;
+    }
+    match work::minted(s) {
+        Some(d) if !d.names_a_disk() => {
+            s.devices.get(index).is_some_and(|sel| sel.name == d.name)
+        }
+        _ => false,
+    }
+}
+
+/// Set §10.3's flag, once, and say whether this was the first time.
+///
+/// **The caller saves.** `wire` has a window on screen and a Rail to file a `Class::Permission` on
+/// if the write fails; this has neither, and a save whose failure has nowhere to go is §20 item 13.
+///
+/// **Nothing in this program ever clears it** — not a cancel, not a failure, not an empty library.
+fn welcome(s: &mut Settings) -> bool {
+    if s.welcomed {
+        return false;
+    }
+    s.welcomed = true;
+    true
 }
 
 /// Press a failure's next step — **after checking in Rust that it is one this build can take**.
 ///
 /// The markup already refuses a disabled `Pressable`; this checks again, because a view is not an
 /// authority on what the program can do and the two must not be able to disagree.
+///
+/// Returns whether the step was a **retry**, because a retry only puts the entry back to `Planned`
+/// — something still has to run it, and that is the caller's press.
 fn take_next_step(
     rail: &Rc<RefCell<rail::Rail>>,
     stack: &Rc<RefCell<nav::Stack>>,
     id: u64,
     which: i32,
     caps: rail::Caps,
-) {
+) -> bool {
     let step = {
         let r = rail.borrow();
-        let Some(e) = r.find(id) else { return };
-        let Some(f) = e.failure.as_ref() else { return };
+        let Some(e) = r.find(id) else { return false };
+        let Some(f) = e.failure.as_ref() else { return false };
         let mut steps = f.class.next(e.retries, caps);
         if which < 0 || which as usize >= steps.len() {
-            return;
+            return false;
         }
         steps.remove(which as usize)
     };
     if !step.available(caps) {
-        return;
+        return false;
     }
     match step {
         rail::Next::Retry => {
-            rail.borrow_mut().retry(id);
+            return rail.borrow_mut().retry(id);
         }
         rail::Next::Devices => stack.borrow_mut().go(nav::Page::Devices, 1),
+        // **§12.7, and it was the second live-but-inert control in this file.** `CancelWrite` is
+        // one of the three `Next::available` returns `true` for unconditionally — it is this
+        // program talking to itself — so it passed the guard above and fell into the empty arm
+        // below it. A control drawn live that does nothing is the defect `docs/GUI.md` indicts
+        // twice, and this one was drawn under every `SpaceMidWrite` failure.
+        //
+        // It goes through the same function the drawn `Cancel` on the entry goes through, because
+        // two routes that both claim to cancel and only one of which does is how the first one came
+        // to be wrong.
+        rail::Next::CancelWrite => cancel_write(rail, id),
         // Every remaining arm needs a mechanism `caps` says this build does not have, so the guard
         // above has already returned. They are enumerated rather than defaulted so the day one
         // arrives the compiler points here.
-        rail::Next::Provide
+        //
+        // **`Fix` used to be handled below this line, and that arm is now deleted.** It was the
+        // first of the two live-but-inert controls: `Next::available` returned `true` for it
+        // unconditionally — this program talking to itself — so `Class::Incompatible` drew it live,
+        // and pressing it did nothing at all. The stopgap was a §9.4 project-state note, and its
+        // written retirement condition was *`rail::Caps` gains `composer` and `Next::Fix`'s
+        // `available` reads it*. That has happened, so the control is drawn disabled wearing
+        // *there is no Composer in this build yet*, the guard above returns before reaching here,
+        // and the stopgap is deleted rather than left standing beside the real gate.
+        rail::Next::Fix { .. }
+        | rail::Next::Provide
         | rail::Next::ChooseElsewhere
         | rail::Next::CopyDetails
-        | rail::Next::Reveal
-        | rail::Next::CancelWrite
-        | rail::Next::Fix { .. } => {}
+        | rail::Next::Reveal => {}
+    }
+    false
+}
+
+/// §12.7: stop a write and delete the partial file — **one function, and both routes to it.**
+///
+/// The entry's drawn `Cancel` and `Class::SpaceMidWrite`'s `Cancel` next step are the same request,
+/// and until now only the first of them did anything. The entry said which file this deletes and
+/// how big it is *before* either control was pressed (`Entry::cancel_cost`), so pressing one is the
+/// consent `AGENTS.md` §3 requires — and `Rail::cancel` hands the path back rather than deleting it
+/// itself, because deciding to delete is not the Rail's to make.
+///
+/// **The only file this can reach is one this program wrote in this run.** `Entry::temp` is set by
+/// `Rail::writing`, which is called with the partial file a step is writing; nothing else fills it,
+/// and an entry with none cancels nothing.
+fn cancel_write(rail: &Rc<RefCell<rail::Rail>>, id: u64) {
+    let Some(p) = rail.borrow_mut().cancel(id) else {
+        // **Not silence.** `Rail::cancel` declines when the entry is not holding a write — which
+        // includes a step that has already **failed**, because `Rail::fail` clears `cancellable`.
+        // `Class::SpaceMidWrite` offers this control on exactly such an entry, so a person can
+        // press `Cancel` under *the disk filled up* and have nothing happen; saying so is the least
+        // this side of the boundary can do about it. The partial file is the Rail's to release and
+        // it did not, so nothing here deletes anything (`AGENTS.md` §3).
+        rail.borrow_mut()
+            .note("nothing was cancelled: that step is not writing a file any more");
+        return;
+    };
+    match std::fs::remove_file(&p) {
+        Ok(()) => {
+            rail.borrow_mut().note(&format!("deleted {}", p.display()));
+        }
+        Err(e) => {
+            rail.borrow_mut().failed(
+                "cancel",
+                &p.display().to_string(),
+                rail::Failure::saying(
+                    rail::Class::Permission,
+                    "deleting the partial file",
+                    format!("{}: {e}", p.display()),
+                ),
+            );
+        }
     }
 }
 
@@ -738,12 +1458,27 @@ fn gone_sentence(d: &Device, absent: &[Absent]) -> String {
 /// **Retirement condition**, in the shape `research/04` uses: when the bench holds an `emu::Config`,
 /// this becomes §7.3's table — `may_restore()` for the parked line, `boot_instructions` for the cold
 /// one — and the second arm here is deleted with it.
+///
+/// **The startable line fits [`geometry::CRADLE_LABEL_MAX_CHARS`], and it did not.** It read *Press
+/// the centre button — running is not wired to the window yet*: 63 characters against a budget of
+/// 48, on the one line the whole bench is built around, eliding unmeasured at every window size this
+/// program allows. `every_typed_cradle_label_fits_its_own_row` is what keeps the next one honest.
+/// The refusal arm is deliberately **not** held to the budget — `gone_sentence` carries a path, and
+/// §7.3's own note says the path goes on the end where there is one, so that line elides by design
+/// and the first words are what survive it.
 fn cradle_label(d: &Device, absent: &[Absent]) -> String {
-    if absent.is_empty() {
-        "Press the centre button — running is not wired to the window yet".into()
-    } else {
-        gone_sentence(d, absent)
+    if !absent.is_empty() {
+        return gone_sentence(d, absent);
     }
+    // **§10.3: a first run that stopped part-way must not be captioned with a promise to start.**
+    // A device that names no drive is *unfinished*, not *broken* — `Settings::missing` sees nothing
+    // wrong with it, so without this arm the cradle read *press the centre button* on an iPod with
+    // no disk, and the press would then quietly resume a build the label said nothing about.
+    // Pressing it does resume; this is the label saying so first.
+    if !d.names_a_disk() {
+        return format!("Press the centre button to finish making {}", d.name);
+    }
+    "Press the centre button — running is not wired".into()
 }
 
 /// §9.1's empty bench, as a whole row, so the markup composes it exactly like a real device.
@@ -751,17 +1486,99 @@ fn cradle_label(d: &Device, absent: &[Absent]) -> String {
 /// **Every string here is this file's rather than the markup's**, which is the same rule the other
 /// eight fields follow. The chassis is the model's own `Unspecified` — a neutral case, deliberately
 /// not black, because drawing an unknown iPod black invents a fact about somebody's device.
-fn empty_device() -> DeviceRow {
+/// **Two sets of words, one row.** `first` selects §10.1's welcome copy over §9.1's later-empty
+/// copy; every other field is identical between them, because they are the same bench in the same
+/// state and only the sentence a person needs is different.
+///
+/// The chassis stays `Colour::Unspecified` `#E4E4E2` in both. That is the ghost's colour and it was
+/// already right — what makes the drawing a ghost is the **opacity**, which is a separate property
+/// (`MainWindow.ghost`), because a real device whose ROM did not state a colour is drawn in this
+/// same neutral case and must not be ghosted.
+///
+/// **Row 3's trailing slot is not drawn here and needs no rule.** `bench.slint` wraps it in
+/// `if !root.drawer-open`, and §10.1 has the drawer open — which is fortunate, because
+/// §10.1's `MENU › Parts, if you have files · or drop them here` names a mechanism §16.4 defers,
+/// and `caps().drop_target` is false. A phantom route in the one place §19.1 calls it fatal.
+fn empty_device(first: bool, caps: rail::Caps, cost: compose::Cost) -> DeviceRow {
+    let si = eapp_loader::si;
     DeviceRow {
-        name: "Nothing on the bench".into(),
-        summary: "The library has no devices yet.".into(),
-        state: "".into(),
-        write_target: "no device yet — nothing will be written".into(),
+        name: if first { "No iPod yet".into() } else { "No devices yet".into() },
+        summary: if first {
+            // §10.1, and the clause naming the machine is not decoration: the two facts a person
+            // needs before agreeing to anything are *you do not have to own one* and *this is what
+            // you will get*. The words come from the model table, so this line and the plan's own
+            // synthesise sub-line cannot drift apart.
+            match eapp_loader::identity::Model::lookup(compose::FIRST_RUN_MODEL) {
+                Some(m) => format!(
+                    "You do not need an iPod, or any files off one. The centre button makes one: \
+                     a {}, {} GB, {}.",
+                    m.generation.label(),
+                    m.capacity_gb,
+                    m.colour().label().to_lowercase()
+                )
+                .into(),
+                None => "You do not need an iPod, or any files off one. The centre button makes \
+                         one."
+                    .into(),
+            }
+        } else {
+            "The centre button makes one; ipod-boot setup composes one from files you have.".into()
+        },
+        state: "nothing mounted".into(),
+        // §7.5's rule is that row 3 never goes away, and with no device there is nothing to write
+        // to — so the line that normally says what will be written says what it will **cost**, and
+        // the number is still first on the line, which is what survives a hard elide.
+        //
+        // **Built from the plan's own `Cost`, never typed.** One number per axis, and both come
+        // from `Recipe::steps()` by way of `work::cost` — which is the same call `push_ledger`
+        // makes, so the shelf and the ledger cannot print two different bills for one press.
+        write_target: if cost.down == 0 {
+            "nothing to download".into()
+        } else {
+            format!("{} to download, about {} on disk.", si(cost.down), si(cost.disk)).into()
+        },
         write_target_is_warning: false,
         chassis: chassis_colour(Colour::Unspecified),
         dark_chassis: is_dark(Colour::Unspecified),
-        startable: false,
-        cradle_label: "Nothing is on the bench. Compose one with: ipod-boot setup".into(),
+        // **The same measurement the press consults**, so the cradle's ring, its
+        // `accessible-enabled` and what pressing actually does all come from one boolean rather than
+        // three. §7.4 is untouched: the drawn centre button and the cradle's Enter/Space handler
+        // stay ungated, so pressing a refused cradle still produces the sentence saying why.
+        //
+        // **It arrives on `caps` rather than being probed here**, and that is not tidiness: this
+        // function is called from `refresh_devices`, which runs on every completed step of a build,
+        // and `tooling::can_download` **spawns a process**. Probing here put a `curl --version`
+        // inside a display refresh — and, worse, made a second source for a fact `wire` had already
+        // measured, so a `curl` that went away mid-session would leave the ring and the press
+        // disagreeing with nothing to say which was right.
+        //
+        // **`first` is gone from this expression, and that was the fatal half of it.** An empty
+        // bench is an empty bench: §9.1's later-empty row and §10.1's welcome row are the same
+        // bench with different copy, and §10.3 says both routes are offered equally. With `first &&`
+        // here, a person who had opened the program once and closed it had the cradle drawn
+        // unpressable for ever, with `press_is_first_run` on the other side saying the press would
+        // have worked. One boolean, or they disagree silently.
+        startable: caps.download,
+        // Both fit [`geometry::CRADLE_LABEL_MAX_CHARS`]; the 58-character sentence this replaced
+        // elided on every window this program allows, which took the escape hatch off the end of
+        // the one line that carried one.
+        //
+        // §7.3 asks for **what pressing will cost, or why it cannot be pressed** — so the refusal
+        // arm is keyed on `startable` and not on `first`. Without it the cradle was drawn `fg-dim`
+        // and non-interactive under a label promising a press, and its `accessible-description` is
+        // that same label: a keyboard user focusing it was told nothing at all, which is what §9.4
+        // and §16.5 exist to prevent. The remedy itself is `Class::ToolMissing`'s command, filed on
+        // the plan; this is the cradle saying which of the two states it is in.
+        //
+        // **One label for both empty benches**, because §9.1 gives the later-empty one the same
+        // cradle line §10.1 gives the first: `press ● to make an iPod`. The `No iPod yet. Compose
+        // one: ipod-boot setup` this replaced was the sentence that made the second bench a dead
+        // end — it named the escape hatch and dropped the route.
+        cradle_label: if caps.download {
+            "Press the centre button to make an iPod".into()
+        } else {
+            "No curl, so nothing can be downloaded".into()
+        },
     }
 }
 
@@ -841,6 +1658,11 @@ fn sync_rail(
     rows: &Rc<VecModel<RailRow>>,
     rail: &rail::Rail,
     caps: rail::Caps,
+    // **What the queue is doing** — `Queue::shape`, not `showing_welcome`. Those were the same
+    // boolean and are two different questions: §9.1's later-empty bench carries the plan with no
+    // welcome copy at all, and keying the heading on the welcome left five `Planned` rows sitting
+    // under *This is what happened.*
+    queue: work::Shape,
 ) {
     let want: Vec<RailRow> = rail.entries().iter().map(|e| to_row(e, caps)).collect();
     for (i, row) in want.iter().enumerate() {
@@ -865,13 +1687,61 @@ fn sync_rail(
     );
     // §7.5's row 2. Empty means the Rail has nothing to say and the device's facts stand.
     window.set_rail_line(rail.line().unwrap_or_default().into());
+    // §9.2, §12.3: the shelf's 3 px bar, **and this is the first thing that has ever bound it**.
+    // `Bench.progress` has been declared and drawn since the drawer landed with nothing behind it —
+    // a drawn instrument with no producer, which is §20 item 15's defect.
+    //
+    // **The sign is the whole contract.** `Entry::fraction()` is negative for `Progress::None` and
+    // for a `Bytes` with a zero denominator, and `bench.slint` reads `progress >= 0` as *there is a
+    // bar*. So a step with no honest denominator draws a number that moves and no bar, and a failure
+    // takes the bar away rather than freezing it at a fraction — a frozen bar is a paused machine
+    // pretending.
+    //
+    // The **last** working entry, not the first: a plan runs in order, so the last one to have
+    // started is the one under way.
+    window.set_progress(
+        rail.entries()
+            .iter()
+            .rev()
+            .find(|e| e.kind == rail::Kind::Working)
+            .map_or(-1.0, |e| e.fraction()),
+    );
     // **§9.1's heading is pushed from HERE, not once at startup.** It was set by `push_ledger` and
     // never again, so the Work page read *"Nothing is happening."* above a warning icon and a
     // paragraph naming a missing file — and that page is the one the drawer auto-opens onto when a
     // press is refused, so it was the first thing anybody saw.
-    let (heading, empty) = work_page_text(rail);
+    let (heading, empty) = work_page_text(rail, queue);
     window.set_work_heading(heading.into());
     window.set_work_empty(empty.into());
+    // §9.2's other half. The shelf's bar and its rail line moved while a build ran; the cradle did
+    // not, so the one line the whole bench is built around read *Press the centre button to finish
+    // making My 5.5G* for the entire download — a promise to press, on a machine already busy
+    // doing it. It comes from the same place the shelf's line does, so the two cannot disagree.
+    window.set_working_label(working_label(rail).into());
+}
+
+/// §9.2's cradle line — `making an iPod — 41 % — fetch Apple's firmware` — or empty.
+///
+/// **Generic, and the device is deliberately not named.** The cradle row is one elided line held to
+/// [`geometry::CRADLE_LABEL_MAX_CHARS`], and a name somebody typed has no length. What a person
+/// needs here is the same three things §9.2 asks for: that something is happening, how far, and
+/// what — and the Rail beside it names the device.
+///
+/// The separator is the em dash and not §9.2's own `·`: U+00B7 is outside §16.6's closed glyph set,
+/// and `no_ui_string_carries_a_glyph_outside_the_closed_set` sweeps this file.
+fn working_label(rail: &rail::Rail) -> String {
+    let Some(e) = rail.entries().iter().rev().find(|e| e.kind == rail::Kind::Working) else {
+        return String::new();
+    };
+    let what = format!("{} {}", e.verb, e.what).trim().to_string();
+    let f = e.fraction();
+    // A negative fraction is *no denominator* rather than nothing done (§12.3), so the percentage
+    // is dropped and the sentence still says what is under way.
+    if f < 0.0 {
+        format!("making an iPod — {what}")
+    } else {
+        format!("making an iPod — {:.0} % — {what}", f * 100.0)
+    }
 }
 
 /// One Rail entry, flattened for the markup.
@@ -943,16 +1813,79 @@ fn to_row(e: &rail::Entry, caps: rail::Caps) -> RailRow {
 /// than printing a figure nobody derived. §10.1's `6.5 MB to download · about 240 MB on disk`
 /// arrives with the Composer.
 ///
-/// **The free-space clause is deliberately absent.** Nothing in this tree can query free bytes —
-/// `grep -rn "statvfs|GetDiskFreeSpace|free_space" --include='*.rs' tools/` returns one unrelated
-/// hit — so `312 GB free on …` would be invented, and `ledger-warn` stays false because the thing
-/// it warns about cannot be measured. **Retirement condition**: when `eapp_loader::volume` exists,
-/// the clause and the warn colour arrive together.
-fn push_ledger(window: &MainWindow) {
-    window.set_ledger_download("Nothing to download".into());
-    window.set_ledger_disk("Nothing to build".into());
-    window.set_ledger_note("Nothing has been downloaded yet.".into());
-    window.set_ledger_warn(false);
+/// §10.1's ledger, pinned under the Work page.
+///
+/// **One number per axis, and both come from `Recipe::steps()`** — by way of `work::cost`, which is
+/// the same call the shelf's row 3 makes, so the two surfaces cannot print two different bills for
+/// one press. An earlier revision put three different sizes for one operation on the one screen
+/// principle 7 was written for.
+///
+/// **The free-space clause arrived with its own measurement**, which was its stated retirement
+/// condition: nothing in this tree could query free bytes, so `312 GB free on …` would have been
+/// invented. `eapp_loader::volume::space` measures it now — and returns `None` where nothing could
+/// say, in which case the clause is **absent** rather than zero. An unmeasured volume states
+/// nothing and warns about nothing.
+///
+/// **The ledger does not move while a download runs.** It is the plan's cost, not its progress; a
+/// ledger that counted down would be a second progress indicator on the one page that already has
+/// the Rail's.
+fn push_ledger(
+    window: &MainWindow,
+    cost: Option<compose::Cost>,
+    cache: &std::path::Path,
+    space: Option<&volume::Space>,
+) {
+    let si = eapp_loader::si;
+    let Some(cost) = cost else {
+        // No plan, so no figure. Saying there is none is the honest line; printing `0 B` would read
+        // as a free download.
+        window.set_ledger_download("Nothing to download".into());
+        window.set_ledger_disk("Nothing to build".into());
+        window.set_ledger_note(cache_note(cache).into());
+        window.set_ledger_warn(false);
+        return;
+    };
+    window.set_ledger_download(
+        if cost.down == 0 {
+            // The catalogue lost the release. `0 B to download` would read as free.
+            "nothing to download".to_string()
+        } else {
+            format!("{} to download", si(cost.down))
+        }
+        .into(),
+    );
+    let free = match space {
+        Some(s) => format!(" — {} free on {}", si(s.free), s.mount),
+        // **Never an invented figure**, and never a zero: `volume::space` answers `None` for a
+        // permission, a missing tool or a line it could not parse, and none of those is an
+        // observation about somebody's disk.
+        None => String::new(),
+    };
+    window.set_ledger_disk(format!("about {} on disk{free}", si(cost.disk)).into());
+    window.set_ledger_note(cache_note(cache).into());
+    // The warn colour is only ever shown against a figure somebody measured, which is why it reads
+    // `is_some_and` rather than defaulting to true when nothing could be measured.
+    window.set_ledger_warn(space.is_some_and(|s| s.free < cost.disk.saturating_add(work::HEADROOM)));
+}
+
+/// §10.1's third ledger line — **checked rather than asserted.**
+///
+/// *Nothing has been downloaded yet.* is false the moment the bundle is already in the cache, and a
+/// ledger that says it anyway is the first sentence of this program a person reads being wrong.
+/// Reads a directory, so it is called from `wire` and from a press, never from a binding.
+fn cache_note(cache: &std::path::Path) -> String {
+    let held = std::fs::read_dir(cache)
+        .map(|d| {
+            d.flatten()
+                .filter(|e| e.path().extension().is_some_and(|x| x == "ipsw"))
+                .count()
+        })
+        .unwrap_or(0);
+    match held {
+        0 => "Nothing has been downloaded yet.".into(),
+        1 => "One bundle is already downloaded.".into(),
+        n => format!("{n} bundles are already downloaded."),
+    }
 }
 
 /// §9.1's two slots on the Work page — **and it is derived from the Rail's own state**, so the
@@ -966,18 +1899,32 @@ fn push_ledger(window: &MainWindow) {
 /// the surface is for underneath it, which is the shape §9.1 asks for. The empty line is drawn only
 /// where it is true; the heading always is.
 ///
-/// **Retirement condition**: when a recipe can be composed, the planned heading becomes §10.1's
-/// *This is what pressing the centre button does* — which is where the plan, rather than the Rail's
-/// own tally, decides it.
-fn work_page_text(rail: &rail::Rail) -> (String, &'static str) {
+/// §10.1's heading arrived with the plan: *This is what pressing the centre button does*, above the
+/// five steps and the ledger, **before** anything has been downloaded. It is the last arm rather
+/// than the first, so a first run that failed reads *One thing failed.* and not the plan heading —
+/// a page that offered the plan again above a failure would be the window ignoring what it just did.
+///
+/// ASCII, and not a compromise: this is a Rust string drawn by a `Text`, §6.7's answer for a symbol
+/// is that it is **drawn** as a `Path`, and Rust has no drawn-Path escape hatch.
+fn work_page_text(rail: &rail::Rail, queue: work::Shape) -> (String, &'static str) {
     let empty = "Fetches, builds and installs report here.";
     let failures = rail.failures();
+    let planned = rail.entries().iter().filter(|e| e.kind == rail::Kind::Planned).count();
+    let done = rail.entries().iter().filter(|e| e.kind == rail::Kind::Done).count();
     let heading = if failures == 1 {
         "One thing failed.".to_string()
     } else if failures > 1 {
         format!("{failures} things failed.")
-    } else if rail.entries().iter().any(|e| e.kind == rail::Kind::Working) {
+    // **A worker running is work, whether or not a step has reported yet.** Between the press and
+    // the worker's first `Started` there is no `Working` entry at all, so the heading read *This is
+    // what happened.* over a run that had just begun, with the Rail beside it announcing
+    // `1 of 5 done.` And the mirror of it: at the end there is one `Planned` step left — the boot —
+    // and reading *that* as work in progress claimed a run was under way after it had finished.
+    // Neither is a question the Rail can answer; the queue can.
+    } else if rail.entries().iter().any(|e| e.kind == rail::Kind::Working) || queue.running {
         "Working.".to_string()
+    } else if queue.has_plan && planned > 0 && done == 0 {
+        "This is what pressing the centre button does".to_string()
     } else if rail.entries().is_empty() {
         "Nothing is happening.".to_string()
     } else {
@@ -1208,7 +2155,16 @@ fn device_rows(settings: &Settings) -> Vec<DeviceRow> {
 /// drive or a ROM removed while the window was open stayed invisible for the life of the process.
 /// The cradle promised *press the centre button* on a device whose image had been deleted an hour
 /// earlier.
-fn refresh_devices(window: &MainWindow, model: &Rc<VecModel<DeviceRow>>, settings: &Settings) {
+///
+/// `showing_welcome` is §10.3's latch and this is the only place it is cleared — see the body.
+fn refresh_devices(
+    window: &MainWindow,
+    model: &Rc<VecModel<DeviceRow>>,
+    settings: &Settings,
+    showing_welcome: &Rc<std::cell::Cell<bool>>,
+    caps: rail::Caps,
+    cost: compose::Cost,
+) {
     let want = device_rows(settings);
     for (i, row) in want.iter().enumerate() {
         match model.row_data(i) {
@@ -1226,6 +2182,30 @@ fn refresh_devices(window: &MainWindow, model: &Rc<VecModel<DeviceRow>>, setting
     if window.get_selected() > last {
         window.set_selected(last.max(0));
     }
+    // **The transition out of the first run, and it is one-way** (§10.3). The welcome copy never
+    // returns: a build that is cancelled or fails empties the list again, and this must NOT put it
+    // back. Which is why the latch is here rather than an expression over `want.len()` — an
+    // expression would go both ways, and going back is the bug.
+    if !want.is_empty() {
+        showing_welcome.set(false);
+    }
+    // §9.1: an empty library is a state with something to say. The window composes `current` out of
+    // this when there is no device, so every sentence on the bench stays the model's — a struct
+    // literal in the markup is how the previous revision came to invent a chassis colour there.
+    window.set_empty_device(empty_device(showing_welcome.get(), caps, cost));
+
+    // §10.1's ghost, and **it is an emptiness state rather than a first-run state** — §9.1 gives
+    // the later-empty bench the same drawing. So it is recomputed from the library on every pass
+    // and it goes both ways: build a device and the ghost solidifies; remove the last one and it
+    // comes back. That is deliberately not the same rule as the welcome copy one line above, and
+    // the difference is the whole answer to *how does the bench know it is a first run without that
+    // being "the device list is empty"*: the **drawing** may key on emptiness, the **welcome** may
+    // not.
+    //
+    // **Retirement condition**, in the shape `research/04` uses: this gains `&& !minted` when
+    // §10.2's cross-dissolve is wanted at the moment `Source::identity()` answers rather than at
+    // the moment the device reaches the list.
+    window.set_ghost(want.is_empty());
 }
 
 /// Ask for a window that is not see-through.
@@ -1426,6 +2406,227 @@ pub(crate) mod tests {
     /// `geometry::the_panel_is_an_exact_integer_number_of_device_pixels` is the test for that one.
     fn panel_at(hero: f64, sw: f64, sh: f64) -> (f64, f64) {
         (hero * sw, hero * sh)
+    }
+
+    /// §10.3's latch, for a test that is not testing the latch itself.
+    fn latch(first: bool) -> Rc<std::cell::Cell<bool>> {
+        Rc::new(std::cell::Cell::new(first))
+    }
+
+    /// The plan's real cost, for a test that is not testing the cost itself.
+    ///
+    /// **Not `Cost::default()`.** The shelf's row 3 and the ledger both render this, and a zero
+    /// would exercise the *nothing to download* arm rather than the one a first run takes.
+    fn a_cost() -> compose::Cost {
+        work::cost(compose::Holes::Sparse)
+    }
+
+    /// No plan at all — the shape a bench with nothing on it is in.
+    fn no_cost() -> compose::Cost {
+        compose::Cost::NONE
+    }
+
+    /// **Point the whole test binary at a data directory of its own, once, and hold the lock.**
+    ///
+    /// `AGENTS.md` §3: never write to the operator's real library. `Settings::save`,
+    /// `settings::drives_dir` and `firmware::cache_dir` all resolve through `settings::data_dir`,
+    /// which under `cargo test` declines the build tree and lands on the **platform** application
+    /// support directory — the operator's own. `wire` saves, and now also builds a `Queue` that
+    /// names `drives/`, so every test that calls it was writing there.
+    ///
+    /// Set **once per process, to one directory**: `std::env::set_var` is process-global and cargo
+    /// runs tests on several threads, so a per-test directory would have two tests interleaving and
+    /// one reading the other's. One value, set under a `Once`, cannot interleave with itself.
+    ///
+    /// **The returned guard is the other half, and it is why this returns anything at all.** This
+    /// file's tests are not the only ones in this binary that redirect the variable: `work.rs`'s do
+    /// too, per test, and they restore it afterwards. So *not varying the value* is only half a
+    /// defence — it stops these tests colliding with each other, not with those. The comment here
+    /// used to claim *every reader in this binary goes through this function first*, and that was
+    /// false the moment `work.rs` landed; the flake it produced was a ledger test reporting a
+    /// firmware bundle nobody had downloaded, because it read `work.rs`'s cache directory.
+    ///
+    /// One lock, [`crate::data_dir_lock`], taken by both, and **it is what performs the redirect** —
+    /// so this is now the act of claiming the directory rather than the act of creating it. Hold
+    /// the guard for as long as the test reads or writes the data directory; dropping it
+    /// immediately is the bug this exists to stop, which is what `#[must_use]` is for.
+    #[must_use = "dropping the guard releases the data directory to another test mid-run"]
+    fn use_a_scratch_data_dir() -> DataDirGuard {
+        DataDirGuard {
+            _guard: crate::data_dir_lock(),
+            at: crate::scratch_data_dir(),
+        }
+    }
+
+    /// The data directory this test owns for as long as it is alive.
+    struct DataDirGuard {
+        _guard: crate::DataDirLock,
+        at: &'static std::path::Path,
+    }
+
+    impl Drop for DataDirGuard {
+        /// **Takes the directory's contents with it**, unless the operator asked to keep them.
+        ///
+        /// Nothing did, and a `cargo test` run left one `ipod-gui-data-<pid>/` per process behind
+        /// for ever: 93 of them on this machine when somebody counted, each holding a settings
+        /// file and — after a test that reached a worker — a `drives/` and a `firmware/`.
+        ///
+        /// **Only the outermost guard cleans**, and that is the whole of the care this needs. The
+        /// lock is re-entrant because one test takes it twice — `a_fresh_installation` claims the
+        /// directory and `a_window` needs the redirect in place before it builds anything — and a
+        /// first cut of this deleted the tree when the *inner* one dropped, which is halfway
+        /// through the test that set it up. It cost an afternoon and looked like `wire` deleting
+        /// files.
+        ///
+        /// It runs **before** the fields drop, so the mutex is still held while the tree goes.
+        /// `data_dir_lock` makes the directory on every claim rather than once, which is what lets
+        /// this take it away entirely instead of emptying it and leaving the husk behind.
+        ///
+        /// `IPOD_TEST_DATA` is somebody saying *keep what this run produced*, which is the whole
+        /// reason it exists, so it is honoured here as well as in `scratch_data_dir`.
+        fn drop(&mut self) {
+            if !self._guard.is_outermost() || std::env::var_os("IPOD_TEST_DATA").is_some() {
+                return;
+            }
+            let _ = std::fs::remove_dir_all(self.at);
+        }
+    }
+
+    /// **Every test that can reach the data directory claims it first.**
+    ///
+    /// `AGENTS.md` §3, and it is the one rule in this file whose cost is somebody else's disk.
+    /// `settings::data_dir` declines a cargo build tree and then lands on the **platform**
+    /// application-support directory — `~/Library/Application Support/ipod-emulator` on macOS, which
+    /// today holds the operator's own devices and two 30 GB drive images. `wire` writes there: it
+    /// saves the settings file, and it builds a `Queue` that names `drives/`.
+    ///
+    /// The redirect away from it used to be an opt-in call three tests made while **six** called
+    /// `wire`, so whether it happened at all depended on which test the scheduler ran first. Now
+    /// `crate::data_dir_lock` performs it — but only for whoever takes the lock, so a test that
+    /// reaches `wire` without claiming the directory is still a test that can be running while
+    /// `work.rs` has the variable pointed somewhere else. This is what stops one being written.
+    ///
+    /// **A sweep of this file's own text**, which is what the two markup sweeps beside it do, and
+    /// cheaper than a convention nobody enforces. It reads the test module — the half `rust_sources`
+    /// deliberately cuts off — splits it at `fn`, and requires any function whose body reaches the
+    /// data directory to also take the guard, directly or through one of the two helpers that do.
+    #[test]
+    fn every_test_that_reaches_the_data_directory_takes_the_lock() {
+        let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
+            .expect("this file");
+        let (_, tests) = text
+            .split_once("pub(crate) mod tests {")
+            .expect("the test module");
+
+        // Anything that resolves through `settings::data_dir()`. `Queue::new` is on the list because
+        // it is `Queue::at(drives_dir(), cache_dir())`, and `wire` because it does all of it.
+        const REACHES: [&str; 6] = [
+            "wire(",
+            "Settings::load()",
+            "settings::drives_dir()",
+            "firmware::cache_dir()",
+            "work::Queue::new()",
+            "Queue::new()",
+        ];
+        // The guard, however it is come by. `a_window` and `a_fresh_installation` both take it and
+        // both hand it back, which is why naming them here is not a loophole.
+        const CLAIMS: [&str; 3] =
+            ["use_a_scratch_data_dir()", "a_fresh_installation()", "a_window()"];
+
+        // **A mention inside a string is not a call**, and this module is full of sweeps that search
+        // for the very text this one searches for: `the_work_timer_is_started_in_exactly_one_place_
+        // and_is_held` contains the literal `"let _wiring = wire("` and calls `wire` nowhere. That
+        // was this sweep's first finding and it was wrong, which is the only kind of finding worth
+        // building an instrument around.
+        // **Char literals have to be skipped as well, and that was this sweep's second finding.**
+        // A stripper that only knows about `"` desynchronises on the `'"'` in its own body and then
+        // reports every function after it inverted — an instrument that lies, produced by the
+        // instrument. A `'` is a char literal when the two or three characters after it close it,
+        // and a lifetime (`&'static str`) otherwise.
+        let code_only = |body: &str| -> String {
+            let c: Vec<char> = body.chars().collect();
+            let mut out = String::with_capacity(body.len());
+            let mut i = 0usize;
+            while i < c.len() {
+                match c[i] {
+                    '"' => {
+                        i += 1;
+                        while i < c.len() && c[i] != '"' {
+                            i += if c[i] == '\\' { 2 } else { 1 };
+                        }
+                        i += 1;
+                    }
+                    '\'' if c.get(i + 2) == Some(&'\'') && c[i + 1] != '\\' => i += 3,
+                    '\'' if c.get(i + 3) == Some(&'\'') && c[i + 1] == '\\' => i += 4,
+                    ch => {
+                        out.push(ch);
+                        i += 1;
+                    }
+                }
+            }
+            out
+        };
+
+        // Split at function boundaries. Every function in this module is indented four spaces, so
+        // `\n    fn ` is unambiguous and does not match a call, a closure or a nested item.
+        let mut bodies: Vec<(&str, String)> = Vec::new();
+        for chunk in tests.split("\n    fn ").skip(1) {
+            let name = chunk.split(['(', '<']).next().unwrap_or("").trim();
+            bodies.push((name, code_only(chunk)));
+        }
+        assert!(bodies.len() > 40, "the sweep found {} functions", bodies.len());
+
+        let mut unclaimed: Vec<(&str, &str)> = Vec::new();
+        for (name, body) in &bodies {
+            // The three that define the mechanism are what everything else goes through.
+            if CLAIMS.iter().any(|c| c.trim_end_matches("()") == *name) {
+                continue;
+            }
+            if let Some(hit) = REACHES.iter().find(|r| body.contains(**r)) {
+                if !CLAIMS.iter().any(|c| body.contains(c)) {
+                    unclaimed.push((name, hit));
+                }
+            }
+        }
+        assert!(
+            unclaimed.is_empty(),
+            "these reach the data directory without claiming it, so they can run while `work.rs` \
+             has `IPOD_EMULATOR_DATA` pointed at one of its own scratch directories — and on a run \
+             where nothing has redirected yet, at the operator's real library: {unclaimed:?}"
+        );
+
+        // **Two controls.** A sweep that matched nothing would pass vacuously.
+        let claimed = bodies
+            .iter()
+            .filter(|(_, b)| {
+                REACHES.iter().any(|r| b.contains(*r)) && CLAIMS.iter().any(|c| b.contains(c))
+            })
+            .count();
+        assert!(
+            claimed > 3,
+            "the sweep found only {claimed} tests that both reach the data directory and claim it, \
+             so it is not reading what it thinks it is"
+        );
+        // And the stripper has to work on both shapes, or the two false positives it exists to stop
+        // come straight back with nothing to report them.
+        let body_of = |name: &str| -> String {
+            bodies
+                .iter()
+                .find(|(n, _)| *n == name)
+                .unwrap_or_else(|| panic!("{name} is not in this module any more"))
+                .1
+                .clone()
+        };
+        assert!(
+            !body_of("the_work_timer_is_started_in_exactly_one_place_and_is_held").contains("wire("),
+            "the stripper let a quoted `wire(` through, so this sweep is about to report a test \
+             that calls nothing"
+        );
+        assert!(
+            !body_of("every_test_that_reaches_the_data_directory_takes_the_lock").contains("wire("),
+            "the stripper desynchronised on a char literal — most likely the `'\"'` in its own \
+             body — so everything after it is being read inside-out"
+        );
     }
 
     /// A directory of our own, named after the test, so two running at once cannot collide.
@@ -1983,6 +3184,127 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **T-22. The work timer is started in exactly one place, and it is held for the window's
+    /// life.**
+    ///
+    /// Two failure modes, both silent, and neither has any diagnostic anywhere.
+    ///
+    /// *Dropped*: `slint::Timer` stops the moment it goes out of scope
+    /// (`i-slint-core-1.17.1/timers.rs:44` — *"You must keep the Timer object around for as long as
+    /// you want the timer to keep firing"*). A timer created inside `wire` and not handed back
+    /// never fires once, and the first run's Rail sits on `Planned` for ever.
+    ///
+    /// *Started twice*: `Timer::start` restarts the same timer with a new callback, so a second
+    /// call site silently replaces the first — the same class as
+    /// `there_is_exactly_one_winit_event_filter_registration`, and there is no error there either.
+    #[test]
+    fn the_work_timer_is_started_in_exactly_one_place_and_is_held() {
+        let mut starts: Vec<String> = Vec::new();
+        let mut held = false;
+        for (name, text) in rust_sources() {
+            for (n, line) in text.lines().enumerate() {
+                let t = line.trim_start();
+                if t.starts_with("//") {
+                    continue;
+                }
+                if line.contains("TimerMode::") {
+                    starts.push(format!("{name}:{}", n + 1));
+                }
+                // `wire` hands the timer back, and `main` binds what it hands back.
+                if name == "main.rs" && line.contains("let _wiring = wire(") {
+                    held = true;
+                }
+            }
+        }
+        assert_eq!(
+            starts.len(),
+            1,
+            "the work timer is started at {starts:?}; a second `Timer::start` silently replaces \
+             the first callback and nothing reports it"
+        );
+        assert!(
+            held,
+            "`main` calls `wire` without binding what it returns, so the timer is dropped at the \
+             end of that statement and never fires — with no error anywhere"
+        );
+    }
+
+    /// **Starting the timer is idempotent**, because `Timer::start` restarts a running one.
+    ///
+    /// `i-slint-core`'s own doc: *"If the timer has been started previously, then it will be
+    /// restarted, no matter if it has already been fired or not."* Every `Press::Busy` came through
+    /// `ticking`, so somebody mashing the centre button on a build that looked stuck pushed the
+    /// next tick out indefinitely — progress froze on screen while the work carried on and the
+    /// reports piled up in the channel. Which is exactly what a person does when a download looks
+    /// stuck.
+    ///
+    /// A source sweep, because a `slint::Timer` under `init_no_event_loop` never fires and there is
+    /// no way to observe a timeout being moved. What is checked is that the guard is there, on the
+    /// one function that starts it.
+    #[test]
+    fn asking_the_timer_to_run_twice_does_not_move_the_next_tick() {
+        let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
+            .expect("this file");
+        let (_, after) = text
+            .split_once("let ticking: Rc<dyn Fn()> = {")
+            .expect("the one place the timer is started");
+        let body = after.split("TimerMode::").next().expect("the start call");
+        assert!(
+            body.contains("timer.running()"),
+            "`ticking` starts the timer without asking whether it is already running, so every \
+             extra press restarts the countdown:\n{body}"
+        );
+        // …and the guard returns rather than starting a second one.
+        assert!(
+            body.contains("return"),
+            "`ticking` reads `timer.running()` and starts it anyway:\n{body}"
+        );
+    }
+
+    /// **The tick a test drives is the tick the timer drives.**
+    ///
+    /// Under `i-slint-backend-testing`'s no-event-loop init a `slint::Timer` never fires at all, so
+    /// a `pump` reachable only through the timer would be reachable from nothing here — §20 item
+    /// 12's defect, one layer up. `pump_once` is a plain function, and the timer's callback is one
+    /// call to it.
+    #[test]
+    fn one_tick_on_an_idle_queue_changes_nothing_and_stops_looking() {
+        let (settings, _held) = a_fresh_installation();
+        let w = a_window();
+        let wiring = wire(&w, settings.clone());
+
+        let rail = Rc::new(RefCell::new(rail::Rail::new()));
+        let rows: Rc<VecModel<RailRow>> = Rc::new(VecModel::default());
+        let devices: Rc<VecModel<DeviceRow>> = Rc::new(VecModel::default());
+        // **Armed first, or the assertion below is vacuous.** A `Timer::default()` is already not
+        // running, so `pump_once` calling `stop()` on one would be indistinguishable from
+        // `pump_once` doing nothing at all — which is how a check that tests nothing looks exactly
+        // like a check that passes.
+        let timer = slint::Timer::default();
+        timer.start(slint::TimerMode::Repeated, work::TICK, || {});
+        assert!(timer.running(), "the fixture's timer is not armed, so the check below proves nothing");
+
+        let before = settings.borrow().devices.len();
+        pump_once(
+            &w,
+            &wiring.work,
+            &rail,
+            &rows,
+            &devices,
+            &settings,
+            &latch(true),
+            &timer,
+            caps(),
+            a_cost(),
+        );
+        assert_eq!(
+            settings.borrow().devices.len(),
+            before,
+            "a tick with nothing running changed the library"
+        );
+        assert!(!timer.running(), "the timer keeps looking at 10 Hz with nothing to look at");
+    }
+
     /// **T-7. There is exactly one `on_winit_window_event` registration in this program.**
     ///
     /// The hook is stored in a `Cell<Option<Box<…>>>` and registering calls `set`, so a second
@@ -2173,7 +3495,7 @@ pub(crate) mod tests {
             } else if let Some(id) = rail.entries().first().map(|e| e.id) {
                 rail.dismiss(id);
             }
-            sync_rail(&window, &rows, &rail, caps());
+            sync_rail(&window, &rows, &rail, caps(), work::Shape::default());
         }
 
         // **Identity first**, because it is the whole of the claim and because a replaced model
@@ -2208,6 +3530,9 @@ pub(crate) mod tests {
     /// It was a `static Once` while exactly one test made a window, where the difference is
     /// invisible. Four tests made it visible in the most confusing way available.
     fn a_window() -> MainWindow {
+        // Before anything that could reach `settings::data_dir` — `wire` saves, and its queue names
+        // `drives/`. See [`use_a_scratch_data_dir`].
+        let _held = use_a_scratch_data_dir();
         thread_local! {
             static READY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         }
@@ -2231,7 +3556,7 @@ pub(crate) mod tests {
         let w = a_window();
 
         w.set_devices(ModelRc::from(Rc::new(VecModel::from(device_rows(&Settings::default())))));
-        w.set_empty_device(empty_device());
+        w.set_empty_device(empty_device(false, caps(), no_cost()));
         w.set_screen_source(dark_screen());
         w.set_panel_description(panel_description(&phase()).into());
         w.global::<Motion>().set_scale(motion::scale());
@@ -2262,7 +3587,7 @@ pub(crate) mod tests {
             w.get_select_d()
         );
 
-        push_ledger(&w);
+        push_ledger(&w, None, &temp_dir("ledger"), None);
         assert!(!w.get_ledger_download().is_empty(), "the ledger has no download line");
         assert!(!w.get_ledger_disk().is_empty(), "the ledger has no disk line");
 
@@ -2270,16 +3595,123 @@ pub(crate) mod tests {
         // what the Rail is holding rather than being frozen at startup.
         let rows: Rc<VecModel<RailRow>> = Rc::new(VecModel::default());
         w.set_rail(ModelRc::from(rows.clone()));
-        sync_rail(&w, &rows, &rail::Rail::new(), caps());
+        sync_rail(&w, &rows, &rail::Rail::new(), caps(), work::Shape::default());
         assert!(!w.get_work_heading().is_empty(), "the Work page has no heading");
         assert!(!w.get_work_empty().is_empty(), "the empty Work page says nothing");
         assert_eq!(w.get_rail_first_failure(), -1, "an empty Rail has no primary row");
         assert!(w.get_rail_line().is_empty(), "an empty Rail is not a shelf line");
 
+        // §10.1's ghost and §12.3's bar, both of which had been drawable and unbound. `set_ghost`
+        // is pushed by `refresh_devices`; `set_progress` by `sync_rail`.
+        refresh_devices(&w, &Rc::new(VecModel::default()), &Settings::default(), &latch(true), caps(), no_cost());
+        assert!(w.get_ghost(), "an empty library did not reach the bench as a ghost");
+        assert!(w.get_progress() < 0.0, "an empty Rail claims a denominator it does not have");
+
+        // §9.2's cradle line, and §17.Q12's measurement. `working-label` is pushed by `sync_rail`
+        // and empty when nothing is running; `verb-width` is the one property that goes the other
+        // way — the renderer's answer, read out — so it is checked for being a real number rather
+        // than for reaching the window.
+        let rows2: Rc<VecModel<RailRow>> = Rc::new(VecModel::default());
+        w.set_rail(ModelRc::from(rows2.clone()));
+        sync_rail(&w, &rows2, &rail::Rail::new(), caps(), work::Shape::default());
+        assert!(w.get_working_label().is_empty(), "an idle bench claims to be working");
+        assert!(
+            w.get_verb_width() >= 0.0,
+            "the verb probe measured {} px, which is not a width",
+            w.get_verb_width()
+        );
+
         let stack = nav::Stack::new();
         push_nav(&w, &stack);
         assert!(!w.get_drawer_open());
         assert_eq!(w.get_drawer_page(), DrawerPage::None);
+    }
+
+    /// **§12.3's bar reaches the bench, and a step with no denominator draws no bar.**
+    ///
+    /// `Bench.progress` has been declared, forwarded and drawn since the drawer landed, bound to
+    /// nothing — the drawn-instrument-with-no-producer shape §20 item 15 names. `sync_rail` is the
+    /// producer now, and the **sign** is the contract: `bench.slint` draws the bar on
+    /// `progress >= 0`, so a negative value is *no denominator, no bar, a number that moves
+    /// instead*.
+    #[test]
+    fn progress_reaches_the_bench_and_a_step_with_no_denominator_draws_no_bar() {
+        let w = a_window();
+        let rows: Rc<VecModel<RailRow>> = Rc::new(VecModel::default());
+        w.set_rail(ModelRc::from(rows.clone()));
+
+        let mut r = rail::Rail::new();
+        sync_rail(&w, &rows, &r, caps(), work::Shape::default());
+        assert!(w.get_progress() < 0.0, "an empty Rail is not 0 % of anything");
+
+        // A step with real bytes on both sides: a real fraction, and the bar is drawn.
+        let id = r.note("fetching");
+        r.progress(id, rail::Progress::Bytes { done: 3_250_000, total: 6_500_000 });
+        sync_rail(&w, &rows, &r, caps(), work::Shape::default());
+        assert!(
+            (w.get_progress() - 0.5).abs() < 0.01,
+            "half of 6.5 MB reached the bench as {}",
+            w.get_progress()
+        );
+
+        // **A denominator of zero is not zero progress.** The catalogue records no size for some
+        // releases, and a bar drawn at 0 % against an unknown total is an instrument that lies.
+        r.progress(id, rail::Progress::Bytes { done: 3_250_000, total: 0 });
+        sync_rail(&w, &rows, &r, caps(), work::Shape::default());
+        assert!(
+            w.get_progress() < 0.0,
+            "a download with no recorded size drew a bar at {}",
+            w.get_progress()
+        );
+
+        // …and a failure takes the bar away rather than freezing it where it stopped.
+        r.progress(id, rail::Progress::Bytes { done: 3_250_000, total: 6_500_000 });
+        sync_rail(&w, &rows, &r, caps(), work::Shape::default());
+        assert!(w.get_progress() >= 0.0, "the fixture is not in the state the next line tests");
+        r.fail(id, rail::Failure::new(rail::Class::Network, "the download"));
+        sync_rail(&w, &rows, &r, caps(), work::Shape::default());
+        assert!(
+            w.get_progress() < 0.0,
+            "the bar froze at {} on a step that failed; a frozen bar is a paused machine \
+             pretending",
+            w.get_progress()
+        );
+    }
+
+    /// **The ghost is an emptiness state, and it goes both ways.**
+    ///
+    /// §9.1 gives the later-empty bench the same drawing §10.1 gives the first one, so this is
+    /// recomputed from the library on every pass rather than latched. The welcome copy is the
+    /// latch, and it is deliberately a different rule: a cancelled build empties the list, and the
+    /// bench may redraw the ghost for that without returning anybody to step one.
+    #[test]
+    fn the_ghost_follows_the_library_and_a_real_device_is_not_one() {
+        let w = a_window();
+        let devices: Rc<VecModel<DeviceRow>> = Rc::new(VecModel::default());
+        w.set_devices(ModelRc::from(devices.clone()));
+
+        let mut s = Settings::default();
+        refresh_devices(&w, &devices, &s, &latch(false), caps(), no_cost());
+        assert!(w.get_ghost(), "an empty library is not drawn as a ghost");
+
+        // **A real device whose ROM did not state a colour is NOT a ghost**, and that is the case
+        // this could most easily get wrong: `Colour::Unspecified` draws the same neutral `#E4E4E2`
+        // chassis the ghost does, and the difference between them is the opacity alone.
+        s = a_library_of_one();
+        s.devices[0].chassis = Some(Colour::Unspecified);
+        refresh_devices(&w, &devices, &s, &latch(false), caps(), no_cost());
+        assert!(!w.get_ghost(), "a device in the library is drawn as a ghost");
+        assert_eq!(
+            devices.row_data(0).expect("the device").chassis,
+            empty_device(false, caps(), no_cost()).chassis,
+            "the fixture no longer shares the ghost's chassis colour, so the line above proves \
+             nothing about the opacity being what separates them"
+        );
+
+        // …and the last device leaving brings it back.
+        s.devices.clear();
+        refresh_devices(&w, &devices, &s, &latch(false), caps(), no_cost());
+        assert!(w.get_ghost(), "the last device left and the bench still draws a solid iPod");
     }
 
     /// **§9.5's boolean flips at the height the device actually needs, and it reaches the window.**
@@ -2365,7 +3797,7 @@ pub(crate) mod tests {
     fn the_centre_button_is_reachable_from_the_keyboard_with_no_pointer() {
         let w = a_window();
         w.set_devices(ModelRc::from(Rc::new(VecModel::from(device_rows(&a_library_of_one())))));
-        w.set_empty_device(empty_device());
+        w.set_empty_device(empty_device(false, caps(), no_cost()));
 
         let fired = Rc::new(std::cell::Cell::new(0));
         {
@@ -2668,7 +4100,7 @@ pub(crate) mod tests {
     /// centre line.
     #[test]
     fn the_empty_work_page_says_what_the_surface_is_for() {
-        let (heading, empty) = work_page_text(&rail::Rail::new());
+        let (heading, empty) = work_page_text(&rail::Rail::new(), work::Shape::default());
         assert!(!heading.trim().is_empty(), "the heading slot is drawn whether or not it is filled");
         assert!(!empty.trim().is_empty());
         assert_eq!(
@@ -2691,14 +4123,14 @@ pub(crate) mod tests {
     #[test]
     fn the_work_heading_follows_what_the_rail_is_actually_holding() {
         let mut r = rail::Rail::new();
-        assert_eq!(work_page_text(&r).0, "Nothing is happening.");
+        assert_eq!(work_page_text(&r, work::Shape::default()).0, "Nothing is happening.");
 
         r.failed(
             "start",
             "iPod 1",
             rail::Failure::saying(rail::Class::Missing, "starting iPod 1", "the drive is gone."),
         );
-        let heading = work_page_text(&r).0;
+        let heading = work_page_text(&r, work::Shape::default()).0;
         assert!(
             !heading.to_lowercase().contains("nothing is happening"),
             "the heading still says nothing is happening above a failure it is drawn on top of: \
@@ -2711,12 +4143,1454 @@ pub(crate) mod tests {
             "iPod 2",
             rail::Failure::saying(rail::Class::Missing, "starting iPod 2", "the ROM is gone."),
         );
-        assert_eq!(work_page_text(&r).0, "2 things failed.");
+        assert_eq!(work_page_text(&r, work::Shape::default()).0, "2 things failed.");
 
         // A note is a thing that happened, and the heading says so rather than counting to zero.
         let mut n = rail::Rail::new();
         n.note("iPod 1 resolves and would start here.");
-        assert_eq!(work_page_text(&n).0, "This is what happened.");
+        assert_eq!(work_page_text(&n, work::Shape::default()).0, "This is what happened.");
+    }
+
+    /// A library nobody has ever used: no devices, no flag, nothing on disk.
+    ///
+    /// **Hands the guard back with it.** It used to drop it on the way out, which meant every test
+    /// built on this helper ran with the data directory unclaimed — the redirect held, because it is
+    /// process-wide and permanent, but nothing stopped `work.rs` pointing the variable at one of its
+    /// own scratch directories in the middle of the test. That is how a ledger assertion came to
+    /// report a firmware bundle nobody had downloaded.
+    #[must_use = "dropping the guard releases the data directory to another test mid-run"]
+    fn a_fresh_installation() -> (Rc<RefCell<Settings>>, DataDirGuard) {
+        let held = use_a_scratch_data_dir();
+        (Rc::new(RefCell::new(Settings::default())), held)
+    }
+
+    /// A library nobody has ever used **on a disk nobody else is using either**.
+    ///
+    /// [`a_fresh_installation`] gives an empty `Settings` but shares the binary's one data
+    /// directory, which is right for a test that only reads it and wrong for one that fills it: the
+    /// three ignored end-to-end tests each download a bundle and build a drive, and sharing a
+    /// directory makes the second one find the first one's cache. That is not a failure, it is
+    /// worse — it is a pass that proves less than it says, and only in some orders.
+    #[must_use = "dropping the guard releases the data directory to another test mid-run"]
+    fn a_fresh_installation_in(name: &str) -> (Rc<RefCell<Settings>>, DataDirGuard) {
+        let guard = crate::data_dir_lock();
+        let at = crate::scratch_data_dir().join(name);
+        let _ = std::fs::remove_dir_all(&at);
+        std::fs::create_dir_all(&at).expect("a data directory of this test's own");
+        // SAFETY: under the shared lock, which is what serialises every test in this binary that
+        // touches this variable. `DataDirLock`'s own `Drop` puts it back.
+        unsafe { std::env::set_var("IPOD_EMULATOR_DATA", &at) };
+        (
+            Rc::new(RefCell::new(Settings::default())),
+            DataDirGuard {
+                _guard: guard,
+                at: Box::leak(at.into_boxed_path()),
+            },
+        )
+    }
+
+    /// **§10.1: the plan is on screen BEFORE anything is downloaded.**
+    ///
+    /// Five steps, each with its own sub-line, in an already-open drawer, with the ledger under
+    /// them — and not one byte fetched to put them there. *Nobody has ever been given that list
+    /// before agreeing to a download.*
+    #[test]
+    fn the_plan_is_on_screen_before_anything_is_downloaded() {
+        let (settings, _held) = a_fresh_installation();
+        let w = a_window();
+        let _wiring = wire(&w, settings.clone());
+
+        let rail = w.get_rail();
+        let planned: Vec<RailRow> = (0..rail.row_count())
+            .filter_map(|i| rail.row_data(i))
+            .filter(|r| r.kind == RailKind::Planned)
+            .collect();
+        assert_eq!(
+            planned.len(),
+            5,
+            "the first run's plan is five steps and {} reached the drawer",
+            planned.len()
+        );
+        // §10.1's own drawing: a verb, a subject and a sub-line on every row. `RailRow.sub` has
+        // been drawn with nothing behind it since the drawer landed.
+        for (i, r) in planned.iter().enumerate() {
+            assert!(!r.verb.is_empty(), "step {i} has no verb");
+            assert!(!r.what.is_empty(), "step {i} has no subject");
+            assert!(!r.sub.is_empty(), "step {i} has no sub-line: {:?} {:?}", r.verb, r.what);
+            // §9.2: a plan nobody has agreed to shows no progress at all — never a spinner.
+            assert!(r.fraction < 0.0, "step {i} draws a bar before anything has started");
+            assert!(r.measure.is_empty(), "step {i} counts bytes nobody has fetched");
+        }
+        // The first row is the one that costs nothing and downloads nothing, and it says so.
+        assert_eq!(planned[0].verb, "synthesise");
+        assert!(
+            planned[0].sub.contains("nothing downloaded"),
+            "the ROM step does not say it costs nothing: {:?}",
+            planned[0].sub
+        );
+
+        // The drawer is already open on the page holding it.
+        assert!(w.get_drawer_open(), "§10.1 opens the drawer; it is shut");
+        assert_eq!(w.get_drawer_page(), DrawerPage::Work);
+        assert_eq!(w.get_drawer_depth(), 1);
+
+        // …and nothing was written to get here.
+        assert!(
+            w.get_progress() < 0.0,
+            "something claims progress before the button has been pressed"
+        );
+        // **Nothing was minted and nothing was filed**, which is what *before anything is
+        // downloaded* means on this side of the boundary. The fetch itself is asserted through the
+        // Rail rather than through the firmware cache: `firmware::cache_dir` resolves through a
+        // process-wide environment variable that other tests in this binary set for themselves, so
+        // reading that directory here would be reading somebody else's.
+        assert!(
+            settings.borrow().devices.is_empty(),
+            "drawing the plan minted an identity, which is the one irreversible thing in this \
+             program"
+        );
+        assert!(
+            settings.borrow().resources.is_empty(),
+            "drawing the plan filed something away"
+        );
+        for r in &planned {
+            assert!(
+                !r.cancellable && r.cancel_cost.is_empty(),
+                "step {:?} names a file it is writing, and nothing has been pressed",
+                r.verb
+            );
+        }
+    }
+
+    /// **§10.3: the wizard does not come back.**
+    ///
+    /// The failure this designs out is the one that shipped: a window that re-opened its wizard
+    /// whenever the device list was empty — and a cancelled or failed build is exactly what empties
+    /// it — so a person was returned to step one with no error shown and no way past.
+    ///
+    /// Both halves are checked, because they fail differently: the **flag** survives the file, and
+    /// the **latch** holds within one session.
+    #[test]
+    fn the_wizard_does_not_come_back() {
+        let (settings, _held) = a_fresh_installation();
+        let first = a_window();
+        let _w1 = wire(&first, settings.clone());
+        assert!(first.get_drawer_open(), "the first launch did not show the welcome");
+        assert!(settings.borrow().welcomed, "the welcome was shown and the flag was not set");
+
+        // **The library is emptied**, which is what a cancelled or failed build leaves behind.
+        settings.borrow_mut().devices.clear();
+        assert!(
+            settings.borrow().devices.is_empty(),
+            "the fixture is not in the state that used to reopen the wizard"
+        );
+
+        // A second launch, on that same emptied library.
+        let second = a_window();
+        let _w2 = wire(&second, settings.clone());
+        assert!(
+            !second.get_drawer_open(),
+            "the drawer opened again on an empty library, which is the wizard coming back"
+        );
+        assert!(settings.borrow().welcomed, "something cleared the flag");
+        // §9.1's later-empty bench, which is the state it should be in: the ghost is back, and the
+        // words are the ones that do not assume this is anybody's first minute.
+        assert!(second.get_ghost(), "an empty bench is not drawn as a ghost");
+        assert_eq!(second.get_empty_device().name, "No devices yet");
+        assert!(
+            !second.get_empty_device().summary.starts_with("You do not need an iPod"),
+            "the welcome copy came back: {:?}",
+            second.get_empty_device().summary
+        );
+
+        // **And the route did not go with it.** §9.1 gives the later-empty bench the cradle label
+        // `press ● to make an iPod`; §10.3 says *both routes offered equally*. What the flag stops
+        // is the welcome **copy** — the press, the plan and the ghost are all still there. This
+        // half is the fatal one: `welcomed` is written when the bench is wired, so opening the
+        // program, looking at it and closing it was enough to reach this state, and the state had
+        // no route to an iPod at all.
+        assert_eq!(
+            second.get_rail().row_count(),
+            first.get_rail().row_count(),
+            "the later-empty bench is not offered the plan the welcome one was"
+        );
+        assert_eq!(
+            second.get_empty_device().startable,
+            caps().download,
+            "the later-empty bench is drawn unpressable while the press would have worked"
+        );
+        assert!(
+            second.get_empty_device().cradle_label.contains("centre button")
+                || !caps().download,
+            "the cradle promises nothing on a bench that can be pressed: {:?}",
+            second.get_empty_device().cradle_label
+        );
+        assert!(
+            second.get_ledger_download().contains("to download"),
+            "the shelf quotes a bill while the ledger says there is nothing to make: {:?}",
+            second.get_ledger_download()
+        );
+    }
+
+    /// **The later-empty bench really does make an iPod when it is pressed.**
+    ///
+    /// The sibling of `the_wizard_does_not_come_back`, and it drives the registered handler rather
+    /// than looking at properties. The gap it closes was reachable in the commonest possible way —
+    /// open the program, close it, open it again — and left the promise the README is built on with
+    /// no route behind it: the cradle drawn `fg-dim`, the drawer shut, and the press answering
+    /// *there are no devices in the library yet, so there is nothing to start*.
+    #[test]
+    fn a_bench_that_is_empty_a_second_time_still_makes_an_ipod() {
+        let (settings, _held) = a_fresh_installation();
+        settings.borrow_mut().welcomed = true;
+        // Nothing is written here: the press below is refused before the worker, because `drives`
+        // is a file where the directory has to be. What is being checked is the ROUTE.
+        let drives = eapp_loader::settings::drives_dir();
+        let _ = std::fs::remove_dir_all(&drives);
+        if let Some(parent) = drives.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&drives, b"not a directory").expect("the blocking file");
+
+        let w = a_window();
+        let _wiring = wire(&w, settings.clone());
+        assert_eq!(first_run_offer(&settings.borrow()), Offer::Again);
+        assert!(
+            press_is_first_run(&settings.borrow(), 0),
+            "the centre button on an empty bench does not route to the first run"
+        );
+
+        w.invoke_start_device(0);
+        assert_eq!(
+            settings.borrow().devices.len(),
+            1,
+            "a press on the later-empty bench made no iPod"
+        );
+        let _ = std::fs::remove_file(&drives);
+    }
+
+    /// **First run is decided by the flag, and an empty library never turns it back on.**
+    ///
+    /// The 2 × 3 sweep. Emptiness may **suppress** the welcome — a library with devices in it is
+    /// plainly not somebody's first minute — but it may never **offer** it, because a build that is
+    /// cancelled or fails is what empties the list.
+    #[test]
+    fn first_run_is_decided_by_the_flag_and_never_by_an_empty_library() {
+        let _held = use_a_scratch_data_dir();
+        let library = |what: &str| -> Settings {
+            let mut s = Settings::default();
+            match what {
+                "empty" => {}
+                "one device" => s = a_library_of_one(),
+                "a half-made one" => {
+                    let rom = s.file_away(
+                        eapp_loader::settings::Resource::Firmware(
+                            eapp_loader::nor::Source::Synthetic {
+                                model: compose::FIRST_RUN_MODEL.into(),
+                                seed: 424_242,
+                                serial: None,
+                                guid: None,
+                                splash: None,
+                            },
+                        ),
+                        "Black 5.5G",
+                        None,
+                    );
+                    s.devices.push(Device {
+                        name: "My 5.5G".into(),
+                        firmware: rom,
+                        ..Device::default()
+                    });
+                }
+                other => unreachable!("{other}"),
+            }
+            s
+        };
+
+        for shape in ["empty", "one device", "a half-made one"] {
+            for welcomed in [false, true] {
+                let mut s = library(shape);
+                s.welcomed = welcomed;
+                let got = first_run_offer(&s);
+                let want = match (shape, welcomed) {
+                    // The identity is already minted and the drive is not made. Pressing carries
+                    // it on — and must NOT start over, because starting over mints a second iPod.
+                    ("a half-made one", _) => Offer::Finish { device: "My 5.5G".into() },
+                    ("empty", false) => Offer::Welcome,
+                    // §9.1's later-empty bench. **Not `Quiet`** — the flag stops the welcome copy
+                    // returning and takes nothing else with it. `Quiet` here was the fatal bug:
+                    // an empty library with no route to an iPod, reached by opening the program
+                    // and closing it.
+                    ("empty", true) => Offer::Again,
+                    _ => Offer::Quiet,
+                };
+                assert_eq!(got, want, "{shape}, welcomed={welcomed}");
+                // **An empty library always has a plan**, whichever bench it is. That is the whole
+                // of the fix: `welcomed` chooses the copy and never the route.
+                assert!(
+                    got.has_plan() || !s.devices.is_empty(),
+                    "{shape}, welcomed={welcomed}: an empty library with nothing to make"
+                );
+            }
+        }
+    }
+
+    /// **One producer, one consumer.** `welcomed` is read in exactly one function in this crate.
+    ///
+    /// The flag is the whole of §10.3, and a second reader is a second rule about when the welcome
+    /// appears. `first_run_offer` is where the decision lives; anything else consulting it is how
+    /// the two come to disagree.
+    #[test]
+    fn only_the_offer_decision_reads_the_welcome_flag() {
+        let mut sites: Vec<String> = Vec::new();
+        for (name, text) in rust_sources() {
+            for (n, line) in text.lines().enumerate() {
+                let t = line.trim_start();
+                if t.starts_with("//") || !line.contains("welcomed") {
+                    continue;
+                }
+                sites.push(format!("{name}:{}", n + 1));
+            }
+        }
+        assert!(
+            !sites.is_empty(),
+            "no `welcomed` was found in this crate at all, so the sweep is reading nothing"
+        );
+        assert!(
+            sites.iter().all(|s| s.starts_with("main.rs")),
+            "the welcome flag is read outside main.rs at {sites:?}; §10.3 has one decision \
+             function and `first_run_offer` is it"
+        );
+        assert!(
+            sites.len() <= 3,
+            "`welcomed` is touched at {sites:?}; that is more places than `first_run_offer` and \
+             `welcome` between them"
+        );
+    }
+
+    /// **§10.1's heading, and a failure outranks it.**
+    #[test]
+    fn the_work_page_says_what_pressing_does_and_a_failure_outranks_it() {
+        let mut r = rail::Rail::new();
+        r.plan(&work::plan(compose::Holes::Sparse));
+        assert_eq!(
+            work_page_text(&r, work::Shape { has_plan: true, running: false }).0,
+            "This is what pressing the centre button does",
+            "the plan does not introduce itself"
+        );
+        // Not a first run: the same Rail, and the heading is the ordinary one.
+        assert_eq!(work_page_text(&r, work::Shape::default()).0, "This is what happened.");
+
+        // A first run that failed reads as a failure, not as an invitation to press again.
+        let id = r.entries()[1].id;
+        r.fail(id, rail::Failure::new(rail::Class::Network, "the download"));
+        assert_eq!(
+            work_page_text(&r, work::Shape { has_plan: true, running: false }).0,
+            "One thing failed.",
+            "the page offered the plan again above the failure it just produced"
+        );
+    }
+
+    /// **The whole first-run screen carries one bill, and one step's own cost.**
+    ///
+    /// §10.1's rule is `6.5 MB to download · about 28 MB on disk` **everywhere**, written against a
+    /// revision that had put three different sizes for one operation on the one screen principle 7
+    /// exists for. Taken to the letter it would put the whole run's 28 MB inside the build step's
+    /// own sub-line, which attributes the bundle's 6.5 MB to the build — so the rule is narrowed
+    /// here, in one place, and this is what holds it: **the bill is one number wherever the bill
+    /// appears, and the build's sub-line states the drive's own cost, once.**
+    ///
+    /// The apparent 8 GiB appears exactly once, on the same line, as a fact about the drive rather
+    /// than a bill.
+    #[test]
+    fn the_first_run_screen_carries_one_bill_and_one_step_cost() {
+        let (settings, _held) = a_fresh_installation();
+        let w = a_window();
+        let _wiring = wire(&w, settings.clone());
+
+        let mut drawn: Vec<String> = vec![
+            w.get_ledger_download().to_string(),
+            w.get_ledger_disk().to_string(),
+            w.get_ledger_note().to_string(),
+            w.get_empty_device().summary.to_string(),
+            w.get_empty_device().write_target.to_string(),
+            w.get_empty_device().cradle_label.to_string(),
+            w.get_work_heading().to_string(),
+        ];
+        for i in 0..w.get_rail().row_count() {
+            let r = w.get_rail().row_data(i).expect("a row");
+            drawn.push(r.what.to_string());
+            drawn.push(r.sub.to_string());
+            drawn.push(r.measure.to_string());
+        }
+
+        let bill = eapp_loader::si(work::cost(compose::Holes::Sparse).disk);
+        let drive = eapp_loader::si(compose::DRIVE_ON_DISK);
+        assert_ne!(bill, drive, "the fixture cannot tell the two figures apart");
+
+        // Every `… on disk` figure on the screen, in the order it is drawn.
+        let mut figures: Vec<String> = Vec::new();
+        for line in &drawn {
+            for (n, _) in line.match_indices(" on disk") {
+                let before = &line[..n];
+                let word: String = before
+                    .rsplit(' ')
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                figures.push(word);
+            }
+        }
+        assert!(!figures.is_empty(), "no disk figure is drawn at all, so this reads nothing");
+        let distinct: std::collections::BTreeSet<&String> = figures.iter().collect();
+        assert!(
+            distinct.len() <= 2,
+            "{} different disk sizes on one screen: {:?}",
+            distinct.len(),
+            distinct
+        );
+        assert_eq!(
+            figures.iter().filter(|f| **f == drive).count(),
+            1,
+            "the drive's own cost ({drive}) is drawn {} times; it belongs on the build step's \
+             sub-line and nowhere else: {figures:?}",
+            figures.iter().filter(|f| **f == drive).count()
+        );
+        assert!(
+            figures.contains(&bill),
+            "the bill ({bill}) is not on the screen at all: {figures:?}"
+        );
+        assert!(
+            w.get_ledger_disk().contains(&bill),
+            "the ledger does not quote the bill: {:?}",
+            w.get_ledger_disk()
+        );
+        assert!(
+            w.get_empty_device().write_target.contains(&bill),
+            "the shelf does not quote the bill: {:?}",
+            w.get_empty_device().write_target
+        );
+
+        // **8 GiB, exactly once**, and it is the volume's apparent size rather than a cost.
+        let apparent = drawn.iter().filter(|l| l.contains("8 GiB")).count();
+        assert_eq!(apparent, 1, "8 GiB is drawn {apparent} times: {drawn:?}");
+    }
+
+    /// **One missing tool is one failure on the Rail**, however many times it is pressed.
+    ///
+    /// `wire` files `ToolMissing` on the plan and `Queue::press` refuses with the same class and
+    /// the same sentence under the verb `make`, so a person with no `curl` opened the window on
+    /// *One thing failed.* and reached *2 things failed.* with one press — two identical
+    /// paragraphs and two copies of the same command, for one absent tool.
+    #[test]
+    fn one_absent_tool_is_counted_once_however_often_it_is_pressed() {
+        let _held = use_a_scratch_data_dir();
+        let mut rail = rail::Rail::new();
+        // What `wire` files.
+        rail.failed(
+            "fetch",
+            "Apple's firmware",
+            rail::Failure::new(rail::Class::ToolMissing(rail::Tool::Curl), "the download"),
+        );
+        assert_eq!(rail.failures(), 1);
+
+        // What a press adds — and the de-duplication is the caller's, because two *different*
+        // failures are deliberately two entries and `Rail::failed` only folds an identical repeat.
+        let refusal =
+            rail::Failure::new(rail::Class::ToolMissing(rail::Tool::Curl), "making an iPod");
+        for _ in 0..3 {
+            let already = rail.entries().iter().any(|e| {
+                e.kind == rail::Kind::Failed
+                    && e.failure.as_ref().is_some_and(|g| g.class == refusal.class)
+            });
+            if !already {
+                rail.failed("make", "an iPod", refusal.clone());
+            }
+        }
+        assert_eq!(
+            rail.failures(),
+            1,
+            "one absent tool reads as {} failures: {}",
+            rail.failures(),
+            rail.announce()
+        );
+        assert_eq!(work_page_text(&rail, work::Shape { has_plan: true, running: false }).0, "One thing failed.");
+    }
+
+    /// **A run that has started reads as work, not as history.**
+    ///
+    /// Between the press and the worker's first `Started` there is no `Working` entry — the window
+    /// has ticked the synthesise step and nothing else — so the heading read *This is what
+    /// happened.* over a run that had just begun, with the Rail beside it announcing `1 of 5 done.`
+    #[test]
+    fn a_run_that_has_just_started_does_not_read_as_finished() {
+        let mut rail = rail::Rail::new();
+        let steps = work::plan(compose::Holes::Sparse);
+        let ids = rail.plan(&steps);
+
+        let waiting = work::Shape { has_plan: true, running: false };
+        let running = work::Shape { has_plan: true, running: true };
+        assert_eq!(
+            work_page_text(&rail, waiting).0,
+            "This is what pressing the centre button does",
+            "the plan does not introduce itself"
+        );
+        // The press ticks step 0 and spawns; nothing has reported yet, and there is no `Working`
+        // entry on the Rail for the heading to read.
+        rail.done(ids[0]);
+        assert_eq!(
+            work_page_text(&rail, running).0,
+            "Working.",
+            "a run that has just begun reads as one that is over"
+        );
+        // …and the ordinary working state is unchanged.
+        rail.progress(ids[1], rail::Progress::Bytes { done: 1, total: 2 });
+        assert_eq!(work_page_text(&rail, running).0, "Working.");
+
+        // **The mirror of it.** At the end there is one `Planned` step left — the boot — and the
+        // worker has gone. Reading that as work in progress claimed a run was under way after it
+        // had finished, which is what the whole first run reported on its last frame.
+        for id in &ids[1..4] {
+            rail.done(*id);
+        }
+        assert_eq!(
+            work_page_text(&rail, waiting).0,
+            "This is what happened.",
+            "a run that is over reads as one still going"
+        );
+    }
+
+    /// **The ledger is re-checked as the run goes, not asserted once at startup.**
+    ///
+    /// §10.1 calls the third line the one that is *checked rather than asserted* — and it was
+    /// checked once, in `wire`, and then left on screen: *Nothing has been downloaded yet.* stayed
+    /// there after the bundle had arrived and been SHA-256 checked. The free-space clause aged the
+    /// same way. `push_ledger` had exactly one non-test caller.
+    #[test]
+    fn the_ledger_is_re_checked_when_a_step_completes() {
+        let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
+            .expect("this file");
+        let (code, _) = text.split_once("pub(crate) mod tests {").expect("the test module");
+        let calls = code.matches("push_ledger(").count();
+        // The declaration, plus every place that pushes it.
+        assert!(
+            calls >= 4,
+            "`push_ledger` is called from {} place(s) in the code — it was one, in `wire`, which \
+             made the line that has to be true a startup snapshot",
+            calls - 1
+        );
+        assert!(
+            code.split_once("fn pump_once(")
+                .is_some_and(|(_, after)| after
+                    .split("\n}\n")
+                    .next()
+                    .is_some_and(|body| body.contains("push_ledger("))),
+            "a completed step does not re-check the ledger, so `Nothing has been downloaded yet.` \
+             stays on screen after the bundle has arrived"
+        );
+
+        // …and the behaviour of the line itself, which is what the sweep is about.
+        let (settings, _held) = a_fresh_installation();
+        let w = a_window();
+        let _wiring = wire(&w, settings.clone());
+        let cache = eapp_loader::firmware::cache_dir();
+        assert_eq!(w.get_ledger_note(), "Nothing has been downloaded yet.");
+        std::fs::create_dir_all(&cache).expect("a cache");
+        std::fs::write(cache.join("arrived.ipsw"), b"as if it had been fetched").expect("a bundle");
+        push_ledger(
+            &w,
+            Some(work::cost(compose::Holes::Sparse)),
+            &cache,
+            volume::space(&cache).as_ref(),
+        );
+        assert_eq!(
+            w.get_ledger_note(),
+            "One bundle is already downloaded.",
+            "the ledger goes on asserting an absence the program has disproved"
+        );
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    /// **The centre button starts the device that was pressed, not the one a session-wide flag
+    /// remembers.**
+    ///
+    /// Reachable in one move: a first run fails at the fetch, leaving `My 5.5G` with no drive; the
+    /// operator composes a second device with `ipod-boot setup`; on the next launch `Offer::Finish`
+    /// made `has_plan` true for the whole session, so pressing the cradle on the **composed**
+    /// device resumed the first run instead of starting it.
+    #[test]
+    fn the_press_routes_by_the_row_it_was_given() {
+        let _held = use_a_scratch_data_dir();
+        let mut s = Settings::default();
+        let rom = s.file_away(
+            eapp_loader::settings::Resource::Firmware(eapp_loader::nor::Source::Synthetic {
+                model: compose::FIRST_RUN_MODEL.into(),
+                seed: 909_090,
+                serial: None,
+                guid: None,
+                splash: None,
+            }),
+            "Black 5.5G",
+            None,
+        );
+        // The half-made first-run device: minted, and no drive.
+        s.devices.push(Device { name: "My 5.5G".into(), firmware: rom, ..Device::default() });
+        // …and one somebody composed by hand, which happens to sort after it.
+        let mut composed = a_library_of_one();
+        composed.devices[0].name = "Their iPod".into();
+        s.resources.extend(composed.resources);
+        s.disks.extend(composed.disks);
+        s.devices.push(composed.devices[0].clone());
+
+        assert_eq!(
+            first_run_offer(&s),
+            Offer::Finish { device: "My 5.5G".into() },
+            "the fixture is not the state this is about"
+        );
+        assert!(press_is_first_run(&s, 0), "the half-made device does not resume");
+        assert!(
+            !press_is_first_run(&s, 1),
+            "pressing a device somebody composed resumed the first run instead of starting it"
+        );
+        // An index past the end is nobody's device, so it is not the first run's either.
+        assert!(!press_is_first_run(&s, 9), "an index past the end routed to the first run");
+
+        // And with nothing in the library at all, every press is the first run's — there is no
+        // device to start, and §9.1 gives that bench one press.
+        assert!(press_is_first_run(&Settings::default(), 0));
+    }
+
+    /// **The cradle carries the work while there is work**, which is §9.2's bench mirror.
+    ///
+    /// The shelf's bar and its rail line moved during a build and the cradle did not, so the one
+    /// line the whole bench is built around read *Press the centre button to finish making My
+    /// 5.5G* for the entire download — a promise to press, on a machine already busy doing it.
+    #[test]
+    fn the_cradle_carries_the_work_and_gives_the_row_back_afterwards() {
+        let _held = use_a_scratch_data_dir();
+        let w = a_window();
+        let rows: Rc<VecModel<RailRow>> = Rc::new(VecModel::default());
+        w.set_rail(ModelRc::from(rows.clone()));
+        let mut rail = rail::Rail::new();
+
+        sync_rail(&w, &rows, &rail, caps(), work::Shape { has_plan: true, running: false });
+        assert_eq!(w.get_working_label(), "", "an idle bench claims to be working");
+
+        let id = rail.note("fetch");
+        rail.writing(id, std::path::PathBuf::from("/tmp/x.part"));
+        rail.progress(id, rail::Progress::Bytes { done: 2_600_000, total: 6_500_000 });
+        sync_rail(&w, &rows, &rail, caps(), work::Shape { has_plan: true, running: false });
+        let said = w.get_working_label().to_string();
+        assert!(said.contains("40 %"), "the cradle does not say how far: {said:?}");
+        assert!(said.contains("fetch"), "the cradle does not say what: {said:?}");
+        assert!(
+            said.chars().count() <= geometry::CRADLE_LABEL_MAX_CHARS,
+            "{said:?} is {} characters against a {}-character row",
+            said.chars().count(),
+            geometry::CRADLE_LABEL_MAX_CHARS
+        );
+
+        // No denominator is *not measured*, never nothing done: the sentence stays and the
+        // percentage goes (§12.3).
+        rail.progress(id, rail::Progress::Bytes { done: 2_600_000, total: 0 });
+        sync_rail(&w, &rows, &rail, caps(), work::Shape { has_plan: true, running: false });
+        assert!(!w.get_working_label().contains('%'), "{:?}", w.get_working_label());
+        assert!(w.get_working_label().contains("fetch"));
+
+        // …and when it is over the row's own label comes back.
+        rail.done(id);
+        sync_rail(&w, &rows, &rail, caps(), work::Shape { has_plan: true, running: false });
+        assert_eq!(
+            w.get_working_label(),
+            "",
+            "the cradle is still narrating a step that finished"
+        );
+    }
+
+    /// **One missing tool is one failure**, and the cradle says which state it is in.
+    ///
+    /// With no `curl`, `wire` files `ToolMissing` on the plan and `Queue::press` refuses with the
+    /// same class and the same sentence under a different verb — so the window opened on *One
+    /// thing failed.* and one press made it *2 things failed.*, two identical paragraphs and two
+    /// copies of the same command. Meanwhile the cradle was drawn unpressable under a label
+    /// promising a press, and its `accessible-description` is that label.
+    #[test]
+    fn a_missing_downloader_is_one_failure_and_the_cradle_says_so() {
+        let no_curl = rail::Caps { download: false, ..caps() };
+        let cost = work::cost(compose::Holes::Sparse);
+        let row = empty_device(true, no_curl, cost);
+        assert!(!row.startable, "the bench is pressable with nothing to download with");
+        assert!(
+            !row.cradle_label.contains("Press"),
+            "the cradle promises a press it will refuse: {:?}",
+            row.cradle_label
+        );
+        assert!(
+            row.cradle_label.to_lowercase().contains("curl"),
+            "the cradle does not say why it cannot be pressed: {:?}",
+            row.cradle_label
+        );
+        // …and with a downloader it is the promise again, on both empty benches.
+        for first in [true, false] {
+            let row = empty_device(first, caps(), cost);
+            assert_eq!(row.startable, caps().download);
+            if caps().download {
+                assert!(row.cradle_label.contains("centre button"), "{:?}", row.cradle_label);
+            }
+        }
+    }
+
+    /// **§10.1's ledger: one number per axis, and both come from the plan.**
+    ///
+    /// An earlier revision put three different sizes for one operation on the one screen principle 7
+    /// was written for — `about 300 MB, and four minutes`, `8 GiB sparse` and `8.02 GB needed` —
+    /// and the free-space gate was written against the apparent size of a sparse file, so somebody
+    /// with 4.1 GB free was refused on a machine with sixteen times the room the build needs.
+    #[test]
+    fn the_ledger_carries_one_number_per_axis_and_both_come_from_the_plan() {
+        let w = a_window();
+        let cache = temp_dir("ledger-empty");
+        let cost = a_cost();
+        push_ledger(&w, Some(cost), &cache, None);
+
+        let down = w.get_ledger_download().to_string();
+        let disk = w.get_ledger_disk().to_string();
+        assert_eq!(down, format!("{} to download", eapp_loader::si(cost.down)));
+        assert_eq!(disk, format!("about {} on disk", eapp_loader::si(cost.disk)));
+        // **The apparent 8 GiB is not on the ledger at all.** It is a fact about the drive, and it
+        // belongs in the build step's own sub-line where it is not a bill.
+        for line in [&down, &disk] {
+            assert!(!line.contains("GiB"), "the ledger bills an apparent size: {line}");
+            assert!(!line.contains("8.6 GB"), "the ledger bills the sparse length: {line}");
+        }
+        // The plan's own sub-line is where it does appear — exactly once.
+        let plan = work::plan(compose::Holes::Sparse);
+        let apparent: Vec<&str> = plan
+            .iter()
+            .map(|s| s.sub())
+            .filter(|s| s.contains("8 GiB"))
+            .collect();
+        assert_eq!(apparent.len(), 1, "8 GiB appears {} times in the plan", apparent.len());
+
+        // **`None` free space states nothing and warns about nothing.** An unmeasured volume is not
+        // a full one.
+        assert!(!disk.contains("free"), "a clause was invented for a volume nobody measured");
+        assert!(!w.get_ledger_warn(), "the warn colour is on against a figure nobody measured");
+
+        // Measured, and short: the clause appears and the warning with it.
+        let tight = volume::Space { free: 1_000_000, mount: "/scratch".into() };
+        push_ledger(&w, Some(cost), &cache, Some(&tight));
+        assert!(w.get_ledger_disk().contains("1.0 MB free on /scratch"), "{}", w.get_ledger_disk());
+        assert!(w.get_ledger_warn(), "1 MB free for a {} build did not warn", eapp_loader::si(cost.disk));
+
+        // Measured, and roomy: the clause appears and the warning does not.
+        let roomy = volume::Space { free: 900_000_000_000, mount: "/".into() };
+        push_ledger(&w, Some(cost), &cache, Some(&roomy));
+        assert!(w.get_ledger_disk().contains("free on /"), "{}", w.get_ledger_disk());
+        assert!(!w.get_ledger_warn(), "900 GB free warned about a 28 MB build");
+
+        // **The third line is checked, not asserted.** *Nothing has been downloaded yet* is false
+        // the moment the bundle is in the cache, and it is the first sentence of this program a
+        // person reads.
+        assert_eq!(w.get_ledger_note(), "Nothing has been downloaded yet.");
+        std::fs::write(cache.join("iPod_x.ipsw"), b"not really a bundle").unwrap();
+        push_ledger(&w, Some(cost), &cache, None);
+        assert_eq!(w.get_ledger_note(), "One bundle is already downloaded.");
+        std::fs::remove_dir_all(&cache).ok();
+    }
+
+    /// **The registered centre button starts the first run on an empty library.**
+    ///
+    /// §20 item 12's lesson: drive the callback `wire` actually registers, not a function beside it.
+    /// The defect that shipped lived inside a closure no test reached, and the press that *worked*
+    /// was the one that took the program down.
+    ///
+    /// **It also proves the press takes no borrow it does not give back.** `Queue::press` wants four
+    /// `&mut`, and writing the call as the scrutinee of a `match` keeps every one of them alive to
+    /// the end of the arms.
+    ///
+    /// **It writes nothing and downloads nothing**, and that is deliberate rather than incidental.
+    /// It used to: three presses through the real handler each reached `volume::probe`'s
+    /// `set_len(8 GiB)` on the developer's own disk and then spawned `curl` at Apple, in a test
+    /// nobody had marked `#[ignore]` and which asserts nothing about either. Neither the identity
+    /// nor the routing needs a worker, so the drives directory is a **file** here: `create_dir_all`
+    /// refuses that on every platform, the probe answers `Refused`, and the press stops there —
+    /// after the mint, which is the whole subject.
+    #[test]
+    fn the_registered_centre_button_starts_the_first_run_on_an_empty_library() {
+        let (settings, _held) = a_fresh_installation();
+        let drives = eapp_loader::settings::drives_dir();
+        let _ = std::fs::remove_dir_all(&drives);
+        if let Some(parent) = drives.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&drives, b"not a directory").expect("the blocking file");
+        let w = a_window();
+        let wiring = wire(&w, settings.clone());
+        assert_eq!(w.get_devices().row_count(), 0, "the fixture is not an empty library");
+
+        // The real, registered handler. A panic here is the shipped defect in a new place.
+        w.invoke_start_device(0);
+
+        // **Identity is the one permanent decision in this program**, and one press makes one.
+        let after_one = settings.borrow().devices.len();
+        assert_eq!(after_one, 1, "a press on an empty bench made {after_one} devices");
+        let guid = |s: &Settings| {
+            s.resources
+                .iter()
+                .find_map(|i| match &i.what {
+                    eapp_loader::settings::Resource::Firmware(
+                        eapp_loader::nor::Source::Synthetic { seed, .. },
+                    ) => Some(*seed),
+                    _ => None,
+                })
+                .expect("a synthesised iPod")
+        };
+        let first = guid(&settings.borrow());
+        assert_ne!(first, 0, "the minted seed is the never-chosen default");
+
+        // Pressing again must not mint a second iPod. Whether it runs or refuses depends on whether
+        // this machine has curl; neither answer may make a new identity.
+        w.invoke_start_device(0);
+        w.invoke_start_device(0);
+        assert_eq!(
+            settings.borrow().devices.len(),
+            1,
+            "three presses left {} devices; three failed first runs used to leave three iPods with \
+             three different FireWire GUIDs",
+            settings.borrow().devices.len()
+        );
+        assert_eq!(guid(&settings.borrow()), first, "the identity was minted twice");
+
+        // And the queue is reachable for a tick, which is the only way to drive it with no display.
+        assert!(wiring.work.borrow().owns(w.get_rail().row_data(0).expect("a plan").id as u64));
+
+        // Nothing ran, so nothing was fetched and nothing was built.
+        assert!(!wiring.work.borrow().busy(), "a worker was started");
+        let cache = eapp_loader::firmware::cache_dir();
+        let fetched = std::fs::read_dir(&cache)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .count();
+        assert_eq!(fetched, 0, "a test that asserts nothing about downloading downloaded something");
+        let _ = std::fs::remove_file(&drives);
+    }
+
+    /// **A real first run, end to end, through the button the markup presses.**
+    ///
+    /// §10 in full: the plan on screen, one press, Apple's own servers, a drive that reads back
+    /// bootable — and every one of the five steps narrated on the Rail as it happens. Nothing here
+    /// is a stand-in: `invoke_start_device` is the callback `wire` registered, `(wiring.tick)()` is
+    /// the closure the 100 ms timer runs, and the bytes come from `secure-appldnld.apple.com`.
+    ///
+    /// Ignored by default because it reaches a third party and writes about 28 MB. Run it with
+    /// `IPOD_TEST_DATA` pointed somewhere disposable if you want to look at what it made:
+    ///
+    /// ```text
+    /// IPOD_TEST_DATA=/tmp/run cargo test -p ipod-gui --bins -- --ignored --nocapture \
+    ///     a_real_first_run_from_the_registered_centre_button
+    /// ```
+    #[test]
+    #[ignore = "reaches Apple's servers and writes ~28 MB; run with --ignored --nocapture"]
+    fn a_real_first_run_from_the_registered_centre_button() {
+        let (settings, _held) = a_fresh_installation_in("e2e-first-run");
+        let w = a_window();
+        let wiring = wire(&w, settings.clone());
+        let began = std::time::Instant::now();
+
+        println!("\ndata directory  {}", eapp_loader::settings::data_dir().display());
+        println!("ledger          {}", w.get_ledger_download());
+        println!("                {}", w.get_ledger_disk());
+        println!("                {}", w.get_ledger_note());
+        println!("heading         {}", w.get_work_heading());
+        println!("cradle          {}", w.get_empty_device().cradle_label);
+        // §10.1's ghost: the full drawing in `Colour::Unspecified` at 45 %, an iPod that has not
+        // been decided yet. It is an emptiness state, so it is true here and false the moment the
+        // press files a device.
+        println!("ghost           {}", w.get_ghost());
+        println!("startable       {}", w.get_empty_device().startable);
+        assert!(w.get_ghost(), "§10.1's bench is not drawing the ghost");
+        assert!(w.get_empty_device().startable, "the empty cradle is not pressable");
+        println!("\n── the plan, before the press ──");
+        let plan = w.get_rail();
+        assert_eq!(plan.row_count(), 5, "the plan is not five steps");
+        for i in 0..plan.row_count() {
+            let r = plan.row_data(i).unwrap();
+            println!("  {} {:<10} {:<22} {}", i, r.verb, r.what, r.sub);
+            assert_eq!(r.kind, RailKind::Planned, "step {i} is not planned before the press");
+        }
+        assert_eq!(
+            std::fs::read_dir(eapp_loader::firmware::cache_dir())
+                .map(|d| d.flatten().count())
+                .unwrap_or(0),
+            0,
+            "something was downloaded to put the plan on screen"
+        );
+
+        // ── the press ───────────────────────────────────────────────────────────────────────────
+        println!("\n── the press ──");
+        w.invoke_start_device(0);
+        assert_eq!(settings.borrow().devices.len(), 1, "the press made no device");
+
+        // ── the run, one tick at a time, exactly as the timer drives it ─────────────────────────
+        //
+        // Each step is timed from the tick that first draws it `Working` (or, for the two the UI
+        // thread does itself, `Done`) to the tick that draws it finished. That is a tick's
+        // resolution — 100 ms — and it is deliberately the *window's* view rather than the worker's:
+        // what is being reported is how long each step was on screen, which is the only duration a
+        // person experiences.
+        let mut kinds: Vec<RailKind> = vec![RailKind::Planned; 5];
+        let mut started: Vec<Option<std::time::Instant>> = vec![None; 5];
+        let mut took: Vec<Option<std::time::Duration>> = vec![None; 5];
+        let mut peak: Vec<String> = vec![String::new(); 5];
+        let mut last_finish = began;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+        loop {
+            (wiring.tick)();
+            let rail = w.get_rail();
+            for i in 0..rail.row_count().min(5) {
+                let r = rail.row_data(i).unwrap();
+                if !r.measure.is_empty() {
+                    peak[i] = r.measure.to_string();
+                }
+                if r.kind == kinds[i] {
+                    continue;
+                }
+                let was = std::mem::replace(&mut kinds[i], r.kind);
+                if r.kind == RailKind::Working {
+                    started[i] = Some(std::time::Instant::now());
+                    println!("  {:>7.2?}  {} {} — {}", began.elapsed(), r.verb, r.what, r.sub);
+                } else if matches!(r.kind, RailKind::Done | RailKind::Failed) {
+                    // **A step never drawn `Working` is timed from the previous step's finish, not
+                    // from the press.** Two of the five are like that: `synthesise` runs on the UI
+                    // thread inside `press` itself, and the install can finish in the same 100 ms
+                    // tick the build does — so timing it from `began` credited it with the whole
+                    // run, and it reported 1.54s for work that took a fraction of a tick.
+                    took[i] = Some(started[i].unwrap_or(last_finish).elapsed());
+                    last_finish = std::time::Instant::now();
+                    if was == RailKind::Planned {
+                        println!(
+                            "  {:>7.2?}  {} {} — finished inside one tick, never drawn working",
+                            began.elapsed(),
+                            r.verb,
+                            r.what
+                        );
+                    }
+                }
+            }
+            if !wiring.work.borrow().busy() || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(work::TICK);
+        }
+        (wiring.tick)();
+
+        println!("\n── how long each step took, as the window saw it ──");
+        for i in 0..5 {
+            let r = w.get_rail().row_data(i).unwrap();
+            println!(
+                "  {:<10} {:<22} {:>8}  {}",
+                r.verb,
+                r.what,
+                took[i].map(|d| format!("{d:.2?}")).unwrap_or_else(|| "—".into()),
+                peak[i]
+            );
+        }
+
+        // ── what the Rail ended up holding ──────────────────────────────────────────────────────
+        println!("── the Rail, at the end ──");
+        let rail = w.get_rail();
+        let mut failed = 0;
+        for i in 0..rail.row_count() {
+            let r = rail.row_data(i).unwrap();
+            println!("  {:<9?} {:<10} {:<22} {}", r.kind, r.verb, r.what, r.sub);
+            if r.kind == RailKind::Failed {
+                failed += 1;
+                println!("            ! {}", r.happened);
+            }
+        }
+        println!("\n  announce  {}", w.get_rail_announce());
+        println!("  heading   {}", w.get_work_heading());
+        let shelf = w.get_devices().row_data(0).expect("the device the press made");
+        println!("  shelf     {}", shelf.summary);
+        println!("  state     {}", shelf.state);
+        println!("  cradle    {}", shelf.cradle_label);
+        println!("  ghost     {}", w.get_ghost());
+        println!("  progress  {}", w.get_progress());
+        println!("  total     {:.1?}", began.elapsed());
+
+        // ── and what is on the disk ─────────────────────────────────────────────────────────────
+        let s = settings.borrow();
+        let d = s.devices.first().expect("the device the press made");
+        println!("\n  device    {}", d.name);
+        let img = s
+            .disks
+            .iter()
+            .find(|x| Some(&x.name) == d.disk.as_ref())
+            .map(|x| x.path.clone())
+            .expect("the drive it built");
+        let meta = std::fs::metadata(&img).expect("the drive is on the disk");
+        println!("  drive     {}", img.display());
+        println!("  apparent  {} bytes", meta.len());
+        println!(
+            "  on disk   {} bytes",
+            eapp_loader::settings::on_disk_size(&meta)
+        );
+
+        assert_eq!(failed, 0, "a step failed; see the Rail above");
+        assert!(
+            !img.to_string_lossy().ends_with(".part"),
+            "the drive still carries a partial file's name: {}",
+            img.display()
+        );
+        // §10.2 step 4: the drive is Apple's software, and the flash updater is not armed — a drive
+        // that would boot the updater instead of the OS looks broken later for a reason nobody
+        // recorded.
+        let state = eapp_loader::ipsw::firmware_state(&img).expect("the drive reads back");
+        println!("  firmware  {state:?}");
+        assert!(state.has_os, "the drive has no OS image on it");
+        assert!(!state.aupd_armed, "Apple's flash updater is still armed on the drive");
+    }
+
+    /// **A retry resumes: it does not re-mint, and it does not download 6.5 MB again.**
+    ///
+    /// §10.3. The two failure runs beside this one both fail at the *first* step, so the only thing
+    /// they can show is that nothing was undone. This one fails in the **middle**: the fetch gets
+    /// all the way through — 6.5 MB from Apple, SHA-256 checked — and then the build is blocked, so
+    /// the second press has real finished work to either keep or throw away.
+    ///
+    /// The block is a directory sitting where the drive's `.part` file wants to be. It is deliberate
+    /// that the volume probe does not trip on it: `volume::probe` writes `.ipod-probe-<pid>`, so the
+    /// directory is writable and the run is refused at exactly one step, which is the shape a
+    /// half-finished first run really has.
+    ///
+    /// The proof that the fetch was not repeated is the bundle's **modification time**, which a
+    /// re-download would move.
+    #[test]
+    #[ignore = "reaches Apple's servers; run with --ignored --nocapture"]
+    fn a_retry_after_a_failed_build_does_not_download_again() {
+        let (settings, _held) = a_fresh_installation_in("e2e-resume");
+        let w = a_window();
+        let wiring = wire(&w, settings.clone());
+        let drives = eapp_loader::settings::drives_dir();
+        let cache = eapp_loader::firmware::cache_dir();
+
+        // The block: a directory where the drive's partial file has to be a file.
+        std::fs::create_dir_all(drives.join("my-5.5g.img.part")).expect("the blocker");
+
+        let run = |label: &str| {
+            println!("\n── {label} ──");
+            w.invoke_start_device(0);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+            while wiring.work.borrow().busy() && std::time::Instant::now() < deadline {
+                (wiring.tick)();
+                std::thread::sleep(work::TICK);
+            }
+            (wiring.tick)();
+            let rail = w.get_rail();
+            for i in 0..rail.row_count() {
+                let r = rail.row_data(i).unwrap();
+                println!("  {:<9?} {:<10} {:<22} {}", r.kind, r.verb, r.what, r.sub);
+                if r.kind == RailKind::Failed {
+                    println!("            ! {}", r.happened);
+                }
+            }
+        };
+
+        run("press 1 — the build is blocked");
+        let bundle = cache.join("iPod_25.1.3.ipsw");
+        let fetched = std::fs::metadata(&bundle)
+            .unwrap_or_else(|e| panic!("the fetch did not finish, so this proves nothing: {e}"));
+        let when = fetched.modified().expect("a modification time");
+        println!("\n  fetched   {} bytes at {when:?}", fetched.len());
+        let seed_of = |s: &Settings| -> u64 {
+            s.resources
+                .iter()
+                .find_map(|i| match &i.what {
+                    eapp_loader::settings::Resource::Firmware(
+                        eapp_loader::nor::Source::Synthetic { seed, .. },
+                    ) => Some(*seed),
+                    _ => None,
+                })
+                .expect("a synthesised iPod")
+        };
+        let first_seed = seed_of(&settings.borrow());
+
+        // Unblock, and press again. **The bundle is on disk and verifies**, so a resume must adopt
+        // it rather than start over.
+        std::fs::remove_dir_all(drives.join("my-5.5g.img.part")).expect("unblocking");
+        run("press 2 — unblocked, and it must resume");
+
+        let again = std::fs::metadata(&bundle).expect("the bundle is still there");
+        assert_eq!(
+            again.modified().expect("a modification time"),
+            when,
+            "the retry re-downloaded 6.5 MB that was already on disk and already verified"
+        );
+        assert_eq!(
+            seed_of(&settings.borrow()),
+            first_seed,
+            "the retry minted a second iPod"
+        );
+        assert_eq!(settings.borrow().devices.len(), 1, "the retry made a second device");
+
+        let rail = w.get_rail();
+        let failed = (0..rail.row_count())
+            .filter_map(|i| rail.row_data(i))
+            .filter(|r| r.kind == RailKind::Failed)
+            .count();
+        assert_eq!(failed, 0, "the resumed run still has a failure on it");
+        let d = settings.borrow().devices[0].clone();
+        assert!(d.names_a_disk(), "the resumed run did not finish the drive");
+        println!("\n  resumed, one iPod, one download.");
+    }
+
+    /// **A first run that fails, pressed again, and again — one iPod.**
+    ///
+    /// §10.3 and §19.2's finding, driven through the registered button rather than through the
+    /// queue: *three failed first runs left three iPods with three different FireWire GUIDs.*
+    /// Identity is the one permanent decision in this program — the DRM binds to the 8-byte FireWire
+    /// GUID in `sysinfo_t`, and a synthesised iPod's identity is what makes the same iPod come back
+    /// next launch. Mint once; a retry resumes.
+    ///
+    /// It does **not** inject a failure of its own. Point it at something that will fail — a `curl`
+    /// on `PATH` that cannot reach Apple, or an `IPOD_TEST_DATA` on a volume with no room — and it
+    /// reports what happened. Given neither, it is a first run that succeeds three times, which is
+    /// the same assertion about identity from the other side and is worth having too.
+    #[test]
+    #[ignore = "for driving deliberate failures; run with --ignored --nocapture"]
+    fn a_first_run_pressed_three_times_mints_one_ipod() {
+        let (settings, _held) = a_fresh_installation_in("e2e-three-presses");
+        let w = a_window();
+        let wiring = wire(&w, settings.clone());
+
+        println!("\ndata directory  {}", eapp_loader::settings::data_dir().display());
+        println!("ledger          {}", w.get_ledger_disk());
+
+        let seed = |s: &Settings| -> Option<u64> {
+            s.resources.iter().find_map(|i| match &i.what {
+                eapp_loader::settings::Resource::Firmware(
+                    eapp_loader::nor::Source::Synthetic { seed, .. },
+                ) => Some(*seed),
+                _ => None,
+            })
+        };
+        let mut seeds: Vec<u64> = Vec::new();
+        let mut done_after: Vec<usize> = Vec::new();
+
+        for attempt in 1..=3 {
+            println!("\n── press {attempt} ──");
+            w.invoke_start_device(0);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+            while wiring.work.borrow().busy() && std::time::Instant::now() < deadline {
+                (wiring.tick)();
+                std::thread::sleep(work::TICK);
+            }
+            (wiring.tick)();
+
+            let rail = w.get_rail();
+            let mut done = 0usize;
+            for i in 0..rail.row_count() {
+                let r = rail.row_data(i).unwrap();
+                if r.kind == RailKind::Done {
+                    done += 1;
+                }
+                let mark = match r.kind {
+                    RailKind::Done => "done   ",
+                    RailKind::Failed => "FAILED ",
+                    RailKind::Planned => "planned",
+                    RailKind::Working => "working",
+                    _ => "       ",
+                };
+                println!("  {mark} {:<10} {:<22} {}", r.verb, r.what, r.sub);
+                if r.kind == RailKind::Failed {
+                    println!("          ! {}", r.happened);
+                    if !r.mono.is_empty() {
+                        println!("          $ {}", r.mono);
+                    }
+                    // The two next-step slots the markup draws, and whether each is live. §16.5:
+                    // a control this build cannot take is drawn DISABLED wearing its reason.
+                    for (label, on, why, escape) in [
+                        (&r.next_a_label, r.next_a_enabled, &r.next_a_reason, &r.next_a_escape),
+                        (&r.next_b_label, r.next_b_enabled, &r.next_b_reason, &r.next_b_escape),
+                    ] {
+                        if label.is_empty() {
+                            continue;
+                        }
+                        println!(
+                            "          > {label}{}{}",
+                            if on { String::new() } else { format!("  (disabled: {why})") },
+                            if escape.is_empty() { String::new() } else { format!("  [{escape}]") }
+                        );
+                    }
+                }
+            }
+            println!("  shelf   {}", w.get_rail_line());
+            done_after.push(done);
+            let s = settings.borrow();
+            println!(
+                "  devices {}  disks {}  resources {}",
+                s.devices.len(),
+                s.disks.len(),
+                s.resources.len()
+            );
+            seeds.push(seed(&s).expect("the press minted an iPod"));
+        }
+
+        println!("\n  seeds        {seeds:?}");
+        println!("  steps done   {done_after:?}");
+        let distinct: std::collections::BTreeSet<u64> = seeds.iter().copied().collect();
+        assert_eq!(
+            distinct.len(),
+            1,
+            "three presses left {} iPods with {} FireWire GUIDs: {seeds:x?}",
+            distinct.len(),
+            distinct.len()
+        );
+        assert_ne!(seeds[0], 0, "the minted seed is the never-chosen default");
+        assert_eq!(settings.borrow().devices.len(), 1, "three presses left more than one device");
+
+        // **A retry resumes; it does not restart.** Whatever a press got through stays through, so
+        // the count can only go up. It going down would mean a later press undid finished work —
+        // which for the fetch means re-downloading 6.5 MB that already verified on disk.
+        for pair in done_after.windows(2) {
+            assert!(
+                pair[1] >= pair[0],
+                "a press undid finished work: {done_after:?} — a retry is meant to resume from the \
+                 first unticked step, not start over"
+            );
+        }
+    }
+
+    /// **Every next step this build draws LIVE is wired to something.**
+    ///
+    /// §16.5's rule has two halves and only the first was ever checked. A control this build cannot
+    /// take is drawn disabled with its reason — `a_disabled_row_states_its_reason_to_an_assistive_
+    /// technology` and `rail.rs`'s own sweeps hold that half. The other half is that a control this
+    /// build draws **live** does something when it is pressed, and it was false twice:
+    /// `Next::CancelWrite` and `Next::Fix` both returned `true` from `available` unconditionally —
+    /// this program talking to itself — so both passed `take_next_step`'s guard and landed in the
+    /// empty catch-all under it. `CancelWrite` is now wired to `cancel_write`; `Fix` is now gated on
+    /// `caps.composer` and drawn disabled, and its stopgap arm is deleted.
+    ///
+    /// This is the closed sweep of that: for every failure class, every next step this build's
+    /// `caps()` says is pressable has to be a variant `take_next_step` acts on.
+    #[test]
+    fn every_next_step_this_build_offers_is_wired_to_something() {
+        use eapp_loader::compose::Fix;
+        use rail::{Class, Tool};
+
+        // The ten, by value. `Class::ALL` is the names; an eleventh variant makes the length
+        // assertion below fail until somebody sweeps it too.
+        let classes = [
+            Class::Network,
+            Class::NotServed,
+            Class::Verification,
+            Class::Incompatible(Fix::BuildFromIpsw),
+            Class::SpacePreflight,
+            Class::SpaceMidWrite,
+            Class::Volume,
+            Class::Permission,
+            Class::ToolMissing(Tool::Curl),
+            Class::Missing,
+        ];
+        assert_eq!(
+            classes.len(),
+            Class::ALL.len(),
+            "a failure class was added and this sweep does not know about it"
+        );
+
+        // **Pressed, not enumerated.** A list of variants `take_next_step` is supposed to act on is
+        // a second copy of the `match`, and it would agree with an empty arm. This presses each
+        // live control through the same function the markup's `rail-next(id, n)` reaches and
+        // requires something to have changed — the Rail, or where you are.
+        let mut live: Vec<String> = Vec::new();
+        for c in &classes {
+            // Both sides of the retry counter: `Verification` stops offering `Retry` after the
+            // first, so a sweep at 0 alone would miss whatever the second press offers.
+            for retries in [0u8, 1, 2] {
+                let steps = c.next(retries, caps());
+                for (which, step) in steps.iter().enumerate() {
+                    if !step.available(caps()) {
+                        // The other half of §16.5, checked here too: disabled and silent is the
+                        // shape §19.1 indicts.
+                        assert!(
+                            !step.reason().is_empty(),
+                            "{:?} offers `{}` disabled with nothing said about why",
+                            c,
+                            step.label()
+                        );
+                        continue;
+                    }
+                    live.push(step.label());
+
+                    let rail = Rc::new(RefCell::new(rail::Rail::new()));
+                    let stack = Rc::new(RefCell::new(nav::Stack::new()));
+                    let id = rail.borrow_mut().failed(
+                        "fetch",
+                        "Apple's firmware",
+                        rail::Failure::new(c.clone(), "a download"),
+                    );
+                    // `failed` files at retries 0; wind it up to the count these steps came from,
+                    // or `Verification`'s second press is tested against its first press's entry.
+                    for _ in 0..retries {
+                        rail.borrow_mut().retry(id);
+                        rail.borrow_mut().fail(id, rail::Failure::new(c.clone(), "a download"));
+                    }
+                    let before = (
+                        rail.borrow().entries().to_vec(),
+                        stack.borrow().page(),
+                        stack.borrow().depth(),
+                    );
+
+                    take_next_step(&rail, &stack, id, which as i32, caps());
+
+                    let after = (
+                        rail.borrow().entries().to_vec(),
+                        stack.borrow().page(),
+                        stack.borrow().depth(),
+                    );
+                    assert!(
+                        before != after,
+                        "{:?} draws `{}` live and pressing it changed nothing — neither the Rail \
+                         nor where you are. A visible control that does nothing is the defect \
+                         docs/GUI.md indicts twice",
+                        c,
+                        step.label()
+                    );
+                }
+            }
+        }
+        // **The control, and it names what it expects rather than counting.** A sweep that found no
+        // live control at all would pass vacuously, and a bare `live > 3` would have been an
+        // instrument that lies in the other direction: `Retry` is now gated on `caps.download`, so
+        // on a computer with no `curl` the count drops to three and the control would go red about
+        // the machine rather than about the program.
+        //
+        // `Cancel` needs no capability — the file is ours, on this computer — so it is live on every
+        // machine, and `Retry` is live exactly when `curl` is. Both are checked; neither can pass
+        // vacuously and neither can fail spuriously.
+        assert!(
+            live.iter().any(|l| l == "Cancel"),
+            "the sweep found no live `Cancel`, so it is not reaching SpaceMidWrite's controls at \
+             all: {live:?}"
+        );
+        assert_eq!(
+            live.iter().any(|l| l == "Retry"),
+            caps().download,
+            "`Retry` is live exactly when this computer can download, and it is not: {live:?}"
+        );
+        // `Fix` was the second live-but-inert control. It is now gated on `caps.composer`, which is
+        // false in this build, so it must be nowhere in this list.
+        assert!(
+            !live.iter().any(|l| *l == compose::Fix::BuildFromIpsw.label()),
+            "`Fix` is drawn live and there is no Composer to change a recipe: {live:?}"
+        );
+    }
+
+    /// **Cancelling deletes the partial file, and both routes to it are one function.**
+    ///
+    /// §12.7. The entry's drawn `Cancel` and `Class::SpaceMidWrite`'s `Cancel` next step are the
+    /// same request; until now only the first did anything.
+    #[test]
+    fn cancelling_deletes_the_partial_file_and_says_so() {
+        let dir = temp_dir("cancel");
+        let part = dir.join("iPod_25.1.3.ipsw.part");
+        std::fs::write(&part, b"half a download").unwrap();
+
+        let rail = Rc::new(RefCell::new(rail::Rail::new()));
+        let id = rail.borrow_mut().note("fetching Apple's firmware");
+        rail.borrow_mut().writing(id, part.clone());
+        rail.borrow_mut()
+            .progress(id, rail::Progress::Bytes { done: 15, total: 6_533_633 });
+
+        // §12.7: the cost is stated BEFORE the control is pressed, which is what makes pressing it
+        // the consent `AGENTS.md` §3 requires.
+        let cost = rail.borrow().find(id).expect("the entry").cancel_cost();
+        assert!(
+            cost.contains("iPod_25.1.3.ipsw.part") && cost.contains("deletes"),
+            "the entry does not say what cancelling costs: {cost:?}"
+        );
+
+        cancel_write(&rail, id);
+        assert!(!part.exists(), "the partial file survived a cancel");
+        let r = rail.borrow();
+        assert_eq!(
+            r.find(id).map(|e| e.kind),
+            Some(rail::Kind::Cancelled),
+            "the entry did not become a cancellation"
+        );
+        assert!(
+            r.entries().iter().any(|e| e.what.contains("deleted")),
+            "nothing on the Rail says the file went"
+        );
+        drop(r);
+
+        // **It deletes nothing it was not given.** An id with no partial file behind it is a
+        // no-op, not a guess at what to remove.
+        let other = rail.borrow_mut().note("nothing is being written");
+        cancel_write(&rail, other);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **Every cradle label this file TYPES fits the row it is drawn in.**
+    ///
+    /// §7.3's label is `width: frame.width` with `overflow: elide` (`ui/bench.slint`), and
+    /// [`geometry::CRADLE_LABEL_MAX_CHARS`] is how many characters that row holds at the smallest
+    /// window that draws the device at all. Both shipped sentences overran it — 63 and 58 against
+    /// 48 — so the one control this whole program is built around was captioned with a line that
+    /// elided, unmeasured, everywhere.
+    ///
+    /// **Only the typed ones.** A refusal is `gone_sentence`, which carries a path on purpose
+    /// (§7.3), and holding a path to a character budget would mean truncating the answer to *where
+    /// did my drive go*. Those elide by design, first words first.
+    #[test]
+    fn every_typed_cradle_label_fits_its_own_row() {
+        let budget = geometry::CRADLE_LABEL_MAX_CHARS;
+        let made = Device {
+            disk: Some("mine".into()),
+            disk_path: Some(std::path::PathBuf::from("/tmp/mine.img")),
+            ..Device::default()
+        };
+        let half_made = Device { name: compose::FIRST_RUN_DEVICE.into(), ..Device::default() };
+        let typed = [
+            ("the startable device", cradle_label(&made, &[])),
+            // §10.3's half-made one. `FIRST_RUN_DEVICE` is the name a first run gives, so this is
+            // the longest label this program composes without a person having renamed anything.
+            ("the half-made device", cradle_label(&half_made, &[])),
+            ("the first-run bench", empty_device(true, caps(), a_cost()).cradle_label.to_string()),
+            ("the empty bench", empty_device(false, caps(), no_cost()).cradle_label.to_string()),
+        ];
+        // …and the half-made one says *finish*, not *start*, or the label promises what the press
+        // does not do.
+        assert!(
+            typed[1].1.contains("finish making") && typed[1].1.contains(compose::FIRST_RUN_DEVICE),
+            "a first run that stopped part-way is captioned with a promise to start: {:?}",
+            typed[1].1
+        );
+        for (what, line) in &typed {
+            let n = line.chars().count();
+            assert!(
+                n <= budget,
+                "{what}'s cradle label is {n} characters against a {budget}-character row, so it \
+                 elides on every window this program allows: {line:?}"
+            );
+        }
+        // **The control.** A budget that nothing can overrun is not a budget, and the sentence that
+        // shipped is the proof that this one can be — 63 characters, and it was on screen.
+        const SHIPPED: &str = "Press the centre button — running is not wired to the window yet";
+        assert!(
+            SHIPPED.chars().count() > budget,
+            "the line that shipped fits after all, so this check has never had anything to catch"
+        );
+        // And a label that fits is still a sentence rather than a word.
+        for (what, line) in &typed {
+            assert!(line.chars().count() > 12, "{what}'s label says nothing: {line:?}");
+        }
     }
 
     /// §7.5's row-2 trailing slot names the display scale only where it differs from `k`.
@@ -2915,6 +5789,11 @@ pub(crate) mod tests {
         let _: fn(&MainWindow, DrawerPage) = MainWindow::set_drawer_page;
         let _: fn(&MainWindow, i32) = MainWindow::set_rail_failures;
         let _: fn(&MainWindow, bool) = MainWindow::set_ledger_warn;
+        let _: fn(&MainWindow, bool) = MainWindow::set_ghost;
+        let _: fn(&MainWindow, f32) = MainWindow::set_progress;
+        // §9.2's cradle line. `verb-width` is deliberately absent: it is an `out property`, so
+        // there is no setter, and that asymmetry is the point of it.
+        let _: fn(&MainWindow, slint::SharedString) = MainWindow::set_working_label;
     }
 
     /// **The non-circular half of §20 item 11.**

@@ -69,6 +69,130 @@ one.
 is reachable — on a 1280 x 800 display, which gives 735 usable logical px against the 809.8 the iPod
 at 1:1 needs, at every scale factor. That is a real open defect and this was never it.
 
+## ~~The window offered no way to make an iPod once you had opened it and closed it~~ — FIXED 2026-08-21
+
+**The state is reached by opening the program, looking at it, and closing it.** `Settings::welcomed`
+is written when the bench is wired, before any press, so the second launch on an empty library was
+already "not your first minute" — and that bench had no route to an iPod at all. The plan was not
+filed, the drawer stayed shut, the cradle was drawn `fg-dim` and unpressable, and pressing it
+answered *there are no devices in the library yet, so there is nothing to start*, while the shelf
+row above went on saying *the centre button makes one*. The one promise the README is built on was
+gone permanently, with no error and no way past.
+
+GUI.md §9.1 and §10.3 both describe that bench correctly — *the ghost iPod, `No devices yet`, cradle
+label `press ● to make an iPod`* and *both routes offered equally*. The flag was meant to stop the
+**welcome copy** returning, which is the bug §10.3 exists about; it disarmed the button instead.
+
+**The fix** is that `Offer` has a fourth state, `Again`, and three of its four carry the plan;
+`empty_device`'s `startable` reads `caps.download` alone rather than `first && caps.download`; and
+the press is routed **per press, by the row that was pressed**. That last part fixed a second defect
+of the same family in the other direction: `has_plan` was one boolean computed at startup, so with a
+half-made first-run device sitting beside one somebody had composed by hand, pressing the composed
+device **resumed the first run** instead of starting it.
+
+Two tests: `the_wizard_does_not_come_back` (extended — it asserted the plan was *not* filed on the
+second launch, which is how the gap was locked in) and
+`a_bench_that_is_empty_a_second_time_still_makes_an_ipod`, which drives the registered handler.
+
+## ~~A finished drive could be built and never recorded~~ — FIXED 2026-08-21
+
+`Queue::busy()` reads `JoinHandle::is_finished`, so it goes false the instant the worker thread
+exits — and `pump_once` stops the 100 ms timer as soon as it does. A report sent in the window
+between the drain and that check was therefore stranded in the channel for ever, because nothing
+would ever drain again. For the install's `Done` that is an 8 GiB-apparent drive sitting on disk
+with its real name, which the library never learns about: `settings.disks` empty, the Rail stuck on
+`Working`, and the next press building `my-5.5g (2).img` beside the orphan.
+
+The close path lost the same report a second way: `Queue::stop` drained the channel looking for one
+`Cancelled` and threw everything else away, so a window closed between the install's rename and the
+next tick wrote a settings file that did not mention the drive.
+
+**Fixed** by draining once more after observing `!busy()`, and by having `stop` apply what it drained
+through the same path a tick uses. The interleaving itself is a few microseconds and no test can
+force it; `a_run_that_finished_before_the_first_pump_is_still_recorded` and
+`stopping_on_the_way_out_records_a_drive_that_was_finished` cover the consequence, offline, and both
+were proved red.
+
+## ~~A resumed first run never ticked the steps it skipped, and never said it had finished~~ — FIXED 2026-08-21
+
+The §10.3 case: a first run fails at the build, and is relaunched. The bundle is in the cache and
+verifies, so the run resumes at the build — and `Queue::press`'s resume branch updated sub-lines and
+nothing else. `fetch Apple's firmware` sat `Planned` for the rest of the run, and `self.done` kept a
+hole at index 1, so `first_unticked()` answered 1 for ever. §12.2's handoff note is gated on it, so
+the drive finished, the timer stopped, and the window said nothing at all.
+
+Only reachable across processes: the same-process retry was green because `pump` had already ticked
+those steps. `a_resumed_run_ticks_what_it_skipped_and_reports_the_handoff` drives it offline.
+
+## ~~An interrupted download left a partial file nobody could see or delete~~ — FIXED 2026-08-21
+
+`fetch_watched` removes its `.part` when the **watcher** stopped the transfer and on no other path,
+so curl 7 / 18 / 28 / 56 — a refused connection, an interrupted transfer, the common ones — left a
+partial in the firmware cache. Nothing showed it: `Rail::fail` clears `cancellable`, so no `Cancel`
+was drawn, and neither `Retry` nor `Provide` routes to the delete, so the path sitting in
+`Entry::temp` was unreachable. Nothing here resumes a download, so those bytes were worth nothing.
+
+`a_transfer_that_ends_early_leaves_no_partial_file` drives it against a local one-shot listener that
+promises the release's length, sends 64 KiB and hangs up — no packet leaves the machine.
+
+## ~~`build_volume`'s pre-write refusal was 32x under the real FAT32 floor~~ — FIXED 2026-08-21
+
+`refuse` checked `sectors <= DATA_LBA + 65_536`, which is one **cluster count** rather than one
+cluster count times 32 sectors each. So a 65 537-sector drive passed the check that exists to catch
+exactly that, the file was created and `set_len` to size, and `fat32` then refused with *"2046
+clusters, which is FAT16 territory"*. A pre-write refusal that lets the write start is not one.
+`MIN_FAT32_SECTORS` is derived from `FAT32_MIN_CLUSTERS`, `FAT32_SPC` and the FAT itself now, and
+the refusal says which of those it applied.
+
+## ~~A cancel that arrived a moment too late was accepted and then vanished~~ — FIXED 2026-08-21
+
+The worker's last cancellation boundary is before the install's rename. `Queue::cancel` answers
+`true` for as long as the thread is alive, which is a few microseconds longer — so a request could
+be accepted, the run finish correctly, and nothing ever say what had happened to it. It now reports
+`Report::TooLate` and the Rail carries *The run finished before the cancel could take effect.
+Nothing was undone.*
+
+## ~~A worker that could not be started said nothing at all~~ — FIXED 2026-08-21
+
+`Worker::spawn` ended in `.ok()`, so a failed `thread::spawn` became `handle: None` — which reads as
+*already finished*. `press` returned `Press::Running`, the timer started, the first tick found
+nothing to do and stopped it, and the window sat on one ticked step and four `Planned` ones with no
+failure anywhere, nothing on the Rail and nothing on stderr. Out of file descriptors or out of
+thread stacks is the one resource failure that is genuinely plausible here, and it was the one that
+said nothing. `spawn` is fallible now and the error becomes a `Class::Permission` refusal; the
+compiler is the guard, because a `Result` cannot be dropped silently.
+
+## ~~A test downloaded 6.5 MB from Apple and wrote an 8 GiB file, and asserted nothing about either~~ — FIXED 2026-08-21
+
+`the_registered_centre_button_starts_the_first_run_on_an_empty_library` was not `#[ignore]`d and
+drove the real registered handler three times. Each press reached `volume::probe`'s
+`set_len(8_589_934_592)` on the developer's own disk and spawned `curl` at Apple; the download
+stopped only because the queue was dropped at the end of the test, up to one 100 ms tick later. It
+asserts device count and seed identity, neither of which needs a worker. The drives directory is a
+**file** in that test now, so the probe refuses and the press stops after the mint.
+
+The same run left one `ipod-gui-data-<pid>/` in the system temp directory per test process, for
+ever — 93 of them when somebody counted. `DataDirGuard` takes its directory with it now, and only
+the outermost guard does, because the lock is re-entrant and a first cut of this deleted the tree
+halfway through the test that had set it up.
+
+## The iPod the first run makes says 30 GB and its drive is 8 GiB — 2026-08-21
+
+`work::plan`'s first step reads *5.5G, 30 GB, black, model A446* — the model table's own figures for
+that part number — and `Plan::of` then builds a drive of `ipsw::DEFAULT_SECTORS`, which is 8 GiB.
+RetailOS learns its capacity from ATA `IDENTIFY`, so its About screen will read 8 GB on a device the
+shelf, the plan and Parts all call 30 GB. Nothing is corrupt and the drive boots; the two numbers
+simply disagree, and somebody will notice.
+
+**Measured**, so the cost of each answer is on the table rather than assumed: an 8 GiB drive costs
+20 987 904 bytes on APFS and a 30 GB one costs 31 440 896 — 21 MB against 31 MB. Cost is not the
+objection.
+
+GUI.md §10.1 says 8 GiB three times, so this is an **operator decision** rather than a defect with
+an obvious fix: either the drive follows the model (and §10.1's three figures change), or the model
+follows the drive (and the synthesised iPod stops being an A446). The plan and the worker take
+`sectors` from one call, so whichever way it goes they cannot end up disagreeing with each other.
+
 ## ~~A resumed machine was dead, and looked like one that ignored input~~ — FIXED 2026-08-20
 
 Reported as *"the booted RetailOS is not taking anything when I click on the hold switch or use the

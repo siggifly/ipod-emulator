@@ -71,7 +71,10 @@ export component Preview inherits Window {
             Text {
                 x: Geometry.page-margin;
                 y: Geometry.page-margin;
-                text: "the bench is Phase 5. This is the drawer and the Rail.";
+                // The bench is composed in `ui/window.slint` and `cargo build` compiles it, so it
+                // is not stood in for here. What this root exists for is the drawer, which nothing
+                // else opens on its own.
+                text: "the bench is in window.slint. This root is the drawer and the Rail.";
                 font-size: Metric.body-size;
                 color: Ink.fg-dim;
             }
@@ -102,7 +105,14 @@ export component Preview inherits Window {
             work-heading: "This is what pressing the centre button does";
             work-empty: "Nothing is happening. Fetches, builds and installs report here.";
             ledger-download: "6.5 MB to download";
-            ledger-disk: "about 240 MB on disk";
+            // **28, not 240**, and 240 is what §10.1 said until it was measured. An 8 GiB image
+            // written by `build_disk` is sparse: an MBR, a 13 895 680-byte firmware partition and
+            // a FAT32 volume's own structures. Probed on this filesystem — `truncate` to
+            // 8 589 934 592, write those three regions, read `st_blocks` — it costs **18 120 704
+            // bytes on disk**, against an apparent 8.6 GB. So the whole first run is the 6 533 633-
+            // byte `.ipsw` plus about 21 MB of drive: **28 MB**, and the figure this fixture used
+            // to carry was wrong by an order of magnitude in the direction of alarm.
+            ledger-disk: "about 28 MB on disk";
             ledger-note: "Nothing has been downloaded yet.";
 
             rail: [
@@ -127,7 +137,13 @@ export component Preview inherits Window {
                     kind: RailKind.working,
                     verb: "fetch",
                     what: "Apple's firmware",
-                    sub: "iPod_25.1.3.ipsw - 6 500 352 B - from Apple, SHA-256 checked",
+                    // 6 533 633, read off `firmware.rs`'s own catalogue entry for
+                    // `iPod_25.1.3.ipsw` — which is the number `verify()` refuses against, and
+                    // therefore the only one this line may carry. §10.1's `6 500 352` matches no
+                    // release in `CATALOGUE`. No thousands separators, because the producer is
+                    // `format!("{} B", rel.bytes)` and a fixture that reads better than the thing
+                    // it stands in for is a fixture nobody can trust.
+                    sub: "iPod_25.1.3.ipsw - 6533633 B - from Apple, SHA-256 checked",
                     measure: "4.1 MB of 6.5 MB",
                     fraction: 0.63,
                     cancellable: true,

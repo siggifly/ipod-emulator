@@ -8,8 +8,13 @@
 //
 // §16.11: *a pinned footer is outside the Flickable, so `Create` is always in the same place. A
 // primary action that scrolls away is a primary action you hunt for.* The ledger is the number
-// principle 7 exists for — `6.5 MB to download - about 240 MB on disk` — and it has to be on screen
+// principle 7 exists for — `6.5 MB to download - about 28 MB on disk` — and it has to be on screen
 // at the moment you press, not scrolled past. One number per axis, from one source.
+//
+// **28, and it was 240 here until it was measured.** An 8 GiB drive image is sparse: an MBR, a
+// 13 895 680-byte firmware partition and a FAT32 volume's own structures. Probed with `truncate` to
+// 8 589 934 592 and those three regions written, `st_blocks` reports 18 120 704 bytes on disk. The
+// design's own figure was wrong by an order of magnitude, in the direction of alarm.
 
 import { Ink, Metric } from "tokens.slint";
 import { Geometry } from "@geometry";
@@ -119,11 +124,13 @@ export component WorkPage inherits Rectangle {
         // 3 x `LINE_LABEL` plus 12 above and 12 below is `WORK_FOOTER_H`, and
         // `the_drawer_fits_its_own_furniture_at_the_window_minimum` is what keeps that true.
         //
-        // **In this phase `ledger-disk` carries the estimate and no free-space clause.** Nothing in
-        // this tree can query free bytes — `grep -rn "statvfs|GetDiskFreeSpace|free_space"
-        // --include='*.rs' tools/` returns one unrelated hit — so `312 GB free on ...` would be
-        // invented, and `ledger-warn` stays false. **Retirement condition**: when
-        // `eapp_loader::volume` exists, the clause and the warn colour arrive together.
+        // **`ledger-disk` carries the estimate AND a free-space clause, and `ledger-warn` is
+        // live.** It used to carry neither: nothing in this tree could query free bytes, so
+        // `312 GB free on …` would have been invented. `volume::space` measures it now, and
+        // answers `None` where nothing could — a permission, a missing tool or an unparseable field
+        // is *not measured*, never *none free*, so the clause is simply absent rather than zero.
+        // The estimate is the **materialised** cost and never a sparse file's apparent length: that
+        // confusion is what refused somebody with 4.1 GB free on a machine with room to spare.
         Rectangle {
             height: Geometry.work-footer-h;
             background: Ink.bg-raised;

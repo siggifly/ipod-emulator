@@ -510,73 +510,328 @@ impl Recipe {
     /// Everything that has to be fetched, built or installed, in order.
     ///
     /// **Shown before it happens and again while it happens.** One list, rendered twice: as "this
-    /// is what will be downloaded" on the way in, and as a checklist with a spinner on the way
-    /// through. A plan a person cannot see before agreeing to it is a download they did not agree
-    /// to.
-    pub fn steps(&self) -> Vec<Step> {
+    /// is what will be downloaded" on the way in, and as a checklist on the way through. A plan a
+    /// person cannot see before agreeing to it is a download they did not agree to.
+    ///
+    /// `holes` decides the drive's sub-line and its disk cost, and it is **measured** by
+    /// [`crate::volume::probe`] rather than assumed. The plan drawn before a press always passes
+    /// [`Holes::Sparse`]: the probe writes an 8 GiB file to find out, and nothing may be written
+    /// before a person has agreed to the plan. If the probe then answers [`Holes::Full`], the
+    /// press refuses against the apparent size and the refusal carries the real number; the plan
+    /// on screen is not re-filed underneath somebody.
+    ///
+    /// **No `Synthesise` and no `Start`.** A [`Recipe`] carries no boot ROM, and a boot is not
+    /// something fetched, built or installed. First run book-ends this list with both.
+    pub fn steps(&self, holes: Holes) -> Vec<Step> {
         let mut v = Vec::new();
         match &self.start {
             Start::FromIpsw(name) => {
-                v.push(Step::Fetch(format!(
-                    "Apple's firmware{}",
-                    if name.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" — {name}")
-                    }
-                )));
-                v.push(Step::Build("a drive, 8 GB sparse".into()));
+                let rel = crate::firmware::by_file(name);
+                let bytes = rel.map_or(0, |r| r.bytes);
+                v.push(Step {
+                    kind: Verb::Fetch,
+                    what: "Apple's firmware".into(),
+                    // **[`crate::group`] and not `si`, and the two are one line apart on purpose.**
+                    // This is the number `firmware::verify` refuses against, so it has to be exact
+                    // — but `6533633` is a seven-digit run a reader has to count, and rendering it
+                    // through `si` would put `6.5 MB` here and in the ledger and leave the exact
+                    // figure nowhere on screen.
+                    sub: match rel {
+                        Some(r) if r.is_verifiable() && r.bytes != 0 => format!(
+                            "{name} — {} B — from Apple, SHA-256 checked",
+                            crate::group(r.bytes)
+                        ),
+                        Some(r) if r.bytes != 0 => format!(
+                            "{name} — {} B — from Apple, size checked only",
+                            crate::group(r.bytes)
+                        ),
+                        _ if name.is_empty() => String::new(),
+                        _ => format!("{name} — size not on record"),
+                    },
+                    cost: Cost {
+                        down: bytes,
+                        disk: bytes,
+                        apparent: None,
+                    },
+                });
+                v.push(self.drive_step(holes));
+                v.push(Step {
+                    kind: Verb::Install,
+                    what: "Apple's software".into(),
+                    sub: "from the bundle above".into(),
+                    // **The whole materialised cost sits on the build**, not split between the two.
+                    // An analytic split — the container, then Apple's 13.9 MB — sums to 13.9 MB
+                    // against a measured 21 MB, because APFS allocates beyond the written extents.
+                    // A ledger that disagrees with the disk is worse than a coarse one.
+                    cost: Cost::NONE,
+                });
             }
-            Start::FromImage { path, .. } => v.push(Step::Copy(path.clone())),
-            Start::FromDisk { name, .. } => v.push(Step::Copy(format!("{name}, from the library"))),
+            Start::FromImage { path, .. } => v.push(Step {
+                kind: Verb::Copy,
+                what: path.clone(),
+                sub: String::new(),
+                cost: Cost {
+                    down: 0,
+                    disk: DRIVE_ON_DISK,
+                    apparent: Some(crate::ipsw::DEFAULT_SECTORS * 512),
+                },
+            }),
+            Start::FromDisk { name, .. } => v.push(Step {
+                kind: Verb::Copy,
+                what: format!("{name}, from the library"),
+                sub: String::new(),
+                cost: Cost {
+                    down: 0,
+                    disk: DRIVE_ON_DISK,
+                    apparent: Some(crate::ipsw::DEFAULT_SECTORS * 512),
+                },
+            }),
         }
         if self.loader == Loader::IPodLoader2 {
-            v.push(Step::Install(
-                "ipodloader2, into the firmware partition".into(),
-            ));
+            v.push(Step {
+                kind: Verb::Install,
+                what: "ipodloader2, into the firmware partition".into(),
+                sub: String::new(),
+                cost: Cost::NONE,
+            });
         }
         if self.oses.contains(&Os::Rockbox) {
-            v.push(Step::Fetch("Rockbox 4.0".into()));
-            v.push(Step::Install(if self.loader == Loader::Rockbox {
-                "Rockbox and its bootloader".into()
-            } else {
-                "Rockbox, onto the volume".into()
-            }));
+            // Read from the catalogue, never typed: the fetcher refuses against these same numbers.
+            let bytes: u64 = crate::rockbox::FULL_INSTALL.iter().map(|p| p.bytes).sum();
+            v.push(Step {
+                kind: Verb::Fetch,
+                what: "Rockbox 4.0".into(),
+                sub: format!("{} B — from the Rockbox release server", bytes),
+                cost: Cost {
+                    down: bytes,
+                    disk: bytes,
+                    apparent: None,
+                },
+            });
+            v.push(Step {
+                kind: Verb::Install,
+                what: if self.loader == Loader::Rockbox {
+                    "Rockbox and its bootloader".into()
+                } else {
+                    "Rockbox, onto the volume".into()
+                },
+                sub: String::new(),
+                cost: Cost::NONE,
+            });
         }
         if self.oses.contains(&Os::IPodLinux) {
-            v.push(Step::Fetch("ZeroSlackr".into()));
-            v.push(Step::Install(
-                "iPodLinux — five directories onto the volume".into(),
-            ));
+            let bytes = crate::ipodlinux::CATALOGUE[0].bytes + crate::ipodlinux::LOADER.bytes;
+            v.push(Step {
+                kind: Verb::Fetch,
+                what: "ZeroSlackr".into(),
+                sub: format!("{} B — from SourceForge", bytes),
+                cost: Cost {
+                    down: bytes,
+                    disk: bytes,
+                    apparent: None,
+                },
+            });
+            v.push(Step {
+                kind: Verb::Install,
+                what: "iPodLinux — five directories onto the volume".into(),
+                sub: String::new(),
+                cost: Cost::NONE,
+            });
         }
         v
+    }
+
+    /// The one row that is about the drive itself, and **the only place 8 GiB is ever quoted**.
+    fn drive_step(&self, holes: Holes) -> Step {
+        let apparent = crate::ipsw::DEFAULT_SECTORS * 512;
+        Step {
+            kind: Verb::Build,
+            what: "a drive".into(),
+            sub: match holes {
+                Holes::Sparse => format!(
+                    "8 GiB volume, about {} on disk — the file is sparse",
+                    crate::si(DRIVE_ON_DISK)
+                ),
+                Holes::Full => format!(
+                    "8 GiB volume, {} on disk — this volume has no sparse files",
+                    crate::si(apparent)
+                ),
+            },
+            cost: Cost {
+                down: 0,
+                disk: match holes {
+                    Holes::Sparse => DRIVE_ON_DISK,
+                    Holes::Full => apparent,
+                },
+                apparent: Some(apparent),
+            },
+        }
+    }
+
+    /// The plan's two totals. **The only place either number is produced.**
+    ///
+    /// Not cached: a cache is a second source of the number, and this is four additions.
+    pub fn cost(&self, holes: Holes) -> Cost {
+        self.steps(holes)
+            .iter()
+            .fold(Cost::NONE, |a, s| a.plus(s.cost))
+    }
+}
+
+/// The six things a plan can ask for.
+///
+/// `Synthesise` and `Start` are never produced by [`Recipe::steps`] — a recipe is about the drive —
+/// but they are lines of the same list when first run book-ends it, and they are drawn by the same
+/// row with the same verb column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verb {
+    Synthesise,
+    Fetch,
+    Build,
+    Copy,
+    Install,
+    Start,
+}
+
+impl Verb {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Verb::Synthesise => "synthesise",
+            Verb::Fetch => "fetch",
+            Verb::Build => "build",
+            Verb::Copy => "copy",
+            Verb::Install => "install",
+            Verb::Start => "start",
+        }
+    }
+
+    /// Every verb, in declaration order. The length is written into the type, so a seventh stops
+    /// the crate compiling until somebody has named it.
+    pub const ALL: [Verb; 6] = [
+        Verb::Synthesise,
+        Verb::Fetch,
+        Verb::Build,
+        Verb::Copy,
+        Verb::Install,
+        Verb::Start,
+    ];
+}
+
+/// What one step costs, on two axes and never more.
+///
+/// **`disk` is the MATERIALISED cost and never a sparse file's apparent length.** That confusion is
+/// what refused somebody with 4.1 GB free on a machine with sixteen times the room the build needs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Cost {
+    /// Bytes off the network.
+    pub down: u64,
+    /// Bytes this step actually occupies once it is finished.
+    pub disk: u64,
+    /// The apparent length of the file this step creates, where that is not `disk` — `Some` on the
+    /// drive and `None` everywhere else, because 8 GiB is a fact about the drive and not a bill.
+    pub apparent: Option<u64>,
+}
+
+impl Cost {
+    pub const NONE: Cost = Cost {
+        down: 0,
+        disk: 0,
+        apparent: None,
+    };
+
+    /// Saturating on both axes. `apparent` takes the **larger** of the two rather than summing:
+    /// two sparse files on one volume do not stack an apparent bill.
+    pub fn plus(self, o: Cost) -> Cost {
+        Cost {
+            down: self.down.saturating_add(o.down),
+            disk: self.disk.saturating_add(o.disk),
+            apparent: match (self.apparent, o.apparent) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (a, b) => a.or(b),
+            },
+        }
     }
 }
 
 /// One line of the plan.
+///
+/// **A struct, not an enum.** A line carries its subject, its sub-line and its two numbers, and
+/// four `String` variants could carry only the first — which is why `sub` was drawn empty for a
+/// whole phase and why three different sizes for one operation reached one screen.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Step {
-    Fetch(String),
-    Build(String),
-    Copy(String),
-    Install(String),
+pub struct Step {
+    pub kind: Verb,
+    /// The subject, short enough for a 372 px row: `Apple's firmware`, `a drive`.
+    pub what: String,
+    /// The detail line: which release, how many bytes, what was checked.
+    pub sub: String,
+    pub cost: Cost,
 }
 
 impl Step {
     pub fn verb(&self) -> &'static str {
-        match self {
-            Step::Fetch(_) => "fetch",
-            Step::Build(_) => "build",
-            Step::Copy(_) => "copy",
-            Step::Install(_) => "install",
-        }
+        self.kind.as_str()
     }
     pub fn what(&self) -> &str {
-        match self {
-            Step::Fetch(s) | Step::Build(s) | Step::Copy(s) | Step::Install(s) => s,
-        }
+        &self.what
+    }
+    pub fn sub(&self) -> &str {
+        &self.sub
     }
 }
+
+/// What the target volume does with holes, **measured** by [`crate::volume::probe`].
+///
+/// A named type and not a `bool`, because a bool at a call site is the argument that gets inverted,
+/// and inverting this one bills 8.6 GB for a 28 MB build.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Holes {
+    Sparse,
+    Full,
+}
+
+/// What an 8 GiB drive built by [`crate::ipsw::build_disk`] actually costs on a filesystem with
+/// holes.
+///
+/// **MEASURED 2026-08-21 on macOS 27.0 / APFS**, with this recipe:
+///
+/// ```no_run
+/// # use eapp_loader::{ipsw, settings};
+/// let out = std::path::Path::new("/tmp/measure.img");
+/// ipsw::build_disk(&vec![0u8; 27_140 * 512], out, ipsw::DEFAULT_SECTORS).unwrap();
+/// let m = std::fs::metadata(out).unwrap();
+/// assert_eq!(m.len(), 8_589_934_592);
+/// assert_eq!(settings::on_disk_size(&m), 20_987_904);
+/// ```
+///
+/// The same recipe at `Model::sectors()` for `A446` (30 GB) gives 31 440 896.
+///
+/// **It is one figure for every filesystem, and it cannot be.** Block accounting is per-filesystem:
+/// the same build measured 14 008 320 bytes on a 500 MB APFS disk image, a third under this, because
+/// a small volume allocates differently. The error is in the safe direction — the plan over-states,
+/// so nobody is refused who should not be — and `the_disk_estimate_is_what_a_build_actually_costs`
+/// allows 25 % for exactly that. **The band is a sanity check on one volume, not a portable
+/// guarantee**, and it is what makes the estimate checkable rather than a claim: the install step
+/// reports what the drive really took, one line below where the plan said what it would.
+///
+/// **Retirement condition**: none — re-measure with the recipe above if `fat32()` changes.
+pub const DRIVE_ON_DISK: u64 = 20_987_904;
+
+/// The iPod first run makes. The same one [`crate::nor::Source::default`] is — see
+/// [`crate::nor::DEFAULT_MODEL`], which this is read from so the two cannot describe two machines.
+pub const FIRST_RUN_MODEL: &str = crate::nor::DEFAULT_MODEL;
+/// What first run calls the device it makes.
+pub const FIRST_RUN_DEVICE: &str = "My 5.5G";
+/// The `UpdaterFamilyID` first run fetches from. The **release** is not a constant — it is
+/// `firmware::by_updater_family(25)`'s newest served, verifiable entry.
+pub const FIRST_RUN_FAMILY: u16 = 25;
+/// How long a cold boot takes, in seconds. A sub-line, never a bar: no percentage until this
+/// device has completed one boot of its own.
+pub const COLD_BOOT_SECONDS: u32 = 75;
+/// A 5G/5.5G firmware partition, for an estimate made before the bundle is opened.
+///
+/// Measured on the reference drive: 27 140 sectors, which is `Firmware-20.6.3` to the byte.
+pub const FW_TYPICAL: usize = 27_140 * 512;
 
 #[cfg(test)]
 mod tests {
@@ -990,10 +1245,10 @@ mod tests {
             &[Os::Apple, Os::Rockbox, Os::IPodLinux],
         );
         assert_eq!(r.boot_word(), Some("triple boot"));
-        let steps = r.steps();
+        let steps = r.steps(Holes::Sparse);
         let fetched: Vec<&str> = steps
             .iter()
-            .filter(|s| matches!(s, Step::Fetch(_)))
+            .filter(|s| s.kind == Verb::Fetch)
             .map(|s| s.what())
             .collect();
         assert_eq!(
@@ -1002,6 +1257,86 @@ mod tests {
             "not everything that downloads is listed: {fetched:?}"
         );
         assert!(steps.iter().any(|s| s.what().contains("ipodloader2")));
+    }
+
+    /// **One number per axis, and both from the plan.**
+    ///
+    /// The design this implements once carried three different sizes for one operation on one
+    /// screen — `about 300 MB, and four minutes`, `8 GiB sparse`, and `8.02 GB needed` — for a
+    /// download that is 6.5 MB and a build that costs 21 MB. The rule that prevents the next one is
+    /// that there is exactly one producer of each number and 8 GiB appears exactly once, in the
+    /// drive's own sub-line, where it is a fact about the file rather than a bill.
+    #[test]
+    fn the_plan_quotes_one_download_size_one_disk_size_and_eight_gibibytes_once() {
+        let r = Recipe {
+            start: Start::FromIpsw("iPod_25.1.3.ipsw".into()),
+            loader: Loader::Apple,
+            oses: [Os::Apple].into_iter().collect(),
+        };
+        let steps = r.steps(Holes::Sparse);
+        assert_eq!(steps.len(), 3, "{steps:#?}");
+        assert_eq!(
+            steps.iter().map(|s| s.verb()).collect::<Vec<_>>(),
+            ["fetch", "build", "install"]
+        );
+
+        let c = r.cost(Holes::Sparse);
+        let rel = crate::firmware::by_file("iPod_25.1.3.ipsw").expect("the catalogue holds it");
+        assert_eq!(c.down, rel.bytes, "the download total is not the release's");
+        assert_eq!(c.disk, rel.bytes + DRIVE_ON_DISK);
+        assert_eq!(crate::si(c.down), "6.5 MB");
+        assert_eq!(crate::si(c.disk), "28 MB");
+        assert_eq!(c.apparent, Some(crate::ipsw::DEFAULT_SECTORS * 512));
+
+        let eight_gib: usize = steps.iter().filter(|s| s.sub().contains("8 GiB")).count();
+        assert_eq!(
+            eight_gib, 1,
+            "8 GiB is quoted {eight_gib} times: {:#?}",
+            steps.iter().map(|s| s.sub()).collect::<Vec<_>>()
+        );
+        assert_eq!(steps[1].kind, Verb::Build, "and not on the drive's own row");
+
+        // A volume with no holes is billed what it will really cost, and says why.
+        let full = r.cost(Holes::Full);
+        assert_eq!(full.disk, rel.bytes + crate::ipsw::DEFAULT_SECTORS * 512);
+        assert!(r.steps(Holes::Full)[1].sub().contains("no sparse files"));
+    }
+
+    /// Every verb is spelled once, and the closed set is closed.
+    #[test]
+    fn every_verb_has_one_word_and_no_two_share_it() {
+        let mut words: Vec<&str> = Verb::ALL.iter().map(|v| v.as_str()).collect();
+        assert_eq!(words.len(), 6);
+        words.sort_unstable();
+        let before = words.len();
+        words.dedup();
+        assert_eq!(words.len(), before, "two verbs share a word");
+        for v in Verb::ALL {
+            assert!(!v.as_str().is_empty());
+        }
+    }
+
+    /// `apparent` is the larger of two, never their sum: two sparse files on one volume do not
+    /// stack an apparent bill, and summing them is how a plan comes to quote 17 GB.
+    #[test]
+    fn two_sparse_files_do_not_stack_an_apparent_bill() {
+        let one = Cost {
+            down: 1,
+            disk: 2,
+            apparent: Some(8_589_934_592),
+        };
+        let both = one.plus(one);
+        assert_eq!(both.down, 2);
+        assert_eq!(both.disk, 4);
+        assert_eq!(both.apparent, Some(8_589_934_592));
+        assert_eq!(Cost::NONE.plus(one), one);
+        // Saturating, so a corrupt catalogue cannot panic a release build's plan.
+        let huge = Cost {
+            down: u64::MAX,
+            disk: u64::MAX,
+            apparent: None,
+        };
+        assert_eq!(huge.plus(one).down, u64::MAX);
     }
 
     /// **A discovery is not an edit.** `fat_type` goes from `None` to `Some(_)` when a background

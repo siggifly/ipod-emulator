@@ -203,7 +203,17 @@ fn platform_size(window: &slint::Window) -> Option<(u32, u32)> {
 /// takes it off the event: during a `ScaleFactorChanged` `slint::Window::scale_factor()` may still
 /// report the old one, and a block that converted its own numbers with a different factor from the
 /// one the fit used would be three lines that cannot be compared.
-pub fn dump_layout(window: &slint::Window, fit: &crate::fit::Fit, measured_logical: f64, sf: f64) {
+pub fn dump_layout(
+    window: &slint::Window,
+    fit: &crate::fit::Fit,
+    measured_logical: f64,
+    sf: f64,
+    // §17.Q12: what the longest Rail verb actually draws at `Metric.body-size`, measured by the
+    // text renderer. **Only the platform knows this**, and `Geometry::RAIL_VERB_W` is a budget
+    // until it is compared against it — so it goes in the instrument rather than staying an
+    // estimate nobody can check. `None` before there is a window to measure in.
+    verb_width: Option<f32>,
+) {
     if std::env::var_os("IPOD_LAYOUT").is_none_or(|v| v.is_empty() || v == "0") {
         return;
     }
@@ -279,6 +289,26 @@ pub fn dump_layout(window: &slint::Window, fit: &crate::fit::Fit, measured_logic
         "  inset       {:.5} of body height at the sides, {:.5} at the top",
         crate::geometry::left_inset(),
         crate::geometry::SCREEN_TOP
+    );
+    // §17.Q12, and it is the one line here that is about the drawer rather than the device.
+    // `RAIL_VERB_W` is derived from `BODY_ADVANCE`, a budget nobody measured; this is the answer,
+    // in the face this platform gave us. `synthesise` is the longest of the six verbs and it is the
+    // one first run draws first, so if the column is short it is short on the first thing a new
+    // person ever sees this program do.
+    eprintln!(
+        "  verb        {} for `synthesise` at {} px against a {} px column{}",
+        match verb_width {
+            Some(w) => format!("{w:.1} logical px"),
+            None => "not measured — no window yet".to_string(),
+        },
+        crate::geometry::BODY_SIZE,
+        crate::geometry::RAIL_VERB_W,
+        match verb_width {
+            Some(w) if w > crate::geometry::RAIL_VERB_W as f32 =>
+                " — IT ELIDES, and it elides at first-run step 1",
+            Some(_) => "",
+            None => "",
+        }
     );
     // The constants once, not on every event: this is called on each change to the fit, and a
     // startup burst or a drag across a display boundary would otherwise bury the four lines that

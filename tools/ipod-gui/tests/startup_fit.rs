@@ -150,7 +150,16 @@ fn declared_headless() -> bool {
 /// display, so an exit after that point is a crash whatever it prints; and anything else is a
 /// refusal to open, which is red unless [`declared_headless`] licenses it.
 fn launch() -> Started {
-    let dir = std::env::temp_dir().join(format!("ipod-gui-startup-fit-{}", std::process::id()));
+    // **One directory per launch, not one per process.** Two tests in this file each launch a
+    // window, cargo runs them on two threads, and a shared name meant the second `remove_dir_all`
+    // deleted the first window's log while it was still writing to it — a failure that only appears
+    // when both run, which is the worst kind to leave in a file whose whole job is measuring.
+    static NTH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "ipod-gui-startup-fit-{}-{}",
+        std::process::id(),
+        NTH.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
     let log = dir.join("layout.txt");
@@ -240,6 +249,9 @@ struct Block {
     /// The client height this fit needs — `fit::required_client_logical`, as printed.
     needs: f64,
     too_short: bool,
+    /// §17.Q12: what the text renderer says the longest Rail verb draws at `BODY_SIZE`, logical.
+    /// `None` on the seed block, where there is no window to measure in.
+    verb: Option<f64>,
 }
 
 /// Split a trace into blocks, dropping any that is not complete. The child is still running while
@@ -277,6 +289,7 @@ fn blocks(trace: &str) -> Vec<Block> {
                 measured: number("measured")?,
                 needs,
                 too_short: field("fit")?.contains("too short for 1:1"),
+                verb: number("verb"),
             })
         })
         .collect()
@@ -603,4 +616,72 @@ fn probe(window: &Window, start: &[Block], startup_trace: &str) {
     }
 
     eprintln!("the external-resize half ran: {m0:.1} -> {want:.1} logical, driven from outside");
+}
+
+/// **The verb column holds the verb this platform actually draws.**
+///
+/// §17.Q12 named `RAIL_VERB_W` as the one constant nobody had measured, and predicted its failure
+/// exactly: *"the longest verb is `synthesise` and it appears at first-run step 1, the first thing
+/// a new user ever sees this program do. If it elides, it elides there."* It shipped at 64 px,
+/// derived from `geometry::BODY_ADVANCE` — a budget about a system UI face this program cannot
+/// interrogate.
+///
+/// **The answer only exists in the renderer**, and Slint 1.17 exposes no Rust-side way to ask it.
+/// So the measurement is taken by a `Text` (`verb-probe` in `ui/window.slint`, `visible: false` and
+/// outside every layout), read back through `MainWindow.verb-width`, printed on `IPOD_LAYOUT`'s
+/// `verb` line, and compared here — against the **real binary**, with the real font, on a real
+/// display. Everything else about that constant is arithmetic about a number somebody chose.
+///
+/// It lives in this file rather than beside `the_rail_verb_column_holds_the_longest_verb` for the
+/// reason the module header gives: `geometry.rs`'s own tests check the arithmetic and never launch
+/// a window, and this project has shipped three defects that no amount of arithmetic could see.
+#[test]
+fn the_verb_column_holds_the_verb_this_platform_draws() {
+    let window = match launch() {
+        Started::NoWindowServer(trace) => {
+            eprintln!(
+                "SKIPPED: this machine declared it has no display, so there is no renderer to \
+                 measure with. What the window printed:\n{}",
+                trace.trim()
+            );
+            return;
+        }
+        Started::OnScreen(w) => w,
+    };
+    let trace = window.trace();
+    let seen = on_screen(&trace);
+    assert!(
+        !seen.is_empty(),
+        "the window never reported a size the platform measured. The whole trace:\n{}",
+        trace.trim()
+    );
+
+    let column = geometry_px("rail-verb-w");
+    let drawn: Vec<f64> = seen.iter().filter_map(|b| b.verb).collect();
+    assert!(
+        !drawn.is_empty(),
+        "no block carries a `verb` line, so this test measured nothing — which is the shape \
+         `AGENTS.md` §6 is about, not a pass. The whole trace:\n{}",
+        trace.trim()
+    );
+    for w in &drawn {
+        assert!(
+            *w > 0.0,
+            "the renderer measured `synthesise` at {w} px, which is not a measurement"
+        );
+        assert!(
+            *w <= column,
+            "`synthesise` draws {w:.1} px in this platform's face and the Rail's verb column is \
+             {column:.1} px, so it ELIDES — at first-run step 1, which is the first thing a new \
+             person ever sees this program do. `geometry::RAIL_VERB_W` is derived from \
+             `BODY_ADVANCE`, a budget rather than a measurement, and this is the measurement. The \
+             whole trace:\n{}",
+            trace.trim()
+        );
+    }
+    eprintln!(
+        "`synthesise` draws {:.1} logical px against a {column:.1} px column — measured by the \
+         renderer, on this display",
+        drawn[0]
+    );
 }

@@ -39,6 +39,77 @@ pub mod ipsw;
 pub mod mount;
 pub mod rockbox;
 pub mod settings;
+/// Whether this computer can run a tool this program shells out to — asked by running it.
+pub mod tooling;
+/// What a volume will do with an 8 GiB file, measured rather than named.
+pub mod volume;
+
+/// Bytes, in the units a person reads. Decimal, because Apple's own figures are.
+///
+/// **One formatter, four surfaces**: a plan's sub-lines, the window's ledger, the shelf's cost line
+/// and the Rail's measure. Two names for one number is how they come to disagree — and this project
+/// has already paid for that once, with a plan that billed `about 300 MB`, `8 GiB sparse` and
+/// `8.02 GB needed` for one operation whose real cost is 6.5 MB down and 21 MB on disk.
+///
+/// It lives here and not in the window because [`compose::Step`] builds `21 MB` into a sub-line
+/// inside this crate and cannot reach a formatter in the window.
+pub fn si(n: u64) -> String {
+    const K: f64 = 1000.0;
+    let n = n as f64;
+    if n < K {
+        return format!("{n:.0} B");
+    }
+    for (i, unit) in ["kB", "MB", "GB", "TB"].iter().enumerate() {
+        let div = K.powi(i as i32 + 1);
+        if n < div * K || *unit == "TB" {
+            let v = n / div;
+            return if v < 10.0 {
+                format!("{v:.1} {unit}")
+            } else {
+                format!("{v:.0} {unit}")
+            };
+        }
+    }
+    unreachable!()
+}
+
+/// An exact byte count, grouped in threes so a seven-digit run can be read.
+///
+/// **Not a second [`si`].** They answer different questions and both are drawn, one under the
+/// other: `si` renders the figure a person weighs a decision against — `6.5 MB` — and this renders
+/// the number a check is made against, which has to be exact or it is not a check.
+/// `firmware::verify` refuses a bundle whose length is not `6 533 633`, and `6533633` is that same
+/// number with the reader left to count digits.
+///
+/// A plain ASCII space, because §16.6's glyph set is closed and a thin space is not in it.
+pub fn group(n: u64) -> String {
+    let d = n.to_string();
+    let mut out = String::with_capacity(d.len() + d.len() / 3);
+    for (i, c) in d.chars().enumerate() {
+        if i > 0 && (d.len() - i).is_multiple_of(3) {
+            out.push(' ');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// `a` or `an` for a figure [`si`] is about to render.
+///
+/// **The article is decided by the sound of the number, not by the unit**, which is why it cannot
+/// be written into the sentence: `8.6 GB` takes *an*, `21 MB` takes *a*, and the same `format!`
+/// produces both. The refusal read *"would not take a 8.6 GB file"* until this existed.
+pub fn article(n: u64) -> &'static str {
+    // Every rendering starts with a digit; only 8 and 11 (`11 MB`, `18 GB`) are said with a vowel
+    // sound at the front, and `1` is said "one" rather than "eleven" unless a second digit follows.
+    let s = si(n);
+    let d: Vec<char> = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+    match d.as_slice() {
+        ['8', ..] => "an",
+        ['1', '1', ..] | ['1', '8', ..] => "an",
+        _ => "a",
+    }
+}
 
 pub const EAPP_MAGIC: &[u8; 4] = b"eapp";
 /// Corrected 2026-08-11 against RetailOS 1.3's own loader — see `eapp-inspect` for the evidence.
@@ -9173,5 +9244,61 @@ mod peek_tests {
     fn a_word_that_would_run_past_the_end_is_none() {
         let r = regions(0x1000_0000, &[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
         assert_eq!(peek_regions(&r, 0x1000_0004), None, "only two bytes remain");
+    }
+}
+
+/// The three number formatters, and what each is for.
+#[cfg(test)]
+mod figure_tests {
+    use super::{article, group, si};
+
+    /// **`si` is the bill and [`group`] is the check, and they are drawn one under the other.**
+    ///
+    /// The plan's fetch row says `iPod_25.1.3.ipsw — 6 533 633 B` because that is the number
+    /// `firmware::verify` refuses against; the ledger under it says `6.5 MB to download` because
+    /// that is the figure somebody weighs a decision against. Rendering the first one through `si`
+    /// would put `6.5 MB` in both, and the exact number — the one that makes the check checkable —
+    /// would be nowhere on screen.
+    #[test]
+    fn the_exact_count_is_grouped_and_the_bill_is_not() {
+        assert_eq!(group(6_533_633), "6 533 633");
+        assert_eq!(si(6_533_633), "6.5 MB");
+        assert_eq!(group(0), "0");
+        assert_eq!(group(1), "1");
+        assert_eq!(group(999), "999");
+        assert_eq!(group(1_000), "1 000");
+        assert_eq!(group(20_987_904), "20 987 904");
+        assert_eq!(group(8_589_934_592), "8 589 934 592");
+        // §16.6: the glyph set is closed, so the separator is a plain space and not a thin one.
+        assert!(
+            group(6_533_633).is_ascii(),
+            "the separator is outside the closed glyph set"
+        );
+    }
+
+    /// **The article is a fact about the rendered figure, not about the unit.**
+    ///
+    /// `volume_refusal` reads *"would not take {article} {si} file"*, and one `format!` produces
+    /// both `a 21 MB file` and `an 8.6 GB file`. It said *"a 8.6 GB file"* until this existed, on
+    /// the one refusal a person meets when their drive is on the wrong kind of volume.
+    #[test]
+    fn the_article_matches_how_the_figure_is_said() {
+        for (n, want) in [
+            (8_589_934_592u64, "an"), // 8.6 GB
+            (20_987_904, "a"),        // 21 MB
+            (6_533_633, "a"),         // 6.5 MB
+            (11_000_000, "an"),       // 11 MB
+            (18_000_000, "an"),       // 18 MB
+            (1_000_000, "a"),         // 1.0 MB — "one", not "eleven"
+            (800, "an"),              // 800 B
+            (100, "a"),               // 100 B
+        ] {
+            assert_eq!(
+                article(n),
+                want,
+                "{} is said with {want}",
+                si(n)
+            );
+        }
     }
 }

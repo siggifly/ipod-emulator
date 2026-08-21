@@ -94,6 +94,25 @@ export component MainWindow inherits Window {
     // the model's — pushed as a whole row from `main.rs` — rather than a struct literal written
     // here, which is how the previous revision came to invent `chassis: #e4e4e2` in markup.
     in property <DeviceRow> empty-device;
+    // §10.1: the drawn iPod in `Colour::Unspecified` at 45 % — **an iPod that has not been decided
+    // yet**, which is what an empty bench has. Not black: drawing an unknown chassis black invents
+    // a fact.
+    //
+    // **Pushed from Rust rather than derived here as `!root.has-devices`**, and the difference is
+    // not cosmetic. It is an *emptiness* state today — §9.1 gives the later-empty bench the same
+    // ghost — but §10.2 wants the body to cross-dissolve to solid the moment `Source::identity()`
+    // answers, which is **before** the device is in the list. A markup expression over
+    // `has-devices` would have to be unpicked to get there; a pushed boolean is already the right
+    // shape.
+    in property <bool> ghost: false;
+    // §9.2's bench mirror: *"the cradle label carries `building · 41 % · fetching Rockbox 4.0`"*.
+    //
+    // Empty means nothing is running, and then the row's own label stands. It is a second property
+    // rather than an override written into `DeviceRow.cradle_label` because a `DeviceRow` is
+    // rebuilt only when the **library** changes, and work moves ten times a second — so the sentence
+    // that moves and the sentence that does not come from two places, and only one of them is
+    // pushed on every tick.
+    in property <string> working-label;
     in-out property <int> selected: 0;
     in property <image> screen-source;
     in property <bool> running: false;
@@ -126,6 +145,11 @@ export component MainWindow inherits Window {
     // the state is drawn. `the_too_short_state_is_an_input_with_nothing_reading_it` asserts the gap
     // and retires itself the moment the pane lands.
     in property <bool> too-short: false;
+    // §17.Q12, measured: how wide the longest Rail verb actually draws at `Metric.body-size` in the
+    // face this platform gave us. **Read out, never in** — it is the one number in this program that
+    // only the text renderer knows, and `Geometry.rail-verb-w` is a budget until it is compared
+    // against this. `IPOD_LAYOUT=1` prints it and `tests/startup_fit.rs` asserts on it.
+    out property <length> verb-width: verb-probe.preferred-width;
     // §7.5's row-2 trailing slot: the one number a bug report can quote.
     in property <string> fidelity;
     // §7.3: the drawn device is the picture, and this is what an assistive technology is told is on
@@ -161,6 +185,15 @@ export component MainWindow inherits Window {
     in property <string> ledger-disk;
     in property <string> ledger-note;
     in property <bool> ledger-warn: false;
+    // §9.2, §12.3: the shelf's 3 px bar, drawn ON the shelf's top rule so it costs no height.
+    //
+    // **The sign is load-bearing: negative means there is no denominator**, so there is no bar — a
+    // number that moves instead. A bar with an invented denominator is a lying instrument, and a
+    // cold boot has no honest one until this device has completed one.
+    //
+    // `Bench` has declared this since the drawer landed and `bench.slint` draws it; until now
+    // nothing bound it, which is a drawn instrument with no producer — the shape §20 item 15 names.
+    in property <float> progress: -1;
 
     callback start-device(int);
     // §7.6's `why ›`: put this device's refusal on the Rail, then open the page that owns it.
@@ -281,6 +314,33 @@ export component MainWindow inherits Window {
             height: 100%;
             clip: true;
 
+            // ── The one thing in this markup that measures rather than draws ──
+            //
+            // `Geometry.rail-verb-w` is 88 px, derived from a **budget** — `geometry::BODY_ADVANCE`,
+            // an average glyph advance nobody has measured against the system face this program
+            // cannot interrogate. §17.Q12 named it as the one constant nobody measured and predicted
+            // its failure exactly: the longest verb is `synthesise`, it appears at first-run step 1,
+            // and if it elides it elides on the first thing a new person ever sees this program do.
+            //
+            // There is no Rust-side text-measurement API in Slint 1.17, so the measurement is taken
+            // where text is measured — by a `Text` — and read back out through an `out property`.
+            // It is `visible: false` and outside every layout, so it draws nothing and moves
+            // nothing; §16.3's rule that `visible: false` still reserves layout space is exactly why
+            // it is positioned absolutely rather than put in a row.
+            //
+            // `tests/startup_fit.rs` launches the real binary, reads this off `IPOD_LAYOUT=1`, and
+            // compares it against the constant — with the real font, on a real display, which is
+            // the only place the answer exists.
+            verb-probe := Text {
+                x: 0;
+                y: 0;
+                visible: false;
+                // The longest of the six `ui/rail.slint` names, and it is the one first run draws.
+                text: "synthesise";
+                font-size: Metric.body-size;
+                font-weight: Metric.weight-body;
+            }
+
             // §7. Full width, always: §9.5's decision is that the shelf's band and its 1 px top rule
             // span the whole client and only the shelf's three content rows narrow, because a drawer
             // that is full client height above an 88 px shelf otherwise leaves the bottom-right
@@ -299,9 +359,12 @@ export component MainWindow inherits Window {
                 select-d: root.select-d;
                 chassis: root.current.chassis;
                 dark-chassis: root.current.dark-chassis;
+                ghost: root.ghost;
                 screen-source: root.screen-source;
                 screen-lit: root.running;
                 panel-description: root.panel-description;
+                // §9.2's one line on the bench, and §12.3's honesty about it.
+                progress: root.progress;
 
                 // §12.2's four phases, and this build is in the first of them: `Off`. Every drawn
                 // control on the device is gated on this and says so when pressed (§7.4), rather
@@ -309,7 +372,10 @@ export component MainWindow inherits Window {
                 has-machine: root.running;
 
                 device-name: root.current.name;
-                cradle-label: root.current.cradle-label;
+                // §9.2: while something is happening, the cradle carries it. The row's own label
+                // says what pressing will cost or why it cannot be pressed (§7.3), and neither of
+                // those is what a person wants to read during a download.
+                cradle-label: root.working-label != "" ? root.working-label : root.current.cradle-label;
                 // §6.4, and this is **three colours and one shape, not four colours**: `accent` when
                 // startable, `fg-dim` otherwise, `danger` only when a machine has **stopped**, and a
                 // **broken ring** when the device cannot start. The first cut painted a refusal
@@ -321,11 +387,22 @@ export component MainWindow inherits Window {
                 // `CradleRing.danger` is therefore **unused until §12.2's `Stopped` exists**, which
                 // is a state this build cannot be in. Retirement condition: `phase()` answers
                 // `Stopped`, and this binding gains the arm rather than borrowing it.
-                cradle-ring: root.has-devices && root.current.startable
+                //
+                // **`has-devices` is gone from THIS expression and deliberately kept in the next
+                // one**, and the two gates were the same by accident rather than by decision.
+                // §10.1 and §9.1 both give the empty bench an `accent` cradle: there is exactly one
+                // thing to press on that screen and the fixture is what says so. `startable` is the
+                // model's answer for a real device *and* for the empty one — `empty_device` computes
+                // it from the same predicate the press consults — so one boolean drives the ring,
+                // the announcement and what pressing does, and they cannot disagree.
+                cradle-ring: root.current.startable
                     ? CradleRing.accent
                     : CradleRing.dim;
                 // A cradle that cannot hold the device has gaps in it — the drawing saying the
-                // thing. An empty bench is not broken, it is empty, so this is false there.
+                // thing. **An empty bench is not broken, it is empty**, so this keeps `has-devices`:
+                // a refused *device* gets a broken ring (§7.3's three `cannot start` rows), a
+                // refused *empty bench* gets an unbroken `fg-dim` one, because there is no device
+                // for the fixture to have failed to hold.
                 cradle-broken: root.has-devices && !root.current.startable;
                 startable: root.current.startable;
 

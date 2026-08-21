@@ -379,6 +379,50 @@ pub fn is_synthetic(nor: &[u8]) -> bool {
     nor.get(SYNTH_MARK_AT..SYNTH_MARK_AT + SYNTH_MARK.len()) == Some(SYNTH_MARK)
 }
 
+/// The iPod this program makes when nobody has said which — a 30 GB black 5.5G.
+///
+/// **The only model number written in this program.** [`Source::default`] reads it, and so does
+/// `compose::FIRST_RUN_MODEL`, so the three cannot come to describe different machines.
+pub const DEFAULT_MODEL: &str = "A446";
+
+/// A seed nobody chose, for an identity that is minted **once** and is then permanent.
+///
+/// **The one irreversible call in this program.** [`crate::identity::Identity::generate`] is a pure
+/// function of a model and this number, and the 8-byte FireWire GUID it produces is what `sysinfo_t`
+/// carries and what iTunes binds DRM to — so the seed *is* the iPod. Three failed first runs must
+/// leave one iPod with one GUID, which means this is called once, at the first press, and never
+/// again while a synthesised ROM for that device exists.
+///
+/// **No dependency**: [`std::collections::hash_map::RandomState`] is std's own OS-seeded hasher key.
+/// The process id and the clock are mixed in because two `RandomState`s in one process share a
+/// thread-local base key that increments by one — hashing the same value twice would otherwise
+/// produce two numbers that differ by a known amount, which is not the property wanted here.
+///
+/// **Never made deterministic.** [`crate::identity::Identity::generate`]'s contract is *same seed,
+/// same iPod, every launch*; a test that pinned this would be asserting that two people who each
+/// press the button get the same iPod.
+///
+/// `0` comes back as `1`: [`Source::default`] is `seed: 0`, and a minted identity indistinguishable
+/// from the never-chosen default is the one value that must not come out of a mint.
+pub fn mint_seed() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u32(std::process::id());
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    );
+    // A second RandomState, because the first one's key is per-thread and increments by one between
+    // two instances — so on its own it is a counter with a random start, not a random number.
+    h.write_u64(std::collections::hash_map::RandomState::new().hash_one("ipod"));
+    match h.finish() {
+        0 => 1,
+        n => n,
+    }
+}
+
 /// Where a boot ROM comes from.
 ///
 /// **Synthetic is not a file.** The image is a pure function of a model, a seed and any overrides,
@@ -426,7 +470,7 @@ impl Default for Source {
     /// the window's argument parsing.
     fn default() -> Source {
         Source::Synthetic {
-            model: "A446".into(),
+            model: DEFAULT_MODEL.into(),
             seed: 0,
             serial: None,
             guid: None,
@@ -821,5 +865,45 @@ mod tests {
         // The identity and model are the caller's, not the source's.
         assert_eq!(spec.model.number, "A002");
         assert_eq!(spec.identity, Identity::generate(model("A002"), 99));
+    }
+}
+
+#[cfg(test)]
+mod mint_tests {
+    use super::*;
+
+    /// **The identity is minted once and is then permanent**, so the mint itself must not be a
+    /// counter with a random start: two presses in one process have to produce two different iPods,
+    /// or the "same seed, same iPod" contract would be quietly making everybody the same one.
+    ///
+    /// `RandomState`'s key increments by one between two instances in one thread, which is why
+    /// [`mint_seed`] mixes in the clock and the process id as well.
+    #[test]
+    fn two_seeds_drawn_in_one_process_are_different() {
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..64 {
+            seen.insert(mint_seed());
+        }
+        assert_eq!(
+            seen.len(),
+            64,
+            "64 mints produced {} distinct seeds — two people would get one iPod",
+            seen.len()
+        );
+    }
+
+    /// `0` is [`Source::default`]'s seed, and a minted identity indistinguishable from the
+    /// never-chosen default is the one value that must not come out of a mint: it is what
+    /// `work::minted` tells a made iPod from an unmade one by.
+    #[test]
+    fn a_minted_seed_is_never_the_default_seed() {
+        for _ in 0..256 {
+            assert_ne!(mint_seed(), 0, "a mint produced the never-chosen default");
+        }
+        let Source::Synthetic { seed, model, .. } = Source::default() else {
+            panic!("the default source is not synthetic");
+        };
+        assert_eq!(seed, 0, "the default seed moved, so 0 is no longer the marker");
+        assert_eq!(model, DEFAULT_MODEL, "two spellings of which iPod this program makes");
     }
 }
