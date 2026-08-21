@@ -28,6 +28,12 @@ export global Ink {
     out property <color> material-top: #5a9aef;
     out property <color> material-bottom: #4a86de;
 
+    // §12.2's `Off` glass, and §11.4's boot-screen preview around it. **One token, two readers** —
+    // the drawn iPod's panel and the preview in Parts are the same black and drifting apart would be
+    // two answers to *what does a powered-off panel look like*. It is a measured colour, not a
+    // derived one: a powered-off 5G's glass, never a frozen last frame.
+    out property <color> glass: #08080a;
+
     out property <color> warn: #9a6700;
 
     // §6.4. 4.14:1 on `bg-sunken`, 5.9:1 on `bg` — the only role that reads as *this destroys

@@ -1,0 +1,307 @@
+// The Devices page — docs/GUI.md §7.2, §9.1, §9.4, §11.4, §16.11.
+//
+// **Device selection lives here, not on the bench.** §7.2 settles a question the previous revision
+// left open and which reproduced the disease this whole design is a cure for: *one device on screen*
+// plus a `←`/`→` that switched devices meant that looking at a second iPod either destroyed the first
+// or left an ARM7 executing behind a panel that was no longer drawn. So while there is a machine the
+// bench draws it and only it, and every other device is read about here — the parts it is made of,
+// where it writes, and `Start`, disabled while a machine exists with the machine-rule reason that
+// names it.
+//
+// **A device that cannot start says which path is missing.** `Settings::missing()` stats every
+// resolved path and returns `Absent::Gone(PathBuf)` or `Absent::Unlisted(String)`, and
+// `devices::gone_sentence` words both — the same function the cradle and the Rail call, so the three
+// surfaces cannot say three things about one device.
+//
+// **`start-device(int)` and `selected` are REUSED, not duplicated.** This page presses the callback
+// the bench's own centre button presses and writes the same index, which is what makes
+// `the_devices_page_and_the_bench_read_one_model` mean anything.
+//
+// This page states no policy and words no sentence. Its literals are its own page name and its two
+// verbs.
+
+import { Ink, Metric } from "tokens.slint";
+import { Geometry } from "@geometry";
+import {
+    DetailRow,
+    DeviceRow,
+    DrawerHeader,
+    Expand,
+    FixRow,
+    Pressable,
+    Row,
+    Scroll,
+} from "primitives.slint";
+
+// ─── One line inside an expanded device (§7.2) ──────────────────────────────────────────────────
+//
+// `devices::made_of` — `iPod`, `Drive`, `Built from`, `Installed`, `Writes to`. It must **not** call
+// `nor::Source::describe`, which interpolates `id.serial` into its sentence; the iPod line is
+// `settings::suggest_ipod_name` plus the resource name, and that rule lives in Rust because this is
+// where a leak would be invisible.
+component MadeOfLine inherits VerticalLayout {
+    in property <DetailRow> d;
+    in property <int> index;
+
+    callback act(int, int);
+    callback reveal(length, length);
+
+    spacing: 0px;
+
+    if root.d.has-action: Pressable {
+        label: root.d.act-label;
+        enabled: root.d.enabled;
+        reason: root.d.reason;
+        escape-hatch: root.d.escape-hatch;
+        machine-rule: root.d.machine-rule;
+        presses: root.d.presses;
+        consequence: root.d.consequence;
+        pad: Geometry.page-margin;
+        activated => {
+            root.act(root.d.action, root.index);
+        }
+        gained-focus => {
+            root.reveal(self.absolute-position.y, self.height);
+        }
+
+        Text {
+            text: root.d.act-label;
+            font-size: Metric.body-size;
+            font-weight: Metric.weight-strong;
+            color: root.d.enabled ? Ink.danger : Ink.fg-disabled;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+
+    if !root.d.has-action && root.d.mono: Text {
+        text: root.d.value;
+        font-family: Metric.mono-family;
+        font-size: Metric.mono-size;
+        color: Ink.fg-dim;
+        wrap: word-wrap;
+    }
+
+    if !root.d.has-action && !root.d.mono: HorizontalLayout {
+        spacing: Metric.s2;
+
+        Text {
+            width: Geometry.field-label-w;
+            text: root.d.label;
+            font-size: Metric.label-size;
+            font-weight: Metric.weight-label;
+            color: Ink.fg-dim;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            text: root.d.value;
+            font-size: Metric.label-size;
+            font-weight: Metric.weight-label;
+            color: root.d.machine-rule ? Ink.fg : Ink.fg-dim;
+            wrap: word-wrap;
+        }
+    }
+}
+
+export component DevicesPage inherits Rectangle {
+    in property <[DeviceRow]> devices;
+    // `in`, not `in-out`: this page fires `select(i)` and Rust is the single writer, exactly as
+    // `nav::Stack` is for where you are. Four entrances writing one piece of state from four sides
+    // is how `Esc` came to have three meanings.
+    in property <int> selected: 0;
+    in property <[DetailRow]> detail;
+    in property <int> detail-of: -1;
+    // §9.1: `No devices yet.` — one non-interactive `fg-disabled` line above the always-present
+    // `+ New device ›`. The sentence is the model's, not this file's.
+    in property <string> empty-line;
+    in property <FixRow> new-device;
+
+    callback back-pressed();
+    callback expand(int, bool);
+    callback select(int);
+    // **`start-device`, not `start`.** `start` is `LayoutAlignment`'s own value, and a callback of
+    // that name shadows it — `alignment: start;` two hundred lines down stops compiling with
+    // *"Callback must be called"*, which points at the alignment rather than at the name.
+    callback start-device(int);
+    callback row-action(int, int);
+    callback new-pressed();
+
+    background: Ink.bg;
+    accessible-role: AccessibleRole.region;
+    accessible-label: "Devices";
+
+    VerticalLayout {
+        spacing: 0px;
+
+        DrawerHeader {
+            back: "Menu";
+            title: "Devices";
+            back-pressed => {
+                root.back-pressed();
+            }
+        }
+
+        scroll := Scroll {
+            vertical-stretch: 1;
+            min-height: 0px;
+            preferred-height: 0px;
+            viewport-height: body.preferred-height;
+
+            body := VerticalLayout {
+                width: scroll.width;
+                padding-top: Metric.s3;
+                padding-bottom: Metric.s3;
+                spacing: 0px;
+                alignment: start;
+                accessible-role: AccessibleRole.list;
+                accessible-label: "Devices";
+
+                if root.devices.length == 0: Text {
+                    x: Geometry.page-margin;
+                    text: root.empty-line;
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-body;
+                    color: Ink.fg-disabled;
+                    wrap: word-wrap;
+                }
+
+                for d[i] in root.devices: VerticalLayout {
+                    spacing: 0px;
+
+                    row := Row {
+                        index: i;
+                        count: root.devices.length;
+                        label: d.name;
+                        // §7.5's row-1 trailing slot, on the page as on the shelf: the state, and
+                        // the time since. One producer, `devices::shelf_state`.
+                        value: d.state;
+                        sub: d.summary;
+                        selected: i == root.selected;
+                        chevron: true;
+                        activated => {
+                            root.select(i);
+                            root.expand(i, root.detail-of != i);
+                        }
+                        gained-focus => {
+                            scroll.ensure-visible(self.absolute-position.y, self.height);
+                        }
+                    }
+
+                    expand := Expand {
+                        open: root.detail-of == i;
+                        body-height: detail-body.preferred-height;
+                        opened => {
+                            scroll.ensure-visible(row.absolute-position.y, row.height + expand.body-height);
+                        }
+
+                        detail-body := VerticalLayout {
+                            padding-left: Geometry.page-margin;
+                            padding-right: Geometry.page-margin;
+                            padding-top: Metric.s2;
+                            padding-bottom: Metric.s2;
+                            spacing: Metric.s2;
+                            alignment: start;
+
+                            // The ternary is a property rather than the `for`'s own expression: a
+                            // conditional inside `for x in <expr>:` puts a `:` where the parser is
+                            // looking for the one that introduces the element.
+                            property <[DetailRow]> mine: root.detail-of == i ? root.detail : [];
+
+                            for line in mine: MadeOfLine {
+                                d: line;
+                                index: i;
+                                act(a, n) => {
+                                    root.row-action(a, n);
+                                }
+                                reveal(top, h) => {
+                                    scroll.ensure-visible(top, h);
+                                }
+                            }
+
+                            // §7.2: **`Start` is disabled with a reason**, and the reason names the
+                            // path. `Absent::Gone(PathBuf)` and `Absent::Unlisted(String)` are both
+                            // reachable and `missing()` stats the filesystem, so this is the one
+                            // refusal this program can already produce — and it is a machine rule,
+                            // because a file that is not there cannot be read by anything.
+                            Pressable {
+                                label: "Start";
+                                enabled: d.startable;
+                                reason: d.cradle-label;
+                                machine-rule: true;
+                                primary: d.startable && i == root.selected;
+                                pad: Geometry.page-margin;
+                                activated => {
+                                    root.select(i);
+                                    root.start-device(i);
+                                }
+                                gained-focus => {
+                                    scroll.ensure-visible(self.absolute-position.y, self.height);
+                                }
+
+                                Text {
+                                    text: "Start";
+                                    font-size: Metric.body-size;
+                                    font-weight: Metric.weight-strong;
+                                    color: !d.startable
+                                        ? Ink.fg-disabled
+                                        : (i == root.selected ? #ffffff : Ink.fg);
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── `+ New device ›`, pinned (§9.1, §16.11) ──
+        //
+        // **Always present**, outside the Scroll, and the page's one material row — because an empty
+        // Devices page whose only action had scrolled away is §9.1's *bare "nothing here"* wearing a
+        // list. Its label and its refusal are the model's: the Composer is a page this build has, so
+        // it is enabled; the day it is not, `rail::Caps` withdraws it and the reason returns with it.
+        Rectangle {
+            height: max(Geometry.primary-footer-h, new.height + 2 * Geometry.footer-pad);
+            background: Ink.bg-raised;
+
+            Rectangle {
+                y: 0;
+                height: 1px;
+                background: Ink.line.with-alpha(0.3);
+            }
+
+            new := Pressable {
+                x: Geometry.page-margin;
+                y: Geometry.footer-pad;
+                width: parent.width - 2 * Geometry.page-margin;
+                label: root.new-device.label;
+                enabled: root.new-device.enabled;
+                reason: root.new-device.reason;
+                escape-hatch: root.new-device.escape-hatch;
+                machine-rule: root.new-device.machine-rule;
+                presses: root.new-device.presses;
+                consequence: root.new-device.consequence;
+                primary: true;
+                pad: Geometry.page-margin;
+                activated => {
+                    root.new-pressed();
+                }
+
+                Text {
+                    text: root.new-device.label;
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-strong;
+                    color: root.new-device.enabled ? #ffffff : Ink.fg-disabled;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

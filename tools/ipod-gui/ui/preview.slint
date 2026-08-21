@@ -25,6 +25,23 @@ import { Ink, Metric, Motion } from "tokens.slint";
 import { Geometry } from "@geometry";
 import { Drawer, DrawerHandle, DrawerPage } from "drawer.slint";
 import { RailRow, RailKind } from "rail.slint";
+import { FixRow, Pressable } from "primitives.slint";
+
+// ─── The Composer's verdict region, as data (§11.3, §2.6) ───────────────────────────────────────
+//
+// **Six cases, because the region has four renderings and the `Fix` under it has three shapes.**
+// Nothing in this build composes a recipe, so this fixture is the only place any of them is drawn —
+// and `tests/markup_discipline.rs` reads the six out of this file and fails if one stops being
+// covered, in the same shape `the_preview_fixture_covers_every_rail_kind` holds the Rail's.
+struct ComposerCase {
+    name: string,
+    region: string,
+    emphatic: bool,
+    why: string,
+    open: bool,
+    has-fix: bool,
+    fix: FixRow,
+}
 
 export { Motion }
 
@@ -39,6 +56,75 @@ export component Preview inherits Window {
     in-out property <bool> open: true;
     in-out property <int> depth: 0;
     in-out property <DrawerPage> page: DrawerPage.none;
+
+    // **§11.3's six states, and the control that steps through them.** The verdict region has four
+    // renderings and the `Fix` under it has three shapes, and nothing in this build composes a
+    // recipe — so this is the only place any of them is drawn. The strings are the model's own,
+    // copied out of `compose.rs` rather than written for the fixture, which is what makes looking at
+    // this the same as looking at the program.
+    in-out property <int> case: 0;
+    property <[ComposerCase]> cases: [
+        // 1. Nothing chosen. `Recipe::nothing_chosen()` is the predicate — never a comparison
+        //    against the string — and before anything is chosen there is nothing to read either.
+        { name: "nothing", region: "nothing chosen yet", emphatic: false },
+        // 2. Still reading. `Start::FromImage { fat_type: None }` means *has not been looked at
+        //    yet*, and picking a 55.9 GB image on a slow external drive used to read `Ok` for
+        //    several seconds and then flip.
+        { name: "reading", region: "reading rockbox-test.img…", emphatic: false },
+        // 3. `Verdict::Ok` — `Recipe::describe()`, in the order `install::loader_menu` writes it.
+        {
+            name: "ok",
+            region: "A boot menu: ZeroSlackr, Apple OS, Rockbox, Disk Mode, Sleep.",
+            emphatic: false,
+        },
+        // 4. `Verdict::No` with a ONE-press fix: it changes the recipe and nothing else.
+        {
+            name: "one-press",
+            region: "ipodloader2 is what carries iPodLinux, and this recipe names Rockbox's bootloader.",
+            emphatic: true,
+            why: "ipodloader2 is what carries iPodLinux, and this recipe names Rockbox's bootloader. Rockbox's bootloader chain-loads Rockbox and Apple's software and knows nothing about a Linux kernel.",
+            open: true,
+            has-fix: true,
+            fix: { label: "use ipodloader2", enabled: true, machine-rule: true, presses: 1 },
+        },
+        // 5. `Verdict::No` with the TWO-press `BuildFromIpsw`, and its consequence drawn BEFORE the
+        //    first press — §11.3, and the finding it comes from: a one-press fix detached a 55.9 GB
+        //    reference with no sentence at all.
+        {
+            name: "two-press",
+            region: "That image's data partition is FAT32 type 0x0C, the LBA form, and ipodloader2 reads only 0x0B.",
+            emphatic: true,
+            why: "That image's data partition is FAT32 type 0x0C, the LBA form, and ipodloader2 reads only 0x0B — it will report \"No valid paritions found!\". Both are legitimate FAT32; drives off real iPods are 0x0C and drives built here are 0x0B.",
+            open: true,
+            has-fix: true,
+            fix: {
+                label: "build a new drive",
+                enabled: true,
+                machine-rule: true,
+                presses: 2,
+                consequence: "builds a new drive; rockbox-test.img stays in Parts and this device stops using it",
+            },
+        },
+        // 6. `Verdict::No` with a **disabled** fix — one naming a value the picker four rows above
+        //    refuses. Same project-state reason, same `mono` escape hatch, so the two surfaces
+        //    cannot word one refusal two ways.
+        {
+            name: "disabled-fix",
+            region: "iPodLinux boots and then its userland stalls, so nothing here can finish it.",
+            emphatic: true,
+            why: "iPodLinux boots — both partitions found, the root mounted, /bin/init run, no ATA error anywhere — and then ZeroLauncher stalls at Finishing Up.",
+            open: true,
+            has-fix: true,
+            fix: {
+                label: "add iPodLinux",
+                enabled: false,
+                reason: "iPodLinux boots, then ZeroLauncher stalls at Finishing Up.",
+                escape-hatch: "ipod-boot install-linux",
+                machine-rule: false,
+                presses: 1,
+            },
+        },
+    ];
 
     property <length> inset: root.open ? Geometry.drawer-w : 0px;
     animate inset {
@@ -77,6 +163,28 @@ export component Preview inherits Window {
                 text: "the bench is in window.slint. This root is the drawer and the Rail.";
                 font-size: Metric.body-size;
                 color: Ink.fg-dim;
+            }
+
+            // The one control this fixture has: step §11.3's six verdict states. It is a
+            // `Pressable`, so what you are looking at is the program's own construction rather than
+            // something written for the preview.
+            Pressable {
+                x: Geometry.page-margin;
+                y: Geometry.page-margin + Geometry.row-h;
+                width: Geometry.drawer-w;
+                label: "next verdict state";
+                pad: Geometry.page-margin;
+                activated => {
+                    root.case = (root.case + 1) < root.cases.length ? root.case + 1 : 0;
+                }
+
+                Text {
+                    text: "next verdict state: " + root.cases[root.case].name;
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-strong;
+                    color: Ink.accent;
+                    vertical-alignment: center;
+                }
             }
         }
 
@@ -208,6 +316,261 @@ export component Preview inherits Window {
                     dismissible: true,
                 },
             ];
+
+            // ── The Composer's root, cycled through §11.3's six states ──
+            composer-title: "New device";
+            composer-which-value: "Black 5.5G";
+            composer-runs-value: "Apple + Rockbox";
+            composer-named-value: "My 5.5G";
+            composer-which-enabled: true;
+            composer-runs-enabled: true;
+            composer-named-enabled: true;
+            composer-generation: root.case;
+            composer-region-text: root.cases[root.case].region;
+            composer-region-emphatic: root.cases[root.case].emphatic;
+            composer-refusal-why: root.cases[root.case].why;
+            composer-refusal-open: root.cases[root.case].open;
+            composer-has-fix: root.cases[root.case].has-fix;
+            composer-fix: root.cases[root.case].fix;
+            composer-ledger-download: "16 MB to download";
+            composer-ledger-disk: "about 37 MB on disk, 312 GB free";
+            composer-create: {
+                label: "Create",
+                enabled: !root.cases[root.case].emphatic,
+                reason: root.cases[root.case].why,
+                machine-rule: true,
+                presses: 1,
+            };
+            composer-plan: [
+                { verb: "fetch", what: "Apple's firmware", sub: "iPod_25.1.3.ipsw - 6533633 B" },
+                { verb: "build", what: "a drive, 8 GiB volume", sub: "16 777 216 sectors, sparse" },
+                { verb: "fetch", what: "Rockbox 4.0", sub: "9 090 335 B" },
+                { verb: "install", what: "Rockbox and its bootloader", sub: "never writes to the source" },
+            ];
+
+            // ── Level (1): a synthesised ROM, masked by default ──
+            //
+            // **Every identifier here is invented.** The mask is what is drawn, `raw` is empty while
+            // masked, and `000A27` is Apple's published OUI — the constant `identity::APPLE_OUI`
+            // already declares — rather than anybody's device.
+            composer-picks: [
+                { field: 0, label: "iPod", value: "Make one", enabled: true, chevron: true },
+                {
+                    field: 1,
+                    label: "Model",
+                    value: "5.5G, 30 GB",
+                    enabled: true,
+                    chevron: true,
+                    note: "2 devices are made of this iPod and will change with it.",
+                },
+                {
+                    field: 2,
+                    label: "Colour",
+                    value: "Black",
+                    enabled: true,
+                    chevron: true,
+                    note: "a different iPod — this changes the serial and the FireWire GUID",
+                },
+            ];
+            composer-fields: [
+                {
+                    field: 3,
+                    label: "Serial",
+                    value: "AB******123",
+                    raw: "",
+                    masked: true,
+                    mono: true,
+                    action: "Show",
+                    note: "the third character is the year, and 2006 or 2007 are the only ones this generation was made in.",
+                },
+                {
+                    field: 4,
+                    label: "GUID",
+                    value: "000A27**********",
+                    raw: "",
+                    masked: true,
+                    mono: true,
+                    action: "Show",
+                    note: "generated from a seed, so the same iPod comes back next launch.",
+                },
+            ];
+            composer-title-auth: "It can never authorise a purchased title — invented values match no purchase ever made, on any machine.";
+            composer-copy-command: {
+                label: "Copy the command line",
+                enabled: false,
+                reason: "this build has no clipboard",
+                machine-rule: false,
+                presses: 1,
+            };
+
+            // ── Level (2): every box ticks, and the two that are not offered say why ──
+            composer-ticks: [
+                { os: 0, label: "Apple's software", on: true, enabled: true },
+                { os: 1, label: "Rockbox 4.0", on: true, enabled: true },
+                {
+                    os: 2,
+                    label: "iPodLinux",
+                    on: false,
+                    enabled: false,
+                    reason: "boots, then ZeroLauncher stalls at Finishing Up.",
+                    escape-hatch: "ipod-boot install-linux",
+                },
+            ];
+            composer-refusals: [
+                {
+                    why: root.cases[root.case].why,
+                    has-fix: root.cases[root.case].has-fix,
+                    fix: root.cases[root.case].fix,
+                    open: root.cases[root.case].open,
+                },
+            ];
+
+            // ── Level (3) ──
+            composer-name-field: {
+                field: 9,
+                label: "Name",
+                value: "My 5.5G",
+                raw: "My 5.5G",
+                action: "",
+            };
+            composer-stem: "my-5.5g.img";
+            composer-taken: "";
+
+            // ── §11.4's Parts, all six groups, one ROM expanded ──
+            parts-groups: [
+                {
+                    group: 0,
+                    heading: "iPods",
+                    count: 1,
+                    verb: "chosen by a device",
+                    empty: "An iPod is a boot ROM. Dump one, or make one.",
+                    has-a: true,
+                    a-action: 0,
+                    a: { label: "Add a dump", enabled: false, reason: "There is no file picker in this build yet.", escape-hatch: "ipod-boot facts FILE", machine-rule: false, presses: 1 },
+                    has-b: true,
+                    b-action: 1,
+                    b: { label: "Synthesise", enabled: true, machine-rule: true, presses: 1 },
+                },
+                {
+                    group: 1,
+                    heading: "Apple firmware",
+                    count: 0,
+                    verb: "makes a disk",
+                    empty: "Apple's firmware bundle is what a drive is built from.",
+                    has-a: true,
+                    a-action: 2,
+                    a: { label: "Fetch", enabled: true, machine-rule: true, presses: 1 },
+                    has-b: true,
+                    b-action: 3,
+                    b: { label: "Provide", enabled: false, reason: "There is no file picker in this build yet.", escape-hatch: "ipod-boot firmware get 25", machine-rule: false, presses: 1 },
+                },
+                {
+                    group: 2,
+                    heading: "Bootloaders",
+                    count: 0,
+                    verb: "goes in the firmware partition, which holds exactly one thing",
+                    empty: "A bootloader is what chooses between the systems on a drive.",
+                    has-a: true,
+                    a-action: 2,
+                    a: { label: "Fetch", enabled: true, machine-rule: true, presses: 1 },
+                    has-b: true,
+                    b-action: 3,
+                    b: { label: "Provide", enabled: false, reason: "There is no file picker in this build yet.", escape-hatch: "ipod-boot firmware get 25", machine-rule: false, presses: 1 },
+                },
+                {
+                    group: 3,
+                    heading: "Software",
+                    count: 0,
+                    verb: "installs onto a disk",
+                    empty: "Rockbox and iPodLinux install onto a drive that already exists.",
+                    has-a: true,
+                    a-action: 2,
+                    a: { label: "Fetch", enabled: true, machine-rule: true, presses: 1 },
+                    has-b: true,
+                    b-action: 3,
+                    b: { label: "Provide", enabled: false, reason: "There is no file picker in this build yet.", escape-hatch: "ipod-boot firmware get 25", machine-rule: false, presses: 1 },
+                },
+                {
+                    group: 4,
+                    heading: "Disks",
+                    count: 0,
+                    verb: "what a device runs",
+                    empty: "A disk is the drive a device boots from.",
+                    has-a: true,
+                    a-action: 4,
+                    a: { label: "Build", enabled: true, machine-rule: true, presses: 1 },
+                    has-b: true,
+                    b-action: 3,
+                    b: { label: "Provide", enabled: false, reason: "There is no file picker in this build yet.", escape-hatch: "ipod-boot make-disk", machine-rule: false, presses: 1 },
+                },
+                {
+                    group: 5,
+                    heading: "Snapshots",
+                    count: 0,
+                    verb: "what press to resume resumes",
+                    empty: "Nothing has been parked. Closing the window parks the machine.",
+                    has-a: false,
+                    has-b: false,
+                },
+            ];
+            parts-rows: [
+                {
+                    id: 1,
+                    group: 0,
+                    kind: 0,
+                    name: "No iPod is plugged in",
+                    expandable: false,
+                    removable: false,
+                },
+                {
+                    id: 2,
+                    group: 0,
+                    kind: 1,
+                    name: "Black 5.5G",
+                    fact: "synthesised, seed 4f2a",
+                    used-by: "used by 2",
+                    expandable: true,
+                    selected: true,
+                    removable: true,
+                    remove-consequence: "My 5.5G and Test rig are made of this iPod. Removing it leaves them naming an iPod that is not filed.",
+                    locked-by: "",
+                },
+            ];
+            parts-detail-of: 2;
+            parts-detail: [
+                { label: "Model", value: "5.5G, 30 GB, black", mono: false, has-action: false },
+                { label: "Serial", value: "AB******123", mono: true, has-action: false },
+                { label: "GUID", value: "000A27**********", mono: true, has-action: false },
+                {
+                    label: "",
+                    value: "This is not a 5th-generation iPod — the table says 4th generation. The bench draws whatever ROM a device points at using one hero and one drawing, so it would be rendered as a 5.5G with a 320 x 240 glass.",
+                    machine-rule: true,
+                    has-action: false,
+                },
+                {
+                    label: "",
+                    value: "Show its boot screen",
+                    has-action: true,
+                    action: 7,
+                    act-label: "Show its boot screen",
+                    enabled: true,
+                    presses: 1,
+                },
+            ];
+
+            // ── §11.6's Settings, and both disabled rows say why ──
+            setting-theme-value: "System";
+            setting-theme-enabled: false;
+            setting-theme-reason: "this build has one palette; §6.4's dark values are not in tokens.slint yet.";
+            setting-check-updates: true;
+            setting-file-name: "settings.txt";
+            setting-file-path: "~/Library/Application Support/ipod-emulator/settings.txt";
+            setting-copy-enabled: false;
+            setting-copy-reason: "this build has no clipboard";
+
+            // ── §7.2's Devices ──
+            devices-empty-line: "No devices yet.";
+            devices-new: { label: "+ New device", enabled: true, machine-rule: true, presses: 1 };
 
             close => {
                 root.open = false;

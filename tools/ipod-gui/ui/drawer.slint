@@ -11,14 +11,40 @@
 
 import { Ink, Metric, Motion } from "tokens.slint";
 import { Geometry } from "@geometry";
-import { DrawerHeader, Pressable, Row, Scroll } from "primitives.slint";
+import {
+    DetailRow,
+    DeviceRow,
+    DrawerHeader,
+    FieldRow,
+    FixRow,
+    GroupRow,
+    OptionRow,
+    PartRow,
+    PickRow,
+    PlanRow,
+    Pressable,
+    RefusalRow,
+    Row,
+    Scroll,
+    TickRow,
+} from "primitives.slint";
 import { RailRow } from "rail.slint";
 import { WorkPage } from "work.slint";
+import { ComposerRoot, NameItPage, WhatItRunsPage, WhichIpodPage } from "composer.slint";
+import { DevicesPage } from "devices.slint";
+import { PartsPage } from "parts.slint";
+import { SettingsPage } from "settings.slint";
 
 // The generated Rust is `pub enum DrawerPage { None, Devices, Parts, Games, Work, Readout,
-// Settings, Reference }` with `None` as `#[default]`. `main.rs` maps it to and from `nav::Page`
-// with an **exhaustive `match`**, so a page added on either side is a compile error rather than a
-// silent `none`.
+// Settings, Reference, Composer, ComposerIpod, ComposerRuns, ComposerName }` with `None` as
+// `#[default]`. `main.rs` maps it to and from `nav::Page` with an **exhaustive `match`**, so a page
+// added on either side is a compile error rather than a silent `none` — which is why the four
+// Composer levels below cannot be landed quietly.
+//
+// **Four variants for the Composer, not "the Composer is `Page::Devices` at depth 2."**
+// `nav::Page::slot()` returns ONE slot per page, and a page cannot have two; a second page drawn at
+// a depth its own `slot()` denies is a blank 420 px panel with no header and no way out, which is
+// the hole `⌘,` fell into and which `Stack::go`'s guard now refuses.
 export enum DrawerPage {
     none,
     devices,
@@ -28,6 +54,10 @@ export enum DrawerPage {
     readout,
     settings,
     reference,
+    composer,
+    composer-ipod,
+    composer-runs,
+    composer-name,
 }
 
 // ─── The root page ──────────────────────────────────────────────────────────────────────────────
@@ -59,11 +89,15 @@ export component MenuPage inherits Rectangle {
             }
         }
 
-        // **The root page scrolls, and it has to.** Six of its seven rows are disabled, and a
-        // disabled `Pressable` is 44 + 34 = 78 px because §9.4's reason slot is reserved under it —
-        // so this page's own minimum is 44 + 6×78 + 44 = **556 px**. The drawer is
-        // `client-height - SHELF`, which at the declared window minimum of 400 is **312**. Without a
-        // Scroll, Work is cut in half and Readout / Settings / Reference fall outside the drawer's
+        // **The root page scrolls, and it still has to.** Three of its seven rows are live now —
+        // Devices, Parts and Settings — and their disabled reasons went with them rather than being
+        // left standing beside the pages that make them false, which is the drift §16.9 exists to
+        // delete. A disabled `Pressable` is 44 + 34 = 78 px because §9.4's reason slot is reserved
+        // under it, so this page's own minimum is 44 header + 3×44 live + 4×78 disabled =
+        // **488 px**, down from 556. The drawer is
+        // `client-height - SHELF`, which at the declared window minimum of 400 is **312**. 488 is
+        // still well past that, so the Scroll stays. Without one, Work is cut in half and
+        // Readout / Reference fall outside the drawer's
         // `clip` — and a clipped item is not merely invisible: `WindowInner::move_focus` gates tab
         // navigation on `is_visible_or_clipped_by_flickable()`, which recovers an item only when the
         // hiding ancestor is a Flickable. The drawer clips with a Rectangle, so there was no
@@ -86,10 +120,10 @@ export component MenuPage inherits Rectangle {
                     index: 0;
                     count: 7;
                     label: "Devices";
-                    enabled: false;
-                    machine-rule: false;
-                    reason: "Composing a device has no page yet.";
-                    escape-hatch: "ipod-boot setup";
+                    chevron: true;
+                    activated => {
+                        root.go(DrawerPage.devices, 1);
+                    }
                     gained-focus => {
                         scroll.ensure-visible(self.absolute-position.y, self.height);
                     }
@@ -99,10 +133,10 @@ export component MenuPage inherits Rectangle {
                     index: 1;
                     count: 7;
                     label: "Parts";
-                    enabled: false;
-                    machine-rule: false;
-                    reason: "Nothing lists the files a device is made of yet.";
-                    escape-hatch: "ipod-boot facts FILE";
+                    chevron: true;
+                    activated => {
+                        root.go(DrawerPage.parts, 1);
+                    }
                     gained-focus => {
                         scroll.ensure-visible(self.absolute-position.y, self.height);
                     }
@@ -152,10 +186,10 @@ export component MenuPage inherits Rectangle {
                     index: 5;
                     count: 7;
                     label: "Settings";
-                    enabled: false;
-                    machine-rule: false;
-                    reason: "Theme, the update check and the settings file have no page yet.";
-                    escape-hatch: "ipod-boot setup";
+                    chevron: true;
+                    activated => {
+                        root.go(DrawerPage.settings, 1);
+                    }
                     gained-focus => {
                         scroll.ensure-visible(self.absolute-position.y, self.height);
                     }
@@ -215,12 +249,112 @@ export component Drawer inherits Rectangle {
     in property <string> ledger-note;
     in property <bool> ledger-warn: false;
 
+    // ── §7.2's Devices page ──
+    //
+    // **`devices` and `selected` are the bench's own two**, threaded down rather than copied.
+    // `selected` is two-way (`<=>`) all the way from `MainWindow`, so pressing a row here and
+    // pressing `←`/`→` on the bench write one number — which is what makes
+    // `the_devices_page_and_the_bench_read_one_model` mean anything.
+    in property <[DeviceRow]> devices;
+    in-out property <int> selected: 0;
+    in property <[DetailRow]> devices-detail;
+    in property <int> devices-detail-of: -1;
+    in property <string> devices-empty-line;
+    in property <FixRow> devices-new;
+
+    // ── §11.4's Parts page ──
+    in property <[GroupRow]> parts-groups;
+    in property <[PartRow]> parts-rows;
+    in property <[DetailRow]> parts-detail;
+    in property <int> parts-detail-of: -1;
+    in property <image> parts-preview;
+    in property <bool> parts-has-preview: false;
+
+    // ── §11.6's Settings page ──
+    in property <string> setting-theme-value;
+    // **No default written out**, and that is not fussiness: a `bool` property already defaults to
+    // false, and `the_drawers_root_page_needs_more_room_than_it_has_and_therefore_scrolls` counts
+    // the disabled-row binding as raw text across this whole file to know how many `MenuPage` rows
+    // are disabled. A property declaration ending in those same two words is a phantom disabled
+    // row — four of them, here — and the sweep cannot tell a declaration from a binding.
+    in property <bool> setting-theme-enabled;
+    in property <string> setting-theme-reason;
+    in property <bool> setting-check-updates: false;
+    in property <string> setting-toggle-reason;
+    in property <string> setting-file-name;
+    in property <string> setting-file-path;
+    in property <bool> setting-copy-enabled;
+    in property <string> setting-copy-reason;
+
+    // ── §11.2's Composer, at depths 2 and 3 ──
+    in property <string> composer-title;
+    in property <string> composer-which-value;
+    in property <string> composer-runs-value;
+    in property <string> composer-named-value;
+    in property <bool> composer-which-enabled: true;
+    in property <bool> composer-runs-enabled;
+    in property <bool> composer-named-enabled;
+    in property <string> composer-which-reason;
+    in property <string> composer-runs-reason;
+    in property <string> composer-named-reason;
+    in property <string> composer-region-text;
+    in property <bool> composer-region-emphatic: false;
+    in property <string> composer-refusal-why;
+    in property <bool> composer-refusal-open: false;
+    in property <bool> composer-has-fix: false;
+    in property <FixRow> composer-fix;
+    in property <FixRow> composer-create;
+    // §3.2's one job: every two-press control in the Composer disarms when this moves, because
+    // `armed` is component-local and a `Fix` armed against one recipe must not fire against another.
+    in property <int> composer-generation: 0;
+    in property <[PlanRow]> composer-plan;
+    in property <string> composer-ledger-download;
+    in property <string> composer-ledger-disk;
+    in property <bool> composer-ledger-warn: false;
+    in property <[PickRow]> composer-picks;
+    in property <[FieldRow]> composer-fields;
+    in property <[TickRow]> composer-ticks;
+    in property <[OptionRow]> composer-options;
+    in property <int> composer-open-field: -1;
+    in property <[RefusalRow]> composer-refusals;
+    in property <string> composer-title-auth;
+    in property <FixRow> composer-copy-command;
+    in property <string> composer-no-ipod;
+    in property <FieldRow> composer-name-field;
+    in property <string> composer-stem;
+    in property <string> composer-taken;
+    in property <string> composer-runs-disabled;
+
     callback close();
     callback back();
     callback go(DrawerPage, int);
     callback rail-cancel(int);
     callback rail-dismiss(int);
     callback rail-next(int, int);
+
+    callback device-expand(int, bool);
+    callback device-row-action(int, int);
+    callback device-new();
+    callback start-device(int);
+
+    callback parts-expand(int, bool);
+    callback parts-group-action(int, int);
+    callback parts-row-action(int, int);
+
+    callback setting-toggled(int);
+
+    callback composer-open(int);
+    callback composer-expand(int, bool);
+    callback composer-pick(int, int);
+    callback composer-type(int, string);
+    callback composer-reveal(int);
+    callback composer-tick(int, bool);
+    // **`composer-fix-pressed`, not `composer-fix`.** The `FixRow` above already owns that name,
+    // and Slint refuses a callback and a property that spell the same thing — which is the right
+    // answer: `composer-fix` is what the control IS, and this is what pressing it does.
+    callback composer-fix-pressed();
+    callback composer-act(int);
+    callback composer-commit();
 
     width: Geometry.drawer-w;
     // §9.5's decision: the drawer runs the full client height ABOVE the shelf. The shelf's band and
@@ -297,7 +431,12 @@ export component Drawer inherits Rectangle {
                 }
             }
 
-            // depth 1
+            // depth 1 — Work, Devices, Parts, Settings.
+            //
+            // **Four pages in one slot, told apart by `visible` and never by `if`** (§16.3): a
+            // conditional repeater destroys its subtree, which is what threw away hover, focus and
+            // the scroll offset on every tab change in the window this replaces. Coming back to a
+            // page here finds it exactly where you left it.
             Rectangle {
                 width: Geometry.drawer-w;
 
@@ -327,16 +466,215 @@ export component Drawer inherits Rectangle {
                         root.rail-next(id, n);
                     }
                 }
+
+                DevicesPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(2) && root.page == DrawerPage.devices;
+                    devices: root.devices;
+                    selected <=> root.selected;
+                    detail: root.devices-detail;
+                    detail-of: root.devices-detail-of;
+                    empty-line: root.devices-empty-line;
+                    new-device: root.devices-new;
+                    back-pressed => {
+                        root.back();
+                    }
+                    expand(i, on) => {
+                        root.device-expand(i, on);
+                    }
+                    start-device(i) => {
+                        root.start-device(i);
+                    }
+                    row-action(a, i) => {
+                        root.device-row-action(a, i);
+                    }
+                    new-pressed => {
+                        root.device-new();
+                    }
+                }
+
+                PartsPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(2) && root.page == DrawerPage.parts;
+                    groups: root.parts-groups;
+                    rows: root.parts-rows;
+                    detail: root.parts-detail;
+                    detail-of: root.parts-detail-of;
+                    preview: root.parts-preview;
+                    has-preview: root.parts-has-preview;
+                    back-pressed => {
+                        root.back();
+                    }
+                    expand(id, on) => {
+                        root.parts-expand(id, on);
+                    }
+                    group-action(g, a) => {
+                        root.parts-group-action(g, a);
+                    }
+                    row-action(a, id) => {
+                        root.parts-row-action(a, id);
+                    }
+                }
+
+                SettingsPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(2) && root.page == DrawerPage.settings;
+                    theme-value: root.setting-theme-value;
+                    theme-enabled: root.setting-theme-enabled;
+                    theme-reason: root.setting-theme-reason;
+                    check-updates: root.setting-check-updates;
+                    toggle-reason: root.setting-toggle-reason;
+                    file-name: root.setting-file-name;
+                    file-path: root.setting-file-path;
+                    copy-enabled: root.setting-copy-enabled;
+                    copy-reason: root.setting-copy-reason;
+                    back-pressed => {
+                        root.back();
+                    }
+                    // The row index, so one handler covers three rows and Rust decides what each
+                    // one writes. `Settings::save()` runs immediately: a preference that does not
+                    // survive the launch it was set in is not a preference.
+                    toggle-updates => {
+                        root.setting-toggled(1);
+                    }
+                    copy-path => {
+                        root.setting-toggled(2);
+                    }
+                }
             }
 
-            // depth 2
+            // depth 2 — the Composer's root.
             Rectangle {
                 width: Geometry.drawer-w;
+
+                ComposerRoot {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(3) && root.page == DrawerPage.composer;
+                    device-title: root.composer-title;
+                    which-value: root.composer-which-value;
+                    runs-value: root.composer-runs-value;
+                    named-value: root.composer-named-value;
+                    which-enabled: root.composer-which-enabled;
+                    runs-enabled: root.composer-runs-enabled;
+                    named-enabled: root.composer-named-enabled;
+                    which-reason: root.composer-which-reason;
+                    runs-reason: root.composer-runs-reason;
+                    named-reason: root.composer-named-reason;
+                    region-text: root.composer-region-text;
+                    region-emphatic: root.composer-region-emphatic;
+                    refusal-why: root.composer-refusal-why;
+                    refusal-open: root.composer-refusal-open;
+                    has-fix: root.composer-has-fix;
+                    fix: root.composer-fix;
+                    generation: root.composer-generation;
+                    plan: root.composer-plan;
+                    ledger-download: root.composer-ledger-download;
+                    ledger-disk: root.composer-ledger-disk;
+                    ledger-warn: root.composer-ledger-warn;
+                    create: root.composer-create;
+                    open(f) => {
+                        root.composer-open(f);
+                    }
+                    fix-pressed => {
+                        root.composer-fix-pressed();
+                    }
+                    commit => {
+                        root.composer-commit();
+                    }
+                    back-pressed => {
+                        root.back();
+                    }
+                }
             }
 
-            // depth 3
+            // depth 3 — the Composer's three levels.
             Rectangle {
                 width: Geometry.drawer-w;
+
+                WhichIpodPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(4) && root.page == DrawerPage.composer-ipod;
+                    device-title: root.composer-title;
+                    picks: root.composer-picks;
+                    fields: root.composer-fields;
+                    options: root.composer-options;
+                    open-field: root.composer-open-field;
+                    title-auth: root.composer-title-auth;
+                    copy-command: root.composer-copy-command;
+                    no-ipod: root.composer-no-ipod;
+                    back-pressed => {
+                        root.back();
+                    }
+                    expand(f, on) => {
+                        root.composer-expand(f, on);
+                    }
+                    pick(f, id) => {
+                        root.composer-pick(f, id);
+                    }
+                    typed(f, t) => {
+                        root.composer-type(f, t);
+                    }
+                    reveal(f) => {
+                        root.composer-reveal(f);
+                    }
+                    act(f) => {
+                        root.composer-act(f);
+                    }
+                }
+
+                WhatItRunsPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(4) && root.page == DrawerPage.composer-runs;
+                    device-title: root.composer-title;
+                    picks: root.composer-picks;
+                    ticks: root.composer-ticks;
+                    options: root.composer-options;
+                    open-field: root.composer-open-field;
+                    refusals: root.composer-refusals;
+                    generation: root.composer-generation;
+                    disabled-reason: root.composer-runs-disabled;
+                    back-pressed => {
+                        root.back();
+                    }
+                    expand(f, on) => {
+                        root.composer-expand(f, on);
+                    }
+                    pick(f, id) => {
+                        root.composer-pick(f, id);
+                    }
+                    ticked(os, on) => {
+                        root.composer-tick(os, on);
+                    }
+                    // `Recipe::check()` yields one verdict carrying one `Fix`, so the index is the
+                    // refusal's position and not a choice of fix. It is passed rather than dropped
+                    // so that the day `check()` returns two, this callback does not have to change.
+                    fix(i) => {
+                        root.composer-fix-pressed();
+                    }
+                }
+
+                NameItPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(4) && root.page == DrawerPage.composer-name;
+                    device-title: root.composer-title;
+                    name: root.composer-name-field;
+                    stem: root.composer-stem;
+                    taken: root.composer-taken;
+                    back-pressed => {
+                        root.back();
+                    }
+                    // `Field::Name` is `Field::ALL`'s tenth entry.
+                    typed(t) => {
+                        root.composer-type(9, t);
+                    }
+                }
             }
 
             // The blank trailing slot.

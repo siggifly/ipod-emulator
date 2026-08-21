@@ -28,6 +28,16 @@ pub enum Page {
     Readout,
     Settings,
     Reference,
+    /// §11.2's root — three numbered rows, the verdict, the plan and `Create`.
+    ///
+    /// **Four variants and not "`Devices` at depth 2".** [`Page::slot`] returns one slot per page,
+    /// and a page cannot have two: reading a level off the stack rather than off the page would put
+    /// the answer to *which child draws this* in two places, which is the drift `slot` exists to
+    /// delete.
+    Composer,
+    ComposerIpod,
+    ComposerRuns,
+    ComposerName,
 }
 
 impl Page {
@@ -48,16 +58,18 @@ impl Page {
         match self {
             // The root page. `MenuPage` is the depth-0 slot's only child and always has been.
             Page::None => Some(0),
-            // `WorkPage` is the depth-1 slot's only child.
-            Page::Work => Some(1),
+            // The depth-1 slot's four children. `ui/drawer.slint` draws each of them at
+            // `on-screen(2)`, which is that slot — the strip carries a blank at each end, so the
+            // markup's `n` is one more than the depth.
+            Page::Devices | Page::Parts | Page::Work | Page::Settings => Some(1),
+            // §11.2's root, one level deeper than the Devices page it is entered from.
+            Page::Composer => Some(2),
+            // …and its three levels, one deeper again. Each `›` slides one level and comes straight
+            // back; §4's three-level maximum is exactly reached here and nowhere else.
+            Page::ComposerIpod | Page::ComposerRuns | Page::ComposerName => Some(3),
             // Not built. Each of these has a `MenuPage` row that is disabled and names its escape
             // hatch, which is where a person is told about them.
-            Page::Devices
-            | Page::Parts
-            | Page::Games
-            | Page::Readout
-            | Page::Settings
-            | Page::Reference => None,
+            Page::Games | Page::Readout | Page::Reference => None,
         }
     }
 }
@@ -146,12 +158,26 @@ impl Stack {
     /// makes that a *decision* rather than an accident: adding a page is a compile error there until
     /// somebody says which level draws it.
     pub fn go(&mut self, p: Page, depth: i32) {
-        let d = match p.slot() {
-            Some(_) => depth.clamp(0, max_depth()),
+        let Some(slot) = p.slot() else {
             // Nothing draws it. §9.1 forbids a bare *nothing here* on every surface, and a slot with
             // no page is worse than that — it does not even say so. The menu does.
-            None => 0,
+            self.open = true;
+            self.pages.clear();
+            return;
         };
+        // **Never jump a level.** `resize(d, Page::None)` fills the levels below with a page nothing
+        // draws, so arriving at depth 3 from depth 0 would leave two blank panels underneath and
+        // `back` would walk down through them.
+        let d = depth.clamp(0, max_depth()).min(self.depth() + 1);
+        // **And a page is drawn at exactly ONE level.** `go(Composer, 2)` from depth 0 clamps to 1
+        // by the line above, where nothing draws a Composer — a blank 420 px panel, which is what
+        // the arm above exists to prevent, one level down. Landing on the menu is the same answer
+        // that arm already gives.
+        if d != slot {
+            self.open = true;
+            self.pages.clear();
+            return;
+        }
         self.open = true;
         if d == 0 {
             self.pages.clear();
@@ -160,6 +186,15 @@ impl Stack {
         self.pages.resize(d as usize, Page::None);
         let last = self.pages.len() - 1;
         self.pages[last] = p;
+    }
+
+    /// One level deeper, into the page's own slot. **The only navigation the Composer does.**
+    ///
+    /// Written as `go(p, depth() + 1)` rather than as a second body, so the two guards above hold
+    /// for it as well: a push of a page whose slot is not the next level down lands on the menu
+    /// rather than on a blank panel.
+    pub fn push(&mut self, p: Page) {
+        self.go(p, self.depth() + 1);
     }
 
     /// One level out. At depth 0 the way out of the drawer is the same control, so it closes.
@@ -241,7 +276,7 @@ fn max_depth() -> i32 {
 mod tests {
     use super::*;
 
-    const EVERY_PAGE: [Page; 8] = [
+    const EVERY_PAGE: [Page; 12] = [
         Page::None,
         Page::Devices,
         Page::Parts,
@@ -250,7 +285,41 @@ mod tests {
         Page::Readout,
         Page::Settings,
         Page::Reference,
+        Page::Composer,
+        Page::ComposerIpod,
+        Page::ComposerRuns,
+        Page::ComposerName,
     ];
+
+    /// Walk down to a page's own slot the way the drawer does — one level at a time.
+    ///
+    /// **`go(p, 3)` from depth 0 no longer arrives.** `go` clamps to `depth() + 1` and then refuses
+    /// any page whose slot is not the level it landed on, because a page drawn at one level and
+    /// navigated to at another is a blank panel. So a test that wants a page at depth 3 has to get
+    /// there, and a test that jumps is testing the refusal rather than the depth.
+    fn walk_to(s: &mut Stack, p: Page) {
+        let Some(slot) = p.slot() else {
+            s.go(p, 0);
+            return;
+        };
+        for level in 1..=slot {
+            let want = if level == slot { p } else { drawn_at(level) };
+            s.go(want, level);
+        }
+        if slot == 0 {
+            s.go(p, 0);
+        }
+    }
+
+    /// Some page the drawer draws at this level. Every level from 1 to [`max_depth`] has one, and
+    /// `Page::slot`'s exhaustive match is what guarantees it.
+    fn drawn_at(level: i32) -> Page {
+        EVERY_PAGE
+            .iter()
+            .copied()
+            .find(|q| q.slot() == Some(level))
+            .unwrap_or_else(|| panic!("no page is drawn at level {level}"))
+    }
 
     /// The worst case, **derived rather than typed**: one press for fullscreen, one for an Expand,
     /// one per drawer level, and one to close the drawer.
@@ -271,14 +340,24 @@ mod tests {
     /// presses before the drawer is even reached, and §4 allows three levels inside it. So the
     /// bound is derived from the terms, exactly as `the_column_terms_sum_to_the_declared_chrome`
     /// does with §9.6's column, and the number it produces is asserted.
+    ///
+    /// **It walks down one level at a time now, and it had to.** It used to sweep
+    /// `s.go(page, depth)` for `depth in 0..=3` — under `go`'s clamp every one of those states
+    /// becomes depth ≤ 1, so the test would go on passing while having stopped testing depth at
+    /// all: three of the four depths would be the same state under a different name.
     #[test]
     fn every_surface_can_be_left() {
         for page in EVERY_PAGE {
-            for depth in 0..=max_depth() {
-                for expand in [false, true] {
-                    for fullscreen in [false, true] {
+            for expand in [false, true] {
+                for fullscreen in [false, true] {
+                    {
                         let mut s = Stack::new();
-                        s.go(page, depth);
+                        // **Walked to, not jumped to.** `go` refuses any page whose slot is not the
+                        // level it lands on, so the old `for depth in 0..=3` sweep would have
+                        // collapsed every state to depth ≤ 1 — passing, while having stopped
+                        // testing depth at all.
+                        walk_to(&mut s, page);
+                        let depth = s.depth();
                         if expand {
                             s.expand_opened(7);
                         }
@@ -310,7 +389,8 @@ mod tests {
 
         // And the worst case really is the worst case, rather than a bound nothing reaches.
         let mut s = Stack::new();
-        s.go(A_DRAWN_PAGE, max_depth());
+        walk_to(&mut s, drawn_at(max_depth()));
+        assert_eq!(s.depth(), max_depth(), "the walk did not reach the deepest level");
         s.expand_opened(1);
         s.enter_fullscreen();
         let mut presses = 0;
@@ -349,8 +429,12 @@ mod tests {
 
         // **Neither closing key writes `depth`.** Close and reopen and you are where you were.
         for depth in 0..=max_depth() {
+            // Walked down rather than jumped to: `go` refuses a page at a level that does not draw
+            // it, so a level-1 page asked for at level 2 lands on the menu and the assertions below
+            // would be about depth 0 under three different names.
             let mut s = Stack::new();
-            s.go(A_DRAWN_PAGE, depth);
+            let page = if depth == 0 { Page::None } else { drawn_at(depth) };
+            walk_to(&mut s, page);
 
             s.toggle();
             assert!(!s.open());
@@ -358,7 +442,7 @@ mod tests {
             s.toggle();
             assert!(s.open());
             assert_eq!(s.depth(), depth, "reopening did not return to level {depth}");
-            assert_eq!(s.page(), if depth == 0 { Page::None } else { A_DRAWN_PAGE });
+            assert_eq!(s.page(), page);
 
             s.close();
             assert_eq!(s.depth(), depth, "close() moved the depth at level {depth}");
@@ -366,7 +450,7 @@ mod tests {
 
         // And `Esc` on a closed drawer touches nothing.
         let mut s = Stack::new();
-        s.go(A_DRAWN_PAGE, 2);
+        walk_to(&mut s, drawn_at(2));
         s.close();
         assert_eq!(s.escape(false, false), Escape::Nothing);
         assert_eq!(s.depth(), 2, "Esc moved the depth of a drawer that was not even open");
@@ -375,9 +459,24 @@ mod tests {
     /// §4: three levels, and a fourth is clamped rather than drawn into a blank slot.
     #[test]
     fn the_drawer_is_never_deeper_than_the_strip_has_slots() {
+        // **Four pushes, not one `go(page, 9)`.** The clamp is `min(depth() + 1)` now, so a single
+        // jump to 9 lands at 1 and the old assertion tested the wrong clamp. This walks to the
+        // bottom the way the drawer does and then tries to go one further.
         let mut s = Stack::new();
-        s.go(A_DRAWN_PAGE, 9);
-        assert_eq!(s.depth(), max_depth());
+        s.go(A_DRAWN_PAGE, 1);
+        s.push(Page::Composer);
+        s.push(Page::ComposerIpod);
+        assert_eq!(s.depth(), max_depth(), "three pushes did not reach the bottom slot");
+        // A fourth push moves **sideways** at the bottom level rather than downward — the clamp is
+        // what makes that the only thing it can do, and a level that does not exist is not one of
+        // the outcomes.
+        s.push(Page::ComposerRuns);
+        assert_eq!(
+            s.depth(),
+            max_depth(),
+            "a fourth level would be drawn into a strip slot that does not exist"
+        );
+        assert_eq!(s.page(), Page::ComposerRuns);
         assert_eq!(max_depth(), 3, "§4 says max 3 levels deep");
         // The strip is one slot per level plus a blank at each end, because `lively` overshoots.
         assert!(
@@ -417,16 +516,13 @@ mod tests {
     /// states the gap: `MenuPage` draws Reference disabled with *"The keyboard table and the stated
     /// limits have no page yet."* Every other unbuilt page in this program is unreachable and says
     /// why; that was the one hole in the policy.
+    ///
+    /// **Devices, Parts and Settings came off this list**, and that is three deliberate lines
+    /// rather than a slip: `ui/drawer.slint`'s depth-1 slot draws each of them now. The list
+    /// shrinks as pages land, one row at a time, exactly as `Page::slot`'s own doc says.
     #[test]
     fn a_page_nothing_draws_lands_on_the_menu() {
-        for p in [
-            Page::Devices,
-            Page::Parts,
-            Page::Games,
-            Page::Readout,
-            Page::Settings,
-            Page::Reference,
-        ] {
+        for p in [Page::Games, Page::Readout, Page::Reference] {
             assert_eq!(p.slot(), None, "{p:?} claims a depth slot; which child draws it?");
             for depth in 0..=4 {
                 let mut s = Stack::new();
@@ -442,11 +538,65 @@ mod tests {
             }
         }
 
-        // The control: the two pages that ARE drawn still go where they are sent.
+        // The control: every page that IS drawn still goes where it is sent.
         assert_eq!(Page::None.slot(), Some(0));
-        assert_eq!(Page::Work.slot(), Some(1));
+        for p in EVERY_PAGE {
+            let Some(slot) = p.slot() else { continue };
+            let mut s = Stack::new();
+            walk_to(&mut s, p);
+            assert_eq!(
+                (s.depth(), s.page()),
+                (slot, p),
+                "{p:?} claims slot {slot} and does not arrive there"
+            );
+        }
+    }
+
+    /// **A page is drawn at exactly one level, and `go` refuses every other one.**
+    ///
+    /// The clamp alone is not enough and that is the point of this test: `go(Composer, 2)` from
+    /// depth 0 clamps to 1, where the depth-1 slot has four children and none of them is a
+    /// Composer. What that produces is the blank 420 px panel with no header that
+    /// `a_page_nothing_draws_lands_on_the_menu` exists to prevent — reached by a different route.
+    #[test]
+    fn a_page_is_drawn_at_exactly_one_level() {
+        for p in EVERY_PAGE {
+            let Some(slot) = p.slot() else { continue };
+            for depth in 0..=max_depth() {
+                let mut s = Stack::new();
+                // From the bottom, so the `min(depth() + 1)` clamp is not what refuses it.
+                walk_to(&mut s, Page::ComposerIpod);
+                s.go(p, depth);
+                if depth == slot {
+                    assert_eq!((s.depth(), s.page()), (slot, p), "{p:?} at its own slot");
+                } else {
+                    assert_eq!(
+                        s.depth(),
+                        0,
+                        "{p:?} is drawn at level {slot} and navigating to it at {depth} left a \
+                         panel nothing draws"
+                    );
+                }
+            }
+        }
+    }
+
+    /// **`push` goes exactly one level down, and never further.**
+    #[test]
+    fn no_level_below_the_one_you_are_on_is_a_page_nothing_draws() {
         let mut s = Stack::new();
-        s.go(Page::Work, 1);
-        assert_eq!((s.depth(), s.page()), (1, Page::Work), "the one built page stopped working");
+        s.go(Page::Devices, 1);
+        s.push(Page::Composer);
+        assert_eq!((s.depth(), s.page()), (2, Page::Composer));
+        // Every level under the one on screen is a page something draws — nothing was filled in
+        // with `Page::None` on the way down.
+        s.back();
+        assert_eq!((s.depth(), s.page()), (1, Page::Devices));
+
+        // And a push that skips a level lands on the menu rather than on a blank.
+        let mut s = Stack::new();
+        s.push(Page::ComposerIpod);
+        assert_eq!(s.depth(), 0, "a level-3 page was pushed straight from the menu");
+        assert!(s.open());
     }
 }

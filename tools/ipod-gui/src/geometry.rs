@@ -150,7 +150,19 @@ geometry! {
     ///
     /// **The design states no number** either; this is the derivation, not a measurement. Same
     /// caveat as [`DRAWER_HEADER_H`].
-    WORK_FOOTER_H:    Px = 3.0 * LINE_LABEL + 12.0 + 12.0;
+    WORK_FOOTER_H:    Px = 3.0 * LINE_LABEL + 2.0 * FOOTER_PAD;
+    /// The air above and below a **pinned footer**, one side.
+    ///
+    /// Extracted from [`WORK_FOOTER_H`]'s own `+ 12.0 + 12.0`, which was the same number typed
+    /// twice on one line. §11.2's `Create` is the second pinned footer this program has, and two
+    /// footers deriving their padding from two literals is how the two come to sit at different
+    /// heights on two pages that are supposed to share a rhythm. One number, two readers.
+    FOOTER_PAD:       Px = 12.0;
+    /// §11.2's pinned `Create` row — a Row with [`FOOTER_PAD`] above and below it.
+    ///
+    /// **Outside the Flickable** (§16.11: *a primary action that scrolls away is a primary action
+    /// you hunt for*), which is why it is a footer height rather than a row inside a page.
+    PRIMARY_FOOTER_H: Px = ROW_H + 2.0 * FOOTER_PAD;
     /// The least body a drawer page may be given — two Rows, which is a heading and one thing.
     DRAWER_MIN_BODY:  Px = 2.0 * ROW_H;
     /// §4: *max 3 levels deep.* A `Ratio` so it emits as `float` and compares against a depth with
@@ -250,6 +262,110 @@ geometry! {
     /// checked before the Composer is written.
     VERDICT_H:        Px = 54.0;
 
+    // ── §11.1's Field, and why it is not a Row ──────────────────────────────────────────────────
+    //
+    // §5's fifth primitive has three cells rather than a Row's two, and its own column rule. The
+    // reason is measured rather than preferred: a 16-hex-digit GUID at `Metric.mono-size` 13 is
+    // `16 × 13 × BODY_ADVANCE` = 129 px, and a Row's drawable value width is `ROW_VALUE_W` 140 less
+    // a 16 px chevron gutter = 124. The identity values would elide in a Row and do not in a Field.
+
+    /// The `Field`'s leading label cell, in [`RAIL_VERB_W`]'s shape rather than in the design's.
+    ///
+    /// **The design states no number**; this is the budget, and it is derived. The longest label in
+    /// the column is `Bootloader` — ten characters — so
+    /// `10 × BODY_SIZE 14 × BODY_ADVANCE 0.62 = 86.8`, plus `Metric.s2` of gutter, rounded up to a
+    /// whole logical pixel. A column width is a whole number of pixels, so it is written as a round
+    /// number rather than as the product, exactly as [`RAIL_VERB_W`] is.
+    ///
+    /// [`BODY_ADVANCE`] stays the conservative 0.62 rather than the measured 0.479 for the reason
+    /// its own doc gives: a budget above the measurement errs toward columns that are too wide,
+    /// which is the safe direction for a column.
+    FIELD_LABEL_W:    Px = 96.0;
+    /// The `Field`'s trailing control cell — `Show` / `Hide`, four characters.
+    ///
+    /// `4 × BODY_SIZE 14 × BODY_ADVANCE 0.62 = 34.7`, plus `Metric.s3` either side = 58.7, rounded
+    /// up to the next value that leaves [`FIELD_VALUE_W`] a round figure.
+    ///
+    /// **`Show` and `Hide` are the same width by construction** — both four characters — so the
+    /// cell does not change size when the mask comes off, which is §11.2's *pressing `Show` changes
+    /// no width and moves nothing*.
+    FIELD_ACTION_W:   Px = 64.0;
+    /// What is left for the value. **Written as the expression**, like [`ROW_VALUE_W`], so a
+    /// re-measured drawer or label column moves it rather than leaving two numbers to disagree.
+    ///
+    /// 212 px holds both identifiers with room: a 16-hex-digit GUID is 129 at `mono-size` 13 and an
+    /// 11-character serial is 89. That is the whole argument for §5's `Field` being its own
+    /// primitive rather than a `Row` with an editable value.
+    FIELD_VALUE_W:    Px = DRAWER_W - 2.0 * PAGE_MARGIN - FIELD_LABEL_W - FIELD_ACTION_W;
+    /// §6.2's `mono` line box — *13 / 18*. The sibling of [`LINE_LABEL`] 16 and [`LINE_BODY`] 20.
+    ///
+    /// New because §11.4's `Settings file` sub-line and §11.2's identity values are the first mono
+    /// line boxes to appear inside a drawer row. `Text` has no `line-height` in Slint 1.17, so a
+    /// line box is a container height — the same arrangement [`LINE_LABEL`] has.
+    LINE_MONO:        Px = 18.0;
+
+    // ── §11.2's plan region, and §11.3's refusal ────────────────────────────────────────────────
+
+    /// One step of the plan on the Composer's root: one [`LINE_BODY`].
+    ///
+    /// The step's `sub` is drawn on the Work page while the step runs. **One list rendered twice at
+    /// two levels of detail, not two lists** — which is why this is a line box rather than a row
+    /// height.
+    PLAN_ROW_H:       Px = LINE_BODY;
+    /// The most lines `Recipe::steps` can produce over every recipe this program can compose.
+    ///
+    /// `Start::FromIpsw` contributes fetch + build + install (3), `Loader::IPodLoader2` adds 1,
+    /// Rockbox adds 2 and iPodLinux adds 2. A `Ratio` because it is a count, exactly as
+    /// [`DRAWER_MAX_DEPTH`] is; emitted because the markup sizes the plan region from it.
+    ///
+    /// **It is a bound rather than an observation**, and the observation is the test's:
+    /// `a_plan_is_never_more_than_eight_lines` enumerates every recipe rather than asserting this.
+    PLAN_MAX_ROWS:    Ratio = 8.0;
+    /// §11.3 item 3: *a 60 %-opacity material* under a `Fix` row.
+    ///
+    /// **It has to be a constant rather than a literal.** `no_opacity_literal_outside_the_cosmetic_
+    /// set` sweeps every binding whose name ends `-opacity` against a closed list of five cosmetic
+    /// press-and-hold states, and 0.6 is not one of them: it is a design constant like
+    /// [`GHOST_OPACITY`], decided by the document, not a press state decided by the drawing. It
+    /// reaches the markup as `Geometry.fix-opacity`, which is a name and not a number, so the sweep
+    /// passes it.
+    FIX_OPACITY:      Ratio = 0.6;
+    /// The width §11.3's refusal paragraph wraps at. **Written as the expression**, so re-deciding
+    /// the page margin moves it.
+    ///
+    /// §11.3 says *388 px of measure*, and 388 is `420 − 2 × 16` — a margin this drawer does not
+    /// use. Every page in it insets by [`PAGE_MARGIN`] 24, which is what `compose::Step`'s own doc
+    /// quotes. The document's number is left unresolved rather than absorbed into a new inset term
+    /// invented to make the two agree.
+    REFUSAL_MEASURE:  Px = DRAWER_W - 2.0 * PAGE_MARGIN;
+    /// §11.3's *4–6 lines*, as the cap on the refusal `Expand`. Derived, so a re-measured
+    /// [`LINE_BODY`] moves it.
+    REFUSAL_MAX_H:    Px = 6.0 * LINE_BODY;
+
+    // ── §11.4's Parts ──────────────────────────────────────────────────────────────────────────
+
+    /// A Parts row: a Row, plus the `Provenance::line()` beneath it at [`LINE_LABEL`].
+    ///
+    /// The same arithmetic `Pressable.sub` produces, declared so the fit test reads a constant
+    /// rather than re-deriving one.
+    PART_ROW_H:       Px = ROW_H + LINE_LABEL;
+    /// §11.4's group heading and its count, on the rows' own rhythm.
+    GROUP_HEAD_H:     Px = ROW_H;
+    /// §11.4's boot-screen preview: the framebuffer's own width in logical px, at 1:1.
+    ///
+    /// Tied to `emu::FB_W` by `the_preview_is_the_framebuffers_own_size` rather than by a comment,
+    /// because a preview drawn at anything but 1:1 is a resampled framebuffer presented as a
+    /// screenshot.
+    PREVIEW_W:        Px = 320.0;
+    /// The same for `emu::FB_H`.
+    PREVIEW_H:        Px = 240.0;
+    /// The black glass around §11.4's preview — §6.1's geometric tell at `k = 1`.
+    ///
+    /// **Written as the product, never as a typed 10.5**, so a re-measured [`BEZEL_RATIO`] moves
+    /// it. It is [`bezel_phys`] at `k = 1` by construction, and
+    /// `the_preview_glass_is_the_bezel_at_one_to_one` is what holds the two together.
+    PREVIEW_GLASS:    Px = BEZEL_RATIO * HERO_PHYS_1X;
+
     // ── The window's own four constants ──
     //
     // §16.1: these are plain constants and they must never read `hero`. If either height were bound
@@ -309,6 +425,61 @@ pub const K_MAX: i32 = 8;
 /// The asymmetry is the whole point — a symmetric comparison flutters under a drag exactly at the
 /// boundary, which is a window that flickers between two layouts while the mouse is down.
 pub const HYSTERESIS: f64 = 20.0;
+
+// ── §11.2's two page heights. Rust-only, and deliberately ───────────────────────────────────────
+//
+// Neither is a position or a size any element is given: they are the SUM of the elements a page
+// puts inside itself, checked against the drawer it has to fit in. Emitting them would put a total
+// in the same global as the terms it is made of, which is an invitation to write
+// `height: Geometry.composer-root-h` on a page whose own layout would then disagree with its parts.
+// The markup lays each page out of its terms; these are what the fit test reads.
+//
+// Both are written as their terms rather than as a number, so re-measuring any one term moves the
+// total — which is the whole of why they are constants and not literals in a test body.
+//
+// **`#[cfg(test)]` rather than `#[allow(dead_code)]`**, and that is [`SF_SWEEP`]'s own precedent
+// stated once more: nothing outside a fit test sums a page, and a constant kept alive by an allow
+// is the shape §16.9 deletes. `build.rs` compiles this file too and wants neither.
+
+/// §11.2's root page, with **no refusal open**: the header, three numbered rows, the
+/// always-reserved verdict, the plan's heading and its eight lines, the two ledger lines, the
+/// pinned `Create`, the page margins, and three gaps between the four bands.
+///
+/// ```text
+/// DRAWER_HEADER_H 44 + 3×ROW_H 132 + VERDICT_H 54 + LINE_LABEL 16
+///   + PLAN_MAX_ROWS×PLAN_ROW_H 160 + 2×LINE_LABEL 32 + PRIMARY_FOOTER_H 68
+///   + 2×PAGE_MARGIN 48 + 3×FOOTER_PAD 36  =  590
+/// ```
+///
+/// Against `722 − SHELF` = 634 — §11.2's own stated window minimum — that is 44 px of slack, which
+/// is what `the_composer_root_fits_the_smallest_window_that_draws_the_device` exists to hold.
+#[cfg(test)]
+pub const COMPOSER_ROOT_H: f64 = DRAWER_HEADER_H
+    + 3.0 * ROW_H
+    + VERDICT_H
+    + LINE_LABEL
+    + PLAN_MAX_ROWS * PLAN_ROW_H
+    + 2.0 * LINE_LABEL
+    + PRIMARY_FOOTER_H
+    + 2.0 * PAGE_MARGIN
+    + 3.0 * FOOTER_PAD;
+
+/// §11.2's level ① — *Which iPod*: the header, one `Pick`-shaped row per iPod/Model/Colour, and the
+/// two identity `Field`s, each reserving its two-line slot, then the `TitleAuth` paragraph.
+///
+/// ```text
+/// DRAWER_HEADER_H 44 + ROW_H 44 + 4×(ROW_H + FIELD_REASON) 312
+///   + 5×LINE_BODY 100 + 2×PAGE_MARGIN 48  =  548
+/// ```
+///
+/// **The four is not a typo and it is the point of §11.1.** Model, Colour, Serial and GUID all
+/// reserve the same slot whether they are open or locked, so a retail dump and a synthesised ROM
+/// draw the same controls at the same heights and the surface does not jump when you switch
+/// between them. Collapsing the locked case to a line of text would make this 4 × 44 and would be
+/// the jump.
+#[cfg(test)]
+pub const LEVEL_ONE_H: f64 =
+    DRAWER_HEADER_H + ROW_H + 4.0 * (ROW_H + FIELD_REASON) + 5.0 * LINE_BODY + 2.0 * PAGE_MARGIN;
 
 // ── Two type budgets, and neither is emitted ────────────────────────────────────────────────────
 //
@@ -541,8 +712,18 @@ mod tests {
     /// a file — silently, and looking exactly like a sweep that found nothing.
     const DECLARED_MARKUP: &[&str] = &[
         "bench.slint",
+        // §11.2's three depth levels and their root. Declared the day the file landed, which is
+        // what this list is for: every sweep below reads `markup()`, so a file nobody declared is
+        // one being swept without anybody having decided it should be.
+        "composer.slint",
+        // §7.2's Devices page — device selection lives here, not on the bench.
+        "devices.slint",
         "drawer.slint",
         "ipod.slint",
+        // §11.4's six groups.
+        "parts.slint",
+        // §11.6's one page and three rows.
+        "settings.slint",
         // A second top-level `Window`, for `slint-viewer` only. **`build.rs` must keep exactly one
         // `compile*` call** — a second one clobbers `cargo:rustc-env=SLINT_INCLUDE_GENERATED` and
         // `MainWindow` stops existing, with the failure reading `cannot find type MainWindow in
@@ -1948,23 +2129,82 @@ mod tests {
     /// The ceiling is derived rather than typed — `HERO_PHYS_1X + CHROME_MIN` is the client height
     /// a `k = 1` window needs, which is `fit::required_client_logical` written out, and the drawer
     /// is that less the shelf (§9.5's decision: only the shelf's three content rows narrow).
+    ///
+    /// **The page's own height is [`COMPOSER_ROOT_H`] and is no longer decomposed here.** It used
+    /// to be, with a hand-typed `PLAN: f64 = 110.0` standing in for §11.2's drawing of the plan
+    /// region and the pinned `Create` costing a bare `ROW_H` — two numbers this test owned that the
+    /// markup would have had to reproduce, which is §16.9's rule broken inside the test that
+    /// enforces it. The constant carries the derivation; this carries the bound.
+    #[allow(clippy::assertions_on_constants)] // a declared total against a declared ceiling, which is the point; a run-time assert names both numbers where a `const` one names neither
     #[test]
     fn the_composer_root_fits_the_smallest_window_that_draws_the_device() {
-        // §11.2's own decomposition of the plan region: four step lines and the two ledger lines.
-        const PLAN: f64 = 110.0;
-        let needed = DRAWER_HEADER_H + 3.0 * ROW_H + VERDICT_H + PLAN + ROW_H;
         let ceiling = (HERO_PHYS_1X + CHROME_MIN) - SHELF;
         assert!(
-            needed <= ceiling,
-            "the Composer's root is {needed:.0} px inside a drawer that is {ceiling:.0} at the \
-             smallest window that draws the device — §11.2's re-cut into three levels is what this \
-             is supposed to buy"
+            COMPOSER_ROOT_H <= ceiling,
+            "the Composer's root is {COMPOSER_ROOT_H:.0} px inside a drawer that is {ceiling:.0} \
+             at the smallest window that draws the device — §11.2's re-cut into three levels is \
+             what this is supposed to buy"
+        );
+        // **§11.2's own stated minimum, which is stricter than the ceiling above.** *at most 803 px
+        // on the operator's own machine and 722 at the minimum* — a measurement of a display class
+        // rather than a constant of this program, so it is written here with the sentence it comes
+        // from rather than declared in `geometry.rs` as though the program decided it.
+        let stated = 722.0 - SHELF;
+        assert!(
+            COMPOSER_ROOT_H <= stated,
+            "the Composer's root is {COMPOSER_ROOT_H:.0} px and §11.2's stated 722 px window \
+             leaves {stated:.0} for the drawer. It fits the device-at-1:1 ceiling and not the \
+             window the design is written against, which is the case that matters"
         );
         // And the shape it replaced does not fit, or the re-cut bought nothing.
         assert!(
             1090.0 > ceiling,
             "the three-groups-on-one-page shape was ~1090 px and this says it fits in \
              {ceiling:.0}; the check is dead"
+        );
+    }
+
+    /// **§11.2's level ① fits the same drawer, and the locked case is what it costs.**
+    ///
+    /// §11.1's *existing and new look identical* is a height claim before it is anything else: a
+    /// locked picker stays a picker and a locked `Field` keeps its two-line slot, so all four
+    /// identity controls are `ROW_H + FIELD_REASON` whichever kind of ROM is chosen. That is 312 px
+    /// of the 548, and it is the reservation that stops the surface jumping when you switch between
+    /// a retail dump and a synthesised iPod.
+    ///
+    /// It is checked against §11.2's stated 722 px window rather than against the device-at-1:1
+    /// ceiling, because that is the smaller of the two and the one the design is written against.
+    #[allow(clippy::assertions_on_constants)] // same arrangement as the test above: a run-time assert names both numbers
+    #[test]
+    fn the_composers_first_level_fits_the_drawer_at_the_stated_minimum() {
+        let stated = 722.0 - SHELF;
+        assert!(
+            LEVEL_ONE_H <= stated,
+            "level ① is {LEVEL_ONE_H:.0} px inside a drawer that is {stated:.0} at §11.2's stated \
+             minimum"
+        );
+        // **The reservation is the whole cost, and this is what says so.** Collapsing the locked
+        // Model / Colour / Serial / GUID to bare rows would save 4 × FIELD_REASON — and buy a page
+        // that changes shape depending on which kind of ROM you chose, which §11.1 refuses.
+        let collapsed = LEVEL_ONE_H - 4.0 * FIELD_REASON;
+        assert!(
+            collapsed < LEVEL_ONE_H,
+            "the reason slot costs nothing, so §11.1's identical-heights rule is free and this \
+             test is measuring nothing"
+        );
+    }
+
+    /// **§11.4's preview glass is [`bezel_phys`] at `k = 1`, not a second measurement of it.**
+    ///
+    /// §6.1's geometric tell is the black surround, and a preview that drew its own would be the
+    /// drawn iPod's bezel and the previewed iPod's bezel disagreeing on the same page.
+    #[test]
+    fn the_preview_glass_is_the_bezel_at_one_to_one() {
+        assert_eq!(
+            PREVIEW_GLASS,
+            bezel_phys(),
+            "PREVIEW_GLASS is {PREVIEW_GLASS} and the drawn bezel is {}; one of the two was typed",
+            bezel_phys()
         );
     }
 
@@ -1986,7 +2226,11 @@ mod tests {
         let rows = text.matches("count: 7;").count();
         assert_eq!(rows, 7, "`MenuPage` no longer declares seven rows of seven: {rows}");
         let disabled = text.matches("enabled: false;").count();
-        assert_eq!(disabled, 6, "`MenuPage` no longer has six disabled rows: {disabled}");
+        // **Three, not six.** Devices, Parts and Settings became live when `ui/drawer.slint` gained
+        // a child for each of them; `Page::slot` answers `None` for exactly Games, Readout and
+        // Reference now, and those three are what is left. The count is read out of the markup and
+        // the arithmetic below is derived from it, so the next page to land moves both.
+        assert_eq!(disabled, 3, "`MenuPage` no longer has three disabled rows: {disabled}");
 
         let needed = DRAWER_HEADER_H
             + disabled as f64 * (ROW_H + FIELD_REASON)

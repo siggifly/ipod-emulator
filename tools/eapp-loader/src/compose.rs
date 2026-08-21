@@ -65,6 +65,69 @@ impl Os {
         }
     }
 
+    /// The short name, for a row that has one line and 124 px of it.
+    ///
+    /// **Not a second spelling of [`Os::as_str`]**, which is a settings-file key and may never
+    /// change; this is prose and is free to. `Apple's software + Rockbox` is 26 characters and
+    /// elides in a `Row`'s value column at every advance this project has measured; `Apple +
+    /// Rockbox` is 15 and does not.
+    pub fn short(self) -> &'static str {
+        match self {
+            Os::Apple => "Apple",
+            Os::Rockbox => "Rockbox",
+            Os::IPodLinux => "iPodLinux",
+        }
+    }
+
+    /// Whether the window offers this one — the same question [`Os::OFFERED`] answers, asked of one
+    /// value rather than of the list, so a caller never writes the `contains` itself.
+    pub fn offered(self) -> bool {
+        Os::OFFERED.contains(&self)
+    }
+
+    /// Why it is not offered — **a project state, in the sense of GUI.md §9.4**: *this is not
+    /// finished, by us*, saying what does work. Empty exactly when [`Os::offered`] is true.
+    ///
+    /// Two independent walls, and both are named because naming one would imply the other is fine:
+    /// ZeroLauncher's stall, and `install_linux`'s refusal to fit a bootloader into a firmware
+    /// partition that is packed to within one sector on every drive tried (`KNOWN-BUGS.md`,
+    /// 2026-08-21).
+    pub fn why_not_offered(self) -> &'static str {
+        match self {
+            Os::Apple | Os::Rockbox => "",
+            Os::IPodLinux => {
+                "iPodLinux boots — both partitions found, the root mounted, /bin/init run, no ATA \
+                 error anywhere — and then ZeroLauncher stalls at \"Finishing Up…\". Installing it \
+                 is refused before anything is written, too: the firmware partition on every drive \
+                 tried is packed to within one sector, so there is no room to move ipodloader2 in."
+            }
+        }
+    }
+
+    /// The command that does the same job from a terminal — **the command alone, and no promise
+    /// about what it produces.**
+    ///
+    /// `ipod-boot install-linux` refuses on every drive it has been tried against, one built here
+    /// and one off real hardware (`KNOWN-BUGS.md`, 2026-08-21). So it is named as the route to
+    /// look at the thing yourself and nothing more; an earlier wording said it *builds that drive*,
+    /// which is an escape hatch that cannot complete.
+    pub fn escape_hatch(self) -> &'static str {
+        match self {
+            Os::Apple | Os::Rockbox => "",
+            Os::IPodLinux => "ipod-boot install-linux",
+        }
+    }
+
+    /// The inverse of [`Os::label`]. `None` for anything this build does not know, so a hand-edited
+    /// `Disk::installed` line cannot invent a system.
+    ///
+    /// **Deliberately not [`Os::parse`]**, which reads the settings file's own lower-case token.
+    /// These are two vocabularies — prose and key — and one function reading both would accept
+    /// `apple` where a label is required and quietly agree that a file said something it did not.
+    pub fn from_label(s: &str) -> Option<Os> {
+        Os::ALL.into_iter().find(|o| o.label() == s.trim())
+    }
+
     pub const ALL: [Os; 3] = [Os::Apple, Os::Rockbox, Os::IPodLinux];
 
     /// What the window offers.
@@ -134,6 +197,41 @@ impl Loader {
     /// What the window offers — see [`Os::OFFERED`]. `ipodloader2` goes with iPodLinux: it is the
     /// only thing that needs it, and a bootloader with nothing to boot is a menu with one entry.
     pub const OFFERED: [Loader; 2] = [Loader::Apple, Loader::Rockbox];
+
+    /// See [`Os::offered`].
+    pub fn offered(self) -> bool {
+        Loader::OFFERED.contains(&self)
+    }
+
+    /// Why it is not offered. Empty exactly when [`Loader::offered`] is true.
+    ///
+    /// **It is downstream of [`Os::IPodLinux`] and says so**, rather than stating a second,
+    /// independent-looking reason. `ipodloader2` is the only thing that starts a ZeroSlackr kernel
+    /// and nothing else needs it, so the day iPodLinux is offered this row is too — and a reason
+    /// that did not name the dependency would be a reason nobody could retire.
+    ///
+    /// **It is a project state and not a machine rule**, which is why it names a command rather
+    /// than carrying a `Fix`: there is nothing about this computer or this drive that forbids
+    /// `ipodloader2`. See GUI.md §9.4.
+    pub fn why_not_offered(self) -> &'static str {
+        match self {
+            Loader::Apple | Loader::Rockbox => "",
+            Loader::IPodLoader2 => {
+                "ipodloader2 is the only bootloader that starts an iPodLinux kernel, and nothing \
+                 else needs it — so it is offered when iPodLinux is, and iPodLinux is not offered \
+                 yet. A bootloader with nothing to boot is a menu with one entry."
+            }
+        }
+    }
+
+    /// The same command [`Os::escape_hatch`] names, for the same reason — see it for why nothing
+    /// is claimed about what the command produces.
+    pub fn escape_hatch(self) -> &'static str {
+        match self {
+            Loader::Apple | Loader::Rockbox => "",
+            Loader::IPodLoader2 => Os::IPodLinux.escape_hatch(),
+        }
+    }
 }
 
 /// Where the drive comes from before anything is installed onto it.
@@ -151,6 +249,29 @@ pub enum Start {
     /// existing disk arrives with its `built_from` and its install list, so a device made from one
     /// can say what it will boot without opening anything.
     FromDisk { name: String, fat_type: Option<u8> },
+}
+
+impl Start {
+    /// The short name of the volume this starts from — what a sentence about detaching it can
+    /// name, and what the reading state says it is waiting on.
+    ///
+    /// The basename for [`Start::FromImage`], the entry name for [`Start::FromDisk`], and `""` for
+    /// [`Start::FromIpsw`], which starts from a bundle and has no volume yet. It is `""` **exactly
+    /// when [`Recipe::nothing_chosen`] would be true for that variant**, which is the property
+    /// [`Fix::consequence`] leans on to know whether there is anything to name — so a path with no
+    /// file name (`/`) falls back to the whole path rather than to the empty string, which would
+    /// claim nothing was chosen when something was.
+    pub fn label(&self) -> &str {
+        match self {
+            Start::FromIpsw(_) => "",
+            Start::FromImage { path, .. } => std::path::Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|n| !n.is_empty())
+                .unwrap_or(path),
+            Start::FromDisk { name, .. } => name,
+        }
+    }
 }
 
 /// A drive somebody is describing: where it starts, what bootloader, and which systems.
@@ -248,6 +369,110 @@ impl Fix {
             Fix::BuildFromIpsw => "build from Apple's firmware instead".into(),
         }
     }
+
+    /// How many presses it takes — GUI.md §11.3's second rule, **and the only place the number is
+    /// decided.**
+    ///
+    /// One where the press changes the recipe and nothing else. **Two where it changes which
+    /// resource the device points at**, which is [`Fix::BuildFromIpsw`] and nothing else: it
+    /// replaces a [`Start::FromImage`] with a bundle that has not been chosen, so a person who
+    /// picked a 55.9 GB image dumped off their own iPod, ticked something out of curiosity and
+    /// pressed the button would silently stop pointing at the only copy of it.
+    ///
+    /// The window's own failure Rail carried this as a literal — `if *fix == Fix::BuildFromIpsw {
+    /// 2 } else { 1 }` — beside a Composer that would have had to carry the same literal again.
+    /// Two copies of a rule is where the two surfaces come to disagree about the same press.
+    pub fn presses(&self) -> u8 {
+        match self {
+            Fix::BuildFromIpsw => 2,
+            Fix::UseLoader(_) | Fix::AddOs(_) | Fix::RemoveOs(_) => 1,
+        }
+    }
+
+    /// What the press will cost, said **before** the first press — GUI.md §11.3.
+    ///
+    /// **Non-empty exactly where [`Fix::presses`] is 2**, which is what makes "a second press means
+    /// there is something to say" a property rather than a habit. §11.4 spends a paragraph on
+    /// `Remove` naming its dependents before it acts; this control detached a 55.9 GB reference
+    /// with no sentence at all.
+    ///
+    /// `start` and not `&Recipe`, because the only fact it needs is which volume is attached — and
+    /// the failure Rail builds its `Incompatible` class with no `Recipe` in hand.
+    pub fn consequence(&self, start: &Start) -> String {
+        match self {
+            Fix::UseLoader(_) | Fix::AddOs(_) | Fix::RemoveOs(_) => String::new(),
+            Fix::BuildFromIpsw => match start.label() {
+                // Nothing is attached — a bundle, or a volume nobody has chosen. There is no file
+                // to name, and naming one would be worse than saying what changes.
+                "" => "builds a new drive from an Apple firmware bundle, and this device stops \
+                       using whatever drive it had"
+                    .into(),
+                name => format!(
+                    "builds a new drive; {name} stays in Parts and this device stops using it"
+                ),
+            },
+        }
+    }
+
+    /// Whether the value this names is one the window would let a person choose — GUI.md §11.3's
+    /// fourth rule and §9.4's last paragraph.
+    ///
+    /// **A `Fix` that names a value the picker four rows above it refuses is itself disabled**,
+    /// wearing that picker's own reason and its own escape hatch. Rule (1) of [`Recipe::check`]
+    /// offers `use ipodloader2` whenever iPodLinux is on a recipe, and `Loader::OFFERED` does not
+    /// hold `ipodloader2` — so the button set in one press a value the control above it refused,
+    /// and the promise that applying a fix resolves rather than moving you to another dead end was
+    /// false in the one place a curious person hits first.
+    ///
+    /// [`Fix::RemoveOs`] is always offered, and that is not a loophole: it moves a system *out* of
+    /// the recipe, which is the state a disabled tick box is already in. A picker refuses a value
+    /// being chosen, never a value being let go of — and a recipe that arrived from a hand-edited
+    /// settings file holding an un-offered system needs exactly this way out.
+    ///
+    /// [`Fix::BuildFromIpsw`] names no system and no bootloader. It lands on
+    /// `Start::FromIpsw(String::new())`, which is rule (0)'s nothing-chosen state, resolved by the
+    /// picker one row above rather than by a button.
+    pub fn offered(&self) -> bool {
+        match self {
+            Fix::UseLoader(l) => l.offered(),
+            Fix::AddOs(o) => o.offered(),
+            Fix::RemoveOs(_) | Fix::BuildFromIpsw => true,
+        }
+    }
+
+    /// The **picker's own** reason, so the two surfaces cannot word one refusal differently.
+    ///
+    /// Empty exactly when [`Fix::offered`] is true. Read through here rather than re-derived at
+    /// each of the two call sites — the failure Rail and the Composer — because that is where one
+    /// of them comes to say something the other does not.
+    pub fn why_not_offered(&self) -> &'static str {
+        match self {
+            Fix::UseLoader(l) => l.why_not_offered(),
+            Fix::AddOs(o) => o.why_not_offered(),
+            Fix::RemoveOs(_) | Fix::BuildFromIpsw => "",
+        }
+    }
+
+    /// The picker's own escape hatch — see [`Fix::why_not_offered`].
+    pub fn escape_hatch(&self) -> &'static str {
+        match self {
+            Fix::UseLoader(l) => l.escape_hatch(),
+            Fix::AddOs(o) => o.escape_hatch(),
+            Fix::RemoveOs(_) | Fix::BuildFromIpsw => "",
+        }
+    }
+
+    /// Every variant, in declaration order. The length is written into the type, so a fifth stops
+    /// the crate compiling until somebody has given it a press count and a consequence.
+    ///
+    /// [`Fix::UseLoader`] and the two `Os` shapes each name one value here; the sweeps that hold
+    /// the four rules honest widen them over [`Loader::ALL`] and [`Os::ALL`] themselves.
+    pub const ALL: [Fix; 4] = [
+        Fix::UseLoader(Loader::Apple),
+        Fix::AddOs(Os::Apple),
+        Fix::RemoveOs(Os::Apple),
+        Fix::BuildFromIpsw,
+    ];
 }
 
 /// What a recipe will do, or why it will not.
@@ -347,6 +572,96 @@ impl Recipe {
         }
     }
 
+    /// Apply a [`Fix`] — **the one applier**, and every caller goes through it.
+    ///
+    /// It was written out inline in `every_fix_resolves_the_thing_it_is_offered_for`, which is the
+    /// worst possible place for it: the test that proves fixes resolve was applying its own idea of
+    /// what applying means, so a window that applied them differently would have been green here
+    /// and wrong on screen. Exhaustive over all four variants, including [`Fix::RemoveOs`], which
+    /// [`Recipe::check`] has no producer for today and which GUI.md §11.3's own table still lists.
+    ///
+    /// **It does not call [`Recipe::best_loader`].** Following the bootloader is what a *systems*
+    /// change does; a fix that also moved the loader would resolve refusals it was not offered for
+    /// and hide the one it was.
+    pub fn apply(&mut self, fix: &Fix) {
+        match fix {
+            Fix::UseLoader(l) => self.loader = *l,
+            Fix::AddOs(o) => {
+                self.oses.insert(*o);
+            }
+            Fix::RemoveOs(o) => {
+                self.oses.remove(o);
+            }
+            Fix::BuildFromIpsw => self.start = Start::FromIpsw(String::new()),
+        }
+    }
+
+    /// Whether this recipe starts from a volume at all, and one somebody has chosen.
+    pub fn has_a_volume(&self) -> bool {
+        matches!(self.start, Start::FromImage { .. } | Start::FromDisk { .. })
+            && !self.nothing_chosen()
+    }
+
+    /// What that volume is called, for a sentence about it. `None` where there is none.
+    pub fn volume_name(&self) -> Option<&str> {
+        match self.start.label() {
+            "" => None,
+            n => Some(n),
+        }
+    }
+
+    /// State what the data partition of the chosen volume turned out to be.
+    ///
+    /// **Public, and the only writer.** [`Recipe::volume_type`]'s own doc says a second copy of its
+    /// match is where the third `Start` variant gets forgotten, and the window — which is a
+    /// different crate — has to write the answer a background read produced. A private setter would
+    /// have made that second copy inevitable.
+    ///
+    /// A `Start` that carries no volume is left alone: nothing has been read about a bundle.
+    pub fn set_volume_type(&mut self, t: u8) {
+        match &mut self.start {
+            Start::FromIpsw(_) => {}
+            Start::FromImage { fat_type, .. } | Start::FromDisk { fat_type, .. } => {
+                *fat_type = Some(t)
+            }
+        }
+    }
+
+    /// Whether the verdict is waiting on a volume read — *and would change either way*.
+    ///
+    /// **The verdict region must never be stale and must never say something it will take back.**
+    /// `Start::FromImage { fat_type: None }` means *has not been looked at yet*, and rule (2) fires
+    /// only on `Some(0x0c)` — so picking a 55.9 GB image on a slow external drive read `Ok` for
+    /// several seconds and then flipped to a refusal, which is content moving under the reader.
+    /// Saying *reading …* instead is honest, but saying it when the answer cannot matter is a
+    /// spinner in front of a settled fact.
+    ///
+    /// So it is a **three-way trial and not a second copy of rule (2)**: rule (2a) makes `0x00` a
+    /// third answer, and the set is closed because `install::data_partition_type` ends
+    /// `.find(|t| matches!(t, 0x0b | 0x0c)).unwrap_or(0)` — an `Ok(_)` is exactly one of
+    /// `0x00`/`0x0B`/`0x0C`.
+    ///
+    /// **Under the rules as they stand today this is true for every unread volume, and that is
+    /// worth saying out loud rather than leaving to be discovered.** Rule (2a) refuses a drive with
+    /// no FAT32 data partition whatever is on it, so `trial(0x00)` never equals `trial(0x0b)` — the
+    /// trial reduces to `has_a_volume() && volume_type().is_none()`. That is the honest answer, not
+    /// a degenerate one: a drive nobody has read yet really might have no volume, in which case
+    /// nothing works. The trial stays a trial because it is the *definition* — the day a rule
+    /// changes it will start discriminating again, and
+    /// `the_reading_state_is_shown_for_every_unread_volume_today` is what goes red to say so.
+    pub fn volume_decides(&self) -> bool {
+        if !self.has_a_volume() || self.volume_type().is_some() {
+            return false;
+        }
+        let trial = |t: u8| {
+            let mut r = self.clone();
+            r.set_volume_type(t);
+            r.check()
+        };
+        let a = trial(0x00);
+        trial(0x0b) != a || trial(0x0c) != a
+    }
+
     /// Whether these parts go together, **whatever the drive starts from**.
     ///
     /// Split out of [`Recipe::check`] so that [`Recipe::loader_works`] and [`Recipe::why_not`] keep
@@ -356,13 +671,31 @@ impl Recipe {
     fn check_parts(&self) -> Verdict {
         let has = |o: Os| self.oses.contains(&o);
 
-        // (2) first, because it invalidates a whole loader regardless of what is selected.
+        // (2a) first of all, because it is a fact about the drive that invalidates every
+        // combination rather than one. `install::data_partition_type` answers `0` when the MBR
+        // names no partition of type 0x0B or 0x0C, and a plan that installs onto a drive with no
+        // volume is a plan for a file that cannot take one.
+        if self.volume_type() == Some(0x00) {
+            return Verdict::No {
+                why: "That drive has no FAT32 data partition — its MBR names no partition of type \
+                      0x0B or 0x0C. An iPod's drive has one, so either this is not an iPod drive \
+                      image, or it is partitioned in a way this program does not read: a \
+                      Mac-formatted iPod uses an Apple Partition Map rather than an MBR."
+                    .into(),
+                fix: Some(Fix::BuildFromIpsw),
+            };
+        }
+
+        // (2) next, because it invalidates a whole loader regardless of what is selected.
         if (self.loader == Loader::IPodLoader2 || has(Os::IPodLinux))
             && self.volume_type() == Some(0x0c)
         {
             return Verdict::No {
+                // **Double quotes and not backticks.** A Slint `Text` renders a backtick literally,
+                // so the window would draw the loader's own message wearing two stray glyphs.
+                // `paritions` is `ipodloader2`'s own spelling and survives.
                 why: "That drive's data partition is FAT32 type 0x0C, the LBA form, and \
-                      ipodloader2 reads only 0x0B — it will report `No valid paritions found!`. \
+                      ipodloader2 reads only 0x0B — it will report \"No valid paritions found!\". \
                       Both are legitimate FAT32; drives off real iPods are 0x0C and drives built \
                       here are 0x0B."
                     .into(),
@@ -523,6 +856,16 @@ impl Recipe {
     /// **No `Synthesise` and no `Start`.** A [`Recipe`] carries no boot ROM, and a boot is not
     /// something fetched, built or installed. First run book-ends this list with both.
     pub fn steps(&self, holes: Holes) -> Vec<Step> {
+        // **Nothing chosen is no plan, and this is the same correction rule (0) made to the
+        // verdict.** Without it, `Start::FromIpsw(String::new())` — the state the Composer opens in
+        // — produced three rows: *fetch Apple's firmware* with an empty sub-line, *build a drive*
+        // billing 21 MB, and *install Apple's software*. So the page's own WILL DO, IN ORDER
+        // asserted a download and a build for a bundle nobody had chosen, one row under a verdict
+        // that had just been fixed to say the opposite. A plan and a verdict disagreeing about
+        // whether anything has been chosen is worse than either being wrong alone.
+        if self.nothing_chosen() {
+            return Vec::new();
+        }
         let mut v = Vec::new();
         match &self.start {
             Start::FromIpsw(name) => {
@@ -576,15 +919,14 @@ impl Recipe {
                     apparent: Some(crate::ipsw::DEFAULT_SECTORS * 512),
                 },
             }),
+            // **A drive already in the library is referenced, not copied, and costs nothing.**
+            // Billing `DRIVE_ON_DISK` plus an apparent 8 GiB would refuse a compose on a machine
+            // with 30 MB free — for a drive that already exists on it.
             Start::FromDisk { name, .. } => v.push(Step {
                 kind: Verb::Copy,
-                what: format!("{name}, from the library"),
+                what: format!("{name}, from the library — referenced, not copied"),
                 sub: String::new(),
-                cost: Cost {
-                    down: 0,
-                    disk: DRIVE_ON_DISK,
-                    apparent: Some(crate::ipsw::DEFAULT_SECTORS * 512),
-                },
+                cost: Cost::NONE,
             }),
         }
         if self.loader == Loader::IPodLoader2 {
@@ -1112,6 +1454,17 @@ mod tests {
                 name: "off my 5.5G".into(),
                 fat_type: Some(0x0c),
             },
+            // **And a drive with no FAT32 data partition at all**, which rule (2a) refuses. Without
+            // these two rows the one arm that can be reached from every combination — and so the
+            // one most likely to chain — would never be exercised.
+            Start::FromImage {
+                path: "/drives/mine.img".into(),
+                fat_type: Some(0x00),
+            },
+            Start::FromDisk {
+                name: "off my 5.5G".into(),
+                fat_type: Some(0x00),
+            },
         ] {
             for n in 0..8u8 {
                 for loader in Loader::ALL {
@@ -1128,17 +1481,11 @@ mod tests {
                     };
                     let fix =
                         fix.unwrap_or_else(|| panic!("no fix offered for {start:?}: {why}"));
+                    // **Through `Recipe::apply`, not through a copy of it written here.** This
+                    // match used to live in the test, so a window that applied a fix differently
+                    // was green here and wrong on screen.
                     let mut fixed = r.clone();
-                    match &fix {
-                        Fix::UseLoader(l) => fixed.loader = *l,
-                        Fix::AddOs(o) => {
-                            fixed.oses.insert(*o);
-                        }
-                        Fix::RemoveOs(o) => {
-                            fixed.oses.remove(o);
-                        }
-                        Fix::BuildFromIpsw => fixed.start = Start::FromIpsw(String::new()),
-                    }
+                    fixed.apply(&fix);
                     let after = fixed.check();
                     assert!(
                         after.ok()
@@ -1152,6 +1499,819 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ── the four rules a `Fix` obeys — GUI.md §11.3 ──────────────────────────────────────────
+
+    /// **The applier is exhaustive, and each arm does the one thing its variant names.**
+    ///
+    /// `RemoveOs` has no producer in `check()` today, so a `_ => {}` would have compiled, shipped
+    /// and done nothing the day one appeared.
+    #[test]
+    fn every_fix_variant_has_an_arm_in_the_applier() {
+        let base = recipe(Loader::Apple, &[Os::Apple]);
+
+        let mut r = base.clone();
+        r.apply(&Fix::UseLoader(Loader::Rockbox));
+        assert_eq!(r.loader, Loader::Rockbox, "UseLoader did nothing");
+
+        let mut r = base.clone();
+        r.apply(&Fix::AddOs(Os::Rockbox));
+        assert!(r.oses.contains(&Os::Rockbox), "AddOs did nothing");
+
+        let mut r = base.clone();
+        r.apply(&Fix::RemoveOs(Os::Apple));
+        assert!(!r.oses.contains(&Os::Apple), "RemoveOs did nothing");
+
+        let mut r = base.clone();
+        r.apply(&Fix::BuildFromIpsw);
+        assert_eq!(r.start, Start::FromIpsw(String::new()), "BuildFromIpsw did nothing");
+
+        // And it does **not** follow the bootloader: ticking a system is what does that.
+        let mut r = recipe(Loader::Apple, &[Os::Apple]);
+        r.apply(&Fix::AddOs(Os::Rockbox));
+        assert_eq!(
+            r.loader,
+            Loader::Apple,
+            "apply() moved the bootloader, so a fix resolves refusals it was not offered for"
+        );
+    }
+
+    /// Applying a fix twice is applying it once — so a double press, or a press against a recipe a
+    /// probe has just rewritten, cannot compound.
+    #[test]
+    fn a_fix_applied_twice_is_the_same_recipe() {
+        for start in [
+            Start::FromIpsw("iPod_20.1.3".into()),
+            Start::FromImage {
+                path: "/drives/mine.img".into(),
+                fat_type: Some(0x0c),
+            },
+        ] {
+            for loader in Loader::ALL {
+                for n in 0..8u8 {
+                    let oses: Vec<Os> = Os::ALL
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| n & (1 << i) != 0)
+                        .map(|(_, o)| *o)
+                        .collect();
+                    for fix in [
+                        Fix::UseLoader(Loader::IPodLoader2),
+                        Fix::AddOs(Os::Rockbox),
+                        Fix::RemoveOs(Os::Apple),
+                        Fix::BuildFromIpsw,
+                    ] {
+                        let mut once = recipe(loader, &oses);
+                        once.start = start.clone();
+                        once.apply(&fix);
+                        let mut twice = once.clone();
+                        twice.apply(&fix);
+                        assert_eq!(once, twice, "{fix:?} compounds on {oses:?}/{loader:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// **One source for the press count.** The window's failure Rail carried
+    /// `if *fix == Fix::BuildFromIpsw { 2 } else { 1 }` as a literal, and the Composer would have
+    /// had to carry the same literal again — two copies of one rule, in the two surfaces that must
+    /// agree about one press.
+    #[test]
+    fn the_two_press_rule_has_one_source() {
+        for l in Loader::ALL {
+            assert_eq!(Fix::UseLoader(l).presses(), 1, "{l:?}");
+        }
+        for o in Os::ALL {
+            assert_eq!(Fix::AddOs(o).presses(), 1, "{o:?}");
+            assert_eq!(Fix::RemoveOs(o).presses(), 1, "{o:?}");
+        }
+        // The one that changes which resource the device points at, and the only one.
+        assert_eq!(Fix::BuildFromIpsw.presses(), 2);
+        assert_eq!(
+            Fix::ALL.iter().filter(|f| f.presses() == 2).count(),
+            1,
+            "a second variant now needs two presses and has no consequence written for it"
+        );
+    }
+
+    /// **The first of the two the critics caught.** A one-press `Fix` detached a 55.9 GB reference
+    /// with no sentence: pick an image dumped off your own 5.5G, tick iPodLinux, watch the loader
+    /// move to ipodloader2, get the 0x0C paragraph, press the button — and the device silently
+    /// stops pointing at the only copy of your iPod.
+    ///
+    /// So the button says what it costs **before** the first press, and it names the file.
+    #[test]
+    fn a_two_press_fix_names_what_it_detaches_before_the_first_press() {
+        for start in [
+            Start::FromImage {
+                path: "/Volumes/backup/rockbox-test.img".into(),
+                fat_type: Some(0x0c),
+            },
+            Start::FromDisk {
+                name: "off my 5.5G".into(),
+                fat_type: Some(0x0c),
+            },
+        ] {
+            let mut r = recipe(Loader::IPodLoader2, &[Os::IPodLinux]);
+            r.start = start.clone();
+            let Verdict::No { fix: Some(fix), .. } = r.check() else {
+                panic!("the fixture no longer refuses: {:?}", r.check());
+            };
+            assert_eq!(fix, Fix::BuildFromIpsw, "the fixture stopped producing it");
+            assert_eq!(fix.presses(), 2, "one press detaches {start:?}");
+
+            let c = fix.consequence(&start);
+            let name = start.label();
+            assert!(!name.is_empty(), "the fixture names no volume");
+            assert!(
+                c.contains(name),
+                "the consequence does not name what it detaches — {c:?} for {name:?}"
+            );
+            assert!(
+                c.contains("stops using"),
+                "the consequence does not say the device stops using it: {c:?}"
+            );
+        }
+    }
+
+    /// **A second press means there is something to say, and saying something means a second
+    /// press.** Either half alone is a control that surprises somebody: a silent two-press button
+    /// reads as broken, and a one-press button carrying a consequence has already acted by the time
+    /// it is read.
+    #[test]
+    fn a_consequence_is_non_empty_exactly_where_a_second_press_is_required() {
+        let starts = [
+            Start::FromIpsw("iPod_20.1.3".into()),
+            Start::FromIpsw(String::new()),
+            Start::FromImage {
+                path: "/drives/mine.img".into(),
+                fat_type: Some(0x0c),
+            },
+            Start::FromImage {
+                path: String::new(),
+                fat_type: None,
+            },
+            Start::FromDisk {
+                name: "off my 5.5G".into(),
+                fat_type: None,
+            },
+        ];
+        let mut fixes: Vec<Fix> = Vec::new();
+        for l in Loader::ALL {
+            fixes.push(Fix::UseLoader(l));
+        }
+        for o in Os::ALL {
+            fixes.push(Fix::AddOs(o));
+            fixes.push(Fix::RemoveOs(o));
+        }
+        fixes.push(Fix::BuildFromIpsw);
+
+        for fix in &fixes {
+            for start in &starts {
+                let c = fix.consequence(start);
+                assert_eq!(
+                    !c.is_empty(),
+                    fix.presses() == 2,
+                    "{fix:?} on {start:?}: {} presses, consequence {c:?}",
+                    fix.presses()
+                );
+            }
+        }
+    }
+
+    /// **The second of the two the critics caught.** Rule (1) offers `use ipodloader2` while the
+    /// bootloader picker four rows above refuses that value — so the button set in one press
+    /// something the control above it would not let anybody choose, and the promise that applying a
+    /// fix resolves rather than moving you to another dead end was false at the first refusal a
+    /// curious person hits.
+    ///
+    /// The rule is not *"no fix ever names an un-offered value"* — rule (1) legitimately does, for
+    /// a recipe that arrived holding iPodLinux. It is that the fix and the picker **give the same
+    /// answer about the same value, in the same words**, so the surface cannot contradict itself.
+    #[test]
+    fn a_fix_never_names_a_value_the_picker_refuses() {
+        let starts = [
+            Start::FromIpsw("iPod_20.1.3".into()),
+            Start::FromImage {
+                path: "/drives/mine.img".into(),
+                fat_type: Some(0x00),
+            },
+            Start::FromImage {
+                path: "/drives/mine.img".into(),
+                fat_type: Some(0x0b),
+            },
+            Start::FromDisk {
+                name: "off my 5.5G".into(),
+                fat_type: Some(0x0c),
+            },
+        ];
+        let mut seen_disabled = 0;
+        for start in &starts {
+            for loader in Loader::ALL {
+                for n in 0..8u8 {
+                    let oses: Vec<Os> = Os::ALL
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| n & (1 << i) != 0)
+                        .map(|(_, o)| *o)
+                        .collect();
+                    let mut r = recipe(loader, &oses);
+                    r.start = start.clone();
+                    let Verdict::No { fix: Some(fix), .. } = r.check() else {
+                        continue;
+                    };
+                    // The fix's own answer about the value it names is the picker's own answer.
+                    let (picker_offers, picker_why, picker_hatch) = match &fix {
+                        Fix::UseLoader(l) => (l.offered(), l.why_not_offered(), l.escape_hatch()),
+                        Fix::AddOs(o) => (o.offered(), o.why_not_offered(), o.escape_hatch()),
+                        // Neither names a value in a picker: `RemoveOs` lets one go, and
+                        // `BuildFromIpsw` lands on the nothing-chosen state the row above resolves.
+                        Fix::RemoveOs(_) | Fix::BuildFromIpsw => (true, "", ""),
+                    };
+                    assert_eq!(
+                        fix.offered(),
+                        picker_offers,
+                        "{:?} on {oses:?}/{loader:?}: the Fix says offered={} and the picker says \
+                         {picker_offers}",
+                        fix,
+                        fix.offered()
+                    );
+                    assert_eq!(
+                        fix.why_not_offered(),
+                        picker_why,
+                        "{fix:?} and the picker word the same refusal differently"
+                    );
+                    assert_eq!(
+                        fix.escape_hatch(),
+                        picker_hatch,
+                        "{fix:?} and the picker name different escape hatches"
+                    );
+                    if !fix.offered() {
+                        seen_disabled += 1;
+                        assert!(
+                            !fix.why_not_offered().is_empty(),
+                            "{fix:?} is disabled with no reason, which is a wall"
+                        );
+                        assert!(
+                            !fix.escape_hatch().is_empty(),
+                            "{fix:?} is disabled with no way round it"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(
+            seen_disabled > 0,
+            "the sweep never produced a Fix naming an un-offered value, so it proved nothing"
+        );
+
+        // The other half, and the one that matters on screen: **inside the surface the window
+        // actually offers, every Fix is pressable.** A person choosing only from `OFFERED` must
+        // never be shown a button they cannot press.
+        for start in &starts {
+            for loader in Loader::OFFERED {
+                for n in 0..(1u8 << Os::OFFERED.len()) {
+                    let oses: Vec<Os> = Os::OFFERED
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| n & (1 << i) != 0)
+                        .map(|(_, o)| *o)
+                        .collect();
+                    let mut r = recipe(loader, &oses);
+                    r.start = start.clone();
+                    if let Verdict::No { fix: Some(fix), why } = r.check() {
+                        assert!(
+                            fix.offered(),
+                            "{oses:?} on {loader:?} from {start:?} offers {:?}, which the picker \
+                             refuses — {why}",
+                            fix.label()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The offered set, the reason for not being offered, and the way round it are three answers to
+    /// one question and cannot come apart.
+    #[test]
+    fn the_offered_sets_and_their_reasons_cannot_drift() {
+        for o in Os::ALL {
+            assert_eq!(o.offered(), Os::OFFERED.contains(&o), "{o:?}");
+            assert_eq!(
+                o.why_not_offered().is_empty(),
+                o.offered(),
+                "{o:?} has a reason it does not need, or needs one it has not got"
+            );
+            assert_eq!(o.escape_hatch().is_empty(), o.offered(), "{o:?}");
+            assert!(!o.short().is_empty(), "{o:?}");
+        }
+        for l in Loader::ALL {
+            assert_eq!(l.offered(), Loader::OFFERED.contains(&l), "{l:?}");
+            assert_eq!(l.why_not_offered().is_empty(), l.offered(), "{l:?}");
+            assert_eq!(l.escape_hatch().is_empty(), l.offered(), "{l:?}");
+        }
+    }
+
+    /// **GUI.md §9.4's two kinds, and greying them identically defeats the whole justification for
+    /// disabling anything with a reason.**
+    ///
+    /// A machine rule says *this cannot work, ever* and carries a `Fix`; a project state says *this
+    /// is not finished, by us*, names what does work, and carries a command. Neither borrows the
+    /// other's shape.
+    #[test]
+    fn the_two_kinds_of_disabled_are_worded_differently() {
+        // Every machine rule this module can produce: a `Verdict::No` about the parts.
+        let mut machine_rules: Vec<String> = Vec::new();
+        for start in [
+            Start::FromImage {
+                path: "/drives/mine.img".into(),
+                fat_type: Some(0x00),
+            },
+            Start::FromImage {
+                path: "/drives/mine.img".into(),
+                fat_type: Some(0x0c),
+            },
+            Start::FromIpsw("iPod_20.1.3".into()),
+        ] {
+            for loader in Loader::ALL {
+                for n in 0..8u8 {
+                    let oses: Vec<Os> = Os::ALL
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| n & (1 << i) != 0)
+                        .map(|(_, o)| *o)
+                        .collect();
+                    let mut r = recipe(loader, &oses);
+                    r.start = start.clone();
+                    if let Verdict::No { why, fix } = r.check() {
+                        assert!(
+                            fix.is_some(),
+                            "a machine rule with no way out is a wall: {why}"
+                        );
+                        machine_rules.push(why);
+                    }
+                }
+            }
+        }
+        assert!(!machine_rules.is_empty(), "the sweep produced no machine rule");
+
+        // Every project state: an un-offered value.
+        let project_states: Vec<&str> = Os::ALL
+            .into_iter()
+            .map(|o| o.why_not_offered())
+            .chain(Loader::ALL.into_iter().map(|l| l.why_not_offered()))
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert!(
+            !project_states.is_empty(),
+            "the sweep produced no project state"
+        );
+
+        for p in &project_states {
+            assert!(
+                !machine_rules.iter().any(|m| m == p),
+                "one sentence is being used for both kinds: {p}"
+            );
+        }
+        // And a project state always names the escape hatch a machine rule never does.
+        for o in Os::ALL {
+            if !o.offered() {
+                assert!(o.escape_hatch().starts_with("ipod-boot "), "{o:?}");
+            }
+        }
+    }
+
+    /// **GUI.md §9.4: an escape hatch is a real command, and it promises nothing it cannot do.**
+    ///
+    /// `ipod-boot install-linux` refuses on every drive it has been tried against — one built here
+    /// and one off real hardware (`KNOWN-BUGS.md`, 2026-08-21). An earlier wording said it *builds
+    /// that drive*, which is a route out that does not go anywhere.
+    #[test]
+    fn no_escape_hatch_claims_a_command_that_cannot_complete() {
+        let hatches: Vec<&str> = Os::ALL
+            .into_iter()
+            .map(|o| o.escape_hatch())
+            .chain(Loader::ALL.into_iter().map(|l| l.escape_hatch()))
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert!(!hatches.is_empty(), "nothing offered an escape hatch");
+        for h in hatches {
+            assert!(
+                h.starts_with("ipod-boot "),
+                "{h:?} is not a command this program ships"
+            );
+            for claim in ["builds", "makes", "produces", "will "] {
+                assert!(
+                    !h.contains(claim),
+                    "{h:?} promises an outcome; an escape hatch is a command, in mono"
+                );
+            }
+            // A command, not a sentence: it goes in a `mono` line beside the reason.
+            assert!(!h.ends_with('.'), "{h:?} is prose, not a command");
+        }
+        // And the reason itself must not make the claim either.
+        assert!(
+            !Os::IPodLinux.why_not_offered().contains("builds that drive"),
+            "the reason still claims install-linux produces a drive"
+        );
+    }
+
+    // ── the verdict region ────────────────────────────────────────────────────────────────────
+
+    /// **Rule (2a), and it is red before it is written.** A recipe starting from an image whose MBR
+    /// names no FAT32 partition read
+    /// `Starts Apple's software, the way the iPod shipped.` — a plan for a file that has no volume
+    /// to install onto, asserted in the region the design says must never say something it will
+    /// take back.
+    #[test]
+    fn a_drive_with_no_fat32_partition_is_refused_before_the_press() {
+        for start in [
+            Start::FromImage {
+                path: "/drives/mine.img".into(),
+                fat_type: Some(0x00),
+            },
+            Start::FromDisk {
+                name: "off my 5.5G".into(),
+                fat_type: Some(0x00),
+            },
+        ] {
+            // Every combination, because the drive is the reason and the parts are not.
+            for loader in Loader::ALL {
+                for n in 0..8u8 {
+                    let oses: Vec<Os> = Os::ALL
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| n & (1 << i) != 0)
+                        .map(|(_, o)| *o)
+                        .collect();
+                    let mut r = recipe(loader, &oses);
+                    r.start = start.clone();
+                    let v = r.check();
+                    assert!(
+                        !v.ok(),
+                        "{oses:?} on {loader:?} was planned onto a drive with no FAT32 partition: \
+                         {}",
+                        v.text()
+                    );
+                    assert!(
+                        v.text().contains("no FAT32 data partition"),
+                        "the reason blames the parts rather than the drive: {}",
+                        v.text()
+                    );
+                    assert_eq!(
+                        match &v {
+                            Verdict::No { fix, .. } => fix.clone(),
+                            _ => None,
+                        },
+                        Some(Fix::BuildFromIpsw),
+                        "no way out of a drive with no volume"
+                    );
+                }
+            }
+        }
+        // And a drive that has one is not refused, so this did not become a blanket refusal.
+        let mut ok = recipe(Loader::Apple, &[Os::Apple]);
+        ok.start = Start::FromImage {
+            path: "/drives/mine.img".into(),
+            fat_type: Some(0x0b),
+        };
+        assert!(ok.check().ok(), "a 0x0B image was refused: {}", ok.check().text());
+    }
+
+    /// **The reading state is a three-way trial, not a second copy of rule (2)** — and the trial
+    /// set is closed by `install::data_partition_type`'s own last line, which is asserted here
+    /// rather than assumed, because a fourth answer would make `volume_decides` say *the read
+    /// cannot change this* about a read that can.
+    #[test]
+    fn the_three_answers_a_volume_read_can_give_are_the_three_the_verdict_is_tried_against() {
+        let install = include_str!("install.rs");
+        assert!(
+            install.contains(".find(|t| matches!(t, 0x0b | 0x0c))"),
+            "data_partition_type no longer narrows to 0x0B/0x0C, so the trial set is open"
+        );
+        assert!(
+            install.contains(".unwrap_or(0)"),
+            "data_partition_type no longer answers 0 for a drive with neither, so 0x00 may not be \
+             the third answer"
+        );
+
+        // An unread volume whose verdict the read decides.
+        let mut r = recipe(Loader::IPodLoader2, &[Os::Apple, Os::IPodLinux]);
+        r.start = Start::FromImage {
+            path: "/drives/mine.img".into(),
+            fat_type: None,
+        };
+        assert!(r.volume_decides(), "the read plainly decides this one");
+
+        // The three answers really are three different verdicts here.
+        let verdict = |t: u8| {
+            let mut c = r.clone();
+            c.set_volume_type(t);
+            c.check()
+        };
+        assert!(!verdict(0x00).ok(), "0x00 was accepted");
+        assert!(verdict(0x0b).ok(), "0x0B was refused: {}", verdict(0x0b).text());
+        assert!(!verdict(0x0c).ok(), "0x0C was accepted");
+        assert_ne!(
+            verdict(0x00).text(),
+            verdict(0x0c).text(),
+            "two of the three answers are one answer, so the trial cannot see the difference"
+        );
+
+        // Once the read has landed there is nothing left to wait for.
+        let mut read = r.clone();
+        read.set_volume_type(0x0b);
+        assert!(!read.volume_decides(), "still waiting on a read that finished");
+
+        // And a bundle has no volume to read, so it never waits.
+        let bundle = recipe(Loader::Apple, &[Os::Apple]);
+        assert!(!bundle.has_a_volume());
+        assert!(!bundle.volume_decides(), "a bundle claimed to be waiting on a read");
+
+        // Nor does one nobody has chosen: there is nothing to read.
+        let mut empty = r.clone();
+        empty.start = Start::FromImage {
+            path: String::new(),
+            fat_type: None,
+        };
+        assert!(!empty.volume_decides(), "an unchosen image claimed to be reading");
+    }
+
+    /// The window renders these strings verbatim into a `Text`, which draws a backtick as a
+    /// backtick. `identity.rs`'s single-character quotes are deliberately out of scope: they wrap
+    /// one character of somebody's own typing, which is a different job from quoting a machine's
+    /// output back.
+    #[test]
+    fn no_model_sentence_reaches_the_screen_with_markup_in_it() {
+        let mut sentences: Vec<String> = Vec::new();
+        for start in [
+            Start::FromIpsw(String::new()),
+            Start::FromIpsw("iPod_20.1.3".into()),
+            Start::FromImage {
+                path: "/drives/mine.img".into(),
+                fat_type: Some(0x00),
+            },
+            Start::FromImage {
+                path: "/drives/mine.img".into(),
+                fat_type: Some(0x0c),
+            },
+            Start::FromDisk {
+                name: "off my 5.5G".into(),
+                fat_type: Some(0x0b),
+            },
+        ] {
+            for loader in Loader::ALL {
+                for n in 0..8u8 {
+                    let oses: Vec<Os> = Os::ALL
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| n & (1 << i) != 0)
+                        .map(|(_, o)| *o)
+                        .collect();
+                    let mut r = recipe(loader, &oses);
+                    r.start = start.clone();
+                    sentences.push(r.check().text().to_string());
+                    if let Verdict::No { fix: Some(f), .. } = r.check() {
+                        sentences.push(f.label());
+                        sentences.push(f.consequence(&start));
+                        sentences.push(f.why_not_offered().into());
+                    }
+                    for s in r.steps(Holes::Sparse) {
+                        sentences.push(s.what);
+                        sentences.push(s.sub);
+                    }
+                }
+            }
+        }
+        for o in Os::ALL {
+            sentences.push(o.label().into());
+            sentences.push(o.short().into());
+            sentences.push(o.why_not_offered().into());
+        }
+        for l in Loader::ALL {
+            sentences.push(l.label().into());
+            sentences.push(l.why_not_offered().into());
+        }
+        assert!(sentences.len() > 100, "the sweep collected almost nothing");
+        for s in &sentences {
+            assert!(
+                !s.contains('`'),
+                "a backtick reaches the screen as a backtick: {s:?}"
+            );
+        }
+        // The 0x0C sentence quotes the loader's own message, and it does so in quotation marks.
+        assert!(
+            sentences
+                .iter()
+                .any(|s| s.contains("\"No valid paritions found!\"")),
+            "the loader's own message is no longer quoted, or is quoted some other way"
+        );
+    }
+
+    // ── one question, one place ───────────────────────────────────────────────────────────────
+
+    /// Every `Start` variant answers *is anything chosen*, *what is it called* and *does it carry a
+    /// volume* through one function each — because a second copy of that match is where the third
+    /// variant gets forgotten, which has already happened once here.
+    #[test]
+    fn all_three_starts_answer_the_same_questions_in_one_place() {
+        let empties = [
+            Start::FromIpsw(String::new()),
+            Start::FromImage {
+                path: String::new(),
+                fat_type: Some(0x0b),
+            },
+            Start::FromDisk {
+                name: String::new(),
+                fat_type: None,
+            },
+        ];
+        for start in empties {
+            let r = Recipe {
+                start: start.clone(),
+                ..Recipe::default()
+            };
+            assert!(r.nothing_chosen(), "{start:?}");
+            assert_eq!(start.label(), "", "{start:?} named something unchosen");
+            assert!(!r.has_a_volume(), "{start:?} carries a volume nobody chose");
+            assert_eq!(r.volume_name(), None, "{start:?}");
+        }
+
+        let chosen = [
+            (Start::FromIpsw("iPod_20.1.3".into()), "", false),
+            (
+                Start::FromImage {
+                    path: "/Volumes/backup/rockbox-test.img".into(),
+                    fat_type: None,
+                },
+                "rockbox-test.img",
+                true,
+            ),
+            (
+                Start::FromDisk {
+                    name: "off my 5.5G".into(),
+                    fat_type: None,
+                },
+                "off my 5.5G",
+                true,
+            ),
+        ];
+        for (start, label, volume) in chosen {
+            let r = Recipe {
+                start: start.clone(),
+                ..Recipe::default()
+            };
+            assert!(!r.nothing_chosen(), "{start:?}");
+            assert_eq!(start.label(), label, "{start:?}");
+            assert_eq!(r.has_a_volume(), volume, "{start:?}");
+        }
+
+        // A path with no file name still names itself, so `label() == ""` keeps meaning
+        // *nothing chosen* rather than *chosen and unnameable*.
+        let odd = Start::FromImage {
+            path: "/".into(),
+            fat_type: None,
+        };
+        assert_eq!(odd.label(), "/");
+    }
+
+    /// The name a sentence about the volume can use, for every start that has one.
+    #[test]
+    fn volume_name_answers_for_every_start_that_carries_a_volume() {
+        let mut r = recipe(Loader::Apple, &[Os::Apple]);
+        assert_eq!(r.volume_name(), None, "a bundle named a volume");
+        r.start = Start::FromImage {
+            path: "/drives/mine.img".into(),
+            fat_type: None,
+        };
+        assert_eq!(r.volume_name(), Some("mine.img"));
+        r.start = Start::FromDisk {
+            name: "rockbox-test".into(),
+            fat_type: None,
+        };
+        assert_eq!(r.volume_name(), Some("rockbox-test"));
+        // And the consequence of detaching it names exactly that.
+        assert!(Fix::BuildFromIpsw
+            .consequence(&r.start)
+            .contains("rockbox-test"));
+    }
+
+    /// The prose vocabulary round-trips, and it is **not** the settings file's.
+    #[test]
+    fn every_os_label_round_trips() {
+        for o in Os::ALL {
+            assert_eq!(Os::from_label(o.label()), Some(o), "{o:?}");
+            // Whitespace a row might carry does not stop it resolving.
+            assert_eq!(Os::from_label(&format!("  {}  ", o.label())), Some(o));
+        }
+        for junk in ["", "Linux", "Apple", "rockbox 4.0", "  "] {
+            assert_eq!(Os::from_label(junk), None, "{junk:?} resolved to a system");
+        }
+    }
+
+    /// **Two vocabularies, and one function reading both would agree that a file said something it
+    /// did not.** `Disk::installed` holds labels; a settings file holds tokens.
+    #[test]
+    fn from_label_refuses_the_settings_token() {
+        for o in Os::ALL {
+            assert_eq!(
+                Os::from_label(o.as_str()),
+                None,
+                "{:?}'s settings token resolved as a label",
+                o
+            );
+            assert_eq!(Os::parse(o.as_str()), Some(o), "the token still parses");
+            // And the labels are not tokens either, which is what keeps them two vocabularies.
+            assert_eq!(Os::parse(o.label()), None, "{o:?}");
+        }
+    }
+
+    // ── the plan ──────────────────────────────────────────────────────────────────────────────
+
+    /// **A drive already in the library is referenced, not copied.** Billing `DRIVE_ON_DISK` plus an
+    /// apparent 8 GiB refused a compose on a machine with 30 MB free, for a drive already on it.
+    #[test]
+    fn composing_from_a_drive_already_in_the_library_bills_nothing() {
+        let mut r = recipe(Loader::Apple, &[Os::Apple]);
+        r.start = Start::FromDisk {
+            name: "off my 5.5G".into(),
+            fat_type: Some(0x0b),
+        };
+        let steps = r.steps(Holes::Sparse);
+        assert_eq!(steps.len(), 1, "{steps:#?}");
+        assert_eq!(steps[0].cost, Cost::NONE, "a library drive was billed for");
+        assert!(
+            steps[0].what().contains("referenced, not copied"),
+            "the row does not say what it does: {}",
+            steps[0].what()
+        );
+        assert_eq!(r.cost(Holes::Sparse), Cost::NONE);
+        assert_eq!(
+            r.cost(Holes::Full),
+            Cost::NONE,
+            "a volume with no holes was billed for a file nothing writes"
+        );
+
+        // An image the person supplied is still copied, and still costs.
+        let mut copied = r.clone();
+        copied.start = Start::FromImage {
+            path: "/drives/mine.img".into(),
+            fat_type: Some(0x0b),
+        };
+        assert_eq!(copied.cost(Holes::Sparse).disk, DRIVE_ON_DISK);
+    }
+
+    /// The plan's longest possible list, enumerated over every recipe rather than asserted.
+    ///
+    /// `FromIpsw` contributes fetch + build + install (3), `ipodloader2` adds 1, Rockbox adds 2 and
+    /// iPodLinux adds 2 — eight, which is what the markup reserves room for.
+    #[test]
+    fn a_plan_is_never_more_than_eight_lines() {
+        const PLAN_MAX_ROWS: usize = 8;
+        let starts = [
+            Start::FromIpsw("iPod_20.1.3".into()),
+            Start::FromImage {
+                path: "/drives/mine.img".into(),
+                fat_type: Some(0x0b),
+            },
+            Start::FromDisk {
+                name: "off my 5.5G".into(),
+                fat_type: Some(0x0b),
+            },
+        ];
+        let mut longest = 0;
+        let mut counted = 0;
+        for start in &starts {
+            for loader in Loader::ALL {
+                for n in 0..8u8 {
+                    let oses: Vec<Os> = Os::ALL
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| n & (1 << i) != 0)
+                        .map(|(_, o)| *o)
+                        .collect();
+                    let mut r = recipe(loader, &oses);
+                    r.start = start.clone();
+                    for holes in [Holes::Sparse, Holes::Full] {
+                        let len = r.steps(holes).len();
+                        assert!(
+                            len <= PLAN_MAX_ROWS,
+                            "{oses:?} on {loader:?} from {start:?} is {len} lines"
+                        );
+                        longest = longest.max(len);
+                    }
+                    counted += 1;
+                }
+            }
+        }
+        assert_eq!(counted, 72, "the sweep is not every recipe");
+        assert_eq!(
+            longest, PLAN_MAX_ROWS,
+            "the reserved room is not the longest plan, so it is either short or wasted"
+        );
     }
 
     /// The preview has to match `install::loader_menu`, which writes ZeroSlackr, Apple OS, Rockbox,

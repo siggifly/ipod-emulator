@@ -15,36 +15,21 @@
 
 use std::path::{Path, PathBuf};
 
-/// The two ways the window can be looked at.
-///
-/// One toggle, not a pile of checkboxes: the choice is between "this is an iPod" and "this is an
-/// instrument", and every counter on screen belongs to the second.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum Mode {
-    /// The iPod and nothing else. The default, and what a stranger who cloned this should meet.
-    #[default]
-    User,
-    /// Instruction counts, both clocks, the task watches, the ATA census, the framebuffer
-    /// inspector, the screenshot button.
-    Debug,
-}
-
-impl Mode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Mode::User => "user",
-            Mode::Debug => "debug",
-        }
-    }
-
-    fn parse(s: &str) -> Option<Mode> {
-        match s.trim() {
-            "user" => Some(Mode::User),
-            "debug" => Some(Mode::Debug),
-            _ => None,
-        }
-    }
-}
+// **There is no `Mode` here, and its deletion is the decision rather than an omission.**
+//
+// It was a two-value user/debug toggle: `Mode::Debug` was to show instruction counts, both clocks,
+// the task watches, the ATA census, the framebuffer inspector and a screenshot button. Every one of
+// those surfaces is now a *page* — §12.8's Readout — reached by navigating to it, and a page you
+// can navigate to does not need a session-wide boolean deciding whether it exists.
+//
+// What it had become was a stored state, set once and forgotten, that silently changed what the
+// window contained on a later launch. The one job left for it — hiding the Readout row — is a
+// second navigation model layered over the first, and a menu row that is present or absent
+// depending on a flag nobody remembers setting is worse than one that is always present.
+//
+// **`parse` ignores keys it does not know**, so a settings file carrying `mode = debug` is read
+// exactly as it was before this went: the line is skipped, nothing complains, and the next `save`
+// drops it. That is what makes this a deletion rather than a migration.
 
 /// One thing in the resources list, and **the verb is what distinguishes them**.
 ///
@@ -210,26 +195,33 @@ impl Provenance {
     /// `line().contains("verified")` is an exact test of the claim rather than a string that also
     /// matches "not verified".
     ///
+    /// **The separator is `,` inside a list of facts and `—` between two clauses, and never `·`.**
+    /// `·` is U+00B7, which is not in the window's closed glyph set (§6.7: a symbol is *drawn* as a
+    /// `Path`, and `ui/bench.slint` draws this one) — so a `Text` asked for it falls to `.notdef`,
+    /// an empty square, and nothing in `.slint` can ask whether a glyph exists. It went unnoticed
+    /// because the window's sweep reads `tools/ipod-gui/src` only and this is a model sentence the
+    /// window renders verbatim. `every_provenance_line_is_ascii_or_an_em_dash` is what holds it.
+    ///
     /// **`Sha256` says *when* it was verified, and the tense is the point.** This is a record of
     /// how a file arrived, not a measurement of the bytes on disk now: an entry is keyed on its
     /// path, so replacing the file under it — a re-download with `curl -o`, a restore from a
-    /// backup — leaves the record standing. `fetched · SHA-256 verified` read as a live claim
+    /// backup — leaves the record standing. `fetched — SHA-256 verified` read as a live claim
     /// about a file nobody had re-opened, which is the same shape as the `fetched and verified`
     /// string literal this field exists to delete, one level down. See [`Provenance::is_verified`]
     /// for how a surface re-establishes it.
     pub fn line(&self) -> String {
         match self {
             Provenance::Dumped => "dumped from a real iPod".to_string(),
-            Provenance::Synthesised { seed } => format!("synthesised · seed {seed:x}"),
+            Provenance::Synthesised { seed } => format!("synthesised, seed {seed:x}"),
             Provenance::Fetched {
                 verified: Verification::Sha256,
-            } => "fetched · SHA-256 verified when it arrived".to_string(),
+            } => "fetched — SHA-256 verified when it arrived".to_string(),
             Provenance::Fetched {
                 verified: Verification::SizeOnly,
-            } => "fetched · size only, no hash on record for this release yet".to_string(),
+            } => "fetched — size only, no hash on record for this release yet".to_string(),
             Provenance::Fetched {
                 verified: Verification::None,
-            } => "fetched · nothing on record to check it against".to_string(),
+            } => "fetched — nothing on record to check it against".to_string(),
             Provenance::Provided => "provided".to_string(),
             Provenance::Built => "built here".to_string(),
         }
@@ -470,6 +462,24 @@ pub struct Device {
     /// `None` until it has booted once, and the bar says "booting" without a fraction rather than
     /// inventing one.
     pub boot_instructions: Option<u64>,
+    /// **What [`Device::boot_instructions`] was measured on** — `crate::compose::BootShape::render`,
+    /// e.g. `rockbox, apple, rockbox`.
+    ///
+    /// The denominator above is honest only while the device goes on booting the same thing.
+    /// Install Rockbox onto a device that learned ~1.6 G on RetailOS and it reaches its menu at
+    /// ~100 M, so the bar reads 6 % at the moment the machine is finished; go the other way and it
+    /// passes 100 % and keeps going. So the number is stored **with the shape that produced it**,
+    /// and [`Settings::set_boot_shape`] drops the number exactly when the shape moves.
+    ///
+    /// A `String` rather than a `BootShape`, and that is the field's whole design: it keeps
+    /// [`Device`] `PartialEq + Default` with no `impl` borrowed from `compose`, and the field and
+    /// the settings-file line are **one spelling** — `render()` on the way out, `BootShape::parse`
+    /// on the way in, and nothing in between to disagree.
+    ///
+    /// `None` means nobody recorded one, which is what every device written before this field has.
+    /// A `None` shape beside a `Some` number is a denominator that cannot be checked, so
+    /// [`Settings::set_boot_shape`] treats it as a mismatch and drops the number once.
+    pub boot_shape: Option<String>,
     /// Seconds since the Unix epoch at which a complete restore point was last written for this
     /// device. `None` means no restore point has ever been written by this program.
     ///
@@ -498,7 +508,6 @@ impl Device {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Settings {
-    pub mode: Mode,
     /// The devices, in the order they were made.
     pub devices: Vec<Device>,
     /// The name of the device that is running, if the live fields came from one.
@@ -708,7 +717,6 @@ impl Settings {
             };
             let (k, v) = (k.trim(), v.trim());
             match k {
-                "mode" => s.mode = Mode::parse(v).unwrap_or_default(),
                 // Empty is "not set", which is what an editor that blanked a line means.
                 // The key an older settings file has. Still read, so an existing setup keeps its
                 // dump instead of silently switching to a generated one.
@@ -781,6 +789,14 @@ impl Settings {
                         "work_on_copy" => s.devices[i].work_on_copy = Some(v == "true"),
                         "boot_instructions" => {
                             s.devices[i].boot_instructions = v.parse::<u64>().ok()
+                        }
+                        // **Read as text and not through `BootShape::parse`.** A hand-edited or
+                        // future token this build does not know must survive the round trip rather
+                        // than being silently blanked — and a shape that does not parse compares
+                        // unequal to every shape that does, which is exactly the answer
+                        // `set_boot_shape` wants from it: drop the denominator, keep going.
+                        "boot_shape" if !v.is_empty() => {
+                            s.devices[i].boot_shape = Some(v.to_string())
                         }
                         "parked_at" => s.devices[i].parked_at = v.parse::<u64>().ok(),
                         _ => {
@@ -1002,10 +1018,17 @@ fn one_line(s: &str) -> String {
 
 /// The name to file a boot ROM under when nobody has given it one.
 ///
-/// One place, because three callers need the same spelling: seeding, [`Settings::remember_as`], and
-/// the migration of a device that carried its recipe inline. Three copies of a format string is
-/// three chances for one of them to mint a duplicate entry under a slightly different name.
-fn suggest_nor_name(src: &crate::nor::Source) -> String {
+/// One place, because four callers need the same spelling: seeding, [`Settings::remember_as`], the
+/// migration of a device that carried its recipe inline, and — since §11.2 — the Composer, which
+/// files an iPod **at the mint** rather than on `Create`. Four copies of a format string is four
+/// chances for one of them to mint a duplicate entry under a slightly different name.
+///
+/// **Public for the Composer, and it is the fourth caller that made it so.** §11.2: *the iPod
+/// becomes a filed resource the moment it is made, under `<model>, seed <n>`* — this string and
+/// nothing else. A window that formatted its own would be a fifth spelling, and
+/// [`Settings::restate_firmware`] re-derives through this function when an identity is tuned, so
+/// the name a mint files under and the name a restate produces cannot be two names.
+pub fn suggest_nor_name(src: &crate::nor::Source) -> String {
     match src {
         crate::nor::Source::File(p) => p
             .file_stem()
@@ -1161,7 +1184,6 @@ impl Settings {
             "# ipod-gui settings. Hand-editable; keys this version does not know are ignored.\n\
              # When the program saves, it writes this file out from its own model — so anything\n\
              # not in the list below, including comments you add, is not carried over.\n\
-             mode = {}\n\
              # auto, white, black, or u2. `auto` reads it out of the NOR's Mod#, which is\n\
              # what the dump says the iPod was; the rest overrule that. Cosmetic either way —\n\
              # the firmware is handed the same identity whatever this says.\n\
@@ -1180,7 +1202,6 @@ impl Settings {
              # from where the drive came from\": a drive this program built is written to directly,\n\
              # one you supplied is copied. Set it to true or false to answer for both.\n\
              {}",
-            self.mode.as_str(),
             self.chassis.map(|c| c.as_str()).unwrap_or("auto"),
             self.render_nor(),
             p(&self.disk),
@@ -1300,6 +1321,13 @@ impl Settings {
             if let Some(b) = d.boot_instructions {
                 out.push_str(&format!("device.{i}.boot_instructions = {b}\n"));
             }
+            // Written **after** the number it qualifies, so a person reading the file meets the
+            // denominator and then what it was measured on. Order is not load-bearing on read —
+            // unlike `res.N.kind` before `res.N.path` — because neither line decides how the other
+            // is parsed.
+            if let Some(b) = &d.boot_shape {
+                out.push_str(&format!("device.{i}.boot_shape = {b}\n"));
+            }
             if let Some(t) = d.parked_at {
                 out.push_str(&format!("device.{i}.parked_at = {t}\n"));
             }
@@ -1344,6 +1372,12 @@ impl Settings {
             chassis: self.chassis,
             work_on_copy: self.work_on_copy,
             boot_instructions: existing.and_then(|d| d.boot_instructions),
+            // **The named trap of §20 item 6, closed.** Without this line every `run_device` /
+            // `remember_as` round trip loses the shape, `set_boot_shape` then sees `None` beside a
+            // good number, reads it as a mismatch, and the next `Create` throws away a denominator
+            // that was correct. The number and the shape it was measured on travel together or
+            // neither of them is worth storing.
+            boot_shape: existing.and_then(|d| d.boot_shape.clone()),
             // The park time belongs to the saved device and is not derivable from the live fields.
             parked_at: existing.and_then(|d| d.parked_at),
         }
@@ -1676,6 +1710,272 @@ impl Settings {
         }
     }
 
+    /// Record what a device boots, and **drop the denominator exactly when the shape moved**.
+    ///
+    /// §12.3 / §20 item 6. [`Device::boot_instructions`] is a measurement of one cold boot and is a
+    /// prediction of the next one only while the device goes on booting the same thing — so this is
+    /// the one function that owns the comparison, and it is called from wherever a recipe is
+    /// committed rather than reimplemented there.
+    ///
+    /// **It keeps the number when the shape did not move**, which is the half that is easy to lose:
+    /// re-saving a device you did not change must not cost it a boot without a bar. A `None` shape
+    /// beside a `Some` number compares unequal to every real shape and drops it once, which is the
+    /// right answer for a device written before the field existed — the number was measured on
+    /// something nobody recorded, so nothing can vouch for it.
+    ///
+    /// `false` when there is no device of that name.
+    pub fn set_boot_shape(&mut self, name: &str, shape: &crate::compose::BootShape) -> bool {
+        let rendered = shape.render();
+        let Some(d) = self.devices.iter_mut().find(|d| d.name == name) else {
+            return false;
+        };
+        if d.boot_shape.as_deref() != Some(rendered.as_str()) {
+            d.boot_instructions = None;
+        }
+        d.boot_shape = Some(rendered);
+        true
+    }
+
+    /// **Replace what one filed iPod IS, keeping every reference pointing at it.**
+    ///
+    /// §11.2's level ① tunes a synthesised identity — a model, a colour, a serial, a GUID — and the
+    /// iPod is already a filed resource by then, because it is filed at the mint rather than on
+    /// `Create`. So tuning is a *restatement* of one entry, not the filing of a second: without
+    /// this, five edits to one seed leave five near-identical entries in the resources and four
+    /// devices pointing at the one nobody is looking at.
+    ///
+    /// Four things happen together, and they are one act because doing three of them is a broken
+    /// library:
+    ///
+    /// 1. the entry's [`Resource::Firmware`] becomes `what`;
+    /// 2. its provenance is re-run through `normalised`, so a synthesised ROM's seed and its
+    ///    recorded provenance cannot disagree after the seed changes;
+    /// 3. its name is re-derived through [`suggest_nor_name`] — the same spelling the mint used —
+    ///    made unique against **every other** entry, so restating an iPod to what it already was
+    ///    keeps its own name rather than colliding with itself and becoming `… (2)`;
+    /// 4. **every** device naming the old name is repointed at the new one.
+    ///
+    /// Step 4 is the decision worth defending. [`Settings::run_device`]'s own model is that the
+    /// named resource wins — *editing one changes every device made of it*, which is the point of
+    /// composing rather than copying — so refusing a shared edit would be the window contradicting
+    /// the model. What the window owes instead is a sentence **before** it acts: *N devices are made
+    /// of this iPod and will change with it.* [`Settings::devices_using_resource`] is what counts
+    /// them.
+    ///
+    /// `None` for a name that resolves to nothing, or to an entry that is not a boot ROM.
+    pub fn restate_firmware(
+        &mut self,
+        filed_as: &str,
+        what: crate::nor::Source,
+    ) -> Option<String> {
+        let i = self.resources.iter().position(|it| it.name == filed_as)?;
+        if !matches!(self.resources[i].what, Resource::Firmware(_)) {
+            return None;
+        }
+        let suggested = suggest_nor_name(&what);
+        // Unique against every entry **but this one**, through the same helper every other name in
+        // this file goes through. A second copy of the suffix loop here is a second answer to
+        // "what is this called", and the two would drift the first time either changed.
+        let name = self.unique_name(&suggested, move |s| {
+            s.resources
+                .iter()
+                .enumerate()
+                .filter(move |(j, _)| *j != i)
+                .map(|(_, it)| it.name.as_str())
+        });
+        let old = std::mem::replace(&mut self.resources[i].name, name.clone());
+        self.resources[i].what = Resource::Firmware(what);
+        self.resources[i].from = normalised(&self.resources[i].what, self.resources[i].from);
+        for d in self.devices.iter_mut().filter(|d| d.firmware == old) {
+            d.firmware = name.clone();
+        }
+        Some(name)
+    }
+
+    /// Rename a device, keeping `current` pointing at it.
+    ///
+    /// Refuses an empty name and a name a **different** device already holds — the name is the key,
+    /// so two devices wearing one name is a list where `run_device`, `forget` and `remember_as` each
+    /// pick whichever they find first. Renaming a device to the name it already has is `true` and
+    /// writes nothing.
+    ///
+    /// **It does not move a snapshot set, and that is safe rather than overlooked.** A park is
+    /// keyed on the device's name at the time it was written and carries its own `name.txt`, so a
+    /// renamed device leaves a set that can still say whose it was — which is a set somebody can
+    /// find and discard, rather than one silently adopted by whoever takes the old name next.
+    pub fn rename_device(&mut self, old: &str, new: &str) -> bool {
+        let new = one_line(new);
+        if new.is_empty() {
+            return false;
+        }
+        let Some(i) = self.devices.iter().position(|d| d.name == old) else {
+            return false;
+        };
+        if self.devices[i].name == new {
+            return true;
+        }
+        if self.devices.iter().any(|d| d.name == new) {
+            return false;
+        }
+        self.devices[i].name = new.clone();
+        if self.current.as_deref() == Some(old) {
+            self.current = Some(new);
+        }
+        true
+    }
+
+    /// §11.4's `used by N`, for a resource: every device that names it as its iPod, in list order.
+    ///
+    /// An empty name matches nothing rather than every device that names nothing — `firmware` is a
+    /// `String` and `""` is *this device names no iPod*, which is a device with a gap, not a device
+    /// made of the entry somebody is about to remove.
+    pub fn devices_using_resource(&self, name: &str) -> Vec<String> {
+        if name.is_empty() {
+            return Vec::new();
+        }
+        self.devices
+            .iter()
+            .filter(|d| d.firmware == name)
+            .map(|d| d.name.clone())
+            .collect()
+    }
+
+    /// The same, for a disk — **and the second arm is not optional.**
+    ///
+    /// A device migrated from the old shape carries a resolved `disk_path` and no name, so matching
+    /// on the name alone reports *used by 0* for a drive something is running.
+    ///
+    /// The two arms are read in [`Settings::disk_of`]'s own order rather than as a plain `or`: a
+    /// device that names a disk is using **that** disk, whatever its resolved path happens to hold,
+    /// because that is what `disk_of` starts and `missing` reports. Reading them as a plain `or`
+    /// would name a device in the consequence sentence that removing this disk would not touch,
+    /// which is the same class of wrong as missing one.
+    pub fn devices_using_disk(&self, name: &str) -> Vec<String> {
+        if name.is_empty() {
+            return Vec::new();
+        }
+        let path = self.disks.iter().find(|d| d.name == name).map(|d| &d.path);
+        self.devices
+            .iter()
+            .filter(|d| match (&d.disk, &d.disk_path) {
+                (Some(n), _) => n == name,
+                (None, Some(p)) => path == Some(p),
+                (None, None) => false,
+            })
+            .map(|d| d.name.clone())
+            .collect()
+    }
+
+    /// Which drives record this resource — built from it, or with it installed on them.
+    ///
+    /// The other half of §11.4's `used by`: an `.ipsw` is named by no device and by every drive
+    /// built from it, so a removal that counted devices alone would report *used by 0* about the
+    /// bundle three drives came out of.
+    pub fn disks_recording_resource(&self, name: &str) -> Vec<String> {
+        if name.is_empty() {
+            return Vec::new();
+        }
+        self.disks
+            .iter()
+            .filter(|d| {
+                d.built_from.as_deref() == Some(name) || d.installed.iter().any(|x| x == name)
+            })
+            .map(|d| d.name.clone())
+            .collect()
+    }
+
+    /// Remove one entry from the resources. **Touches no file.**
+    ///
+    /// §11.4's own rule, and both halves are deliberate:
+    ///
+    /// - **No file is deleted.** A boot ROM is sometimes the only dump of an iPod somebody owns.
+    ///   Removing it from a list is *"stop showing me this"*; deleting it is not recoverable, and
+    ///   the two must not be one press. Whoever wants the file gone is told where it is.
+    /// - **No device is rewritten.** A device that named it goes on naming it, so
+    ///   [`Settings::missing`] reports [`Absent::Unlisted`] and every surface — the cradle, the
+    ///   Rail, the Devices page — says *which name* is gone. Silently blanking the reference would
+    ///   turn a device somebody can repair into a device that is quietly incomplete.
+    ///
+    /// `false` when no entry of that name exists.
+    pub fn remove_resource(&mut self, name: &str) -> bool {
+        if name.is_empty() {
+            return false;
+        }
+        let before = self.resources.len();
+        self.resources.retain(|it| it.name != name);
+        before != self.resources.len()
+    }
+
+    /// The same for a drive image — see [`Settings::remove_resource`] for both halves of the rule.
+    ///
+    /// The image on disk is a **separate** press with its own consequence and its own size, because
+    /// it is the one thing here that can be gigabytes and the one thing that cannot be undone.
+    pub fn remove_disk(&mut self, name: &str) -> bool {
+        if name.is_empty() {
+            return false;
+        }
+        let before = self.disks.len();
+        self.disks.retain(|d| d.name != name);
+        before != self.disks.len()
+    }
+
+    /// **What a device is, as a recipe** — the bridge §11.2's Edit mode stands on.
+    ///
+    /// In the model, because every resolution rule it needs is here: which disk a name resolves to,
+    /// and what the device recorded about what it boots. A window that assembled this itself would
+    /// be a second resolver beside [`Settings::disk_of`], and the two would disagree the first time
+    /// either changed.
+    ///
+    /// **It never fails.** A device that names nothing produces `Start::FromIpsw("")`, which is
+    /// `Recipe::nothing_chosen` — the verdict region's own opening state — rather than an error the
+    /// caller has to invent a page for. An unfinished device opens the Composer on *nothing chosen*,
+    /// which is exactly what it is.
+    ///
+    /// **A device that names a disk starts `FromDisk` and not `FromIpsw`.** The drive exists; a
+    /// recipe that re-describes it references it rather than proposing to build a second one — which
+    /// is also why `Start::FromDisk` costs nothing. `fat_type` is `None`: what the volume actually
+    /// says is a read of the file, and reads do not happen here.
+    ///
+    /// [`Device::boot_shape`] is the authority on what it boots when there is one, because that is
+    /// the thing recorded at the moment it was composed. The fallback reads the drive's own install
+    /// list through `Os::from_label` and follows the systems to a bootloader with
+    /// `Recipe::best_loader`, so a drive filed before shapes existed still opens as what is on it
+    /// rather than as Apple-by-default.
+    pub fn recipe_of(&self, d: &Device) -> crate::compose::Recipe {
+        use crate::compose::{BootShape, Os, Recipe, Start};
+        let start = match (&d.disk, &d.disk_path) {
+            (Some(name), _) => Start::FromDisk {
+                name: name.clone(),
+                fat_type: None,
+            },
+            (None, Some(p)) => Start::FromImage {
+                path: p.to_string_lossy().into_owned(),
+                fat_type: None,
+            },
+            (None, None) => Start::FromIpsw(String::new()),
+        };
+        if let Some(shape) = d.boot_shape.as_deref().and_then(BootShape::parse) {
+            return Recipe {
+                start,
+                loader: shape.loader,
+                oses: shape.oses,
+            };
+        }
+        let oses = d
+            .disk
+            .as_deref()
+            .and_then(|n| self.disks.iter().find(|x| x.name == n))
+            .map(|x| x.installed.iter().filter_map(|s| Os::from_label(s)).collect())
+            .unwrap_or_default();
+        let mut r = Recipe {
+            start,
+            loader: crate::compose::Loader::Apple,
+            oses,
+        };
+        r.loader = r.best_loader();
+        r
+    }
+
     /// What the progress bar should divide by, if anything is known.
     pub fn expected_boot(&self) -> Option<u64> {
         self.current
@@ -1929,6 +2229,32 @@ pub fn dir_size(d: &Path) -> u64 {
         .sum()
 }
 
+/// What a directory **claims** to hold, as against what [`dir_size`] says it costs.
+///
+/// The sibling of [`dir_size`], and it exists for one sentence rather than for arithmetic. §11.4's
+/// Snapshots group has to say how much disk a parked machine is using, and the two figures differ
+/// by more than a rounding here: `clone_disk` copies with `cp -c`, so on APFS a 1.6 GB park can be
+/// **153 MB** of real disk. Neither number alone is the truth — the apparent one is what would be
+/// written if every shared block were touched, and the materialised one is what deleting it gives
+/// back today.
+///
+/// So the group renders [`dir_size`] and names this one **beside it where the two differ**, rather
+/// than picking whichever reads better. A group whose whole argument is *this is where every byte
+/// this program spends is visible* cannot open with a figure wrong by a factor of forty in the
+/// direction of alarm — and it cannot open with one wrong in the direction of reassurance either.
+pub fn dir_size_apparent(d: &Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(d) else {
+        return 0;
+    };
+    rd.flatten()
+        .map(|e| match e.metadata() {
+            Ok(m) if m.is_dir() => dir_size_apparent(&e.path()),
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        })
+        .sum()
+}
+
 /// What a file actually costs, rather than how long it claims to be.
 ///
 /// The drive images here are **sparse** and, on APFS, **clones**: `clone_disk` copies with `cp -c`,
@@ -2154,10 +2480,11 @@ mod tests {
 
     use super::*;
 
+    /// **Renamed rather than deleted when `Mode` went**, and the three assertions under it are why:
+    /// the name was the only part of it that was about a mode.
     #[test]
-    fn a_missing_file_is_user_mode_with_nothing_configured() {
+    fn a_missing_file_configures_nothing() {
         let s = Settings::parse("");
-        assert_eq!(s.mode, Mode::User);
         assert_eq!(s.flash(), None);
         assert_eq!(s.disk, None);
         assert!(!s.check_updates_on_start);
@@ -2250,7 +2577,6 @@ mod tests {
     #[test]
     fn settings_round_trip_through_the_file_format() {
         let s = Settings {
-            mode: Mode::Debug,
             chassis: Some(crate::identity::Colour::Black),
             nor: crate::nor::Source::File(PathBuf::from("/a/b/rom.bin")),
             disk: Some(PathBuf::from("/a/b/disk.img")),
@@ -2291,11 +2617,9 @@ mod tests {
              disk =\n\
              check_updates_on_start = maybe\n",
         );
-        assert_eq!(
-            s.mode,
-            Mode::User,
-            "an unknown mode falls back to the default"
-        );
+        // `mode = sideways` above is now a key this program has never heard of, which is exactly
+        // what it has to be: an existing settings file carrying `mode = debug` must be read as it
+        // always was and lose the line on the next save, rather than complain about it.
         assert_eq!(
             s.disk, None,
             "an empty value is `not set`, not `the empty path`"
@@ -3518,7 +3842,7 @@ mod device_tests {
         }
         // **And the one that does say `verified` says WHEN.** A provenance is stored against a
         // path with no digest, size or mtime beside it, so replacing the file underneath it leaves
-        // the claim standing and nothing can refute it. A present-tense `fetched · SHA-256
+        // the claim standing and nothing can refute it. A present-tense `fetched — SHA-256
         // verified` is then the `fetched and verified` string literal again, one level down.
         let sha = Provenance::Fetched {
             verified: Verification::Sha256,
@@ -3797,6 +4121,447 @@ mod device_tests {
         assert!(!text.contains("device.0.flash"), "{text}");
         assert!(!text.contains("device.0.nor_model"), "{text}");
         assert!(!text.contains("device.0.nor_seed"), "{text}");
+    }
+
+    // ── §12.3 / §20 item 6: what a device boots, and the number measured on it ──────────────────
+
+    fn shape(loader: crate::compose::Loader, oses: &[crate::compose::Os]) -> crate::compose::BootShape {
+        crate::compose::BootShape {
+            loader,
+            oses: oses.iter().copied().collect(),
+        }
+    }
+
+    fn a_device_called(name: &str) -> Settings {
+        let mut s = Settings {
+            nor: synth("A446", 3),
+            ..Default::default()
+        };
+        s.remember_as(name);
+        s
+    }
+
+    /// **§20 item 6's named trap, at the file.** The number and the shape it was measured on travel
+    /// together or neither is worth storing — a round trip that keeps one and loses the other
+    /// leaves `set_boot_shape` comparing a good denominator against nothing and dropping it.
+    #[test]
+    fn a_devices_boot_shape_survives_a_round_trip_through_the_settings_file() {
+        let mut s = a_device_called("My 5.5G");
+        let sh = shape(
+            crate::compose::Loader::Rockbox,
+            &[crate::compose::Os::Apple, crate::compose::Os::Rockbox],
+        );
+        assert!(s.set_boot_shape("My 5.5G", &sh));
+        s.devices[0].boot_instructions = Some(1_600_000_000);
+
+        let text = s.render();
+        assert!(
+            text.contains("device.0.boot_shape = rockbox, apple, rockbox"),
+            "the shape is not in the file at all:\n{text}"
+        );
+        let back = Settings::parse(&text);
+        assert_eq!(back.devices[0].boot_shape.as_deref(), Some("rockbox, apple, rockbox"));
+        assert_eq!(back.devices[0].boot_instructions, Some(1_600_000_000));
+        // The file is the only spelling: what came back parses to the shape that went in.
+        assert_eq!(
+            back.devices[0]
+                .boot_shape
+                .as_deref()
+                .and_then(crate::compose::BootShape::parse),
+            Some(sh)
+        );
+    }
+
+    /// **The same trap one layer in, and this is the layer it was named at.** `as_device` rebuilds
+    /// a device from the live fields on every `run_device` and every `remember_as`; without the
+    /// carry-forward line the shape is dropped there, silently, in memory, and never reaches the
+    /// file for the test above to catch.
+    #[test]
+    fn as_device_carries_the_boot_shape_it_was_given() {
+        let mut s = a_device_called("My 5.5G");
+        assert!(s.set_boot_shape("My 5.5G", &shape(crate::compose::Loader::Apple, &[crate::compose::Os::Apple])));
+        let rebuilt = s.as_device("My 5.5G");
+        assert_eq!(
+            rebuilt.boot_shape.as_deref(),
+            Some("apple, apple"),
+            "a round trip through `as_device` lost the shape"
+        );
+        // And through the two functions that call it.
+        s.remember_as("My 5.5G");
+        assert_eq!(s.devices[0].boot_shape.as_deref(), Some("apple, apple"));
+        assert!(s.run_device("My 5.5G"));
+        s.remember_as("My 5.5G");
+        assert_eq!(s.devices[0].boot_shape.as_deref(), Some("apple, apple"));
+    }
+
+    /// **A denominator is honest only about the thing it was measured on.**
+    ///
+    /// Three cases in order, and the middle one is the half that is easy to lose: the first shape a
+    /// device ever gets drops the number (it was measured on something nobody recorded), the same
+    /// shape twice keeps it, and a real change drops it.
+    #[test]
+    fn installing_rockbox_over_apple_drops_the_boot_denominator() {
+        let mut s = a_device_called("My 5.5G");
+        let apple = shape(crate::compose::Loader::Apple, &[crate::compose::Os::Apple]);
+        let rockbox = shape(
+            crate::compose::Loader::Rockbox,
+            &[crate::compose::Os::Apple, crate::compose::Os::Rockbox],
+        );
+
+        s.devices[0].boot_instructions = Some(1_600_000_000);
+        assert!(s.set_boot_shape("My 5.5G", &apple));
+        assert_eq!(
+            s.devices[0].boot_instructions, None,
+            "a number measured on a shape nobody recorded cannot be vouched for"
+        );
+
+        s.devices[0].boot_instructions = Some(1_600_000_000);
+        assert!(s.set_boot_shape("My 5.5G", &rockbox));
+        assert_eq!(
+            s.devices[0].boot_instructions, None,
+            "RetailOS's 1.6 G is not Rockbox's 100 M, and a bar built on it reads 6 % when the \
+             machine is finished"
+        );
+        assert!(!s.set_boot_shape("nobody", &rockbox), "a device that does not exist");
+    }
+
+    /// The control for the test above: **re-saving a device you did not change must not cost it a
+    /// boot without a bar.**
+    #[test]
+    fn re_saving_an_unchanged_recipe_keeps_the_denominator() {
+        let mut s = a_device_called("My 5.5G");
+        let rockbox = shape(
+            crate::compose::Loader::Rockbox,
+            &[crate::compose::Os::Apple, crate::compose::Os::Rockbox],
+        );
+        assert!(s.set_boot_shape("My 5.5G", &rockbox));
+        s.devices[0].boot_instructions = Some(101_000_000);
+        assert!(s.set_boot_shape("My 5.5G", &rockbox));
+        assert_eq!(s.devices[0].boot_instructions, Some(101_000_000));
+    }
+
+    // ── §11.2's Edit mode: a device, as a recipe ────────────────────────────────────────────────
+
+    /// **What a device is, read back as what would compose it.**
+    #[test]
+    fn a_device_round_trips_through_a_recipe_and_back() {
+        let mut s = Settings {
+            nor: synth("A446", 3),
+            ..Default::default()
+        };
+        s.file_disk(PathBuf::from("/drives/mine.img"), "mine");
+        s.disk = Some(PathBuf::from("/drives/mine.img"));
+        s.remember_as("My 5.5G");
+        let sh = shape(
+            crate::compose::Loader::Rockbox,
+            &[crate::compose::Os::Apple, crate::compose::Os::Rockbox],
+        );
+        assert!(s.set_boot_shape("My 5.5G", &sh));
+
+        let r = s.recipe_of(&s.devices[0]);
+        assert_eq!(
+            r.start,
+            crate::compose::Start::FromDisk {
+                name: "mine".into(),
+                fat_type: None
+            },
+            "a device that names a library drive references it — it does not propose to build a \
+             second one"
+        );
+        assert_eq!(r.shape(), sh, "the recipe boots something else than the device does");
+    }
+
+    /// **A device that names nothing is unfinished, not broken** — so it opens on `nothing chosen`
+    /// rather than on an error the caller has to invent a page for.
+    #[test]
+    fn an_unfinished_device_opens_the_composer_on_nothing_chosen() {
+        let d = Device {
+            name: "half made".into(),
+            firmware: "A446, seed 3".into(),
+            ..Default::default()
+        };
+        let r = Settings::default().recipe_of(&d);
+        assert!(r.nothing_chosen(), "{r:?}");
+        assert!(!r.check().ok(), "a recipe with nothing chosen must not claim a plan");
+    }
+
+    /// **A drive filed before shapes existed opens as what is on it**, not as Apple-by-default.
+    #[test]
+    fn a_device_with_no_recorded_shape_reads_the_drives_own_install_list() {
+        let mut s = Settings::default();
+        s.file_disk(PathBuf::from("/drives/mine.img"), "mine");
+        s.disks[0].installed = vec![
+            crate::compose::Os::Apple.label().to_string(),
+            crate::compose::Os::Rockbox.label().to_string(),
+        ];
+        let d = Device {
+            name: "old".into(),
+            firmware: "whatever".into(),
+            disk: Some("mine".into()),
+            ..Default::default()
+        };
+        let r = s.recipe_of(&d);
+        assert!(r.oses.contains(&crate::compose::Os::Rockbox), "{r:?}");
+        assert_eq!(
+            r.loader,
+            crate::compose::Loader::Rockbox,
+            "the bootloader follows the systems when nobody recorded one"
+        );
+    }
+
+    // ── §11.4: renaming, restating, and what `used by N` counts ─────────────────────────────────
+
+    /// The name is the key, so **`current` moves with it** or the running device stops being in the
+    /// list the moment it is renamed.
+    #[test]
+    fn a_rename_moves_current_with_it() {
+        let mut s = a_device_called("My 5.5G");
+        assert_eq!(s.current.as_deref(), Some("My 5.5G"));
+        assert!(s.rename_device("My 5.5G", "The black one"));
+        assert_eq!(s.devices[0].name, "The black one");
+        assert_eq!(s.current.as_deref(), Some("The black one"));
+        assert!(
+            s.rename_device("The black one", "The black one"),
+            "renaming a device to the name it has is not a failure"
+        );
+        assert!(!s.rename_device("The black one", "   "), "an empty name is refused");
+        assert!(!s.rename_device("nobody", "anything"), "a device that does not exist");
+    }
+
+    /// Two devices wearing one name is a list where `run_device`, `forget` and `remember_as` each
+    /// pick whichever they find first.
+    #[test]
+    fn a_rename_onto_a_taken_name_is_refused() {
+        let mut s = a_device_called("one");
+        s.remember_as("two");
+        assert_eq!(s.devices.len(), 2);
+        assert!(!s.rename_device("one", "two"));
+        assert_eq!(s.devices[0].name, "one", "the refusal renamed it anyway");
+    }
+
+    /// **Editing one iPod changes every device made of it**, which is the point of composing rather
+    /// than copying — and `restate_firmware` is what keeps the references pointing at it.
+    #[test]
+    fn restating_an_ipod_repoints_every_device_made_of_it() {
+        let mut s = a_device_called("one");
+        s.remember_as("two");
+        assert_eq!(s.resources.len(), 1, "both devices are made of one iPod");
+        let filed = s.devices[0].firmware.clone();
+        assert_eq!(s.devices_using_resource(&filed), vec!["one", "two"]);
+
+        let now = s
+            .restate_firmware(&filed, synth("A446", 9))
+            .expect("a filed boot ROM restates");
+        assert_eq!(now, "A446, seed 9");
+        assert_eq!(s.resources.len(), 1, "restating filed a second iPod");
+        assert!(
+            s.devices.iter().all(|d| d.firmware == now),
+            "a device was cut loose from the iPod it is made of: {:?}",
+            s.devices.iter().map(|d| d.firmware.clone()).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            s.resources[0].from,
+            Some(Provenance::Synthesised { seed: 9 }),
+            "the provenance still states the old seed"
+        );
+        assert!(s.restate_firmware("nobody", synth("A446", 1)).is_none());
+    }
+
+    /// **Five edits to one seed leave one entry, not five** — §11.2 files an iPod at the mint, so
+    /// every subsequent tune is a restatement of that entry.
+    #[test]
+    fn tuning_an_identity_files_one_ipod_and_not_five() {
+        let mut s = a_device_called("mine");
+        let mut name = s.devices[0].firmware.clone();
+        for seed in 1..=5 {
+            name = s
+                .restate_firmware(&name, synth("A446", seed))
+                .expect("each tune restates the same entry");
+        }
+        assert_eq!(s.resources.len(), 1, "{:?}", s.resources);
+        assert_eq!(name, "A446, seed 5");
+        assert_eq!(s.devices[0].firmware, name);
+        // And restating it to what it already is keeps its own name rather than colliding with
+        // itself and becoming `A446, seed 5 (2)`.
+        let again = s.restate_firmware(&name, synth("A446", 5)).expect("idempotent");
+        assert_eq!(again, name);
+        assert_eq!(s.resources.len(), 1);
+    }
+
+    /// **Removing an entry from a list is not deleting somebody's file**, and it does not rewrite
+    /// the device that named it — so `missing` can say *which name* is gone.
+    #[test]
+    fn removing_a_resource_never_deletes_the_file_and_the_device_still_names_it() {
+        let dir = temp_dir("remove-resource");
+        let rom = dir.join("real.bin");
+        std::fs::write(&rom, [0u8; 16]).expect("a scratch dump");
+        let mut s = Settings {
+            nor: crate::nor::Source::File(rom.clone()),
+            ..Default::default()
+        };
+        s.remember_as("mine");
+        let filed = s.devices[0].firmware.clone();
+
+        assert!(s.remove_resource(&filed));
+        assert!(!s.remove_resource(&filed), "removing it twice is not a second removal");
+        assert!(rom.is_file(), "removing an entry deleted somebody's only dump of an iPod");
+        assert_eq!(
+            s.devices[0].firmware, filed,
+            "the device stopped naming what is gone, so nothing can say which name it was"
+        );
+        assert_eq!(s.missing(&s.devices[0]), vec![Absent::Unlisted(filed)]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// §11.4's `used by N`, both halves — **a device that names only a resolved path still counts.**
+    #[test]
+    fn removal_names_every_device_and_every_disk_that_refers_to_it() {
+        let mut s = Settings::default();
+        s.file_disk(PathBuf::from("/drives/mine.img"), "mine");
+        s.disks[0].built_from = Some("iPod_25.1.3".into());
+        s.disks[0].installed = vec!["Rockbox 4.0".into()];
+        s.file_away(
+            Resource::Installer(PathBuf::from("/x/iPod_25.1.3.ipsw")),
+            "iPod_25.1.3",
+            None,
+        );
+        s.devices.push(Device {
+            name: "by name".into(),
+            firmware: "rom".into(),
+            disk: Some("mine".into()),
+            ..Default::default()
+        });
+        // A device migrated from the old shape: a resolved path and no name.
+        s.devices.push(Device {
+            name: "by path".into(),
+            firmware: "rom".into(),
+            disk_path: Some(PathBuf::from("/drives/mine.img")),
+            ..Default::default()
+        });
+
+        assert_eq!(s.devices_using_disk("mine"), vec!["by name", "by path"]);
+        assert_eq!(s.disks_recording_resource("iPod_25.1.3"), vec!["mine"]);
+        assert_eq!(s.disks_recording_resource("Rockbox 4.0"), vec!["mine"]);
+        assert!(s.disks_recording_resource("nothing").is_empty());
+        // An empty name matches nothing, rather than every device that names nothing.
+        assert!(s.devices_using_disk("").is_empty());
+        assert!(s.devices_using_resource("").is_empty());
+
+        assert!(s.remove_disk("mine"));
+        assert!(!s.remove_disk("mine"));
+        assert_eq!(
+            s.devices[0].disk.as_deref(),
+            Some("mine"),
+            "removing a disk rewrote the device that named it"
+        );
+    }
+
+    /// A resource two devices share says so **before** it is edited or removed.
+    #[test]
+    fn a_rom_two_devices_share_is_used_by_two() {
+        let mut s = a_device_called("one");
+        s.remember_as("two");
+        s.nor = synth("A146", 77);
+        s.remember_as("three");
+        let shared = s.devices[0].firmware.clone();
+        assert_eq!(s.devices_using_resource(&shared), vec!["one", "two"]);
+        assert_eq!(s.devices_using_resource(&s.devices[2].firmware.clone()), vec!["three"]);
+    }
+
+    // ── The two sweeps this file owns ───────────────────────────────────────────────────────────
+
+    /// **Nothing in this program reads a settings mode any more**, and a file that carries one is
+    /// read exactly as it was before the field went.
+    #[test]
+    fn no_settings_key_called_mode_survives_a_render() {
+        let text = Settings::default().render();
+        assert!(
+            !text.contains("mode = "),
+            "the renderer still writes a key nothing reads:\n{text}"
+        );
+        // The compatibility half: `parse` ignores keys it does not know, so an existing file is not
+        // a migration and not a complaint. It is the same Settings, minus a line, on the next save.
+        assert_eq!(
+            Settings::parse("mode = debug\nwelcomed = true\n"),
+            Settings {
+                welcomed: true,
+                ..Default::default()
+            }
+        );
+    }
+
+    /// **Every sentence this model hands the window is ASCII or an em dash.**
+    ///
+    /// §6.7 / §16.6: Slint takes one `font-family` per element with no fallback list and nothing in
+    /// `.slint` can ask whether a glyph exists, so a character outside the closed set the window
+    /// trusts falls to `.notdef` — an empty square — in the middle of a row. `·` (U+00B7) is not in
+    /// that set: it is a *symbol*, and §6.7's answer for a symbol is a drawn `Path`.
+    ///
+    /// The window's own sweep reads `tools/ipod-gui/src` only, so it has never looked at this
+    /// function. Parts is the first surface that draws it.
+    #[test]
+    fn every_provenance_line_is_ascii_or_an_em_dash() {
+        let all = [
+            Provenance::Dumped,
+            Provenance::Synthesised { seed: 0x4f2a },
+            Provenance::Fetched {
+                verified: Verification::Sha256,
+            },
+            Provenance::Fetched {
+                verified: Verification::SizeOnly,
+            },
+            Provenance::Fetched {
+                verified: Verification::None,
+            },
+            Provenance::Provided,
+            Provenance::Built,
+        ];
+        for p in all {
+            let line = p.line();
+            for c in line.chars() {
+                assert!(
+                    c.is_ascii() || c == '—',
+                    "`{c}` (U+{:04X}) is in {line:?}, and the window's font is not trusted for it",
+                    c as u32
+                );
+            }
+        }
+        // The control, in the shape `AGENTS.md` §6 asks for: the predicate above has to be able to
+        // say no, or a sweep that found nothing looks exactly like a set that carries nothing.
+        let planted = "synthesised · seed 4f2a";
+        assert!(
+            planted.chars().any(|c| !c.is_ascii() && c != '—'),
+            "the check cannot see the character it exists to refuse"
+        );
+    }
+
+    /// **A parked machine is measured by what deleting it gives back, not by what it claims.**
+    ///
+    /// `clone_disk` copies with `cp -c`, so on APFS a drive image shares every block the emulator
+    /// has not written. Summing `len()` once told the operator a cache had reached 32 GB; deleting
+    /// one whole set — 6.4 GB by that arithmetic — returned 153 MB. §11.4's whole argument is that
+    /// this is where every byte the program spends is visible, so it cannot open with a figure
+    /// wrong by a factor of forty in either direction.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_is_measured_materialised_and_the_apparent_figure_is_a_different_number() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let dir = temp_dir("sparse");
+        let f = std::fs::File::create(dir.join("frozen.img")).expect("a scratch image");
+        // A hole, which is what `make-disk` produces and what `cp -c` preserves. Nothing is
+        // written, so nothing is allocated.
+        f.set_len(GIB).expect("a sparse file");
+        drop(f);
+
+        let apparent = dir_size_apparent(&dir);
+        let real = dir_size(&dir);
+        assert_eq!(apparent, GIB, "the apparent figure is the length it claims");
+        assert!(
+            real < GIB / 100,
+            "a 1 GiB hole was measured as {real} bytes of real disk; `dir_size` is summing \
+             `len()` again and every size this program shows is wrong in the direction of alarm"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
 

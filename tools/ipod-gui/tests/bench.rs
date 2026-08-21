@@ -928,12 +928,23 @@ fn the_ghost_dims_the_body_and_not_the_glass() {
     let ink = palette();
     let well = ink["bg-sunken"];
     let glass = block(&text, "glass := Rectangle {");
-    let dark = hex(
-        glass
-            .iter()
-            .find_map(|l| l.strip_prefix("background:"))
-            .expect("the glass no longer declares a background"),
-    );
+    let background = glass
+        .iter()
+        .find_map(|l| l.strip_prefix("background:"))
+        .expect("the glass no longer declares a background")
+        .trim()
+        .trim_end_matches(';')
+        .to_string();
+    // **The glass is a token now, not a literal**, because §11.4's boot-screen preview draws the
+    // same black and two literals is how one colour comes to be two. So resolve the name through
+    // the palette this file already reads out of `ui/tokens.slint` — the measurement below is about
+    // the colour, and it must not start failing because the colour acquired a name.
+    let dark = match background.strip_prefix("Ink.") {
+        Some(token) => *ink.get(token).unwrap_or_else(|| {
+            panic!("the glass names `Ink.{token}`, which `ui/tokens.slint` does not declare")
+        }),
+        None => hex(&background),
+    };
     let alpha = ratios()["Geometry.ghost-opacity"];
     assert!(
         (0.0..1.0).contains(&alpha),

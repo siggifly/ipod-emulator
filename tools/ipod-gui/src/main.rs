@@ -52,6 +52,7 @@ mod wheel;
 // platform one further question §8.4 needs and Slint cannot answer. `rail` is where the program
 // narrates and fails (§9.2, §9.3); `nav` is the single writer of where you are (§4, §16.8).
 mod client_height;
+mod composer;
 mod fit;
 mod geometry;
 mod motion;
@@ -419,6 +420,30 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
     let stack = Rc::new(RefCell::new(nav::Stack::new()));
     let work = Rc::new(RefCell::new(work::Queue::new()));
 
+    // ── §11.2's Composer: one recipe, and it is private ─────────────────────────────────────────
+    //
+    // `None` until somebody opens the page. **There is exactly one `compose::Recipe` in the running
+    // window and nothing outside `composer.rs` and `work.rs` may ask the model what a recipe does**
+    // — `the_window_computes_no_compatibility_rule_of_its_own` is the sweep that holds it, and this
+    // is the one cell the whole of §11.2 hangs from.
+    //
+    // Its six models are retained for the same reason the Rail's is (§16.9): `push_composer` runs on
+    // every keystroke in the serial field, and a fresh `VecModel` per keystroke takes the caret with
+    // it.
+    let composer: Rc<RefCell<Option<composer::Composer>>> = Rc::new(RefCell::new(None));
+    let c_picks: Rc<VecModel<PickRow>> = Rc::new(VecModel::default());
+    let c_fields: Rc<VecModel<FieldRow>> = Rc::new(VecModel::default());
+    let c_ticks: Rc<VecModel<TickRow>> = Rc::new(VecModel::default());
+    let c_opts: Rc<VecModel<OptionRow>> = Rc::new(VecModel::default());
+    let c_plan: Rc<VecModel<PlanRow>> = Rc::new(VecModel::default());
+    let c_refusals: Rc<VecModel<RefusalRow>> = Rc::new(VecModel::default());
+    window.set_composer_picks(ModelRc::from(c_picks.clone()));
+    window.set_composer_fields(ModelRc::from(c_fields.clone()));
+    window.set_composer_ticks(ModelRc::from(c_ticks.clone()));
+    window.set_composer_options(ModelRc::from(c_opts.clone()));
+    window.set_composer_plan(ModelRc::from(c_plan.clone()));
+    window.set_composer_refusals(ModelRc::from(c_refusals.clone()));
+
     // ── §10.1: the plan, on screen BEFORE the press ─────────────────────────────────────────────
     //
     // Five rows, each with its own sub-line, filed as `Kind::Planned` — and **nothing is
@@ -508,6 +533,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
         let devices = devices.clone();
         let settings = settings.clone();
         let showing_welcome = showing_welcome.clone();
+        let composer = composer.clone();
         let weak = window.as_weak();
         Rc::new(move || {
             let Some(w) = weak.upgrade() else { return };
@@ -519,6 +545,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
                 &devices,
                 &settings,
                 &showing_welcome,
+                &composer,
                 &timer,
                 caps,
                 cost,
@@ -755,6 +782,319 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
         });
     }
 
+    // ── §11.2's Composer: eleven callbacks, one redraw ──────────────────────────────────────────
+    //
+    // **One function re-pushes the whole page**, and every writer below ends in it. `Composer`'s own
+    // setters each end in `recompute()`, which rewrites the verdict, the plan and the two totals
+    // *together* before control returns to the event loop — so no frame can render a recipe beside
+    // another recipe's verdict. This is the second half of that: what `recompute` computed is what
+    // reaches the pixels, in one pass, from one borrow.
+    let redraw: Rc<dyn Fn()> = {
+        let composer = composer.clone();
+        let settings = settings.clone();
+        let work = work.clone();
+        let space = space.clone();
+        let (picks, fields, ticks, opts, plan_m, refusals) = (
+            c_picks.clone(),
+            c_fields.clone(),
+            c_ticks.clone(),
+            c_opts.clone(),
+            c_plan.clone(),
+            c_refusals.clone(),
+        );
+        let weak = window.as_weak();
+        Rc::new(move || {
+            let Some(w) = weak.upgrade() else { return };
+            // **Every borrow is scoped and released before anything is pushed.** §20 item 12: a
+            // `RefMut` held across a `match` scrutinee is what panicked on the path that worked.
+            let building = work.borrow().busy();
+            let held = composer.borrow();
+            let Some(c) = held.as_ref() else { return };
+            push_composer(
+                &w,
+                c,
+                &settings.borrow(),
+                building,
+                space.as_ref(),
+                &picks,
+                &fields,
+                &ticks,
+                &opts,
+                &plan_m,
+                &refusals,
+            );
+        })
+    };
+
+    // `+ New device ›`, from the Devices page. §11.2: it **mints nothing** — three cancelled visits
+    // to this page leave zero iPods, because `nor::mint_seed` happens on `Make one` and not on a
+    // page opening.
+    {
+        let composer = composer.clone();
+        let stack = stack.clone();
+        let redraw = redraw.clone();
+        let weak = window.as_weak();
+        window.on_device_new(move || {
+            *composer.borrow_mut() = Some(composer::Composer::new());
+            stack.borrow_mut().push(nav::Page::Composer);
+            redraw();
+            if let Some(w) = weak.upgrade() {
+                push_nav(&w, &stack.borrow());
+            }
+        });
+    }
+
+    // Each `›` slides one level deeper. **`push`, never `go`** — the level a page is drawn at is
+    // `Page::slot`'s answer and not the caller's, so there is no arithmetic here to get wrong.
+    {
+        let composer = composer.clone();
+        let stack = stack.clone();
+        let redraw = redraw.clone();
+        let weak = window.as_weak();
+        window.on_composer_open(move |field| {
+            let Some(f) = composer::Field::from_i32(field) else { return };
+            let page = match f.level() {
+                composer::Level::WhichIpod => nav::Page::ComposerIpod,
+                composer::Level::WhatItRuns => nav::Page::ComposerRuns,
+                composer::Level::NameIt => nav::Page::ComposerName,
+                composer::Level::Root => return,
+            };
+            if let Some(c) = composer.borrow_mut().as_mut() {
+                c.set_level(f.level());
+                // §7's rule: `Shown` is per-field and is cleared whenever level ① is left. Arriving
+                // at a level closes whatever picker was open on the last one.
+                c.set_open(None);
+            }
+            stack.borrow_mut().push(page);
+            redraw();
+            if let Some(w) = weak.upgrade() {
+                push_nav(&w, &stack.borrow());
+            }
+        });
+    }
+
+    // **Opening a picker closes the one that was open.** `Composer::set_open` holds that; the
+    // `Stack`'s expand id is what `Esc` closes before it leaves the page.
+    {
+        let composer = composer.clone();
+        let stack = stack.clone();
+        let redraw = redraw.clone();
+        window.on_composer_expand(move |field, open| {
+            let Some(f) = composer::Field::from_i32(field) else { return };
+            if let Some(c) = composer.borrow_mut().as_mut() {
+                c.set_open(if open { Some(f) } else { None });
+            }
+            let id = f.as_i32() as u32;
+            if open {
+                stack.borrow_mut().expand_opened(id);
+            } else {
+                stack.borrow_mut().expand_closed(id);
+            }
+            redraw();
+        });
+    }
+
+    // A picked option, by **index into the same list that was drawn** — `Composer::choose` resolves
+    // it against `options_of`, which is the function that produced the row, so the row drawn
+    // disabled is the row that refuses to be picked.
+    {
+        let composer = composer.clone();
+        let settings = settings.clone();
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let work = work.clone();
+        let redraw = redraw.clone();
+        let weak = window.as_weak();
+        window.on_composer_pick(move |field, index| {
+            let Some(f) = composer::Field::from_i32(field) else { return };
+            if index < 0 {
+                return;
+            }
+            let refused = {
+                let s = settings.borrow();
+                let mut held = composer.borrow_mut();
+                let Some(c) = held.as_mut() else { return };
+                c.choose(&s, f, index as usize).err()
+            };
+            if let Some(why) = refused {
+                rail.borrow_mut().note(&why);
+                if let Some(w) = weak.upgrade() {
+                    sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+                }
+            }
+            redraw();
+        });
+    }
+
+    // Typing. **`Field::Serial` and `Field::Guid` arrive here only while revealed** — a masked
+    // `Field` is `read-only`, and `Show` reveals and enables in one act, so the drawn text and the
+    // editable text are never different things.
+    {
+        let composer = composer.clone();
+        let redraw = redraw.clone();
+        window.on_composer_type(move |field, text| {
+            let Some(f) = composer::Field::from_i32(field) else { return };
+            let typed = text.to_string();
+            {
+                let mut held = composer.borrow_mut();
+                let Some(c) = held.as_mut() else { return };
+                // **The refusal each of these can return is drawn under the field**, not filed on
+                // the Rail: it is about what was typed, `FieldState::reason` already carries it, and
+                // a Rail entry per keystroke would be a log of somebody's typing.
+                //
+                // **None of the three writes the library, so none of them saves.** A typed identity
+                // lives on the page until `Create` files it — `Settings::render` regenerates the
+                // file whole and takes any comment the operator added with it, so a save on a
+                // callback that mutated nothing is a rewrite of somebody's file for no reason.
+                match f {
+                    composer::Field::Serial => drop(c.set_serial(&typed)),
+                    composer::Field::Guid => drop(c.set_guid(&typed)),
+                    composer::Field::Name => c.set_name(&typed),
+                    _ => {}
+                }
+            }
+            redraw();
+        });
+    }
+
+    // `Show` / `Hide`. Per field, never persisted — a `Show` that survived a relaunch would defeat
+    // the mask on the next screenshot.
+    {
+        let composer = composer.clone();
+        let redraw = redraw.clone();
+        window.on_composer_reveal(move |field| {
+            let Some(f) = composer::Field::from_i32(field) else { return };
+            if let Some(c) = composer.borrow_mut().as_mut() {
+                c.set_reveal(f);
+            }
+            redraw();
+        });
+    }
+
+    // A system's tick box. `Composer::set_os` follows the bootloader **before** the verdict is
+    // recomputed, so the window never draws — for one frame — a refusal the program is about to fix
+    // itself.
+    {
+        let composer = composer.clone();
+        let redraw = redraw.clone();
+        window.on_composer_tick(move |os, on| {
+            let Some(o) = compose::Os::ALL.get(os.max(0) as usize).copied() else { return };
+            if let Some(c) = composer.borrow_mut().as_mut() {
+                c.set_os(o, on);
+            }
+            redraw();
+        });
+    }
+
+    // §11.3's one-press `Fix`. `Recipe::apply` is **the one applier**, in the model.
+    {
+        let composer = composer.clone();
+        let redraw = redraw.clone();
+        window.on_composer_fix_pressed(move || {
+            if let Some(c) = composer.borrow_mut().as_mut() {
+                c.apply_fix();
+            }
+            redraw();
+        });
+    }
+
+    // Level ①'s two acting controls: `Make one`, and `Copy the command line`.
+    {
+        let composer = composer.clone();
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let work = work.clone();
+        let redraw = redraw.clone();
+        let weak = window.as_weak();
+        window.on_composer_act(move |field| {
+            let Some(f) = composer::Field::from_i32(field) else { return };
+            match f {
+                composer::Field::Ipod => {
+                    let mut held = composer.borrow_mut();
+                    let Some(c) = held.as_mut() else { return };
+                    // **`Composer::make_one` mints into the page and files nothing**, so there is
+                    // no save here. §11.2 asks for the iPod to be filed at the mint — *cancelling
+                    // the device keeps the identity you just tuned* — and `composer.rs` files it in
+                    // `commit` instead. Adding a `save` here would write the settings file on a
+                    // press that changed nothing in it, which `render` turns into somebody's
+                    // comments being deleted for no reason; adding a `file_away` here would be a
+                    // second place that decides what an iPod is called. Both belong on the same
+                    // side of the boundary as the minting, and that side is `composer.rs`.
+                    c.make_one();
+                }
+                composer::Field::Serial => {
+                    // §7 gate 3: the command carries a **recipe**, never a value. `Composer::
+                    // command_line` is what words it and refuses the typed case; this only routes
+                    // it, and `on_copy_text`'s own gate is under both of them.
+                    let line = composer
+                        .borrow()
+                        .as_ref()
+                        .map(|c| c.command_line())
+                        .unwrap_or_default();
+                    if let Some(w) = weak.upgrade() {
+                        w.invoke_copy_text(line.into());
+                    }
+                }
+                _ => {}
+            }
+            if let Some(w) = weak.upgrade() {
+                sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+            }
+            redraw();
+        });
+    }
+
+    // `Create` / `Save`. **Save first**, and it is the ordering rather than a preference: a device
+    // that was filed and not built is §10's unfinished device, which every surface already words;
+    // a build that ran and was not filed is a drive on disk the library never learned about.
+    {
+        let composer = composer.clone();
+        let settings = settings.clone();
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let work = work.clone();
+        let stack = stack.clone();
+        let devices = devices.clone();
+        let showing_welcome = showing_welcome.clone();
+        let redraw = redraw.clone();
+        let weak = window.as_weak();
+        window.on_composer_commit(move || {
+            let outcome = {
+                let mut s = settings.borrow_mut();
+                let mut held = composer.borrow_mut();
+                let Some(c) = held.as_mut() else { return };
+                c.commit(&mut s)
+            };
+            match outcome {
+                Err(why) => {
+                    // **Nothing was written**, which is what `commit`'s own contract promises for
+                    // every refusal — so there is no save here and the page stays where it is.
+                    rail.borrow_mut().note(&why);
+                }
+                Ok(done) => {
+                    // §20 item 13's Composer save point.
+                    save(&settings.borrow(), &mut rail.borrow_mut());
+                    // §9.2 wants the work where work is reported. **The build is not wired**:
+                    // `work::Queue` has no `compose`, so this says so rather than leaving a device
+                    // that looks built. §10's unfinished-device wording is what the bench then
+                    // draws for it.
+                    rail.borrow_mut().note(&format!(
+                        "{} is in the library. Building a composed device is not wired yet — \
+                         press the centre button on it to finish making it.",
+                        done.device
+                    ));
+                    stack.borrow_mut().go(nav::Page::Work, 1);
+                }
+            }
+            if let Some(w) = weak.upgrade() {
+                refresh_devices(&w, &devices, &settings.borrow(), &showing_welcome, caps, cost);
+                sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+                push_nav(&w, &stack.borrow());
+            }
+            redraw();
+        });
+    }
+
     // ── `Esc`, which has ONE definition (§16.8) ──
     {
         let stack = stack.clone();
@@ -851,19 +1191,21 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
         });
     }
 
-    // **A defensive arm, and it is unreachable by construction.** `Copy the details` is gated on
+    // **The single route to a clipboard, and the gate on it.** `Copy the details` is gated on
     // `caps.clipboard`, which is false because nothing in this dependency graph provides a
-    // clipboard, so no control can fire this. It says so rather than silently succeeding — a
+    // clipboard, so no control can fire this today. It says so rather than silently succeeding — a
     // handler that swallows the request is the visible-control-that-does-nothing defect one level
-    // down.
+    // down — and it refuses an identifier **before** it says that, because the refusal is the rule
+    // and the missing clipboard is only the state of this build.
     {
         let rail = rail.clone();
         let rows = rows.clone();
         let work = work.clone();
         let weak = window.as_weak();
-        window.on_copy_text(move |_| {
-            rail.borrow_mut()
-                .note("this build has no clipboard, so nothing was copied");
+        window.on_copy_text(move |text| {
+            let note = clipboard_refusal(&text)
+                .unwrap_or("this build has no clipboard, so nothing was copied");
+            rail.borrow_mut().note(note);
             if let Some(w) = weak.upgrade() {
                 sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
             }
@@ -962,6 +1304,7 @@ fn pump_once(
     devices: &Rc<VecModel<DeviceRow>>,
     settings: &Rc<RefCell<Settings>>,
     showing_welcome: &Rc<std::cell::Cell<bool>>,
+    composer: &Rc<RefCell<Option<composer::Composer>>>,
     timer: &slint::Timer,
     caps: rail::Caps,
     cost: compose::Cost,
@@ -996,6 +1339,21 @@ fn pump_once(
     // probed, so nothing changes on the common path.
     let cost = work.borrow().measured_cost().unwrap_or(cost);
     if tick.library_changed {
+        // **The Composer is asked whether its device left underneath it**, and it is asked here
+        // because this is the one place the library is known to have changed. §11.2's Edit mode
+        // holds a device *name*; a run that renamed or replaced it leaves the page editing
+        // something that is not there, and the honest answer is that this is a new device now —
+        // said once, on the Rail, rather than discovered at `Save`.
+        //
+        // The borrow is scoped and released before the note is filed: §20 item 12.
+        let note = {
+            let s = settings.borrow();
+            let mut held = composer.borrow_mut();
+            held.as_mut().and_then(|c| c.device_vanished(&s))
+        };
+        if let Some(note) = note {
+            rail.borrow_mut().note(&note);
+        }
         refresh_devices(window, devices, &settings.borrow(), showing_welcome, caps, cost);
     }
     if tick.changed {
@@ -1075,8 +1433,18 @@ fn caps() -> rail::Caps {
         drop_target: false,
         clipboard: false,
         reveal: false,
-        devices_page: false,
+        // **Derived, not typed.** `Page::slot()` returns `Some` on the day `ui/drawer.slint` gains
+        // a child that draws the page and `None` until then — which is exactly the question this
+        // cap asks. Written as a literal it is a second answer to it, and the two go out of step in
+        // one direction only: the page lands, the literal stays `false`, and `Next::Choose`'s
+        // disabled reason goes on naming a gap that has been closed. §16.9's rule about a stale
+        // claim, applied to a boolean.
+        devices_page: nav::Page::Devices.slot().is_some(),
         download: eapp_loader::tooling::can_download(),
+        // **Not derived, and deliberately so — there is no `Page::Composer` to ask.** The moment
+        // there is, this reads `nav::Page::Composer.slot().is_some()` like the line above, and it
+        // flips in the same commit that gives `main::take_next_step` a real `Next::Fix` arm.
+        // Flipping it first restores the live-but-inert control this file has shipped twice.
         composer: false,
     }
 }
@@ -1808,13 +2176,6 @@ fn to_row(e: &rail::Entry, caps: rail::Caps) -> RailRow {
 
 /// §10.1's ledger, pinned under the Work page.
 ///
-/// **One number per axis, and both come from `Recipe::steps()`** — which is why there are none
-/// here: nothing in this build composes a recipe yet, so the ledger says there is no plan rather
-/// than printing a figure nobody derived. §10.1's `6.5 MB to download · about 240 MB on disk`
-/// arrives with the Composer.
-///
-/// §10.1's ledger, pinned under the Work page.
-///
 /// **One number per axis, and both come from `Recipe::steps()`** — by way of `work::cost`, which is
 /// the same call the shelf's row 3 makes, so the two surfaces cannot print two different bills for
 /// one press. An earlier revision put three different sizes for one operation on the one screen
@@ -1835,25 +2196,39 @@ fn push_ledger(
     cache: &std::path::Path,
     space: Option<&volume::Space>,
 ) {
+    let (download, disk, warn) = ledger_lines(cost, space);
+    window.set_ledger_download(download.into());
+    window.set_ledger_disk(disk.into());
+    window.set_ledger_note(cache_note(cache).into());
+    window.set_ledger_warn(warn);
+}
+
+/// **§10.1's two figures, as strings, with no window in sight** — the download line, the disk line,
+/// and whether the second one is a warning.
+///
+/// Lifted out of [`push_ledger`] whole, because §11.2's Composer root prints the same bill above
+/// `Create` that the Work page prints under the plan, and **two pieces of arithmetic that are
+/// supposed to agree, don't**. There is one of them; the two surfaces are two callers.
+///
+/// It takes a `Cost` and a measured `Space` and nothing else. `cache_note` is deliberately *not*
+/// folded in: it reads a directory, so it belongs on the caller's side of the line between a pure
+/// function and one that touches a filesystem — and only one of the two surfaces draws it.
+fn ledger_lines(
+    cost: Option<compose::Cost>,
+    space: Option<&volume::Space>,
+) -> (String, String, bool) {
     let si = eapp_loader::si;
     let Some(cost) = cost else {
         // No plan, so no figure. Saying there is none is the honest line; printing `0 B` would read
         // as a free download.
-        window.set_ledger_download("Nothing to download".into());
-        window.set_ledger_disk("Nothing to build".into());
-        window.set_ledger_note(cache_note(cache).into());
-        window.set_ledger_warn(false);
-        return;
+        return ("Nothing to download".into(), "Nothing to build".into(), false);
     };
-    window.set_ledger_download(
-        if cost.down == 0 {
-            // The catalogue lost the release. `0 B to download` would read as free.
-            "nothing to download".to_string()
-        } else {
-            format!("{} to download", si(cost.down))
-        }
-        .into(),
-    );
+    let download = if cost.down == 0 {
+        // The catalogue lost the release. `0 B to download` would read as free.
+        "nothing to download".to_string()
+    } else {
+        format!("{} to download", si(cost.down))
+    };
     let free = match space {
         Some(s) => format!(" — {} free on {}", si(s.free), s.mount),
         // **Never an invented figure**, and never a zero: `volume::space` answers `None` for a
@@ -1861,11 +2236,11 @@ fn push_ledger(
         // observation about somebody's disk.
         None => String::new(),
     };
-    window.set_ledger_disk(format!("about {} on disk{free}", si(cost.disk)).into());
-    window.set_ledger_note(cache_note(cache).into());
+    let disk = format!("about {} on disk{free}", si(cost.disk));
     // The warn colour is only ever shown against a figure somebody measured, which is why it reads
     // `is_some_and` rather than defaulting to true when nothing could be measured.
-    window.set_ledger_warn(space.is_some_and(|s| s.free < cost.disk.saturating_add(work::HEADROOM)));
+    let warn = space.is_some_and(|s| s.free < cost.disk.saturating_add(work::HEADROOM));
+    (download, disk, warn)
 }
 
 /// §10.1's third ledger line — **checked rather than asserted.**
@@ -1945,6 +2320,10 @@ fn to_markup(p: nav::Page) -> DrawerPage {
         nav::Page::Readout => DrawerPage::Readout,
         nav::Page::Settings => DrawerPage::Settings,
         nav::Page::Reference => DrawerPage::Reference,
+        nav::Page::Composer => DrawerPage::Composer,
+        nav::Page::ComposerIpod => DrawerPage::ComposerIpod,
+        nav::Page::ComposerRuns => DrawerPage::ComposerRuns,
+        nav::Page::ComposerName => DrawerPage::ComposerName,
     }
 }
 
@@ -1958,6 +2337,10 @@ fn from_markup(p: DrawerPage) -> nav::Page {
         DrawerPage::Readout => nav::Page::Readout,
         DrawerPage::Settings => nav::Page::Settings,
         DrawerPage::Reference => nav::Page::Reference,
+        DrawerPage::Composer => nav::Page::Composer,
+        DrawerPage::ComposerIpod => nav::Page::ComposerIpod,
+        DrawerPage::ComposerRuns => nav::Page::ComposerRuns,
+        DrawerPage::ComposerName => nav::Page::ComposerName,
     }
 }
 
@@ -1980,6 +2363,302 @@ fn mono_family() -> &'static str {
     {
         "DejaVu Sans Mono"
     }
+}
+
+// ── §11.2's Composer, across the boundary ───────────────────────────────────────────────────────
+//
+// One flattener per boundary struct, each one total and each one dumb: it renames fields and turns
+// a Rust `String` into a `SharedString`, and it decides nothing. Every sentence on every row was
+// worded in `composer.rs` out of `compose.rs`, which is what
+// `every_composer_sentence_comes_from_the_model_or_composer_rs` holds — a flattener that computed
+// anything would be the window having an opinion about a recipe, which §6 of the contract forbids
+// in the one place it is easiest to slip in.
+
+fn to_fix(f: &composer::FixRow) -> FixRow {
+    FixRow {
+        label: f.label.clone().into(),
+        enabled: f.enabled,
+        reason: f.reason.clone().into(),
+        escape_hatch: f.escape.clone().into(),
+        machine_rule: f.machine_rule,
+        presses: i32::from(f.presses),
+        consequence: f.consequence.clone().into(),
+    }
+}
+
+fn to_pick(p: &composer::Pick) -> PickRow {
+    PickRow {
+        field: p.field.as_i32(),
+        label: p.label.clone().into(),
+        value: p.value.clone().into(),
+        // **`enabled` is the negation of `locked` and not a second decision.** §11.1: a locked
+        // picker stays a picker — same control, same position, same height — so the row is drawn
+        // and greyed with its reason rather than replaced by a line of text.
+        enabled: !p.locked,
+        locked: p.locked,
+        note: p.note.clone().into(),
+        reason: p.reason.clone().into(),
+        escape_hatch: p.escape.clone().into(),
+        machine_rule: p.machine_rule,
+        chevron: true,
+        open: p.open,
+    }
+}
+
+fn to_choice(c: &composer::Choice) -> OptionRow {
+    OptionRow {
+        id: c.id as i32,
+        label: c.label.clone().into(),
+        sub: c.sub.clone().into(),
+        enabled: c.enabled,
+        chosen: c.chosen,
+        reason: c.reason.clone().into(),
+        escape_hatch: c.escape.clone().into(),
+        machine_rule: c.machine_rule,
+    }
+}
+
+/// **The masking boundary, at the one place it crosses into the toolkit.**
+///
+/// `raw` is `composer::Secret::editable()`'s answer, which is `None` while masked — so while a
+/// field is masked the markup holds no identifier at all, and neither does the accessible tree,
+/// which captions `value`. There is no arm here that reaches for the full string.
+fn to_field(f: &composer::FieldState) -> FieldRow {
+    FieldRow {
+        field: f.field.as_i32(),
+        label: f.label.clone().into(),
+        value: f.value.clone().into(),
+        raw: f.raw.clone().into(),
+        masked: f.masked,
+        locked: f.locked,
+        mono: f.mono,
+        note: f.note.clone().into(),
+        reason: f.reason.clone().into(),
+        action: f.action.clone().into(),
+    }
+}
+
+fn to_tick(t: &composer::Tick) -> TickRow {
+    TickRow {
+        // The ordinal in `Os::ALL`, which is what `composer-tick(int, bool)` hands back — the
+        // markup never names a system and the vocabulary stays in Rust.
+        os: compose::Os::ALL.iter().position(|o| *o == t.os).unwrap_or(0) as i32,
+        label: t.label.clone().into(),
+        on: t.on,
+        enabled: t.enabled,
+        reason: t.reason.clone().into(),
+        escape_hatch: t.escape.clone().into(),
+    }
+}
+
+fn to_plan(s: &compose::Step) -> PlanRow {
+    PlanRow {
+        verb: s.verb().into(),
+        what: s.what().into(),
+        sub: s.sub().into(),
+    }
+}
+
+fn to_refusal(r: &composer::Refused) -> RefusalRow {
+    RefusalRow {
+        why: r.why.clone().into(),
+        has_fix: r.fix.is_some(),
+        fix: r.fix.as_ref().map(to_fix).unwrap_or_default(),
+        // §16.11: an Expand that opens below the fold scrolls its own top edge into view. Which one
+        // is open is `nav::Stack`'s, not this row's, and this phase draws the refusal paragraph
+        // open — there is at most one and it is the thing the page is about.
+        open: true,
+    }
+}
+
+/// Everything the four Composer pages read, pushed **in place** (§16.9).
+///
+/// **Never a fresh `VecModel`.** Handing `set_composer_picks` a new model tears down every repeater
+/// instance under it, and this function runs on every keystroke in the serial field — so a fresh
+/// model would take focus, hover and the caret with it on every character typed.
+///
+/// It is called from a callback and from the tick, **never from a binding**: it calls
+/// `Settings::missing` by way of `Composer::which`, and `Presence`'s own rule is that a `stat` may
+/// block on a stale network mount.
+#[allow(clippy::too_many_arguments)] // one argument per retained model, which is what §16.9's in-place rule costs; bundling them changes nothing but the count
+fn push_composer(
+    window: &MainWindow,
+    c: &composer::Composer,
+    settings: &Settings,
+    building: bool,
+    space: Option<&volume::Space>,
+    picks: &Rc<VecModel<PickRow>>,
+    fields: &Rc<VecModel<FieldRow>>,
+    ticks: &Rc<VecModel<TickRow>>,
+    opts: &Rc<VecModel<OptionRow>>,
+    plan: &Rc<VecModel<PlanRow>>,
+    refusals: &Rc<VecModel<RefusalRow>>,
+) {
+    let root = c.root(settings, building);
+    let which = c.which(settings, building);
+    let runs = c.runs(settings, building);
+    let named = c.named(settings, building);
+
+    window.set_composer_title(
+        match c.mode() {
+            composer::Mode::New => "New device".to_string(),
+            composer::Mode::Editing { device } => device.clone(),
+        }
+        .into(),
+    );
+    window.set_composer_which_value(root.which.value.clone().into());
+    window.set_composer_runs_value(root.runs.value.clone().into());
+    window.set_composer_named_value(root.named.value.clone().into());
+    window.set_composer_which_enabled(root.which.enabled);
+    window.set_composer_runs_enabled(root.runs.enabled);
+    window.set_composer_named_enabled(root.named.enabled);
+    window.set_composer_which_reason(root.which.reason.clone().into());
+    window.set_composer_runs_reason(root.runs.reason.clone().into());
+    window.set_composer_named_reason(root.named.reason.clone().into());
+
+    // §11.3's four renderings. The **variant** decides the colour; `Verdict` gains none.
+    window.set_composer_region_text(root.region.text().into());
+    window.set_composer_region_emphatic(root.region.emphatic());
+    window.set_composer_create(to_fix(&root.create));
+    window.set_composer_copy_command(to_fix(&which.copy_command));
+    window.set_composer_title_auth(which.title_auth.clone().into());
+    window.set_composer_no_ipod(runs.disabled_reason.clone().into());
+    window.set_composer_runs_disabled(runs.disabled_reason.clone().into());
+    window.set_composer_stem(named.stem.clone().into());
+    window.set_composer_taken(named.taken.clone().into());
+    window.set_composer_name_field(to_field(&named.name));
+
+    // **The same function the Work page's ledger goes through** — one bill, two surfaces.
+    let (download, disk, warn) = ledger_lines(Some(root.cost), space);
+    window.set_composer_ledger_download(download.into());
+    window.set_composer_ledger_disk(disk.into());
+    window.set_composer_ledger_warn(warn);
+
+    // The root's own `Fix`, which is the verdict's when it has one.
+    match &root.region {
+        composer::Region::No { why, fix } => {
+            window.set_composer_refusal_why(why.clone().into());
+            window.set_composer_refusal_open(true);
+            match fix {
+                Some(f) => {
+                    window.set_composer_has_fix(true);
+                    window.set_composer_fix(to_fix(&composer::FixRow::of(f, &c.recipe().start)));
+                }
+                None => {
+                    window.set_composer_has_fix(false);
+                    window.set_composer_fix(FixRow::default());
+                }
+            }
+        }
+        _ => {
+            window.set_composer_refusal_why("".into());
+            window.set_composer_refusal_open(false);
+            window.set_composer_has_fix(false);
+            window.set_composer_fix(FixRow::default());
+        }
+    }
+
+    // **The generation, and it has exactly one job.** Every two-press control in `ui/composer.slint`
+    // binds `for-recipe: root.composer-generation` and disarms when it changes: `Pressable.armed` is
+    // component-local, and a `Fix` armed against one recipe must not fire against another.
+    // `ui/rail.slint` solves the identical problem for repeater reuse with `for-entry: root.e.id`.
+    window.set_composer_generation(c.generation() as i32);
+    window.set_composer_open_field(c.open().map_or(-1, |f| f.as_i32()));
+
+    let want_picks: Vec<PickRow> = match c.level() {
+        composer::Level::WhichIpod => [&which.ipod, &which.model, &which.colour]
+            .into_iter()
+            .map(to_pick)
+            .collect(),
+        composer::Level::WhatItRuns => [&runs.disk, &runs.from, &runs.loader]
+            .into_iter()
+            .map(to_pick)
+            .collect(),
+        _ => Vec::new(),
+    };
+    let want_fields: Vec<FieldRow> = match c.level() {
+        composer::Level::WhichIpod => vec![to_field(&which.serial), to_field(&which.guid)],
+        composer::Level::NameIt => vec![to_field(&named.name)],
+        _ => Vec::new(),
+    };
+    let want_ticks: Vec<TickRow> = match c.level() {
+        composer::Level::WhatItRuns => runs.systems.iter().map(to_tick).collect(),
+        _ => Vec::new(),
+    };
+    let want_opts: Vec<OptionRow> = c.options(settings).iter().map(to_choice).collect();
+    let want_plan: Vec<PlanRow> = root.plan.iter().map(to_plan).collect();
+    let want_refusals: Vec<RefusalRow> = runs.refusals.iter().map(to_refusal).collect();
+
+    in_place(picks, &want_picks);
+    in_place(fields, &want_fields);
+    in_place(ticks, &want_ticks);
+    in_place(opts, &want_opts);
+    in_place(plan, &want_plan);
+    in_place(refusals, &want_refusals);
+}
+
+/// §16.9's rule, once, for every retained model in this file: **set in place, push for new, remove
+/// from the end.**
+///
+/// `refresh_devices` open-codes the same three lines for `DeviceRow`, and this is what every model
+/// added since goes through — a fourth and a fifth copy of it is how one of them comes to rebuild.
+fn in_place<T: Clone + PartialEq + 'static>(model: &Rc<VecModel<T>>, want: &[T]) {
+    for (i, row) in want.iter().enumerate() {
+        match model.row_data(i) {
+            Some(old) if old == *row => {}
+            Some(_) => model.set_row_data(i, row.clone()),
+            None => model.push(row.clone()),
+        }
+    }
+    while model.row_count() > want.len() {
+        model.remove(model.row_count() - 1);
+    }
+}
+
+/// **Whether this string may leave the window, and why not when it may not.**
+///
+/// §11.2 masks a serial and a FireWire GUID on screen because *a screenshot of this page must not
+/// carry somebody's identifiers* — **and the clipboard is not presentation.** A screenshot is a
+/// picture of one moment; a clipboard outlives the screen, survives the window closing, and is
+/// pasted somewhere nobody was thinking about masking. So a value that is masked until `Show` is
+/// pressed does not become copyable when it is: `Show` reveals, it does not unlock.
+///
+/// This is the **last** gate rather than the only one, and the order matters. The producers refuse
+/// first — `composer::Secret` has no `raw()` and hands the markup `None` while masked, and
+/// `parts::copyable` answers `Some` only for a path. This sits under both of them, on the one
+/// callback in this program that can reach a pasteboard, so a producer added later without those
+/// rules cannot quietly become a leak. `AGENTS.md` §7: verify what you ship, not what is on disk.
+///
+/// **The predicates are the model's own, not a second guess at what a serial looks like.**
+/// `Identity::check_serial_for(_, None)` is the same function that refuses a typed serial, asked
+/// with no model so it tests the shape rather than the generation. A GUID is sixteen hexadecimal
+/// digits; that is checked here rather than through `Identity::check_guid`, which additionally
+/// requires Apple's OUI — a *non*-Apple GUID is still somebody's identifier, and refusing only the
+/// Apple ones would be the gate letting through exactly the values `identity.rs` warns about.
+///
+/// **Masked text passes, and that is the design working.** `7B******X3N` splits at the asterisks
+/// into `7B` and `X3N`, neither of which is a serial — so the mask is what makes a string copyable,
+/// which is the property this whole arrangement is for.
+///
+/// A refusal, never a silent drop: the sentence goes on the Rail. A control that appears to copy
+/// and does not is worse than one that says why it will not.
+fn clipboard_refusal(text: &str) -> Option<&'static str> {
+    use eapp_loader::identity::Identity;
+    for token in text.split(|c: char| !c.is_ascii_alphanumeric()) {
+        if Identity::check_serial_for(token, None).is_ok() {
+            return Some(
+                "nothing was copied — that carries a serial number, and a clipboard outlives \
+                 the screen that masked it",
+            );
+        }
+        if token.len() == 16 && token.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Some(
+                "nothing was copied — that carries a FireWire GUID, and a clipboard outlives \
+                 the screen that masked it",
+            );
+        }
+    }
+    None
 }
 
 /// Write the settings, and put a failure where somebody can see it.
@@ -2206,6 +2885,36 @@ fn refresh_devices(
     // §10.2's cross-dissolve is wanted at the moment `Source::identity()` answers rather than at
     // the moment the device reaches the list.
     window.set_ghost(want.is_empty());
+
+    // ── §7.2's Devices page ─────────────────────────────────────────────────────────────────────
+    //
+    // §9.1: an empty list is a state with something to say, and the one row that fills it is
+    // **always present** — pinned outside the Scroll, at the same place whether there are no
+    // devices or nine.
+    window.set_devices_empty_line("No devices yet.".into());
+    // **Derived from the page's own slot**, exactly like `caps.devices_page`: `Page::Composer`
+    // answers `Some` on the day `ui/drawer.slint` gains a child that draws it, which is the day
+    // this control can do what it says. Written as a literal it is a second answer to the same
+    // question, and a stale `false` here is a row disabled beside a page that exists.
+    let composer_exists = nav::Page::Composer.slot().is_some();
+    window.set_devices_new(FixRow {
+        label: "New device".into(),
+        enabled: composer_exists,
+        reason: if composer_exists {
+            "".into()
+        } else {
+            // §9.4's project-state wording — *this is not finished, by us* — with what does work.
+            "the Composer has no page in this build yet".into()
+        },
+        escape_hatch: if composer_exists {
+            "".into()
+        } else {
+            "ipod-boot setup".into()
+        },
+        machine_rule: false,
+        presses: 1,
+        consequence: "".into(),
+    });
 }
 
 /// Ask for a window that is not see-through.
@@ -3293,6 +4002,7 @@ pub(crate) mod tests {
             &devices,
             &settings,
             &latch(true),
+            &Rc::new(RefCell::new(None)),
             &timer,
             caps(),
             a_cost(),
@@ -3424,7 +4134,19 @@ pub(crate) mod tests {
             "the wholesale-rebuild shape this test looks for no longer matches itself"
         );
 
-        for setter in ["set_rail(", "set_devices("] {
+        for setter in [
+            "set_rail(",
+            "set_devices(",
+            // §11.2's six. `push_composer` runs on **every keystroke** in the serial field, so a
+            // fresh `VecModel` per call would take the caret with it on every character typed —
+            // which is the same defect as the Rail's, on the page that is typed into most.
+            "set_composer_picks(",
+            "set_composer_fields(",
+            "set_composer_ticks(",
+            "set_composer_options(",
+            "set_composer_plan(",
+            "set_composer_refusals(",
+        ] {
             let (calls, wholesale) = model_handoffs(setter);
             assert_eq!(
                 calls.len(),
@@ -3438,6 +4160,104 @@ pub(crate) mod tests {
                  every repeater instance"
             );
         }
+    }
+
+    /// **The registered `+ New device ›` opens the Composer and mints nothing.**
+    ///
+    /// §11.2: `nor::mint_seed` is the one irreversible call in this program — the seed *is* the
+    /// iPod — so it happens when somebody presses `Make one`, not when a page opens. Three
+    /// cancelled visits to this page must leave zero iPods, and this is the first of the three.
+    ///
+    /// §20 item 12's lesson: it drives the callback `wire` registers, not a function beside it.
+    #[test]
+    fn the_registered_new_device_handler_opens_the_composer_and_mints_nothing() {
+        let settings = Rc::new(RefCell::new(Settings::default()));
+        let w = a_window();
+        wire(&w, settings.clone());
+        let before = settings.borrow().resources.len();
+
+        w.invoke_device_new();
+
+        assert!(w.get_drawer_open(), "the Composer did not open the drawer");
+        assert_eq!(
+            w.get_drawer_page(),
+            DrawerPage::Composer,
+            "`+ New device` did not land on the Composer's root"
+        );
+        assert_eq!(
+            w.get_drawer_depth(),
+            nav::Page::Composer.slot().expect("the Composer has a slot"),
+            "the Composer is drawn at one level and was navigated to at another, which is a blank \
+             420 px panel with no header"
+        );
+        assert_eq!(
+            settings.borrow().resources.len(),
+            before,
+            "opening the page minted an iPod; the seed IS the iPod and cancelling must cost nothing"
+        );
+        // §11.3 rule (0): the region says nothing it will have to take back.
+        assert_eq!(
+            w.get_composer_region_text().to_string(),
+            compose::NOTHING_CHOSEN,
+            "the opening state asserts a plan for a firmware nobody has chosen"
+        );
+        assert_eq!(w.get_composer_plan().row_count(), 0, "an unchosen recipe drew a plan");
+        assert!(
+            !w.get_composer_create().enabled,
+            "`Create` is live on a recipe the verdict refuses"
+        );
+        // Three visits, three cancellations, zero iPods — which is the promise in full.
+        for _ in 0..2 {
+            w.invoke_drawer_back();
+            w.invoke_device_new();
+        }
+        assert_eq!(settings.borrow().resources.len(), before);
+    }
+
+    /// **A press that changes nothing in the library does not rewrite the library's file.**
+    ///
+    /// §20 item 13's other half, and it is the one that costs somebody something: `Settings::render`
+    /// regenerates the file **whole**, from the model, so every comment the operator added goes with
+    /// it. A save on a callback that mutated nothing is that deletion, for nothing. The rule is
+    /// *every callback that mutated `Settings` ends in `save`, and one that did not must not*, and
+    /// this is the second clause.
+    ///
+    /// `Make one` is the case that looks like an exception and is not: `nor::mint_seed` is the one
+    /// irreversible act on the page — the seed **is** the iPod — but it mints into the Composer,
+    /// and `composer.rs` files it at `Create`. So the mint changes the page and not the file.
+    #[test]
+    fn a_press_that_writes_no_library_does_not_rewrite_the_settings_file() {
+        let settings = Rc::new(RefCell::new(Settings::default()));
+        let w = a_window();
+        wire(&w, settings.clone());
+        w.invoke_device_new();
+
+        let path = eapp_loader::settings::Settings::path().expect("a settings path");
+        // A comment nobody's model holds, which is exactly what `render` cannot carry.
+        std::fs::write(&path, "# a comment somebody added\nwelcomed = true\n").expect("scratch");
+
+        w.invoke_composer_act(composer::Field::Ipod.as_i32());
+        w.invoke_composer_type(composer::Field::Name.as_i32(), "My 5.5G".into());
+        w.invoke_composer_reveal(composer::Field::Serial.as_i32());
+
+        assert_eq!(
+            settings.borrow().resources.len(),
+            0,
+            "`Make one` filed an iPod; §11.2 files it at `Create` and cancelling must cost nothing"
+        );
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            text.contains("# a comment somebody added"),
+            "a press that wrote nothing to the library rewrote the file and took the operator's \
+             comment with it:\n{text}"
+        );
+
+        // The control: the mint DID happen — it is on the page rather than in the file, which is
+        // the distinction this test is about and not an absence of any effect at all.
+        assert!(
+            !w.get_composer_which_value().is_empty(),
+            "`Make one` did nothing at all, so the assertion above is vacuous"
+        );
     }
 
     /// Every `.rs` file in this crate, name and text, **with its test module cut off**.
@@ -3928,25 +4748,40 @@ pub(crate) mod tests {
                 .unwrap_or_else(|| panic!("no drawer row labelled {want:?}"))
         };
 
-        let devices = by_label("Devices");
+        // **`Devices` came off this test and `Games` took its place**, which is three deliberate
+        // lines rather than a slip: `ui/drawer.slint`'s depth-1 slot draws Devices, Parts and
+        // Settings now, and a row that goes on saying *the page behind it is not built* beside a
+        // page that exists is the stale claim §16.9 deletes. The three that remain are exactly the
+        // three `Page::slot` still answers `None` for.
+        let unbuilt = by_label("Games");
         assert_eq!(
-            devices.accessible_enabled(),
+            unbuilt.accessible_enabled(),
             Some(false),
-            "the `Devices` row claims to work; the page behind it is not built"
+            "the `Games` row claims to work; the page behind it is not built"
         );
         assert!(
-            !devices.accessible_description().unwrap_or_default().is_empty(),
-            "the `Devices` row is disabled and says nothing about why, which is §19.1's finding \
+            !unbuilt.accessible_description().unwrap_or_default().is_empty(),
+            "the `Games` row is disabled and says nothing about why, which is §19.1's finding \
              with the label changed"
         );
 
-        // The control: the one page that IS built has to read differently, or `accessible-enabled`
+        // The control: the pages that ARE built have to read differently, or `accessible-enabled`
         // is not being set from anything and every answer above is the same answer.
-        assert_eq!(
-            by_label("Work").accessible_enabled(),
-            Some(true),
-            "the one page that IS built reads as disabled too"
-        );
+        for built in ["Work", "Devices", "Parts", "Settings"] {
+            assert_eq!(
+                by_label(built).accessible_enabled(),
+                Some(true),
+                "the `{built}` row reads as disabled beside the page that draws it"
+            );
+        }
+        // …and no row states a gap that has been closed.
+        for live in ["Devices", "Parts", "Settings"] {
+            assert_eq!(
+                by_label(live).accessible_description().unwrap_or_default().to_string(),
+                "",
+                "the `{live}` row still explains why the page it opens does not exist"
+            );
+        }
     }
 
     /// **A closed drawer is gone, not parked off screen still being announced.**
@@ -4900,6 +5735,163 @@ pub(crate) mod tests {
         push_ledger(&w, Some(cost), &cache, None);
         assert_eq!(w.get_ledger_note(), "One bundle is already downloaded.");
         std::fs::remove_dir_all(&cache).ok();
+    }
+
+    /// **§11.2's root and §10.1's Work page print one bill**, because there is one function that
+    /// makes it and two callers of it.
+    ///
+    /// A second copy of this arithmetic on the Composer would be two figures for one press, on two
+    /// surfaces a person moves between while deciding whether to agree to a download — which is
+    /// principle 7's own complaint about three sizes for one operation, one page along.
+    ///
+    /// It drives [`ledger_lines`] directly as well as through [`push_ledger`], and the two are
+    /// asserted **equal** rather than each asserted separately: the point is not that both are
+    /// right, it is that they cannot differ.
+    #[test]
+    fn the_composer_and_the_work_page_print_one_bill() {
+        let w = a_window();
+        let cache = temp_dir("one-bill");
+        let cost = a_cost();
+        for space in [
+            None,
+            Some(volume::Space { free: 1_000_000, mount: "/scratch".into() }),
+            Some(volume::Space { free: 900_000_000_000, mount: "/".into() }),
+        ] {
+            for plan in [None, Some(cost)] {
+                push_ledger(&w, plan, &cache, space.as_ref());
+                let (download, disk, warn) = ledger_lines(plan, space.as_ref());
+                assert_eq!(w.get_ledger_download().to_string(), download);
+                assert_eq!(w.get_ledger_disk().to_string(), disk);
+                assert_eq!(w.get_ledger_warn(), warn);
+            }
+        }
+        // The control: the two cases this has to be able to tell apart are actually different, or
+        // the loop above is comparing one string against itself.
+        let (_, roomy, roomy_warn) =
+            ledger_lines(Some(cost), Some(&volume::Space { free: 900_000_000_000, mount: "/".into() }));
+        let (_, tight, tight_warn) =
+            ledger_lines(Some(cost), Some(&volume::Space { free: 1_000_000, mount: "/scratch".into() }));
+        assert_ne!(roomy, tight);
+        assert!(tight_warn && !roomy_warn);
+        std::fs::remove_dir_all(&cache).ok();
+    }
+
+    /// **Nothing carrying an identifier reaches the clipboard, at any masking state.**
+    ///
+    /// §11.2 masks a serial and a FireWire GUID because *a screenshot of this page must not carry
+    /// somebody's identifiers* — and the critics found `Copy the command line` putting the very
+    /// values that rule hides onto the pasteboard. A screenshot is one moment; a clipboard outlives
+    /// the screen. So `Show` reveals and it does not unlock, and this is the gate that makes that
+    /// true from the window's side rather than by everybody remembering.
+    ///
+    /// The values below are **generated**, not read out of `resources/`: `Identity::generate` is a
+    /// pure function of a model and a seed, so the fixture is reproducible and belongs to nobody.
+    #[test]
+    fn nothing_outside_the_composer_can_reach_an_unmasked_identifier() {
+        // A synthesised iPod, so no real person's identifiers are in this file.
+        let (serial, guid) = a_generated_identity();
+        assert_eq!(serial.len(), 11, "the fixture is not a serial: {serial:?}");
+
+        // Bare, and inside a sentence, and inside a command line — every shape a copy control could
+        // hand this.
+        //
+        // **The failure message names the case by POSITION and never quotes the value**, which is
+        // `Refusal::masked`'s own rule applied one layer out: §11.2's other named defect was a
+        // masked validation sentence quoting the offending character back, and a test that prints
+        // an identifier into a CI log to complain that identifiers escape is the same shape.
+        for (case, carried) in [
+            ("a bare serial", serial.clone()),
+            ("a bare GUID", guid.clone()),
+            ("a serial inside a command line", format!("ipod-boot retail --nor-serial {serial}")),
+            ("a GUID inside a sentence", format!("GUID {guid} on /dev/disk4")),
+            ("both, on two lines", format!("{serial}\n{guid}")),
+        ] {
+            assert!(
+                clipboard_refusal(&carried).is_some(),
+                "{case} reached the clipboard ({} characters)",
+                carried.len()
+            );
+        }
+
+        // **The mask is what makes a string copyable**, which is the property the whole arrangement
+        // is for — so a masked value passes, and so does ordinary prose and a path.
+        for ordinary in [
+            "7B******X3N",
+            "000A27**********",
+            "/Users/somebody/Library/Application Support/ipod-emulator/settings.txt",
+            "ipod-boot make-disk iPod_25.1.3.ipsw my-5.5g.img",
+            "fetched — SHA-256 verified when it arrived",
+            "synthesised, seed 4f2a",
+            // A SHA-256 is sixty-four hex digits in one token, not sixteen, and is a fact about a
+            // file rather than about a person.
+            "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        ] {
+            assert!(
+                clipboard_refusal(ordinary).is_none(),
+                "the gate refuses text carrying no identifier: {ordinary:?}"
+            );
+        }
+    }
+
+    /// **The registered handler is the one that refuses**, not a function beside it.
+    ///
+    /// §20 item 12's lesson: the defect that shipped lived inside a closure no test reached. This
+    /// invokes `copy-text` on a real composed window and reads the sentence back off the Rail.
+    #[test]
+    fn the_registered_copy_handler_refuses_an_identifier_and_says_so() {
+        let settings = Rc::new(RefCell::new(Settings::default()));
+        let w = a_window();
+        wire(&w, settings);
+
+        // **The last row, not row 0.** `wire` files the first run's plan before any press, so the
+        // Rail already holds five `Planned` steps — reading index 0 reads the plan and reports a
+        // refusal that is not there.
+        let last_row = |w: &MainWindow| {
+            let rail = w.get_rail();
+            rail.row_data(rail.row_count() - 1).expect("the Rail is not empty")
+        };
+
+        let (serial, _) = a_generated_identity();
+        w.invoke_copy_text(serial.clone().into());
+        let row = last_row(&w);
+        assert_eq!(row.kind, RailKind::Note, "the refusal did not reach the Rail");
+        assert!(
+            row.what.to_lowercase().contains("serial"),
+            "the refusal does not say what it refused: {:?}",
+            row.what
+        );
+        assert!(
+            !row.what.contains(&serial),
+            "the refusal quoted the identifier back, which is the leak one line along: {:?}",
+            row.what
+        );
+
+        // The control: ordinary text gets the build's own sentence instead, so the arm above is
+        // reached by the gate and not by every press.
+        w.invoke_copy_text("ipod-boot facts my-5.5g.img".into());
+        let last = last_row(&w);
+        assert_eq!(last.kind, RailKind::Note);
+        assert!(
+            last.what.contains("no clipboard"),
+            "text carrying nothing was refused as an identifier: {:?}",
+            last.what
+        );
+    }
+
+    /// A serial and a GUID that belong to nobody: `Identity::generate` is a pure function of a
+    /// model and a seed, so the fixture is reproducible and `resources/` is not opened.
+    ///
+    /// **The one place this file makes one.** `AGENTS.md` §2 is the rule it exists to keep — a real
+    /// serial, GUID, name or Apple ID never enters a tracked file, and a test fixture is a tracked
+    /// file.
+    fn a_generated_identity() -> (String, String) {
+        let model = eapp_loader::identity::Model::lookup("A446")
+            .expect("A446 is in this build's model table");
+        let id = eapp_loader::identity::Identity::generate(model, 3);
+        (
+            id.serial.clone().expect("a generated identity carries a serial"),
+            format!("{:016X}", id.guid),
+        )
     }
 
     /// **The registered centre button starts the first run on an empty library.**

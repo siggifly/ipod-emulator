@@ -14,6 +14,202 @@ import { Ink, Metric, Motion } from "tokens.slint";
 // from there, so a test cannot hand-copy one and stay green.
 import { Geometry } from "@geometry";
 
+// ─── The boundary (§11.1, §11.2, §11.4, §11.6) ──────────────────────────────────────────────────
+//
+// **Every row a drawer page draws, flattened.** Each of these is built in `main.rs` out of
+// `composer.rs` / `parts.rs` / `devices.rs`, which are built out of the model in `eapp-loader` —
+// so no page below states a policy or words a sentence, and the window and the model cannot
+// disagree about what a recipe does.
+//
+// **They live here rather than in `ui/window.slint`**, which is where the contract put them, for
+// the reason `DrawerHeader` gives four hundred lines down: `window.slint` imports `drawer.slint`,
+// which imports every page, so a page importing `window.slint` back is a cycle. This file is the
+// leaf every page already imports and these are the shapes its primitives render — a `PickRow` is
+// what a `Row` draws, a `FieldRow` is what a `Field` draws, a `TickRow` is what a `Check` draws.
+//
+// **`field` / `group` / `kind` / `action` cross as `int`.** `rail-next(int, int)` set the precedent
+// and the reason is the same: the markup never needs to name one, and a Slint enum would put the
+// vocabulary in the markup. Rust's side is an exhaustive `from_i32`, so an unknown value is a
+// refusal rather than a wrong branch.
+
+// §9.4's disabled construction, as data: the two kinds worded differently, and §11.3's second press
+// with the sentence that has to be read before the first. Declared first — `RefusalRow`, `GroupRow`
+// and the pages all embed one, and `process_struct` inserts into the local registry in document
+// order (`object_tree.rs:205-250`).
+export struct FixRow {
+    label: string,
+    enabled: bool,
+    reason: string,
+    escape-hatch: string,
+    machine-rule: bool,
+    presses: int,
+    consequence: string,
+}
+
+// §11.2's levels ① and ②: a picker, which is a `Row` with a chevron whose options live in the
+// `Expand` under it. **A locked picker stays a picker** (§11.1) — `locked` greys the row and states
+// why, and the `Expand` never opens; it does not collapse to a line of text, because that is what
+// makes the page jump when you switch between a dump and a synthesised ROM.
+export struct PickRow {
+    field: int,
+    label: string,
+    value: string,
+    enabled: bool,
+    locked: bool,
+    note: string,
+    reason: string,
+    escape-hatch: string,
+    machine-rule: bool,
+    chevron: bool,
+    open: bool,
+}
+
+// One option inside the one open picker. §11.3's *every box ticks*: a refused value stays, in place,
+// at its own height, in `fg-disabled`, and says why — it is never absent.
+export struct OptionRow {
+    id: int,
+    label: string,
+    sub: string,
+    enabled: bool,
+    chosen: bool,
+    reason: string,
+    escape-hatch: string,
+    machine-rule: bool,
+}
+
+// §11.2's identity rows and §11.2's name. **`value` is what is drawn and is already masked;
+// `raw` is `""` while masked** — so while a field is masked the markup holds no identifier at all.
+// That is `composer::Secret`'s boundary, expressed in the type rather than in a rule somebody has
+// to remember.
+export struct FieldRow {
+    field: int,
+    label: string,
+    value: string,
+    raw: string,
+    masked: bool,
+    locked: bool,
+    mono: bool,
+    note: string,
+    reason: string,
+    action: string,
+}
+
+// §11.3's systems list. `os` is the ordinal in `Os::ALL`, so all three are offered and the two that
+// are not in `OFFERED` are drawn disabled with their project-state reason.
+export struct TickRow {
+    os: int,
+    label: string,
+    on: bool,
+    enabled: bool,
+    reason: string,
+    escape-hatch: string,
+}
+
+// §11.2's plan — `Recipe::steps()`, one line per step. **One list rendered twice**: here as *this is
+// what will be downloaded*, and on the Work page as a ticking checklist while it runs.
+export struct PlanRow {
+    verb: string,
+    what: string,
+    sub: string,
+}
+
+// §11.3 item 2: the reason is a paragraph under the value that caused it, reserved via an `Expand`,
+// verbatim from `Verdict::No.why`. At most one `Fix` with it.
+export struct RefusalRow {
+    why: string,
+    has-fix: bool,
+    fix: FixRow,
+    open: bool,
+}
+
+// §11.4's six groups, fixed order, always all six present even when empty. `a` and `b` are the
+// group's own verbs — `Add a dump…` / `Synthesise…`, `Fetch…` / `Provide…`, `Build…`, `Discard`.
+export struct GroupRow {
+    group: int,
+    heading: string,
+    count: int,
+    verb: string,
+    empty: string,
+    a: FixRow,
+    b: FixRow,
+    has-a: bool,
+    has-b: bool,
+    // **Which `Action` each verb IS**, and the contract's own list did not carry it. `parts-group-
+    // action(Group, Action)` cannot be fired without it: `Group::actions()` is per group —
+    // `[AddDump, Synthesise]` for iPods, `[Fetch, Provide]` for firmware, `[Build, Provide]` for
+    // disks — so a markup passing a slot index would have fired `Add a dump…` for `Fetch…`. The
+    // ordinal travels with the row that draws it.
+    a-action: int,
+    b-action: int,
+}
+
+// One part. `fact` is `Provenance::line()` and nothing in the window may construct the word
+// *verified*; `used-by` is the reference-not-copy property made visible; `locked-by` is §11.4's one
+// machine rule — *`My 5.5G` is running. Stop it first.*
+export struct PartRow {
+    id: int,
+    group: int,
+    kind: int,
+    name: string,
+    fact: string,
+    used-by: string,
+    expandable: bool,
+    open: bool,
+    selected: bool,
+    removable: bool,
+    remove-consequence: string,
+    locked-by: string,
+}
+
+// One device, flattened for the markup. **Every string on it is the model's**, built in `main.rs`
+// out of `settings.rs` — no markup file words one, which is what stops the window and the model
+// disagreeing about what a device is.
+//
+// **It moved here from `ui/window.slint` and gained no fields.** §7.2's Devices page needs it, and
+// a page importing `window.slint` back is a cycle. The contract's own list adds `parts`, `parked`
+// and `remove-consequence`; none of the three is taken, and the reason is in the document rather
+// than in a preference. `parked` was **deleted** by §20 item 4 — *"it was computed and bound to
+// nothing in any markup file, which is item 15's defect in a new place"* — and what the shelf and
+// the page actually want is §7.5's *state, and time since*, which `state` carries (`off`, or
+// `off, parked 4 min ago`). `parts` is `summary` under a second name. And a `Remove` consequence is
+// a line inside the row's own `Expand`, where `DetailRow.consequence` already carries it.
+//
+// `ResourceRow` went with the Resources tab. Its one test —
+// `no_row_claims_a_verification_the_model_did_not_record` — was re-expressed onto
+// `Provenance::line()` rather than dropped (§16.10), and is still in `main.rs`.
+export struct DeviceRow {
+    name: string,
+    summary: string,
+    state: string,
+    write-target: string,
+    write-target-is-warning: bool,
+    chassis: color,
+    dark-chassis: bool,
+    // §7.3: can the cradle hold this one? False where a part of it has left the library, which is
+    // the refusal §20 item 1 already produces and §20 item 12 requires somewhere to show.
+    startable: bool,
+    // §7.3's label: what pressing will cost, or why it cannot be pressed. The model's sentence,
+    // verbatim.
+    cradle-label: string,
+}
+
+// One line inside an expanded row — `parts::Detail` flattened. A `Fact`, a `Paragraph`, a
+// `MachineRule`, a `Mono` or an `Act`; `has-action` is which.
+export struct DetailRow {
+    label: string,
+    value: string,
+    mono: bool,
+    machine-rule: bool,
+    action: int,
+    has-action: bool,
+    act-label: string,
+    enabled: bool,
+    reason: string,
+    escape-hatch: string,
+    presses: int,
+    consequence: string,
+}
+
 // ─── The material (§6.5) ────────────────────────────────────────────────────────────────────────
 //
 // A 1 px darker top rule, an immediate bright band, a gentle fall — sampled down a vertical strip
@@ -79,6 +275,64 @@ export component Icon inherits Path {
         : "M 12 3 L 22.5 21 L 1.5 21 Z M 10.9 9 L 13.1 9 L 13.1 15 L 10.9 15 Z M 10.9 16.8 L 13.1 16.8 L 13.1 19 L 10.9 19 Z";
 }
 
+// ─── ReasonSlot (§5, §9.4, §16.5) ───────────────────────────────────────────────────────────────
+//
+// §5's 34 px two-line reason slot, lifted out of `Pressable` **unchanged** so `Field` can have one
+// without a second copy of it. It **elides** rather than growing its owner: a 250-character machine
+// rule does not fit in 34 px at any width, so the full text lives in `accessible-description` and,
+// for a failure, in the Rail entry's own `happened` paragraph — and for §11.3's refusal, in the
+// `Expand` one level up, which is not a reason slot at all.
+//
+// This is the only extraction in this phase, and it exists because `Field` and `Pressable` must
+// reserve the *same* slot: §11.1's *existing and new look identical* is a height claim before it is
+// anything else, and two slots of 34 px that were written twice are two slots that drift.
+export component ReasonSlot inherits Rectangle {
+    // Reserved whenever the owner has something to tell you. Never derived here — the owner knows.
+    in property <bool> tells;
+    in property <string> text;
+    in property <string> escape-hatch;
+    // §9.4: a project state names its escape hatch as a command in `mono`; a machine rule does not.
+    // The owner computes it (`!enabled && !machine-rule`) rather than this slot re-deciding it.
+    in property <bool> show-hatch;
+    // §11.3: the first of two presses has been taken, so the sentence is about what the second does.
+    in property <bool> armed;
+    // The owner's own horizontal padding, so a reason lines up under the label it is about.
+    in property <length> pad: 0px;
+
+    height: root.tells ? Geometry.field-reason : 0px;
+    clip: true;
+    visible: root.tells;
+
+    VerticalLayout {
+        alignment: start;
+        spacing: 0px;
+        padding-left: root.pad;
+        padding-right: root.pad;
+
+        Text {
+            height: Geometry.line-label;
+            text: root.text;
+            font-size: Metric.label-size;
+            font-weight: Metric.weight-label;
+            color: root.armed ? Ink.danger : Ink.fg-dim;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+
+        // §9.4: a project state always names the escape hatch, as a command in `mono`.
+        Text {
+            height: Geometry.line-mono;
+            text: root.escape-hatch;
+            font-family: Metric.mono-family;
+            font-size: Metric.mono-size;
+            color: Ink.fg-dim;
+            overflow: elide;
+            vertical-alignment: center;
+            visible: root.show-hatch;
+        }
+    }
+}
+
 // ─── The one pressable construction (§16.5, §9.4, §11.3) ────────────────────────────────────────
 //
 // **Two traps, both verified in the toolkit source, and both fatal to the obvious construction:**
@@ -123,6 +377,17 @@ export component Pressable inherits Rectangle {
     in property <bool> inert: false;
     // Horizontal padding inside the control. §6.3: 12 inside a control, 24 at a drawer page margin.
     in property <length> pad: 0px;
+    // **A fact about the row, on a second line inside the same hit region and the same accessible
+    // node** — §11.4's `synthesised, seed 4f2a, used by 2` under `Black 5.5G`. The default `""`
+    // costs zero height, so every existing use site is byte-identical to what it was.
+    in property <string> sub;
+    // §6.2: a path, a hash, a serial or an address is `mono`; prose is not. One boolean rather than
+    // a second `sub` property, so a row cannot carry both and draw neither.
+    in property <bool> sub-mono: false;
+    // §5's ring, drawn for a control whose focus lives on a child this construction does not own —
+    // `Field`'s `TextInput`. Without it a `Field` would have to invent a second ring, and two ring
+    // constructions is how they come to be drawn in two places.
+    in property <bool> focus-inside: false;
 
     out property <bool> armed: false;
     out property <bool> has-focus: focus.has-focus;
@@ -138,12 +403,27 @@ export component Pressable inherits Rectangle {
         root.armed = false;
     }
 
-    // **The slot is reserved whenever this control has something to tell you**, and `presses == 2`
-    // is static per control — so arming changes the wording and the colour and moves nothing. A
+    // **The slot is reserved whenever this control has something to tell you**, and every term is
+    // static per control — so arming changes the wording and the colour and moves nothing. A
     // control that grows when you press it is content moving under the cursor (principle 2).
-    property <bool> tells: !root.enabled || root.presses == 2;
+    //
+    // **`consequence != ""` is the third term and it was missing.** §11.3's `BuildFromIpsw` is the
+    // two-press case, but a one-press control may carry a consequence too — §11.4's `Remove` names
+    // its dependents before it acts — and without this term that sentence had nowhere to be drawn.
+    //
+    // **`inert` withdraws the first term**, and that is not a special case: an inert line is not a
+    // control at all (§9.1's empty-group line, §5's group heading, §11.4's reserved plugged-in row),
+    // so it has no reason to state and reserving 34 px under it is 34 px of nothing. A disabled
+    // CONTROL still states why and still stays in the tab order — that is §9.4, and it is untouched.
+    property <bool> tells: (!root.enabled && !root.inert)
+        || root.presses == 2
+        || root.consequence != "";
 
-    height: Geometry.row-h + (root.tells ? Geometry.field-reason : 0px);
+    // 44 plain · 60 with a fact line · 78 disabled, two-press or carrying a consequence · 94 both.
+    // Those four numbers are the whole of every fit test's arithmetic in this phase.
+    height: Geometry.row-h
+        + (root.sub == "" ? 0px : Geometry.line-label)
+        + (root.tells ? Geometry.field-reason : 0px);
 
     accessible-role: AccessibleRole.button;
     accessible-label: root.label;
@@ -153,8 +433,10 @@ export component Pressable inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
 
+        // **The material spans the row cell AND the fact line**, so a selected row reads as one
+        // object rather than as a blue band with a caption hanging off the bottom of it.
         Rectangle {
-            height: Geometry.row-h;
+            height: Geometry.row-h + (root.sub == "" ? 0px : Geometry.line-label);
 
             Material {
                 width: 100%;
@@ -167,51 +449,58 @@ export component Pressable inherits Rectangle {
                 }
             }
 
-            // No `alignment`: setting one makes `horizontal-stretch` inert
-            // (`i-slint-core-1.17.1/layout.rs:1274-1279`), which is the defect the chrome bar's own
-            // comment records.
-            HorizontalLayout {
-                padding-left: root.pad;
-                padding-right: root.pad;
-                @children
+            VerticalLayout {
+                spacing: 0px;
+
+                Rectangle {
+                    height: Geometry.row-h;
+
+                    // No `alignment`: setting one makes `horizontal-stretch` inert
+                    // (`i-slint-core-1.17.1/layout.rs:1274-1279`), which is the defect the chrome
+                    // bar's own comment records.
+                    HorizontalLayout {
+                        padding-left: root.pad;
+                        padding-right: root.pad;
+                        @children
+                    }
+                }
+
+                // §11.4's fact line. `visible`, never `if` — §16.3: the cell is allocated at
+                // lowering step 156 and `visible` runs at 180, so a row that gains a fact does not
+                // shuffle the rows below it. Its height is zero when there is nothing to say, which
+                // is what makes that free.
+                Rectangle {
+                    height: root.sub == "" ? 0px : Geometry.line-label;
+                    clip: true;
+                    visible: root.sub != "";
+
+                    HorizontalLayout {
+                        padding-left: root.pad;
+                        padding-right: root.pad;
+
+                        Text {
+                            text: root.sub;
+                            font-family: root.sub-mono ? Metric.mono-family : "";
+                            font-size: root.sub-mono ? Metric.mono-size : Metric.label-size;
+                            font-weight: Metric.weight-label;
+                            color: !root.enabled
+                                ? Ink.fg-disabled
+                                : (root.selected ? #ffffff : Ink.fg-dim);
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
             }
         }
 
-        // §5's 34 px two-line reason slot. It **elides** rather than growing the control: a
-        // 250-character machine rule does not fit in 34 px at any width, so the full text lives in
-        // `accessible-description` and, for a failure, in the Rail entry's own `happened`
-        // paragraph, which is not in a reason slot. Named as a cost rather than discovered.
-        Rectangle {
-            height: root.tells ? Geometry.field-reason : 0px;
-            clip: true;
-            visible: root.tells;
-
-            VerticalLayout {
-                alignment: start;
-                spacing: 0px;
-
-                Text {
-                    height: Geometry.line-label;
-                    text: root.enabled ? root.consequence : root.reason;
-                    font-size: Metric.label-size;
-                    font-weight: Metric.weight-label;
-                    color: root.armed ? Ink.danger : Ink.fg-dim;
-                    overflow: elide;
-                    vertical-alignment: center;
-                }
-
-                // §9.4: a project state always names the escape hatch, as a command in `mono`.
-                Text {
-                    height: Geometry.line-label;
-                    text: root.escape-hatch;
-                    font-family: Metric.mono-family;
-                    font-size: Metric.mono-size;
-                    color: Ink.fg-dim;
-                    overflow: elide;
-                    vertical-alignment: center;
-                    visible: !root.enabled && !root.machine-rule;
-                }
-            }
+        ReasonSlot {
+            tells: root.tells;
+            text: root.enabled ? root.consequence : root.reason;
+            escape-hatch: root.escape-hatch;
+            show-hatch: !root.enabled && !root.machine-rule;
+            armed: root.armed;
+            pad: root.pad;
         }
     }
 
@@ -222,7 +511,7 @@ export component Pressable inherits Rectangle {
         height: 100%;
         border-width: Geometry.focus-ring-w;
         border-color: Ink.accent;
-        visible: focus.has-focus;
+        visible: focus.has-focus || root.focus-inside;
     }
 
     // §11.3: the first of two presses has been taken. Same weight as the focus ring, `danger`
@@ -346,6 +635,328 @@ export component Row inherits Pressable {
             width: Metric.s3;
             height: Metric.s3;
             visible: root.chevron;
+        }
+    }
+}
+
+// ─── Field (§5, §11.1, §11.2) ───────────────────────────────────────────────────────────────────
+//
+// §5's fifth primitive: a labelled input, which may be **locked** and states why.
+//
+// **Three cells, not a Row's two, and the reason is measured rather than preferred.** A 16-hex-digit
+// GUID at `Metric.mono-size` 13 is about 129 px; a `Row`'s drawable value width is `ROW_VALUE_W`
+// 140 less a 16 px chevron gutter = 124. The identity values elide in a `Row` and do not in a
+// `Field`, which is why this is its own primitive and not a `Row` with an editable value.
+//
+// **The reason slot is ALWAYS reserved**, whether it is filled or not — `reason` when there is one,
+// `note` otherwise. That reservation is what sets this control's height, and it is what makes
+// §11.1's *existing and new look identical* mechanical: a locked retail row and an editable
+// synthetic row are `ROW_H + FIELD_REASON` either way, so the surface does not jump when you switch
+// between them.
+//
+// **Masked means read-only, and `Show` reveals and enables in one act** (§11.2). So the drawn text
+// and the editable text are never different things, and a masked value cannot be
+// selected-and-copied either: the hole closes by construction as well as by rule. The cost is
+// named — you cannot type a serial without pressing `Show` first — because the alternative is
+// either drawing what you type as bullets, which is a password field and this is not a secret, or
+// drawing the value while claiming it is masked.
+//
+// **`enabled: false` appears on no `TouchArea` and no `FocusScope` here** (§16.5). The lock is
+// `read-only` on the `TextInput`; the row stays in the tab order and states its reason.
+export component Field inherits Rectangle {
+    in property <string> label;
+    // **What is drawn.** Already masked when `masked` — this component does no masking of its own,
+    // because `identity::mask_serial` is the one mask in this workspace and a second one in markup
+    // is a second boundary to get wrong.
+    in property <string> value;
+    // What may be edited. `""` while masked, and never both.
+    in property <string> raw;
+    in property <bool> locked: false;
+    in property <bool> masked: false;
+    in property <bool> mono: false;
+    in property <string> note;
+    in property <string> reason;
+    // `Show` | `Hide` | `""`. Four characters either way, so the cell does not change size when the
+    // mask comes off — §11.2's *pressing `Show` changes no width and moves nothing*.
+    in property <string> action;
+
+    callback edited(string);
+    callback act();
+    callback gained-focus();
+
+    height: Geometry.row-h + Geometry.field-reason;
+
+    // The one string the `TextInput` may hold. Masked → the mask, and it is `read-only`, so the
+    // mask is what a selection would copy too.
+    property <string> editable-text: root.masked ? root.value : root.raw;
+    // Slint's `TextInput` **writes its own `text` property** when a person types, which dissolves
+    // any binding on it. So the binding is restored here rather than relied on: without this a
+    // `Show` after one keystroke would reveal the value everywhere except in the control it was
+    // typed into. It cannot loop — this writes `input.text`, and nothing feeds `input.text` back.
+    changed editable-text => {
+        input.text = root.editable-text;
+    }
+
+    VerticalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            height: Geometry.row-h;
+
+            HorizontalLayout {
+                spacing: 0px;
+
+                Text {
+                    width: Geometry.field-label-w;
+                    text: root.label;
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-body;
+                    color: root.locked ? Ink.fg-disabled : Ink.fg;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    width: Geometry.field-value-w;
+
+                    input := TextInput {
+                        width: 100%;
+                        height: 100%;
+                        text: root.editable-text;
+                        font-family: root.mono ? Metric.mono-family : "";
+                        font-size: root.mono ? Metric.mono-size : Metric.body-size;
+                        font-weight: Metric.weight-body;
+                        color: root.locked ? Ink.fg-disabled : Ink.fg;
+                        selection-background-color: Ink.accent;
+                        selection-foreground-color: #ffffff;
+                        single-line: true;
+                        wrap: no-wrap;
+                        vertical-alignment: center;
+                        // **Never `enabled: false`** — that is a `FocusScope` refusing focus even
+                        // programmatically (§16.5). `read-only` keeps the row in the tab order and
+                        // keeps its reason reachable by keyboard alone.
+                        read-only: root.locked || root.masked;
+
+                        accessible-role: AccessibleRole.text-input;
+                        accessible-label: root.label;
+                        // §7: the accessible tree carries **what is drawn** — the mask — so a
+                        // screen reader never captions somebody's identifier.
+                        accessible-value: root.value;
+                        accessible-read-only: root.locked;
+                        accessible-description: root.reason != "" ? root.reason : root.note;
+
+                        edited => {
+                            root.edited(self.text);
+                        }
+                        // §16.11: `Tab` is the only keyboard route into a `Scroll`, so every tab
+                        // stop reports where it landed.
+                        changed has-focus => {
+                            if (self.has-focus) {
+                                root.gained-focus();
+                            }
+                        }
+                    }
+                }
+
+                // **The cell is allocated whether or not there is an action** (§16.3), so a field
+                // with a `Show` and a field without one have the same value column.
+                act := Pressable {
+                    width: Geometry.field-action-w;
+                    label: root.action;
+                    inert: root.action == "";
+                    // §5's ring, drawn by the one construction that draws every other ring in this
+                    // program rather than by a second one invented here. `Field` is the reason
+                    // `focus-inside` exists: the focus lives on the `TextInput`, which is not this
+                    // `Pressable`'s own `FocusScope`.
+                    focus-inside: input.has-focus;
+                    activated => {
+                        root.act();
+                    }
+                    gained-focus => {
+                        root.gained-focus();
+                    }
+
+                    Text {
+                        text: root.action;
+                        font-size: Metric.body-size;
+                        font-weight: Metric.weight-strong;
+                        color: Ink.accent;
+                        horizontal-alignment: right;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // Always reserved. `tells: true` is not a shortcut — it IS §11.1's height claim.
+        ReasonSlot {
+            tells: true;
+            text: root.reason != "" ? root.reason : root.note;
+            show-hatch: false;
+            armed: false;
+        }
+    }
+}
+
+// ─── Expand (§5, §8.1, §11.3, §11.4, §16.11) ────────────────────────────────────────────────────
+//
+// In-place detail for a Row, pushing the rows below it down. `gentle`, and inside a `Scroll` an
+// `Expand` that opens below the fold brings its own top edge into view — otherwise the rows below
+// it travel under a stationary cursor, which is principle 2 violated through a mechanism §16.3 does
+// not cover: `visible` keeps a cell, and a scroll offset is not a cell.
+//
+// **`body-height` is pushed rather than measured.** An `Expand` whose height is its content's
+// preferred height animates against a number that is itself changing, and §8.3's rule is that no
+// animation may fail to end.
+//
+// All three accessibility properties are real and verified in the compiler's own registry
+// (`typeregister.rs:264-266`, `:277`).
+export component Expand inherits Rectangle {
+    in property <bool> open: false;
+    in property <length> body-height;
+
+    callback opened();
+    callback closed();
+
+    // **The animated length is a named property, and `height` reads it** rather than the other way
+    // round. `root.height` is banned in this markup (§16.1) — the vertical axis is where the binding
+    // loop closes, and `nothing_in_the_markup_reads_the_windows_own_height` is a text sweep that
+    // cannot tell an `Expand`'s `root` from the window's. One property is cheaper than an exemption.
+    property <length> shown: root.open ? root.body-height : 0px;
+    animate shown {
+        duration: Motion.gentle;
+        easing: ease-out-quart;
+    }
+    height: root.shown;
+    clip: true;
+    // Out of the tab order and out of the accessible tree the moment it has finished closing —
+    // and still drawn while it is closing, which is the same argument the drawer's own `on-screen`
+    // makes one level up.
+    visible: root.shown > 0px;
+
+    accessible-role: AccessibleRole.groupbox;
+    accessible-expandable: true;
+    accessible-expanded: root.open;
+    accessible-action-expand => {
+        if (root.open) {
+            root.closed();
+        } else {
+            root.opened();
+        }
+    }
+
+    changed open => {
+        if (root.open) {
+            root.opened();
+        } else {
+            root.closed();
+        }
+    }
+
+    @children
+}
+
+// ─── Check (§11.3) ──────────────────────────────────────────────────────────────────────────────
+//
+// **Every box ticks.** `compose.rs`'s doctrine is that a checkbox you cannot tick is a question you
+// cannot ask: it tells you *that* something is impossible and never *why*. So a refused system is
+// drawn disabled with its reason and its escape hatch — `Pressable`'s whole construction — rather
+// than being absent.
+//
+// The box is a `Rectangle` with a `1px` hairline border and the **existing** `check` icon inside,
+// so §6.7's drawn set stays closed at sixteen.
+export component Check inherits Pressable {
+    in property <bool> on: false;
+
+    pad: Geometry.page-margin;
+
+    accessible-role: AccessibleRole.checkbox;
+    accessible-checkable: true;
+    accessible-checked: root.on;
+
+    Rectangle {
+        width: Metric.s5;
+
+        Rectangle {
+            x: 0;
+            y: (parent.height - self.height) / 2;
+            width: Metric.s4;
+            height: Metric.s4;
+            border-width: 1px;
+            border-color: root.enabled ? Ink.line : Ink.fg-disabled;
+            border-radius: 1px;
+            background: root.on && root.enabled ? Ink.accent : Ink.bg;
+
+            Icon {
+                kind: "check";
+                ink: #ffffff;
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: root.on;
+            }
+        }
+    }
+
+    Text {
+        text: root.label;
+        font-size: Metric.body-size;
+        font-weight: Metric.weight-body;
+        color: root.enabled ? Ink.fg : Ink.fg-disabled;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+}
+
+// ─── ToggleRow (§11.6) ──────────────────────────────────────────────────────────────────────────
+//
+// A full-width settings row with the box trailing. **The markup never writes the state** — it fires
+// `activated()` and Rust flips the model and pushes it back, so there is one writer, which is the
+// same rule `nav::Stack` gets for where you are.
+export component ToggleRow inherits Pressable {
+    in property <bool> checked: false;
+
+    pad: Geometry.page-margin;
+
+    accessible-role: AccessibleRole.checkbox;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+
+    Text {
+        horizontal-stretch: 1;
+        min-width: 0px;
+        text: root.label;
+        font-size: Metric.body-size;
+        font-weight: Metric.weight-body;
+        color: root.enabled ? Ink.fg : Ink.fg-disabled;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+
+    Rectangle {
+        width: Metric.s4;
+
+        Rectangle {
+            x: 0;
+            y: (parent.height - self.height) / 2;
+            width: Metric.s4;
+            height: Metric.s4;
+            border-width: 1px;
+            border-color: root.enabled ? Ink.line : Ink.fg-disabled;
+            border-radius: 1px;
+            background: root.checked && root.enabled ? Ink.accent : Ink.bg;
+
+            Icon {
+                kind: "check";
+                ink: #ffffff;
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                visible: root.checked;
+            }
         }
     }
 }

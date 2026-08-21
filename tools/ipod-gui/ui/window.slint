@@ -27,6 +27,22 @@ import { Geometry } from "@geometry";
 import { Bench, CradleRing } from "bench.slint";
 import { Drawer, DrawerHandle, DrawerPage } from "drawer.slint";
 import { RailRow } from "rail.slint";
+// The boundary structs and `DeviceRow` live in `primitives.slint` — the leaf every page already
+// imports. They cannot live here: this file imports `drawer.slint`, which imports every page, so a
+// page importing this one back is a cycle. `DrawerHeader` moved for the same reason.
+import {
+    DetailRow,
+    DeviceRow,
+    FieldRow,
+    FixRow,
+    GroupRow,
+    OptionRow,
+    PartRow,
+    PickRow,
+    PlanRow,
+    RefusalRow,
+    TickRow,
+} from "primitives.slint";
 
 // **LOAD-BEARING, and it is easy to miss.** A global reaches the generated Rust only if it appears
 // in the export list of the document the compiler was given as the ROOT
@@ -36,29 +52,6 @@ import { RailRow } from "rail.slint";
 // missing method rather than as a missing export — `main.rs` pushes §8.4's reduced-motion scale
 // through one and §16.6's single font family through the other.
 export { Motion, Metric } from "tokens.slint";
-
-// One device, flattened for the markup. **Every string on it is the model's**, built in `main.rs`
-// out of `settings.rs` — this file never words one, which is what stops the window and the model
-// disagreeing about what a device is.
-//
-// `ResourceRow` went with the Resources tab. Its one test —
-// `no_row_claims_a_verification_the_model_did_not_record` — was re-expressed onto
-// `Provenance::line()` rather than dropped (§16.10), and is still in `main.rs`.
-export struct DeviceRow {
-    name: string,
-    summary: string,
-    state: string,
-    write-target: string,
-    write-target-is-warning: bool,
-    chassis: color,
-    dark-chassis: bool,
-    // §7.3: can the cradle hold this one? False where a part of it has left the library, which is
-    // the refusal §20 item 1 already produces and §20 item 12 requires somewhere to show.
-    startable: bool,
-    // §7.3's label: what pressing will cost, or why it cannot be pressed. The model's sentence,
-    // verbatim.
-    cradle-label: string,
-}
 
 export component MainWindow inherits Window {
     title: "ipod-emulator";
@@ -195,6 +188,83 @@ export component MainWindow inherits Window {
     // nothing bound it, which is a drawn instrument with no producer — the shape §20 item 15 names.
     in property <float> progress: -1;
 
+    // ── §7.2's Devices page ──
+    //
+    // `devices` and `selected` above are the page's too. Nothing here is a second copy of either.
+    in property <[DetailRow]> devices-detail;
+    in property <int> devices-detail-of: -1;
+    in property <string> devices-empty-line;
+    in property <FixRow> devices-new;
+
+    // ── §11.4's Parts page ──
+    in property <[GroupRow]> parts-groups;
+    in property <[PartRow]> parts-rows;
+    in property <[DetailRow]> parts-detail;
+    in property <int> parts-detail-of: -1;
+    in property <image> parts-preview;
+    in property <bool> parts-has-preview: false;
+
+    // ── §11.6's Settings page ──
+    in property <string> setting-theme-value;
+    in property <bool> setting-theme-enabled: false;
+    in property <string> setting-theme-reason;
+    in property <bool> setting-check-updates: false;
+    in property <string> setting-toggle-reason;
+    in property <string> setting-file-name;
+    in property <string> setting-file-path;
+    in property <bool> setting-copy-enabled: false;
+    in property <string> setting-copy-reason;
+
+    // ── §11.2's Composer ──
+    //
+    // **`composer-generation` exists for exactly one job.** Every two-press control in
+    // `ui/composer.slint` binds `property <int> for-recipe: root.composer-generation` and disarms
+    // when it moves. `Pressable.armed` is component-local, and a `Fix` armed against one recipe must
+    // not fire against another; `ui/rail.slint:337-340` already solves the identical problem for
+    // repeater reuse with `for-entry: root.e.id`.
+    in property <string> composer-title;
+    in property <string> composer-which-value;
+    in property <string> composer-runs-value;
+    in property <string> composer-named-value;
+    in property <bool> composer-which-enabled: true;
+    in property <bool> composer-runs-enabled: false;
+    in property <bool> composer-named-enabled: false;
+    in property <string> composer-which-reason;
+    in property <string> composer-runs-reason;
+    in property <string> composer-named-reason;
+    in property <string> composer-region-text;
+    in property <bool> composer-region-emphatic: false;
+    in property <string> composer-refusal-why;
+    in property <bool> composer-refusal-open: false;
+    in property <bool> composer-has-fix: false;
+    in property <FixRow> composer-fix;
+    in property <FixRow> composer-create;
+    in property <int> composer-generation: 0;
+    in property <[PlanRow]> composer-plan;
+    // **Its own two numbers, not the Work page's.** `main::ledger_lines` is one function called
+    // twice — the Composer bills the recipe being composed and the Work page bills the run in
+    // progress, and at the moment both are true they are different numbers. One pair of properties
+    // would print one bill on two pages.
+    in property <string> composer-ledger-download;
+    in property <string> composer-ledger-disk;
+    in property <bool> composer-ledger-warn: false;
+    in property <[PickRow]> composer-picks;
+    in property <[FieldRow]> composer-fields;
+    in property <[TickRow]> composer-ticks;
+    in property <[OptionRow]> composer-options;
+    in property <int> composer-open-field: -1;
+    in property <[RefusalRow]> composer-refusals;
+    in property <string> composer-title-auth;
+    in property <FixRow> composer-copy-command;
+    in property <string> composer-no-ipod;
+    // Level ③'s one `Field`. Separate from `composer-fields` because all four level pages are
+    // instantiated at once in the drawer's strip — §16.3, `visible` and never `if` — so one model
+    // cannot serve two of them.
+    in property <FieldRow> composer-name-field;
+    in property <string> composer-stem;
+    in property <string> composer-taken;
+    in property <string> composer-runs-disabled;
+
     callback start-device(int);
     // §7.6's `why ›`: put this device's refusal on the Rail, then open the page that owns it.
     callback explain(int);
@@ -206,6 +276,37 @@ export component MainWindow inherits Window {
     callback rail-dismiss(int);
     callback rail-cancel(int);
     callback copy-text(string);
+
+    // §7.2. `start-device(int)` and `selected` are deliberately absent from this list: the Devices
+    // page presses the bench's own callback and writes the bench's own index.
+    callback device-expand(int, bool);
+    // `RowAction`, then the device index. It subsumes the contract's `device-remove(int)`: a
+    // device's `Remove` is a line inside its own `Expand`, where `DetailRow` already carries the
+    // two presses and the sentence that has to be read before the first — and `DeviceRow` carries
+    // no consequence, because §20 item 4 deleted the last field that was computed and bound to
+    // nothing.
+    callback device-row-action(int, int);
+    callback device-new();
+
+    callback parts-expand(int, bool);
+    callback parts-group-action(int, int);
+    callback parts-row-action(int, int);
+
+    // The row index. `Settings::save()` runs immediately: a preference that does not survive the
+    // launch it was set in is not a preference.
+    callback setting-toggled(int);
+
+    callback composer-open(int);
+    callback composer-expand(int, bool);
+    callback composer-pick(int, int);
+    callback composer-type(int, string);
+    callback composer-reveal(int);
+    callback composer-tick(int, bool);
+    // `composer-fix` is the `FixRow` above; this is what pressing it does. Slint refuses a callback
+    // and a property of one name, and it is right to.
+    callback composer-fix-pressed();
+    callback composer-act(int);
+    callback composer-commit();
 
     property <bool> has-devices: root.devices.length > 0;
     property <DeviceRow> current: root.has-devices ? root.devices[root.selected] : root.empty-device;
@@ -473,6 +574,124 @@ export component MainWindow inherits Window {
                 ledger-disk: root.ledger-disk;
                 ledger-note: root.ledger-note;
                 ledger-warn: root.ledger-warn;
+
+                devices: root.devices;
+                // §7.2: **one number**, written from the bench's `←`/`→` and from a Devices row,
+                // read by both. `<=>` rather than two properties and a callback, because two
+                // spellings of where you are is how `Esc` came to have three meanings.
+                selected <=> root.selected;
+                devices-detail: root.devices-detail;
+                devices-detail-of: root.devices-detail-of;
+                devices-empty-line: root.devices-empty-line;
+                devices-new: root.devices-new;
+
+                parts-groups: root.parts-groups;
+                parts-rows: root.parts-rows;
+                parts-detail: root.parts-detail;
+                parts-detail-of: root.parts-detail-of;
+                parts-preview: root.parts-preview;
+                parts-has-preview: root.parts-has-preview;
+
+                setting-theme-value: root.setting-theme-value;
+                setting-theme-enabled: root.setting-theme-enabled;
+                setting-theme-reason: root.setting-theme-reason;
+                setting-check-updates: root.setting-check-updates;
+                setting-toggle-reason: root.setting-toggle-reason;
+                setting-file-name: root.setting-file-name;
+                setting-file-path: root.setting-file-path;
+                setting-copy-enabled: root.setting-copy-enabled;
+                setting-copy-reason: root.setting-copy-reason;
+
+                composer-title: root.composer-title;
+                composer-which-value: root.composer-which-value;
+                composer-runs-value: root.composer-runs-value;
+                composer-named-value: root.composer-named-value;
+                composer-which-enabled: root.composer-which-enabled;
+                composer-runs-enabled: root.composer-runs-enabled;
+                composer-named-enabled: root.composer-named-enabled;
+                composer-which-reason: root.composer-which-reason;
+                composer-runs-reason: root.composer-runs-reason;
+                composer-named-reason: root.composer-named-reason;
+                composer-region-text: root.composer-region-text;
+                composer-region-emphatic: root.composer-region-emphatic;
+                composer-refusal-why: root.composer-refusal-why;
+                composer-refusal-open: root.composer-refusal-open;
+                composer-has-fix: root.composer-has-fix;
+                composer-fix: root.composer-fix;
+                composer-create: root.composer-create;
+                composer-generation: root.composer-generation;
+                composer-plan: root.composer-plan;
+                composer-ledger-download: root.composer-ledger-download;
+                composer-ledger-disk: root.composer-ledger-disk;
+                composer-ledger-warn: root.composer-ledger-warn;
+                composer-picks: root.composer-picks;
+                composer-fields: root.composer-fields;
+                composer-ticks: root.composer-ticks;
+                composer-options: root.composer-options;
+                composer-open-field: root.composer-open-field;
+                composer-refusals: root.composer-refusals;
+                composer-title-auth: root.composer-title-auth;
+                composer-copy-command: root.composer-copy-command;
+                composer-no-ipod: root.composer-no-ipod;
+                composer-name-field: root.composer-name-field;
+                composer-stem: root.composer-stem;
+                composer-taken: root.composer-taken;
+                composer-runs-disabled: root.composer-runs-disabled;
+
+                device-expand(i, on) => {
+                    root.device-expand(i, on);
+                }
+                device-row-action(a, i) => {
+                    root.device-row-action(a, i);
+                }
+                device-new => {
+                    root.device-new();
+                }
+                start-device(i) => {
+                    root.start-device(i);
+                }
+
+                parts-expand(id, on) => {
+                    root.parts-expand(id, on);
+                }
+                parts-group-action(g, a) => {
+                    root.parts-group-action(g, a);
+                }
+                parts-row-action(a, id) => {
+                    root.parts-row-action(a, id);
+                }
+
+                setting-toggled(n) => {
+                    root.setting-toggled(n);
+                }
+
+                composer-open(f) => {
+                    root.composer-open(f);
+                }
+                composer-expand(f, on) => {
+                    root.composer-expand(f, on);
+                }
+                composer-pick(f, id) => {
+                    root.composer-pick(f, id);
+                }
+                composer-type(f, t) => {
+                    root.composer-type(f, t);
+                }
+                composer-reveal(f) => {
+                    root.composer-reveal(f);
+                }
+                composer-tick(os, on) => {
+                    root.composer-tick(os, on);
+                }
+                composer-fix-pressed => {
+                    root.composer-fix-pressed();
+                }
+                composer-act(f) => {
+                    root.composer-act(f);
+                }
+                composer-commit => {
+                    root.composer-commit();
+                }
 
                 close => {
                     root.drawer-toggled();

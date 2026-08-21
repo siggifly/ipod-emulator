@@ -1,0 +1,136 @@
+// Settings — docs/GUI.md §11.6, §9.1, §9.4, §14.3.
+//
+// **One page, three rows, and it is not a settings app.** `Settings::chassis`,
+// `Settings::check_updates_on_start` and the theme were settled decisions with no surface at all:
+// §15 said *"there are three program settings and this is one of them"* and §14.3 argued the drawer
+// is not a sidebar partly because *"this program has five resource groups and three settings"* — and
+// then no page owned any of them.
+//
+// **What the operator rejected was a settings screen reachable only by destroying the running
+// machine, not settings.** This page is reachable while the machine runs, which is the whole cure.
+//
+// **`chassis` is deliberately not one of the three.** The model's own comment says it is *"the
+// window's iPod, not the machine's identity"*, so it is an override on the **device's** page; a
+// global override for a per-device fact is how one setting comes to mean two things.
+//
+// **Never empty — three rows, always** (§9.1). Two of them are disabled today and both say why:
+//
+//   - **Theme** has one palette. `ui/tokens.slint`'s `Ink` is one measured light palette with no
+//     dark values and nothing in the program keying on a scheme, so a Theme control would write a
+//     field no pixel reads — which is exactly the landmine §17.Q8 names about `Settings::mode`. It
+//     carries **no escape hatch**, because there is no command that themes this program and §9.4's
+//     rule is to name a real one or none.
+//   - **Copy path** needs a clipboard this dependency graph does not reach.
+//
+// The page states no policy and words no sentence beyond its own three labels and its page name.
+
+import { Ink, Metric } from "tokens.slint";
+// **No `@geometry` import.** Every size on this page belongs to `Row`, `ToggleRow`, `DrawerHeader`
+// and `Scroll`, which read the generated global themselves — and
+// `the_markup_imports_the_generated_global_and_nothing_shadows_it` refuses a file that imports it
+// and never reads it, because an import nobody uses is the next place a shadowing one hides.
+import { DrawerHeader, Row, Scroll, ToggleRow } from "primitives.slint";
+
+export component SettingsPage inherits Rectangle {
+    in property <string> theme-value;
+    in property <bool> theme-enabled: false;
+    in property <string> theme-reason;
+    in property <bool> check-updates: false;
+    in property <string> toggle-reason;
+    in property <string> file-name;
+    in property <string> file-path;
+    in property <bool> copy-enabled: false;
+    in property <string> copy-reason;
+
+    callback back-pressed();
+    callback toggle-updates();
+    callback copy-path();
+
+    background: Ink.bg;
+    accessible-role: AccessibleRole.region;
+    accessible-label: "Settings";
+
+    VerticalLayout {
+        spacing: 0px;
+
+        DrawerHeader {
+            back: "Menu";
+            title: "Settings";
+            back-pressed => {
+                root.back-pressed();
+            }
+        }
+
+        // The page is three rows and cannot overflow a 312 px drawer — but it is inside a `Scroll`
+        // for the same reason `MenuPage` is: two of the three are disabled and therefore
+        // `ROW_H + FIELD_REASON`, and a drawer whose window has been dragged to its floor still has
+        // to reach the third by keyboard. A clipped item is not merely invisible — `move_focus`
+        // recovers one only when the hiding ancestor **is** a Flickable.
+        scroll := Scroll {
+            vertical-stretch: 1;
+            min-height: 0px;
+            preferred-height: 0px;
+            viewport-height: body.preferred-height;
+
+            body := VerticalLayout {
+                width: scroll.width;
+                alignment: start;
+                spacing: 0px;
+                accessible-role: AccessibleRole.list;
+                accessible-label: "Settings";
+
+                Row {
+                    index: 0;
+                    count: 3;
+                    label: "Theme";
+                    value: root.theme-value;
+                    enabled: root.theme-enabled;
+                    reason: root.theme-reason;
+                    // §9.4's second kind: *this is not finished, by us*. It names no escape hatch
+                    // because there is none — see this file's header.
+                    machine-rule: false;
+                    chevron: root.theme-enabled;
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                ToggleRow {
+                    label: "Check for updates on launch";
+                    checked: root.check-updates;
+                    // Non-empty only when the write failed. `Settings::save` returns `io::Result`
+                    // and a read-only home used to be swallowed, so a failure is a sentence rather
+                    // than a control that silently does not stick.
+                    consequence: root.toggle-reason;
+                    activated => {
+                        root.toggle-updates();
+                    }
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                // §11.6: *a preference nobody can find is one nobody can reset.* The path is
+                // `Settings::path()`, in `mono`, on the row's own fact line.
+                Row {
+                    index: 2;
+                    count: 3;
+                    label: "Settings file";
+                    value: root.file-name;
+                    sub: root.file-path;
+                    // §6.2 gives paths, hashes, serials and addresses to `mono`.
+                    sub-mono: true;
+                    enabled: root.copy-enabled;
+                    reason: root.copy-reason;
+                    machine-rule: false;
+                    activated => {
+                        root.copy-path();
+                    }
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+            }
+        }
+    }
+}
