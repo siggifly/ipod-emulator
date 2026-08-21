@@ -90,8 +90,16 @@ i-slint-backend-winit = { version = "1.17", default-features = false, features =
 # opaque ObjC object either way, so reinterpreting it as the 0.3 type is sound; resolving the `use`
 # against the 0.2 crate would not compile.
 [target.'cfg(target_os = "macos")'.dependencies]
+#
+# `NSWorkspace` joins `NSScreen` for docs/GUI.md §8.4: `accessibilityDisplayShouldReduceMotion` is
+# the platform's own answer and Slint has none — a grep for `reduced.motion` across `i-slint-core`,
+# `i-slint-common` and `builtins.slint` returns nothing. It is a feature of a crate that is already
+# compiled, so it adds **no crates**: `cargo tree -p ipod-gui | wc -l` is the same before and after.
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["NSScreen"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "NSScreen",
+    "NSWorkspace",
+] }
 
 # 0.61, not 0.52: both are in the Windows tree (0.61 via muda and softbuffer, 0.52 via winit and
 # glutin) and 0.52 would be a third copy. `Win32_Foundation` and `Win32_UI_WindowsAndMessaging` are

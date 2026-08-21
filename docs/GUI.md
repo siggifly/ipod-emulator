@@ -360,6 +360,20 @@ Two more fields, both cheap and both currently unrepresentable:
 **The bench is not a place you can leave**, because there is nowhere above it. The drawer is a set of
 pages you visit. Fullscreen is a surface the machine has, not a mode the window is in.
 
+**The bottom-right 420 × 88, decided 2026-08-21.** *The drawer is full client height above the
+shelf* **and** *the shelf narrows to W − 420* cannot both be true of the same rectangle: between them
+they leave the corner where the drawer's height stops and the shelf's width stops belonging to
+nothing. §11.2's own arithmetic — 803 px on the operator's machine, 722 at the window minimum — is
+computed as `client − SHELF`, so the drawer's height is not the negotiable half. **The shelf's band
+background and its 1 px top rule span the full client width; only the shelf's three content rows
+narrow to `W − 420`.** Nothing is unpainted, the drawer covers no shelf content, row 3 keeps the
+narrowed measure §7.5 asks for, and the bottom band stays continuous as §7's own drawing shows it.
+
+**And the drawer has to be *told* that height.** A component's root element cannot read `parent` —
+Slint says `Cannot access id 'parent'` — and it must not read the window's own height either (§16.1),
+so the client area is a wrapping element at `100%` and its height is passed in. Letting each use site
+write `height: <something> - SHELF` would put this decision in two files and let them disagree.
+
 **`Esc` is not on that diagram and that is the point.** It has exactly one definition, in §16.8, and
 it only ever goes *outwards*. The previous revision listed it as a way *into* the drawer while also
 defining it as the way out, and also as the way out of fullscreen — three meanings for one key, of
@@ -385,7 +399,7 @@ first — and note that this revision adds three (**Cradle**, **Gauge**, **Scrol
 | **Cradle** | the fixture the device sits in. **Carries every piece of UI state the device is forbidden to carry**: startable, running, refused, focused | `Button` + `accessible-label` + `accessible-description` | the bench, and only there |
 | **Row** | one thing, on a line, 44 px, label leading / value at 232 px / chevron trailing | `ListItem` inside a `List` | every drawer page |
 | **Expand** | in-place detail for a Row; pushes the rows below it down | `accessible-expandable` + `-expanded` + `accessible-action-expand` | a refusal's paragraph, what is inside a ROM |
-| **Field** | a labelled input, which may be **locked** and states why. Reserves a 34 px two-line reason slot whether or not it is filled | `TextInput` / `Combobox` | identity, names, paths |
+| **Field** | a labelled input, which may be **locked** and states why | `TextInput` / `Combobox` | identity, names, paths |
 | **Gauge** | one measured number: label leading, value trailing in tabular mono, with a **three-state freshness** — live / stale / not measured | `Text` | the Readout, and nothing else |
 | **Rail** | a stream of plan, progress and results | `Region` + `accessible-live-region: polite` | the drawer's Work page |
 | **Scroll** | the **body** of a drawer page, between its fixed header and any pinned footer row. Never the bench, never the shelf, never the well | `Flickable`, `accessible-*` on its children | Readout, Parts, Composer, Games |
@@ -399,12 +413,25 @@ headings, six inter-group gaps and a four-line paragraph — about 1 970 px) dra
 itself over the well and off the bottom of the window, silently. §11.4's Parts and §11.2's Composer
 are the same shape. That is the exact failure §16.2 names: *it looks fine and it is wrong.*
 
-**Scroll's two costs are real and are accepted with their numbers** (§16.11): a pressable inside a
-`Flickable` gets a **100 ms** press-forward delay and an **8 px** drag threshold
-(`i-slint-core-1.17.1/items/flickable.rs:366-370`), and a `Flickable` that has scrolled captures
-further wheel events for **800 ms** (`:376`). The first collides with `tight`'s 140 ms press
-feedback and is the reason §11.2 is re-cut into three depth levels so that the page that gets
-pressed most does not usually need to scroll at all.
+**Scroll's costs are real and are accepted with their numbers** (§16.11): an **8 px** drag threshold
+(`i-slint-core-1.17.1/items/flickable.rs:366`), and a `Flickable` that has scrolled captures further
+wheel events for **800 ms** (`:376`). *(A third — a **100 ms** press-forward delay — was accepted
+here and is **retired**: it applies only to an interactive Flickable, and `Scroll` declares
+`interactive: false`. What replaces it is no touch-drag-to-flick. See §16.11.)* §11.2 is still re-cut
+into three depth levels, because 1 090 px does not fit in 722.
+
+**Amended 2026-08-21: the 34 px reason slot belongs to every pressable thing, not to `Field`.** It
+was written as `Field`'s alone, and §9.4's rule — *a disabled control states why, and stays in the
+tab order* — applies to a `Row` as much as to an input. So the slot is reserved by the one
+construction §16.5 specifies, which `Row` inherits: **a disabled `Row` is 44 + 34 = 78 px, not 44.**
+
+That is a real cost and it is named rather than discovered. §11.2's page budget counts Rows at 44
+and Fields at 44 + 34 separately, so any page sized against that arithmetic is short: the drawer's
+own root page is 556 px rather than 380, which is what put it past the bottom of a 312 px drawer
+(§16.11). The alternative — showing a `Row`'s reason on focus and hover *inside* the 44 px — is a
+control that changes what it says without changing size, and there is nowhere in 44 px for two
+lines of `label` beside a label and a value. This is the edit §5's own *"a tenth requires editing
+this document first"* rule demands, made rather than left implicit.
 
 **Retired: Tile and Sheet.** Tile went with the device grid (rejected) and the carousel (§18). Sheet
 went because the drawer *is* the pushed surface, and having both would be two mechanisms for one
@@ -484,6 +511,20 @@ device is redundant, and its line box was eating 36 px of a vertical budget with
 **`readout` earns the seventh slot the sixth vacated**, because 25 live numbers want tabular figures
 — without them a value that changes from `1 612 004 992` to `1 612 500 112` reflows its own digits,
 which reads as motion and is not.
+
+**Two of the columns above are not properties Slint has, and both got substitutes in the building
+(2026-08-21).**
+
+- **The `/ 26`, `/ 22`, `/ 20`, `/ 16`, `/ 18` line heights.** `Text` has **no `line-height`** in
+  Slint 1.17 — zero hits across `builtins.slint` — and a `Text`'s vertical `LayoutInfo` is
+  `min == preferred ==` its own font metric (`items/text.rs:684`). So **a line box is a container
+  height**: `LINE_TITLE = 26`, `LINE_BODY = 20`, `LINE_LABEL = 16` are declared in
+  `src/geometry.rs` and the row that carries the type sets them. The other two arrive with their
+  first use site.
+- **`readout`'s tabular figures.** There is no font-feature or font-variant control in the language
+  at all. What is available is choosing a **monospace family**, which §6.2 already does for that
+  role — the tabular digits then come from the family rather than from a feature flag. The reason
+  the role exists is unchanged; only the mechanism is.
 
 One family: the system UI font, because it is the only one right on three platforms and this program
 should not ship a webfont to draw a settings page. One monospace, chosen per platform in Rust and
@@ -916,6 +957,24 @@ title.
 device itself is `AccessibleRole::Image` with the panel's own description, and announces nothing
 about the program.
 
+**Three things the building added to this section (2026-08-21).**
+
+- **`accessible-enabled` is the announcement, never the gate.** Neither the cradle's `Enter` / `Space`
+  handler nor the drawn centre button may check `startable`: §7.4 keeps the drawn control live at all
+  times, and Rust is the only thing that can say *which part is gone*. Gating the keyboard half and
+  not the pointer half made `Return` a dead key on exactly the device §20 item 12 exists for, while
+  a click on the same device filed the refusal.
+- **The window has to hand the cradle focus, and a `forward-focus` cannot reach it.** The fixture is
+  an internal element of a component, so the route is a `public function focus-cradle()` called from
+  the window's `init`. Without it the window opens with focus on the root scope, where `Return` means
+  nothing, and the one control the whole program is built around is a `Tab` away with no ring on it.
+- **The `●` in every label above is a glyph nothing has proved.** U+25CF, on the one line the whole
+  bench is built around, in the system UI font, on three platforms — and nothing in `.slint` or in
+  Rust can ask whether a font has it (§16.6). §6.7's answer for a symbol is that it is **drawn**, and
+  these labels come from Rust, which has no `Path`. Either the wording loses it or the cradle label
+  gains a drawn mark beside a shorter sentence. **Unresolved, and it is an operator decision** — the
+  table above is the design's own wording and this document is not the place to quietly reword it.
+
 ### 7.4 The wheel, the buttons and the hold switch — all of them the machine's
 
 **Every drawn control goes to the machine, always, and to nothing else.** With no machine the only
@@ -1148,7 +1207,8 @@ and the shelf's top rule carries the bar.
 ### 9.3 Failed
 
 **Stays until dismissed.** Says what was attempted, what happened in the program's own words, and
-what to do next — with the next step as a **real pressable control**, never prose. Seven classes:
+what to do next — with the next step as a **real pressable control**, never prose. **Ten classes**
+*(the prose said "Seven" over a table of nine until 2026-08-21, and the tenth is the row below)*:
 
 | class | example wording | next step |
 |---|---|---|
@@ -1160,7 +1220,22 @@ what to do next — with the next step as a **real pressable control**, never pr
 | **space, mid-write** | `Stopped at 41.2 GB. my-5.5g.img.part is 41.2 GB and cancelling deletes it.` | `Choose somewhere else…` · `Cancel` |
 | **volume** | `That folder is on a FAT32 volume. FAT32 cannot hold a file larger than 4 GiB and has no sparse files, so an 8 GiB drive image would be written in full and would stop at exactly 4 294 967 296 bytes.` | `Choose somewhere else…` |
 | **permission** | the path, and what to change | `Reveal` |
-| **tool missing** | `Install p7zip (brew install p7zip, apt install p7zip-full), or unpack it yourself into <path>.` | — |
+| **tool missing** | `7z is not on the path, and it is what this step runs.` | — · **a named command in `mono`**, one per tool |
+| **missing** *(added 2026-08-21)* | `my-5.5g.img is not where it was — /Volumes/Work/my-5.5g.img.` | `Provide the file yourself…` · `Devices` |
+
+**`missing` is the tenth and §20 items 1 and 12 are why.** §3.3's refusal — *a part of this device
+is no longer on disk* — is the one failure this program can already produce, and none of the nine
+covers it. Filing it under `permission` would be the program asserting a fact about somebody's
+filesystem it did not observe.
+
+**Two things about it that are true today and are worth saying rather than discovering.** First,
+`tool missing` is the one class with **no** next step at all: there is no control this program could
+draw that installs 7-Zip, so what it carries instead is a command a person can paste, in `mono`,
+under the paragraph. Second, `missing` currently resolves to **zero live controls**: `Provide the
+file yourself…` needs a file picker or a drop target and this build has neither, and `Devices` needs
+a drawer page that is not built. Both are drawn **disabled with their reason** per §14.1, and only
+`Devices` has a real escape hatch (`ipod-boot setup`). That is the honest state of the first failure
+anybody will see, and §17.Q3 is the operator's call that changes it.
 
 **`volume` is a class because free bytes are not the only thing a filesystem can refuse.** Unpack the
 release zip onto a FAT32 USB stick — which is what a stick that also has to work in a car is — and
@@ -1211,6 +1286,16 @@ same escape hatch — §11.3, and it exists because the two surfaces contradicte
 refusal a curious user hits.
 
 ### 9.5 And a fifth, because the alternative is the 560 px bug again
+
+> **Before this pane is built, one measured fact about the boolean.** `too_short` goes **true on
+> every launch, for one or two events, on a display that is comfortably tall enough.** Slint's own
+> `adjust_window_size_to_satisfy_constraints` clamps a not-yet-known size up to the declared minimum,
+> so the first `Resized` carries exactly `MIN_HEIGHT` — measured with `IPOD_LAYOUT=1`, which prints
+> `measured 400.0 logical … too short for 1:1` immediately before a second event at 846. Nothing
+> reads the boolean today so nothing is visible; the moment this pane exists it will **flash on every
+> start** unless the first `Resized` whose height equals `MIN_HEIGHT`, before the window has ever
+> reported a non-zero size, is suppressed. Written down while the observation is fresh rather than
+> rediscovered as a flicker.
 
 **The display is too short to show the panel at 1:1.** This is a designed state, not an overflow, and
 it is reachable on real hardware people own — 1280 × 800 and 1366 × 768 can never satisfy it at any
@@ -2612,9 +2697,24 @@ Consequences, and they are constraints rather than advice:
   plain constants that do not read `hero`.** They are: 400 and 846. If either were bound to `hero` in
   the same frame the loop would close and oscillate, and this is the sentence that stops somebody
   "tidying" it.
+
+  **And the compiler will not catch that one — measured 2026-08-21, three ways.** With
+  `preferred-height: root.hero + Geometry.chrome-pref` on the Window,
+  `cargo build -p ipod-gui 2>&1 | grep -ci 'binding loop'` prints **0**; so does a version reading a
+  property bound to the client's height. A genuine two-property cycle prints **3**
+  (*"The binding for the property 'pb' is part of a binding loop (root.pa -> root.pb -> root.pa)"*),
+  and a deliberate `visible: false` on the root reaches the same grep as a `cargo:warning=` — so the
+  plumbing is real and the *window-layout* case simply is not a cycle in the property graph: `hero`
+  is an `in property` and reads nothing back. **The grep is a general regression net and is not the
+  guard for this paragraph.** The guard is the text sweep
+  `the_window_constants_do_not_read_the_hero`, which does exist and does go red on all three shapes.
 - **The container that holds the device must declare no intrinsic height** — `min-height: 0px;
-  preferred-height: 0px` — so the arrow points one way there too. `window.slint` claims to do this
-  today and does not; `stage-area` sets neither.
+  preferred-height: 0px` — so the arrow points one way there too. Every container between the window
+  and the device does it now: `Bench`, the drawer page's `Scroll`, and the `Flickable` inside it.
+- **`root.height` is banned in markup; `root.width` is not.** The vertical axis is where the loop
+  closes; the horizontal one has no pushed-in size the layout influences, and the drawer *pushes*, so
+  the well's width has to come from the window's.
+  `nothing_in_the_markup_reads_the_windows_own_height` is the mechanical form.
 - **There are no responsive breakpoints and there cannot be.** "One layout, nothing collapses at a
   breakpoint" is not a taste rule, it is the only thing Slint permits. §9.5's too-short state is
   therefore decided **in Rust** and pushed in as a boolean.
@@ -2752,8 +2852,33 @@ knowing before the first Linux CI job, and worth not reporting one platform's nu
 
 Then: `Region` / `Complementary` / `Main` for surfaces,
 `accessible-live-region: polite` for the Rail and the Readout, `accessible-expandable` / `-expanded` /
-`accessible-action-expand` for Expand, `accessible-item-selectable` / `-selected` / `-index` /
-`-count` for lists, `accessible-enabled` and `accessible-description` for every disabled control.
+`accessible-action-expand` for Expand, `accessible-item-selectable` / `accessible-item-selected` /
+`accessible-item-index` / `accessible-item-count` for lists, `accessible-enabled` and
+`accessible-description` for every disabled control.
+
+*(**The list spellings are corrected 2026-08-21.** This section abbreviated them to `-index` and
+`-count`, which are not properties: `accessible-index` and `accessible-count` do not compile.
+`no_accessible_property_is_set_without_a_constant_role` checks the spelling as well as the role,
+because the abbreviation is the sort of thing that gets copied out of a design document.)*
+
+**`ItemRc::is_visible()` is a GEOMETRY test, not a read of the `visible` property**, and anything
+resting on ARIA has to know it. It intersects an item's absolute rect with its absolute clip rect
+(`i-slint-core-1.17.1/item_tree.rs:399-408`) and never consults `visible` at all; `visible: false`
+reaches the accessible tree only because it lowers to a `Clip` element that empties that rect
+(`passes/visible.rs`). Two consequences that bit:
+
+- An element hidden with `opacity: 0` is **fully focusable and fully clickable** — `Opacity`'s input
+  filter is `ForwardAndIgnore` and `is_visible()` never looks at it. `opacity` is not a way to hide
+  a control.
+- An element clipped away by an ancestor is out of the accessible tree **and out of the tab order**,
+  with one exception: `WindowInner::move_focus` calls `is_visible_or_clipped_by_flickable()`
+  (`window.rs:1328`), which recovers an item only when the hiding ancestor is a `Flickable`. A
+  Rectangle's `clip` has no such recovery — see §16.11's `MenuPage` note.
+
+So a closed drawer parked at exactly the client's edge is out of the tree **by a zero-width margin**,
+which is not a guarantee. It carries an explicit `open` boolean as well, and
+`the_closed_drawer_gate_is_a_boolean_and_not_only_geometry` is what keeps that term from being tidied
+away — the behavioural test alone passes with it deleted, because the parking happens to be exact.
 
 **One correction, made when the feature was turned on.** This section used to say
 `AccessibleRole::TextInput` additionally has a *behavioural* job — that §16.8's shortcut suppression
@@ -2781,7 +2906,7 @@ Ctrl+, elsewhere; write the table with one column and use `Platform.os` only for
 | key | does |
 |---|---|
 | `Tab` / `⇧Tab` | focus, in document order. Never a positive tabindex |
-| `Esc` | **one definition, outwards, in order**: leaves fullscreen · then closes an Expand · then closes the drawer · then, from `Running`, parks. **From `Booting` it powers off** |
+| `Esc` | **one definition, outwards, in order**: leaves fullscreen · then closes an Expand · then **goes back one drawer level** · then closes the drawer · then, from `Running`, parks. **From `Booting` it powers off** |
 | `Enter` / `Space` | the primary action — on the bench, the centre button; on §9.5's bench, its primary row |
 | `←` `→` | the wheel while there is a machine; previous / next device when there is not |
 | `↑` `↓` | the wheel, always |
@@ -2799,6 +2924,15 @@ drawer, §16.8 defined it as a pure exit, and §12.6 said it was the way out of 
 might instead have initiated a 1.6 GB park. It is deleted from §4's list of entrances (there are
 already four) and the order above is total. And **from `Booting` it powers off rather than parking**,
 because parking a boot is a 1.6 GB write of a state nobody wants.
+
+**Amended 2026-08-21 to five steps**, in the shape §5 used when it admitted a ninth primitive: the
+drawer-level pop was in the built order and not in this table, so the document promised a different
+`Esc` from the one the program has. It mirrors the header's `‹`, which is what makes the key and the
+control agree; the cost is that the deepest surface takes **six** presses to reach the bench
+(fullscreen, an Expand, three levels, close) rather than the three an earlier draft of the test
+asserted. `every_surface_can_be_left` derives its bound from those terms — `2 + DRAWER_MAX_DEPTH + 1`
+— and asserts the deepest surface reaches it exactly, so the bound is met rather than merely
+respected. **Neither `Esc` nor `⌘\` ever writes `depth`**, so reopening returns you where you were.
 
 **One exception, and it is focus rather than modality.** *Single-letter shortcuts and `Space` are
 suppressed while an element with `AccessibleRole::TextInput` holds focus.* Only modified keys
@@ -2829,10 +2963,13 @@ bar**, so on macOS it costs nothing from §9.6's budget.
 
 Two caveats, both real:
 
-- **`MenuBar` "must not be in a `for` or an `if`"**, so it cannot be conditionally declared. Two
-  top-level `.slint` components importing one shared `Bench` component, selected by `cfg` in
-  `main.rs`, is the way to have it on macOS and not elsewhere — and that is the same `cfg` the
-  fullscreen row already needs.
+- ~~**`MenuBar` "must not be in a `for` or an `if`"**~~ — **corrected 2026-08-21, checked in the
+  compiler.** Only `for` is rejected: `process_window` errors under
+  `if !repeated.is_conditional_element` (`passes/lower_menus.rs:465-471`) and threads the condition
+  into the generated `MenuBarImpl`. So
+  `if Platform.os == OperatingSystemType.macos : MenuBar { … }` compiles, and the
+  two-top-level-components workaround is **not needed for the menu bar**. It is still needed for
+  nothing else here, so it goes.
 - **On Linux there is no muda**, so Slint renders the bar itself — which costs outer height and may
   need a style this crate does not compile in. **Measure it before trusting it.** §17.Q4.
 
@@ -2940,9 +3077,31 @@ numbers rather than discovered later:
 
 | | value | consequence |
 |---|---|---|
-| `FORWARD_DELAY` | **100 ms** (`:370`) | a press inside reaches inner children 100 ms late, which collides with `tight`'s 140 ms press feedback. §11.2's three-level re-cut is the mitigation: the page you press most does not need a Flickable at all |
+| `FORWARD_DELAY` | **100 ms** (`:370`) | **retired — see below.** It applies only to an *interactive* Flickable |
 | `DISTANCE_THRESHOLD` | **8 px** (`:366`) | a drag under 8 px is a press, over it is a scroll. Fine for rows; it is the reason nothing draggable lives inside a Scroll |
 | `SCROLL_FILTER_DURATION` | **800 ms** (`:376`) | once it has scrolled, it captures further wheel events for 800 ms. A nested scroll would be unusable, so there are none |
+
+**Corrected 2026-08-21, in the building: `FORWARD_DELAY` is not paid.** `Scroll` declares
+`interactive: false`, and `Flickable::input_event_filter_before_children` returns `ForwardAndIgnore`
+for every non-wheel event on that condition (`flickable.rs:155-158`), as does `input_event`
+(`:167-170`) — so `handle_mouse_filter`, and with it `DelayForwarding(FORWARD_DELAY)`, is never
+reached. **Wheel events fall through in both places**, so the wheel and the trackpad still scroll.
+What replaces the cost is **no touch-drag-to-flick**, which matters on a touchscreen laptop and not
+on a trackpad. §11.2's three-level re-cut still stands on its other leg: 1 090 px does not fit in
+722.
+
+**And a page whose own content overflows the drawer needs one.** `MenuPage` — seven rows, six of
+them disabled and therefore `ROW_H + FIELD_REASON` = 78 px each — is 556 px inside a drawer that is
+312 at the declared window minimum, and it shipped without a Scroll. A clipped item is not merely
+invisible: `WindowInner::move_focus` gates tab navigation on `is_visible_or_clipped_by_flickable()`
+(`window.rs:1328`), which recovers an item only when the hiding ancestor **is** a Flickable, and the
+drawer clips with a Rectangle. Three rows were unreachable by pointer, by keyboard and by an
+assistive technology at once, with no indicator that they existed.
+
+**The keyboard route into a Scroll is `Tab`, and that is an honest gap.** §16.8 gives `↑`/`↓` to the
+machine's wheel, always, so scroll-into-view is driven from each `Pressable`'s `focus-gained`. That
+reaches every interactive thing and nothing else: a page of pure `Gauge`s would be unreachable by
+keyboard below the fold.
 
 Two design rules on top:
 
@@ -3050,6 +3209,23 @@ immediately and would make the iPod change size under a drag, which is principle
 which `k` is in force, so it is a stated limitation rather than a mystery. If it turns out to annoy,
 the cheapest fix is a one-line offer in that slot (`2× fits this window — relaunch to use it`), not a
 live recompute.
+
+**Q12 — four numbers in `src/geometry.rs` that this document does not state, and one that nobody has
+measured.** Added 2026-08-21, because they are load-bearing and were derived rather than read:
+
+| constant | value | where it came from |
+|---|---|---|
+| `DRAWER_HEADER_H` | 44 | one `Row`, so a header and the rows under it share a rhythm. §11.2's *"≈ 60"* covers *the page header **and** the group rules together* — an approximation inside a total, not a declaration |
+| `WORK_FOOTER_H` | 72 | §10.1's three `label` line boxes, plus 12 above and 12 below |
+| `RAIL_VERB_W` | 64 | **nobody has measured this one.** Every other constant here is quoted or derived; the longest verb is `synthesise` and it appears at first-run step 1, the first thing a new user ever sees this program do. If it elides, it elides there |
+| `SHELF`'s decomposition | 12 + 26 + 20 + 16 + 12 = **86**, or 87 with the top rule, against a declared **88** | §7.5's own parts do not sum to §7.5's own total, and `CHROME_MIN` (154) and `CHROME_PREF` (190) are both built on the 88, so the 88 is the load-bearing half. Two pixels sit below row 3 inside the bottom padding |
+
+**Recommendation: look at all four on screen before Phase 5, and answer the shelf one first.** The
+first three are inventions with their derivations written down, which is the least bad kind; the
+fourth is a disagreement between two numbers in one section, and **do not invent a `SHELF_SPARE` term
+to absorb it** — that is a second source of truth inside the section whose rule is that constants live
+in one place. `the_shelf_rows_and_its_padding_fit_the_declared_shelf` measures the leftover and fails
+if it grows past 4 px, so it is visible rather than forgotten.
 
 ---
 
@@ -3187,7 +3363,7 @@ because the failure was imagined.
 |---|---|
 | **1280 × 800 and 1366 × 768 cannot show the panel at 1:1, at any scale factor** | The body alone needs 656 physical pixels and neither display has 810 of usable window height. Drawing it smaller discards pixels the emulator produced, which principle 9 forbids. §9.5 is a designed state with a working action, not a failure — and fullscreen gives both displays 3× |
 | **`k` is not re-decided on a plain window resize** | Principle 1. A drawn iPod that changes size while you drag an edge is worse than one that takes the larger scale at the next launch. The shelf says which `k` is in force. §17.Q11 |
-| **Every control inside a drawer page's Scroll is 100 ms late to a press** | Slint's `Flickable` has no way to opt out of `FORWARD_DELAY`. Mitigated structurally: §11.2's re-cut keeps `Create` and the three level rows off the scrolling path entirely |
+| ~~**Every control inside a drawer page's Scroll is 100 ms late to a press**~~ **RETIRED 2026-08-21** | It was believed `Flickable` had no way to opt out of `FORWARD_DELAY`. `interactive: false` skips it entirely and the wheel still scrolls — see §16.11. The cost that replaces it is **no touch-drag-to-flick**, which matters on a touchscreen laptop and not on a trackpad |
 | **"Centred on first launch" and the work-area read are two-platform** | Wayland has neither `set_outer_position` nor a work-area query. Mitigated by measuring the window we actually got rather than predicting it, so the *too-short* state is right on all three; only the initial placement is not |
 | **The 96-detent ring has no announced accessible equivalent** | Slint has `Slider` and a wheel is not one. `↑`/`↓` are the route and they are a fallback, not a peer. Said once rather than pretended |
 | **`BuildFromIpsw` breaks the one-press `Fix` rule** | It is the only `Fix` shape that changes which resource a device points at, and a silent detachment of somebody's only image is the worse failure. The rule is stated rather than the exception hidden |
@@ -3233,9 +3409,11 @@ In order, because each depends on the one before it.
    `now_unix`, `Settings::record_park`, `Settings::discard_park` and `parked_for` (saturating, so a
    clock that stepped backwards reads as `0` rather than as 584 942 417 355 years). The **writer**
    is not built: `emu::Link` has no `parked_at` and `write_restore_point` still returns `()`, so
-   nothing calls `record_park` yet. `main.rs`'s `parked` flag reads `parked_at.is_some()`, which is a
-   placeholder carrying its retirement condition — the authority is `Config::may_restore()`, and the
-   window has no `Config`.
+   nothing calls `record_park` yet. **`DeviceRow.parked` is deleted** (2026-08-21): it was computed and
+   bound to nothing in any markup file, which is item 15's defect in a new place. What the shelf
+   actually needs is §7.5's *state, and time since*, and `DeviceRow.state` carries it now — `off`, or
+   `off, parked 4 min ago`, from `phase()` and `parked_for`. The authority on whether there is a
+   restore point to **resume** is still `Config::may_restore()`, and the window has no `Config`.
 5. **DONE.** `Recipe::check()` gains rule (0) — `Recipe::nothing_chosen()`, which covers all three
    `Start` variants and not only `FromIpsw` — returning `Verdict::No { why: NOTHING_CHOSEN,
    fix: None }` (§11.3), so the always-reserved verdict region stops asserting a plan for a firmware
@@ -3261,9 +3439,13 @@ In order, because each depends on the one before it.
    `Create` throws away a good denominator.
    **The `main.rs` half is done** (2026-08-21): `DeviceRow.state` read `never started`, which is a
    claim about history from a field that is a progress-bar **denominator** — a device booted a dozen
-   times renders it the moment `set_boot_shape` clears the number. It reads `no boot time learned
-   yet`. It is asserted against `device_rows`' output rather than through the markup, because
-   `DeviceRow.state` is declared at `window.slint:18` and drawn nowhere yet.
+   times renders it the moment `set_boot_shape` clears the number.
+   **The replacement was wrong too, and was corrected the same day.** It read `no boot time learned
+   yet`, which is still a fact about the *progress bar* rather than about the machine — and by then
+   that string was drawn on shelf row 1, which §12.2 gives to the **phase**: `off` / `booting` /
+   `running` / `stopped`, with §7.5's *time since* beside it. `phase()` already answered `Off` and
+   reached that slot nowhere. It reads `off` now, and `off, parked 4 min ago` for a parked device.
+   The denominator is not a thing the shelf says at all.
 7. **DONE.** `install-linux` uses the fetched `ipodlinux::LOADER` — v2.8.1, 56 912 B, SHA-256 on
    record — rather than `resources/vendor/ipodloader2/loader.bin` (§11.3), through
    `ipodlinux::resolve_loader`, with `IPOD_LOADER=` as the override for a build somebody made. That
@@ -3322,10 +3504,30 @@ In order, because each depends on the one before it.
     suppression does **not** key on `AccessibleRole::TextInput` — it is a root `FocusScope` and a
     focused `TextInput` consuming character keys ahead of it, which works with the feature off. The
     feature is a prerequisite for the announced half, not for the keyboard. See §16.7.)*
-12. **The Rail exists before the first button is wired.** Every action about to be reconnected — the
-    centre button, Create, Fetch, Build, Install — needs somewhere to narrate and somewhere to fail,
-    and principle 5 forbids the easy answer. Wire `on_start_device` after the Work page, or the first
-    failure lands in stderr again exactly as it does today.
+12. **DONE 2026-08-21. The Rail exists before the first button is wired**, and `on_start_device` is
+    wired after it. `rail.rs` is toolkit-free: ten failure classes, each with its own words and its
+    next steps, `Caps` gating every step whose mechanism this build does not have, and no `std::time`
+    anywhere in the file — so nothing in it can expire. `ui/rail.slint` draws it, `ui/work.slint`
+    pins §10.1's ledger under it, and the drawer opens on the Work page when a press is refused.
+    **A device whose ROM or drive has left the library is refused, and the refusal is on screen.**
+
+    Four things the doing found, each of which had shipped green:
+    - **The registered handler panicked on the path that WORKS.** `on_start_device` held
+      `settings.borrow_mut()` alive across a `match` — a scrutinee temporary lives to the end of the
+      match in every edition — and then took `settings.borrow()` in the `Ok` arm. Every refusal test
+      passed, because only the success path took it. No test could see inside that closure at all:
+      the callbacks are registered in a `wire()` function now, on a window a test can make, and
+      `the_registered_centre_button_handler_survives_a_device_that_resolves` drives the real one.
+    - **`Class::ToolMissing`'s named command reached no pixel.** `RailRow` had no field for it, so
+      §9.3's one class with no next step would have rendered as a paragraph, two invisible controls
+      holding a 78 px band open, and `Dismiss`. `RailRow.mono` carries it now and `ui/preview.slint`
+      draws that row.
+    - **`why ›` opened the Work page on "Nothing is happening."** The shelf's refusal is a fact about
+      the device, computed when its row was built; the Rail only ever got an entry from a press. It
+      carries the device index now and files the sentence before it opens the page.
+    - **The Rail grew without bound.** The module's own claim that it does not was true of no code
+      path — `collapse_finished` is called only from `plan`, which nothing calls. A note or a failure
+      identical to the one before it is now one entry; two *different* ones are still two.
 13. **`Settings::save()` acquires callers**: **at first-run step 1**, after every completed first-run
     step, after any Composer `Create` or `Save`, after any Parts add or remove, and on close (together
     with `record_boot()` and the remembered geometry). `Settings::load()` called `seed_resources()`,
@@ -3341,10 +3543,15 @@ In order, because each depends on the one before it.
     a `.part` and a rename, because `fs::write` truncates first and a process that died between the
     two left a device list that was half a file; and it returns `io::Result`, because a read-only
     home used to be swallowed and `ipod-boot setup` printed *"Saved to …"* about a file it had not
-    written. Two constraints nothing enforces: `load_and_seed` writes only into a file that already
+    written. One constraint nothing enforces: `load_and_seed` writes only into a file that already
     existed, because `migrate_legacy` declines the moment one exists here and a minted file would
-    block a carry-forward for ever; and `migrate_legacy` still has **zero callers**, so when the
-    window wires it, it must run before the first read. The window's own save points are unbuilt.
+    block a carry-forward for ever.
+    **`migrate_legacy` has its first caller as of 2026-08-21**, and it runs before the first read, in
+    `fn main`, ahead of `load_and_seed`. **Two of the window's save points are built**: after a
+    successful resolve — where the window is still on screen and a failure becomes a Rail entry — and
+    on `on_close_requested` as a backstop, whose failure has nowhere left to be shown and says so in
+    the one `eprintln!` left in `main.rs`. The first-run, Composer and Parts save points wait on those
+    surfaces.
 14. **`README.md`, `docs/DEVELOPING.md` and `docs/GETTING-THE-FILES.md` are corrected** where they
     describe a window that does not exist: drop-anywhere, the `S` / `D` / `Esc` keys, parking on
     close, `IPOD_LAYOUT`, and the model table's **197** rows against the README's 198.
@@ -3361,12 +3568,41 @@ In order, because each depends on the one before it.
     fail on this**, because `geometry::the_minimum_height_is_a_floor_not_a_fit` asserts the floor is
     low and nothing asserts anything catches the window when it gets there. Until the pane exists,
     that is the state of it.
-16. **Parts shows `Resource::Bootloader`.** `resource_rows` renders four groups — iPods, Apple
-    firmware, Software, Disks — and drops the fourth kind on the floor, which is §3's own named
-    complaint and §11.4's six-group requirement. `Settings::parse` will produce one from
+    **Three things measured 2026-08-21, none of which is the pane.** The declaration moved to
+    `window.slint:125` and the row it names is shelf row 3 now, not a caption. The well **clips**, so
+    what a too-short window loses is the *top* of the device rather than the shelf off the bottom —
+    strictly better than the shipped failure and **not** the pane; §9.5's primary Row, which is the
+    only start affordance on a 1280 × 800 display, does not exist. And the boolean flips true on
+    every launch from Slint's own startup size clamp — see the note at the head of §9.5, which is
+    what the pane will have to suppress.
+16. **Parts shows `Resource::Bootloader`.** `resource_rows` rendered four groups — iPods, Apple
+    firmware, Software, Disks — and dropped the fourth kind on the floor, which is §3's own named
+    complaint and §11.4's six-group requirement. **`resource_rows` and `ResourceRow` are deleted**
+    (2026-08-21) with the Resources tab; per §16.10 the assertion they carried was re-expressed
+    rather than dropped, onto `Provenance::line()` and onto a window-side test that an item nobody
+    recorded a provenance for contributes the empty string. This item is now about the Parts page,
+    which does not exist. `Settings::parse` will produce one from
     `res.N.kind = bootloader`, and item 2 gave it an honest provenance column that nothing can
     display. **A clean-looking Parts page is not evidence that no bootloader is filed**, and that
     is the sentence this item exists to delete.
+
+17. **What the drawer and the Rail landed with, and what is still open behind them** (2026-08-21).
+    Built: the drawer and its push, `MenuPage` (seven rows, six disabled with their reason and their
+    escape hatch, in a `Scroll`), the Work page with §10.1's ledger pinned under it, the Rail, the
+    eight-primitive vocabulary's `Pressable` / `Row` / `Scroll` / `Icon`, `nav::Stack` as the single
+    writer of where you are, and §8.4's reduced motion read per platform into one global.
+
+    **Deferred with what each waits on**, so that none of them is mistaken for finished: `bench.rs`'s
+    cradle-state table and `machine.rs` (Phase 5, and every §7.3 row but two needs a `Config` this
+    window does not hold); `work.rs` and its queue (nothing produces work, so the shelf's 3 px bar and
+    `Rail::line`'s working half have no producer); `drops.rs` (§16.4's winit hook, which is why
+    `Provide the file yourself…` is disabled with **no** escape hatch rather than pointing at a drop
+    target that does not exist); `keys.rs` (§16.8's bare-letter half needs a `field-focused` property,
+    and declaring one nothing writes is item 15's defect in a new place); `persist.rs`; and §9.5's
+    pane. Of §16.8's eleven keyboard rows, five are wired — `Tab`, `Esc`, `←`/`→`, `Enter`/`Space`,
+    `⌘\` — and `⌘,` opens the **menu** rather than Reference, because pointing it at a page that does
+    not exist landed on a blank panel with no header and no way out, bypassing the very row that
+    states the gap. That table should be read as the design and not as a description of the program.
 
 **Conditional on §17.Q10**: `Stats::enters_by_core: [[u64; WATCHED.len()]; 2]`, if the run loop can
 attribute an arrival to a core. Until it is answered, §12.8 draws one column.

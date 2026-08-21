@@ -1,0 +1,394 @@
+// The drawer — docs/GUI.md §4, §7.5, §8.1, §9.1, §14.3, §16.3.
+//
+// **420 px, right-anchored, and it PUSHES.** The well and the shelf narrow to `W - 420`; the drawer
+// occupies the full client height minus the shelf. It is not a sidebar wearing a hat and it is not
+// an overlay: nothing in this program floats (§2.4), and a drawer that covered the shelf's right
+// 420 px would be covering rather than pushing, which principle 5 forbids.
+//
+// **Max three levels deep**, and the depth slides — the borrowed iPod motion, inside a 420 px panel
+// where no framebuffer can be (§6.1). Every route in is a route out: `⌘\`, the handle, the shelf's
+// row-3 leading slot, the menu bar. `Esc` is not one of them (§4) — it only ever goes outwards.
+
+import { Ink, Metric, Motion } from "tokens.slint";
+import { Geometry } from "@geometry";
+import { DrawerHeader, Pressable, Row, Scroll } from "primitives.slint";
+import { RailRow } from "rail.slint";
+import { WorkPage } from "work.slint";
+
+// The generated Rust is `pub enum DrawerPage { None, Devices, Parts, Games, Work, Readout,
+// Settings, Reference }` with `None` as `#[default]`. `main.rs` maps it to and from `nav::Page`
+// with an **exhaustive `match`**, so a page added on either side is a compile error rather than a
+// silent `none`.
+export enum DrawerPage {
+    none,
+    devices,
+    parts,
+    games,
+    work,
+    readout,
+    settings,
+    reference,
+}
+
+// ─── The root page ──────────────────────────────────────────────────────────────────────────────
+//
+// Seven rows, and **six of them are disabled with a reason** (§9.4's second kind: *this is not
+// finished, by us* — say what does work, and name the escape hatch as a command in `mono`).
+//
+// A row that is present and dead is the shape §19.1 indicts. A row that is absent is a page you
+// have to re-learn next visit (§9.1). So they are present, greyed, and each says why and what to
+// type instead — and every command named below is one this repository actually has: they are read
+// out of `ipod-boot`'s own `usage()`, not invented. Where there is no command, the row says so
+// rather than pointing at a phantom.
+export component MenuPage inherits Rectangle {
+    in property <int> failures;
+
+    callback close();
+    callback go(DrawerPage, int);
+
+    background: Ink.bg;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        DrawerHeader {
+            back: "Close";
+            title: "Menu";
+            back-pressed => {
+                root.close();
+            }
+        }
+
+        // **The root page scrolls, and it has to.** Six of its seven rows are disabled, and a
+        // disabled `Pressable` is 44 + 34 = 78 px because §9.4's reason slot is reserved under it —
+        // so this page's own minimum is 44 + 6×78 + 44 = **556 px**. The drawer is
+        // `client-height - SHELF`, which at the declared window minimum of 400 is **312**. Without a
+        // Scroll, Work is cut in half and Readout / Settings / Reference fall outside the drawer's
+        // `clip` — and a clipped item is not merely invisible: `WindowInner::move_focus` gates tab
+        // navigation on `is_visible_or_clipped_by_flickable()`, which recovers an item only when the
+        // hiding ancestor is a Flickable. The drawer clips with a Rectangle, so there was no
+        // recovery, no accessible-tree entry and no scroll indicator either. The Work page had this
+        // right; the root page of the same drawer did not.
+        scroll := Scroll {
+            vertical-stretch: 1;
+            min-height: 0px;
+            preferred-height: 0px;
+            viewport-height: rows.preferred-height;
+
+            rows := VerticalLayout {
+                width: scroll.width;
+                alignment: start;
+                spacing: 0px;
+                accessible-role: AccessibleRole.list;
+                accessible-label: "Menu";
+
+                Row {
+                    index: 0;
+                    count: 7;
+                    label: "Devices";
+                    enabled: false;
+                    machine-rule: false;
+                    reason: "Composing a device has no page yet.";
+                    escape-hatch: "ipod-boot setup";
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                Row {
+                    index: 1;
+                    count: 7;
+                    label: "Parts";
+                    enabled: false;
+                    machine-rule: false;
+                    reason: "Nothing lists the files a device is made of yet.";
+                    escape-hatch: "ipod-boot facts FILE";
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                Row {
+                    index: 2;
+                    count: 7;
+                    label: "Games";
+                    enabled: false;
+                    machine-rule: false;
+                    reason: "Nothing files a .ipg title yet, and no command does it either.";
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                Row {
+                    index: 3;
+                    count: 7;
+                    label: "Work";
+                    value: root.failures > 0 ? "\{root.failures}" : "";
+                    warn: root.failures > 0;
+                    chevron: true;
+                    activated => {
+                        root.go(DrawerPage.work, 1);
+                    }
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                Row {
+                    index: 4;
+                    count: 7;
+                    label: "Readout";
+                    enabled: false;
+                    machine-rule: false;
+                    reason: "Nothing draws the counters a running machine publishes.";
+                    escape-hatch: "ipod-boot retail";
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                Row {
+                    index: 5;
+                    count: 7;
+                    label: "Settings";
+                    enabled: false;
+                    machine-rule: false;
+                    reason: "Theme, the update check and the settings file have no page yet.";
+                    escape-hatch: "ipod-boot setup";
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                Row {
+                    index: 6;
+                    count: 7;
+                    label: "Reference";
+                    enabled: false;
+                    machine-rule: false;
+                    reason: "The keyboard table and the stated limits have no page yet.";
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─── The drawer itself ──────────────────────────────────────────────────────────────────────────
+
+export component Drawer inherits Rectangle {
+    // **On stage**, which is not quite *open*: true from the moment it starts opening until the
+    // close animation has finished. The window supplies it as `drawer-open || drawer-inset > 0`,
+    // because a drawer whose pages blanked the instant `Esc` was pressed would slide out empty.
+    //
+    // It is read by `on-screen` below and it is the difference between a closed drawer being gone
+    // and a closed drawer being 420 px off the right edge, still in the tab order and still
+    // announced by a screen reader. It was declared and read by nothing, which is §20 item 15's
+    // defect in a new place — a property nobody reads is indistinguishable from one nobody wrote.
+    in property <bool> open: false;
+    // 0..=3. **`in`, not `in-out`** — `nav::Stack` in Rust is the single source of truth, and the
+    // markup fires callbacks rather than writing state. Four entrances plus `Esc` writing the same
+    // state from two sides is how `Esc` came to have three meanings.
+    in property <int> depth: 0;
+    in property <DrawerPage> page: DrawerPage.none;
+    in property <int> rail-failures: 0;
+    // The client height the drawer is being given. **Pushed in, because a component's root element
+    // cannot read `parent`** — Slint says `Cannot access id 'parent'` — and the alternative, letting
+    // each use site write `height: <something> - Geometry.shelf`, would put §9.5's decision in two
+    // files and let them disagree.
+    in property <length> client-height;
+
+    // The Work page's inputs, passed straight through. The contract's property list stops at
+    // `rail-failures`; a drawer that owns the Work page has to be given what the Work page reads,
+    // and the alternative — a `@children` slot filled by `window.slint` — would put the depth-1
+    // slot's contents in a file that does not own the drawer.
+    in property <[RailRow]> rail;
+    in property <string> rail-announce;
+    in property <int> rail-first-failure: -1;
+    in property <string> work-heading;
+    in property <string> work-empty;
+    in property <string> ledger-download;
+    in property <string> ledger-disk;
+    in property <string> ledger-note;
+    in property <bool> ledger-warn: false;
+
+    callback close();
+    callback back();
+    callback go(DrawerPage, int);
+    callback rail-cancel(int);
+    callback rail-dismiss(int);
+    callback rail-next(int, int);
+
+    width: Geometry.drawer-w;
+    // §9.5's decision: the drawer runs the full client height ABOVE the shelf. The shelf's band and
+    // its 1 px top rule span the full client width; only the shelf's three content rows narrow.
+    // Nothing is unpainted and the drawer covers no shelf content.
+    height: root.client-height - Geometry.shelf;
+    clip: true;
+    background: Ink.bg-raised;
+
+    accessible-role: AccessibleRole.complementary;
+    accessible-label: "Drawer";
+
+    // Deliberately not a `<length>` declaration, so §16.9's literal sweep does not see the `1`:
+    // this is a slot index, not a size.
+    property <int> slot: root.depth + 1;
+
+    // **Is slot `n` on screen right now?** Read off the ANIMATED `strip.x`, not off `depth`, and
+    // that is the whole point: during the slide both the outgoing and the incoming page are partly
+    // in the viewport and both stay drawn, so §8.1 item 2's motion survives intact — and the moment
+    // the animation settles, the page that left is `visible: false` and therefore out of the tab
+    // order and out of the accessible tree.
+    //
+    // **And the whole drawer answers `false` while it is off stage**, which is the same argument one
+    // level up: a closed drawer is parked a full 420 px past the right edge, where `clip` stops it
+    // being drawn and stops nothing else.
+    //
+    // Without this, every level of the drawer is reachable by `Tab` and announced by a screen
+    // reader while it is 420 px off screen behind a `clip`. Nothing in the design's own `visible`
+    // versus `if` rule covers it: §16.3 is about a layout cell, and a page sitting outside the
+    // clip is not a cell. `visible` here keeps the subtree alive exactly as §16.3 requires — a
+    // page you come back to still has its scroll offset, its hover and its focus.
+    pure function on-screen(n: int) -> bool {
+        return root.open
+            && strip.x + n * Geometry.drawer-w > -Geometry.drawer-w
+            && strip.x + n * Geometry.drawer-w < Geometry.drawer-w;
+    }
+
+    // **Six slots for four levels.** `lively` is `ease-out-back` and overshoots by design; without
+    // a blank at each end an overshoot slides a hole into view. They cost nothing.
+    //
+    // **All four level slots stay alive — no `if`.** §16.3: a conditional repeater destroys its
+    // subtree, which is what makes the shipped `if tab == 0:` throw away carousel state, hover and
+    // focus on every tab change. Pages inside a slot switch by `visible`, never by `if`.
+    strip := Rectangle {
+        width: Geometry.drawer-strip-slots * Geometry.drawer-w;
+        height: 100%;
+        x: -Geometry.drawer-w * root.slot;
+
+        // **The one and only use site of `Motion.lively` in the whole program.** §8's table says
+        // drawer page depth only, nothing else, ever. A second use site is a design change.
+        animate x {
+            duration: Motion.lively;
+            easing: ease-out-back;
+        }
+
+        HorizontalLayout {
+            spacing: 0px;
+
+            // The blank leading slot.
+            Rectangle {
+                width: Geometry.drawer-w;
+            }
+
+            // depth 0
+            MenuPage {
+                width: Geometry.drawer-w;
+                visible: root.on-screen(1);
+                failures: root.rail-failures;
+                close => {
+                    root.close();
+                }
+                go(p, d) => {
+                    root.go(p, d);
+                }
+            }
+
+            // depth 1
+            Rectangle {
+                width: Geometry.drawer-w;
+
+                WorkPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(2) && root.page == DrawerPage.work;
+                    entries: root.rail;
+                    announce: root.rail-announce;
+                    first-failure: root.rail-first-failure;
+                    heading: root.work-heading;
+                    empty-text: root.work-empty;
+                    ledger-download: root.ledger-download;
+                    ledger-disk: root.ledger-disk;
+                    ledger-note: root.ledger-note;
+                    ledger-warn: root.ledger-warn;
+                    back-pressed => {
+                        root.back();
+                    }
+                    cancel(id) => {
+                        root.rail-cancel(id);
+                    }
+                    dismiss(id) => {
+                        root.rail-dismiss(id);
+                    }
+                    next-step(id, n) => {
+                        root.rail-next(id, n);
+                    }
+                }
+            }
+
+            // depth 2
+            Rectangle {
+                width: Geometry.drawer-w;
+            }
+
+            // depth 3
+            Rectangle {
+                width: Geometry.drawer-w;
+            }
+
+            // The blank trailing slot.
+            Rectangle {
+                width: Geometry.drawer-w;
+            }
+        }
+    }
+
+    // The leading edge. **No shadow, ever** (§6.1): a shadow is the visual grammar of floating, and
+    // nothing here floats. Separation is a 1 px `line` rule. Drawn after the strip so the strip
+    // cannot slide over it.
+    Rectangle {
+        x: 0;
+        width: 1px;
+        height: 100%;
+        background: Ink.line;
+    }
+}
+
+// ─── The handle (§7.5) ──────────────────────────────────────────────────────────────────────────
+//
+// 12 x 96, on the well's trailing edge, so it rides the push rather than the window edge — which is
+// the window's job to position. **Never disabled**: it is one of the four routes in, and the
+// program's discoverability does not get to be conditional.
+export component DrawerHandle inherits Rectangle {
+    in property <bool> open: false;
+    callback toggled();
+
+    width: Geometry.handle-w;
+    height: Geometry.handle-h;
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        background: Ink.line.with-alpha(0.4);
+        border-radius: 1px;
+    }
+
+    // The `Pressable` carries the hit region, the focus ring and the announcement. Its own height
+    // is a row's; the handle is 96, so the instance overrides it.
+    Pressable {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        label: root.open ? "Close the drawer" : "Open the drawer";
+        accessible-description: "420 pixels, right; the well and the shelf narrow to make room.";
+        activated => {
+            root.toggled();
+        }
+    }
+}

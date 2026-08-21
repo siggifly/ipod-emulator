@@ -45,9 +45,25 @@ fn main() {
     // (`typeloader.rs:1690-1693`). Under an include-path arrangement a stray `ui/geometry.slint`
     // would silently win over the generated one. `@geometry` cannot be shadowed by any file on
     // disk.
-    let config = slint_build::CompilerConfiguration::new().with_library_paths(
-        std::collections::HashMap::from([("geometry".to_string(), generated)]),
-    );
+    // **Debug info, in debug profiles only, and it is what makes the accessible tree testable.**
+    //
+    // `i-slint-backend-testing`'s `ElementHandle` — the only way to read what an assistive
+    // technology would actually be handed — refuses to run without it: *"The use of the
+    // ElementHandle API requires the presence of debug info in Slint compiler generated code."* So
+    // without this line every `accessible-*` binding in the markup is a claim nothing can check,
+    // which is §20 item 11's whole complaint one level up.
+    //
+    // Gated on the profile rather than switched on always: it is element names and source positions
+    // in the generated code, and a shipped binary has no use for either. `cargo test --release`
+    // therefore cannot run those tests, which is the honest trade and is said out loud here rather
+    // than discovered.
+    let debug_info = std::env::var("PROFILE").as_deref() == Ok("debug");
+    let config = slint_build::CompilerConfiguration::new()
+        .with_library_paths(std::collections::HashMap::from([(
+            "geometry".to_string(),
+            generated,
+        )]))
+        .with_debug_info(debug_info);
 
     // **Exactly one `compile*` call in this script, and that is a constraint rather than a style.**
     // `compile_with_config` ends by printing `cargo:rustc-env=SLINT_INCLUDE_GENERATED=<path>`, and

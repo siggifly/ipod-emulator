@@ -1,0 +1,457 @@
+// The Rail — docs/GUI.md §5, §9.2, §9.3, §12.3, §12.7.
+//
+// **A stream of plan, progress and results.** It is the one surface that says what the program is
+// doing and what happened when it failed, and it exists before the first button is wired precisely
+// so that the first failure has somewhere to land other than `eprintln!` (§20 item 12).
+//
+// Three rules with teeth, and each has a test:
+//
+//   - **Never a toast.** There is no `Timer` in this file and there must never be one. §7.4 records
+//     a four-second self-dismissing message and §14.4 bans it by name; `Timer` IS a real element
+//     (`builtins.slint:2695`), so the ban is a live risk. `the_rail_never_dismisses_itself` is the
+//     mechanical form.
+//   - **Never a spinner** (§8.3). `about_to_wait` calls `request_redraw()` for every window with an
+//     active animation and Skia partial rendering is off by default, so one perpetual spinner pins
+//     the main thread at display refresh with full-window repaints while an ARM7 runs at 24 % of
+//     real time. Where there is no denominator (`fraction < 0`) there is a number that moves and no
+//     bar.
+//   - **`visible`, never `if`, on every optional line.** The layout has already allocated the cell
+//     at lowering step 156 and the `visible` pass runs at 180 (§16.3), so nothing moves when a
+//     sub-line arrives. That is what stops a Rail whose entries are appearing and completing from
+//     shuffling the entries below them.
+//
+// Failures accumulate and are dismissed individually. **Nothing expires on a timer, ever.**
+
+import { Ink, Metric, Motion } from "tokens.slint";
+import { Geometry } from "@geometry";
+import { Pressable, Icon } from "primitives.slint";
+
+// Declared BEFORE the struct that uses it: `process_enum` and `process_struct` insert into
+// `local_registry` in document order (`object_tree.rs:205-250`).
+//
+// The generated Rust is `pub enum RailKind { Planned, Working, Done, Failed, Cancelled, Note }`
+// with `Planned` as `#[default]` (`generator/rust.rs:739-770`), and **user enum values are the
+// identifier as written** (`object_tree.rs:170-186`) — unlike built-in enums, which are kebab-cased.
+export enum RailKind {
+    planned,
+    working,
+    done,
+    failed,
+    cancelled,
+    note,
+}
+
+// **The failure class is not in here, and that is deliberate.** The class decides the *wording* and
+// the *next steps*, both of which are flattened into strings by the time they reach the markup; and
+// `rail-next(id, n)` with `n` in {0, 1} already identifies which control was pressed, so Rust looks
+// the entry up rather than being told what it already knows. Two enums the markup never branches on
+// are two generated types and two places for a mismatch to hide.
+export struct RailRow {
+    id: int,
+    kind: RailKind,
+    // `Step::verb()` — fetch | build | copy | install | start | synthesise.
+    verb: string,
+    // `Step::what()`.
+    what: string,
+    // `iPod_25.1.3.ipsw - 6 500 352 B - from Apple, SHA-256 checked`.
+    sub: string,
+    // `4.1 MB of 6.5 MB` — real bytes. Non-empty whenever `kind == working`.
+    measure: string,
+    // 0.0..1.0. **NEGATIVE means no denominator and no bar** (§12.3).
+    fraction: float,
+    // The program's own words, verbatim from the model. Never re-worded here.
+    happened: string,
+    // §9.3's last row. `ToolMissing` is the one class with **no** next step — there is no control
+    // this program could draw that installs 7-Zip — so what it carries instead is a named command in
+    // `mono`. It had no field here at all, so `Class::mono_remedy()` reached no pixel and T-11 was
+    // green on a remedy the window could not show. Empty for every other class.
+    mono: string,
+    cancellable: bool,
+    // §12.7: which file cancelling deletes, and how big it is right now.
+    cancel-cost: string,
+    dismissible: bool,
+    next-a-label: string,
+    next-a-enabled: bool,
+    next-a-reason: string,
+    next-a-escape: string,
+    next-a-presses: int,
+    next-a-consequence: string,
+    next-b-label: string,
+    next-b-enabled: bool,
+    next-b-reason: string,
+    next-b-escape: string,
+    next-b-presses: int,
+    next-b-consequence: string,
+}
+
+// ─── One entry ──────────────────────────────────────────────────────────────────────────────────
+
+export component RailEntryView inherits VerticalLayout {
+    in property <RailRow> e;
+    // §6.5: the material goes on **one** row per page. A Rail holding two failures would otherwise
+    // draw two primary rows, and a window where two things are blue has no primary action. The Rail
+    // knows its own order, so the first failure gets it and the rest are plain.
+    in property <bool> first-failure: false;
+
+    callback cancel(int);
+    callback dismiss(int);
+    // The entry id, then 0 for next-a and 1 for next-b.
+    callback next-step(int, int);
+    // Forwarded up so the page's `Scroll` can bring a tab stop into view (§16.11).
+    callback reveal(length, length);
+
+    spacing: 0px;
+
+    // ── The line itself: marker, verb, what, measure ──
+    HorizontalLayout {
+        height: Geometry.row-h;
+        spacing: Metric.s2;
+
+        Rectangle {
+            width: Metric.s4;
+
+            // planned and working: a ring, `fg-dim` until it is the one being worked.
+            Rectangle {
+                x: 0;
+                y: (parent.height - self.height) / 2;
+                width: Metric.s4;
+                height: Metric.s4;
+                border-radius: self.width / 2;
+                border-width: 1px;
+                border-color: root.e.kind == RailKind.working ? Ink.accent : Ink.fg-dim;
+                visible: root.e.kind == RailKind.planned || root.e.kind == RailKind.working;
+            }
+
+            Icon {
+                kind: "check";
+                ink: Ink.accent;
+                x: 0;
+                y: (parent.height - self.height) / 2;
+                width: Metric.s4;
+                height: Metric.s4;
+                visible: root.e.kind == RailKind.done;
+            }
+
+            Icon {
+                kind: "warning";
+                ink: Ink.danger;
+                x: 0;
+                y: (parent.height - self.height) / 2;
+                width: Metric.s4;
+                height: Metric.s4;
+                visible: root.e.kind == RailKind.failed;
+            }
+
+            Icon {
+                kind: "close";
+                ink: Ink.fg-dim;
+                x: 0;
+                y: (parent.height - self.height) / 2;
+                width: Metric.s4;
+                height: Metric.s4;
+                visible: root.e.kind == RailKind.cancelled;
+            }
+        }
+
+        // The verb column, so the plan reads as a column rather than as six sentences.
+        Text {
+            width: Geometry.rail-verb-w;
+            text: root.e.verb;
+            font-size: Metric.body-size;
+            font-weight: Metric.weight-body;
+            color: Ink.fg-dim;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            text: root.e.what;
+            font-size: Metric.body-size;
+            font-weight: Metric.weight-strong;
+            color: root.e.kind == RailKind.failed ? Ink.danger : Ink.fg;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+
+        // Real bytes, in mono so a counter does not reflow its own digits as it moves.
+        Text {
+            text: root.e.measure;
+            font-family: Metric.mono-family;
+            font-size: Metric.mono-size;
+            color: Ink.fg-dim;
+            vertical-alignment: center;
+        }
+    }
+
+    // ── Progress ──
+    //
+    // **No `animate` on the fill.** §8's table gives progress the `linear` curve and calls it
+    // data-driven: the bar moves when data moves, and a bar that eases is a bar that is lying about
+    // when the bytes arrived.
+    Rectangle {
+        height: Geometry.progress-h;
+        background: Ink.line.with-alpha(0.3);
+        visible: root.e.kind == RailKind.working && root.e.fraction >= 0;
+
+        accessible-role: AccessibleRole.progress-indicator;
+        accessible-label: root.e.what;
+        accessible-value: root.e.measure;
+        accessible-value-minimum: 0;
+        accessible-value-maximum: 1;
+
+        Rectangle {
+            x: 0;
+            width: parent.width * root.e.fraction;
+            height: 100%;
+            background: Ink.accent;
+        }
+    }
+
+    // ── What it is being done against ──
+    Text {
+        height: Geometry.line-label;
+        text: root.e.sub;
+        font-size: Metric.label-size;
+        font-weight: Metric.weight-label;
+        color: Ink.fg-dim;
+        overflow: elide;
+        visible: root.e.sub != "";
+    }
+
+    // §12.7: which file cancelling deletes, and how big it is right now — stated BEFORE the
+    // control that would delete it.
+    Text {
+        height: Geometry.line-label;
+        text: root.e.cancel-cost;
+        font-size: Metric.label-size;
+        font-weight: Metric.weight-label;
+        color: Ink.warn;
+        overflow: elide;
+        visible: root.e.cancellable;
+    }
+
+    // **`if`, not `visible`, and this is the one place in this file where that is right.**
+    //
+    // §16.3 decides the two PER ELEMENT, and its `if` carve-out is *where a subtree genuinely has
+    // no rows*. A 44 px control on a step that cannot be cancelled is exactly that, and `visible`
+    // would reserve it on all six steps of a plan. Measured, with the fixture in
+    // `ui/preview.slint`: reserving this control and the failure block below on every entry makes
+    // one entry **271 px**, so a six-step recipe is 1 626 px in a 420 px drawer and only the first
+    // entry is on screen. The lines above keep `visible`, because those are what come and go while
+    // an entry is working — which is the shuffling §16.3 actually exists to stop.
+    if root.e.cancellable: Pressable {
+        label: "Cancel";
+        pad: Metric.s3;
+        activated => {
+            root.cancel(root.e.id);
+        }
+        gained-focus => {
+            root.reveal(self.absolute-position.y, self.height);
+        }
+
+        Text {
+            text: "Cancel";
+            font-size: Metric.body-size;
+            font-weight: Metric.weight-strong;
+            color: Ink.fg;
+            vertical-alignment: center;
+        }
+    }
+
+    // ── The failure block (§9.3) ──
+    //
+    // Stays until dismissed. Says what was attempted, what happened in the program's own words, and
+    // what to do next — with the next step as a real pressable control, never prose.
+    //
+    // `if`, for the reason measured above: this block is a wrapped paragraph plus up to three 44 px
+    // controls, about 148 px, and reserving it on every planned step buries the plan. A failure
+    // arriving does move the entries below it, and that is correct — a failure is a state change
+    // the reader has to notice, and §9.3 keeps it on screen until it is dismissed.
+    if root.e.kind == RailKind.failed: Rectangle {
+        background: Ink.bg-raised;
+
+        VerticalLayout {
+            padding: Metric.s3;
+            spacing: Metric.s2;
+
+            Text {
+                text: root.e.happened;
+                font-size: Metric.body-size;
+                font-weight: Metric.weight-body;
+                color: Ink.fg;
+                wrap: word-wrap;
+            }
+
+            // §9.3's `ToolMissing` row: no control, a named command instead. `if`, because a class
+            // that has one is the exception and every other failure would otherwise carry an empty
+            // `mono` line's cell.
+            if root.e.mono != "": Text {
+                text: root.e.mono;
+                font-family: Metric.mono-family;
+                font-size: Metric.mono-size;
+                color: Ink.fg-dim;
+                wrap: word-wrap;
+            }
+
+            // **`if`, not `visible`, on both of these and on the row that holds them.**
+            //
+            // Both cells are `horizontal-stretch: 1`, and `visible: false` still reserves the cell
+            // (§16.3 — `handle_visible` runs at pass 180, after `lower_layout` at 156). Six of the
+            // ten failure classes offer exactly ONE next step, so a lone `Choose somewhere else` sat
+            // in half the width with the other half empty; `ToolMissing` offers none at all and drew
+            // a 44 px band containing two invisible controls. That is the same 116 px hole this
+            // repository has already paid for once.
+            //
+            // §16.3's anti-shuffle argument does not reach these: a next step is fixed for the life
+            // of a failed entry — it is not a line that comes and goes while something is working —
+            // which is the carve-out the `Cancel` control and this whole block already take.
+            if root.e.next-a-label != "": HorizontalLayout {
+                spacing: Metric.s2;
+
+                a := Pressable {
+                    horizontal-stretch: 1;
+                    label: root.e.next-a-label;
+                    enabled: root.e.next-a-enabled;
+                    reason: root.e.next-a-reason;
+                    escape-hatch: root.e.next-a-escape;
+                    presses: root.e.next-a-presses;
+                    consequence: root.e.next-a-consequence;
+                    // A next step is never a machine rule: it is disabled only where this build has
+                    // no mechanism behind it, which is a project state (§9.4).
+                    machine-rule: false;
+                    // §6.5: ONE material per page. The Rail is a stream and failures accumulate, so
+                    // only the first failure's primary step wears it.
+                    primary: root.first-failure;
+                    pad: Metric.s3;
+                    // §11.3: `armed` is component-local state on a control inside a **repeater**,
+                    // and repeater instances are reused when the model row under them changes (§16.9
+                    // — the model is retained and `set_row_data` mutates it in place). Without this,
+                    // a control armed on one entry stays armed after that entry has become a
+                    // different one, and the second press detaches a resource nobody looked at.
+                    // `disarm()` is public for exactly this and had no caller anywhere.
+                    property <int> for-entry: root.e.id;
+                    changed for-entry => {
+                        self.disarm();
+                    }
+                    activated => {
+                        root.next-step(root.e.id, 0);
+                    }
+                    gained-focus => {
+                        root.reveal(self.absolute-position.y, self.height);
+                    }
+
+                    Text {
+                        text: root.e.next-a-label;
+                        font-size: Metric.body-size;
+                        font-weight: Metric.weight-strong;
+                        color: !root.e.next-a-enabled
+                            ? Ink.fg-disabled
+                            : (root.first-failure ? #ffffff : Ink.fg);
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if root.e.next-b-label != "": Pressable {
+                    horizontal-stretch: 1;
+                    label: root.e.next-b-label;
+                    enabled: root.e.next-b-enabled;
+                    reason: root.e.next-b-reason;
+                    escape-hatch: root.e.next-b-escape;
+                    presses: root.e.next-b-presses;
+                    consequence: root.e.next-b-consequence;
+                    machine-rule: false;
+                    pad: Metric.s3;
+                    property <int> for-entry: root.e.id;
+                    changed for-entry => {
+                        self.disarm();
+                    }
+                    activated => {
+                        root.next-step(root.e.id, 1);
+                    }
+                    gained-focus => {
+                        root.reveal(self.absolute-position.y, self.height);
+                    }
+
+                    Text {
+                        text: root.e.next-b-label;
+                        font-size: Metric.body-size;
+                        font-weight: Metric.weight-strong;
+                        color: root.e.next-b-enabled ? Ink.fg : Ink.fg-disabled;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            if root.e.dismissible: Pressable {
+                label: "Dismiss";
+                pad: Metric.s3;
+                activated => {
+                    root.dismiss(root.e.id);
+                }
+                gained-focus => {
+                    root.reveal(self.absolute-position.y, self.height);
+                }
+
+                Text {
+                    text: "Dismiss";
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-body;
+                    color: Ink.fg-dim;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+// ─── The stream ─────────────────────────────────────────────────────────────────────────────────
+//
+// **The Rail never auto-scrolls.** It does not grow without bound (a new recipe collapses the
+// previous one's `done` steps into one summary entry), its order is stable, and moving a reader's
+// viewport is content moving under them (principle 2). The one exception is a keyboard tab stop
+// arriving below the fold, which is the reader's own action and is `reveal`.
+//
+// `announce` is rewritten in Rust ONLY on a state transition. The live region is `polite`; a
+// description that tracked `measure` would read 6.5 MB of progress out loud.
+export component Rail inherits VerticalLayout {
+    in property <[RailRow]> entries;
+    in property <string> announce;
+    // §6.5: which entry is allowed to wear the material. Rust knows the order and computes it once
+    // rather than every instance of the repeater searching the model for itself — and `-1` where
+    // there is no failure, so nothing is primary on a plan that is merely running.
+    in property <int> first-failure: -1;
+
+    callback cancel(int);
+    callback dismiss(int);
+    callback next-step(int, int);
+    callback reveal(length, length);
+
+    spacing: Metric.s2;
+    alignment: start;
+
+    accessible-role: AccessibleRole.region;
+    accessible-live-region: AccessibleLiveness.polite;
+    accessible-label: "Work";
+    accessible-description: root.announce;
+
+    for entry[i] in root.entries: RailEntryView {
+        e: entry;
+        first-failure: i == root.first-failure;
+        cancel(id) => {
+            root.cancel(id);
+        }
+        dismiss(id) => {
+            root.dismiss(id);
+        }
+        next-step(id, n) => {
+            root.next-step(id, n);
+        }
+        reveal(top, h) => {
+            root.reveal(top, h);
+        }
+    }
+}

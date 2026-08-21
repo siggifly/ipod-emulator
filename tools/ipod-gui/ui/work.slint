@@ -1,0 +1,176 @@
+// The Work page — docs/GUI.md §9.1, §9.2, §9.3, §10.1, §16.11.
+//
+// **Three cells, and which of them scrolls is the whole design.**
+//
+//   1. the page header — fixed, outside the Scroll, never scrolls;
+//   2. the body — the heading, the empty sentence, and the Rail — inside the one Scroll;
+//   3. the ledger — pinned, outside the Flickable.
+//
+// §16.11: *a pinned footer is outside the Flickable, so `Create` is always in the same place. A
+// primary action that scrolls away is a primary action you hunt for.* The ledger is the number
+// principle 7 exists for — `6.5 MB to download - about 240 MB on disk` — and it has to be on screen
+// at the moment you press, not scrolled past. One number per axis, from one source.
+
+import { Ink, Metric } from "tokens.slint";
+import { Geometry } from "@geometry";
+import { DrawerHeader, Scroll } from "primitives.slint";
+import { Rail, RailRow } from "rail.slint";
+
+export component WorkPage inherits Rectangle {
+    in property <[RailRow]> entries;
+    in property <string> announce;
+    // §6.5: the index of the one entry allowed to wear the material, or -1.
+    in property <int> first-failure: -1;
+    // "This is what pressing the centre button does" — or "Building My 5.5G".
+    in property <string> heading;
+    in property <string> empty-text;
+    // §7 / §10.1: one number per axis, from one source.
+    in property <string> ledger-download;
+    in property <string> ledger-disk;
+    in property <string> ledger-note;
+    in property <bool> ledger-warn: false;
+
+    callback back-pressed();
+    callback cancel(int);
+    callback dismiss(int);
+    callback next-step(int, int);
+
+    background: Ink.bg;
+    accessible-role: AccessibleRole.region;
+    accessible-label: "Work";
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // `Menu`, not `Close`: Work sits one level under the drawer's root page, and
+        // `DrawerHeader`'s own rule is that `back` is `Close` at depth 0 and the parent page's name
+        // below it. §11.6's drawing of the Settings page shows the same thing.
+        DrawerHeader {
+            back: "Menu";
+            title: "Work";
+            back-pressed => {
+                root.back-pressed();
+            }
+        }
+
+        scroll := Scroll {
+            vertical-stretch: 1;
+            // Pinned to zero so this cell reports no intrinsic height of its own and takes what the
+            // page has left — §16.1, two levels down from the window.
+            min-height: 0px;
+            preferred-height: 0px;
+            // **Bound explicitly, and it is not optional.** Slint computes `viewport-height`
+            // automatically only from direct children that are layouts and are NOT repeated
+            // (`passes/flickable.rs:181-196`) — and the Rail is a `for`. Left unset, the Rail
+            // reports a viewport of zero, the Scroll declines to scroll, and the entries past the
+            // fold are positioned outside the Flickable and drawn there.
+            viewport-height: body.preferred-height;
+
+            body := VerticalLayout {
+                width: scroll.width;
+                padding: Metric.s5;
+                spacing: Metric.s3;
+                alignment: start;
+
+                Text {
+                    text: root.heading;
+                    font-size: Metric.title-size;
+                    font-weight: Metric.weight-title;
+                    color: Ink.fg;
+                    wrap: word-wrap;
+                }
+
+                // §9.1: never a bare "nothing here". It says what the surface is for.
+                //
+                // **`if`, not `visible`.** The empty sentence is mutually exclusive with the Rail
+                // having any content, so §16.3's anti-shuffle argument does not apply — and
+                // `visible: false` still reserves the cell *and* the 12 px `spacing` on either side
+                // of it, which put a blank band between the heading and the first entry.
+                if root.entries.length == 0: Text {
+                    text: root.empty-text;
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-body;
+                    color: Ink.fg-dim;
+                    wrap: word-wrap;
+                }
+
+                Rail {
+                    entries: root.entries;
+                    announce: root.announce;
+                    first-failure: root.first-failure;
+                    cancel(id) => {
+                        root.cancel(id);
+                    }
+                    dismiss(id) => {
+                        root.dismiss(id);
+                    }
+                    next-step(id, n) => {
+                        root.next-step(id, n);
+                    }
+                    reveal(top, h) => {
+                        scroll.ensure-visible(top, h);
+                    }
+                }
+            }
+        }
+
+        // ── The ledger, pinned ──
+        //
+        // 3 x `LINE_LABEL` plus 12 above and 12 below is `WORK_FOOTER_H`, and
+        // `the_drawer_fits_its_own_furniture_at_the_window_minimum` is what keeps that true.
+        //
+        // **In this phase `ledger-disk` carries the estimate and no free-space clause.** Nothing in
+        // this tree can query free bytes — `grep -rn "statvfs|GetDiskFreeSpace|free_space"
+        // --include='*.rs' tools/` returns one unrelated hit — so `312 GB free on ...` would be
+        // invented, and `ledger-warn` stays false. **Retirement condition**: when
+        // `eapp_loader::volume` exists, the clause and the warn colour arrive together.
+        Rectangle {
+            height: Geometry.work-footer-h;
+            background: Ink.bg-raised;
+
+            Rectangle {
+                y: 0;
+                height: 1px;
+                background: Ink.line.with-alpha(0.3);
+            }
+
+            VerticalLayout {
+                padding-left: Metric.s5;
+                padding-right: Metric.s5;
+                padding-top: Metric.s3;
+                padding-bottom: Metric.s3;
+                spacing: 0px;
+
+                Text {
+                    height: Geometry.line-label;
+                    text: root.ledger-download;
+                    font-size: Metric.label-size;
+                    font-weight: Metric.weight-label;
+                    color: Ink.fg;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    height: Geometry.line-label;
+                    text: root.ledger-disk;
+                    font-size: Metric.label-size;
+                    font-weight: Metric.weight-label;
+                    color: root.ledger-warn ? Ink.warn : Ink.fg;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    height: Geometry.line-label;
+                    text: root.ledger-note;
+                    font-size: Metric.label-size;
+                    font-weight: Metric.weight-label;
+                    color: Ink.fg-dim;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

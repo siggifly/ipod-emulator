@@ -453,7 +453,7 @@ pub struct Stats {
     /// became worth showing the day the clock stopped inventing time: against `wall_secs` it is the
     /// honest "how fast is this iPod running compared to a real one", now that idle costs what
     /// running costs. The readout has the instruction ratio and not this one.
-    #[allow(dead_code)]
+    #[allow(dead_code)]  // retired when: the Readout draws the wall-clock ratio beside the instruction one
     pub sim_usec_here: u64,
     pub hold: bool,
     pub touched: bool,
@@ -478,7 +478,7 @@ pub struct Stats {
     /// Depth of the input drain queue. Computed and not shown; `input_dropped` above is the one
     /// that matters, because a refused step is a lie about what the user did and a deep queue is
     /// only ever the reason for one.
-    #[allow(dead_code)]
+    #[allow(dead_code)]  // retired when: the Readout draws queue depth; `input_dropped` is the one that matters
     pub queued: usize,
     /// Arrivals at each of [`WATCHED`], in that order.
     pub enters: [u64; WATCHED.len()],
@@ -807,7 +807,10 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
                 } else {
                     format!(
                         "this boot ROM has no `{tag}` image. It has: {}",
-                        have.join(" · ")
+                        // ASCII: this becomes a `Failure::said` and therefore UI text, and §6.7
+                        // does not trust the window's font with a middle dot — `ui/bench.slint`
+                        // draws that one as a `Path`.
+                        have.join(", ")
                     )
                 }
             })?;

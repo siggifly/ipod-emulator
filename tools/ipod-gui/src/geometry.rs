@@ -78,8 +78,6 @@ geometry! {
     HOLD_W:           Ratio = 0.100;
     HOLD_H:           Ratio = 0.024;
     HOLD_INSET:       Ratio = 0.055;
-    /// The carousel's neighbours, relative to the selected device.
-    NEIGHBOUR_SCALE:  Ratio = 0.55;
 
     // ── §6.6 the physical hero ──
 
@@ -120,6 +118,89 @@ geometry! {
     DRAWER_W:         Px = 420.0;
     /// 20 each side of the well.
     WELL_AIR:         Px = 20.0;
+
+    // ── §5's primitives, §6.3's space scale applied, and §7.5's furniture ──
+    //
+    // Everything below is a **drawer or Rail** measurement. They are geometry in exactly the sense
+    // item 9 means it — a position or a size the markup would otherwise carry as a literal — so
+    // they live here and `no_geometry_literal_survives_in_the_markup` is what keeps them here.
+    //
+    // Two of them are numbers the design does not state; both say so in their own doc comment, and
+    // both are derived rather than typed, so re-measuring the term they are built from moves them.
+
+    /// §5: *a Row is one thing, on a line, 44 px.* The rhythm every drawer page is made of.
+    ROW_H:            Px = 44.0;
+    /// §5: the value column starts here, measured from the row's leading edge — so the value has
+    /// one x on every page rather than one per page.
+    ROW_VALUE_X:      Px = 232.0;
+    /// §6.3's drawer page margin. The same 24 as `Metric.s5`, and the duplication is bounded and
+    /// asserted — `the_row_value_column_fits_the_drawer` reads `s5` out of `tokens.slint` as text.
+    PAGE_MARGIN:      Px = 24.0;
+    /// What is left for the value. **Written as the expression**, so a re-measured drawer moves it
+    /// rather than leaving two numbers to disagree.
+    ROW_VALUE_W:      Px = DRAWER_W - 2.0 * PAGE_MARGIN - ROW_VALUE_X;
+    /// One Row tall, so the header and the rows under it share a rhythm.
+    ///
+    /// **The design states no number.** §11.2's *"≈ 60"* covers the page header **and** the group
+    /// rules together — an approximation inside a total, not a declaration — so this is derived
+    /// from the Row rather than read off that. It is load-bearing: `the_drawer_fits_its_own_
+    /// furniture_at_the_window_minimum` is built on it. Look at it on screen before trusting it.
+    DRAWER_HEADER_H:  Px = ROW_H;
+    /// §10.1's three-line ledger, pinned: `3 × LINE_LABEL` plus 12 above and 12 below.
+    ///
+    /// **The design states no number** either; this is the derivation, not a measurement. Same
+    /// caveat as [`DRAWER_HEADER_H`].
+    WORK_FOOTER_H:    Px = 3.0 * LINE_LABEL + 12.0 + 12.0;
+    /// The least body a drawer page may be given — two Rows, which is a heading and one thing.
+    DRAWER_MIN_BODY:  Px = 2.0 * ROW_H;
+    /// §4: *max 3 levels deep.* A `Ratio` so it emits as `float` and compares against a depth with
+    /// no unit on it.
+    DRAWER_MAX_DEPTH: Ratio = 3.0;
+    /// One slot per level, plus a blank at each end — because `lively` is `ease-out-back` and
+    /// overshoots by design, and without the blanks an overshoot at either end slides a hole into
+    /// view. They cost nothing.
+    DRAWER_STRIP_SLOTS: Ratio = DRAWER_MAX_DEPTH + 3.0;
+    /// §7.5's drawer handle, on the well's trailing edge so it rides the push.
+    HANDLE_W:         Px = 12.0;
+    HANDLE_H:         Px = 96.0;
+    /// §5: *a 34 px two-line reason slot, reserved whether or not it is filled.* That reservation
+    /// is what makes principle 2 mechanical — the control does not change height when it is refused.
+    FIELD_REASON:     Px = 34.0;
+    /// §7.3's focus ring, reused by every `Pressable`. Two, not one: a one-device-pixel hairline is
+    /// a border, and a focus ring has to be visible against the material as well as against the
+    /// page.
+    FOCUS_RING_W:     Px = 2.0;
+    /// §7.5's 3 px accent bar. **One constant** — the shelf's bar and the Rail's bar are the same
+    /// bar at two sizes of surface, and two names for one number is how they come to disagree.
+    PROGRESS_H:       Px = 3.0;
+    /// The Rail's verb column, so a plan reads as a column rather than as a paragraph.
+    ///
+    /// **The one measurement nobody has taken.** Every other constant here is quoted from the
+    /// design or derived from one that is. The longest verb is `synthesise`, and it appears at
+    /// first-run step 1 — the first thing a new user ever sees this program do — so if it elides,
+    /// it elides there. Take it with `slint-viewer` at `body` 14 px before shipping.
+    RAIL_VERB_W:      Px = 64.0;
+    /// §6.2's `label` line box.
+    ///
+    /// **`Text` has no `line-height` in Slint 1.17** — the property does not exist — so a line box
+    /// is a container height and that is what this is. The other five roles get theirs when they
+    /// get a use site.
+    LINE_LABEL:       Px = 16.0;
+    /// §6.2's `title` line box — *20 / 26*. The shelf's first row is its use site.
+    ///
+    /// It lived in `ui/bench.slint` as `Metric.title-size + Metric.s3 / 2` while `src/geometry.rs`
+    /// had a different owner; the stated retirement condition was *when `geometry.rs` declares it*,
+    /// and this is that. Written as the number the design states, checked against the type scale by
+    /// `the_shelf_line_boxes_are_the_type_scales`.
+    LINE_TITLE:       Px = 26.0;
+    /// §6.2's `body` line box — *14 / 20*. The shelf's second row.
+    LINE_BODY:        Px = 20.0;
+    /// §7.3's clamp marks: `3 × 28` at the body's mid-height, one on either side of the cradle.
+    CLAMP_W:          Px = 3.0;
+    CLAMP_H:          Px = 28.0;
+    /// §11.2: *THE VERDICT — 54 px, always reserved.* Emitted now so the Composer's own fit can be
+    /// checked before the Composer is written.
+    VERDICT_H:        Px = 54.0;
 
     // ── The window's own four constants ──
     //
@@ -209,7 +290,7 @@ pub fn slint_name(rust_name: &str) -> String {
 // Compiled by `build.rs` as well as by the crate, and only the build script calls it — hence the
 // allow. It comes off if the window ever needs to print a Slint literal at run time, which it does
 // not today.
-#[allow(dead_code)]
+#[allow(dead_code)]  // retired when: the window needs to print a Slint literal at run time, which it does not today
 pub fn slint_number(v: f64) -> String {
     let s = format!("{v:?}");
     assert!(
@@ -224,7 +305,7 @@ pub fn slint_number(v: f64) -> String {
 /// Called by `build.rs` **and** by `the_generated_file_is_byte_identical_to_the_source_of_truth`,
 /// so a non-deterministic byte here — a timestamp, a hash-map order, an absolute path — is caught
 /// by a test rather than by four consecutive rebuilds that each recompile.
-#[allow(dead_code)]
+#[allow(dead_code)]  // retired when: never — `build.rs` and `the_generated_file_is_byte_identical_to_the_source_of_truth` are both real callers, and the allow exists because the crate compile sees neither
 pub fn slint_source() -> String {
     let mut out = String::new();
     out.push_str("// generated by build.rs from src/geometry.rs — do not edit\n");
@@ -336,10 +417,63 @@ mod tests {
     /// The text `build.rs` wrote into `OUT_DIR`, as the crate's own compile saw it.
     const GENERATED: &str = include_str!(concat!(env!("OUT_DIR"), "/geometry.slint"));
 
-    const IPOD_SLINT: &str =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/ipod.slint"));
-    const WINDOW_SLINT: &str =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/window.slint"));
+    /// **Every `.slint` file this phase declares.** The list is here so the sweeps below can be
+    /// checked *both* ways: a file on disk that is not in this list is unswept, and a name in this
+    /// list that is not on disk is a sweep pointing at nothing.
+    ///
+    /// The two-name array this replaced was written when there were two markup files, and five more
+    /// have landed since. A sweep that names its own inputs stops sweeping the moment somebody adds
+    /// a file — silently, and looking exactly like a sweep that found nothing.
+    const DECLARED_MARKUP: &[&str] = &[
+        "bench.slint",
+        "drawer.slint",
+        "ipod.slint",
+        // A second top-level `Window`, for `slint-viewer` only. **`build.rs` must keep exactly one
+        // `compile*` call** — a second one clobbers `cargo:rustc-env=SLINT_INCLUDE_GENERATED` and
+        // `MainWindow` stops existing, with the failure reading `cannot find type MainWindow in
+        // this scope` — so this file is never a compile root and reaches the binary only if
+        // something imports it.
+        "preview.slint",
+        "primitives.slint",
+        "rail.slint",
+        "tokens.slint",
+        "window.slint",
+        "work.slint",
+    ];
+
+    fn ui_dir() -> std::path::PathBuf {
+        std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/ui"))
+    }
+
+    /// Every `.slint` file **on disk**, name and text, sorted. Read at run time rather than
+    /// `include_str!`'d, because the point is to see what is there rather than what was there when
+    /// this was compiled.
+    fn markup() -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = std::fs::read_dir(ui_dir())
+            .expect("the ui directory")
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "slint"))
+            .map(|p| {
+                let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                let text = std::fs::read_to_string(&p)
+                    .unwrap_or_else(|e| panic!("could not read {}: {e}", p.display()));
+                (name, text)
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// One file's text, by name. Panics rather than skipping: a sweep that quietly finds no file is
+    /// the instrument that reports an absence it could not have observed.
+    fn read(name: &str) -> String {
+        markup()
+            .into_iter()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("ui/{name} is not on disk"))
+            .1
+    }
 
     /// §9.6's `min-width` has ONE derivation, and this is it.
     ///
@@ -397,21 +531,33 @@ mod tests {
     /// gets forgotten.
     #[test]
     fn the_too_short_state_is_an_input_with_nothing_reading_it() {
-        let uses: Vec<&str> = WINDOW_SLINT
+        // **Comments are stripped first.** The prose above these files discusses `too-short` at
+        // length — that is the design being recorded, not the state being read, and a sweep that
+        // could not tell the two apart would fire on a paragraph explaining why nothing reads it.
+        let window = read("window.slint");
+        let uses: Vec<String> = window
             .lines()
-            .map(str::trim)
+            .map(|l| strip(l).trim().to_string())
             .filter(|l| l.contains("too-short"))
             .collect();
         assert_eq!(
             uses,
-            vec!["in property <bool> too-short: false;"],
+            vec!["in property <bool> too-short: false;".to_string()],
             "§9.5's pane reads `too-short` now — delete this test, MIN_HEIGHT's paragraph about it, \
              and GUI.md §20 item 15"
         );
-        assert!(
-            !IPOD_SLINT.contains("too-short"),
-            "the drawing reads the window's too-short state; the same retirement applies"
-        );
+        for (name, text) in markup() {
+            if name == "window.slint" {
+                continue;
+            }
+            for (n, line) in text.lines().enumerate() {
+                assert!(
+                    !strip(line).contains("too-short"),
+                    "ui/{name}:{}: reads the window's too-short state; the same retirement applies",
+                    n + 1
+                );
+            }
+        }
     }
 
     /// [`CHROME_MIN`] and [`CHROME_PREF`] are not typed-in totals.
@@ -723,21 +869,38 @@ mod tests {
     /// would silently win over the generated one.
     #[test]
     fn the_markup_imports_the_generated_global_and_nothing_shadows_it() {
-        let shadow = std::path::Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/ui/geometry.slint"
-        ));
+        let shadow = ui_dir().join("geometry.slint");
         assert!(
             !shadow.exists(),
             "{} exists; the generated global must have no file of that name to shadow it",
             shadow.display()
         );
-        for (name, text) in [("ui/ipod.slint", IPOD_SLINT), ("ui/window.slint", WINDOW_SLINT)] {
-            assert!(
-                text.contains("from \"@geometry\""),
-                "{name} does not import the generated Geometry global"
-            );
+        // **Every file on disk**, not the two that existed when this was written. A file that names
+        // `Geometry.` without importing it is a compile error; the direction this catches is the
+        // other one — a file that imports it and then hand-writes the number anyway, which the
+        // literal sweep sees only if this list is complete.
+        let mut named = 0;
+        for (name, text) in markup() {
+            let uses = text.contains("Geometry.");
+            let imports = text.contains("from \"@geometry\"");
+            if uses {
+                named += 1;
+                assert!(
+                    imports,
+                    "ui/{name} reads `Geometry.` and does not import the generated global"
+                );
+            } else {
+                assert!(
+                    !imports,
+                    "ui/{name} imports the Geometry global and never reads it"
+                );
+            }
         }
+        assert!(
+            named >= 2,
+            "only {named} markup files read the generated global; the drawn device and the window \
+             both do"
+        );
     }
 
     /// §16.1's one-way arrow, mechanically.
@@ -752,8 +915,9 @@ mod tests {
         // device is pinned to `min-height: 0px; preferred-height: 0px` for the same reason (§16.1,
         // "the container must declare no intrinsic height"), and a `hero` in either place closes
         // the same loop one level down.
+        let window = read("window.slint");
         let mut seen = 0;
-        for line in WINDOW_SLINT.lines() {
+        for line in window.lines() {
             let t = line.trim();
             for prop in ["min-width:", "min-height:", "preferred-width:", "preferred-height:"] {
                 if t.starts_with(prop) {
@@ -776,9 +940,37 @@ mod tests {
             "preferred-height: Geometry.pref-height;",
         ] {
             assert!(
-                WINDOW_SLINT.lines().any(|l| l.trim() == want),
+                window.lines().any(|l| l.trim() == want),
                 "the window no longer declares `{want}`"
             );
+        }
+    }
+
+    /// **T-5. The vertical axis is where the loop closes, so `root.height` is banned in markup.**
+    ///
+    /// The window's height comes from its layout, the layout from the content, the content from
+    /// `hero` — so anything in the markup that reads the window's own height has closed it. Slint
+    /// reports the inherited case as a **deprecation warning** saying it may panic at run time
+    /// (`passes/binding_analysis.rs:359-362`, gated on a flag that defaults to false and that
+    /// `slint-build` exposes no setter for), so the compiler will not fail the build and this is
+    /// what does.
+    ///
+    /// **`root.width` is deliberately not banned.** The drawer pushes, so the well's width has to
+    /// come from the window's; the horizontal axis has no pushed-in size the layout influences, and
+    /// `min-width` / `preferred-width` are plain constants.
+    #[test]
+    fn nothing_in_the_markup_reads_the_windows_own_height() {
+        for (name, text) in markup() {
+            for (n, line) in text.lines().enumerate() {
+                let t = strip(line);
+                assert!(
+                    !t.contains("root.height"),
+                    "ui/{name}:{}: reads the window's own height, which closes the binding loop\n  \
+                     {}",
+                    n + 1,
+                    line.trim()
+                );
+            }
         }
     }
 
@@ -807,6 +999,17 @@ mod tests {
         // height, and it was missing from this list — so `body-height: 655.751px` on a new use
         // site would have gone straight through the sweep that exists to stop exactly that.
         "body-height",
+        // A border width is a size, and it was not in this list — so `border-width: 2px` on the
+        // focus ring §7.3 asks for would have gone straight through the sweep that exists to stop
+        // exactly that. `1px` stays in [`ALLOWED`] as a device-pixel hairline.
+        "border-width",
+        // §5's Scroll declares all four, and every one of them is a length or a position. They
+        // arrive with the first `Flickable` in this markup, so they go in with it rather than
+        // after somebody has written a number into one.
+        "viewport-width",
+        "viewport-height",
+        "viewport-x",
+        "viewport-y",
     ];
 
     /// Closed and exact. `0` and `0px` are nothing; `1px` is a device-pixel hairline, not a
@@ -816,34 +1019,24 @@ mod tests {
     /// a plausible device with no Rust running — every real use site passes a size.
     const ALLOWED: &[&str] = &["0", "0px", "1px", "2", "100%", "50%", "420px"];
 
-    /// **The exemption, enumerated line by line, with a retirement condition.**
-    ///
-    /// These are `window.slint`'s **control metrics** — a 36 px control, a 6 px radius, the 56 px
-    /// chrome bar, the 60 px device row, the caption slots, the 7 px carousel dot. They are not
-    /// geometry in §6.6's sense (a fraction of body height) and they are not §9.6's column; they
-    /// belong to §6.2 and §6.3, whose single source of truth is `Metric` in `ui/tokens.slint`,
-    /// which item 9 does not own.
-    ///
-    /// **Retirement condition**: §9.6 deletes the chrome bar and the caption stack outright, and
-    /// §4 replaces the tab strip with the drawer. When the bench is rebuilt, every line below goes
-    /// with it and this list becomes empty — at which point delete it rather than let it stand.
-    ///
-    /// Enumerated as whole lines rather than as bare values on purpose: a **new** `height: 36px` on
-    /// a new element fails this test, which a value-only allowlist would wave through.
-    const CONTROL_METRICS: &[&str] = &[
-        "height: 36px;",                     // Button, Tab — one control height
-        "border-radius: 6px;",               // Button, Tab, and each one's Material fill
-        "height: 56px;",                     // the chrome bar §9.6 deletes
-        "height: 60px;",                     // a device row on the Devices tab
-        "height: 20px;",                     // a caption slot
-        "height: 16px;",                     // the write-target line
-        "height: 8px;",                      // the carousel dot row
-        "width: 7px;",                       // a carousel dot
-        "height: 7px;",
-        "border-radius: 3.5px;",
-        "spacing: 2px;",                     // the two-line device row
-        "height: r.heading ? 44px : 30px;",  // a resource row, heading or not
-    ];
+    // **There is no exemption list any more, and that is the retirement working rather than an
+    // omission.**
+    //
+    // `CONTROL_METRICS` held `window.slint`'s twelve control metrics — sizes belonging to §6.2 and
+    // §6.3, whose single source of truth is `Metric` in `ui/tokens.slint`, which item 9 does not
+    // own. Eleven went when the chrome bar, the tab strip, the carousel and the caption stack were
+    // deleted: `height: 36px;`, `border-radius: 6px;`, `height: 56px;`, `height: 60px;`,
+    // `height: 20px;`, `height: 8px;`, `width: 7px;`, `height: 7px;`, `border-radius: 3.5px;`,
+    // `spacing: 2px;` and `height: r.heading ? 44px : 30px;`.
+    //
+    // The twelfth was `height: 16px;` — §10's write-target row, kept at `label` size directly under
+    // the device because deleting the caption stack before §7.5's shelf existed would have taken
+    // with it the sentence standing between an afternoon and somebody's only image of an iPod they
+    // own. Its stated retirement condition was *it becomes shelf row 3; then this list is empty and
+    // goes*. It is shelf row 3 now (`ui/bench.slint`, at `Geometry.line-label`), so the list is
+    // empty and it has gone, and `every_exemption_still_covers_a_line` — which existed to make the
+    // list self-retiring — has gone with it. `no_geometry_literal_survives_in_the_markup` now sweeps
+    // every markup file with no exemption at all.
 
     /// Strip string literals, then `//` comments, so neither can hide or invent a number.
     fn strip(line: &str) -> String {
@@ -900,32 +1093,145 @@ mod tests {
         out
     }
 
-    /// Does this line assign to something whose value is a length or a position?
-    fn is_geometry_line(t: &str) -> bool {
-        // A `property <length> foo: …` declaration is geometry too — that is where `0.5917 * hero`
-        // used to live.
-        if t.starts_with("property <length>") || t.starts_with("in property <length>") {
-            return true;
-        }
-        GEOMETRY_PROPS
-            .iter()
-            .any(|p| t.starts_with(p) && t[p.len()..].starts_with(':'))
+    /// One token of a markup file: an element opening, an element closing, or a statement.
+    ///
+    /// **Tokens rather than lines, and three exploitable holes are why.** The first cut classified a
+    /// *line* by its trimmed prefix, so all three of these compiled and swept clean with a literal
+    /// in them:
+    ///
+    /// ```text
+    /// Rectangle { width: 37px; height: 13px; }     // an element body on one line
+    /// states [ nudged when open : { handle.y: 37px; } ]   // a qualified target
+    /// why => { root.spare = 37px; }                // an assignment inside a handler
+    /// ```
+    ///
+    /// The first is the dangerous one: `Rectangle { width: 37px; }` is ordinary Slint that anybody
+    /// writes without thinking, and this sweep exists to stop exactly that.
+    #[derive(Debug, Clone, PartialEq)]
+    enum Tok {
+        /// The text before a `{`: `touch := TouchArea`, `if cond: Foo`, `clicked =>`.
+        Open(usize, String),
+        Close(usize),
+        /// A `;`-terminated fragment, or whatever sat before a brace.
+        Stmt(usize, String),
     }
 
-    /// The exemption list shrinks to nothing and then goes, rather than rotting in place.
-    ///
-    /// An allowlist entry that no longer matches any line is a bypass with nothing behind it —
-    /// exactly the shape §16.9 deletes. This makes the list self-retiring: when the bench is
-    /// rebuilt and the last chrome line goes, the entry that covered it fails here.
-    #[test]
-    fn every_exemption_still_covers_a_line() {
-        let lines: Vec<&str> = WINDOW_SLINT.lines().map(str::trim).collect();
-        for e in CONTROL_METRICS {
-            assert!(
-                lines.contains(e),
-                "`{e}` is exempted and appears nowhere in ui/window.slint; delete the exemption"
-            );
+    /// Split a markup file into [`Tok`]s. Comments and string bodies are removed first, so neither
+    /// can hide or invent a number, and a wrapped binding is one statement rather than two lines.
+    fn tokens(text: &str) -> Vec<Tok> {
+        let mut out = Vec::new();
+        let mut buf = String::new();
+        // The line the buffer started on, so a wrapped statement is reported where it begins.
+        let mut at = 1usize;
+        let mut fresh = true;
+        for (n, raw) in text.lines().enumerate() {
+            let line = strip(raw);
+            for c in line.chars() {
+                match c {
+                    '{' | '}' | ';' => {
+                        let t = buf.trim().to_string();
+                        if !t.is_empty() {
+                            out.push(if c == '{' { Tok::Open(at, t) } else { Tok::Stmt(at, t) });
+                        } else if c == '{' {
+                            out.push(Tok::Open(at, String::new()));
+                        }
+                        if c == '}' {
+                            out.push(Tok::Close(n + 1));
+                        }
+                        buf.clear();
+                        fresh = true;
+                    }
+                    _ => {
+                        if fresh && !c.is_whitespace() {
+                            at = n + 1;
+                            fresh = false;
+                        }
+                        buf.push(c);
+                    }
+                }
+            }
+            buf.push(' ');
         }
+        let t = buf.trim().to_string();
+        if !t.is_empty() {
+            out.push(Tok::Stmt(at, t));
+        }
+        out
+    }
+
+    /// Every `property <length> NAME` declared anywhere in this markup.
+    ///
+    /// A declared length is geometry whatever it is called, so writing `root.spare = 37px` into a
+    /// handler is caught by name. The set is global rather than per component, which makes it a
+    /// superset and therefore strictly stricter — the point is that a number cannot get in.
+    fn declared_lengths() -> std::collections::BTreeSet<String> {
+        let mut out: std::collections::BTreeSet<String> = Default::default();
+        for (_, text) in markup() {
+            for tok in tokens(&text) {
+                let (Tok::Stmt(_, t) | Tok::Open(_, t)) = tok else { continue };
+                let Some(i) = t.find("property <length> ") else { continue };
+                let rest = &t[i + "property <length> ".len()..];
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                    .collect();
+                if !name.is_empty() {
+                    out.insert(name);
+                }
+            }
+        }
+        out
+    }
+
+    /// The value side of every geometry binding or assignment in one statement fragment.
+    ///
+    /// Matches `width:`, `handle.y:`, `root.spare =`, `property <length> foo:` — a property name,
+    /// optionally qualified, followed by `:` or `=`.
+    fn geometry_values(stmt: &str, extra: &std::collections::BTreeSet<String>) -> Vec<String> {
+        let mut out = Vec::new();
+        // A `property <length> foo: …` declaration is geometry whatever `foo` is called — that is
+        // where `0.5917 * hero` used to live — so it is recognised by shape rather than by name.
+        if let Some(i) = stmt.find("property <length> ") {
+            if let Some(j) = stmt[i..].find(':') {
+                out.push(stmt[i + j + 1..].to_string());
+            }
+        }
+        let bytes: Vec<char> = stmt.chars().collect();
+        let is_ident = |c: char| c.is_alphanumeric() || c == '_' || c == '-' || c == '.';
+        let mut i = 0;
+        while i < bytes.len() {
+            if i > 0 && is_ident(bytes[i - 1]) {
+                i += 1;
+                continue;
+            }
+            // Read an optionally-qualified identifier.
+            let start = i;
+            while i < bytes.len() && is_ident(bytes[i]) {
+                i += 1;
+            }
+            if i == start {
+                i += 1;
+                continue;
+            }
+            let ident: String = bytes[start..i].iter().collect();
+            // …then the separator.
+            let mut j = i;
+            while j < bytes.len() && bytes[j] == ' ' {
+                j += 1;
+            }
+            // `==` is a comparison, not a binding.
+            let binds = matches!(bytes.get(j), Some(':') | Some('='))
+                && bytes.get(j + 1) != Some(&'=')
+                && bytes.get(j.wrapping_sub(1)) != Some(&'=');
+            if !binds {
+                continue;
+            }
+            let bare = ident.rsplit('.').next().unwrap_or(&ident);
+            if GEOMETRY_PROPS.contains(&bare) || extra.contains(bare) {
+                out.push(bytes[j + 1..].iter().collect());
+            }
+        }
+        out
     }
 
     /// **The hole this whole item exists to close.**
@@ -940,42 +1246,39 @@ mod tests {
     ///  + (i - root.selected) * 88px;
     /// ```
     ///
-    /// — puts its literal on a line that does not begin with a geometry property, so a per-line
-    /// sweep never looks at it. Statements are joined to the `;` before they are swept.
+    /// — puts its literal on a line that does not begin with a geometry property. And an element
+    /// body written on one line puts three of them there. [`tokens`] splits on `;` and on braces, so
+    /// neither shape is a line and both are swept.
     ///
-    /// The exemption is scoped to `window.slint`, which is the file it was enumerated from and the
-    /// only file `every_exemption_still_covers_a_line` checks it against. Applying it to
-    /// `ipod.slint` as well would let a line silently escape in a file nothing verifies the list
-    /// against — and `ipod.slint`, the drawn device, is what item 9 is actually about.
+    /// **There is no exemption any more.** The one that survived the bench rebuild was §10's
+    /// `height: 16px;` write-target row, and it retired the moment that row became shelf row 3 — see
+    /// the note where `CONTROL_METRICS` used to be.
     #[test]
     fn no_geometry_literal_survives_in_the_markup() {
-        for (file, text) in [("ui/ipod.slint", IPOD_SLINT), ("ui/window.slint", WINDOW_SLINT)] {
-            let exempt: &[&str] = if file == "ui/window.slint" {
-                CONTROL_METRICS
-            } else {
-                &[]
-            };
-            let lines: Vec<String> = text.lines().map(|l| strip(l).trim().to_string()).collect();
-            for (n, first) in lines.iter().enumerate() {
-                if !is_geometry_line(first) || exempt.contains(&first.as_str()) {
+        let extra = declared_lengths();
+        for (name, text) in markup() {
+            let file = format!("ui/{name}");
+            for tok in tokens(&text) {
+                let (Tok::Stmt(n, stmt) | Tok::Open(n, stmt)) = tok else { continue };
+                // **`tokens.slint`'s own scale declarations are the one exemption, and it is a
+                // boundary rather than a hole.** §16.9 gives *geometry* — positions and sizes — to
+                // `src/geometry.rs`; §6.2's type scale and §6.3's space scale belong to `Metric`,
+                // and this is where `Metric` is declared. `out property <length> s1: 4px;` IS the
+                // single source of truth for that 4, and moving it to `geometry.rs` would put two
+                // scales in one file with no rule separating them. Only the declaration form is
+                // exempt: `x: 37px` in this file would still be caught, and `Metric.s1` at a use
+                // site is a name rather than a number.
+                if name == "tokens.slint" && stmt.contains("out property <length> ") {
                     continue;
                 }
-                // Join to the end of the statement. A binding that opens a block (`=> {`) is not
-                // one statement, so the join stops at a brace as well as at a semicolon.
-                let mut stmt = first.clone();
-                let mut at = n;
-                while !stmt.contains(';') && !stmt.contains('{') && at + 1 < lines.len() {
-                    at += 1;
-                    stmt.push(' ');
-                    stmt.push_str(&lines[at]);
-                }
-                for num in numbers(&stmt) {
-                    assert!(
-                        ALLOWED.contains(&num.as_str()),
-                        "{file}:{}: `{num}` is a geometry literal; it belongs in \
-                         src/geometry.rs\n  {stmt}",
-                        n + 1
-                    );
+                for value in geometry_values(&stmt, &extra) {
+                    for num in numbers(&value) {
+                        assert!(
+                            ALLOWED.contains(&num.as_str()),
+                            "{file}:{n}: `{num}` is a geometry literal; it belongs in \
+                             src/geometry.rs\n  {stmt}"
+                        );
+                    }
                 }
             }
         }
@@ -984,38 +1287,840 @@ mod tests {
     /// **The control that makes the instrument produce a non-zero.**
     ///
     /// `AGENTS.md` §6: before believing a zero, run the control. The sweep above reports nothing,
-    /// and a sweep that reports nothing because its matcher is broken looks exactly the same. This
-    /// feeds it the two lines that used to be in the markup and asserts they are caught.
+    /// and a sweep that reports nothing because its matcher is broken looks exactly the same.
+    ///
+    /// The last three cases are the three shapes that were snuck past the previous, line-prefix
+    /// matcher. Each of them compiles as ordinary Slint and each carried a literal the sweep exists
+    /// to stop.
     #[test]
     fn the_literal_sweep_can_see_a_literal() {
-        assert!(is_geometry_line("width: 0.5917 * h;"));
-        assert!(is_geometry_line("property <length> hero: 655.751px;"));
-        assert!(!is_geometry_line("background: #08080a;"));
-        // `body-height` is the drawing's own size input, and it was not in the list.
-        assert!(is_geometry_line("body-height: 655.751px;"));
-        // A property whose name merely *starts* with one of them is not one of them.
-        assert!(!is_geometry_line("heightish: 12px;"));
+        let none = std::collections::BTreeSet::new();
+        // Everything the sweep would flag in one fragment, allowlist applied.
+        let caught = |stmt: &str, extra: &std::collections::BTreeSet<String>| -> Vec<String> {
+            geometry_values(stmt, extra)
+                .iter()
+                .flat_map(|v| numbers(v))
+                .filter(|n| !ALLOWED.contains(&n.as_str()))
+                .collect()
+        };
 
-        let caught: Vec<String> = numbers(&strip("width: 0.5917 * h; // 0.4866 was wrong"))
-            .into_iter()
-            .filter(|n| !ALLOWED.contains(&n.as_str()))
-            .collect();
+        assert_eq!(caught("width: 0.5917 * h", &none), vec!["0.5917".to_string()]);
         assert_eq!(
-            caught,
-            vec!["0.5917".to_string()],
-            "the sweep would not have caught the ratio that used to be written here"
+            caught("property <length> hero: 655.751px", &none),
+            vec!["655.751px".to_string()]
         );
+        assert!(caught("background: #08080a", &none).is_empty());
+        // `body-height` is the drawing's own size input, and it was not in the list.
+        assert_eq!(caught("body-height: 655.751px", &none), vec!["655.751px".to_string()]);
+        // A property whose name merely *starts* with one of them is not one of them.
+        assert!(caught("heightish: 12px", &none).is_empty());
+        // A comparison is not a binding.
+        assert!(caught("visible: root.width == 12px", &none).is_empty());
 
         // `Metric.s7` is a name, not a 7; `#ffffff14` is a colour, not a 14; and
         // `Geometry.hero-phys-1x` is a name, not a `1x` — which the first version of this scanner
         // read as a literal, because a hyphen is an identifier character in Slint.
-        assert!(numbers("spacing: Metric.s7;").is_empty());
-        assert!(numbers("border-color: #ffffff14;").is_empty());
-        assert!(numbers("border-color: #08080a;").is_empty());
-        assert!(numbers("in property <length> hero: Geometry.hero-phys-1x;").is_empty());
-        // …but a real subtraction of a real length still reads as one.
-        assert_eq!(numbers("y: parent.height - 1px;"), vec!["1px"]);
-        // …and the allowlist really is consulted rather than everything being waved through.
-        assert_eq!(numbers("y: (parent.height - self.height) / 2;"), vec!["2"]);
+        assert!(caught("spacing: Metric.s7", &none).is_empty());
+        assert!(caught("border-color: #ffffff14", &none).is_empty());
+        assert!(caught("in property <length> hero: Geometry.hero-phys-1x", &none).is_empty());
+        // …but a real subtraction of a real length still reads as one, and is allowed.
+        assert_eq!(numbers("parent.height - 1px"), vec!["1px"]);
+        assert!(caught("y: parent.height - 1px", &none).is_empty());
+        assert!(caught("y: (parent.height - self.height) / 2", &none).is_empty());
+        // A border width is a size, and the focus ring is the reason it had to be one. `1px` is an
+        // allowed device-pixel hairline; the ring's own 2 is `Geometry.focus-ring-w` and typing it
+        // is caught.
+        assert!(caught("border-width: 1px", &none).is_empty());
+        assert_eq!(caught("border-width: 2px", &none), vec!["2px".to_string()]);
+
+        // ── The three that were snuck past the line-prefix matcher ──
+        //
+        // (a) An element body on one line. This is the dangerous one: ordinary Slint that anybody
+        //     writes without thinking, and exactly what this sweep exists to stop.
+        let one_line = tokens("Rectangle { width: 37px; height: 13px; background: Ink.line; }");
+        let flagged: Vec<String> = one_line
+            .iter()
+            .filter_map(|t| match t {
+                Tok::Stmt(_, s) | Tok::Open(_, s) => Some(s.clone()),
+                Tok::Close(_) => None,
+            })
+            .flat_map(|s| caught(&s, &none))
+            .collect();
+        assert_eq!(flagged, vec!["37px".to_string(), "13px".to_string()]);
+
+        // (b) A `states` block with a qualified target.
+        assert_eq!(caught("handle.y: 37px", &none), vec!["37px".to_string()]);
+
+        // (c) An assignment inside a callback handler, to a property declared elsewhere in the file.
+        //     `spare` is not a geometry property by name; it is one because it was declared a
+        //     `<length>`, which is what [`declared_lengths`] is for.
+        let mut declared = std::collections::BTreeSet::new();
+        declared.insert("spare".to_string());
+        assert!(caught("root.spare = 37px", &none).is_empty());
+        assert_eq!(caught("root.spare = 37px", &declared), vec!["37px".to_string()]);
+        // …and the real markup does declare lengths, or that half is looking at nothing.
+        assert!(
+            !declared_lengths().is_empty(),
+            "no `property <length>` was found in any markup file, so the by-name half of the \
+             sweep is pointing at nothing"
+        );
+    }
+
+    // ── The sweeps' own input, and the four fits the drawer has to survive ──────────────────────
+
+    /// **T-1. Every markup file is swept, and the set is checked in both directions.**
+    ///
+    /// A sweep that names its own inputs stops sweeping the moment somebody adds a file — silently,
+    /// and looking exactly like a sweep that found nothing. So the discovered set and the declared
+    /// set are compared: a file on disk that nobody declared is unswept, and a declared file that
+    /// is not on disk is a sweep pointing at nothing.
+    #[test]
+    fn every_markup_file_is_swept() {
+        let found: Vec<String> = markup().into_iter().map(|(n, _)| n).collect();
+        let mut want: Vec<String> = DECLARED_MARKUP.iter().map(|s| s.to_string()).collect();
+        want.sort();
+
+        let extra: Vec<&String> = found.iter().filter(|n| !want.contains(n)).collect();
+        assert!(
+            extra.is_empty(),
+            "ui/ holds {extra:?}, which nothing in this module knows about — add it to \
+             DECLARED_MARKUP or delete it"
+        );
+        let absent: Vec<&String> = want.iter().filter(|n| !found.contains(n)).collect();
+        assert!(
+            absent.is_empty(),
+            "DECLARED_MARKUP names {absent:?}, which are not on disk — every sweep in this module \
+             is pointing at nothing for them"
+        );
+    }
+
+    /// **T-2. `Flickable` is declared in exactly one file, and it is never interactive.**
+    ///
+    /// §5's Scroll is the only element in the tree that declares one, so the whole of a
+    /// `Flickable`'s cost is paid in one place and audited there. `interactive: false` is what
+    /// retires §19.4's accepted 100 ms press latency —
+    /// `Flickable::input_event_filter_before_children` returns `ForwardAndIgnore` for every
+    /// non-wheel event when it is false, so `DelayForwarding(FORWARD_DELAY)` is never reached, and
+    /// wheel events still fall through. The cost that replaces it is no touch-drag-to-flick.
+    #[test]
+    fn every_flickable_declares_itself_not_interactive() {
+        let mut files: Vec<String> = Vec::new();
+        for (name, text) in markup() {
+            let lines: Vec<String> = text.lines().map(|l| strip(l).trim().to_string()).collect();
+            for (n, line) in lines.iter().enumerate() {
+                if !line.contains("Flickable") {
+                    continue;
+                }
+                files.push(name.clone());
+                // The declaration's own body: to the next `}` at the top of its nesting, which for
+                // this element is short. Scanning the whole file would let a sibling's
+                // `interactive: false` cover a Flickable that has none.
+                let body: String = lines[n..].iter().take(24).cloned().collect::<Vec<_>>().join(" ");
+                assert!(
+                    body.contains("interactive: false;"),
+                    "ui/{name}:{}: a Flickable that does not declare `interactive: false` costs \
+                     every control inside it 100 ms of press latency\n  {line}",
+                    n + 1
+                );
+            }
+        }
+        files.dedup();
+        assert_eq!(
+            files,
+            vec!["primitives.slint".to_string()],
+            "a Flickable is declared outside ui/primitives.slint; §5 has exactly one Scroll and \
+             §16.11 bans nesting them"
+        );
+    }
+
+    /// **T-3. The Rail never dismisses itself, and there is no clock anywhere near it.**
+    ///
+    /// §14.4 bans the four-second self-dismissing message by name, and `Timer` **is** a real
+    /// element in Slint 1.17 (`builtins.slint:2695`), so the ban is a live risk rather than a
+    /// theoretical one. Three mechanical halves: no `Timer` in any markup, no `animate` on a
+    /// visibility, and no unit of time anywhere in `src/rail.rs`.
+    #[test]
+    fn the_rail_never_dismisses_itself() {
+        for (name, text) in markup() {
+            for (n, line) in text.lines().enumerate() {
+                let t = strip(line);
+                let t = t.trim();
+                assert!(
+                    !t.starts_with("Timer ") && !t.starts_with("Timer{") && !t.contains("Timer {"),
+                    "ui/{name}:{}: a Timer. §14.4 bans the self-dismissing message by name\n  {}",
+                    n + 1,
+                    line.trim()
+                );
+                // **The animation ban is scoped to the Rail's own two files**, and deliberately so:
+                // `ipod.slint` fades the drawn device's press feedback and `bench.slint` fades the
+                // cradle, both of which are §8's motion working. What must never fade is an entry
+                // that says something failed, out from under somebody reading it.
+                if (name == "rail.slint" || name == "work.slint") && t.starts_with("animate ") {
+                    let props = t.trim_start_matches("animate ");
+                    for banned in ["visible", "opacity"] {
+                        assert!(
+                            !props.split(|c: char| !c.is_alphanumeric() && c != '-')
+                                .any(|p| p == banned),
+                            "ui/{name}:{}: animates `{banned}`, which is how a failure fades out \
+                             from under somebody reading it\n  {}",
+                            n + 1,
+                            line.trim()
+                        );
+                    }
+                }
+            }
+        }
+
+        // And the model half: an entry that cannot hold a time cannot expire.
+        let rail = include_str!("rail.rs");
+        for word in ["std::time", "Instant", "SystemTime", "Duration"] {
+            assert!(
+                !rail.contains(word),
+                "src/rail.rs names `{word}`; nothing in the Rail expires, so nothing in it needs \
+                 a clock"
+            );
+        }
+    }
+
+    /// **T-6. The value column fits the drawer, and `PAGE_MARGIN` is still the space scale's 24.**
+    ///
+    /// Two halves and the second is the one that catches the duplication rather than the
+    /// arithmetic: `PAGE_MARGIN` is the same number as `Metric.s5`, declared in two files because
+    /// §6.3's scale is the markup's and §16.9's constants are Rust's, and the only thing stopping
+    /// them drifting is that this reads one out of the other as text.
+    //
+    // **The identity is a tautology under the derivation, and it is kept for what that catches.**
+    // `ROW_VALUE_W` is `DRAWER_W − 2 × PAGE_MARGIN − ROW_VALUE_X`, so the two columns sum to the
+    // page's inner width by construction and moving `ROW_VALUE_X` cannot break it. What *does*
+    // break it is somebody replacing the expression with a typed `140.0` — which is the second
+    // source of truth this whole module exists to delete — and the moment they do, moving
+    // `ROW_VALUE_X` goes red here. The check that can fail on today's numbers is the one under it.
+    #[test]
+    fn the_row_value_column_fits_the_drawer() {
+        let inner = DRAWER_W - 2.0 * PAGE_MARGIN;
+        let used = ROW_VALUE_X + ROW_VALUE_W;
+        assert_eq!(
+            used, inner,
+            "the label and value columns are {used} wide inside a {inner} px page"
+        );
+
+        // Neither column may collapse. **Two Rows wide** is the floor, because §11.2 draws
+        // two-word labels (`Which iPod`, `What it runs`) against two-word values (`Black 5.5G`,
+        // `Apple + Rockbox`), and a column narrower than the row is tall cannot hold either.
+        let floor = 2.0 * ROW_H;
+        for (what, w) in [("label", ROW_VALUE_X), ("value", ROW_VALUE_W)] {
+            assert!(
+                w >= floor,
+                "the {what} column is {w} px inside a {inner} px page; below {floor} it cannot \
+                 hold the two-word {what}s §11.2 draws"
+            );
+        }
+
+        let tokens = read("tokens.slint");
+        let s5 = tokens
+            .lines()
+            .map(str::trim)
+            .find_map(|l| l.strip_prefix("out property <length> s5: "))
+            .and_then(|v| v.strip_suffix("px;"))
+            .and_then(|v| v.parse::<f64>().ok())
+            .expect("ui/tokens.slint declares s5");
+        assert_eq!(
+            s5, PAGE_MARGIN,
+            "Metric.s5 is {s5}px and PAGE_MARGIN is {PAGE_MARGIN}; the drawer's page margin IS the \
+             space scale's 24 and two spellings of one number is how they come to disagree"
+        );
+    }
+
+    /// **T-9. The drawer holds its own furniture at the window's declared minimum.**
+    ///
+    /// A page is a fixed header, a body, and a pinned footer. At [`MIN_HEIGHT`] the header and the
+    /// footer are still their full size — nothing gives (§16.2) — so what is left over is the body,
+    /// and it has to be at least [`DRAWER_MIN_BODY`] or the Work page has nowhere to put its first
+    /// entry.
+    //
+    // Declared constants related to each other, which is the point rather than a defect; left as a
+    // run-time assertion so a failure names the numbers instead of stopping the build.
+    #[allow(clippy::assertions_on_constants)]
+    #[test]
+    fn the_drawer_fits_its_own_furniture_at_the_window_minimum() {
+        let body = MIN_HEIGHT - SHELF - DRAWER_HEADER_H - WORK_FOOTER_H;
+        assert!(
+            body >= DRAWER_MIN_BODY,
+            "at the window minimum the drawer has {body} px of body for a page that needs \
+             {DRAWER_MIN_BODY} — {MIN_HEIGHT} minus {SHELF} shelf, {DRAWER_HEADER_H} header and \
+             {WORK_FOOTER_H} footer"
+        );
+    }
+
+    /// **T-10. The Composer's root fits the smallest window that draws the device at 1:1.**
+    ///
+    /// §11.2's three-groups-on-one-page came to about 1 090 px inside a drawer that is at most 803
+    /// on the operator's own machine and 722 at the minimum, which is what forced the re-cut into
+    /// three depth levels. This is that re-cut, checked: a header, three numbered rows, the
+    /// always-reserved verdict, the plan and `Create`.
+    ///
+    /// The ceiling is derived rather than typed — `HERO_PHYS_1X + CHROME_MIN` is the client height
+    /// a `k = 1` window needs, which is `fit::required_client_logical` written out, and the drawer
+    /// is that less the shelf (§9.5's decision: only the shelf's three content rows narrow).
+    #[test]
+    fn the_composer_root_fits_the_smallest_window_that_draws_the_device() {
+        // §11.2's own decomposition of the plan region: four step lines and the two ledger lines.
+        const PLAN: f64 = 110.0;
+        let needed = DRAWER_HEADER_H + 3.0 * ROW_H + VERDICT_H + PLAN + ROW_H;
+        let ceiling = (HERO_PHYS_1X + CHROME_MIN) - SHELF;
+        assert!(
+            needed <= ceiling,
+            "the Composer's root is {needed:.0} px inside a drawer that is {ceiling:.0} at the \
+             smallest window that draws the device — §11.2's re-cut into three levels is what this \
+             is supposed to buy"
+        );
+        // And the shape it replaced does not fit, or the re-cut bought nothing.
+        assert!(
+            1090.0 > ceiling,
+            "the three-groups-on-one-page shape was ~1090 px and this says it fits in \
+             {ceiling:.0}; the check is dead"
+        );
+    }
+
+    /// **The drawer's ROOT page does not fit the drawer, and that is why it scrolls.**
+    ///
+    /// `the_drawer_fits_its_own_furniture_at_the_window_minimum` checks the *furniture* — header,
+    /// shelf, footer — and says nothing about what a page puts between them. `MenuPage` puts seven
+    /// rows there, six of them disabled, and a disabled `Pressable` is `ROW_H + FIELD_REASON` = 78
+    /// because §9.4's reason slot is reserved under it. That is 556 px inside a drawer that is 312
+    /// at the declared window minimum: Work cut in half, and Readout / Settings / Reference entirely
+    /// outside a `clip` that no `Flickable` can recover them from.
+    ///
+    /// So this asserts both halves of the answer: the page genuinely does not fit, and it declares a
+    /// `Scroll`. Dropping either — a shorter page or a lost Scroll — is a page whose bottom rows are
+    /// unreachable by pointer, by keyboard and by an assistive technology at once.
+    #[test]
+    fn the_drawers_root_page_needs_more_room_than_it_has_and_therefore_scrolls() {
+        let text = read("drawer.slint");
+        let rows = text.matches("count: 7;").count();
+        assert_eq!(rows, 7, "`MenuPage` no longer declares seven rows of seven: {rows}");
+        let disabled = text.matches("enabled: false;").count();
+        assert_eq!(disabled, 6, "`MenuPage` no longer has six disabled rows: {disabled}");
+
+        let needed = DRAWER_HEADER_H
+            + disabled as f64 * (ROW_H + FIELD_REASON)
+            + (rows - disabled) as f64 * ROW_H;
+        let have = MIN_HEIGHT - SHELF;
+        assert!(
+            needed > have,
+            "the root page needs {needed:.0} px and has {have:.0} at the window minimum, so it \
+             fits and the Scroll below is unnecessary. Delete this test rather than the Scroll."
+        );
+
+        // The whole page's own three cells, in the order they have to be in: a fixed header, then
+        // the Scroll. `WorkPage` had this right; the root page of the same drawer did not.
+        let menu = text
+            .split_once("export component MenuPage")
+            .expect("ui/drawer.slint declares MenuPage")
+            .1
+            .split_once("export component Drawer")
+            .map_or_else(|| text.clone(), |(a, _)| a.to_string());
+        assert!(
+            menu.contains("DrawerHeader"),
+            "`MenuPage` has no header, so there is no way out of it in the same place as every \
+             other page"
+        );
+        assert!(
+            menu.contains("Scroll {"),
+            "`MenuPage` needs {needed:.0} px inside {have:.0} and declares no Scroll — its last \
+             three rows are outside the drawer's clip, which is not a Flickable, so they are out \
+             of the tab order and out of the accessible tree with no indicator that they exist"
+        );
+        assert!(
+            menu.matches("ensure-visible").count() == rows,
+            "not every row brings itself into view when the keyboard reaches it; Tab is the only \
+             keyboard scroll route this program has (§16.11)"
+        );
+    }
+
+    // ── Accessibility and glyphs: two sweeps whose failure is silent without them ────────────────
+
+    /// **T-18. No `accessible-*` property is set without a constant role on the same element.**
+    ///
+    /// Slint's accessibility lowering (`lower_accessibility.rs:29-33`) says **nothing** when an
+    /// element sets `accessible-label` beside `AccessibleRole.none` — the label simply never
+    /// reaches anybody. A role behind a ternary is worse: it is a compile error in one direction
+    /// and a silent nothing in the other, which is why the spelling is checked here as well.
+    ///
+    /// **It walks [`Tok`]s rather than lines.** The line-prefix version could not see an element
+    /// written on one line — `Rectangle { accessible-role: AccessibleRole.none; accessible-label:
+    /// "…"; }` was neither an open, a close nor a binding, and fell through all three. That is the
+    /// one case this test uniquely catches, since a conditional role and an orphan label are both
+    /// compile errors on their own, so the hole was the whole of the test.
+    #[test]
+    fn no_accessible_property_is_set_without_a_constant_role() {
+        let bearers = role_bearing_components();
+        // The control: a component that declares one has to be in the set, or the set is empty and
+        // every use site below is being waved through.
+        assert!(
+            bearers.contains("Pressable"),
+            "no component in this markup was found to declare a constant accessible-role, so the \
+             sweep below cannot tell a role-bearing element from any other: {bearers:?}"
+        );
+
+        for (name, text) in markup() {
+            let toks = tokens(&text);
+            // A stack of open elements. Each frame remembers whether a role reaches it — its own
+            // binding, its element type's, or an ancestor's — because §16.7 accepts a role on the
+            // element or on the one containing it.
+            let mut stack: Vec<bool> = vec![false];
+            // Every element whose role arrives AFTER a binding it has to cover, so the order the
+            // language does not require is not required here either. Recorded as we go and checked
+            // once the element closes.
+            let mut pending: Vec<(usize, String)> = Vec::new();
+            let mut frames: Vec<usize> = vec![0];
+
+            for tok in &toks {
+                match tok {
+                    Tok::Open(_, head) => {
+                        let inherited = *stack.last().unwrap_or(&false);
+                        stack.push(inherited || bearers.contains(&element_type(head)));
+                        frames.push(pending.len());
+                    }
+                    Tok::Close(_) => {
+                        let covered = stack.pop().unwrap_or(false);
+                        let from = frames.pop().unwrap_or(0);
+                        if covered {
+                            pending.truncate(from);
+                        }
+                    }
+                    Tok::Stmt(n, stmt) => {
+                        let Some(rest) = stmt.strip_prefix("accessible-") else {
+                            continue;
+                        };
+                        // `accessible-action-default => { … }` is a **callback**, not a property,
+                        // and a callback needs no role to be legal. Only bindings are swept.
+                        if rest.contains("=>") {
+                            continue;
+                        }
+                        if let Some(v) = rest.strip_prefix("role:") {
+                            assert!(
+                                !v.contains('?'),
+                                "ui/{name}:{n}: a conditional accessible-role. It must be a \
+                                 constant\n  {stmt}"
+                            );
+                            // **The silent one.** `AccessibleRole.none` beside a label compiles,
+                            // says nothing (`lower_accessibility.rs:29-33`) and reaches nobody.
+                            assert!(
+                                !v.contains("AccessibleRole.none"),
+                                "ui/{name}:{n}: AccessibleRole.none on an element that carries \
+                                 other accessible-* bindings — the label reaches nobody\n  {stmt}"
+                            );
+                            if let Some(top) = stack.last_mut() {
+                                *top = true;
+                            }
+                            pending.truncate(*frames.last().unwrap_or(&0));
+                        } else {
+                            // §16.7's own abbreviation does not compile: the properties are
+                            // `accessible-item-index` / `-count`, not `accessible-index` / `-count`.
+                            for wrong in ["index:", "count:"] {
+                                assert!(
+                                    !rest.starts_with(wrong),
+                                    "ui/{name}:{n}: `accessible-{wrong}` is not a property; it is \
+                                     `accessible-item-{wrong}`"
+                                );
+                            }
+                            if !*stack.last().unwrap_or(&false) {
+                                pending.push((*n, stmt.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some((n, stmt)) = pending.first() {
+                panic!(
+                    "ui/{name}:{n}: `{stmt}` with no accessible-role on the element or on anything \
+                     containing it"
+                );
+            }
+        }
+    }
+
+    /// **Every duration comes from the `Motion` global, and `lively` has exactly one use site.**
+    ///
+    /// §8.4's reduced motion is one multiplication inside one global, so a use site writes
+    /// `Motion.gentle` and cannot forget it. A hard-coded `duration: 200ms;` is therefore a silent
+    /// reduced-motion hole that nothing else in this program would see — which is the precise
+    /// failure mode the pre-multiplied global was chosen to prevent, and nothing was checking it.
+    ///
+    /// The second half is §8's table read literally: *`lively` — drawer page depth **only**, nothing
+    /// else, ever.* `lively` is `ease-out-back` and overshoots, and §8.2 rule 2 forbids an
+    /// overshooting curve anywhere near a property the Screen's geometry reads.
+    #[test]
+    fn every_duration_is_a_motion_token_and_lively_has_one_use_site() {
+        let mut durations = 0usize;
+        let mut lively: Vec<String> = Vec::new();
+        for (name, text) in markup() {
+            for tok in tokens(&text) {
+                let (Tok::Stmt(n, stmt) | Tok::Open(n, stmt)) = tok else { continue };
+                let Some(v) = stmt.strip_prefix("duration:") else { continue };
+                durations += 1;
+                assert!(
+                    v.contains("Motion."),
+                    "ui/{name}:{n}: a duration that is not a `Motion` token. §8.4's reduced-motion \
+                     multiplication lives inside that global, so a literal here is an animation \
+                     that keeps running with reduce-motion on and no test would see it.\n  {stmt}"
+                );
+                if v.contains("Motion.lively") {
+                    lively.push(format!("ui/{name}:{n}"));
+                }
+            }
+        }
+        // The control: a sweep that found no durations at all would pass both assertions.
+        assert!(durations > 5, "only {durations} `duration:` bindings were found in the markup");
+        assert_eq!(
+            lively.len(),
+            1,
+            "`Motion.lively` is used at {lively:?}. §8's table: drawer page depth ONLY, nothing \
+             else, ever — it overshoots, and §8.2 rule 2 keeps an overshooting curve away from \
+             anything the Screen's geometry reads"
+        );
+        assert!(
+            lively[0].starts_with("ui/drawer.slint"),
+            "`Motion.lively`'s one use site moved off the drawer's depth strip: {lively:?}"
+        );
+    }
+
+    /// **Every markup file is reachable from the one compile root, or it is exempt and says why.**
+    ///
+    /// `build.rs` hands the Slint compiler exactly one root (`ui/window.slint`) and must keep
+    /// exactly one `compile*` call — a second clobbers `SLINT_INCLUDE_GENERATED` and `MainWindow`
+    /// stops existing. So a file nothing imports is compiled by nothing: a syntax error or a binding
+    /// loop in it fails no build. That gap had a test of its own while `bench.slint` was unimported;
+    /// the test retired on schedule and the hole re-opened one file over with nothing naming it.
+    #[test]
+    fn every_markup_file_is_reachable_from_the_compile_root() {
+        // `preview.slint` is a second top-level `Window` for `slint-viewer`, and it imports the
+        // components it draws rather than being imported. Its own discipline is
+        // `tests/markup_discipline.rs`, which reads it as text.
+        const NOT_A_COMPILE_INPUT: &[&str] = &["preview.slint"];
+
+        let mut reached: std::collections::BTreeSet<String> = Default::default();
+        let mut queue = vec!["window.slint".to_string()];
+        while let Some(f) = queue.pop() {
+            if !reached.insert(f.clone()) {
+                continue;
+            }
+            let Some((_, text)) = markup().into_iter().find(|(n, _)| *n == f) else { continue };
+            for line in text.lines() {
+                let t = line.trim();
+                if !t.starts_with("import ") && !t.starts_with("export {") {
+                    continue;
+                }
+                let Some(open) = t.find('"') else { continue };
+                let Some(close) = t[open + 1..].find('"') else { continue };
+                let target = &t[open + 1..open + 1 + close];
+                if target.ends_with(".slint") {
+                    queue.push(target.to_string());
+                }
+            }
+        }
+        // The control: the walk has to have gone somewhere.
+        assert!(
+            reached.len() > 3,
+            "the import walk reached {reached:?}, which is not a graph — it is reading nothing"
+        );
+
+        let orphans: Vec<String> = markup()
+            .into_iter()
+            .map(|(n, _)| n)
+            .filter(|n| !reached.contains(n) && !NOT_A_COMPILE_INPUT.contains(&n.as_str()))
+            .collect();
+        assert!(
+            orphans.is_empty(),
+            "{orphans:?} are compiled by nothing — `build.rs` gives the Slint compiler one root and \
+             nothing imports these, so a syntax error or a binding loop in them fails no build"
+        );
+    }
+
+    /// The control for the sweep above, fed the shape that used to walk straight through it.
+    #[test]
+    fn the_accessible_sweep_can_see_a_one_line_element() {
+        let one = "Rectangle { accessible-role: AccessibleRole.none; accessible-label: \"x\"; }";
+        let toks = tokens(one);
+        assert_eq!(
+            toks.len(),
+            4,
+            "an element body on one line is an open, two statements and a close: {toks:?}"
+        );
+        assert!(matches!(&toks[0], Tok::Open(_, h) if h == "Rectangle"));
+        assert!(
+            matches!(&toks[1], Tok::Stmt(_, s) if s.starts_with("accessible-role:")),
+            "the role binding on a one-line element is not a statement: {:?}",
+            toks[1]
+        );
+        assert!(matches!(&toks[3], Tok::Close(_)));
+    }
+
+    /// The element type on a line that opens a block: `touch := TouchArea {` is a `TouchArea`.
+    fn element_type(line: &str) -> String {
+        let head = line.trim_end_matches('{').trim();
+        let head = head.rsplit(":=").next().unwrap_or(head).trim();
+        head.split_whitespace().next_back().unwrap_or("").to_string()
+    }
+
+    /// Every component in this markup whose own declaration sets a constant `accessible-role`,
+    /// transitively through `inherits`.
+    ///
+    /// **Without this the sweep cannot see a `Pressable`'s role from its use site.** `Pressable`
+    /// declares `accessible-role: AccessibleRole.button` once; every use site sets a label and a
+    /// description and no role, which is correct and is the whole point of having the component.
+    fn role_bearing_components() -> std::collections::BTreeSet<String> {
+        let mut bearers: std::collections::BTreeSet<String> = Default::default();
+        let mut inherits: Vec<(String, String)> = Vec::new();
+
+        for (_, text) in markup() {
+            let lines: Vec<String> = text.lines().map(|l| strip(l).trim().to_string()).collect();
+            let mut current: Option<String> = None;
+            let mut depth = 0usize;
+            for line in &lines {
+                if let Some(rest) = line
+                    .strip_prefix("export component ")
+                    .or_else(|| line.strip_prefix("component "))
+                {
+                    let mut it = rest.split_whitespace();
+                    let name = it.next().unwrap_or("").to_string();
+                    if it.next() == Some("inherits") {
+                        if let Some(base) = it.next() {
+                            inherits.push((name.clone(), base.trim_end_matches('{').to_string()));
+                        }
+                    }
+                    current = Some(name);
+                    depth = 0;
+                }
+                if line.ends_with('{') {
+                    depth += 1;
+                }
+                if line.starts_with('}') {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        current = None;
+                    }
+                }
+                // Depth 1 is the component's own root; anything deeper is a child of it.
+                if depth == 1 && line.starts_with("accessible-role:") {
+                    if let Some(c) = current.clone() {
+                        bearers.insert(c);
+                    }
+                }
+            }
+        }
+
+        // `Row inherits Pressable` carries `Pressable`'s role. Fixpoint, because the chain can be
+        // any length.
+        loop {
+            let before = bearers.len();
+            for (name, base) in &inherits {
+                if bearers.contains(base) {
+                    bearers.insert(name.clone());
+                }
+            }
+            if bearers.len() == before {
+                break;
+            }
+        }
+        bearers
+    }
+
+    // `role_later_in_this_element` used to live here — a forward line scan for a role declared after
+    // a binding it covers. The token walk above holds the same bindings in `pending` until the
+    // element closes, which answers the same question without a second parser, so it is deleted
+    // rather than left standing (§16.9).
+
+    /// **The closed set of non-ASCII characters allowed in a string the window draws.**
+    ///
+    /// §16.6: Slint takes one `font-family` per element with no fallback list, and a missing glyph
+    /// falls to `.notdef` — the empty square. Nothing in `.slint` can ask whether a glyph exists,
+    /// so the only mechanism available is a closed set that a person has decided on.
+    ///
+    /// Each of these is present in the system UI face on every platform this program runs on, and
+    /// each earns its place in prose this document is written in. **A character not on this list is
+    /// a decision, not an oversight** — §6.7's answer for a symbol is that it is drawn as a `Path`,
+    /// not typed. Do not add one to make a test pass.
+    /// **The line is punctuation versus symbol**, and it is drawn where §6.7 draws it. A symbol —
+    /// `·`, `×`, `›` — is *drawn as a `Path`*, which `ui/bench.slint` does for the shelf's own MENU
+    /// list. A punctuation mark is text and stays text. `·` and `×` used to be on this list, and
+    /// were the two the shelf drew as Paths one row below where Rust typed them.
+    const GLYPHS: &[char] = &[
+        '—', // em dash — the sentence break this program's prose is built on
+        '…', // ellipsis — one glyph rather than three full stops
+        '§', // a section reference
+    ];
+
+    /// Macros whose string argument reaches a **terminal**, not a `Text`.
+    ///
+    /// `IPOD_LAYOUT`'s box-drawing rule and every panic message land in whatever font the operator's
+    /// terminal is set to, which this program neither chooses nor can ask about. The closed set
+    /// above speaks for the window's own font and for nothing else.
+    const TERMINAL: &[&str] = &[
+        "eprintln!",
+        "println!",
+        "eprint!",
+        "print!",
+        "panic!",
+        "unreachable!",
+        "assert",
+        ".expect(",
+    ];
+
+    /// The net change in parenthesis depth on one line, ignoring anything inside a string literal.
+    ///
+    /// It is what lets the terminal filter above span the lines a `println!` invocation actually
+    /// occupies. Without it the filter is per line, and the format string of a wrapped `println!`
+    /// is not on the line the macro's name is on.
+    fn unquoted_parens(line: &str) -> i32 {
+        let mut depth = 0i32;
+        let mut in_string = false;
+        let mut escaped = false;
+        for c in line.chars() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            match c {
+                '"' => in_string = true,
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+        }
+        depth
+    }
+
+    /// **T-19. No UI string carries a glyph outside that set — in the markup OR in Rust.**
+    ///
+    /// Comments are stripped first, so the prose above every one of these files does not count —
+    /// only what the window actually draws.
+    ///
+    /// **Both halves, and the Rust half was ungated.** §6.7's own wording is *"no source file may
+    /// contain a non-ASCII character rendered as UI text"*, and it names ` · ` (U+00B7) as the
+    /// character the shipped window built into UI strings with no coverage gate at all. That is
+    /// where the strings live: `ui/*.slint` carries almost no prose, and every sentence the bench
+    /// and the Rail draw is built in `src/*.rs`. A sweep over the half with no glyphs in it, and
+    /// none over the half with all of them, is a gate passing on the wrong file.
+    #[test]
+    fn no_ui_string_carries_a_glyph_outside_the_closed_set() {
+        let mut swept = 0usize;
+        // `rust_sources` cuts each file at its own test module, so this sweeps what the program
+        // ships rather than what its tests write down. It lives beside the sweeps that first needed
+        // it (`main.rs`), and there is one of it rather than two.
+        let files = markup()
+            .into_iter()
+            .map(|(n, t)| (format!("ui/{n}"), t))
+            .chain(
+                crate::tests::rust_sources()
+                    .into_iter()
+                    .map(|(n, t)| (format!("src/{n}"), t)),
+            );
+        for (name, text) in files {
+            swept += 1;
+            // **A string that goes to a terminal is not UI text.** §6.7's rule is about a glyph
+            // rendered by *this program's* font, in a `Text` whose family it chose and cannot
+            // interrogate. `IPOD_LAYOUT`'s box-drawing rule and a panic message land in whatever
+            // font the operator's terminal is set to.
+            //
+            // The depth counter is what makes that work rather than nearly work: `println!(` and
+            // its format string are usually on **different lines**, so a per-line check waved
+            // through six `µ`s in `emu.rs` and would have gone on doing so.
+            let mut depth = 0i32;
+            for (n, line) in text.lines().enumerate() {
+                // Rust doc comments are prose about the program, not strings the program draws.
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                if depth == 0 && TERMINAL.iter().any(|m| line.contains(m)) {
+                    // Balanced on one line → 0, and this line is skipped either way.
+                    depth = unquoted_parens(line).max(0);
+                    continue;
+                }
+                if depth > 0 {
+                    depth = (depth + unquoted_parens(line)).max(0);
+                    continue;
+                }
+                for s in string_literals(line) {
+                    for c in s.chars() {
+                        assert!(
+                            c.is_ascii() || GLYPHS.contains(&c),
+                            "{name}:{}: the string carries `{c}` (U+{:04X}), which is not in \
+                             the closed set this program's font is trusted for. §6.7's answer for \
+                             a symbol is a drawn Path — do not widen the list to make this \
+                             pass.\n  {}",
+                            n + 1,
+                            c as u32,
+                            line.trim()
+                        );
+                    }
+                }
+            }
+        }
+        // The control for the sweep's own reach: it has to have seen both halves.
+        assert!(
+            swept > DECLARED_MARKUP.len(),
+            "the sweep saw {swept} files and there are {} markup files alone, so the Rust half \
+             read nothing",
+            DECLARED_MARKUP.len()
+        );
+    }
+
+    /// Every string literal on one line, comments excluded.
+    ///
+    /// The mirror of [`strip`], which keeps everything a string is not; this keeps everything a
+    /// string is. Both walk the line the same way, so a `//` inside a string is not a comment in
+    /// either of them.
+    fn string_literals(line: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut current = String::new();
+        let mut in_string = false;
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '"' => {
+                    if in_string {
+                        out.push(std::mem::take(&mut current));
+                    }
+                    in_string = !in_string;
+                }
+                '/' if !in_string && chars.peek() == Some(&'/') => break,
+                _ if in_string => current.push(c),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// The control: the scanner can see a glyph, and it does not read one out of a comment.
+    #[test]
+    fn the_glyph_sweep_can_see_a_glyph() {
+        assert_eq!(
+            string_literals(r#"text: "Press ▓ to start"; // a ▓ in a comment"#),
+            vec!["Press ▓ to start".to_string()]
+        );
+        assert!(string_literals("// nothing but a \u{2593} comment").is_empty());
+        assert!(!GLYPHS.contains(&'▓'), "the set was widened to include a block element");
+        // …the punctuation the prose is written in is on the list rather than tripping it…
+        for c in ['—', '…', '§'] {
+            assert!(GLYPHS.contains(&c), "`{c}` is used in this program's own prose");
+        }
+        // …and the two SYMBOLS the shelf draws as `Path`s are not, because one band cannot have two
+        // answers to one question. §6.7 names `·` as the character the shipped window built into UI
+        // strings with no coverage gate at all.
+        for c in ['·', '×', '›'] {
+            assert!(
+                !GLYPHS.contains(&c),
+                "`{c}` is a symbol, and §6.7's answer for a symbol is a drawn Path — ui/bench.slint \
+                 draws this one"
+            );
+        }
     }
 }

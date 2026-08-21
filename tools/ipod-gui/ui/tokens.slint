@@ -29,6 +29,51 @@ export global Ink {
     out property <color> material-bottom: #4a86de;
 
     out property <color> warn: #9a6700;
+
+    // §6.4. 4.14:1 on `bg-sunken`, 5.9:1 on `bg` — the only role that reads as *this destroys
+    // something*: a failed Rail entry, `Remove`, a stopped machine.
+    out property <color> danger: #b3261e;
+}
+
+// ─── Motion (§8) ────────────────────────────────────────────────────────────────────────────────
+//
+// **Three durations, and the reduced-motion multiplication is inside this global rather than at
+// every use site.** A use site writes `Motion.gentle` and cannot get it wrong; a use site writing
+// `Metric.gentle * Motion.scale` can forget the multiplier, and a forgotten one is a silent
+// reduced-motion hole that no test would see.
+//
+// **Slint has no reduced-motion signal of its own** — a grep for `reduced.motion` across
+// `i-slint-core`, `i-slint-common` and `builtins.slint` returns nothing — so `scale` is read per
+// platform in Rust (macOS `NSWorkspace.accessibilityDisplayShouldReduceMotion`, Windows
+// `SPI_GETCLIENTAREAANIMATION`, otherwise false) and pushed in as 1.0 or 0.0.
+//
+// **`scale: 0.0` lands on the animation's final value rather than freezing it.** Verified rather
+// than assumed, because the whole of reduced motion rests on it:
+// `i-slint-core-1.17.1/properties_animations.rs:123-125` short-circuits `duration <= 0` to
+// `AnimationState::Done`, and `Done` returns `to_value` (`:156-161`). The structural change still
+// happens; only its animation does not.
+//
+// The curve belongs to the token and is never authored at a call site: `tight` is `ease-out-quad`,
+// `gentle` is `ease-out-quart`, `wake` is `ease-out-quad`, `lively` is `ease-out-back`, progress is
+// `linear`. Slint has no spring easing, so §8 retires the spring vocabulary outright rather than
+// keeping it as a fiction.
+export global Motion {
+    in property <float> scale: 1.0;
+
+    // press, hover, cradle colour, device cross-dissolve, drop-band content
+    out property <duration> tight: 140ms * scale;
+    // drawer in and out, the device's `x`, Expand height, scroll-into-view
+    out property <duration> gentle: 320ms * scale;
+    // **§8.1 item 6, and it is a fourth token rather than a literal at one call site.** The wake is
+    // 220 ms `ease-out-quad`; §8's table has no 220 ms row, so the first cut reached for `gentle`
+    // (320 ms) and paired it with `ease-out-quad`, which is `tight`'s curve — the one call site in
+    // the program pairing one token's duration with another's curve. A named token cannot be got
+    // wrong that way and cannot forget the reduced-motion multiplication either.
+    out property <duration> wake: 220ms * scale;
+    // **drawer page depth only, and there is exactly one use site in the program** — `strip.x` in
+    // `drawer.slint`. `lively` overshoots (§8.2 rule 2), so a second use site is a design change
+    // rather than a convenience.
+    out property <duration> lively: 260ms * scale;
 }
 
 export global Metric {
@@ -41,16 +86,33 @@ export global Metric {
     out property <length> s6: 32px;
     out property <length> s7: 48px;
 
-    // Six type roles and no seventh.
-    out property <length> display-size: 30px;
+    // Six type roles and no seventh. **`display` is retired** (§6.2): a 30 px device name floating
+    // over a 656 px rendering of that same device is redundant, and its line box was eating 36 px
+    // of a vertical budget with none to spare. The shelf's name row is `title`.
     out property <length> title-size: 20px;
     out property <length> body-size: 14px;
     out property <length> label-size: 12px;
+    // §6.2's `mono` — paths, hashes, serials, addresses, byte counts.
+    out property <length> mono-size: 13px;
 
-    // §8's motion. **Slint has no spring easing**, so the document's spring vocabulary maps onto
-    // Slint's curves rather than being implemented literally — recorded here so the difference is a
-    // decision rather than a drift. `ease-out-quart` is the closest thing to `gentle` that Slint
-    // offers: fast departure, long settle, no overshoot.
-    out property <duration> quick: 140ms;
-    out property <duration> settle: 320ms;
+    // **One `font-family` string, no fallback list** (§16.6). Slint takes exactly one per element
+    // and appends only `SansSerif` then `SystemUi`
+    // (`i-slint-common-1.17.1/sharedfontique.rs:188-192`); an unknown family renders in sans-serif
+    // with no error, and a missing GLYPH falls to `.notdef` — the twelve empty squares. So the
+    // family is chosen per platform in Rust and pushed in here.
+    //
+    // `in`, not `out`: an `out` global property has no generated setter, so the `out` form cannot
+    // be pushed from Rust at all.
+    //
+    // There is deliberately no `ui-family` beside it. §6.2 wants the system UI face, and an element
+    // with no `font-family` binding already gets it; pushing one would oblige every `Text` in the
+    // program to name it, for nothing.
+    in property <string> mono-family;
+
+    // §6.2's weights. `font-weight: 600` is a role, never inlined — it was inlined in six places in
+    // `window.slint`, and that is corrected at the token file rather than per call site.
+    out property <int> weight-title: 600;
+    out property <int> weight-strong: 600;
+    out property <int> weight-body: 400;
+    out property <int> weight-label: 500;
 }

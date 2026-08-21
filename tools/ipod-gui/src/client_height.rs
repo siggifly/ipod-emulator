@@ -21,7 +21,7 @@
 // not of the display — so the other two are always "never constructed" in any single build. They
 // are the other platforms' answers, and the enum is the closed set of them; dropping the two this
 // build does not use would mean the honest gap could not be stated at all.
-#[allow(dead_code)]
+#[allow(dead_code)]  // retired when: a platform this build does not run on needs its own arm — the enum is the closed set, and dropping the two would mean the honest gap could not be stated
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum WorkArea {
     /// macOS: `NSScreen.visibleFrame` for the screen the window is on. Subtracts the menu bar and
@@ -148,7 +148,26 @@ fn measure(_window: &slint::Window) -> Option<f64> {
 /// it or delete the claim*). This is the build half. It is the only thing in the program that prints
 /// a measured display height, which is what makes the reader observable at all — and it is what
 /// caught `k` being decided from the window rather than from the display.
-pub fn dump_layout(window: &slint::Window, fit: &crate::fit::Fit) {
+///
+/// **`measured_logical` is not optional and it is not `window.size()`.** During a `Resized` the
+/// window still reports the OLD size — which is why the event handler takes the size off the event
+/// — so an instrument that printed `window.size()` beside a fit computed from the event printed two
+/// different moments on adjacent lines and read as an inversion: *too short for 1:1* next to a
+/// window comfortably tall enough, then the reverse one event later. Measured on this machine with a
+/// bare Slint window and no content at all:
+///
+/// ```text
+/// Resized event 1760 x  800 ; win.size() 2360 x 1692
+/// Resized event 2360 x 1692 ; win.size() 1760 x  800
+/// ```
+///
+/// (The 1760 × 800 is Slint's own doing, not this program's: `adjust_window_size_to_satisfy_
+/// constraints` clamps a not-yet-known size up to the declared minimum and then the preferred size
+/// arrives. It happens with an empty `Window` carrying only the four size constants.)
+///
+/// So the caller passes the height the fit was actually computed from, and the two are printed as
+/// two lines that can be compared rather than as one line that quietly picks a winner.
+pub fn dump_layout(window: &slint::Window, fit: &crate::fit::Fit, measured_logical: f64) {
     if std::env::var_os("IPOD_LAYOUT").is_none_or(|v| v.is_empty() || v == "0") {
         return;
     }
@@ -168,11 +187,32 @@ pub fn dump_layout(window: &slint::Window, fit: &crate::fit::Fit) {
         }
     );
     eprintln!(
-        "  window      {} x {} physical, {:.1} x {:.1} logical, scale {sf}",
+        "  window      {} x {} physical, {:.1} x {:.1} logical, scale {sf} — as the window reports \
+         it right now",
         size.width,
         size.height,
         f64::from(size.width) / sf,
         f64::from(size.height) / sf
+    );
+    let reported = f64::from(size.height) / sf;
+    eprintln!(
+        "  measured    {measured_logical:.1} logical — the height the fit below was computed \
+         from{}",
+        if size.height == 0 {
+            // The seed, before the event loop has run. The window genuinely has no size, so a
+            // difference here is not the two being out of step.
+            ", and the window has no size yet".to_string()
+        } else if (reported - measured_logical).abs() < 0.5 {
+            String::new()
+        } else {
+            // Not a defect: `Resized` carries the new size and the window still holds the old one.
+            // Saying so is the difference between an instrument and a puzzle.
+            format!(
+                ", which is {:.1} px from what the line above says — the event is ahead of the \
+                 window",
+                measured_logical - reported
+            )
+        }
     );
     eprintln!(
         "  fit         k = {}, body {:.3} logical ({:.3} physical), panel {:.4} x {:.4}{}",

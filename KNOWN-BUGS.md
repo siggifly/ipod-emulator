@@ -14,6 +14,53 @@ belongs here.
 
 ---
 
+## The window opens at its minimum height, not its preferred one
+
+**Every launch, on every platform, since `11e1ea6`.** The window is created at 1180 x 846, and after
+the first layout pass Slint resizes it to 880 x 400 — exactly `min-width` x `min-height` — where the
+88 px shelf carrying `write_target()` is drawn past the bottom edge. It settles there; it does not
+oscillate.
+
+Reproduce with `IPOD_LAYOUT=1 ipod-emulator` and read the `window` lines:
+
+```
+window   0 x 0 physical            — before the event loop
+window   2360 x 1692, 1180 x 846   — created at the preferred size
+window   1760 x 800,   880 x 400   — and resized to the minimum
+```
+
+**Root cause, as far as it is established.** `min-height` is the only thing holding the window open:
+set `MIN_HEIGHT` to 846 and the third line does not happen. So Slint is applying something derived
+from the root content — which contributes no preferred size of its own, every element below the
+window being bound `100%` or positioned absolutely — and the window minimum is what the result gets
+clamped to.
+
+**What is NOT the cause**, each tested and reverted:
+
+- the winit event-filter hook (the collapse happens with it disabled);
+- `preferred-width`/`preferred-height` on `client`, and on the `FocusScope` that is the window's own
+  direct child — neither changes anything, so an element bound `100%` is not the whole story;
+- anything in this program calling `set_size`: the only two calls are inside `#[cfg(test)]`;
+- Phases 3 and 4. **The bug predates them** — commit `11e1ea6` built in a worktree collapses
+  identically.
+
+**How it got in.** `MIN_HEIGHT` was 860 and became 400, for a good reason: GUI.md §9.6 showed that
+no 1280 x 800 display can satisfy 860, so the minimum guarded a drag case and nothing on the display
+class §9.5 exists for. Lowering it was right. What nobody knew was that the old value had been
+holding the window open by accident, so the change turned an invisible dependency into the default
+state.
+
+**Why no test caught it, and this is the part worth keeping.** The suite is green — 482 tests — and
+`the_column_terms_sum_to_the_declared_chrome`, `the_too_short_state_is_an_input_with_nothing_reading_
+it` and the whole `fit` module all pass. Every one of them checks arithmetic about a window. None
+launches one. It was found by running the program and reading `IPOD_LAYOUT=1`, which is the third
+time in this project that a defect survived a green suite by living in the gap between what the code
+computes and what the platform does with it.
+
+**Related but not the same**: GUI.md §20 item 15 records the too-short state having no §9.5 pane, and
+describes it as reachable by dragging the window short. It is not reachable — it is where the window
+starts.
+
 ## ~~A resumed machine was dead, and looked like one that ignored input~~ — FIXED 2026-08-20
 
 Reported as *"the booted RetailOS is not taking anything when I click on the hold switch or use the
