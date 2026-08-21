@@ -109,12 +109,185 @@ impl Resource {
     }
 }
 
+/// How hard a fetched file was checked, and it is never rounded up.
+///
+/// Only ever appears inside [`Provenance::Fetched`]. `SizeOnly` is not a lesser spelling of
+/// `Sha256`: `firmware.rs` keeps the two apart on purpose — the catalogue holds no hash for some
+/// releases, and the cache listing hashes nothing by default — and a window that collapses them is
+/// a window claiming a check that did not happen.
+///
+/// **Never `use Verification::*`.** [`Verification::None`] and [`Option::None`] would then be two
+/// meanings of one word in the same match, and the compiler's complaint about it points somewhere
+/// unhelpful. Spell it `Verification::None`, always.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verification {
+    /// A SHA-256 was on record for this exact file and the bytes matched it.
+    Sha256,
+    /// A size was on record and matched; **no hash was**. Never renders as "verified".
+    SizeOnly,
+    /// Neither was on record, or the settings file did not say which.
+    None,
+}
+
+/// Where a resource came from, so a row can say it rather than a string literal claiming it.
+///
+/// The shipped window printed `fetched and verified` for every installer and every piece of
+/// software, and `dumped from a real iPod` for every ROM file, regardless — because [`Resource`]
+/// carried a path and nothing else, so the model could not support the claim. This is the field
+/// that supports it.
+///
+/// **Five variants, not the four `docs/GUI.md` §3.2 lists.** `Built` is the fifth: a file this
+/// program produced from a vendored tree is neither fetched nor provided nor dumped, and a row that
+/// has to say something about it would otherwise have to pick one of those and be wrong.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Provenance {
+    /// Read off somebody's own iPod.
+    Dumped,
+    /// Generated here from this seed. Derived from the recipe, never passed in — see [`normalised`].
+    Synthesised { seed: u64 },
+    /// Downloaded, and checked as hard as [`Verification`] says.
+    Fetched { verified: Verification },
+    /// The operator handed us this file. Nothing is known about it beyond that.
+    Provided,
+    /// Built here, out of a tree in this checkout.
+    ///
+    /// **Retirement condition**, in the shape `research/04` uses for bypasses: `docs/GUI.md` §20
+    /// item 7 replaces the vendored `ipodloader2` with the fetched release. If, once the Composer's
+    /// Build action exists, nothing files a resource with this, delete the variant rather than
+    /// leave it standing — a variant with no producer is the claim-without-a-check §16.9 forbids.
+    Built,
+}
+
+impl Provenance {
+    /// The single word the settings file carries.
+    ///
+    /// **One token, not a `provenance` plus a `verified` pair.** This file already has one
+    /// order-dependent pair of keys (`kind` before `path`) and a second is how a hand-edit files an
+    /// unverified download as a verified one.
+    pub fn token(&self) -> &'static str {
+        match self {
+            Provenance::Dumped => "dumped",
+            Provenance::Synthesised { .. } => "synthesised",
+            Provenance::Fetched {
+                verified: Verification::Sha256,
+            } => "fetched-sha256",
+            Provenance::Fetched {
+                verified: Verification::SizeOnly,
+            } => "fetched-size",
+            Provenance::Fetched {
+                verified: Verification::None,
+            } => "fetched",
+            Provenance::Provided => "provided",
+            Provenance::Built => "built",
+        }
+    }
+
+    /// Back from the token. **Anything unrecognised is `None`** — an unreadable value is not a
+    /// claim, and it must never fall through to a verified one.
+    pub fn parse(s: &str) -> Option<Provenance> {
+        match s.trim() {
+            "dumped" => Some(Provenance::Dumped),
+            // A placeholder seed. `normalised` overwrites it from the recipe, unconditionally.
+            "synthesised" => Some(Provenance::Synthesised { seed: 0 }),
+            "fetched-sha256" => Some(Provenance::Fetched {
+                verified: Verification::Sha256,
+            }),
+            "fetched-size" => Some(Provenance::Fetched {
+                verified: Verification::SizeOnly,
+            }),
+            "fetched" => Some(Provenance::Fetched {
+                verified: Verification::None,
+            }),
+            "provided" => Some(Provenance::Provided),
+            "built" => Some(Provenance::Built),
+            _ => None,
+        }
+    }
+
+    /// The trailing line a parts row draws.
+    ///
+    /// The `Verification::None` wording deliberately avoids the substring `verified`, so that
+    /// `line().contains("verified")` is an exact test of the claim rather than a string that also
+    /// matches "not verified".
+    ///
+    /// **`Sha256` says *when* it was verified, and the tense is the point.** This is a record of
+    /// how a file arrived, not a measurement of the bytes on disk now: an entry is keyed on its
+    /// path, so replacing the file under it — a re-download with `curl -o`, a restore from a
+    /// backup — leaves the record standing. `fetched · SHA-256 verified` read as a live claim
+    /// about a file nobody had re-opened, which is the same shape as the `fetched and verified`
+    /// string literal this field exists to delete, one level down. See [`Provenance::is_verified`]
+    /// for how a surface re-establishes it.
+    pub fn line(&self) -> String {
+        match self {
+            Provenance::Dumped => "dumped from a real iPod".to_string(),
+            Provenance::Synthesised { seed } => format!("synthesised · seed {seed:x}"),
+            Provenance::Fetched {
+                verified: Verification::Sha256,
+            } => "fetched · SHA-256 verified when it arrived".to_string(),
+            Provenance::Fetched {
+                verified: Verification::SizeOnly,
+            } => "fetched · size only, no hash on record for this release yet".to_string(),
+            Provenance::Fetched {
+                verified: Verification::None,
+            } => "fetched · nothing on record to check it against".to_string(),
+            Provenance::Provided => "provided".to_string(),
+            Provenance::Built => "built here".to_string(),
+        }
+    }
+
+    /// **The only way to ask whether a verification badge is warranted.**
+    ///
+    /// There is deliberately no other predicate, so `SizeOnly` cannot be silently upgraded by a
+    /// surface that felt like rounding up.
+    ///
+    /// **It answers about the filing, not about the file.** A [`Provenance`] is stored against a
+    /// [`Resource`] — a path — and no digest, size or mtime is stored beside it, so this cannot
+    /// tell you the bytes are still the bytes that matched. Nothing here is a substitute for
+    /// looking: the path that re-establishes or refutes it is `firmware::cached(dir, true)`, which
+    /// re-hashes, through `firmware::provenance`, filed with [`Settings::record_provenance`] —
+    /// **never** [`Settings::file_away`], whose whole rule is that it does not overwrite a stated
+    /// value. A surface that wants a live badge runs that pass; a surface that draws this alone is
+    /// drawing a record, and [`Provenance::line`] words it as one.
+    pub fn is_verified(&self) -> bool {
+        matches!(
+            self,
+            Provenance::Fetched {
+                verified: Verification::Sha256
+            }
+        )
+    }
+}
+
+/// The one place a [`Provenance`] is reconciled with the [`Resource`] it describes.
+///
+/// A synthesised ROM's seed lives in the recipe already. Storing it a second time in the provenance
+/// is two spellings of one fact, which is the drift this whole model change exists to delete — so
+/// the relation is made total and mechanical instead: a `Firmware(Synthetic)` item's provenance is
+/// **always** `Synthesised` with the recipe's own seed, whatever the caller or the file said, and
+/// `Synthesised` on anything that is not one is meaningless and says nothing.
+fn normalised(what: &Resource, from: Option<Provenance>) -> Option<Provenance> {
+    match (what, from) {
+        (Resource::Firmware(crate::nor::Source::Synthetic { seed, .. }), _) => {
+            Some(Provenance::Synthesised { seed: *seed })
+        }
+        (_, Some(Provenance::Synthesised { .. })) => None,
+        (_, other) => other,
+    }
+}
+
 /// A named entry in the resources list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Item {
     /// What the person calls it, and the key a device refers to it by. Unique within the list.
     pub name: String,
     pub what: Resource,
+    /// Where this came from. **`None` is "nobody recorded it"**, and it renders as nothing.
+    ///
+    /// An `Option` rather than a bare [`Provenance`] because none of the five variants is a
+    /// says-nothing state, and every settings file written before this field has one for every
+    /// entry it holds. When every write path states a provenance this becomes unreachable and the
+    /// `Option` comes off.
+    pub from: Option<Provenance>,
 }
 
 /// A drive image, and **what is on it**.
@@ -134,6 +307,121 @@ pub struct Disk {
     pub installed: Vec<String>,
 }
 
+/// A part a device refers to that is not there, and **which of the two kinds of gone it is**.
+///
+/// Two named cases rather than one boolean, because the sentences differ and only one of them can
+/// name a path — which, when there is one, is the whole of the answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Absent {
+    /// The device names a part the lists no longer hold.
+    Unlisted(String),
+    /// The lists hold it and the file it points at is gone.
+    Gone(PathBuf),
+}
+
+impl Absent {
+    /// The shortest thing that names it: the entry's name, or the file's name — **not its path**.
+    ///
+    /// The cradle's one-part row is 24 px of centred body text (`cannot start — my-5.5g.img is not
+    /// where it was`), and a full path does not fit in it. Whoever wants the path asks for it.
+    pub fn label(&self) -> String {
+        match self {
+            Absent::Unlisted(s) => s.clone(),
+            Absent::Gone(p) => p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                // A path ending in `/` or `..` has no file name, and an empty label names nothing.
+                .unwrap_or_else(|| p.display().to_string()),
+        }
+    }
+
+    /// The full path, when there is one. `Copy path` and the device's drawer page want it.
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Absent::Unlisted(_) => None,
+            Absent::Gone(p) => Some(p),
+        }
+    }
+}
+
+/// Whether paths are on disk, remembered for the length of one pass.
+///
+/// **The caller rule, and it is what the memoization buys:** [`Settings::missing`] performs a
+/// `stat(2)` per resolved path, and a path under a stale network mount blocks until the mount times
+/// out — tens of seconds on SMB, indefinitely on a hard NFS mount. So it must not be called from a
+/// UI binding or a callback body. One `Presence` is made at the top of the pass that rebuilds the
+/// rows, shared across every device in it, and dropped at the end of it. Nothing invalidates the
+/// cache because the cache does not outlive the pass.
+#[derive(Clone, Debug, Default)]
+pub struct Presence {
+    seen: std::collections::HashMap<PathBuf, bool>,
+}
+
+impl Presence {
+    pub fn new() -> Presence {
+        Presence::default()
+    }
+
+    /// `false` **only** when the path was looked for and was not there.
+    ///
+    /// [`std::fs::metadata`] by hand rather than either of the two shorter spellings, and the third
+    /// match arm is the whole reason:
+    ///
+    /// - `Path::exists()` is `metadata().is_ok()`, which folds **every** error into `false`. A
+    ///   parent directory the user cannot traverse would be reported as "the disk is not where it
+    ///   was" — the program asserting a fact about somebody's filesystem it did not observe.
+    /// - `symlink_metadata()` does not follow links, so a symlink pointing at a deleted image would
+    ///   read as present. `metadata()` follows it, gets `NotFound`, and reports the truth the device
+    ///   cares about.
+    ///
+    /// **The `false` arm names the errors that are statements of absence**, and there is more than
+    /// one of them. `NotFound` is the obvious one. `NotADirectory` is a path whose parent component
+    /// is a regular file. `InvalidInput` and `InvalidFilename` are paths the OS will not even
+    /// accept — a NUL byte inside one on Unix, a reserved name on Windows; `metadata` produces
+    /// neither from anything but the path itself. Nothing can exist at any of them, so calling them
+    /// present would swallow a device that cannot start and leave the cradle saying nothing.
+    /// Everything else — a permission, a timeout, a device error — stays in the `true` arm, which
+    /// is what this function exists for.
+    ///
+    /// The path is keyed exactly as given. `canonicalize` would stat every component and multiply
+    /// the cost this exists to bound.
+    pub fn exists(&mut self, p: &Path) -> bool {
+        if let Some(known) = self.seen.get(p) {
+            return *known;
+        }
+        use std::io::ErrorKind;
+        let there = match std::fs::metadata(p) {
+            Ok(_) => true,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    ErrorKind::NotFound
+                        | ErrorKind::NotADirectory
+                        | ErrorKind::InvalidInput
+                        | ErrorKind::InvalidFilename
+                ) =>
+            {
+                false
+            }
+            // Something else went wrong — a permission, a timeout, a device error. That is not an
+            // observation of absence, and reporting it as one is the lie the third arm exists for.
+            Err(_) => true,
+        };
+        self.seen.insert(p.to_path_buf(), there);
+        there
+    }
+
+    /// Forget one answer, for a caller that changed the model mid-pass.
+    pub fn forget(&mut self, p: &Path) {
+        self.seen.remove(p);
+    }
+
+    /// Forget every answer.
+    pub fn clear(&mut self) {
+        self.seen.clear();
+    }
+}
+
 /// **A device: a firmware and a disk, under a name.** The only thing that can be run.
 ///
 /// This replaced `Machine`, which was the same idea with the seams showing: the machine you were
@@ -142,20 +430,30 @@ pub struct Disk {
 /// each. A device is just a device; the one that is running is the one `current` names.
 ///
 /// **It refers to its parts by name** — [`Device::firmware`] into the resources, [`Device::disk`]
-/// into the disks — so editing a resource changes every device made of it. `nor` and `disk_path`
-/// below are the *resolved* values, kept because everything downstream of here reads them and none
-/// of it should have to know a resource list exists.
+/// into the disks — so editing a resource changes every device made of it. `disk_path` below is the
+/// *resolved* value, kept because everything downstream of here reads it and none of it should have
+/// to know a disk list exists.
+///
+/// There is deliberately no resolved copy of the boot ROM beside the name. There used to be, with
+/// a migration case in its own doc comment, and two spellings of one fact is how the two came to
+/// disagree: a device whose dump had moved silently booted a **generated** 5.5G instead, because
+/// the resolution fell back to the inline copy. [`Settings::nor_of`] is the one resolution point
+/// now, and it has no fallback.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Device {
     /// What the person calls it. The key, so it is unique and renaming is a delete plus an add.
     pub name: String,
-    /// The firmware resource this device boots, by name. `None` means [`Device::nor`] answers
-    /// directly, which is what a device migrated from an older settings file has.
-    pub firmware: Option<String>,
+    /// The iPod this device boots, by name into [`Settings::resources`]. Resolved through
+    /// [`Settings::nor_of`]; there is no second, inline copy.
+    ///
+    /// A `String` rather than an `Option<String>` because with the inline copy gone, `None` and
+    /// `""` would both mean "this device names no iPod" — one bad state, so it is encoded once.
+    /// **Every device in [`Settings::devices`] names a resource**: [`Settings::parse`] guarantees
+    /// it for anything read from a file and [`Settings::remember_as`] for anything this program
+    /// makes. `Device::default()`'s empty one is a scratch value, never a list member.
+    pub firmware: String,
     /// The disk this device runs, by name. `None` means [`Device::disk_path`] answers directly.
     pub disk: Option<String>,
-    /// The resolved boot ROM. A recipe, not a megabyte — see [`Settings::nor`].
-    pub nor: crate::nor::Source,
     /// The resolved drive image.
     pub disk_path: Option<PathBuf>,
     pub chassis: Option<crate::identity::Colour>,
@@ -172,6 +470,15 @@ pub struct Device {
     /// `None` until it has booted once, and the bar says "booting" without a fraction rather than
     /// inventing one.
     pub boot_instructions: Option<u64>,
+    /// Seconds since the Unix epoch at which a complete restore point was last written for this
+    /// device. `None` means no restore point has ever been written by this program.
+    ///
+    /// **It answers *when*, never *whether*.** Whether there is a restore point to resume is a
+    /// question about two files on disk and the drive they pair with; this is the time to put
+    /// beside the answer. So it is not cleared by a cold boot, by a power-off, or by a pair that
+    /// has broken — a device whose drive was touched by something else keeps its park time and is
+    /// offered `Discard the snapshot`, which is what makes that offer explicable.
+    pub parked_at: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -239,12 +546,49 @@ pub struct Settings {
 impl Settings {
     /// Read the settings file, tolerating everything: a missing file, a missing directory, a
     /// truncated write, a key from a future version. A settings file is not a place to fail.
+    ///
+    /// **A read, and only a read.** It creates no file and writes none. That is not timidity: this
+    /// is called from five places in `ipod-boot` that only want to know the default drive, and
+    /// `ipod-boot <recipe> --print` is documented as *showing the command line and running
+    /// nothing*. A save from here made `--print` rewrite the operator's settings — and
+    /// [`Settings::render`] is generated from the model, so every comment they had added went with
+    /// it. Whoever means to persist what seeding produced says so: [`Settings::load_and_seed`].
     pub fn load() -> Settings {
-        let mut s = match std::fs::read_to_string(data_dir().join(FILE)).ok() {
-            Some(text) => Settings::parse(&text),
-            None => Settings::default(),
-        };
+        let (mut s, _) = Settings::read();
         s.seed_resources();
+        s
+    }
+
+    /// The file, and whether there was one. Split out so [`Settings::load_and_seed`] can tell a
+    /// file it read from a file it would be creating.
+    fn read() -> (Settings, bool) {
+        let text = std::fs::read_to_string(data_dir().join(FILE)).ok();
+        match &text {
+            Some(text) => (Settings::parse(text), true),
+            None => (Settings::default(), false),
+        }
+    }
+
+    /// The same read, **and what seeding produced is written back**.
+    ///
+    /// Seeding mutates, and for as long as nothing wrote the answer down it was re-derived on every
+    /// launch: the marker that makes removing an entry stick existed only in memory, so the list a
+    /// person had edited came back the next time the program opened. Once per installation — the
+    /// next launch reads the marker and seeding returns before it changes anything.
+    ///
+    /// **Only for a caller that owns the library**, which today is the window and nothing else. It
+    /// rewrites the file from the model, so anything the format cannot hold — an operator's own
+    /// comments, a key from a version that is not this one — does not survive it.
+    ///
+    /// **Only a file that already exists is written.** Reading is not a reason to create one:
+    /// `migrate_legacy` carries a previous installation's settings forward and declines the moment
+    /// a file exists here, so a load that minted one on a fresh machine would permanently block the
+    /// carry-forward.
+    pub fn load_and_seed() -> Settings {
+        let (mut s, existed) = Settings::read();
+        if s.seed_resources() && existed {
+            let _ = s.save();
+        }
         s
     }
 
@@ -257,9 +601,13 @@ impl Settings {
     ///
     /// Guarded by [`Settings::library_seeded`] rather than by emptiness, so that removing every
     /// entry is a thing you can do rather than a thing that undoes itself at the next launch.
-    pub fn seed_resources(&mut self) {
+    ///
+    /// **Returns whether it changed anything**, so [`Settings::load`] can write the answer back.
+    /// Seeding that is never persisted is seeding that runs again next launch, and a marker that is
+    /// never written is a removal that does not stick.
+    pub fn seed_resources(&mut self) -> bool {
         if self.library_seeded {
-            return;
+            return false;
         }
         self.library_seeded = true;
         let stem = |p: &Path| {
@@ -267,28 +615,28 @@ impl Settings {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default()
         };
-        let describe = |src: &crate::nor::Source| match src {
-            crate::nor::Source::File(p) => stem(p),
-            crate::nor::Source::Synthetic { model, seed, .. } => format!("{model}, seed {seed}"),
-        };
-        // Gathered before anything is filed, because filing borrows the lists mutably and the names
-        // are read out of the very fields being filed.
+        // The live machine's ROM. Devices no longer carry one to gather — they name a resource, and
+        // `Settings::parse` has already filed whatever an older file had inline.
         //
-        // The live machine comes first, so its entries get the unsuffixed names — it is the one on
-        // screen, and the one whose name a person will recognise.
-        let mut firmware: Vec<(crate::nor::Source, String)> =
-            vec![(self.nor.clone(), describe(&self.nor))];
-        let mut drives: Vec<(PathBuf, String)> =
-            self.disk.iter().map(|d| (d.clone(), stem(d))).collect();
-        for d in &self.devices {
-            firmware.push((d.nor.clone(), describe(&d.nor)));
-            if let Some(p) = &d.disk_path {
-                drives.push((p.clone(), stem(p)));
-            }
-        }
-        for (src, name) in firmware {
-            self.file_away(Resource::Firmware(src), &name);
-        }
+        // Bound to locals first: `file_away` takes `&mut self` and would otherwise be handed a
+        // borrow of the very field it is filing.
+        let live = self.nor.clone();
+        let name = suggest_nor_name(&live);
+        // `None`, deliberately: a dump seeded out of a pre-library `flash =` line is one we never
+        // observed being made, and `Dumped` for it would be exactly the assertion this field exists
+        // to delete. A synthetic needs nothing — `normalised` derives it from the recipe.
+        self.file_away(Resource::Firmware(live), &name, None);
+
+        let drives: Vec<(PathBuf, String)> = self
+            .disk
+            .iter()
+            .map(|d| (d.clone(), stem(d)))
+            .chain(
+                self.devices
+                    .iter()
+                    .filter_map(|d| d.disk_path.as_ref().map(|p| (p.clone(), stem(p)))),
+            )
+            .collect();
         for (path, name) in drives {
             self.file_disk(path, &name);
         }
@@ -305,15 +653,8 @@ impl Settings {
                         .map(|d| d.name.clone());
                 }
             }
-            if self.devices[i].firmware.is_none() {
-                let nor = self.devices[i].nor.clone();
-                self.devices[i].firmware = self
-                    .resources
-                    .iter()
-                    .find(|it| matches!(&it.what, Resource::Firmware(s) if *s == nor))
-                    .map(|it| it.name.clone());
-            }
         }
+        true
     }
 
     pub fn parse(text: &str) -> Settings {
@@ -322,6 +663,11 @@ impl Settings {
         // file is read, because an entry's `path` line arrives after its `kind` line and moving it
         // early would move an empty one.
         let mut was_a_disk: Vec<usize> = Vec::new();
+        // The recipe each device carried in `device.N.flash` / `device.N.nor_*`, which is what a
+        // settings file written before a device named its iPod looks like. Kept beside the devices
+        // rather than on them, because a device has nowhere to put one any more; `adopt_inline_roms`
+        // files each as a resource once the whole file has been read.
+        let mut inline_rom: Vec<Option<crate::nor::Source>> = Vec::new();
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -374,31 +720,43 @@ impl Settings {
                     while s.devices.len() <= i {
                         s.devices.push(Device::default());
                     }
-                    let d = &mut s.devices[i];
+                    while inline_rom.len() < s.devices.len() {
+                        inline_rom.push(None);
+                    }
+                    // `s.devices[i]` is indexed per arm rather than bound once, because the arms
+                    // that write `inline_rom[i]` must not be holding a borrow of `s.devices`.
                     match field {
-                        "name" => d.name = v.to_string(),
+                        "name" => s.devices[i].name = v.to_string(),
                         "flash" if !v.is_empty() => {
-                            d.nor = crate::nor::Source::File(PathBuf::from(v))
+                            inline_rom[i] = Some(crate::nor::Source::File(PathBuf::from(v)))
                         }
                         // `disk` was a path in the old shape and is the disk's *name* in this one.
                         // Told apart by what it looks like: a path has a separator in it.
                         "disk" if !v.is_empty() => {
                             if v.contains('/') || v.contains('\\') {
-                                d.disk_path = Some(PathBuf::from(v));
+                                s.devices[i].disk_path = Some(PathBuf::from(v));
                             } else {
-                                d.disk = Some(v.to_string());
+                                s.devices[i].disk = Some(v.to_string());
                             }
                         }
-                        "firmware" => d.firmware = (!v.is_empty()).then(|| v.to_string()),
+                        // An empty value leaves it empty, which the post-pass then fills.
+                        "firmware" => s.devices[i].firmware = v.to_string(),
                         // The old shape's names for the two references.
-                        "rom" if !v.is_empty() => d.firmware = Some(v.to_string()),
-                        "drive" if !v.is_empty() => d.disk = Some(v.to_string()),
-                        "chassis" => d.chassis = crate::identity::Colour::parse(v),
-                        "work_on_copy" => d.work_on_copy = Some(v == "true"),
-                        "boot_instructions" => d.boot_instructions = v.parse::<u64>().ok(),
+                        "rom" if !v.is_empty() => s.devices[i].firmware = v.to_string(),
+                        "drive" if !v.is_empty() => s.devices[i].disk = Some(v.to_string()),
+                        "chassis" => s.devices[i].chassis = crate::identity::Colour::parse(v),
+                        "work_on_copy" => s.devices[i].work_on_copy = Some(v == "true"),
+                        "boot_instructions" => {
+                            s.devices[i].boot_instructions = v.parse::<u64>().ok()
+                        }
+                        "parked_at" => s.devices[i].parked_at = v.parse::<u64>().ok(),
                         _ => {
-                            if let Some(next) = nor_field(d.nor.clone(), field, v) {
-                                d.nor = next;
+                            // `unwrap_or_default` reproduces the old start point exactly: the
+                            // resolved ROM defaulted to a synthetic A446 seed 0, so a lone
+                            // `nor_seed = 5` still yields `Synthetic { model: "A446", seed: 5 }`.
+                            let base = inline_rom[i].clone().unwrap_or_default();
+                            if let Some(next) = nor_field(base, field, v) {
+                                inline_rom[i] = Some(next);
                             }
                         }
                     }
@@ -435,6 +793,7 @@ impl Settings {
                         s.resources.push(Item {
                             name: String::new(),
                             what: Resource::Firmware(crate::nor::Source::default()),
+                            from: None,
                         });
                     }
                     let item = &mut s.resources[i];
@@ -468,6 +827,10 @@ impl Settings {
                                 }
                             }
                         }
+                        // Written explicitly rather than left to fall through `nor_field`, which
+                        // returns `None` for it and would make a missing arm silently harmless —
+                        // which is exactly why it has to be here to be read.
+                        "provenance" => item.from = Provenance::parse(v),
                         _ => {
                             if let Resource::Firmware(src) = &item.what {
                                 if let Some(next) = nor_field(src.clone(), field, v) {
@@ -480,8 +843,65 @@ impl Settings {
                 _ => {}
             }
         }
+        // Order is load-bearing. `migrate_disks_out_of_resources` removes by the **file's** own
+        // indices, so it has to run before anything else adds or removes a resource; swapping these
+        // two lines silently removes the wrong one.
         s.migrate_disks_out_of_resources(&was_a_disk);
+        // **A device with no name is not a device.** Indices are tolerated sparse on read, and the
+        // gaps are filled with `Device::default()` so that `device.2.name` lands on index 2 — but a
+        // hand-edit that deletes one `device.1.*` block leaves that placeholder behind, and
+        // `adopt_inline_roms` would then mint a generated iPod for a machine nobody made. Dropped
+        // here, before the migration, for the same reason `filed_under` refuses to hand out an
+        // unnamed resource: nothing can name it, so nothing can run it or remove it.
+        //
+        // `inline_rom` is indexed by the **file's** device index, so it is filtered in the same
+        // pass — `Vec::retain` visits every element once, in order, which is what makes this safe.
+        let mut kept: Vec<Option<crate::nor::Source>> = Vec::with_capacity(s.devices.len());
+        let mut at = 0usize;
+        s.devices.retain(|d| {
+            let keep = !d.name.is_empty();
+            if keep {
+                kept.push(inline_rom.get(at).cloned().flatten());
+            }
+            at += 1;
+            keep
+        });
+        s.adopt_inline_roms(&kept);
+        s.normalise_provenance();
         s
+    }
+
+    /// Give every device that came out of the file a named iPod.
+    ///
+    /// `inline[i]` is the recipe device `i` carried in `device.N.flash` / `device.N.nor_*`. It is
+    /// filed as a resource and the device is pointed at its name — the old keys are read for ever
+    /// and written never.
+    fn adopt_inline_roms(&mut self, inline: &[Option<crate::nor::Source>]) {
+        for i in 0..self.devices.len() {
+            if !self.devices[i].firmware.is_empty() {
+                continue;
+            }
+            // A device that said nothing at all — `device.5.chassis = black` and no ROM keys —
+            // silently booted a generated 5.5G. It still boots exactly that; the difference is that
+            // it now says which one, in a list, where it can be changed.
+            let src = inline.get(i).cloned().flatten().unwrap_or_default();
+            let suggested = suggest_nor_name(&src);
+            // `None`: a dump named by a `flash =` line is one this program never watched being
+            // made. `file_away` dedupes by value, so however many devices lack a recipe, at most
+            // one extra resource comes out of this.
+            let name = self.file_away(Resource::Firmware(src), &suggested, None);
+            self.devices[i].firmware = name;
+        }
+    }
+
+    /// Reconcile every resource's provenance with the resource itself, once the whole file is read.
+    ///
+    /// Running it here rather than per line is what keeps `res.N.provenance` and `res.N.nor_seed`
+    /// order-independent: the file gains no new order dependency from this key.
+    fn normalise_provenance(&mut self) {
+        for it in &mut self.resources {
+            it.from = normalised(&it.what, it.from);
+        }
     }
 
     /// Move entries an older settings file filed as resources of `kind = disk` into [`Self::disks`].
@@ -497,6 +917,8 @@ impl Settings {
                 continue;
             }
             let item = self.resources.remove(i);
+            // The entry's provenance is dropped in the move, and that is right: a `Disk` has no
+            // such field because a drive's origin is already `built_from`.
             if let Some(p) = item.what.path() {
                 let path = p.to_path_buf();
                 if !self.disks.iter().any(|d| d.path == path) {
@@ -525,6 +947,38 @@ impl Settings {
     /// The `nor` half of the settings file.
     fn render_nor(&self) -> String {
         render_nor_of(&self.nor)
+    }
+}
+
+/// A string that can be written into this file and read back as itself.
+///
+/// **Names in this program come from filenames**, through `p.file_stem()`, and every filesystem
+/// this runs on lets a filename hold a newline. Written straight out, one splits the record in
+/// two and everything after it is read as a fresh key — `res.0.name = mine⏎res.0.kind = software`
+/// files somebody's boot ROM as software. Replaced with a space rather than rejected, because a
+/// name is a label and the label they meant is still in there.
+///
+/// **Paths are not put through this and must not be**: a mangled path is a path that names the
+/// wrong file, which is worse than the record it would repair. A path holding a line break is a
+/// limit of this file format, stated in [`Settings::render`], and closing it means quoting values
+/// rather than trimming them.
+fn one_line(s: &str) -> String {
+    // `\r\n` first, so a Windows line ending becomes one space rather than two.
+    s.replace("\r\n", " ").replace(['\r', '\n'], " ").trim().to_string()
+}
+
+/// The name to file a boot ROM under when nobody has given it one.
+///
+/// One place, because three callers need the same spelling: seeding, [`Settings::remember_as`], and
+/// the migration of a device that carried its recipe inline. Three copies of a format string is
+/// three chances for one of them to mint a duplicate entry under a slightly different name.
+fn suggest_nor_name(src: &crate::nor::Source) -> String {
+    match src {
+        crate::nor::Source::File(p) => p
+            .file_stem()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        crate::nor::Source::Synthetic { model, seed, .. } => format!("{model}, seed {seed}"),
     }
 }
 
@@ -558,6 +1012,14 @@ fn render_nor_of(nor: &crate::nor::Source) -> String {
 }
 
 impl Settings {
+    /// The whole settings file, as text.
+    ///
+    /// **One known limit, stated rather than papered over**: a `key = value` line format cannot
+    /// hold a value with a line break in it. Names go through [`one_line`] before they are filed,
+    /// so the only way to reach it is a *path* — a drive image or a dump whose own filename holds
+    /// a newline. Such a record is written and read back short. Mangling the path would name the
+    /// wrong file and dropping it would lose a drive somebody is running, so the fix is quoting,
+    /// which is a change to the format and not to this function.
     pub fn render(&self) -> String {
         let p = |o: &Option<PathBuf>| {
             o.as_ref()
@@ -565,7 +1027,9 @@ impl Settings {
                 .unwrap_or_default()
         };
         format!(
-            "# ipod-gui settings. Hand-editable; unknown keys are ignored.\n\
+            "# ipod-gui settings. Hand-editable; keys this version does not know are ignored.\n\
+             # When the program saves, it writes this file out from its own model — so anything\n\
+             # not in the list below, including comments you add, is not carried over.\n\
              mode = {}\n\
              # auto, white, black, or u2. `auto` reads it out of the NOR's Mod#, which is\n\
              # what the dump says the iPod was; the rest overrule that. Cosmetic either way —\n\
@@ -594,28 +1058,39 @@ impl Settings {
             + &self.render_devices()
     }
 
-    /// The library, as `item.N.field` lines.
-    ///
-    /// `kind` is written **before** `path`, and the parser depends on that order: it uses the kind
-    /// to decide which variant a path belongs to. Reordering these two lines by hand in the file
-    /// would file an `.ipsw` as a boot ROM, so the order is load-bearing rather than tidy.
     /// The resources, as `res.N.field` lines.
     ///
     /// `kind` is written **before** `path`, and the parser depends on that order: it uses the kind
     /// to decide which variant a path belongs to. Reordering these two by hand would file an
     /// `.ipsw` as a boot ROM, so the order is load-bearing rather than tidy.
+    ///
+    /// `provenance` is one self-contained token and carries **no** order dependency. It is omitted
+    /// entirely for a synthesised ROM, whose provenance is derived from the recipe already in the
+    /// file, and omitted when nobody recorded one — because "nobody recorded it" is the absence of
+    /// a line, not a line saying so.
     fn render_resources(&self) -> String {
         if self.resources.is_empty() && !self.library_seeded {
             return String::new();
         }
         let mut out = String::from(
             "\n# Resources: firmware a device can boot, installers that make a disk, and\n\
-             # software that installs onto one. A device names firmware from here.\n",
+             # software that installs onto one. A device names firmware from here.\n\
+             # `provenance` says where a file came from: dumped, provided, built,\n\
+             # fetched, fetched-size or fetched-sha256. A generated iPod has none —\n\
+             # its provenance is the recipe below it, so writing one here does nothing.\n",
         );
         out.push_str(&format!("library_seeded = {}\n", self.library_seeded));
         for (i, item) in self.resources.iter().enumerate() {
             out.push_str(&format!("\nres.{i}.name = {}\n", item.name));
             out.push_str(&format!("res.{i}.kind = {}\n", item.what.kind()));
+            if !matches!(
+                &item.what,
+                Resource::Firmware(crate::nor::Source::Synthetic { .. })
+            ) {
+                if let Some(f) = item.from {
+                    out.push_str(&format!("res.{i}.provenance = {}\n", f.token()));
+                }
+            }
             match &item.what {
                 // A synthesised ROM is a recipe, written the way every other recipe in this file
                 // is. `flash = …` becomes `path = …` because at this level the kinds share one key.
@@ -669,16 +1144,11 @@ impl Settings {
         }
         for (i, d) in self.devices.iter().enumerate() {
             out.push_str(&format!("\ndevice.{i}.name = {}\n", d.name));
-            match &d.firmware {
-                // Composed of a resource: the name is the whole of it, and the resolved recipe is
-                // not written, because writing both is how the two come to disagree.
-                Some(f) => out.push_str(&format!("device.{i}.firmware = {f}\n")),
-                None => {
-                    for line in render_nor_of(&d.nor).lines() {
-                        out.push_str(&format!("device.{i}.{line}\n"));
-                    }
-                }
-            }
+            // **The name is the whole of it.** A recipe is never written under a device: writing
+            // both a reference and a resolved copy is how the two came to disagree, and the copy is
+            // what used to win. Written even when empty, so the block is uniform and hand-editable;
+            // `parse`'s post-pass fills an empty one back in.
+            out.push_str(&format!("device.{i}.firmware = {}\n", d.firmware));
             match (&d.disk, &d.disk_path) {
                 (Some(name), _) => out.push_str(&format!("device.{i}.disk = {name}\n")),
                 (None, Some(p)) => out.push_str(&format!("device.{i}.disk = {}\n", p.display())),
@@ -693,36 +1163,52 @@ impl Settings {
             if let Some(b) = d.boot_instructions {
                 out.push_str(&format!("device.{i}.boot_instructions = {b}\n"));
             }
+            if let Some(t) = d.parked_at {
+                out.push_str(&format!("device.{i}.parked_at = {t}\n"));
+            }
         }
         out
     }
 
     /// The live fields as a [`Device`] under `name`.
+    ///
+    /// The name goes through [`one_line`], for the same reason a resource's does — it ends up as
+    /// `device.N.name` in a `key = value` file, and `current` names a device by it.
     pub fn as_device(&self, name: &str) -> Device {
+        let name = one_line(name);
         let existing = self.devices.iter().find(|d| d.name == name);
         Device {
-            name: name.to_string(),
+            name: name.clone(),
             // **The composition is kept, not re-derived.** Deriving it from the live values was
             // tried and is wrong: switching devices writes back the one you were editing, so the
             // moment a resource changed, the write-back looked for one matching the old value,
             // found none, and quietly cut the device loose from what it was made of.
-            firmware: existing.and_then(|d| d.firmware.clone()).or_else(|| {
-                self.resources
-                    .iter()
-                    .find(|it| matches!(&it.what, Resource::Firmware(src) if *src == self.nor))
-                    .map(|it| it.name.clone())
-            }),
+            //
+            // It can still come back empty — nothing existing, and nothing in the resources
+            // matching the live ROM. `remember_as` is what closes that; this stays `&self` and
+            // mints nothing.
+            firmware: existing
+                .map(|d| d.firmware.clone())
+                .filter(|f| !f.is_empty())
+                .or_else(|| {
+                    // The same lookup `file_away` does, through the same function, so the name a
+                    // save hands the device and the name filing hands back cannot be two names.
+                    self.filed_under(&Resource::Firmware(self.nor.clone()))
+                        .map(|i| self.resources[i].name.clone())
+                })
+                .unwrap_or_default(),
             disk: existing.and_then(|d| d.disk.clone()).or_else(|| {
                 self.disk
                     .as_ref()
                     .and_then(|p| self.disks.iter().find(|d| d.path == *p))
                     .map(|d| d.name.clone())
             }),
-            nor: self.nor.clone(),
             disk_path: self.disk.clone(),
             chassis: self.chassis,
             work_on_copy: self.work_on_copy,
             boot_instructions: existing.and_then(|d| d.boot_instructions),
+            // The park time belongs to the saved device and is not derivable from the live fields.
+            parked_at: existing.and_then(|d| d.parked_at),
         }
     }
 
@@ -732,16 +1218,70 @@ impl Settings {
     /// the value, not the name: two entries pointing at one path would be two names for one thing,
     /// and nothing could tell you which you were running. A name collision with a *different* thing
     /// gets a suffix rather than overwriting it.
-    pub fn file_away(&mut self, what: Resource, suggested: &str) -> String {
-        if let Some(existing) = self.resources.iter().find(|it| it.what == what) {
+    ///
+    /// `from` is a required argument, including when it is `None` — because `None` is a statement,
+    /// and a resource filed without one is a row that has to invent what to say about it. On the
+    /// duplicate path there is one rule and one only: **`None` may become stated; a stated value is
+    /// never changed.** So a ROM seeded before anyone knew where it came from stops saying nothing
+    /// the first time a real acquisition files it, and a fetch followed by a Provide cannot flip a
+    /// recorded fact. [`Settings::record_provenance`] is the deliberate second verb for the caller
+    /// that has re-checked the bytes and is entitled to overwrite.
+    ///
+    /// An entry with **no name** is never handed out as one: `parse` fills sparse `res.N.` indices
+    /// with unnamed placeholders, and without that guard the first file of a default synthetic ROM
+    /// matched placeholder 0 and returned `""` — a reference nothing can resolve.
+    pub fn file_away(&mut self, what: Resource, suggested: &str, from: Option<Provenance>) -> String {
+        if let Some(i) = self.filed_under(&what) {
+            let existing = &mut self.resources[i];
+            if existing.from.is_none() && from.is_some() {
+                existing.from = normalised(&existing.what, from);
+            }
             return existing.name.clone();
         }
         let name = self.unique_name(suggested, |s| s.resources.iter().map(|i| i.name.as_str()));
+        let from = normalised(&what, from);
         self.resources.push(Item {
             name: name.clone(),
             what,
+            from,
         });
         name
+    }
+
+    /// Where this exact value is already filed, if it is. **One lookup, two callers**, so the name
+    /// [`Settings::file_away`] hands back and the name [`Settings::as_device`] writes on a device
+    /// cannot be two different names for one thing.
+    ///
+    /// **Never an unnamed entry.** [`Settings::parse`] fills sparse `res.N.` indices with unnamed
+    /// placeholders holding a default synthetic ROM, and handing one of those back as a name is a
+    /// reference nothing can resolve — which is what a device made on a hand-edited file used to
+    /// get.
+    fn filed_under(&self, what: &Resource) -> Option<usize> {
+        self.resources
+            .iter()
+            .position(|it| it.what == *what && !it.name.is_empty())
+    }
+
+    /// State where a resource came from, overwriting whatever was there.
+    ///
+    /// The second verb, because "fill in what nobody said" and "I have just re-checked this" are
+    /// different acts and one function that did both would decide silently which had happened.
+    /// `false` if there is no resource of that name.
+    ///
+    /// **This is the only way a stale verification comes down.** A recorded
+    /// [`Provenance::Fetched`] is a record of how the file arrived, and the entry is keyed on its
+    /// path — so a file replaced underneath it keeps the badge until somebody re-reads the bytes
+    /// and files the answer here. A re-fetch must come through this and not through
+    /// [`Settings::file_away`], which by design leaves a stated value alone: routed the wrong way,
+    /// a re-download that could only be size-checked would keep the SHA-256 badge from the first.
+    pub fn record_provenance(&mut self, name: &str, from: Provenance) -> bool {
+        match self.resources.iter_mut().find(|it| it.name == name) {
+            Some(it) => {
+                it.from = normalised(&it.what, Some(from));
+                true
+            }
+            None => false,
+        }
     }
 
     /// Put a drive image in the disks, or return the name the same path already has.
@@ -760,15 +1300,19 @@ impl Settings {
     }
 
     /// A name not already taken in the list `taken` names.
+    ///
+    /// Put through [`one_line`] first — every name in this program is derived from a filename, and
+    /// a filename may hold a newline.
     fn unique_name<'a, F, I>(&'a self, suggested: &str, taken: F) -> String
     where
         F: Fn(&'a Settings) -> I,
         I: Iterator<Item = &'a str>,
     {
+        let suggested = one_line(suggested);
         let base = if suggested.is_empty() {
             "unnamed"
         } else {
-            suggested
+            suggested.as_str()
         };
         let mut name = base.to_string();
         let mut n = 2;
@@ -779,34 +1323,131 @@ impl Settings {
         name
     }
 
-    /// Names a device refers to that no longer exist.
+    /// The boot ROM this device runs, resolved through the resources by name.
+    ///
+    /// `None` when the name is empty, names nothing, or names something that is not a
+    /// [`Resource::Firmware`]. **There is deliberately no fallback**: substituting a generated 5.5G
+    /// for a dump that has gone is the window telling a lie about which iPod is running, and it is
+    /// precisely what the deleted inline copy used to do.
+    ///
+    /// Callers that need ownership write `.cloned()`.
+    pub fn nor_of(&self, d: &Device) -> Option<&crate::nor::Source> {
+        self.firmware_of(d).ok()
+    }
+
+    /// The boot ROM a device actually boots, or why it cannot be found.
+    ///
+    /// The wrong-kind case is a real class rather than a curiosity: resource names are unique within
+    /// one list holding all four kinds, so an `.ipsw` called `my dump` shadows nothing and resolves
+    /// to nothing. It is [`Absent::Unlisted`] for the same reason a name nobody holds is — the
+    /// device names a part the lists do not hold, whatever else happens to wear that name.
+    ///
+    /// **A device that names nothing gets a label rather than the empty string.** `parse` fills
+    /// every empty `firmware` and `remember_as` files before it saves, so this arrives only from a
+    /// hand-built [`Device`] — but `missing` renders `missing {label}`, and `missing ` followed by
+    /// nothing is the caption saying something is wrong and refusing to say what.
+    fn firmware_of(&self, d: &Device) -> Result<&crate::nor::Source, Absent> {
+        self.resources
+            .iter()
+            .find(|it| it.name == d.firmware && !it.name.is_empty())
+            .and_then(|it| match &it.what {
+                Resource::Firmware(src) => Some(src),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                Absent::Unlisted(if d.firmware.is_empty() {
+                    "an iPod".into()
+                } else {
+                    d.firmware.clone()
+                })
+            })
+    }
+
+    /// The drive image a device actually runs. `None` when it names no disk at all — which is an
+    /// **unfinished** device, not a broken one, and belongs to first run rather than to a refusal.
+    fn disk_of(&self, d: &Device) -> Option<Result<PathBuf, Absent>> {
+        match (&d.disk, &d.disk_path) {
+            (Some(name), _) => Some(
+                self.disks
+                    .iter()
+                    .find(|x| x.name == *name)
+                    .map(|x| x.path.clone())
+                    .ok_or_else(|| Absent::Unlisted(name.clone())),
+            ),
+            (None, Some(p)) => Some(Ok(p.clone())),
+            (None, None) => None,
+        }
+    }
+
+    /// Names a device refers to that no longer resolve, and files that are no longer there.
     ///
     /// **Reported rather than swallowed.** A device whose firmware went missing should say which
     /// one, because "it boots to a white screen" is not a diagnosis and the name of the file that
     /// went is the whole of the answer.
-    pub fn missing(&self, d: &Device) -> Vec<String> {
+    ///
+    /// This performs a `stat(2)` per resolved path and **may block** — see [`Presence`] for the
+    /// caller rule. Use [`Settings::missing_with`] to share one pass's answers across devices.
+    pub fn missing(&self, d: &Device) -> Vec<Absent> {
+        self.missing_with(d, &mut Presence::new())
+    }
+
+    /// The same, sharing one pass's worth of `stat` answers across several devices.
+    ///
+    /// The firmware absence comes first and the disk second, always, so the cradle's one-part
+    /// sentence is stable. At most two elements.
+    pub fn missing_with(&self, d: &Device, seen: &mut Presence) -> Vec<Absent> {
         let mut out = Vec::new();
-        if let Some(f) = &d.firmware {
-            if !self.resources.iter().any(|it| it.name == *f) {
-                out.push(f.clone());
+        match self.firmware_of(d) {
+            Err(a) => out.push(a),
+            // A recipe has no file anywhere, and never goes missing.
+            Ok(crate::nor::Source::Synthetic { .. }) => {}
+            Ok(crate::nor::Source::File(p)) => {
+                if !seen.exists(p) {
+                    out.push(Absent::Gone(p.clone()));
+                }
             }
         }
-        if let Some(k) = &d.disk {
-            if !self.disks.iter().any(|x| x.name == *k) {
-                out.push(k.clone());
-            }
+        match self.disk_of(d) {
+            Some(Err(a)) => out.push(a),
+            Some(Ok(p)) if !seen.exists(&p) => out.push(Absent::Gone(p)),
+            // The disk is there, or the device names none — which is unfinished, not broken.
+            Some(Ok(_)) | None => {}
         }
         out
     }
 
-    /// Resolve a device's parts and make it the live one. `false` if there is no device of that name.
+    /// Resolve a device's parts and make it the live one.
+    ///
+    /// `false`, and **nothing is mutated**, when there is no device of that name or when a name it
+    /// carries does not resolve — its `firmware` to a [`Resource::Firmware`], or its `disk` to a
+    /// drive in the list. The window asks [`Settings::missing`] which it was; this only refuses.
+    /// There used to be a fallback here — the device's own inline copy of the recipe — and it is
+    /// what made a moved dump boot a silently substituted generated 5.5G rather than say anything
+    /// at all.
+    ///
+    /// **The disk obeys the same rule as the boot ROM**, and used not to. `disk_path` was kept as a
+    /// last resort, but by the time a device has been through the settings file once there is no
+    /// `disk_path` to fall back to — `render_devices` writes the name and `parse` reads it back as
+    /// one — so an unresolvable name started a machine with no drive at all and said nothing.
+    /// Before that round trip it was worse: the stale resolved path was still there and the machine
+    /// booted the wrong drive, which is the `unwrap_or(d.nor)` substitution wearing a different
+    /// hat. Naming **no** disk is still fine: that is an unfinished device, not a broken one.
     ///
     /// **The device being replaced is written back first**, so switching away from something you
     /// have been editing does not discard the edits — which is what every person switching between
-    /// two of anything expects, and what they never say out loud.
+    /// two of anything expects, and what they never say out loud. Both resolutions happen before
+    /// that write-back, so a refusal leaves everything exactly as it was.
     pub fn run_device(&mut self, name: &str) -> bool {
         let Some(i) = self.devices.iter().position(|d| d.name == name) else {
             return false;
+        };
+        let Some(nor) = self.nor_of(&self.devices[i]).cloned() else {
+            return false;
+        };
+        let disk = match self.disk_of(&self.devices[i]) {
+            Some(Ok(p)) => Some(p),
+            Some(Err(_)) => return false,
+            None => None,
         };
         if let Some(c) = self.current.clone() {
             if c != name && self.devices.iter().any(|d| d.name == c) {
@@ -816,26 +1457,13 @@ impl Settings {
                 }
             }
         }
+        // The write-back only ever touches an index other than `i` — it is guarded by `c != name` —
+        // so the position resolved above is still this device.
         let d = self.devices[i].clone();
         // **The named resource wins**, so editing one changes every device made of it — the point
-        // of composing rather than copying. A name that is not there falls back to the device's own
-        // stored value rather than leaving it with no firmware at all; `missing` reports that, at a
-        // moment when it can be read.
-        self.nor = d
-            .firmware
-            .as_deref()
-            .and_then(|n| self.resources.iter().find(|it| it.name == n))
-            .and_then(|it| match &it.what {
-                Resource::Firmware(src) => Some(src.clone()),
-                _ => None,
-            })
-            .unwrap_or(d.nor);
-        self.disk = d
-            .disk
-            .as_deref()
-            .and_then(|n| self.disks.iter().find(|x| x.name == n))
-            .map(|x| x.path.clone())
-            .or(d.disk_path);
+        // of composing rather than copying.
+        self.nor = nor;
+        self.disk = disk;
         self.chassis = d.chassis;
         self.work_on_copy = d.work_on_copy;
         self.current = Some(name.to_string());
@@ -843,13 +1471,25 @@ impl Settings {
     }
 
     /// Save the live fields as a device under `name`, replacing any device of that name.
+    ///
+    /// **The live boot ROM is filed first**, because a device names its iPod and cannot name one
+    /// that is not in the list. Filing is by value and idempotent, so a ROM already in the resources
+    /// keeps the name it has and no second entry appears per save. `as_device` still prefers an
+    /// existing device's reference, so re-saving a device whose stored ROM differs from the live one
+    /// does not silently re-point it.
     pub fn remember_as(&mut self, name: &str) {
-        let d = self.as_device(name);
+        // Sanitised here as well as in `as_device`, so the name this looks the device up by and the
+        // name it saves under cannot be two different strings — which would push a duplicate.
+        let name = one_line(name);
+        let live = self.nor.clone();
+        let suggested = suggest_nor_name(&live);
+        self.file_away(Resource::Firmware(live), &suggested, None);
+        let d = self.as_device(&name);
         match self.devices.iter().position(|x| x.name == name) {
             Some(i) => self.devices[i] = d,
             None => self.devices.push(d),
         }
-        self.current = Some(name.to_string());
+        self.current = Some(name);
     }
 
     /// Remove a device. The live fields are untouched — forgetting the device you are running
@@ -871,6 +1511,34 @@ impl Settings {
         }
     }
 
+    /// Record that a complete restore point was written for this device at `at`.
+    ///
+    /// The time is reported by whoever wrote the snapshot — which has a machine and deliberately no
+    /// [`Settings`] — and recorded here by whoever owns the device's name.
+    /// `false` if there is no device of that name.
+    pub fn record_park(&mut self, name: &str, at: u64) -> bool {
+        match self.devices.iter_mut().find(|d| d.name == name) {
+            Some(d) => {
+                d.parked_at = Some(at);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Forget this device's park time. **Deletes no files** — the caller does that, after saying
+    /// what it is about to delete and how big it is.
+    /// `false` if there is no device of that name.
+    pub fn discard_park(&mut self, name: &str) -> bool {
+        match self.devices.iter_mut().find(|d| d.name == name) {
+            Some(d) => {
+                d.parked_at = None;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// What the progress bar should divide by, if anything is known.
     pub fn expected_boot(&self) -> Option<u64> {
         self.current
@@ -880,12 +1548,28 @@ impl Settings {
             .filter(|n| *n > 0)
     }
 
-    pub fn save(&self) {
+    /// Write the settings file.
+    ///
+    /// **Through a `.part` and a rename**, the same shape `firmware::download` uses, because
+    /// `fs::write` truncates before it writes: a process that died between the two left a device
+    /// list that was half a file, and this is called on paths where nobody is watching. A rename
+    /// within one directory is atomic, so the file on disk is either the old one or the new one.
+    ///
+    /// **It reports failure.** A read-only home, a full disk or a second process holding the file
+    /// used to be swallowed, and the caller went on to say "Saved to …". A save nobody can see fail
+    /// is a save that silently did not happen.
+    pub fn save(&self) -> std::io::Result<()> {
         let dir = data_dir();
-        if std::fs::create_dir_all(&dir).is_err() {
-            return;
+        std::fs::create_dir_all(&dir)?;
+        let part = dir.join(format!("{FILE}.part"));
+        std::fs::write(&part, self.render())?;
+        match std::fs::rename(&part, dir.join(FILE)) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = std::fs::remove_file(&part);
+                Err(e)
+            }
         }
-        let _ = std::fs::write(dir.join(FILE), self.render());
     }
 
     /// Where the settings live, for the UI to print. A preference nobody can find is a preference
@@ -893,6 +1577,31 @@ impl Settings {
     pub fn path() -> Option<PathBuf> {
         Some(data_dir().join(FILE))
     }
+}
+
+/// Seconds since the Unix epoch, now.
+///
+/// One place, so a park time and anything that compares against it cannot end up in different
+/// units. Seconds because that is the coarsest unit a `parked · 4 min ago` can be rendered from,
+/// because it is what [`std::time::SystemTime`] gives directly, and because it is readable in a
+/// hand-editable settings file. A clock set before 1970 reads `0` rather than failing — a settings
+/// file is not a place to fail.
+pub fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// How long ago this device was parked, in seconds, or `None` if it never was.
+///
+/// Saturating, because the two clocks are the same one read at different times: a machine whose
+/// clock went backwards — an NTP step, a dual boot, a VM resumed — must read as `0` seconds ago
+/// rather than as 584 942 417 355 years.
+///
+/// The phrase itself is the window's to choose. This is the last step the model takes.
+pub fn parked_for(d: &Device, now: u64) -> Option<u64> {
+    d.parked_at.map(|at| now.saturating_sub(at))
 }
 
 const FILE: &str = "settings.txt";
@@ -1030,6 +1739,11 @@ fn legacy_dirs() -> Vec<PathBuf> {
 ///
 /// Only the settings file. The old snapshots and working disks are gigabytes and keyed on paths
 /// that may no longer exist; they are reported to the user for deletion rather than copied.
+///
+/// **This has no callers**, and it must run before the first [`Settings::load`] when it acquires
+/// one: it declines the moment a file exists in the new directory, and `load` writes one back
+/// whenever seeding changed something. `load` deliberately does not create a file that was not
+/// already there, which is what keeps that order from mattering today.
 pub fn migrate_legacy() {
     let dir = data_dir();
     if dir.join(FILE).exists() {
@@ -1256,6 +1970,18 @@ fn with_splash(src: crate::nor::Source, v: &str) -> crate::nor::Source {
     }
 }
 
+/// Serialises the tests that set `IPOD_EMULATOR_DATA`.
+///
+/// [`std::env::set_var`] is process-global and cargo runs tests on several threads, so two tests
+/// that both set it interleave and one reads the other's directory. That is a flake nobody can
+/// reproduce, so it is a lock rather than a convention. A test that panicked holding it must not
+/// poison every later one, hence the `into_inner`.
+#[cfg(test)]
+fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     /// A build tree is refused; a real install beside the executable is not.
@@ -1441,6 +2167,7 @@ mod tests {
 
     #[test]
     fn the_data_directory_is_absolute() {
+        let _guard = env_lock();
         let d = data_dir();
         assert!(d.is_absolute(), "{}", d.display());
     }
@@ -1449,7 +2176,9 @@ mod tests {
     /// both the beside-the-executable default and the platform directory.
     #[test]
     fn the_override_wins() {
-        // SAFETY: single-threaded test, and the value is restored before it returns.
+        let _guard = env_lock();
+        // SAFETY: `env_lock` serialises every test in this crate that touches this variable, and
+        // the value is restored before it returns.
         let before = std::env::var_os("IPOD_EMULATOR_DATA");
         unsafe { std::env::set_var("IPOD_EMULATOR_DATA", "/tmp/ipod-emulator-test-dir") };
         assert_eq!(data_dir(), PathBuf::from("/tmp/ipod-emulator-test-dir"));
@@ -1474,6 +2203,22 @@ mod device_tests {
         }
     }
 
+    /// A directory of our own, named after the test, so two running at once cannot collide.
+    ///
+    /// The counter is there because a test may want two, and `SystemTime` has a resolution these
+    /// calls can outrun.
+    fn temp_dir(what: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let d = std::env::temp_dir().join(format!(
+            "ipod-emulator-test-{what}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&d).expect("a temp directory");
+        d
+    }
+
     /// **A machine list has to survive the round trip, or it is not storage.**
     #[test]
     fn devices_survive_render_and_parse() {
@@ -1486,14 +2231,20 @@ mod device_tests {
         s.nor = crate::nor::Source::File(PathBuf::from("/roms/real.bin"));
         s.disk = Some(PathBuf::from("/drives/two.img"));
         s.remember_as("my own iPod");
+        s.record_park("Video 5G", 1_755_738_000);
 
         let back = Settings::parse(&s.render());
         assert_eq!(back.devices.len(), 2, "both devices came back");
         assert_eq!(back.devices[0].name, "Video 5G");
         assert_eq!(
-            back.devices[0].nor,
-            synth("A146", 5),
-            "a synthesised ROM is a recipe"
+            back.nor_of(&back.devices[0]),
+            Some(&synth("A146", 5)),
+            "a synthesised ROM is a recipe, resolved through the resource it names"
+        );
+        assert_eq!(
+            back.devices[0].parked_at,
+            Some(1_755_738_000),
+            "the park time did not survive the file"
         );
         // The disk arrives as a *name*, and it resolves to the path it was seeded from.
         assert_eq!(
@@ -1501,6 +2252,120 @@ mod device_tests {
             Some(PathBuf::from("/drives/two.img"))
         );
         assert_eq!(back.current.as_deref(), Some("my own iPod"));
+        // The whole device, field for field — which is what makes this storage rather than a
+        // hopeful subset of it.
+        assert_eq!(back.devices, s.devices);
+    }
+
+    /// **A device holds exactly one reference to its iPod, and it resolves.**
+    ///
+    /// The pair this replaced was a name *and* a resolved recipe, and the resolved one won when
+    /// they disagreed — so a device whose dump had moved silently booted a generated 5.5G.
+    #[test]
+    fn a_device_holds_one_reference_to_its_ipod() {
+        let mut s = Settings {
+            nor: synth("A146", 5),
+            ..Default::default()
+        };
+        s.remember_as("mine");
+        let d = s.devices[0].clone();
+        assert!(
+            !d.firmware.is_empty(),
+            "a device this program made names no iPod"
+        );
+        assert!(
+            s.resources
+                .iter()
+                .any(|it| it.name == d.firmware
+                    && matches!(&it.what, Resource::Firmware(src) if *src == synth("A146", 5))),
+            "the name does not reach a firmware resource: {:?}",
+            s.resources
+        );
+        assert_eq!(s.nor_of(&d), Some(&synth("A146", 5)));
+
+        // A second, differently seeded ROM ahead of it in the list must not be what the name
+        // resolves to — there is no "first firmware wins" anywhere.
+        s.resources.insert(
+            0,
+            Item {
+                name: "a decoy".into(),
+                what: Resource::Firmware(synth("A146", 99)),
+                from: None,
+            },
+        );
+        assert_eq!(
+            s.nor_of(&d),
+            Some(&synth("A146", 5)),
+            "the resolution ignored the name"
+        );
+    }
+
+    /// A name that reaches an entry of the **wrong kind** resolves to nothing, and the two functions
+    /// that ask cannot disagree about it.
+    #[test]
+    fn a_name_that_resolves_to_the_wrong_kind_is_not_a_boot_rom() {
+        let mut s = Settings::default();
+        s.file_away(
+            Resource::Installer(PathBuf::from("/fw/iPod_20.1.3.ipsw")),
+            "my dump",
+            Some(Provenance::Provided),
+        );
+        let d = Device {
+            name: "confused".into(),
+            firmware: "my dump".into(),
+            ..Device::default()
+        };
+        assert_eq!(s.nor_of(&d), None, "an .ipsw was accepted as a boot ROM");
+        assert_eq!(
+            s.missing(&d),
+            vec![Absent::Unlisted("my dump".into())],
+            "the name resolves to nothing and nothing said so"
+        );
+        assert!(!s.run_device("confused"), "there is no device of that name");
+    }
+
+    /// The two lookups are one lookup, so they cannot drift.
+    #[test]
+    fn missing_and_nor_of_never_disagree() {
+        let mut s = Settings::default();
+        s.file_away(Resource::Firmware(synth("A146", 5)), "a real one", None);
+        s.file_away(
+            Resource::Installer(PathBuf::from("/fw/x.ipsw")),
+            "wrong kind",
+            None,
+        );
+        for name in ["a real one", "wrong kind", "nothing of that name", ""] {
+            let d = Device {
+                firmware: name.into(),
+                ..Device::default()
+            };
+            assert_eq!(
+                s.missing(&d).is_empty(),
+                s.nor_of(&d).is_some(),
+                "`missing` and `nor_of` disagree about {name:?}"
+            );
+        }
+    }
+
+    /// The three callers that need a ROM's default name have to spell it the same way, or reading a
+    /// settings file back mints duplicates under new names.
+    #[test]
+    fn a_synthesised_rom_and_a_dump_are_named_the_way_they_always_were() {
+        assert_eq!(suggest_nor_name(&synth("A146", 5)), "A146, seed 5");
+        assert_eq!(
+            suggest_nor_name(&crate::nor::Source::File(PathBuf::from("/roms/retail.bin"))),
+            "retail"
+        );
+        // And the round trip: file the same value twice, get one entry.
+        let mut s = Settings::default();
+        let a = s.file_away(Resource::Firmware(synth("A146", 5)), "A146, seed 5", None);
+        let b = s.file_away(
+            Resource::Firmware(synth("A146", 5)),
+            &suggest_nor_name(&synth("A146", 5)),
+            None,
+        );
+        assert_eq!(a, b);
+        assert_eq!(s.resources.len(), 1);
     }
 
     /// **Switching must be able to go back to a synthesised ROM**, which is the whole complaint
@@ -1522,7 +2387,182 @@ mod device_tests {
         assert!(!s.run_device("nothing of that name"));
     }
 
-    /// Switching away from a machine you have edited keeps the edits.
+    /// **A device whose iPod is gone refuses, and changes nothing on the way out.**
+    ///
+    /// It used to boot a silently substituted generated 5.5G — the resolution fell back to the
+    /// device's own inline copy of the recipe, which is the pair this model change deleted.
+    #[test]
+    fn a_device_whose_ipod_is_gone_refuses_and_changes_nothing() {
+        let mut s = Settings {
+            nor: synth("A146", 7),
+            ..Default::default()
+        };
+        s.remember_as("mine");
+        s.nor = crate::nor::Source::File(PathBuf::from("/roms/still here.bin"));
+        s.current = Some("something else".into());
+        s.resources.clear();
+
+        let before = s.nor.clone();
+        assert!(!s.run_device("mine"), "it started without an iPod");
+        assert_eq!(s.nor, before, "the live ROM was changed by a refusal");
+        assert_eq!(
+            s.current.as_deref(),
+            Some("something else"),
+            "the live device was changed by a refusal"
+        );
+        assert_eq!(
+            s.missing(&s.devices[0]),
+            vec![Absent::Unlisted("A146, seed 7".into())],
+            "the refusal did not name what is gone"
+        );
+    }
+
+    /// **A device whose drive is gone from the list refuses too**, and for the same reason the
+    /// boot ROM does.
+    ///
+    /// It used to start anyway. After one round trip through the settings file there is no
+    /// `disk_path` left to fall back on — `render_devices` writes the name and `parse` reads it
+    /// back as one — so the machine started with **no drive at all** and nothing said so, while
+    /// `missing` was reporting the very same name as absent. Three of the four `disk_of` outcomes
+    /// had the two functions disagreeing.
+    #[test]
+    fn a_device_whose_drive_is_gone_refuses_and_missing_agrees() {
+        let mut s = Settings {
+            nor: synth("A146", 3),
+            disk: Some(PathBuf::from("/drives/mine.img")),
+            ..Default::default()
+        };
+        s.file_disk(PathBuf::from("/drives/mine.img"), "mine");
+        s.remember_as("mine");
+        assert!(s.run_device("mine"), "it refused a device that is complete");
+
+        // The drive leaves the library — a Parts remove, or a hand-edit. The name on the device
+        // now resolves to nothing.
+        let saved = Settings::parse(&s.render());
+        let mut s = saved;
+        s.disks.clear();
+        s.disk = Some(PathBuf::from("/drives/something else.img"));
+        let before = s.disk.clone();
+
+        assert_eq!(
+            s.devices[0].disk_path, None,
+            "the fixture must have been through the file, which is where the fallback vanishes"
+        );
+        assert!(!s.run_device("mine"), "it started with no drive at all");
+        assert_eq!(s.disk, before, "the live drive was changed by a refusal");
+        assert!(
+            s.missing(&s.devices[0])
+                .contains(&Absent::Unlisted("mine".into())),
+            "`missing` and `run_device` disagree about the drive: {:?}",
+            s.missing(&s.devices[0])
+        );
+    }
+
+    /// A device that names **no** drive is unfinished, not broken: it still starts, and `missing`
+    /// still says nothing about it. The refusal above must not swallow first run.
+    #[test]
+    fn a_device_with_no_drive_at_all_still_starts() {
+        let mut s = Settings {
+            nor: synth("A146", 4),
+            ..Default::default()
+        };
+        s.remember_as("bare");
+        s.disk = None;
+        s.devices[0].disk = None;
+        s.devices[0].disk_path = None;
+        assert!(s.run_device("bare"), "an unfinished device was refused");
+        assert!(s.missing(&s.devices[0]).is_empty());
+    }
+
+    /// **A device that names nothing says so, rather than saying `missing` and stopping.**
+    ///
+    /// `summary` renders `missing {label}`, and `Absent::Unlisted("")` made that `missing ` with
+    /// nothing after it — the caption saying something is wrong and refusing to say what, which is
+    /// the one thing §9 forbids.
+    #[test]
+    fn a_device_that_names_no_ipod_is_named_as_that() {
+        let s = Settings::default();
+        let d = Device::default();
+        assert_eq!(
+            s.missing(&d),
+            vec![Absent::Unlisted("an iPod".into())],
+            "a device with no iPod produced a nameless absence"
+        );
+        assert!(
+            !s.missing(&d)[0].label().is_empty(),
+            "an absence with an empty label names nothing"
+        );
+    }
+
+    /// **A hand-edit that deletes one device block does not leave a phantom behind.**
+    ///
+    /// Indices are tolerated sparse on read and the gaps are filled with `Device::default()`, so
+    /// deleting `device.1.*` used to leave a nameless placeholder in the list — and once devices
+    /// carried a named iPod, `adopt_inline_roms` minted a generated one for it. A machine nobody
+    /// made, pointing at an iPod nobody added.
+    #[test]
+    fn a_gap_in_the_device_numbering_is_not_a_device() {
+        let s = Settings::parse(
+            "device.0.name = a\ndevice.0.firmware = mine\n\
+             device.2.name = c\ndevice.2.nor_model = A146\ndevice.2.nor_seed = 9\n",
+        );
+        assert_eq!(
+            s.devices.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
+            vec!["a", "c"],
+            "a nameless placeholder survived: {:?}",
+            s.devices
+        );
+        // And the surviving device kept **its own** recipe: dropping the gap must not shift the
+        // side table the migration reads.
+        assert_eq!(s.devices[1].firmware, "A146, seed 9", "{:?}", s.resources);
+        assert!(
+            !s.resources.iter().any(|it| it.name == "A446, seed 0"),
+            "the phantom was given a generated iPod: {:?}",
+            s.resources
+        );
+    }
+
+    /// **A filename with a line break in it cannot inject keys into the settings file.**
+    ///
+    /// Every name here is derived from a filename, and every filesystem this runs on allows a
+    /// newline in one. Written straight out, `res.0.name = mine⏎res.0.kind = software` files
+    /// somebody's boot ROM as software on the next read.
+    #[test]
+    fn a_name_out_of_a_hostile_filename_cannot_split_the_record() {
+        let mut s = Settings::default();
+        let hostile = PathBuf::from("/roms/mine\nres.0.kind = software.bin");
+        let name = s.file_away(
+            Resource::Firmware(crate::nor::Source::File(hostile)),
+            &suggest_nor_name(&crate::nor::Source::File(PathBuf::from(
+                "/roms/mine\nres.0.kind = software.bin",
+            ))),
+            None,
+        );
+        assert!(
+            !name.contains('\n'),
+            "the filed name still holds a line break: {name:?}"
+        );
+        s.remember_as("a\nname");
+        assert_eq!(s.devices[0].name, "a name", "the device name was not repaired");
+        assert_eq!(s.devices.len(), 1, "the lookup and the save used two names");
+        // `as_device` is `pub` and repairs the name itself, not only because `remember_as` does.
+        // Both, deliberately: a caller that reaches `as_device` directly must not be able to mint
+        // a device whose name splits the record, and `remember_as` must look the device up under
+        // the same name it saves it under or it pushes a duplicate on every save.
+        assert_eq!(s.as_device("b\r\nname").name, "b name");
+
+        let text = s.render();
+        let back = Settings::parse(&text);
+        assert!(
+            matches!(back.resources[0].what, Resource::Firmware(_)),
+            "the record split and the kind was overwritten:\n{text}"
+        );
+        assert_eq!(back.devices[0].name, "a name");
+        assert_eq!(back.current.as_deref(), Some("a name"));
+    }
+
+    /// Switching away from a machine you have edited keeps the edits — including which iPod it is
+    /// made of, which a re-derivation from the live fields would quietly re-point.
     #[test]
     fn switching_writes_back_what_you_were_editing() {
         let mut s = Settings {
@@ -1530,15 +2570,38 @@ mod device_tests {
             ..Default::default()
         };
         s.remember_as("a");
+        s.nor = synth("A146", 2);
         s.remember_as("b");
+        let a_boots = s.devices[0].firmware.clone();
         s.run_device("a");
         s.disk = Some(PathBuf::from("/drives/edited.img"));
+
+        // Re-seed the entry `a` is made of, the way the Parts page will. **This is what the
+        // write-back has to survive**: a re-derivation from the live values goes looking for a
+        // resource matching what the ROM used to be, finds none, and quietly cuts the device loose
+        // from what it is made of.
+        let i = s
+            .resources
+            .iter()
+            .position(|it| it.name == a_boots)
+            .expect("the entry `a` is made of");
+        s.resources[i].what = Resource::Firmware(synth("A146", 42));
+
         s.run_device("b");
-        s.run_device("a");
+        assert!(s.run_device("a"));
         assert_eq!(
             s.disk,
             Some(PathBuf::from("/drives/edited.img")),
             "the edit made while `a` was live came back with it"
+        );
+        assert_eq!(
+            s.devices[0].firmware, a_boots,
+            "the write-back re-pointed `a` at whatever was live"
+        );
+        assert_eq!(
+            s.nor,
+            synth("A146", 42),
+            "`a` did not follow the entry it is made of"
         );
     }
 
@@ -1588,18 +2651,30 @@ mod device_tests {
     #[test]
     fn the_resources_survive_render_and_parse() {
         let mut s = Settings::default();
-        s.file_away(Resource::Firmware(synth("A146", 5)), "a synthesised 30 GB");
+        s.file_away(
+            Resource::Firmware(synth("A146", 5)),
+            "a synthesised 30 GB",
+            None,
+        );
         s.file_away(
             Resource::Firmware(crate::nor::Source::File(PathBuf::from("/roms/retail.bin"))),
             "my own dump",
+            Some(Provenance::Dumped),
         );
+        // Size-only on purpose: the round trip has to cover the case §11.4 forbids upgrading.
         s.file_away(
             Resource::Installer(PathBuf::from("/fw/iPod_20.1.3.ipsw")),
             "20.1.3",
+            Some(Provenance::Fetched {
+                verified: Verification::SizeOnly,
+            }),
         );
         s.file_away(
             Resource::Software(PathBuf::from("/software/rockbox.ipod")),
             "Rockbox 4.0",
+            Some(Provenance::Fetched {
+                verified: Verification::Sha256,
+            }),
         );
         s.disks.push(Disk {
             name: "Music 30GB".into(),
@@ -1625,16 +2700,25 @@ mod device_tests {
     #[test]
     fn filing_the_same_file_twice_returns_the_name_it_already_has() {
         let mut s = Settings::default();
-        let first = s.file_away(Resource::Software(PathBuf::from("/sw/one.ipod")), "mine");
+        let first = s.file_away(
+            Resource::Software(PathBuf::from("/sw/one.ipod")),
+            "mine",
+            None,
+        );
         let again = s.file_away(
             Resource::Software(PathBuf::from("/sw/one.ipod")),
             "something else",
+            None,
         );
         assert_eq!(first, again, "the same file was filed under a second name");
         assert_eq!(s.resources.len(), 1);
 
         // A different thing that wants a taken name gets a suffix rather than overwriting it.
-        let other = s.file_away(Resource::Software(PathBuf::from("/sw/two.ipod")), "mine");
+        let other = s.file_away(
+            Resource::Software(PathBuf::from("/sw/two.ipod")),
+            "mine",
+            None,
+        );
         assert_ne!(
             other, "mine",
             "a second file overwrote the first one's name"
@@ -1654,19 +2738,17 @@ mod device_tests {
     #[test]
     fn editing_a_library_entry_changes_the_machines_composed_of_it() {
         let mut s = Settings::default();
-        s.file_away(Resource::Firmware(synth("A146", 5)), "the shared ROM");
+        // A decoy ahead of the shared one, so a resolution that ignored the name would be caught.
+        s.file_away(Resource::Firmware(synth("A146", 1)), "a decoy", None);
+        s.file_away(Resource::Firmware(synth("A146", 5)), "the shared ROM", None);
         s.nor = synth("A146", 5);
         s.disk = Some(PathBuf::from("/drives/one.img"));
         s.remember_as("first");
         s.remember_as("second");
-        assert_eq!(
-            s.devices[0].firmware.as_deref(),
-            Some("the shared ROM"),
-            "not composed of it"
-        );
+        assert_eq!(s.devices[0].firmware, "the shared ROM", "not composed of it");
 
         // Re-seed the entry. Both machines are made of it, so both should now boot the new one.
-        s.resources[0].what = Resource::Firmware(synth("A146", 99));
+        s.resources[1].what = Resource::Firmware(synth("A146", 99));
         for name in ["first", "second"] {
             assert!(s.run_device(name));
             assert_eq!(
@@ -1677,20 +2759,87 @@ mod device_tests {
         }
     }
 
-    /// A machine saved before the library existed has no reference, and must keep working.
+    /// A machine saved before the library existed carried its recipe inline. **Reading the file is
+    /// what gives it a named iPod**, and it must boot exactly what it booted before.
     #[test]
-    fn a_machine_with_no_reference_still_boots_its_own_files() {
+    fn a_machine_with_no_reference_gets_one_when_the_file_is_read() {
         let mut s = Settings::parse(
             "machine.0.name = old\nmachine.0.nor_model = A146\nmachine.0.nor_seed = 7\n\
              machine.0.disk = /drives/old.img\n",
         );
+        assert_eq!(s.resources.len(), 1, "the recipe was not filed: {:?}", s.resources);
+        assert_eq!(
+            s.devices[0].firmware, "A146, seed 7",
+            "the device does not name what it boots"
+        );
+        assert_eq!(s.nor_of(&s.devices[0]), Some(&synth("A146", 7)));
         assert!(s.run_device("old"));
         assert_eq!(s.nor, synth("A146", 7));
         assert_eq!(s.disk, Some(PathBuf::from("/drives/old.img")));
         assert!(
-            s.missing(&s.devices[0].clone()).is_empty(),
-            "nothing was named, so nothing is missing"
+            !s.missing(&s.devices[0].clone())
+                .iter()
+                .any(|a| matches!(a, Absent::Unlisted(_))),
+            "nothing was named, so nothing is unlisted"
         );
+    }
+
+    /// The other spelling of the same file: a path rather than a recipe.
+    #[test]
+    fn a_device_that_carried_its_recipe_inline_becomes_a_named_ipod() {
+        let s = Settings::parse("machine.0.name = old\nmachine.0.flash = /roms/mine.bin\n");
+        assert_eq!(s.resources.len(), 1, "{:?}", s.resources);
+        assert_eq!(s.devices[0].firmware, "mine");
+        assert_eq!(
+            s.nor_of(&s.devices[0]),
+            Some(&crate::nor::Source::File(PathBuf::from("/roms/mine.bin")))
+        );
+        // And the recipe is never written back under the device.
+        let text = s.render();
+        assert!(text.contains("device.0.firmware = mine"), "{text}");
+        assert!(!text.contains("device.0.flash"), "{text}");
+        assert!(!text.contains("device.0.nor_model"), "{text}");
+    }
+
+    /// A device that was **already** composed gains nothing from the migration.
+    #[test]
+    fn a_device_already_pointing_at_a_named_ipod_gains_nothing() {
+        let s = Settings::parse(
+            "res.0.name = my dump\nres.0.kind = firmware\nres.0.path = /roms/retail.bin\n\
+             device.0.name = mine\ndevice.0.firmware = my dump\n",
+        );
+        assert_eq!(
+            s.resources.len(),
+            1,
+            "the migration minted a duplicate: {:?}",
+            s.resources
+        );
+        assert_eq!(s.devices[0].firmware, "my dump");
+    }
+
+    /// A device that says nothing at all still gets the iPod it silently booted, **named**.
+    #[test]
+    fn a_device_that_says_nothing_still_gets_the_ipod_it_used_to_boot() {
+        let s = Settings::parse("device.0.name = old\ndevice.0.chassis = black\n");
+        assert_eq!(s.resources.len(), 1, "{:?}", s.resources);
+        assert!(!s.devices[0].firmware.is_empty());
+        assert_eq!(
+            s.nor_of(&s.devices[0]),
+            Some(&crate::nor::Source::default()),
+            "it used to boot a generated 5.5G; it still does, and now it says so"
+        );
+    }
+
+    /// An entry `parse` left unnamed — a sparse `res.N.` block — is **never handed out as a
+    /// reference**, because nothing can resolve one.
+    #[test]
+    fn an_unnamed_leftover_is_never_handed_out_as_a_reference() {
+        let mut s = Settings::parse("res.3.name = mine\nres.3.kind = firmware\n");
+        assert_eq!(s.resources.len(), 4, "the sparse index did not leave fillers");
+        s.remember_as("x");
+        let d = s.devices[0].clone();
+        assert!(!d.firmware.is_empty(), "a device was given an unusable name");
+        assert!(s.nor_of(&d).is_some(), "the name resolves to nothing");
     }
 
     /// **A reference to an entry that is gone is reported, not swallowed.** "It boots to a white
@@ -1707,7 +2856,215 @@ mod device_tests {
             2,
             "both dangling references should be named: {missing:?}"
         );
-        assert!(missing.iter().any(|m| m.contains("ROM")));
+        assert!(missing.iter().any(|a| a.label().contains("ROM")));
+    }
+
+    /// The two kinds of gone are different, they come in a fixed order, and the second one names a
+    /// path the first cannot.
+    #[test]
+    fn a_delisted_name_and_a_deleted_file_are_different_absences() {
+        let dir = temp_dir("absences");
+        let img = dir.join("mine.img");
+        std::fs::write(&img, b"not really a drive").unwrap();
+
+        let mut s = Settings::default();
+        s.file_disk(img.clone(), "the drive");
+        let d = Device {
+            name: "half gone".into(),
+            firmware: "a ROM that was deleted".into(),
+            disk: Some("the drive".into()),
+            ..Device::default()
+        };
+        assert_eq!(
+            s.missing(&d),
+            vec![Absent::Unlisted("a ROM that was deleted".into())],
+            "the drive is on disk, so only the name is absent"
+        );
+
+        std::fs::remove_file(&img).unwrap();
+        assert_eq!(
+            s.missing(&d),
+            vec![
+                Absent::Unlisted("a ROM that was deleted".into()),
+                Absent::Gone(img.clone()),
+            ],
+            "the firmware comes first and the two are different kinds of gone"
+        );
+        assert_eq!(s.missing(&d)[1].label(), "mine.img");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A deleted image is `Gone`, and it names the file. **The check that did not exist**: the old
+    /// `missing` looked only at names, so an image deleted in Finder left the device startable and
+    /// the cradle promising `about 3 s`.
+    #[test]
+    fn a_deleted_image_is_gone_and_names_its_path() {
+        let dir = temp_dir("deleted-image");
+        let img = dir.join("my-5.5g.img");
+        std::fs::write(&img, b"x").unwrap();
+
+        let mut s = Settings::default();
+        s.file_away(Resource::Firmware(synth("A146", 5)), "an iPod", None);
+        s.file_disk(img.clone(), "my drive");
+        let d = Device {
+            name: "mine".into(),
+            firmware: "an iPod".into(),
+            disk: Some("my drive".into()),
+            ..Device::default()
+        };
+        assert!(s.missing(&d).is_empty(), "{:?}", s.missing(&d));
+
+        std::fs::remove_file(&img).unwrap();
+        assert_eq!(s.missing(&d), vec![Absent::Gone(img.clone())]);
+        assert_eq!(s.missing(&d)[0].label(), "my-5.5g.img");
+        assert_eq!(s.missing(&d)[0].path(), Some(img.as_path()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A recipe is not a path, so it is never absent — however hard anybody stats.
+    #[test]
+    fn a_synthesised_rom_is_never_absent() {
+        let mut s = Settings::default();
+        s.file_away(Resource::Firmware(synth("A146", 5)), "a recipe", None);
+        let d = Device {
+            firmware: "a recipe".into(),
+            ..Device::default()
+        };
+        assert!(s.missing(&d).is_empty(), "{:?}", s.missing(&d));
+    }
+
+    /// A device that names no disk at all is **unfinished**, not broken.
+    #[test]
+    fn a_device_with_no_disk_is_not_missing_one() {
+        let mut s = Settings::default();
+        s.file_away(Resource::Firmware(synth("A146", 5)), "a recipe", None);
+        let d = Device {
+            firmware: "a recipe".into(),
+            disk: None,
+            disk_path: None,
+            ..Device::default()
+        };
+        assert!(s.missing(&d).is_empty(), "{:?}", s.missing(&d));
+    }
+
+    /// The absence label names the **file**, not the path — the cradle has 24 px of centred body
+    /// text for it — and a path with no file name falls back to something rather than nothing.
+    #[test]
+    fn an_absence_names_the_file_not_the_path() {
+        let p = PathBuf::from("/some where/My iPod Backups/my-5.5g.img");
+        let gone = Absent::Gone(p.clone());
+        assert_eq!(gone.label(), "my-5.5g.img");
+        assert_eq!(gone.path(), Some(p.as_path()));
+
+        let unlisted = Absent::Unlisted("a ROM that was deleted".into());
+        assert_eq!(unlisted.label(), "a ROM that was deleted");
+        assert_eq!(unlisted.path(), None);
+
+        assert!(
+            !Absent::Gone(PathBuf::from("/")).label().is_empty(),
+            "a path with no file name produced an empty label"
+        );
+    }
+
+    /// The cache answers from memory for the length of one pass, and a fresh one sees the world.
+    #[test]
+    fn the_presence_cache_answers_from_memory_within_one_pass() {
+        let dir = temp_dir("presence");
+        let f = dir.join("here.img");
+        std::fs::write(&f, b"x").unwrap();
+
+        let mut seen = Presence::new();
+        assert!(seen.exists(&f));
+        std::fs::remove_file(&f).unwrap();
+        assert!(
+            seen.exists(&f),
+            "the pass re-stat'ed a path it had already answered"
+        );
+        assert!(
+            !Presence::new().exists(&f),
+            "a fresh pass did not see the deletion"
+        );
+        seen.forget(&f);
+        assert!(!seen.exists(&f), "`forget` did not forget");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A path we cannot stat is not a path we observed to be absent.**
+    ///
+    /// `Path::exists()` folds every error into `false`, so a directory the user cannot traverse
+    /// would be reported as "the disk is not where it was" — the program asserting a fact about
+    /// somebody's filesystem that it did not observe.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_we_cannot_stat_is_not_reported_as_gone() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("eacces");
+        let locked = dir.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        let f = locked.join("mine.img");
+        std::fs::write(&f, b"x").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Running as root ignores the mode bits, and a test that cannot create the condition it
+        // measures must say so rather than assert on it.
+        let enforced = std::fs::read_dir(&locked).is_err();
+        let answer = Presence::new().exists(&f);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        if !enforced {
+            return;
+        }
+        assert!(
+            answer,
+            "a permission error was reported as an observation of absence"
+        );
+    }
+
+    /// **The other half of the same rule: an error that *is* a statement of absence reads as one.**
+    ///
+    /// The permission arm above is right, and a catch-all `Err(_) => true` beside it swallows the
+    /// errors that are definite negatives. A path whose parent component is a regular file gives
+    /// `ENOTDIR`; a path with an interior NUL gives `InvalidFilename`. Nothing can exist at either,
+    /// so calling them present hides a device that cannot start and leaves the cradle saying
+    /// nothing at all.
+    #[test]
+    fn an_impossible_path_is_gone_rather_than_unreadable() {
+        let dir = temp_dir("enotdir");
+        let file = dir.join("not-a-directory");
+        std::fs::write(&file, b"x").unwrap();
+
+        let mut seen = Presence::new();
+        assert!(seen.exists(&file), "the file itself is there");
+        assert!(
+            !seen.exists(&file.join("mine.img")),
+            "a path under a regular file was reported as present"
+        );
+        // A filesystem cannot hold this name at all, on any platform.
+        assert!(
+            !seen.exists(Path::new("no\0such.img")),
+            "a path no filesystem can hold was reported as present"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A symlink pointing at nothing is gone, and one pointing at something is not.
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_is_gone_not_present() {
+        let dir = temp_dir("symlink");
+        let real = dir.join("real.img");
+        std::fs::write(&real, b"x").unwrap();
+        let good = dir.join("good.img");
+        let bad = dir.join("bad.img");
+        std::os::unix::fs::symlink(&real, &good).unwrap();
+        std::os::unix::fs::symlink(dir.join("never existed"), &bad).unwrap();
+
+        assert!(Presence::new().exists(&good));
+        assert!(
+            !Presence::new().exists(&bad),
+            "a symlink to a deleted image read as present"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// An `.ipsw` is not something that can be run — a drive is *built* from it. Applying one as if
@@ -1718,10 +3075,12 @@ mod device_tests {
         s.file_away(
             Resource::Installer(PathBuf::from("/fw/iPod_20.1.3.ipsw")),
             "20.1.3",
+            None,
         );
         s.file_away(
             Resource::Software(PathBuf::from("/sw/rockbox.ipod")),
             "Rockbox 4.0",
+            None,
         );
         s.file_disk(PathBuf::from("/drives/one.img"), "a drive");
 
@@ -1749,66 +3108,556 @@ mod device_tests {
              item.1.name = ipod8g\nitem.1.kind = disk\nitem.1.path = /drives/ipod8g.img\n\
              machine.0.name = old\nmachine.0.drive = ipod8g\n",
         );
-        assert_eq!(
-            s.resources.len(),
-            1,
+        assert!(
+            !s.resources
+                .iter()
+                .any(|i| i.what.path().is_some_and(|p| p.ends_with("ipod8g.img"))),
             "the disk stayed in the resources: {:?}",
             s.resources
         );
+        // **An exact count, not just an absence.** The dump, plus the generated 5.5G the migration
+        // mints for `machine.0`, which names a drive and no iPod — §20 item 1's stated behaviour:
+        // a device that said nothing at all is given, in a list, the ROM it used to boot silently.
+        // Asserting only that the drive left would let a third entry appear unnoticed.
+        assert_eq!(
+            s.resources
+                .iter()
+                .map(|i| i.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["my dump", "A446, seed 0"],
+            "{:?}",
+            s.resources
+        );
+        assert_eq!(s.devices[0].firmware, "A446, seed 0");
         assert_eq!(s.disks.len(), 1, "the disk did not arrive in the disks");
         assert_eq!(s.disks[0].name, "ipod8g");
         assert_eq!(s.disks[0].path, PathBuf::from("/drives/ipod8g.img"));
         // And the device that referred to it by name still resolves, which is the whole point of
         // moving it rather than dropping it.
         assert_eq!(s.devices[0].disk.as_deref(), Some("ipod8g"));
+        // The drive image itself is fictional, so it *is* `Gone`. The subject here is that the
+        // **name** survived the move, which is the `Unlisted` half.
         assert!(
-            s.missing(&s.devices[0]).is_empty(),
-            "the reference broke in the move"
+            !s.missing(&s.devices[0])
+                .iter()
+                .any(|a| matches!(a, Absent::Unlisted(_))),
+            "the reference broke in the move: {:?}",
+            s.missing(&s.devices[0])
         );
     }
 
     /// **A setup that predates this is not an empty list.** Someone who has been running a boot ROM
     /// and a drive for months should open the page and see them, not "nothing yet".
+    ///
+    /// The per-device half is proved through `parse` now — a device names its iPod and has no
+    /// recipe of its own to gather. What is left here is the live machine and the drives.
     #[test]
     fn the_lists_seed_themselves_from_what_is_already_configured() {
-        let mut s = Settings {
-            nor: synth("A146", 5),
-            disk: Some(PathBuf::from("/drives/mine.img")),
-            ..Default::default()
-        };
-        s.remember_as("the one I use");
-        s.nor = crate::nor::Source::File(PathBuf::from("/roms/retail.bin"));
-        s.remember_as("with my own dump");
-
-        s.seed_resources();
+        let mut s = Settings::parse(
+            "flash = /roms/retail.bin\ndisk = /drives/mine.img\n\
+             device.0.name = the one I use\ndevice.0.nor_model = A146\ndevice.0.nor_seed = 5\n\
+             device.0.disk = /drives/mine.img\n",
+        );
+        assert!(s.seed_resources(), "seeding said it changed nothing");
         assert_eq!(s.resources.len(), 2, "two boot ROMs: {:?}", s.resources);
         assert_eq!(s.disks.len(), 1, "one drive: {:?}", s.disks);
         assert!(s
             .resources
             .iter()
             .any(|i| i.what == Resource::Firmware(synth("A146", 5))));
+        assert!(s.resources.iter().any(|i| i.what
+            == Resource::Firmware(crate::nor::Source::File(PathBuf::from(
+                "/roms/retail.bin"
+            )))));
         assert!(s.disks[0].path.ends_with("mine.img"));
+        assert!(
+            !s.seed_resources(),
+            "seeding ran twice and said it had changed something"
+        );
     }
 
     /// **Seeding happens once, so removing an entry sticks.** A list that puts back what you took
     /// out at the next launch is a list you cannot edit.
+    ///
+    /// The fixture carries a device on purpose: it is what makes this the guard against `parse`'s
+    /// own post-pass re-filing a ROM somebody removed.
     #[test]
     fn removing_the_last_entry_is_not_undone_by_the_next_launch() {
         let mut s = Settings {
             nor: synth("A146", 5),
             ..Default::default()
         };
+        s.remember_as("mine");
         s.seed_resources();
         assert_eq!(s.resources.len(), 1);
 
         s.resources.clear();
-        let back = Settings::parse(&s.render());
+        let mut back = Settings::parse(&s.render());
         assert!(back.library_seeded, "the marker did not survive the file");
-        let mut back = back;
+        assert!(
+            back.resources.is_empty(),
+            "reading the file put back an entry that was removed: {:?}",
+            back.resources
+        );
         back.seed_resources();
         assert!(
             back.resources.is_empty(),
             "an entry that was removed came back"
         );
+    }
+
+    /// **What seeding produced is written back — by the caller that asked for it, and by nothing
+    /// else.** Two halves, and both of them are the point:
+    ///
+    /// - [`Settings::load_and_seed`] persists it, or a removal cannot stick: the marker that says
+    ///   "this has been seeded" lived only in memory, so the next launch re-derived the list a
+    ///   person had just edited.
+    /// - [`Settings::load`] does not, because `ipod-boot` calls it from five places that only want
+    ///   to know the default drive, and one of them is `--print`, documented as running nothing.
+    ///   A save from there rewrote the operator's file — and `render` is generated from the model,
+    ///   so every comment they had added went with it.
+    ///
+    /// The fixture is an existing installation's file — one written before the library existed, so
+    /// it has a `flash =` line and no `library_seeded` marker. That is the only shape this can
+    /// happen to, and it is the shape every current installation has. The comment in it is the
+    /// thing a plain read must not eat.
+    #[test]
+    fn what_seeding_produced_is_written_back_so_a_removal_can_stick() {
+        let dir = temp_dir("seed-writeback");
+        let _guard = env_lock();
+        let before = std::env::var_os("IPOD_EMULATOR_DATA");
+        // SAFETY: `env_lock` serialises every test in this crate that touches this variable, and
+        // the previous value is restored before the guard is dropped.
+        unsafe { std::env::set_var("IPOD_EMULATOR_DATA", &dir) };
+
+        let fixture = "# MY OWN NOTE: this is the dump off the 5.5G in the drawer.\n\
+                       mode = user\nflash = /roms/mine.bin\n";
+        std::fs::write(dir.join(FILE), fixture).unwrap();
+
+        // A plain read seeds in memory and touches nothing on disk.
+        let read_only = Settings::load();
+        assert!(read_only.library_seeded, "a plain read still seeds in memory");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(FILE)).unwrap(),
+            fixture,
+            "reading the settings rewrote them"
+        );
+
+        let first = Settings::load_and_seed();
+        assert!(first.library_seeded);
+        assert_eq!(first.resources.len(), 1, "{:?}", first.resources);
+        let written = std::fs::read_to_string(dir.join(FILE))
+            .expect("the settings file went missing");
+        assert!(
+            written.contains("library_seeded = true"),
+            "the write-back did not persist what it seeded: {written}"
+        );
+        assert!(written.contains("res.0.kind = firmware"), "{written}");
+
+        // Remove it and save, the way a Parts remove will. The next load must leave it removed.
+        let mut edited = first;
+        edited.resources.clear();
+        edited.save().expect("save");
+        let again = Settings::load_and_seed();
+        assert!(
+            again.resources.is_empty(),
+            "an entry that was removed came back on the next launch: {:?}",
+            again.resources
+        );
+
+        // And reading is never a reason to create a file: `migrate_legacy` declines as soon as one
+        // exists here, so a `load` that minted one would block a carry-forward for ever.
+        std::fs::remove_file(dir.join(FILE)).unwrap();
+        Settings::load_and_seed();
+        assert!(
+            !dir.join(FILE).exists(),
+            "reading settings that do not exist created a settings file"
+        );
+        // Nor a half-written one: `save` goes through a `.part` and a rename, so an interrupted
+        // write leaves the old file rather than a truncated device list.
+        assert!(
+            !dir.join(format!("{FILE}.part")).exists(),
+            "a .part file survived a completed save"
+        );
+
+        match before {
+            Some(v) => unsafe { std::env::set_var("IPOD_EMULATOR_DATA", v) },
+            None => unsafe { std::env::remove_var("IPOD_EMULATOR_DATA") },
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ------------------------------------------------------------------- parking
+
+    /// A park time survives the file, and a file written before the field has none rather than a
+    /// device that claims to have been parked at the epoch.
+    #[test]
+    fn a_park_time_survives_the_file_and_an_older_file_has_none() {
+        let mut s = Settings {
+            nor: synth("A146", 5),
+            ..Default::default()
+        };
+        s.remember_as("mine");
+        assert!(s.record_park("mine", 1_755_738_000));
+        let back = Settings::parse(&s.render());
+        assert_eq!(back.devices[0].parked_at, Some(1_755_738_000));
+
+        assert_eq!(
+            Settings::parse("device.0.name = old\n").devices[0].parked_at,
+            None,
+            "a file that never said reads as never parked"
+        );
+        assert_eq!(
+            Settings::parse("device.0.name = old\ndevice.0.parked_at = nonsense\n").devices[0]
+                .parked_at,
+            None,
+            "an unreadable value is `nobody said`, not `parked at the epoch`"
+        );
+    }
+
+    /// Parking stamps the time, discarding clears it, and neither invents a device.
+    #[test]
+    fn parking_stamps_the_time_and_discarding_clears_it() {
+        let mut s = Settings {
+            nor: synth("A146", 5),
+            ..Default::default()
+        };
+        s.remember_as("a");
+        assert!(s.record_park("a", 1_000));
+        assert_eq!(s.devices[0].parked_at, Some(1_000));
+        assert!(s.discard_park("a"));
+        assert_eq!(s.devices[0].parked_at, None);
+
+        assert!(!s.record_park("nope", 1));
+        assert!(!s.discard_park("nope"));
+        assert_eq!(s.devices.len(), 1, "a park invented a device");
+    }
+
+    /// A clock that went backwards reads as just now, not as 584 942 417 355 years ago.
+    #[test]
+    fn a_clock_that_went_backwards_reads_as_just_now() {
+        let parked = Device {
+            parked_at: Some(1_000),
+            ..Device::default()
+        };
+        assert_eq!(parked_for(&parked, 1_240), Some(240));
+        assert_eq!(parked_for(&parked, 500), Some(0));
+        assert_eq!(
+            parked_for(&Device::default(), 500),
+            None,
+            "never parked is not the same as parked a moment ago"
+        );
+        assert!(now_unix() > 1_700_000_000, "the clock reads before 2023");
+    }
+
+    // ------------------------------------------------------------------- provenance
+
+    /// **§11.4's rule, mechanically**: only a SHA-256 match ever renders as verified.
+    #[test]
+    fn a_size_only_row_never_says_verified() {
+        for p in [
+            Provenance::Dumped,
+            Provenance::Synthesised { seed: 5 },
+            Provenance::Fetched {
+                verified: Verification::Sha256,
+            },
+            Provenance::Fetched {
+                verified: Verification::SizeOnly,
+            },
+            Provenance::Fetched {
+                verified: Verification::None,
+            },
+            Provenance::Provided,
+            Provenance::Built,
+        ] {
+            assert_eq!(
+                p.line().contains("verified"),
+                p.is_verified(),
+                "{p:?} renders {:?} but is_verified() is {}",
+                p.line(),
+                p.is_verified()
+            );
+        }
+        // **And the one that does say `verified` says WHEN.** A provenance is stored against a
+        // path with no digest, size or mtime beside it, so replacing the file underneath it leaves
+        // the claim standing and nothing can refute it. A present-tense `fetched · SHA-256
+        // verified` is then the `fetched and verified` string literal again, one level down.
+        let sha = Provenance::Fetched {
+            verified: Verification::Sha256,
+        };
+        assert!(
+            sha.line().contains("arrived"),
+            "the verified row reads as a live fact about the bytes on disk: {:?}",
+            sha.line()
+        );
+        assert!(Provenance::Fetched {
+            verified: Verification::Sha256
+        }
+        .is_verified());
+        assert!(!Provenance::Fetched {
+            verified: Verification::SizeOnly
+        }
+        .is_verified());
+    }
+
+    /// An unreadable token is not a claim, and it degrades toward saying nothing.
+    #[test]
+    fn an_unknown_provenance_token_is_not_a_claim() {
+        for junk in [
+            "",
+            "verified",
+            "fetched-md5",
+            "FETCHED-SHA256",
+            "sha256",
+            "  ",
+            "dumped from a real iPod",
+        ] {
+            assert_eq!(Provenance::parse(junk), None, "{junk:?} was read as a claim");
+        }
+        assert_eq!(
+            Provenance::parse("fetched"),
+            Some(Provenance::Fetched {
+                verified: Verification::None
+            })
+        );
+    }
+
+    /// The writer and the reader cannot drift, because the round trip is a test.
+    #[test]
+    fn every_token_round_trips_through_parse() {
+        for p in [
+            Provenance::Dumped,
+            Provenance::Synthesised { seed: 0 },
+            Provenance::Fetched {
+                verified: Verification::Sha256,
+            },
+            Provenance::Fetched {
+                verified: Verification::SizeOnly,
+            },
+            Provenance::Fetched {
+                verified: Verification::None,
+            },
+            Provenance::Provided,
+            Provenance::Built,
+        ] {
+            assert_eq!(Provenance::parse(p.token()), Some(p), "{p:?}");
+        }
+    }
+
+    /// **The invariant is total and unforgeable**: a synthesised ROM's provenance is its recipe's
+    /// seed, whatever the caller or the file said.
+    #[test]
+    fn a_synthesised_rom_is_always_synthesised_provenance() {
+        let mut s = Settings::default();
+        let name = s.file_away(
+            Resource::Firmware(synth("A146", 5)),
+            "x",
+            Some(Provenance::Dumped),
+        );
+        assert_eq!(
+            s.resources[0].from,
+            Some(Provenance::Synthesised { seed: 5 }),
+            "a caller was allowed to state a synthetic ROM's provenance"
+        );
+        assert!(s.record_provenance(&name, Provenance::Provided));
+        assert_eq!(
+            s.resources[0].from,
+            Some(Provenance::Synthesised { seed: 5 }),
+            "`record_provenance` was allowed to overrule the recipe"
+        );
+
+        // And through the file, with the key on either side of the recipe.
+        for text in [
+            "res.0.name = x\nres.0.kind = firmware\nres.0.provenance = provided\n\
+             res.0.nor_model = A146\nres.0.nor_seed = 7\n",
+            "res.0.name = x\nres.0.kind = firmware\nres.0.nor_model = A146\n\
+             res.0.nor_seed = 7\nres.0.provenance = provided\n",
+        ] {
+            assert_eq!(
+                Settings::parse(text).resources[0].from,
+                Some(Provenance::Synthesised { seed: 7 }),
+                "a hand-written provenance survived on a synthetic recipe: {text}"
+            );
+        }
+    }
+
+    /// `synthesised` on something that is not a recipe is nonsense, and nonsense says nothing
+    /// rather than inventing a seed of zero.
+    #[test]
+    fn a_synthesised_token_on_a_file_is_not_a_claim() {
+        let s = Settings::parse(
+            "res.0.name = x\nres.0.kind = installer\nres.0.path = /fw/x.ipsw\n\
+             res.0.provenance = synthesised\n",
+        );
+        assert_eq!(s.resources[0].from, None);
+    }
+
+    /// **The file shape every existing installation has**: no `provenance` key at all, and the row
+    /// says nothing rather than lying.
+    #[test]
+    fn an_older_settings_file_says_nothing_rather_than_lying() {
+        let s = Settings::parse(
+            "res.0.name = my dump\nres.0.kind = firmware\nres.0.path = /roms/retail.bin\n",
+        );
+        assert_eq!(s.resources[0].from, None);
+        let text = s.render();
+        assert!(
+            !text.contains("res.0.provenance"),
+            "`nobody said` was written as a line: {text}"
+        );
+    }
+
+    /// `None` may become stated; a stated value is never changed by filing. `record_provenance` is
+    /// the second verb, for the caller that has just re-checked the bytes.
+    #[test]
+    fn filing_a_file_twice_fills_an_unknown_and_never_overwrites_a_stated_one() {
+        let mut s = Settings::default();
+        let p = Resource::Software(PathBuf::from("/sw/one.ipod"));
+        let name = s.file_away(p.clone(), "mine", None);
+        assert_eq!(s.resources[0].from, None);
+
+        s.file_away(
+            p.clone(),
+            "mine",
+            Some(Provenance::Fetched {
+                verified: Verification::Sha256,
+            }),
+        );
+        assert_eq!(
+            s.resources[0].from,
+            Some(Provenance::Fetched {
+                verified: Verification::Sha256
+            }),
+            "`nobody said` was not filled in by a caller that knew"
+        );
+
+        s.file_away(p.clone(), "mine", Some(Provenance::Provided));
+        assert_eq!(
+            s.resources[0].from,
+            Some(Provenance::Fetched {
+                verified: Verification::Sha256
+            }),
+            "filing overwrote a recorded fact"
+        );
+        assert_eq!(s.resources.len(), 1);
+
+        assert!(s.record_provenance(&name, Provenance::Provided));
+        assert_eq!(s.resources[0].from, Some(Provenance::Provided));
+        assert!(!s.record_provenance("no such name", Provenance::Provided));
+    }
+
+    /// Seeding states nothing about a dump it never watched being made, and everything about a
+    /// recipe, because the recipe says it.
+    #[test]
+    fn a_seeded_dump_states_nothing_and_a_seeded_recipe_states_the_seed() {
+        let mut s = Settings::parse(
+            "flash = /roms/retail.bin\n\
+             device.0.name = mine\ndevice.0.nor_model = A146\ndevice.0.nor_seed = 5\n",
+        );
+        s.seed_resources();
+        let dump = s
+            .resources
+            .iter()
+            .find(|i| matches!(&i.what, Resource::Firmware(crate::nor::Source::File(_))))
+            .expect("the dump");
+        assert_eq!(dump.from, None, "a dump was claimed as `Dumped`");
+        let recipe = s
+            .resources
+            .iter()
+            .find(|i| i.what == Resource::Firmware(synth("A146", 5)))
+            .expect("the recipe");
+        assert_eq!(recipe.from, Some(Provenance::Synthesised { seed: 5 }));
+    }
+
+    /// Every provenance survives the file, and the one that is derived is written nowhere.
+    #[test]
+    fn provenance_survives_render_and_parse() {
+        let mut s = Settings::default();
+        for (i, p) in [
+            Some(Provenance::Dumped),
+            Some(Provenance::Fetched {
+                verified: Verification::Sha256,
+            }),
+            Some(Provenance::Fetched {
+                verified: Verification::SizeOnly,
+            }),
+            Some(Provenance::Fetched {
+                verified: Verification::None,
+            }),
+            Some(Provenance::Provided),
+            Some(Provenance::Built),
+            None,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            s.file_away(
+                Resource::Software(PathBuf::from(format!("/sw/{i}.ipod"))),
+                &format!("sw {i}"),
+                p,
+            );
+        }
+        s.file_away(Resource::Firmware(synth("A146", 5)), "a recipe", None);
+
+        let text = s.render();
+        // The literal lines, not only the round trip: a render that drops the key for everything
+        // and a parse that ignores it for everything would cancel out.
+        assert!(text.contains("res.0.provenance = dumped"), "{text}");
+        assert!(text.contains("res.1.provenance = fetched-sha256"), "{text}");
+        assert!(text.contains("res.2.provenance = fetched-size"), "{text}");
+        assert!(text.contains("res.3.provenance = fetched\n"), "{text}");
+        assert!(text.contains("res.4.provenance = provided"), "{text}");
+        assert!(text.contains("res.5.provenance = built"), "{text}");
+        assert!(!text.contains("res.6.provenance"), "{text}");
+        assert!(
+            !text.contains("res.7.provenance"),
+            "a synthetic ROM's seed was written twice: {text}"
+        );
+
+        let back = Settings::parse(&text);
+        assert_eq!(back.resources, s.resources);
+        assert_eq!(
+            back.resources[7].from,
+            Some(Provenance::Synthesised { seed: 5 }),
+            "the derived provenance did not come back"
+        );
+    }
+
+    /// The new key adds no order dependency to a file that already has one.
+    #[test]
+    fn a_reordered_hand_edit_still_reads_the_same() {
+        let want = Item {
+            name: "20.1.3".into(),
+            what: Resource::Installer(PathBuf::from("/fw/iPod_20.1.3.ipsw")),
+            from: Some(Provenance::Fetched {
+                verified: Verification::SizeOnly,
+            }),
+        };
+        for text in [
+            "res.0.name = 20.1.3\nres.0.kind = installer\nres.0.path = /fw/iPod_20.1.3.ipsw\n\
+             res.0.provenance = fetched-size\n",
+            "res.0.provenance = fetched-size\nres.0.name = 20.1.3\nres.0.kind = installer\n\
+             res.0.path = /fw/iPod_20.1.3.ipsw\n",
+            "res.0.name = 20.1.3\nres.0.kind = installer\nres.0.provenance = fetched-size\n\
+             res.0.path = /fw/iPod_20.1.3.ipsw\n",
+        ] {
+            assert_eq!(Settings::parse(text).resources[0], want, "{text}");
+        }
+    }
+
+    /// A settings file **never** writes a recipe under a device — writing both a reference and a
+    /// resolved copy is how the two came to disagree.
+    #[test]
+    fn a_settings_file_never_writes_a_recipe_under_a_device() {
+        let mut s = Settings {
+            nor: synth("A146", 5),
+            ..Default::default()
+        };
+        s.remember_as("mine");
+        let text = s.render();
+        assert!(text.contains("device.0.firmware = A146, seed 5"), "{text}");
+        assert!(!text.contains("device.0.flash"), "{text}");
+        assert!(!text.contains("device.0.nor_model"), "{text}");
+        assert!(!text.contains("device.0.nor_seed"), "{text}");
     }
 }

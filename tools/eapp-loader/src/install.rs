@@ -502,7 +502,8 @@ pub fn data_partition_type(src: &Path) -> Result<u8, String> {
 /// directories on the data partition, and a `loader.cfg` naming what is actually there.
 ///
 /// `tree` is the extracted ZeroSlackr distribution — the directory holding `bin/`, `boot/` and the
-/// rest. `loader` is `ipodloader2`'s built `loader.bin`.
+/// rest. `loader` is a `loader.bin` — the fetched v2.8.1 release, or whatever `IPOD_LOADER=` named;
+/// [`crate::ipodlinux::resolve_loader`] is what decides which.
 pub fn install_linux(
     src: &Path,
     loader: &Path,
@@ -546,12 +547,13 @@ pub fn install_linux(
         let data_type = data_partition_type(src)?;
         if data_type == 0x0c {
             return Err(format!(
-                "{}: its data partition is FAT32 type 0x0C (the LBA form), and `ipodloader2` \
-                 2.9.0d reads only 0x0B — `vfs.c` has no case for it and reports `No valid \
-                 paritions found!`. Installing here would produce a drive that cannot boot.\n\
+                "{}: its data partition is FAT32 type 0x0C (the LBA form), and `ipodloader2` reads \
+                 only 0x0B — measured on 2.9.0d, whose `vfs.c` has `case 0x83` and `case 0xB` and \
+                 nothing else, and which reports `No valid paritions found!`. Installing here \
+                 would produce a drive that cannot boot.\n\
                  \n\
-                 A drive built by `ipod-boot make-disk` from an .ipsw is 0x0B and works. Rewriting \
-                 this one's partition type would make the loader happy and the disk a lie, so this \
+                 A drive built by `ipod-boot make-disk` from an .ipsw is 0x0B. Rewriting this \
+                 one's partition type would make the loader happy and the disk a lie, so this \
                  does neither.",
                 src.display()
             ));

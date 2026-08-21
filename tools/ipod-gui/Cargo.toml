@@ -28,7 +28,38 @@ path = "src/main.rs"
 # any presentation effect worth having costs nothing on the CPU.
 #
 # `backend-winit` + `renderer-skia` rather than the default set: skia because the material in
-# docs/GUI.md §7 is gradients and rounded rectangles and skia draws those properly at any DPI.
+# docs/GUI.md §7 is gradients and rounded rectangles and skia draws those properly at any DPI —
+# **and `accessibility`, because turning the default set off dropped it**; see below.
+
+# ── Accessibility (docs/GUI.md §16.7, §20 item 11) ───────────────────────────────────────────────
+#
+# **On by default.** `accessibility` is in slint's own default feature set; the `default-features =
+# false` below dropped it and nothing put it back, so `grep -c accesskit Cargo.lock` returned 0 and
+# every ARIA claim in the previous design was false as built.
+#
+# The chain, read from the manifests rather than assumed: `slint/accessibility` →
+# `i-slint-backend-selector/accessibility` → `i-slint-backend-winit?/accessibility` →
+# `dep:accesskit, dep:accesskit_winit`. The weak `?` resolves because `backend-winit` is on, and
+# feature unification turns it on for the direct `i-slint-backend-winit` dependency below too.
+#
+# It is a named feature rather than an unconditional one so that `accessibility_is_compiled_in` has
+# a control that makes it go red: `cargo test -p ipod-gui --no-default-features`.
+#
+# Measured cost on aarch64-apple-darwin, `--release` with this workspace's `lto = "thin",
+# codegen-units = 1`: +5 crates (accesskit, accesskit_consumer, accesskit_macos, accesskit_winit,
+# uuid). **Linux is the one that is not cheap** — `accesskit_unix` pulls the AT-SPI stack and the
+# graph grows by 16, not 5. Worth knowing before the first Linux CI job.
+#
+# One correction to the design's stated reason, because a comment describing a mechanism that is not
+# there is the next drift: §16.8's single-letter shortcut suppression does **not** key on this
+# feature. `accessible-role` is a compiler-level property with no `cfg` near it, and the suppression
+# is a root `FocusScope` that a focused `TextInput` consumes character keys ahead of — which is
+# focus, and works with the feature off. What the feature buys is the *announced* half: an
+# `AccessibleRole` reaching an assistive technology at all.
+[features]
+default = ["accessibility"]
+accessibility = ["slint/accessibility"]
+
 [dependencies]
 eapp-loader = { path = "../eapp-loader" }
 arm7tdmi = { path = "../arm7tdmi" }
@@ -47,5 +78,38 @@ i-slint-backend-winit = { version = "1.17", default-features = false, features =
     "renderer-skia",
 ] }
 
+# ── The client-height reader (docs/GUI.md §9.6, §20 item 8) ──────────────────────────────────────
+#
+# Both of the crates below are ALREADY in the dependency tree at these versions and these features —
+# `objc2-app-kit`'s `NSScreen` arrives through its own `default` set, which `i-slint-backend-winit`
+# asks for. Declaring them adds no compilation; it only makes them importable, **which a transitive
+# dependency is not**. §9.6's "already in the tree" invites exactly that mistake.
+#
+# Pin 0.3 / 0.6 deliberately: `objc2-app-kit 0.2.2` and `objc2 0.5.2` are also in this tree, via
+# `copypasta` and `winit`, with a different `NSScreen` API. The pointer winit hands over is an
+# opaque ObjC object either way, so reinterpreting it as the 0.3 type is sound; resolving the `use`
+# against the 0.2 crate would not compile.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSScreen"] }
+
+# 0.61, not 0.52: both are in the Windows tree (0.61 via muda and softbuffer, 0.52 via winit and
+# glutin) and 0.52 would be a third copy. `Win32_Foundation` and `Win32_UI_WindowsAndMessaging` are
+# both already enabled there.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [build-dependencies]
 slint-build = "1.17"
+
+# A headless backend, for one test: `a_missing_winit_window_is_none_not_a_panic`. The client-height
+# reader's `None` branch — no winit window yet, which is the state at startup, which is when it is
+# first called — cannot be reached without a `slint::Window`, and a `slint::Window` cannot be made
+# without a platform. `default-features = false` is not decoration here: this crate's optional
+# features pull prost, protox and an image stack, and none of them is wanted. What is left is
+# `i-slint-core` and `i-slint-common`, both already in the tree.
+[dev-dependencies]
+i-slint-backend-testing = { version = "1.17", default-features = false }

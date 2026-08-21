@@ -1328,7 +1328,7 @@ fn watch_range_names_every_writer_of_a_word_not_just_the_first() {
 
     // The control: a word nobody touched must not appear at all, or "every writer" would be
     // satisfied by a table that lists everything.
-    assert!(m.mem.watch_range_words.get(&(span + 8)).is_none());
+    assert!(!m.mem.watch_range_words.contains_key(&(span + 8)));
 }
 // ---------------------------------------------------------------- the PMU's ADC
 

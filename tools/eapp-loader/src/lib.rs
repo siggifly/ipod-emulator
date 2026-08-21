@@ -3845,8 +3845,8 @@ impl Machine {
         self.mem.service_clickwheel();
 
         let now = self.mem.usec;
-        for i in 0..2 {
-            let cfg = self.mem.read32(TIMER_CFG[i]);
+        for (i, &cfg_addr) in TIMER_CFG.iter().enumerate() {
+            let cfg = self.mem.read32(cfg_addr);
             if cfg & 0x8000_0000 == 0 {
                 self.timer_next[i] = 0;
                 continue;
@@ -4435,7 +4435,9 @@ impl Machine {
                     let n = self.steps();
                     self.last_novel = n;
                     self.last_novel_sleeps = self.mem.sleeps;
-                    self.novelty.as_mut().unwrap().insert(pc & !0xf, n);
+                    if let Some(novelty) = self.novelty.as_mut() {
+                        novelty.insert(pc & !0xf, n);
+                    }
                 }
                 // Checked here rather than every instruction: this block already costs a bitset
                 // probe, and idleness cannot begin on an instruction that just found new code.
@@ -4560,12 +4562,9 @@ impl Machine {
                 // by distinct edges — loop back-edges included — rather than by executed
                 // instructions.
                 if target != pc.wrapping_add(4) {
-                    *self
-                        .edges
-                        .as_mut()
-                        .unwrap()
-                        .entry((pc, target))
-                        .or_insert(0) += 1;
+                    if let Some(edges) = self.edges.as_mut() {
+                        *edges.entry((pc, target)).or_insert(0) += 1;
+                    }
                 }
             }
             if indirect {
@@ -6067,7 +6066,7 @@ impl Nor {
 /// +0x1ec  SECTOR          +0x1fc  STATUS (read) / COMMAND (write)
 /// +0x3f8  CONTROL
 /// ```
-
+///
 /// The PCF50605 power-management chip, on I²C address `0x08`.
 ///
 /// Register map from Rockbox's `firmware/export/pcf5060x.h`; the power-on values below are the
@@ -6244,8 +6243,8 @@ impl Pcf50605 {
             // The first byte of a write is always the register address, so a one-byte write only
             // moves the pointer. Longer writes carry values for consecutive registers.
             self.ptr = d[0];
-            for i in 1..len {
-                self.write_reg(self.ptr.wrapping_add(i as u8 - 1), d[i]);
+            for (i, &value) in d.iter().enumerate().take(len).skip(1) {
+                self.write_reg(self.ptr.wrapping_add(i as u8 - 1), value);
             }
             self.ptr = self.ptr.wrapping_add(len as u8 - 1);
             self.writes += 1;

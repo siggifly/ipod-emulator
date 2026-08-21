@@ -275,7 +275,19 @@ there**. On a drive that already carries Apple's software and Rockbox, that come
 three-entry menu — *ZeroSlackr, Apple OS, Rockbox*. There is a button for it in the window.
 
 ZeroSlackr is fetched and verified like everything else here — URL, size, SHA-256, and nothing
-renamed into place until it verifies.
+renamed into place until it verifies. **So is the bootloader.** `ipodloader2` v2.8.1 — 56 912 B,
+SHA-256 on record — is downloaded and checked the same way, and it is resolved *before* the 101 MB
+distribution rather than after it, so a failure arrives before the download instead of at the end of
+one. Until now the loader was built from `resources/vendor/ipodloader2`, which is not in the
+repository: iPodLinux could be installed only by somebody working inside a checkout of this project.
+
+**This changes which bootloader you get.** The vendored build is `iPL 2.9.0d`, from upstream's
+`master` and newer than any release; the fetched one is v2.8.1, the newest thing upstream publishes a
+binary for. Every number in `research/17` was measured on 2.9.0d, so until the same run is made
+against 2.8.1 those figures describe a loader most people will not be running.
+`IPOD_LOADER=/path/to/loader.bin` installs one you built instead — including 2.9.0d — and the report
+says which of the two ran, marking a supplied one `not hashed`, because this project holds no hash
+for a build somebody made.
 
 **It refuses drives it cannot boot rather than building them.** `ipodloader2` reads FAT32 partition
 type `0x0B` and has no case for `0x0C`; every drive image taken off real hardware here is `0x0C`.

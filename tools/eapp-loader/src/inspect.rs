@@ -1105,7 +1105,6 @@ mod classify_tests {
     /// The drive's opening word is the one worth noticing: it is **nothing at all**, which is why
     /// the drive cannot be recognised from its head and is instead what a file is when it is not
     /// one of the other two.
-
     fn write_ipod(
         dir: &std::path::Path,
         name: &str,

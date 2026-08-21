@@ -39,7 +39,29 @@ because an unexplained difference that nobody wrote down is one that gets redisc
 
 ## `ipodloader2` — the row this file did not have
 
-**Measured 2026-08-19**, `ipod-boot loader` against the same drive on all three ROMs:
+**Measured 2026-08-19**, `ipod-boot loader` against the same drive on all three ROMs.
+
+**Which `ipodloader2`, recorded late.** These numbers are **`iPL 2.9.0d`**, built from upstream
+`master` at `a41ec49` into `resources/vendor/ipodloader2/loader.bin` (57 676 B) — which is what
+`ipod-boot install-linux` used to put in the firmware partition. It no longer does: since
+2026-08-21 the command fetches the **v2.8.1 release** (56 912 B, SHA-256 on record), because the
+vendored path is inside a gitignored directory and so worked only in this checkout. Nobody has run
+this table against 2.8.1.
+
+**Reproducing the rows is two steps, not a flag.** `IPOD_LOADER=` is **not** a pinned input in the
+shape `FLASH=` and `DISK=` are — the run that produced these numbers was `ipod-boot loader`, which
+is `--osos-from-disk`: it boots whatever bootloader is already in the drive's firmware partition and
+never reads the variable. Only `install-linux` does. So the loader is pinned by rebuilding the
+drive with it and then booting that drive:
+
+```sh
+IPOD_LOADER=resources/vendor/ipodloader2/loader.bin ipod-boot install-linux   # writes the drive
+ipod-boot loader                                                              # boots what is on it
+```
+
+Setting the variable and re-running `ipod-boot loader` alone changes nothing, silently — which is
+the shape §*The instruments lie* is about. (`install-linux` currently refuses on every drive tried;
+see `KNOWN-BUGS.md`.)
 
 | boot ROM | ATA commands | unmapped |
 |---|---|---|

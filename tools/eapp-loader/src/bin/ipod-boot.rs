@@ -429,6 +429,9 @@ ipod-boot — Apple's firmware, booted under the emulator
                                      build a drive that boots iPodLinux — ipodloader2 in the
                                      firmware partition, ZeroSlackr's five directories on the
                                      data partition, and a loader.cfg naming what is on it.
+                                     ipodloader2 v2.8.1 is fetched and verified (56 912 B,
+                                     SHA-256 on record); IPOD_LOADER=/path/to/loader.bin uses
+                                     one you built instead, unhashed, and says so.
 
   ipod-boot install-os SRC.img OS.ipod OUT.img
                                      install another operating system into a COPY of the drive's
@@ -1226,14 +1229,15 @@ fn setup() -> Result<(), String> {
         }
     }
 
-    s.save();
-    match Settings::path() {
-        Some(p) => println!(
-            "\nSaved to {}. Every recipe here and the window both use it.",
-            p.display()
-        ),
-        None => println!("\nSaved."),
-    }
+    // Reported rather than swallowed: a read-only home or a full disk used to leave this printing
+    // "Saved to …" about a file it had not written, and the next command would ask the same
+    // questions again with no explanation.
+    let where_to = Settings::path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "the settings file".into());
+    s.save()
+        .map_err(|e| format!("could not write {where_to}: {e}"))?;
+    println!("\nSaved to {where_to}. Every recipe here and the window both use it.");
     Ok(())
 }
 
@@ -1972,8 +1976,10 @@ fn install_os(args: &[String]) -> Result<(), String> {
 /// `ipod-boot install-linux [SRC.img [OUT.img]]` — argv, then
 /// [`eapp_loader::install::install_linux`].
 ///
-/// Both paths default: the drive from settings, and `<drive>-linux.img` beside it. The loader and
-/// the distribution come from `resources/vendor/`, where they are kept with their provenance.
+/// Both paths default: the drive from settings, and `<drive>-linux.img` beside it. The loader is
+/// fetched and verified — v2.8.1, 56 912 B, SHA-256 on record — unless `IPOD_LOADER=` names one;
+/// the distribution is the unpacked ZeroSlackr tree, from `resources/vendor/` if it is there and
+/// fetched if it is not.
 fn install_linux(args: &[String]) -> Result<(), String> {
     const USAGE: &str = "usage: ipod-boot install-linux [SRC.img [OUT.img]]\n\
                          builds a drive that boots iPodLinux: ipodloader2 in the firmware \
@@ -1992,15 +1998,26 @@ fn install_linux(args: &[String]) -> Result<(), String> {
         src.with_file_name(format!("{stem}-linux.img"))
     });
     let root = eapp_loader::settings::repo_root();
-    let loader = root.join("resources/vendor/ipodloader2/loader.bin");
     let tree = root.join("resources/vendor/zeroslackr/tree");
-    if !loader.exists() {
-        return Err(format!(
-            "{}: `ipodloader2` has not been built. `make` in resources/vendor/ipodloader2 \
-             produces it.",
-            loader.display()
-        ));
-    }
+    // The loader is resolved BEFORE the 101 MB fetch below, so a failure that used to arrive after
+    // a download arrives before it.
+    let cache = eapp_loader::ipodlinux::cache_dir();
+    let (loader, from) = eapp_loader::ipodlinux::resolve_loader(&cache)?;
+    println!(
+        "{}",
+        match from {
+            eapp_loader::ipodlinux::LoaderFrom::Release => format!(
+                "  ipodloader2 — {} ({} bytes, SHA-256 verified)",
+                loader.display(),
+                eapp_loader::ipodlinux::LOADER.bytes
+            ),
+            eapp_loader::ipodlinux::LoaderFrom::Provided => format!(
+                "  ipodloader2 — {} (IPOD_LOADER; not hashed — this project holds no hash for a \
+                 build somebody made)",
+                loader.display()
+            ),
+        }
+    );
     // Not there? Fetch it, the same way Rockbox and Apple's firmware are fetched — a recorded
     // size and SHA-256, and nothing renamed into place until it verifies. It used to be a file
     // somebody had downloaded by hand, and the one time that was done only `boot/vmlinux` was kept.
@@ -2008,7 +2025,7 @@ fn install_linux(args: &[String]) -> Result<(), String> {
         tree
     } else {
         println!("  ZeroSlackr is not unpacked yet — fetching it (101 MB, verified)");
-        eapp_loader::ipodlinux::fetch(&eapp_loader::ipodlinux::cache_dir())?
+        eapp_loader::ipodlinux::fetch(&cache)?
     };
     for line in eapp_loader::install::install_linux(&src, &loader, &tree, &out)? {
         println!("{line}");

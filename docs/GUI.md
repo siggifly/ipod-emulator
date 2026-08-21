@@ -175,9 +175,16 @@ revision wrote those two rules as one and got the sentence backwards. Four sente
 ### 3.1 A synthesised boot ROM is a resource, exactly like a dumped one
 
 **Required in `settings.rs`, with its own tests, before the window is built.** This was declared
-closed in the previous revision and was never done; `Device` still carries both
-`firmware: Option<String>` **and** `nor: Source`, with the migration case described in its own doc
-comment. Collapse them into one named reference and delete the migration case with them.
+closed in the previous revision and was never done; `Device` carried both `firmware: Option<String>`
+**and** `nor: Source`, with the migration case described in its own doc comment. **Done 2026-08-21**
+(§20 item 1): the field is `firmware: String`, resolved through `Settings::nor_of` and nowhere else,
+and the migration case went with the field — `Settings::parse` gives a device that carried its
+recipe inline a **named** iPod instead. The rest of this section is why, and it still stands.
+
+The consequence to say out loud, because it is a behaviour change for a real user: with the inline
+copy gone there is nothing to fall back to, so a device whose dump has moved is **refused** rather
+than booted as a silently substituted generated 5.5G. That substitution is what `unwrap_or(d.nor)`
+did, and it is the whole argument for collapsing the pair.
 
 Three things depend on it and none of them is cosmetic:
 
@@ -206,24 +213,59 @@ pub enum Provenance {
     Synthesised { seed: u64 },
     Fetched { verified: Verification },
     Provided,
+    /// Built here, out of a tree in this checkout.
+    Built,
 }
 pub enum Verification { Sha256, SizeOnly, None }
 ```
 
-`Item` gains a `from: Provenance`. The three download outcomes render as three distinct strings and
-**`SizeOnly` is never silently upgraded to `verified`** — `firmware.rs` already keeps that
-distinction and the window must not undo it. Until the field exists the row **says nothing** rather
-than lying.
+`Item` gains a `from: Option<Provenance>`. The three download outcomes render as three distinct
+strings and **`SizeOnly` is never silently upgraded to `verified`** — `firmware.rs` already keeps
+that distinction and the window must not undo it. Until the field exists the row **says nothing**
+rather than lying.
+
+**Two departures from this block, both argued from its own sentences, both now shipped in
+`settings.rs`.** *(Corrected 2026-08-21, when §20 item 2 was built.)*
+
+- **Five variants, not four.** `Built` is what a file this program produced from a vendored tree is,
+  and none of the other four is true of it. It carries a retirement condition in its own doc
+  comment: §20 item 7 replaces the vendored `ipodloader2` with the fetched release, and if nothing
+  ends up filing a resource with `Built` it is deleted rather than left standing.
+- **`Option<Provenance>`, not `Provenance`.** "Says nothing rather than lying" needs a says-nothing
+  state and none of the five is one — every settings file written before this field has one for
+  every entry it holds. `None` renders as the empty string. It is deletable later: when every write
+  path states a provenance it becomes unreachable and the `Option` comes off.
+
+Two rules hold the field down, and they are the reason there are two verbs rather than one.
+`Settings::file_away` fills in a `None` and **never overwrites a stated value**, so a fetch followed
+by a Provide cannot flip a recorded fact; `Settings::record_provenance` is the separate verb for a
+caller that has re-checked the bytes. And a `Firmware(Synthetic)` item's provenance is **always**
+`Synthesised` with the recipe's own seed, whatever a caller or a hand-edit said — the seed is in the
+file once, in the recipe, and `res.N.provenance` is not written for it at all.
+
+**A provenance is a record of how a file arrived, not a measurement of the bytes now on disk**, and
+the wording had to be corrected to say so (2026-08-21). An `Item` is keyed on its `Resource` — a
+*path* — and no digest, size or mtime is stored beside the token, so replacing the file underneath
+it (a partial re-download, a `curl -o`, a restore from a backup) leaves the claim standing. The row
+read `fetched · SHA-256 verified`, present tense, about a file nobody had re-opened: the same shape
+as the string literal this field exists to delete, one level down. It reads **`fetched · SHA-256
+verified when it arrived`**, and `Provenance::is_verified` says in its own doc comment that it
+answers about the filing rather than about the file. The path that re-establishes or refutes it does
+exist and is named there — `firmware::cached(dir, true)` re-hashes, `firmware::provenance` maps the
+answer, `Settings::record_provenance` files it — and it has **no caller yet**, because the Parts
+page that would run it is Phase 6. A re-fetch must go through that verb and not through
+`file_away`, whose whole rule is that it leaves a stated value alone: routed the wrong way, a
+re-download that could only be size-checked keeps the SHA-256 badge from the first one.
 
 ### 3.3 A third: a device knows whether its parts are still on disk, and when it was parked
 
 **Required before the cradle can be honest, which is before the bench can be drawn.** §7.3's closed
 cradle set contains `cannot start — the disk is not where it was`, and the previous revision treated
-that state as reached. **Nothing computes it.** `Settings::missing()` (settings.rs:787) checks only
-whether a *name* still resolves in `self.disks` and `self.resources`; it never touches the
-filesystem. Delete an image in Finder and the entry is still in the list, so `missing()` returns
-empty, the cradle stays `accent`, the label promises `about 3 s`, and the machine starts and fails
-somewhere inside `emu`.
+that state as reached. **Nothing computed it.** `Settings::missing()` checked only
+whether a *name* still resolved in `self.disks` and `self.resources`; it never touched the
+filesystem. Delete an image in Finder and the entry was still in the list, so `missing()` returned
+empty, the cradle stayed `accent`, the label promised `about 3 s`, and the machine started and
+failed somewhere inside `emu`. It stats now — see the block below and the three decisions under it.
 
 ```rust
 pub enum Absent {
@@ -240,13 +282,43 @@ the path — which is the whole of the answer. **A device missing more than one 
 cradle row** (§7.3), because 24 px of centred `body` does not hold two filenames and the previous
 revision specified both the cradle *and* shelf row 2 for the same string.
 
+**Done 2026-08-21** (§20 item 3), with three decisions the block above does not carry:
+
+- **The order is fixed** — firmware first, disk second — so the one-part sentence is stable.
+- **`Presence` memoizes one pass's `stat` answers** and is dropped at the end of it, so N devices on
+  one drive cost one call and there is no staleness window to invalidate. A path under a stale
+  network mount blocks, so `missing()` **must not be called from a binding or a callback body**; it
+  belongs in the same off-thread pass §11.4's `detect_mounted()` already needs. *(The sharing was
+  specified and then not done: the one caller used `Settings::missing`, which mints a fresh
+  `Presence` per call, so N devices on one drive cost N. Fixed 2026-08-21 — `device_rows` builds one
+  and threads it through `summary`. **The off-thread half is still open**, and the pass runs before
+  `window.run()`, so a share that is not up delays the first window rather than one row of it.)*
+- **A `stat` that fails reads as present, unless the failure is itself a statement of absence.**
+  `Path::exists()` folds every error into `false`, so a directory the user cannot traverse would be
+  reported as `is not where it was` — the program asserting a fact about somebody's filesystem it
+  never observed, which is the same defect class as the `fetched and verified` literal. The cost is
+  that a permissions problem produces no diagnosis at all; §7.3's closed set has no row for it, and
+  adding one is an operator decision. *(Corrected 2026-08-21: `NotFound` alone was too narrow the
+  other way. `NotADirectory` — a path whose parent component is a regular file — and `InvalidInput`
+  / `InvalidFilename` — a path the OS will not accept at all — are definite negatives, and calling
+  them present hid a device that cannot start behind a cradle saying nothing.)*
+
+§7.3 has no row worded for `Unlisted` — its one-part row names a *file*. The model keeps the
+distinction; the window reuses the one-part row via `Absent::label()` until the design says
+otherwise.
+
 Two more fields, both cheap and both currently unrepresentable:
 
 - **`Device::parked_at: Option<u64>`** — a unix timestamp. §7.5's shelf renders `parked · 4 min ago`
   and §12.4 treats "parked" as a device state, and `Device` carries no such flag and no such time.
   Derive both from the snapshot file's existence and mtime *or* store them; either is fine and the
   document has to say which. **It stores them**, because the snapshot path is a `Config` concern and
-  the shelf should not have to know it.
+  the shelf should not have to know it. **Model half done 2026-08-21** (§20 item 4) — seconds since
+  the epoch, with `now_unix`, `record_park`, `discard_park` and a saturating `parked_for`. It answers
+  *when*, never *whether*: the authority on whether there is a restore point is
+  `Config::may_restore()`, so `parked_at` is **not** cleared by a cold boot, a power-off, or a pair
+  that has broken. **Nothing writes it yet** — `emu::Link` carries no `parked_at` and
+  `write_restore_point` still reports nothing, so `record_park` has no caller.
 - **`Stats::enters_by_core`** — conditional, and §17.Q10 is the question. Today `Stats::enters` is
   `[u64; WATCHED.len()]`: one flat array of five arrival counts, with no per-core dimension anywhere
   in `Stats` or `Out`. §12.8 draws **one** column until the model carries two, because the
@@ -1596,8 +1668,11 @@ A refused value gets three things, all permanent, all in the flow:
 
 **And the `Fix` obeys four rules, because "one press applies it and the reason collapses" was not
 enough.** A test already asserts that every refusal carries a fix and that applying it resolves the
-*`Verdict`* — `every_refusal_carries_a_fix_and_applying_it_resolves` — and that test says nothing
-about what the fix discards or whether the value it names is one the user is allowed to choose.
+*`Verdict`* — `every_fix_resolves_the_thing_it_is_offered_for` — and that test says nothing about
+what the fix discards or whether the value it names is one the user is allowed to choose. (Three
+earlier drafts of this document called that test
+`every_refusal_carries_a_fix_and_applying_it_resolves`, which is not a name anything in `compose.rs`
+has ever had. A document citing a test that cannot be run is the §1.1 shape exactly.)
 
 | shape | presses | rule |
 |---|---|---|
@@ -1606,7 +1681,7 @@ about what the fix discards or whether the value it names is one the user is all
 | **any `Fix` naming a value the picker disables** | **none — it is disabled too**, wearing the same project-state reason and the same `mono` escape hatch | |
 
 **`BuildFromIpsw` needed the second press because it detaches an image.** `Fix::BuildFromIpsw`
-replaces `Start::FromImage` with `Start::FromIpsw` (`compose.rs:127`). Pick a 55.9 GB image dumped
+replaces `Start::FromImage` with `Start::FromIpsw` (`compose::Fix::BuildFromIpsw`). Pick a 55.9 GB image dumped
 off your own 5.5G, tick iPodLinux out of curiosity, watch `best_loader()` move to ipodloader2, get
 the 0x0C paragraph, press the button — and the device silently stops pointing at the only copy of
 your iPod and starts pointing at a drive that does not exist yet. §11.4 spends a paragraph on
@@ -1614,16 +1689,22 @@ your iPod and starts pointing at a drive that does not exist yet. §11.4 spends 
 sentence at all. So the button reads its consequence: **`builds a new drive; rockbox-test.img stays
 in Parts and this device stops using it`**, and the second press is the confirmation.
 
-**The disabled-`Fix` rule exists because the two surfaces contradicted each other on the first
-refusal a curious user hits.** Un-tick iPodLinux, re-tick it, and `check()`'s rule (1) offers
-`use ipodloader2` — while the picker four rows above shows `ipodloader2` `fg-disabled` with
-`has not been built. `make` in resources/vendor/ipodloader2`. The picker refuses the value and a
-button below it sets it in one press; and if the press is honoured, `install_linux` then wants
-`resources/vendor/ipodloader2/loader.bin` and errors out. The promise *"applying it resolves rather
-than moving you from one dead end to another"* was false. §20 has the deeper fix — **`install-linux`
-uses the fetched `ipodlinux::LOADER` (v2.8.1, 56 912 B, SHA-256 on record) instead of the `make`d
-vendor binary**, which deletes the project state rather than papering over it. Until that lands, the
-two surfaces at least agree.
+**The disabled-`Fix` rule existed because the two surfaces contradicted each other on the first
+refusal a curious user hits, and §20 item 7 has now deleted the contradiction rather than
+reconciling it.** Un-tick iPodLinux, re-tick it, and `check()`'s rule (1) offers `use ipodloader2` —
+while the picker four rows above used to show `ipodloader2` `fg-disabled` with
+`has not been built. `make` in resources/vendor/ipodloader2`. The picker refused the value and a
+button below it set it in one press; and if the press was honoured, `install_linux` then wanted
+`resources/vendor/ipodloader2/loader.bin` and errored out. The promise *"applying it resolves rather
+than moving you from one dead end to another"* was false.
+
+**`install-linux` now uses the fetched `ipodlinux::LOADER`** — v2.8.1, 56 912 B, SHA-256 on record —
+via `ipodlinux::resolve_loader`, which consults `IPOD_LOADER=` and otherwise the download cache, and
+never `resources/vendor/`. So there is no project state left for the picker to report: ipodloader2's
+Bootloaders row is `not fetched yet` with the group's own `Fetch…`, exactly like Rockbox's. The
+disabled-`Fix` rule stays in the table because it is a rule about *any* `Fix` naming a value the
+picker disables — `iPodLinux` itself is still disabled, for ZeroLauncher's stall — and not because
+of this one instance.
 
 `best_loader()` runs on every change, so the bootloader **follows** rather than complaining — ticking
 iPodLinux moves the loader to ipodloader2 rather than telling you the one you had is wrong. The
@@ -1635,7 +1716,7 @@ verdict is still there for combinations somebody drives into deliberately.
 |---|---|
 | `Verdict::Ok` | `Recipe::describe()` in `fg-dim`, in the order `install::loader_menu` actually writes it — `A boot menu: ZeroSlackr, Apple OS, Rockbox, Disk Mode, Sleep.` |
 | `Verdict::No` | `why`, in `fg`, with the `Fix` below |
-| **nothing chosen yet** | `nothing chosen yet` in `fg-dim` |
+| **nothing chosen yet** | `compose::NOTHING_CHOSEN` — `nothing chosen yet` — in `fg-dim`. The window picks `fg-dim` from `Recipe::nothing_chosen()`, **not** from the verdict: `Verdict` gains no variant, and the string is a constant precisely so this row and the code cannot drift apart |
 | **still reading** | `reading rockbox-test.img…` in `fg-dim` |
 
 **The last two are the correction, and both were false claims in the always-reserved region.**
@@ -1645,9 +1726,22 @@ verdict is still there for combinations somebody drives into deliberately.
 *"has not been looked at yet"*, while rule (2) only fires on `Some(0x0c)` — so picking a 55.9 GB image
 on a slow external drive read `Ok` for several seconds and then flipped to the 0x0C refusal, which is
 content moving under the user, which principle 2 forbids. §11.3's whole argument is that the verdict
-is a teaching instrument; it was teaching two things that are not true. `Recipe::check()` gains a
-`Start::FromIpsw(name) if name.is_empty()` arm returning `Verdict::No` — a model change, so it is in
+is a teaching instrument; it was teaching two things that are not true. `Recipe::check()` gains
+rule (0), returning `Verdict::No { why: NOTHING_CHOSEN, fix: None }` — a model change, so it is in
 §20 — and the reserved 54 px absorbs both new strings at no layout cost.
+
+**Rule (0) covers all three `Start` variants, not only `FromIpsw`** — `Recipe::nothing_chosen()` is
+the predicate, and an empty `FromImage` path or `FromDisk` name is the same question with the same
+answer. A second copy of that match, in the window, is where the third variant gets forgotten. It
+carries **no `Fix`**: `Fix` has no payload that could name a firmware, and none is needed, because
+the picker one row above is what resolves it. That is why
+`every_fix_resolves_the_thing_it_is_offered_for` accepts the nothing-chosen state as a terminus —
+a refusal with no fix, not a dead end with one that fails.
+
+**And it is `check()` that gains the arm, not `check_parts()`.** `Recipe::loader_works` and
+`Recipe::why_not` go through the latter, so a bootloader's tooltip stays about the bootloader; wired
+to `check()`, every bootloader would grey out reading `nothing chosen yet` before a firmware is
+picked, which is a non-sequitur in a bootloader tooltip.
 
 **The plan is one list rendered twice**: `Recipe::steps()` as *this is what will be downloaded* here,
 and as a ticking checklist on the Work page while it runs. One source, so they cannot disagree.
@@ -1659,6 +1753,8 @@ else. A five-minute, five-ways-to-fail operation must not own a screen — that 
 answer to *"a wizard that re-opens itself"*.
 
 **And `Create` clears `Device::boot_instructions` whenever `oses` or `loader` changed** — §12.3.
+`Recipe::shape()` is what it compares: `compose::BootShape`, the bootloader and the systems and
+deliberately not the drive.
 
 ### 11.4 Parts
 
@@ -1712,9 +1808,8 @@ these belong in it, with sizes, with the device each pairs with, and with a `Dis
  │ Bootloaders                      1   │  ← the fourth kind the shipped
  │  Rockbox's bootloader              › │     window drops entirely
  │  51 996 B · fetched · SHA-256        │
- │  ipodloader2                         │  ← fg-disabled, PROJECT STATE
- │  has not been built. `make` in       │
- │  resources/vendor/ipodloader2        │
+ │  ipodloader2 v2.8.1                  │  ← no longer a project state:
+ │  56 912 B · not fetched yet          │     `Fetch…` is the whole answer
  │  Fetch…           Provide…           │
  │──────────────────────────────────────│
  │ Software                         1   │
@@ -1966,7 +2061,29 @@ defect `boot_instructions` replaced `snap_at` to fix, reintroduced through the e
 
 So: **`Create` clears `Device::boot_instructions` whenever the recipe's `oses` or `loader` changed**,
 and the first boot after an edit has no fraction, exactly like a device that has never booted. One
-line in `Create`, and it makes the honesty claim true rather than conditional.
+line in `Create` — plus a model method that owns the rule, because a device is edited from more than
+one entrance and a rule with nothing computing it is the shape §16.9 exists to delete.
+
+**The comparison is `compose::BootShape`**, which `Recipe::shape()` produces: the bootloader and the
+set of systems, and **not** the drive it starts from. Excluding the drive is what makes a *rename*
+distinguishable from an *edit*. Three reasons, in order of weight: `Start` carries
+`fat_type: Option<u8>`, which goes from `None` to `Some(_)` when a background read of the volume
+finishes — a discovery, not an edit — so a whole-`Recipe` comparison would drop a good denominator
+because a read completed, which is a number changing for a reason the user did not cause; renaming
+the `.ipsw` moves RetailOS's cold boot by a few per cent, not by the order of magnitude this is
+about; and the next completed boot overwrites the number anyway.
+
+The device stores the shape it last learned its denominator on — `Device::boot_shape:
+Option<BootShape>`, one settings key, the bootloader then the systems comma-separated — and
+`Settings::set_boot_shape` is the single place the rule runs: same shape, keep the number; different
+shape, store the new one and take the number; no such device, do nothing. `None` means nobody
+recorded it, which is what every device from an existing settings file reads as, and an unverifiable
+denominator is dropped once rather than trusted for ever.
+
+*(`compose::BootShape` and `Recipe::shape()` shipped 2026-08-21. **`Device::boot_shape` and
+`Settings::set_boot_shape` are not built** — `grep -rn boot_shape tools --include='*.rs'` reaches
+`compose.rs` and nothing else. The paragraph above is the design, not a description of code; §20
+item 6 carries what is outstanding and names the `as_device` line that has to go in first.)*
 
 ### 12.4 Parking, and what it costs
 
@@ -2536,8 +2653,9 @@ be drawn.
 
 Also: **stretch factors are inert unless the layout's alignment is `stretch`.** With
 `alignment: center | start | end | space-*` and available space ≥ preferred, every item gets exactly
-its preferred size and `vertical-stretch` is never consulted. The comment at `window.slint:191` is
-correct and this is the mechanism.
+its preferred size and `vertical-stretch` is never consulted. The comment on the chrome bar's
+`HorizontalLayout` in `window.slint` — *"setting one packs the children and makes
+`horizontal-stretch` inert"* — is correct, and this is the mechanism.
 
 ### 16.3 `visible` versus `if`, decided per element
 
@@ -2614,19 +2732,40 @@ widens rather than retires.
 be accessed in an expression". That is why §7.3's refused cradle is a **broken** ring — four arcs
 with gaps — rather than a dashed one: a gap is a shape and a shape is buildable.
 
-### 16.7 Accessibility is not compiled in
+### 16.7 Accessibility, and what it does not buy
 
-`accessibility` is in slint's default feature set; `tools/ipod-gui/Cargo.toml` sets
-`default-features = false` and does not list it. `grep -c accesskit Cargo.lock` returns **0**. Every
-ARIA claim in the previous revision was false as built.
+`accessibility` is in slint's default feature set, and `tools/ipod-gui/Cargo.toml` set
+`default-features = false` and did not list it. `grep -c accesskit Cargo.lock` returned **0** at
+`5cf06c7`. Every ARIA claim in the previous revision was false as built.
 
-Turning it on is a prerequisite. Then: `Region` / `Complementary` / `Main` for surfaces,
+**Turned on 2026-08-21** (§20 item 11), as a named feature that is on by default — named rather than
+unconditional so that `cargo test -p ipod-gui --no-default-features` is a control that makes
+`accessibility_is_compiled_in` go red. Two tests, deliberately not one: that one asks whether the
+feature is set, and `the_lockfile_carries_accesskit` asks whether the crate is actually **resolved**,
+which is the thing the ARIA claims were false about. Under `--no-default-features` the first goes red
+and the second stays green, because a lockfile records the union of all features.
+
+Measured cost, aarch64-apple-darwin, `--release` with this workspace's `lto = "thin"`: **+5 crates**
+(`accesskit`, `accesskit_consumer`, `accesskit_macos`, `accesskit_winit`, `uuid`). **Linux is not
+that cheap**: `accesskit_unix` pulls the AT-SPI stack and the graph grows by **16**, not 5 — worth
+knowing before the first Linux CI job, and worth not reporting one platform's number as the number.
+
+Then: `Region` / `Complementary` / `Main` for surfaces,
 `accessible-live-region: polite` for the Rail and the Readout, `accessible-expandable` / `-expanded` /
 `accessible-action-expand` for Expand, `accessible-item-selectable` / `-selected` / `-index` /
 `-count` for lists, `accessible-enabled` and `accessible-description` for every disabled control.
 
-`AccessibleRole::TextInput` additionally has a **behavioural** job here, not only an announced one:
-§16.8's shortcut suppression is keyed on it.
+**One correction, made when the feature was turned on.** This section used to say
+`AccessibleRole::TextInput` additionally has a *behavioural* job — that §16.8's shortcut suppression
+is keyed on it, making the feature a prerequisite for the keyboard as well as the screen reader.
+That is not true as built. `accessible-role` is a compiler-level property with no `cfg` near it
+(`i-slint-compiler-1.17.1/builtins.slint:1636`) and nothing in `i-slint-core` gates it on
+`feature = "accessibility"`; more to the point, §16.8's mechanism does not query the role at all —
+the suppression is a root `FocusScope` that a focused `TextInput` consumes character keys ahead of.
+That is focus, and it works with the feature off. There is also no supported Rust route to ask what
+role has focus: `ItemRc::accessible_role()` exists (`i-slint-core-1.17.1/item_tree.rs:505`) but
+`ItemRc` is not public API. The feature is still required — §16.7's rule is that an ARIA claim must
+be true as built — but for the **announced** half, which is the honest reason.
 
 **The honest gap**: a 96-detent ring has no announced equivalent — Slint has `Slider` but a wheel is
 not one, and the `↑` / `↓` keys are the accessible route and are a fallback, not a peer. Say so once
@@ -2718,9 +2857,16 @@ gets the discipline `research/` already has: **the constants live in one place, 
 and a claim without a check is deleted rather than left standing.**
 
 Mechanically: `build.rs` emits every ratio and every geometry constant from **one Rust source of
-truth** into both a generated `.slint` file and a Rust `const` module, so the test reads what the
-markup reads rather than hand-copying it. `min-width: 880` is one of them, and its derivation lives
-beside it (§9.6) rather than in a parenthetical that sums to 449.
+truth** — `tools/ipod-gui/src/geometry.rs` — into a generated `.slint` file, which the markup imports
+as `@geometry`. The tests read that same Rust module directly, so the test reads what the markup
+reads rather than hand-copying it. `min-width: 880` is one of them, and its derivation lives beside
+it (§9.6) rather than in a parenthetical that sums to 449.
+
+*(Built 2026-08-21. This paragraph used to say "into **both** a generated `.slint` file and a Rust
+`const` module". Only the `.slint` is generated: the Rust `const` module **is** the source, and
+`build.rs` compiles that same file via `#[path = "src/geometry.rs"]`. Generating a second Rust copy
+of a Rust source would add an artifact that can go stale without adding a check that can fail —
+which is the failure mode this section exists to close.)*
 
 ### 16.10 The tests, and proving they can fail
 
@@ -2731,7 +2877,7 @@ glyphs, then two more within the hour.
 |---|---|
 | `the_panel_is_an_exact_integer_number_of_device_pixels` | drawn width is an exact integer multiple of **320 physical px**; drawn height is the **same** multiple of 240; the aspect is 4:3 to a float epsilon. **Runs at `sf ∈ {1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.5}` × `k ∈ 1..8`** — and **it goes red at 2.75 / 7 today**, which is the prove-it-can-fail obligation satisfied by a real case rather than an assumed one (§6.6). Also **prove the ratio arm**: set the ratios back to `0.4866 / 0.3672` and watch it go red before trusting it |
 | **`the_glass_is_the_panel_plus_ten_and_a_half_physical_pixels`** | the black surround is `0.016 × hero_phys` on **all four** sides at every `k` and every `sf`, and the glass is computed **from** the panel rather than from a ratio — so a re-measured bezel cannot silently flip which axis bounds `k` (§6.6) |
-| `the_column_fits_the_declared_minimum` | derives §9.6's terms from the generated constants — not from typed copies — and asserts `sum ≤ min_height`, **including the cradle's overhang and focus ring above the body as well as below** |
+| `the_column_terms_sum_to_the_declared_chrome` | derives §9.6's terms from the generated constants — not from typed copies — and asserts they sum to `CHROME_MIN` and `CHROME_PREF`, **including the cradle's overhang and focus ring above the body as well as below**. Drop the top band and it reports 138 against 154, which is the omission §9.6 describes. *(This row used to name a test `the_column_fits_the_declared_minimum` asserting `sum ≤ min_height`. Under §9.6's own numbers that is `809.751 ≤ 400`, which holds at no `k` and no `sf` — a test that can only fail, and would then be weakened until it passed. What §9.6 establishes is the sum, so that is what is asserted; `the_minimum_height_is_a_floor_not_a_fit` carries the other half.)* |
 | `the_drawn_ipod_is_the_shape_of_a_real_one` | survives unchanged except for the two corrected ratios and the added hold switch |
 | `every_surface_can_be_left` | every drawer page reaches the bench in ≤ 3 presses of one key |
 | `every_disabled_control_states_its_reason_under_keyboard_focus_alone` | §16.5's proof obligation, with the mouse untouched |
@@ -2739,14 +2885,49 @@ glyphs, then two more within the hour.
 | **`every_cradle_state_clears_three_to_one_against_bg_sunken`** | §6.4's table, computed rather than eyeballed, in both schemes |
 | `dropped_files_route_themselves_in_either_order` | comes across unchanged, and keeps its two-file scope |
 | **`an_ambiguous_drop_files_and_makes_no_device`** | §11.4's rule for two ROMs or two `.ipsw`s |
-| **`a_fix_that_changes_a_resource_reference_says_so_and_needs_two_presses`** | §11.3, and it is the assertion `every_refusal_carries_a_fix_and_applying_it_resolves` does not make |
+| **`a_fix_that_changes_a_resource_reference_says_so_and_needs_two_presses`** | §11.3, and it is the assertion `every_fix_resolves_the_thing_it_is_offered_for` does not make |
 | `no_ui_string_contains_a_glyph_the_font_is_not_proven_to_have` | widened per §6.7 — and it catches the shipped ` · ` today |
-| `the_verdict_preview_matches_what_the_installer_writes` | already exists in `compose.rs`; the window renders it verbatim |
-| `every_refusal_carries_a_fix_and_applying_it_resolves` | already exists in `compose.rs` |
+| `the_menu_preview_is_in_the_order_the_loader_writes` | already exists in `compose.rs`; the window renders it verbatim. (Earlier drafts called this `the_verdict_preview_matches_what_the_installer_writes`, which no test has ever been called) |
+| `every_fix_resolves_the_thing_it_is_offered_for` | already exists in `compose.rs`, and is now swept over three `Start`s — a fix that lands on rule (0)'s nothing-chosen state is a terminus, and one that lands anywhere else carrying a fix still fails |
+| **`a_zero_c_volume_refuses_ipodlinux_whatever_bootloader_is_showing`** | §11.3 rule (2), which is a fact about the volume and so must fire on every bootloader **and from either way of choosing a drive** — the guard that made rule (1)'s fix chain into rule (2)'s refusal, and the `Start::FromDisk` half it skipped |
+| **`the_panel_is_an_exact_integer_number_of_device_pixels`** | §20 item 10. Swept `SF_SWEEP × 1..=K_MAX`, and it found `next_up_until` stepping f64 ULPs across an f32 grid: 40 of the 160 cases drew the panel short of its own framebuffer |
+| **`the_display_decides_k_and_the_window_decides_the_warning`** | §9.5 / §16.1. `k` from the display, the too-short boolean from the window — the two were one value, so a window dragged short and then moved reported room it did not have |
+| **`the_default_recipe_says_nothing_is_chosen_yet`** | §11.3 rule (0). It **replaces** `the_default_recipe_works`, which asserted the opposite and was wrong |
+| **`the_bootloader_tooltip_is_about_the_bootloader_even_before_a_firmware_is_chosen`** | the `check` / `check_parts` split, without which the whole bootloader picker greys out reading `nothing chosen yet` |
+| **`a_volume_type_discovered_later_is_not_a_change_to_what_a_device_boots`** | §12.3: `BootShape` excludes `Start`, so a background read completing does not throw away a denominator |
+| **`the_loader_override_wins_and_an_override_that_points_at_nothing_is_an_error`** | §20 item 7: `IPOD_LOADER=` is honoured or refused, never quietly ignored |
+| **`nothing_reaches_for_the_vendored_loader_any_more`** | §20 item 7: no `.rs` under `tools/` joins `resources/vendor/ipodloader2`, so the path that worked only inside this checkout cannot come back |
 
-**`IPOD_LAYOUT=1` does not exist.** `docs/DEVELOPING.md` documents it as the way to make the window
-print the measurements its size constants derive from; `grep -rn 'IPOD_LAYOUT' tools/` returns
-nothing. Either build it — it is ten lines once the constants are generated — or delete the claim.
+**`IPOD_LAYOUT=1` exists now** (2026-08-21). It was documented in `docs/DEVELOPING.md` and
+implemented nowhere — `grep -rn 'IPOD_LAYOUT' tools/` returned nothing — so it was built rather than
+deleted. `client_height::dump_layout` prints the work-area answer this build can give, the measured
+display height, the window, the fit, the threshold, the glass, the inset, and every constant in
+`geometry::ALL` once. On the operator's own machine, at the first event after startup:
+
+```
+── IPOD_LAYOUT ────────────────────────────────────────────
+  work area   VisibleFrame — the usable height of the display this window is on, …
+  display     923.0 logical px usable
+  window      2360 x 1692 physical, 1180.0 x 846.0 logical, scale 2
+  fit         k = 2, body 655.751 logical (1311.502 physical), panel 320.0000 x 240.0000
+  needs       809.8 logical / 1619.5 physical for k = 2
+  glass       661.0 x 501.0 physical, 10.49 px surround on all four sides
+  inset       0.05186 of body height at the sides, 0.05250 at the top
+```
+
+That is §6.6's operator row and §9.6's `923` measured rather than asserted — and it is what caught
+the one real defect in the wiring: with `k` decided from `min(window, display)`, the size winit
+reports during window creation dragged `k` down to 1 and raised the too-short flag before a later
+event corrected it. `k` is decided from the display; the too-short boolean from the window.
+
+**And that fix was half-made**, which is worth recording because the prose above was written as
+though it were whole. Splitting the two inputs was done in `main.rs`, where `ceiling_logical` reads
+the display and `own_height_logical` reads the window — but `fit::Moment` still carried **one**
+`client_logical` per variant, so `Fitter::apply` fed the display's number to the too-short
+comparison on `Shown`, `Moved` and `ScaleFactorChanged`. Only a plain `Resized` ever reached it with
+the window's own height. Each variant carries both measurements now (2026-08-21), and
+`the_display_decides_k_and_the_window_decides_the_warning` is the case that could not be written
+before: drag short, then move to a taller display, and the warning has to stay up.
 
 ### 16.11 Scroll, and the price of a `Flickable`
 
@@ -3017,48 +3198,175 @@ because the failure was imagined.
 
 In order, because each depends on the one before it.
 
-1. **`Device::firmware` + `Device::nor` collapse into one named reference** (§3.1), in `settings.rs`,
-   with tests, and the migration case deleted with them.
-2. **`Item` gains `Provenance`** (§3.2), and the hard-coded `fetched and verified` /
-   `dumped from a real iPod` strings in `main.rs` are deleted.
-3. **`Settings::missing()` gains a filesystem existence check per resolved path** (§3.3), with its
-   own test, returning `Absent::Gone(PathBuf)` or `Absent::Unlisted(String)` so the cradle can name
-   the path — and so that the cradle state the previous revision specified becomes reachable at all.
-4. **`Device::parked_at: Option<u64>`** (§3.3), written on park and cleared on discard.
-5. **`Recipe::check()` gains a `Start::FromIpsw(name) if name.is_empty()` arm** returning
-   `Verdict::No` (§11.3), so the always-reserved verdict region stops asserting a plan for a firmware
-   nobody has chosen.
-6. **`Create` clears `Device::boot_instructions` when `oses` or `loader` changed** (§12.3). One line,
-   and it is what makes the one-bar-across-three-operating-systems claim true rather than conditional.
-7. **`install-linux` uses the fetched `ipodlinux::LOADER`** — v2.8.1, 56 912 B, SHA-256 on record —
-   rather than `resources/vendor/ipodloader2/loader.bin` (§11.3). That turns a project state into a
-   working path for anybody not working inside this checkout, and deletes a contradiction between two
-   surfaces rather than reconciling them.
+1. **DONE.** `Device::firmware` + `Device::nor` collapsed into one named reference (§3.1):
+   `firmware: String`, resolved through `Settings::nor_of`, with no second inline copy and no
+   fallback. The migration case went with the field — a device that carried its recipe inline is
+   given a **named** iPod by `Settings::parse` instead, through `adopt_inline_roms`, so the old keys
+   are read for ever and written never. **One behaviour change for a real user**: a device whose dump
+   has moved stops silently booting a substituted generated 5.5G and starts being refused by
+   `run_device` and named by `missing()`. Between this and item 12's Rail that refusal has nowhere to
+   be shown — `on_start_device` is still an `eprintln!`.
+   **The disk got the same rule on 2026-08-21**, having been left with the old one: `run_device`
+   fell through to `Device::disk_path` when the disk's *name* did not resolve, and after one round
+   trip through the settings file there is no `disk_path` to fall through to — so the machine
+   started with no drive at all while `missing()` was already reporting the name as absent. Three of
+   the four `disk_of` outcomes had the two functions disagreeing. It refuses now, and naming **no**
+   disk still starts, because that is an unfinished device rather than a broken one.
+2. **DONE.** `Item` gains `from: Option<Provenance>` (§3.2), and the hard-coded
+   `fetched and verified` / `dumped from a real iPod` strings in `main.rs` are deleted — every
+   trailing column is `Provenance::line()` now, and an item nobody recorded one for contributes the
+   empty string. `firmware::provenance(CacheState)` is the bridge that makes the default listing
+   path — which hashes nothing — file its results honestly.
+3. **DONE.** `Settings::missing()` stats every resolved path (§3.3) and returns
+   `Vec<Absent>` — `Gone(PathBuf)` or `Unlisted(String)`, firmware first, disk second, so the
+   cradle's one-part sentence is stable. `Presence` memoizes one pass's answers and treats a
+   permission, a timeout or a device error as **present**, because none of those is an observation
+   of absence. Corrected 2026-08-21: the `false` arm is `NotFound`, `NotADirectory`, `InvalidInput`
+   and `InvalidFilename`, not `NotFound` alone — a path whose parent component is a regular file,
+   or one the OS will not even accept, is a definite negative, and folding those into "present"
+   swallowed a device that cannot start. `device_rows` now builds **one** `Presence` and threads it
+   through `summary`, which is the sharing the design is written around; it called
+   `Settings::missing` per device, minting a fresh cache each time. `missing()` may block on a
+   stale network mount, so it is not callable from a binding — that rule is in `Presence`'s doc
+   comment, nothing enforces it, and the row-rebuild pass is still on the UI thread.
+4. **Model half DONE.** `Device::parked_at: Option<u64>` (§3.3) — seconds since the Unix epoch, with
+   `now_unix`, `Settings::record_park`, `Settings::discard_park` and `parked_for` (saturating, so a
+   clock that stepped backwards reads as `0` rather than as 584 942 417 355 years). The **writer**
+   is not built: `emu::Link` has no `parked_at` and `write_restore_point` still returns `()`, so
+   nothing calls `record_park` yet. `main.rs`'s `parked` flag reads `parked_at.is_some()`, which is a
+   placeholder carrying its retirement condition — the authority is `Config::may_restore()`, and the
+   window has no `Config`.
+5. **DONE.** `Recipe::check()` gains rule (0) — `Recipe::nothing_chosen()`, which covers all three
+   `Start` variants and not only `FromIpsw` — returning `Verdict::No { why: NOTHING_CHOSEN,
+   fix: None }` (§11.3), so the always-reserved verdict region stops asserting a plan for a firmware
+   nobody has chosen. The old body moved to a private `check_parts()`, which is what
+   `loader_works`/`why_not` call, so a bootloader tooltip stays about the bootloader. It came with
+   one companion fix: rule (2)'s `0x0C` guard now fires whenever `ipodloader2` is *required*, not
+   only when it is selected, because otherwise rule (1)'s fix chained into rule (2)'s refusal.
+   **A second half of that guard was still missing** and was closed 2026-08-21: it matched
+   `Start::FromImage` alone, so a disk out of the **library** — `Start::FromDisk`, carrying the same
+   `fat_type`, and the drives most likely to be `0x0C` because they come off real iPods, which is
+   what the refusal's own text says — verdicted `Ok` for a recipe `install::install_linux` refuses.
+   Both variants are read through one `Recipe::volume_type()` rather than matched twice, for the
+   same reason `nothing_chosen` enumerates all three in one place, and
+   `every_fix_resolves_the_thing_it_is_offered_for` now sweeps five `Start`s rather than three.
+6. **`Create` clears `Device::boot_instructions` when `oses` or `loader` changed** (§12.3). One line
+   in `Create`, plus `Settings::set_boot_shape` owning the rule and `Device::boot_shape` storing what
+   was compared — it is what makes the one-bar-across-three-operating-systems claim true rather than
+   conditional. `compose::BootShape` and `Recipe::shape()` are **DONE**; the `settings.rs` half is
+   not — no `Device::boot_shape`, no `Settings::set_boot_shape`, and none of the three named tests.
+   The trap for whoever finishes it is `Settings::as_device`: without
+   `boot_shape: existing.and_then(|d| d.boot_shape.clone())` beside the `boot_instructions` and
+   `parked_at` lines, every `run_device`/`remember_as` round trip loses the shape and the next
+   `Create` throws away a good denominator.
+   **The `main.rs` half is done** (2026-08-21): `DeviceRow.state` read `never started`, which is a
+   claim about history from a field that is a progress-bar **denominator** — a device booted a dozen
+   times renders it the moment `set_boot_shape` clears the number. It reads `no boot time learned
+   yet`. It is asserted against `device_rows`' output rather than through the markup, because
+   `DeviceRow.state` is declared at `window.slint:18` and drawn nowhere yet.
+7. **DONE.** `install-linux` uses the fetched `ipodlinux::LOADER` — v2.8.1, 56 912 B, SHA-256 on
+   record — rather than `resources/vendor/ipodloader2/loader.bin` (§11.3), through
+   `ipodlinux::resolve_loader`, with `IPOD_LOADER=` as the override for a build somebody made. That
+   turns a project state into a working path for anybody not working inside this checkout, and
+   deletes a contradiction between two surfaces rather than reconciling them. **It also changes
+   which bootloader people get**: every number in research/17 was measured on the vendored 2.9.0d,
+   and the command now installs 2.8.1.
+   **The loader half is done and the command still cannot complete**, and item 7 must not be read as
+   claiming otherwise: `install::install_linux` refuses at a firmware-partition packing step —
+   `no room: moving the later images by 57344 bytes needs 13952512 of a 13895680-byte partition` —
+   on every drive tried, one built by `make-disk` and one off real hardware. It predates this
+   change and the arithmetic says the partition is packed to within one 512-byte sector, so no
+   bootloader of any size fits. `KNOWN-BUGS.md` carries it, and the `0x0C` refusal in `install.rs`
+   dropped its *"and works"* on 2026-08-21 for the same reason.
 8. **The client-height reader exists**: `NSScreen.visibleFrame` on macOS (`objc2-app-kit 0.3.2` is
    already in the tree), `SPI_GETWORKAREA` on Windows, nothing on Wayland — and §9.6's too-short
    boolean is computed from the **measured** `Window::size()` on `Resized`, `Moved` and
-   `ScaleFactorChanged` (§16.1).
-9. **`build.rs` emits every ratio and geometry constant from one Rust source** into both a generated
-   `.slint` and a Rust `const` module (§16.9) — including `HERO_PHYS_1X`, `BEZEL_RATIO`, `CHROME_MIN`
-   and `min-width`.
+   `ScaleFactorChanged` (§16.1). **Done 2026-08-21**, as `client_height.rs` + `fit.rs`. Two notes
+   the doing added: *already in the tree* is not *importable* — `objc2-app-kit` had to be declared
+   as a direct dependency (it costs no extra compilation, only a `use` that resolves); and winit
+   hands `ns_screen()` over **unretained**, so the pointer is retained before the first message
+   send. `k` is decided from the display and the too-short boolean from the window — see §16.10's
+   `IPOD_LAYOUT` note for what taking the smaller of the two did instead.
+   **Corrected 2026-08-21**: it was written that way and built the other way. `fit::Moment` carried
+   one `client_logical` per variant and `Fitter::apply` fed that single value to both answers, so on
+   three of the four moments — `Shown`, `Moved`, `ScaleFactorChanged` — the boolean came from the
+   **display**. Drag the bottom edge up and then move the window and it reported room the window did
+   not have, which is §16.1's own failure with the shelf drawn past the bottom edge. Each variant
+   now carries `display_logical` **and** `window_logical`, `Resized` carries only the window
+   (a drag is not evidence about a screen), and
+   `fit::the_display_decides_k_and_the_window_decides_the_warning` is the case that could not be
+   expressed before.
+9. **`build.rs` emits every ratio and geometry constant from one Rust source** into a generated
+   `.slint` (§16.9) — including `HERO_PHYS_1X`, `BEZEL_RATIO`, `CHROME_MIN` and `min-width`.
+   **Done 2026-08-21**, as `tools/ipod-gui/src/geometry.rs`. *(Not "and a Rust `const` module": the
+   Rust `const` module is the source, and `build.rs` compiles that same file. See §16.9.)* The
+   markup's hand-written geometry is gone and so is `main.rs`'s hand-copied test block — which had
+   already drifted, carrying a second copy of `SCREEN_W`/`SCREEN_H` at the pre-§6.6 values inside
+   the very test that claims to verify the drawing.
 10. **`the_panel_is_an_exact_integer_number_of_device_pixels` is written and proved to fail** — twice,
     once against the old `0.4866 / 0.3672` pair and once at `sf = 2.75, k = 7`, which it does today
-    (§16.10).
+    (§16.10). **Done 2026-08-21**, in `geometry.rs`, sweeping `SF_SWEEP × 1..=K_MAX` — 160 cases —
+    and it found a real one immediately. `next_up_until` stepped **`f64::next_up`** across an
+    **f32** grid: an f64 ULP is a relative 2⁻⁵², about 2⁻²⁹ of one step of the grid it was crossing,
+    so sixty-four of them could not move the value and the loop always handed back exactly what it
+    was given. It read as working because 120 of the 160 cases are already exact; the other 40 —
+    every `sf` of 1.5, 1.75, 2.25, 3.0, 3.5 and some of 2.75 — drew the panel a fraction of a pixel
+    **short** of `k × 320`, which is a framebuffer column thrown away wherever the renderer
+    truncates rather than rounds. Stepping in f32 fixes all 40, worst overshoot 0.00015 px. The
+    ratio arm is its own test, `the_old_ratios_would_draw_the_panel_off_its_own_framebuffer`, which
+    hands the checker the pair that shipped and requires it to reject them — because
+    `panel_logical` does not read the ratios at all, so the sweep alone could never catch a
+    re-measurement gone wrong.
 11. **The `accessibility` feature is turned on** and `cargo tree | grep accesskit` returns something
-    (§16.7). §16.8's shortcut suppression keys on `AccessibleRole::TextInput`, so this is a
-    prerequisite for the keyboard as well as for the screen reader.
+    (§16.7). **Done 2026-08-21.** *(The stated reason was corrected in the doing: §16.8's shortcut
+    suppression does **not** key on `AccessibleRole::TextInput` — it is a root `FocusScope` and a
+    focused `TextInput` consuming character keys ahead of it, which works with the feature off. The
+    feature is a prerequisite for the announced half, not for the keyboard. See §16.7.)*
 12. **The Rail exists before the first button is wired.** Every action about to be reconnected — the
     centre button, Create, Fetch, Build, Install — needs somewhere to narrate and somewhere to fail,
     and principle 5 forbids the easy answer. Wire `on_start_device` after the Work page, or the first
     failure lands in stderr again exactly as it does today.
 13. **`Settings::save()` acquires callers**: **at first-run step 1**, after every completed first-run
     step, after any Composer `Create` or `Save`, after any Parts add or remove, and on close (together
-    with `record_boot()` and the remembered geometry). `Settings::load()` already calls
-    `seed_resources()`, which mutates and is never written back — a list that puts back what you
-    removed, every launch — and the same save points fix it.
+    with `record_boot()` and the remembered geometry). `Settings::load()` called `seed_resources()`,
+    which mutates, and never wrote the answer back — a list that put back what you removed, every
+    launch — and the same save points fix it.
+    **Half done 2026-08-21, and the half is narrower than it first was.** `seed_resources` returns
+    whether it changed anything and **`Settings::load_and_seed`** persists it; `Settings::load`
+    stays a pure read. The first attempt put the write inside `load`, and that is a save on a path
+    nobody asked to save on: `ipod-boot` calls `load` from five places that only want the default
+    drive, one of which is `<recipe> --print`, documented as *showing the command line and running
+    nothing*. It rewrote the operator's settings, and `render` is generated from the model — so
+    every comment they had added went with it. Two more things fixed with it: `save` writes through
+    a `.part` and a rename, because `fs::write` truncates first and a process that died between the
+    two left a device list that was half a file; and it returns `io::Result`, because a read-only
+    home used to be swallowed and `ipod-boot setup` printed *"Saved to …"* about a file it had not
+    written. Two constraints nothing enforces: `load_and_seed` writes only into a file that already
+    existed, because `migrate_legacy` declines the moment one exists here and a minted file would
+    block a carry-forward for ever; and `migrate_legacy` still has **zero callers**, so when the
+    window wires it, it must run before the first read. The window's own save points are unbuilt.
 14. **`README.md`, `docs/DEVELOPING.md` and `docs/GETTING-THE-FILES.md` are corrected** where they
     describe a window that does not exist: drop-anywhere, the `S` / `D` / `Esc` keys, parking on
     close, `IPOD_LAYOUT`, and the model table's **197** rows against the README's 198.
+15. **§9.5's replacement pane, and it became load-bearing when item 9 landed.** `min-height` moved
+    from a hand-written `860px` to `Geometry.min-height` = **400**, which is right — §9.6 argues a
+    window minimum is a floor and not a fit, and 860 was a minimum no 1280 × 800 display can
+    satisfy, so it guarded the drag and never the display class §9.5 is actually about. But the
+    boolean that is supposed to replace the layout below the threshold is declared at
+    `window.slint:189` and **read nowhere**: `too-short` is computed correctly, pushed in on every
+    change, and drawn by nothing. So between 400 and ~810 logical the 655.751 px device and the
+    caption row carrying `write_target()` are positioned past the bottom edge and drawn there — the
+    exact state §16.1 describes, with the warning off screen. Neither the old floor nor the new one
+    catches it; the old one only made it harder to reach by dragging. **Nothing in the tests can
+    fail on this**, because `geometry::the_minimum_height_is_a_floor_not_a_fit` asserts the floor is
+    low and nothing asserts anything catches the window when it gets there. Until the pane exists,
+    that is the state of it.
+16. **Parts shows `Resource::Bootloader`.** `resource_rows` renders four groups — iPods, Apple
+    firmware, Software, Disks — and drops the fourth kind on the floor, which is §3's own named
+    complaint and §11.4's six-group requirement. `Settings::parse` will produce one from
+    `res.N.kind = bootloader`, and item 2 gave it an honest provenance column that nothing can
+    display. **A clean-looking Parts page is not evidence that no bootloader is filed**, and that
+    is the sentence this item exists to delete.
 
 **Conditional on §17.Q10**: `Stats::enters_by_core: [[u64; WATCHED.len()]; 2]`, if the run loop can
 attribute an arrival to a core. Until it is answered, §12.8 draws one column.

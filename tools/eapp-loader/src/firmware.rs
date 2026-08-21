@@ -515,6 +515,34 @@ pub fn cached(dir: &std::path::Path, verify_hashes: bool) -> Vec<Cached> {
     out
 }
 
+/// What a cached file's state says about where it came from, or `None` when it is not something to
+/// file at all.
+///
+/// **This is what makes the default listing path honest.** [`cached`] hashes nothing unless it is
+/// asked to, and says so in its own doc comment; a window that filed its results as "fetched and
+/// verified" would be claiming a check the program explicitly declined to perform. `SizeOk` maps to
+/// [`crate::settings::Verification::SizeOnly`] and never to `Sha256`.
+///
+/// `Corrupt` maps to `None`, and that means **do not file it** — not "file it as unknown". A
+/// truncated download is not a resource.
+///
+/// It lives here rather than in `settings.rs` because this module already depends on that one, and
+/// the arrow has to stay one-way.
+pub fn provenance(state: CacheState) -> Option<crate::settings::Provenance> {
+    use crate::settings::{Provenance, Verification};
+    match state {
+        CacheState::Verified => Some(Provenance::Fetched {
+            verified: Verification::Sha256,
+        }),
+        CacheState::SizeOk => Some(Provenance::Fetched {
+            verified: Verification::SizeOnly,
+        }),
+        CacheState::Corrupt => None,
+        // Somebody's own `.ipsw` sitting in the cache directory.
+        CacheState::Unknown => Some(Provenance::Provided),
+    }
+}
+
 /// Total bytes held in a cache directory.
 pub fn cache_bytes(dir: &std::path::Path) -> u64 {
     cached(dir, false).iter().map(|c| c.bytes).sum()
@@ -538,6 +566,38 @@ pub fn remove(paths: &[std::path::PathBuf]) -> Result<u64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The listing path hashes nothing by default**, so what it files must not claim a hash.
+    ///
+    /// The match is exhaustive on purpose: a fifth `CacheState` will not compile until somebody has
+    /// decided what it says about where the file came from.
+    #[test]
+    fn every_cache_state_maps_to_one_provenance_and_size_ok_is_not_verified() {
+        use crate::settings::{Provenance, Verification};
+        assert_eq!(
+            provenance(CacheState::Verified),
+            Some(Provenance::Fetched {
+                verified: Verification::Sha256
+            })
+        );
+        assert_eq!(
+            provenance(CacheState::SizeOk),
+            Some(Provenance::Fetched {
+                verified: Verification::SizeOnly
+            }),
+            "a size check was filed as a hash check"
+        );
+        assert_eq!(
+            provenance(CacheState::Corrupt),
+            None,
+            "a truncated download is not a resource"
+        );
+        assert_eq!(provenance(CacheState::Unknown), Some(Provenance::Provided));
+        assert!(
+            !provenance(CacheState::SizeOk).unwrap().is_verified(),
+            "the default listing path claimed a verification it did not perform"
+        );
+    }
 
     /// NIST's vectors, plus the multi-block case the padding gets wrong if `span` is miscomputed.
     /// **A hash that is subtly wrong fails silently**, so these are the whole safety net.

@@ -6,8 +6,7 @@ fn the_wizard_can_fetch_apple_firmware_for_a_video() {
         let rel = eapp_loader::firmware::CATALOGUE
             .iter()
             .filter(|r| families.contains(&(r.updater_family as u32)))
-            .filter(|r| r.served && r.is_verifiable())
-            .next_back()
+            .rfind(|r| r.served && r.is_verifiable())
             .unwrap_or_else(|| panic!("{label}: no served, verifiable release"));
         println!("  {label} -> {} ({} bytes)", rel.file, rel.bytes);
         let got = eapp_loader::firmware::download(rel, &eapp_loader::firmware::cache_dir())

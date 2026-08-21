@@ -1647,14 +1647,19 @@ fn main() {
                             _ => 0,
                         };
                         let mut j = i + 1;
-                        while stride != 0 {
-                            match (run_of(&rs[j - 1]), rs.get(j).and_then(run_of)) {
-                                (Some((pb, _)), Some((nb, nl)))
-                                    if nl == halfwords && nb as i64 - pb as i64 == stride =>
-                                {
-                                    j += 1
+                        // `stride` is decided above and never moves, so this is a guard rather than
+                        // a loop condition — written as `while` it reads as one, and under
+                        // rustc 1.95 `clippy::while_immutable_condition` is a deny-level error.
+                        if stride != 0 {
+                            loop {
+                                match (run_of(&rs[j - 1]), rs.get(j).and_then(run_of)) {
+                                    (Some((pb, _)), Some((nb, nl)))
+                                        if nl == halfwords && nb as i64 - pb as i64 == stride =>
+                                    {
+                                        j += 1
+                                    }
+                                    _ => break,
                                 }
-                                _ => break,
                             }
                         }
                         let n = j - i;
@@ -2286,8 +2291,9 @@ fn main() {
             );
             for (lr, p) in m.print_sites.iter() {
                 let mut txt = String::new();
-                let mut a = *p;
-                for _ in 0..48 {
+                // The address IS the counter, so it says so: `0..48` counted nothing and `a` was
+                // walked by hand beside it.
+                for a in (*p..).take(48) {
                     let c = m.mem.read8(a);
                     if c == 0 {
                         break;
@@ -2297,7 +2303,6 @@ fn main() {
                     } else {
                         '.'
                     });
-                    a += 1;
                 }
                 println!("  from {lr:#010x}  str {p:#010x}  {txt:?}");
             }

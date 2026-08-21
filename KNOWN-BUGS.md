@@ -80,6 +80,46 @@ for precisely this reason.
 the flat binary, and that base is inferred rather than read. A run logging reads of `0xc5000184` is
 what settles it, and until it lands this is a decode that fits, not a measurement.
 
+## `install-linux` cannot fit a bootloader into a full firmware partition — 2026-08-21
+
+`ipod-boot install-linux` refuses, before writing anything, with
+
+```text
+no room: moving the later images by 57344 bytes needs 13952512 of a 13895680-byte partition
+```
+
+on every drive it has been tried against — one built here by `ipod-boot make-disk`, and one off real
+hardware. **Reported, not independently reproduced**; the numbers above are one measurement and the
+recipe to re-check it is `ipod-boot install-linux` against a drive of either kind.
+
+The arithmetic in `install::install_linux` is coherent with them, which is what makes the report
+worth recording rather than discounting. `osos` is written at `entry_offset` inside its own slot,
+anything after it has to shift by `delta`, and the shift has to end inside the partition:
+
+```rust
+delta  = end - next.dev_offset + FW_SECTOR;
+needed = last.dev_offset + align(last.len) + delta;
+if needed > part_sectors * 512 { … }
+```
+
+`13895680 = 27140 × 512`, `delta = 57344 = 112 × 512`, and the overshoot is `56832 = 111 × 512` —
+one sector less than `delta`. So on these drives the last image already ends **512 bytes** short of
+the partition's end: the firmware partition is packed to within one sector and there is no room to
+push anything into it at all. That is a property of how the partition is laid out, not of the
+bootloader's size — the vendored 2.9.0d is 57 676 B against the release's 56 912 B, so replacing one
+with the other moves the shortfall by 512 bytes and does not remove it.
+
+**The consequence to say out loud**: `compose.rs` will happily verdict an iPodLinux recipe `Ok`, and
+the command that would build it cannot complete. The `0x0C` refusal in `install.rs` used to end
+*"A drive built by `ipod-boot make-disk` from an .ipsw is 0x0B and works"*; the last two words were
+removed on 2026-08-21 because nobody can currently demonstrate them. They go back when this is
+fixed.
+
+**What would settle it**: run it against a `make-disk` drive with `RUST_LOG` off and read the
+report's `firmware partition at …, N image(s)` line, which prints before the refusal. If the
+partition really is packed to one sector, the fix is to grow the firmware partition in `make-disk`
+rather than to shrink the payload.
+
 ## The cold boot takes longer in simulated time than hardware does — MOSTLY EXPLAINED 2026-08-18
 
 **It was the clock, and the clock was ours.** `--clock` sets how many interpreter instructions make

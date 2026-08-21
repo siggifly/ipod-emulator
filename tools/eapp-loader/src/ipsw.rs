@@ -114,8 +114,10 @@ impl<'a> BitReader<'a> {
             self.acc |= (b as u32) << self.bit;
             self.bit += 8;
         }
-        let v = self.acc & ((1u32 << n) - 1).max(if n == 0 { 0 } else { 0 });
-        let v = if n == 0 { 0 } else { v };
+        // `n == 0` is a real call — a Huffman table with one symbol asks for zero bits —
+        // and `1u32 << 0 - 1` is a mask of nothing, so it is spelled out rather than
+        // arrived at.
+        let v = if n == 0 { 0 } else { self.acc & ((1u32 << n) - 1) };
         self.acc >>= n;
         self.bit -= n;
         Ok(v)

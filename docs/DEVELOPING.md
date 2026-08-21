@@ -57,9 +57,16 @@ because a recipe with an input you cannot see in its command line is one you can
 
 `tools/ipod-boot/README.md` has the full set.
 
-**Pin your inputs when you compare two builds.** `FLASH=`, `DISK=`, `BUDGET=` and `WORKDISK=`
+**Pin your inputs when you compare two builds.** `FLASH=`, `DISK=`, `BUDGET=` and `WORKDISK=`,
 explicitly, in both arms. A comparison that lets the recipe resolve its own paths is comparing two
 machines as well as two builds, and this project has drawn a wrong conclusion from exactly that.
+
+**`IPOD_LOADER=` is not one of them, and it looks like one.** It is read by `install-linux` and by
+nothing else — a boot recipe such as `ipod-boot loader` is `--osos-from-disk`, so it runs whatever
+bootloader is already in the drive's firmware partition and never consults the variable. Setting it
+and re-running a boot changes nothing, silently. Pinning the bootloader means **rebuilding the drive
+with it and then booting that drive**, which matters since `install-linux` stopped using the locally
+built `iPL 2.9.0d` and started fetching the v2.8.1 release.
 
 ## Building drives
 
@@ -80,6 +87,19 @@ Installs never write to the source image.
 hardware does. `install-linux` does the whole iPodLinux install rather than half of it — the
 distribution is **five** directories and a drive carrying only `boot/vmlinux` boots the kernel
 completely and then has nothing to execute.
+
+**`ipodloader2` is fetched and verified**, like everything else here: v2.8.1, 56 912 B, SHA-256 on
+record, cached beside Apple's firmware and Rockbox. It used to be built from
+`resources/vendor/ipodloader2` — a directory that is gitignored, so iPodLinux could be installed only
+by somebody working inside this checkout, and the failure arrived *after* a 101 MB download. The
+loader is now resolved before that download, and the command prints which one it used.
+
+`IPOD_LOADER=/path/to/loader.bin` uses one you built instead. It is never second-guessed: if it names
+something that is not a file, that is an error rather than a quiet fall-through to the release. The
+report marks it `not hashed` — this project holds no hash for a build somebody made. **The numbers in
+[research/17](../research/17-the-boot-matrix.md) were measured on the vendored `iPL 2.9.0d`**, which
+is newer than any release. Reproducing them is two steps, not a flag — `IPOD_LOADER=... ipod-boot
+install-linux` to rebuild the drive, then `ipod-boot loader` against it.
 
 The boot menu it writes names only what is actually on the volume, so a drive with Apple's software
 and Rockbox already on it comes out triple-boot.
@@ -117,11 +137,33 @@ userland around 20 G.
 | `--stop-when-idle=N` | end the run once nothing new is reached |
 | `--restore=FILE` | resume a saved machine — and say so if nothing is mapped at its program counter |
 
-`IPOD_LAYOUT=1` makes the **window** print the measurement its size constants are derived from:
+`IPOD_LAYOUT=1` makes the **window** print the measurements its size constants are derived from, to
+stderr — once at startup and again whenever the fit changes. The constant table is printed once; the
+measurements repeat.
 
 ```
-layout: window 1100x830 @2 ppp · device area 1100x714 · chrome 116 px · scale x2
+── IPOD_LAYOUT ────────────────────────────────────────────
+  work area   VisibleFrame — the usable height of the display this window is on, …
+  display     923.0 logical px usable
+  window      2360 x 1692 physical, 1180.0 x 846.0 logical, scale 2
+  fit         k = 2, body 655.751 logical (1311.502 physical), panel 320.0000 x 240.0000
+  needs       809.8 logical / 1619.5 physical for k = 2
+  glass       661.0 x 501.0 physical, 10.49 px surround on all four sides
+  inset       0.05186 of body height at the sides, 0.05250 at the top
+  ── the constants, from src/geometry.rs ──
+  body-aspect              0.5917
+  screen-w                 0.48799
+  …
 ```
+
+`k` is the whole-number framebuffer scale: at `k = 2` a 320 × 240 frame is drawn 640 × 480 physical,
+exactly, with no resampling. `display` is `NSScreen.visibleFrame` on macOS and `SPI_GETWORKAREA` on
+Windows; everywhere else no work area is published and the line says so rather than guessing.
+
+**The example above is real output from this machine** (2026-08-21). The one this replaced —
+`layout: window 1100x830 @2 ppp · device area 1100x714 · chrome 116 px · scale x2` — was a format
+nothing ever printed: the flag was documented here and implemented nowhere, and `grep -rn
+IPOD_LAYOUT tools/` returned nothing until `docs/GUI.md` §16.10 called it out.
 
 **[NEXT.md](../NEXT.md) lists every instrument with a note on how each one lies.** That section is
 not decoration: eight of them have reported an absence they could not have observed. Before
