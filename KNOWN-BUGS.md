@@ -14,52 +14,60 @@ belongs here.
 
 ---
 
-## The window opens at its minimum height, not its preferred one
+## ~~The window opens at its minimum height, not its preferred one~~ — FIXED 2026-08-21
 
-**Every launch, on every platform, since `11e1ea6`.** The window is created at 1180 x 846, and after
-the first layout pass Slint resizes it to 880 x 400 — exactly `min-width` x `min-height` — where the
-88 px shelf carrying `write_target()` is drawn past the bottom edge. It settles there; it does not
-oscillate.
+**The window never did that, and the report this replaces was written off a trace that printed two
+moments on adjacent lines.** Measured from outside the process with the accessibility API — the real
+`NSWindow` frame, not the program's opinion — the window is **1180 x 878 outer** at 0.5 s, 1 s, 2 s,
+3 s and 5 s after launch, in every run. 878 outer is 846 client plus a 32 px title bar: the preferred
+size, held. **It reads 1180 x 878 with `MIN_HEIGHT` set to 846 as well** — measured, because that was
+the change everyone expected to be the fix. All raising the minimum does is stop the third block being
+*printed*: the dump is gated on the fit changing, and the only term a resize moves is the too-short
+boolean.
 
-Reproduce with `IPOD_LAYOUT=1 ipod-emulator` and read the `window` lines:
+**What was really wrong is smaller and worse.** Slint clamps a not-yet-existing window's size *up* to
+the declared minimum — `update_window_properties` runs before `set_visible`, the adapter's size is
+still 0 x 0, and the clamp writes `min-width x min-height` into the pending window attributes. So the
+window is **created** at 880 x 400 and resized to 1180 x 846 **before it is ever mapped**. Both sizes
+then arrive as two queued `Resized` events in creation order, and this program computed `k` and the
+too-short boolean from the first one — a size no window was ever on screen at. `too-short` went true
+on every launch. Nothing reads that boolean today (GUI.md §20 item 15), so it had no drawn effect;
+it was wrong state published by the program, and §9.5's pane would have read it.
+
+The trace made it look like a resize because `dump_layout` printed `window` — Slint's **cache**,
+which the winit event filter runs one event ahead of — beside a fit computed from a different source.
+The `880 x 400` line was the creation size printed against a cache that had already caught up.
+
+**The fix**, in `tools/ipod-gui/src/main.rs`: `own_height_logical` asks
+`winit::Window::inner_size()`, the platform, now — not the `Resized` payload (a size the window
+*had*) and not `slint::Window::size()` (a cache that is stale in both directions inside the filter).
+`live_scale` takes the scale factor from the same place, so both halves of a logical height come from
+one moment. `MIN_HEIGHT` is untouched, and raising it was never the fix: at 846 the third block
+merely stops being *printed*, because the dump is gated on the fit changing.
 
 ```
-window   0 x 0 physical            — before the event loop
-window   2360 x 1692, 1180 x 846   — created at the preferred size
-window   1760 x 800,   880 x 400   — and resized to the minimum
+window      2360 x 1692 physical — Slint's cached size, which inside the event filter is one event old
+platform    2360 x 1692 physical, 1180.0 x 846.0 logical at scale 2 — winit::Window::inner_size(), asked now
+measured    846.0 logical — the height the fit below was computed from
 ```
 
-**Root cause, as far as it is established.** `min-height` is the only thing holding the window open:
-set `MIN_HEIGHT` to 846 and the third line does not happen. So Slint is applying something derived
-from the root content — which contributes no preferred size of its own, every element below the
-window being bound `100%` or positioned absolutely — and the window minimum is what the result gets
-clamped to.
+`IPOD_LAYOUT=1` prints all three sizes now, and `measured` is compared against `platform` rather than
+against the cache — so a difference on that line means a defect instead of an expected lag.
 
-**What is NOT the cause**, each tested and reverted:
-
-- the winit event-filter hook (the collapse happens with it disabled);
-- `preferred-width`/`preferred-height` on `client`, and on the `FocusScope` that is the window's own
-  direct child — neither changes anything, so an element bound `100%` is not the whole story;
-- anything in this program calling `set_size`: the only two calls are inside `#[cfg(test)]`;
-- Phases 3 and 4. **The bug predates them** — commit `11e1ea6` built in a worktree collapses
-  identically.
-
-**How it got in.** `MIN_HEIGHT` was 860 and became 400, for a good reason: GUI.md §9.6 showed that
-no 1280 x 800 display can satisfy 860, so the minimum guarded a drag case and nothing on the display
-class §9.5 exists for. Lowering it was right. What nobody knew was that the old value had been
-holding the window open by accident, so the change turned an invisible dependency into the default
-state.
-
-**Why no test caught it, and this is the part worth keeping.** The suite is green — 482 tests — and
+**Why no test caught it, and this is the part worth keeping.** The suite was green — 482 tests — and
 `the_column_terms_sum_to_the_declared_chrome`, `the_too_short_state_is_an_input_with_nothing_reading_
-it` and the whole `fit` module all pass. Every one of them checks arithmetic about a window. None
-launches one. It was found by running the program and reading `IPOD_LAYOUT=1`, which is the third
-time in this project that a defect survived a green suite by living in the gap between what the code
-computes and what the platform does with it.
+it` and the whole `fit` module all passed. Every one of them checks arithmetic about a window. None
+launched one. The guard is `the_fit_is_computed_from_the_size_the_platform_reports`
+(`tools/ipod-gui/tests/startup_fit.rs`), which launches the real binary, reads `IPOD_LAYOUT=1`, and
+**resizes the window from outside the process** by an amount chosen after it is running. That last
+part is not decoration: an earlier version compared the program only with itself, and a
+`own_height_logical` replaced by a constant — no platform call at all — passed it while the binary
+believed 846 with the window 700 px tall. Five breaks were each proved to make it red, including that
+one.
 
-**Related but not the same**: GUI.md §20 item 15 records the too-short state having no §9.5 pane, and
-describes it as reachable by dragging the window short. It is not reachable — it is where the window
-starts.
+**Related but not the same**: GUI.md §20 item 15 records the too-short state having no §9.5 pane. It
+is reachable — on a 1280 x 800 display, which gives 735 usable logical px against the 809.8 the iPod
+at 1:1 needs, at every scale factor. That is a real open defect and this was never it.
 
 ## ~~A resumed machine was dead, and looked like one that ignored input~~ — FIXED 2026-08-20
 

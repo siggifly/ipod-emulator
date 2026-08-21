@@ -1287,15 +1287,19 @@ refusal a curious user hits.
 
 ### 9.5 And a fifth, because the alternative is the 560 px bug again
 
-> **Before this pane is built, one measured fact about the boolean.** `too_short` goes **true on
-> every launch, for one or two events, on a display that is comfortably tall enough.** Slint's own
+> **This pane needs no startup suppression, and the note here used to say it did.** `too_short` did
+> go true on every launch, for one event, on a display comfortably tall enough: Slint's
 > `adjust_window_size_to_satisfy_constraints` clamps a not-yet-known size up to the declared minimum,
-> so the first `Resized` carries exactly `MIN_HEIGHT` — measured with `IPOD_LAYOUT=1`, which prints
-> `measured 400.0 logical … too short for 1:1` immediately before a second event at 846. Nothing
-> reads the boolean today so nothing is visible; the moment this pane exists it will **flash on every
-> start** unless the first `Resized` whose height equals `MIN_HEIGHT`, before the window has ever
-> reported a non-zero size, is suppressed. Written down while the observation is fresh rather than
-> rediscovered as a flicker.
+> so the window is *created* at `MIN_HEIGHT` and the first `Resized` carries that — 400, a size the
+> window is resized away from before it is ever mapped. This note prescribed suppressing that first
+> event. **Do not build that**: the height is now taken from `winit::Window::inner_size()` rather
+> than off the `Resized` payload, so the first answer is already the right one and a suppression rule
+> would swallow a legitimate event. Measured with `IPOD_LAYOUT=1`, 2026-08-21: one on-screen block at
+> startup, `measured 846.0`, no *too short for 1:1*.
+>
+> The guard is `the_fit_is_computed_from_the_size_the_platform_reports`
+> (`tools/ipod-gui/tests/startup_fit.rs`), which launches the real window — the only kind of test
+> that can see this at all.
 
 **The display is too short to show the panel at 1:1.** This is a designed state, not an overflow, and
 it is reachable on real hardware people own — 1280 × 800 and 1366 × 768 can never satisfy it at any
@@ -1384,8 +1388,14 @@ changes:
   it the same shape as `set_outer_position`: a two-platform fact, stated in Reference rather than
   pretended.
 - **Then stop relying on the prediction entirely.** The too-short boolean is computed from
-  `Window::size()` — the window we actually got — and re-computed on `Resized`, `Moved` and
-  `ScaleFactorChanged`. The table below becomes documentation of what to expect, not a mechanism.
+  `winit::Window::inner_size()` — the window we actually got, asked of the platform — and re-computed
+  on `Resized`, `Moved` and `ScaleFactorChanged`. The table below becomes documentation of what to
+  expect, not a mechanism. **Not `slint::Window::size()`, which this line used to name**: the winit
+  event filter runs *before* Slint applies the event that updates that cache
+  (`event_loop.rs:192-194` calls the filter, `:222` writes the cache), so inside the filter it is one
+  event old — and not the `Resized` payload either, which at startup is the size Slint's minimum
+  clamp gave the window at creation. Three sizes, one of them true at the moment the question is
+  asked; `IPOD_LAYOUT=1` prints all three so they can be compared.
 
 | display | sf | client, Dock hidden | k | body, logical | needs | verdict |
 |---|---|---|---|---|---|---|
@@ -3034,6 +3044,7 @@ glyphs, then two more within the hour.
 | **`a_volume_type_discovered_later_is_not_a_change_to_what_a_device_boots`** | §12.3: `BootShape` excludes `Start`, so a background read completing does not throw away a denominator |
 | **`the_loader_override_wins_and_an_override_that_points_at_nothing_is_an_error`** | §20 item 7: `IPOD_LOADER=` is honoured or refused, never quietly ignored |
 | **`nothing_reaches_for_the_vendored_loader_any_more`** | §20 item 7: no `.rs` under `tools/` joins `resources/vendor/ipodloader2`, so the path that worked only inside this checkout cannot come back |
+| **`the_fit_is_computed_from_the_size_the_platform_reports`** | §9.5 / §9.6 / §16.1, and it is the only test in this workspace that **launches the window**. Every other geometry test checks a number *about* one, and the headless backend cannot stand in: `i-slint-backend-testing` applies no minimum clamp, so it reads the same whether or not the defect is present. It reads `IPOD_LAYOUT=1`, and it **drives the window from outside the process** — a size this program cannot predict, because the two assertions that only compare the program with itself are both satisfied by a constant |
 
 **`IPOD_LAYOUT=1` exists now** (2026-08-21). It was documented in `docs/DEVELOPING.md` and
 implemented nowhere — `grep -rn 'IPOD_LAYOUT' tools/` returned nothing — so it was built rather than
@@ -3045,7 +3056,9 @@ display height, the window, the fit, the threshold, the glass, the inset, and ev
 ── IPOD_LAYOUT ────────────────────────────────────────────
   work area   VisibleFrame — the usable height of the display this window is on, …
   display     923.0 logical px usable
-  window      2360 x 1692 physical, 1180.0 x 846.0 logical, scale 2
+  window      2360 x 1692 physical — Slint's cached size, which inside the event filter is one event old
+  platform    2360 x 1692 physical, 1180.0 x 846.0 logical at scale 2 — winit::Window::inner_size(), asked now
+  measured    846.0 logical — the height the fit below was computed from
   fit         k = 2, body 655.751 logical (1311.502 physical), panel 320.0000 x 240.0000
   needs       809.8 logical / 1619.5 physical for k = 2
   glass       661.0 x 501.0 physical, 10.49 px surround on all four sides
@@ -3056,6 +3069,19 @@ That is §6.6's operator row and §9.6's `923` measured rather than asserted —
 the one real defect in the wiring: with `k` decided from `min(window, display)`, the size winit
 reports during window creation dragged `k` down to 1 and raised the too-short flag before a later
 event corrected it. `k` is decided from the display; the too-short boolean from the window.
+
+**`window`, `platform` and `measured` are three lines because they are three different sizes**, and
+printing two of them as one is what turned a real defect into a bug report for a defect that does not
+exist. `window` is Slint's cache; `platform` is the platform, asked now; `measured` is the height the
+fit was computed from. For two revisions the block printed the first and the third, so at startup it
+read as *too short for 1:1* beside a window comfortably tall enough and then the reverse one event
+later — which four separate investigations read as *"the window collapses to 880 × 400"*. **It never
+did.** Measured from outside the process with the accessibility API, the window is 1180 × 878 outer
+from 0.5 s to 5 s after launch and at no point anything else; the 880 × 400 was the *creation* size
+printed against a stale cache. The real defect underneath was that the fit was computed from that
+creation size, and it is fixed (§9.5's box, §9.6). `measured` is now compared against `platform`
+rather than against `window`, so a difference printed on that line means a defect rather than the
+one-event lag the cache always has.
 
 **And that fix was half-made**, which is worth recording because the prose above was written as
 though it were whole. Splitting the two inputs was done in `main.rs`, where `ceiling_logical` reads
@@ -3462,7 +3488,7 @@ In order, because each depends on the one before it.
    dropped its *"and works"* on 2026-08-21 for the same reason.
 8. **The client-height reader exists**: `NSScreen.visibleFrame` on macOS (`objc2-app-kit 0.3.2` is
    already in the tree), `SPI_GETWORKAREA` on Windows, nothing on Wayland — and §9.6's too-short
-   boolean is computed from the **measured** `Window::size()` on `Resized`, `Moved` and
+   boolean is computed from the **measured** `winit::Window::inner_size()` on `Resized`, `Moved` and
    `ScaleFactorChanged` (§16.1). **Done 2026-08-21**, as `client_height.rs` + `fit.rs`. Two notes
    the doing added: *already in the tree* is not *importable* — `objc2-app-kit` had to be declared
    as a direct dependency (it costs no extra compilation, only a `use` that resolves); and winit
@@ -3572,9 +3598,9 @@ In order, because each depends on the one before it.
     `window.slint:125` and the row it names is shelf row 3 now, not a caption. The well **clips**, so
     what a too-short window loses is the *top* of the device rather than the shelf off the bottom —
     strictly better than the shipped failure and **not** the pane; §9.5's primary Row, which is the
-    only start affordance on a 1280 × 800 display, does not exist. And the boolean flips true on
-    every launch from Slint's own startup size clamp — see the note at the head of §9.5, which is
-    what the pane will have to suppress.
+    only start affordance on a 1280 × 800 display, does not exist. The boolean **used** to flip true
+    on every launch from Slint's own startup size clamp; it does not any more, and the pane needs no
+    suppression when it is built — see the corrected note at the head of §9.5.
 16. **Parts shows `Resource::Bootloader`.** `resource_rows` rendered four groups — iPods, Apple
     firmware, Software, Disks — and dropped the fourth kind on the floor, which is §3's own named
     complaint and §11.4's six-group requirement. **`resource_rows` and `ResourceRow` are deleted**

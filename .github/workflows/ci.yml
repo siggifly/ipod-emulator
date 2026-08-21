@@ -37,12 +37,38 @@ jobs:
           - name: windows-x86_64
             os: windows-latest
 
+    # **One test opens a real window** — `tools/ipod-gui/tests/startup_fit.rs`, which measures what
+    # the platform does with it, because the headless backend applies no minimum clamp and reads the
+    # same whether or not the defect is present. The Linux runner has no window server, and this
+    # says so **in advance**, on that leg and no other. The test refuses to infer it: a backend left
+    # unset answers "Could not initialize backend." and is indistinguishable from a headless runner
+    # from the outside, so an inferred skip passed green through a real regression once already.
+    #
+    # This is therefore also the line that says **the Linux leg does not measure that test.** Making
+    # it real means `xvfb-run` plus the runtime GL/X11 libraries — not the `-dev` packages below,
+    # which are link-time only — and then deleting this declaration. Deliberately not done here: it
+    # cannot be verified from the machine this was written on, and an unverifiable CI step is the
+    # instrument shape this repository has been burned by most.
+    #
+    # **macOS and Windows are deliberately NOT declared, and the Windows half is unverified.** Both
+    # runners are believed to have a desktop session; only macOS has been reasoned about with any
+    # confidence. If the Windows leg goes red with "the window refused to open", that is the answer
+    # to a question nobody could answer from here — add `matrix.os == 'windows-latest'` to the
+    # condition below, with the log line as the evidence. A leg that cannot open a window must say
+    # so; it must not be guessed at in either direction.
+    env:
+      IPOD_GUI_NO_DISPLAY: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
+
     steps:
       - uses: actions/checkout@v4
 
-      # eframe on Linux links against the X11 and OpenGL headers. Wayland and xkbcommon are opened
-      # at runtime by `dlopen`, but the dev packages are installed anyway so a future change to
-      # either backend does not turn into a mystery.
+      # Slint's winit backend on Linux links against the X11 and OpenGL headers. Wayland and
+      # xkbcommon are opened at runtime by `dlopen`, but the dev packages are installed anyway so a
+      # future change to either backend does not turn into a mystery.
+      #
+      # `eframe`, which this comment used to name, has not been in the graph since 0.5 — `grep -c
+      # '^name = "eframe"' Cargo.lock` is 0. The package list is unchanged because winit needs the
+      # same headers eframe did.
       - name: Linux display and GL headers
         if: runner.os == 'Linux'
         run: |
@@ -72,9 +98,20 @@ jobs:
 
       # The interpreter, the machine and the loader, the .ipg / eApp / .sinf reader, and the
       # window's own unit tests — the arithmetic of the wheel, the PNG chunk CRCs, the settings
-      # file, the image validator. Nothing opens a display, so this passes on a headless runner.
+      # file, the image validator.
+      # `startup_fit` opens a real window here — see the job's `env:` block for which leg measures
+      # it and which one declares it cannot.
       - name: test the workspace
         run: cargo test --release --workspace
+
+      # **Again, with its output visible.** `cargo test` captures the stderr of a PASSING test, so
+      # everything that test says about what it could and could not measure — the SKIPPED line, the
+      # line naming the resize it drove from outside — is invisible in the step above. Measured, not
+      # assumed: an `eprintln!` in a passing test does not appear without `--nocapture`, which is
+      # how a "read the SKIPPED line in the CI log" instruction came to point at a line that could
+      # never be printed. Two seconds, and the log says which half ran.
+      - name: the window's platform test, with its output visible
+        run: cargo test --release -p ipod-gui --test startup_fit -- --nocapture
 
       # The binaries have to LINK, not merely compile as libraries, and their argument parsing has
       # to survive contact with a shell that is not bash.

@@ -145,7 +145,9 @@ measurements repeat.
 ── IPOD_LAYOUT ────────────────────────────────────────────
   work area   VisibleFrame — the usable height of the display this window is on, …
   display     923.0 logical px usable
-  window      2360 x 1692 physical, 1180.0 x 846.0 logical, scale 2
+  window      2360 x 1692 physical — Slint's cached size, which inside the event filter is one event old
+  platform    2360 x 1692 physical, 1180.0 x 846.0 logical at scale 2 — winit::Window::inner_size(), asked now
+  measured    846.0 logical — the height the fit below was computed from
   fit         k = 2, body 655.751 logical (1311.502 physical), panel 320.0000 x 240.0000
   needs       809.8 logical / 1619.5 physical for k = 2
   glass       661.0 x 501.0 physical, 10.49 px surround on all four sides
@@ -159,6 +161,19 @@ measurements repeat.
 `k` is the whole-number framebuffer scale: at `k = 2` a 320 × 240 frame is drawn 640 × 480 physical,
 exactly, with no resampling. `display` is `NSScreen.visibleFrame` on macOS and `SPI_GETWORKAREA` on
 Windows; everywhere else no work area is published and the line says so rather than guessing.
+
+**`window`, `platform` and `measured` are three different sizes, and that is why they are three
+lines.** `window` is Slint's cache, and this print happens inside the winit event filter, which runs
+*before* Slint applies the event that updates it — so during a resize it is one event behind, and it
+is the only one of the three that is ever wrong. `platform` asks winit, now. `measured` is the height
+the fit was actually computed from, and it is compared against `platform`: a difference printed there
+is a defect, not a lag. Printing only the first and the last is what once produced a bug report
+titled *"the window opens at its minimum height"* for a window that had never been anything but
+1180 × 846 (`KNOWN-BUGS.md`).
+
+**A block appears only when the fit changes**, and the only term an ordinary resize moves is the
+too-short boolean — so dragging the bottom edge between two heights that are both tall enough prints
+nothing. No output is not the same as no events.
 
 **The example above is real output from this machine** (2026-08-21). The one this replaced —
 `layout: window 1100x830 @2 ppp · device area 1100x714 · chrome 116 px · scale x2` — was a format

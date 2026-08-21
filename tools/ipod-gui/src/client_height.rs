@@ -140,6 +140,25 @@ fn measure(_window: &slint::Window) -> Option<f64> {
     None
 }
 
+// ── The window's own size, from the platform ────────────────────────────────────────────────────
+
+/// What `winit` says this window's client area is, **physical**, asked now. `None` before the window
+/// is created and under any backend that is not winit.
+///
+/// **This deliberately does not call `main.rs`'s `own_height_logical`, and the duplication is the
+/// point.** An instrument that asks the same function it is checking cannot catch that function
+/// answering from somewhere other than the platform — a constant substituted for the body of
+/// `own_height_logical` satisfies every self-comparison in this program. The `platform` line below
+/// is the independent source, and `the_fit_is_computed_from_the_size_the_platform_reports`
+/// (`tests/startup_fit.rs`) is the assertion that compares them.
+fn platform_size(window: &slint::Window) -> Option<(u32, u32)> {
+    use i_slint_backend_winit::WinitWindowAccessor;
+    window.with_winit_window(|w| {
+        let s = w.inner_size();
+        (s.width, s.height)
+    })
+}
+
 /// `IPOD_LAYOUT=1` — print the measurements the size constants derive from, and the fit they
 /// produced.
 ///
@@ -149,12 +168,16 @@ fn measure(_window: &slint::Window) -> Option<f64> {
 /// a measured display height, which is what makes the reader observable at all — and it is what
 /// caught `k` being decided from the window rather than from the display.
 ///
-/// **`measured_logical` is not optional and it is not `window.size()`.** During a `Resized` the
-/// window still reports the OLD size — which is why the event handler takes the size off the event
-/// — so an instrument that printed `window.size()` beside a fit computed from the event printed two
-/// different moments on adjacent lines and read as an inversion: *too short for 1:1* next to a
-/// window comfortably tall enough, then the reverse one event later. Measured on this machine with a
-/// bare Slint window and no content at all:
+/// **Three sizes are printed, because there are three and they are not the same.** `window` is
+/// Slint's CACHE, and this filter runs before Slint applies the event that updates it
+/// (`i-slint-backend-winit-1.17.1/event_loop.rs:192-194` calls the filter; `:222` writes the cache),
+/// so during a `Resized` it holds a size from one event ago. `platform` is
+/// `winit::Window::inner_size()`, asked now. `measured` is the height the fit was actually computed
+/// from — passed in, because it is a decision this file does not make.
+///
+/// An instrument that printed only the first and the last read as an inversion at startup: *too
+/// short for 1:1* next to a window comfortably tall enough, then the reverse one event later.
+/// Measured on this machine with a bare Slint window and no content at all:
 ///
 /// ```text
 /// Resized event 1760 x  800 ; win.size() 2360 x 1692
@@ -165,13 +188,25 @@ fn measure(_window: &slint::Window) -> Option<f64> {
 /// constraints` clamps a not-yet-known size up to the declared minimum and then the preferred size
 /// arrives. It happens with an empty `Window` carrying only the four size constants.)
 ///
-/// So the caller passes the height the fit was actually computed from, and the two are printed as
-/// two lines that can be compared rather than as one line that quietly picks a winner.
-pub fn dump_layout(window: &slint::Window, fit: &crate::fit::Fit, measured_logical: f64) {
+/// **That inversion is what four investigations read as "the window collapses to 880 × 400", and it
+/// never did** — measured from outside the process with the accessibility API, the window is
+/// 1180 × 878 outer from 0.5 s to 5 s after launch and never anything else. The 880 × 400 line was
+/// the CREATION size printed against a stale cache.
+///
+/// **So `measured` is compared against `platform` and not against `window`**, and that is the
+/// difference between an instrument and a puzzle: the two legitimately disagree with the cache
+/// during any real resize, and they must never disagree with the platform. A printed difference on
+/// the `measured` line is now a defect rather than a lag, which is what makes it worth asserting —
+/// see `the_fit_is_computed_from_the_size_the_platform_reports` in `tests/startup_fit.rs`.
+///
+/// `sf` is the moment's scale factor rather than the window's, for the same reason the event handler
+/// takes it off the event: during a `ScaleFactorChanged` `slint::Window::scale_factor()` may still
+/// report the old one, and a block that converted its own numbers with a different factor from the
+/// one the fit used would be three lines that cannot be compared.
+pub fn dump_layout(window: &slint::Window, fit: &crate::fit::Fit, measured_logical: f64, sf: f64) {
     if std::env::var_os("IPOD_LAYOUT").is_none_or(|v| v.is_empty() || v == "0") {
         return;
     }
-    let sf = f64::from(window.scale_factor());
     let size = window.size();
     eprintln!("── IPOD_LAYOUT ────────────────────────────────────────────");
     eprintln!("  work area   {:?} — {}", support(), support().describe());
@@ -187,31 +222,37 @@ pub fn dump_layout(window: &slint::Window, fit: &crate::fit::Fit, measured_logic
         }
     );
     eprintln!(
-        "  window      {} x {} physical, {:.1} x {:.1} logical, scale {sf} — as the window reports \
-         it right now",
-        size.width,
-        size.height,
-        f64::from(size.width) / sf,
-        f64::from(size.height) / sf
+        "  window      {} x {} physical — Slint's cached size, which inside the event filter is one \
+         event old",
+        size.width, size.height
     );
-    let reported = f64::from(size.height) / sf;
+    let platform = platform_size(window);
+    eprintln!(
+        "  platform    {}",
+        match platform {
+            Some((w, h)) => format!(
+                "{w} x {h} physical, {:.1} x {:.1} logical at scale {sf} — \
+                 winit::Window::inner_size(), asked now",
+                f64::from(w) / sf,
+                f64::from(h) / sf
+            ),
+            None => "no winit window yet — nothing has been created to measure".to_string(),
+        }
+    );
     eprintln!(
         "  measured    {measured_logical:.1} logical — the height the fit below was computed \
          from{}",
-        if size.height == 0 {
-            // The seed, before the event loop has run. The window genuinely has no size, so a
-            // difference here is not the two being out of step.
-            ", and the window has no size yet".to_string()
-        } else if (reported - measured_logical).abs() < 0.5 {
-            String::new()
-        } else {
-            // Not a defect: `Resized` carries the new size and the window still holds the old one.
-            // Saying so is the difference between an instrument and a puzzle.
-            format!(
-                ", which is {:.1} px from what the line above says — the event is ahead of the \
-                 window",
-                measured_logical - reported
-            )
+        match platform.map(|(_, h)| f64::from(h) / sf) {
+            // The seed, before the event loop has run. There is no window to disagree with; the
+            // height is the one the markup asked for.
+            None => ", and the platform has no window to measure yet".to_string(),
+            Some(p) if (p - measured_logical).abs() < 0.5 => String::new(),
+            // Against the PLATFORM, not against the cache above — so this clause means a defect.
+            Some(p) => format!(
+                ", which is {:.1} px from the platform line — the fit was computed from a size this \
+                 window does not have",
+                measured_logical - p
+            ),
         }
     );
     eprintln!(

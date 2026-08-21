@@ -113,7 +113,7 @@ fn main() -> Result<(), slint::PlatformError> {
         sf,
     });
     push_fit(&window, &fitter.fit(), sf);
-    client_height::dump_layout(window.window(), &fitter.fit(), geometry::PREF_HEIGHT);
+    client_height::dump_layout(window.window(), &fitter.fit(), geometry::PREF_HEIGHT, sf);
 
     // **And it is recomputed while you are looking at it**, which is the promise the previous
     // design made and the platform cannot keep. Drag the bottom edge up to make room for a
@@ -133,11 +133,16 @@ fn main() -> Result<(), slint::PlatformError> {
     window.window().on_winit_window_event(move |win, event| {
         use i_slint_backend_winit::winit::event::WindowEvent;
 
-        // The size and the scale factor come from the EVENT rather than from `win`: during
-        // `Resized` the window may still report the old size, and during `ScaleFactorChanged` the
-        // old scale factor. Taking them from the window instead produces a fit that is one event
-        // behind and self-corrects on the next one — invisible except as a single wrong frame
-        // after every display change.
+        // **The scale factor comes from the EVENT; the size comes from the PLATFORM.** They are not
+        // the same rule, and the difference between them is the whole of `tests/startup_fit.rs`.
+        // `win.scale_factor()` may still report the old factor during a `ScaleFactorChanged`, so
+        // the factor is taken off the event. The size cannot be taken off the event, because at
+        // startup a `Resized` payload is the size Slint's minimum clamp gave
+        // the window at CREATION — 880 × 400, a window that is resized to 1180 × 846 before it is
+        // ever mapped, so no such window is ever on screen. `own_height_logical` carries the
+        // citations and asks the platform instead; `win.size()` is Slint's cache and is the one
+        // source that is wrong in BOTH directions, because this filter runs before Slint applies
+        // the event.
         //
         // **Every moment carries both measurements**, because they answer different questions:
         // `k` from the display's usable height, the too-short boolean from the window we actually
@@ -145,9 +150,9 @@ fn main() -> Result<(), slint::PlatformError> {
         // computed from the display — so a window dragged short and then moved reported that it
         // had room it did not have.
         let moment = match event {
-            WindowEvent::Resized(size) => {
+            WindowEvent::Resized(_) => {
                 let sf = live_scale(win);
-                let own = f64::from(size.height) / sf;
+                let own = own_height_logical(win, sf);
                 if shown {
                     // `k` is not re-decided here (§6.6, principle 1), so this brings no display
                     // height: dragging a window edge is not evidence about the screen.
@@ -163,17 +168,23 @@ fn main() -> Result<(), slint::PlatformError> {
                     }
                 }
             }
-            WindowEvent::Moved(_) => fit::Moment::Moved {
-                display_logical: ceiling_logical(win),
-                window_logical: own_height_logical(win),
-                sf: live_scale(win),
-            },
+            WindowEvent::Moved(_) => {
+                // One read, used for both: the height below is that size divided by this factor,
+                // and asking twice across a display boundary is how they come from two moments.
+                let sf = live_scale(win);
+                fit::Moment::Moved {
+                    display_logical: ceiling_logical(win),
+                    window_logical: own_height_logical(win, sf),
+                    sf,
+                }
+            }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                // The event's own scale factor, not the window's: `win.scale_factor()` may still
+                // report the old one here, which would misconvert the physical size.
+                let sf = sane_scale(*scale_factor);
                 fit::Moment::ScaleFactorChanged {
                     display_logical: ceiling_logical(win),
-                    // The event's own scale factor, not the window's: `win.scale_factor()` may
-                    // still report the old one here, which would misconvert the physical size.
-                    window_logical: f64::from(win.size().height) / sane_scale(*scale_factor),
+                    window_logical: own_height_logical(win, sf),
                     sf: *scale_factor,
                 }
             }
@@ -181,16 +192,17 @@ fn main() -> Result<(), slint::PlatformError> {
         };
 
         let sf = sane_scale(moment_scale(&moment, win));
-        // Taken BEFORE `apply` consumes the moment, and it is the whole point of the parameter:
-        // during a `Resized` the window still reports the old size, so `win.size()` and this
-        // disagree by exactly one event.
+        // Taken BEFORE `apply` consumes the moment, because `apply` takes it by value. It is the
+        // height the fit was computed from, and `dump_layout` prints it beside the platform's own
+        // answer so the two can be compared — they agree, and a printed difference is a defect
+        // rather than the one-event cache lag the `window` line carries.
         let measured = moment_window_logical(&moment);
         let (fit, changed) = fitter.apply(moment);
         if changed {
             if let Some(w) = weak.upgrade() {
                 push_fit(&w, &fit, sf);
             }
-            client_height::dump_layout(win, &fit, measured);
+            client_height::dump_layout(win, &fit, measured, sf);
         }
         // An observer, never a filter: every arm propagates.
         i_slint_backend_winit::EventResult::Propagate
@@ -1064,9 +1076,23 @@ fn moment_scale(moment: &fit::Moment, win: &slint::Window) -> f64 {
     }
 }
 
-/// A scale factor that cannot divide by zero. Slint's is an `f32`.
+/// The scale factor, **asked of the platform**, falling back to Slint's cache. Slint's is an `f32`.
+///
+/// **Both halves of a logical height have to come from the same moment.** The numerator is
+/// `winit::Window::inner_size()` — the platform's, now — and taking the denominator from
+/// `slint::Window::scale_factor()` pairs it with Slint's cache, which this filter runs ahead of
+/// (`event_loop.rs:192-194` calls the filter, `:216-222` applies the event). Drag a window onto a
+/// display of a different backing scale and `Moved` can arrive carrying the new physical size while
+/// the cached factor is still the old one: new physical over old scale is a logical height wrong by
+/// exactly that ratio, which on a 1× → 2× move is double.
+///
+/// `ScaleFactorChanged` is the one moment that does not use this. It carries its own factor, which
+/// is the whole reason that arm exists.
 fn live_scale(win: &slint::Window) -> f64 {
-    sane_scale(f64::from(win.scale_factor()))
+    let sf = win
+        .with_winit_window(|w| w.scale_factor())
+        .unwrap_or_else(|| f64::from(win.scale_factor()));
+    sane_scale(sf)
 }
 
 /// The same guard, for a scale factor that arrived on an event rather than from the window.
@@ -1074,9 +1100,46 @@ fn sane_scale(sf: f64) -> f64 {
     if sf.is_finite() && sf > 0.0 { sf } else { 1.0 }
 }
 
-/// The window's own height, logical.
-fn own_height_logical(win: &slint::Window) -> f64 {
-    f64::from(win.size().height) / live_scale(win)
+/// The window's own height, logical — **asked of the platform, at `sf`**.
+///
+/// There are three sizes in play during a `Resized` and they are not interchangeable. This is the
+/// one that is true at the moment the event filter runs:
+///
+/// * `win.size()` is Slint's **cache**, and the filter runs BEFORE Slint applies the event
+///   (`i-slint-backend-winit-1.17.1/event_loop.rs:192-194` calls the filter; `:216-222` handles the
+///   event and `:222` is the only writer of that cache), so during a `Resized` it holds a size from
+///   one event ago;
+/// * the `Resized` **payload** is a size the window HAD when the platform queued the event;
+/// * `winit::Window::inner_size()` asks the platform, now — `contentRectForFrameRect` on macOS
+///   (`winit-0.30.13/src/platform_impl/macos/window_delegate.rs:944-949`), `XGetGeometry` on X11
+///   (`.../linux/x11/window.rs:1242-1254`), `GetClientRect` on Windows (`.../windows/window.rs:
+///   214-222`), and winit's own configure state on Wayland (`.../linux/wayland/window/mod.rs:
+///   277-281`), which is updated before the `Resized` it belongs to is emitted. So it is never
+///   staler than the payload, and on macOS it is materially fresher. **The macOS half is measured**
+///   — `tests/startup_fit.rs` drives a resize from outside the process and reads the answer back;
+///   the other three are read from those backends' source and not run. The fallback when there is no
+///   winit window at all is `win.size()`, which is what this used to do unconditionally, so the
+///   worst case on a platform where `inner_size()` lags is the behaviour it already had.
+///
+/// **And the payload at startup is a size this window never had on screen.** Slint clamps a
+/// not-yet-existing window's size UP to the declared minimum: `WindowInner::show` calls
+/// `update_window_properties()` before `set_visible` (`i-slint-core-1.17.1/window.rs:1635-1636`),
+/// the adapter's size is still 0 × 0, and `adjust_window_size_to_satisfy_constraints`
+/// (`i-slint-backend-winit-1.17.1/winitwindowadapter.rs:1690-1722`) writes `min-width × min-height`
+/// into the pending `WindowAttributes::inner_size` (`:810-818`). The window is therefore CREATED at
+/// the minimum and resized to the preferred size before it is ever mapped (`:1114-1124`, then
+/// `set_visible(true)` at `:1133`). macOS's `request_inner_size` returns `None`
+/// (`winit-0.30.13/src/platform_impl/macos/window_delegate.rs:957-963`), so both sizes arrive
+/// afterwards as two queued `Resized` events **in creation order**. Reading the first payload
+/// computes the whole fit — `k` and the too-short boolean — for a window `min-height` tall that was
+/// never on screen, and `min-height` is 400.
+fn own_height_logical(win: &slint::Window, sf: f64) -> f64 {
+    let physical = win
+        .with_winit_window(|w| w.inner_size().height)
+        // No winit window — a headless backend, or before creation. Slint's cache is the only
+        // answer there is, and at that point it is not stale because nothing has moved.
+        .unwrap_or_else(|| win.size().height);
+    f64::from(physical) / sane_scale(sf)
 }
 
 /// The usable height of the **display**, falling back to the window's own where no work area is
@@ -1093,7 +1156,8 @@ fn own_height_logical(win: &slint::Window) -> f64 {
 /// (§9.5, §16.1). Two questions, two measurements: *what could this display hold* and *how much
 /// height is there right now*.
 fn ceiling_logical(win: &slint::Window) -> f64 {
-    client_height::client_height_logical(win).unwrap_or_else(|| own_height_logical(win))
+    client_height::client_height_logical(win)
+        .unwrap_or_else(|| own_height_logical(win, live_scale(win)))
 }
 
 /// The list the window shows, built from the model.
