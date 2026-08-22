@@ -75,7 +75,13 @@ component DetailView inherits VerticalLayout {
             text: root.d.act-label;
             font-size: Metric.body-size;
             font-weight: Metric.weight-strong;
-            color: root.d.enabled ? Ink.accent : Ink.fg-disabled;
+            // The act's own answer, so this file and `devices.slint` cannot draw one struct in two
+            // colours. Nothing this page files is destructive — `Remove` is the row's own control
+            // below, not a `Detail` — so the binding changes no pixel here and is what makes the
+            // other page's `Edit…` stop being red.
+            color: !root.d.enabled
+                ? Ink.fg-disabled
+                : (root.d.destructive ? Ink.danger : Ink.accent);
             overflow: elide;
             vertical-alignment: center;
         }
@@ -312,7 +318,12 @@ export component PartsPage inherits Rectangle {
                 for g in root.groups: VerticalLayout {
                     spacing: 0px;
                     accessible-role: AccessibleRole.list;
-                    accessible-label: g.heading;
+                    // **`verb` is what this kind is FOR**, from `Resource::verb()` — §11.4's own
+                    // table column. It costs no pixel and it is the one place the answer is worth
+                    // saying to somebody who cannot see the sketch: *iPods, chosen by a device.*
+                    // Declared and pushed but bound to nothing, it would have been §20 item 4's
+                    // `parked` in a new place.
+                    accessible-label: g.heading + ", " + g.verb;
 
                     Row {
                         label: g.heading;

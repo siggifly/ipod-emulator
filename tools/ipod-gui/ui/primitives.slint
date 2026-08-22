@@ -146,6 +146,10 @@ export struct GroupRow {
 // One part. `fact` is `Provenance::line()` and nothing in the window may construct the word
 // *verified*; `used-by` is the reference-not-copy property made visible; `locked-by` is §11.4's one
 // machine rule — *`My 5.5G` is running. Stop it first.*
+// `open` is **deliberately absent.** It was declared here and read by nothing: `PartRowView.open`
+// is bound from `root.detail-of == r.id` by the page, which is the one cursor, and `parts::PartView`
+// has no such field to fill it from. A second spelling of *which row is open* is §20 item 4's
+// `parked` — computed, pushed, and bound to nothing — and this is where it would have started.
 export struct PartRow {
     id: int,
     group: int,
@@ -154,7 +158,6 @@ export struct PartRow {
     fact: string,
     used-by: string,
     expandable: bool,
-    open: bool,
     selected: bool,
     removable: bool,
     remove-consequence: string,
@@ -208,6 +211,11 @@ export struct DetailRow {
     escape-hatch: string,
     presses: int,
     consequence: string,
+    // **The act's colour, decided by the act.** `parts.slint` drew every one of these in
+    // `Ink.accent` and `devices.slint` drew every one in `Ink.danger` — one struct, one flattener,
+    // two answers — so `Edit…` was red on the page that has it. `parts::RowAction::destructive` is
+    // the producer and `Remove` is the only true one.
+    destructive: bool,
 }
 
 // ─── The material (§6.5) ────────────────────────────────────────────────────────────────────────

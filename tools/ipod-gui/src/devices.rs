@@ -4,7 +4,7 @@
 // `devices-detail` and `devices-detail-of`; nothing set either, and `detail-of` defaults to `-1`,
 // so `Expand.open: root.detail-of == i` was false for every row for ever. The five `Made of` lines
 // were undrawn — and so was the `Start` button, which lives **inside** that Expand
-// (`devices.slint:230`). A page whose only control was unreachable is what this file ends.
+// (`devices.slint:266`). A page whose only control was unreachable is what this file ends.
 //
 // **What this file does not produce.** `refresh_devices` in `main.rs` already pushes `devices`,
 // `devices-empty-line` and `devices-new`, and every field of `DeviceRow` with them — the row's
@@ -14,7 +14,7 @@
 // row which `DeviceRow` also carries is `Start`, and note 3 below is why that is not an exception
 // to this paragraph but the sharpest instance of it.
 //
-// **The cursor is the device's NAME and never its index.** `devices.slint:187` fires
+// **The cursor is the device's NAME and never its index.** `devices.slint:223` fires
 // `expand(i, ...)` with the repeater's index and `detail-of` is compared against that same index,
 // so the number crossing the boundary is an index in both directions — but a device inserted or
 // removed above the open one moves every index below it, and a cursor that held one would then be
@@ -26,25 +26,33 @@
 // **And `open_row` is the only place in this file that reads one.** The draft this grew out of
 // took an index in `row_action` and in `editor` as well, and that is where an index costs more
 // than a body drawn about the wrong device: every act is rendered *inside* the open row —
-// `devices.slint:212` hands a `MadeOfLine` the detail only where `detail-of == i` — so the number
+// `devices.slint:248` hands a `MadeOfLine` the detail only where `detail-of == i` — so the number
 // a press carries is always the open device's, computed at the last push. Resolve it again
 // against a list that gained a device in between and `Remove` forgets the row above the one that
 // was pressed, silently, having been handed a valid index for a device nobody asked about. The
 // name is already held and it is the answer, so the acts read it and take no index at all.
 //
-// **This page pins no ordinal.** `devices.slint:218` fires `root.row-action(a, n)` where `a` is
+// **This page pins no ordinal.** `devices.slint:254` fires `root.row-action(a, n)` where `a` is
 // `root.d.action` — a number Rust put on the line — and nothing else. The one ordinal that is
 // pinned anywhere, `RowAction::Remove == 2`, is pinned by `ui/parts.slint`'s own `Remove` control
 // and is written down in `parts.rs` beside the enum.
 //
-// ─── Three things measured while writing this, none of them fixable from here ────────────────────
+// ─── Three things measured while writing this ────────────────────────────────────────────────────
 //
-// **1. `devices.slint:71` draws every act in `Ink.danger`.** `parts.slint:78` draws the same
-// struct — one `DetailRow`, one `to_detail`, one flattener — in `Ink.accent`. The two files
-// disagree about the colour of one type, and the disagreement only became visible when this page
-// gained a line that is not a removal: `Edit…` is drawn in the destructive colour. The markup is
-// not this file's to change; whoever wires the page should make the two agree, and `Remove` is
-// then the one that needs a way to say it is destructive.
+// **1. The two files drew one struct in two colours, and that is repaired.** `devices.slint` drew
+// every act in `Ink.danger` and `parts.slint` drew the same struct — one `DetailRow`, one
+// `to_detail`, one flattener — in `Ink.accent`, and the disagreement only became visible when this
+// page gained a line that is not a removal: `Edit…`, in the destructive colour. The repair is the
+// one this note asked for: the colour is a fact about the **act**, so
+// [`crate::parts::RowAction::destructive`] answers it, `to_detail` carries the answer across as
+// `DetailRow.destructive`, and both files bind it. `Remove` is the only true one — §12.4 parks a
+// machine rather than discarding it, so `PowerOff` destroys nothing.
+//
+// **The second half of the same disagreement went with it.** `devices.slint` had **no** paragraph
+// branch: a `Detail` with an empty label — which is what [`device_rule`] produces, and §9.4's
+// machine rule is the only line on this page that has one — fell into the two-column fact
+// rendering and was drawn as a value, indented past a blank label column at `label-size`.
+// `parts.slint` had split the two since it was written. One struct, one rendering, on both pages.
 //
 // **2. `Settings::rename_device`, `set_boot_shape` and `restate_firmware` cannot get a production
 // caller here.** All three were assigned to this page, and all three belong to `Composer::commit`:
@@ -74,8 +82,8 @@
 // beside a running ARM7 draws a live `Start` on every other device in the library.
 //
 // The obvious repair is to teach `device_rows` the machine, and it is wrong: **those two fields
-// are the bench's cradle as well.** `window.slint:479` reads `root.current.cradle-label` and
-// `window.slint:508` reads `root.current.startable`, so the sentence that refuses this page's
+// are the bench's cradle as well.** `window.slint:486` reads `root.current.cradle-label` and
+// `window.slint:515` reads `root.current.startable`, so the sentence that refuses this page's
 // `Start` would be printed under the drawn iPod — the machine's own cradle telling the operator
 // that the machine is running and to stop it first. One field, two surfaces, and only one of them
 // is asking §7.2's question.
@@ -83,11 +91,13 @@
 // So this page answers it for itself, in [`start_row`], and it is not a second writer for one
 // pixel: `DeviceRow.cradle_label` stays §7.3's cradle caption and this is §7.2's refusal. Nothing
 // is re-worded — `crate::cradle_label` is called for every arm that is not the machine rule, so
-// the shelf and this page cannot say two things about one device. What the wiring wave owes is
-// **four** bindings and not two, counted off the markup rather than off the two fields this note
-// opened with: `devices.slint:232` `enabled`, `:233` `reason`, `:234` `machine-rule` — a literal
-// `true`, which [`start_row`] computes and which is wrong for the composed-and-unbuilt arm — and
-// `:235` `primary`, which reads `d.startable` a second time. All four read the pushed row instead.
+// the shelf and this page cannot say two things about one device. **The bindings are now this
+// row's**, counted off the markup rather than off the two fields this note opened with:
+// `devices.slint:267` `label`, `:268` `enabled`, `:269` `reason`, `:270` `escape-hatch`, `:276`
+// `machine-rule` — which was a literal `true`, and is wrong for the composed-and-unbuilt arm —
+// `:277` `presses`, `:278` `consequence` and `:279` `primary`, which read `d.startable` a second
+// time. `main.rs`'s `devices-start` carries one row, for the one open device, because a closed
+// `Expand` is `visible: false` and no other row's control is on screen.
 // And `on_start_device` asks the machine rule again on the press, for the reason `row_action` asks
 // it twice below.
 
@@ -108,7 +118,6 @@ use crate::rail::{Caps, Next};
 /// reason, which is the shape `primitives.slint` forbids and the shape this file's own sweep
 /// looks for; `None` says *there is no such control right now* instead of lying quietly. The
 /// flattener writes `unwrap_or_default()` into a struct property that nothing is drawing.
-#[allow(dead_code)] // retired when: `push_devices_detail` flattens one into `devices-detail` + `devices-detail-of` — `Devices::view` already returns it, and nothing outside this file reads what it returns
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View {
     pub detail: Vec<Detail>,
@@ -125,12 +134,10 @@ pub struct View {
 ///
 /// **A cursor, not a copy.** Everything drawn is recomputed from `Settings` on every push, which
 /// is what stops it going stale — the same discipline `Composer` holds one `Recipe` under.
-#[allow(dead_code)] // retired when: `wire` holds one in a cell beside the Composer's — `Devices::view` reads `open` and `Devices::open_row` writes it already, so the condition this carried was met the day it was written; what is dead is the construction
 pub struct Devices {
     open: Option<String>,
 }
 
-#[allow(dead_code)] // retired when: `wire` constructs one beside the Composer's cell and the three `on_device_*` callbacks reach these — the wave after this one
 impl Devices {
     pub fn new() -> Devices {
         Devices { open: None }
@@ -402,7 +409,7 @@ fn made_of(
     out
 }
 
-/// A labelled fact — `devices.slint:85`'s two-column rendering.
+/// A labelled fact — `devices.slint:92`'s two-column rendering.
 fn device_fact(label: &str, value: String) -> Detail {
     Detail {
         label: label.to_string(),
@@ -414,7 +421,8 @@ fn device_fact(label: &str, value: String) -> Detail {
 }
 
 /// §9.4's machine rule: prose, in `fg` rather than `fg-dim`, because its teaching is the point.
-/// `devices.slint:104` is the binding that draws the difference.
+/// `devices.slint:122` is the branch that draws it — the label is empty, which is what tells the
+/// two renderings apart, and `:126` is the colour that draws the difference.
 fn device_rule(value: String) -> Detail {
     Detail {
         label: String::new(),
@@ -429,7 +437,7 @@ fn device_rule(value: String) -> Detail {
 ///
 /// **One property, one producer, and the value is MOVED rather than copied.** `DetailRow` has
 /// exactly one `machine-rule`; `devices.slint:56` binds it to the `Pressable` when there is an act
-/// and `devices.slint:104` to the fact line when there is not, and `main.rs`'s `to_detail` reads it
+/// and `devices.slint:126` to the paragraph when there is not, and `main.rs`'s `to_detail` reads it
 /// off the `Detail`. Leaving the `FixRow`'s copy set as well would be two fields holding one fact
 /// on their way to one pixel. `parts::act` is the same three lines for the same reason.
 fn device_act(a: RowAction, mut fix: FixRow) -> Detail {
@@ -582,17 +590,18 @@ fn removal_consequence(s: &Settings, d: &Device) -> String {
 ///
 /// 3. **And `reason` is empty when the control is live**, which `cradle_label` is not — its
 ///    enabled arm is §7.3's caption, *press the centre button*, and `Pressable.reason` is the
-///    refusal slot: `primitives.slint:499` is `text: root.enabled ? root.consequence : root.reason`,
+///    refusal slot: `primitives.slint:507` is `text: root.enabled ? root.consequence : root.reason`,
 ///    so a live control draws its consequence there and its reason nowhere. (Not `:418`, which this
 ///    used to cite — that is `tells`, and it reserves the slot for **three** reasons: disabled, two
 ///    presses, or a consequence. The reservation is not the binding.) Handing a live control a
 ///    reason it will never draw is the kind of field that is true for a while and then quietly
 ///    becomes a second producer.
 ///
-/// `machine_rule` is computed rather than assumed. `devices.slint:234` hard-codes `machine-rule:
-/// true`, which is wrong for the composed-and-unbuilt arm — *building a composed device is not
-/// wired yet* is §9.4's other kind, a project state, and drawing it in `fg` as a law of physics
-/// tells the reader this program will never do it.
+/// `machine_rule` is computed rather than assumed, and `devices.slint:276` binds what this
+/// computes. It used to be a literal `machine-rule: true` in the markup, which is wrong for the
+/// composed-and-unbuilt arm — *building a composed device is not wired yet* is §9.4's other kind,
+/// a project state, and drawing it in `fg` as a law of physics tells the reader this program will
+/// never do it.
 fn start_row(s: &Settings, d: &Device, seen: &mut Presence, machine: Option<&str>) -> FixRow {
     let mut row = FixRow {
         label: "Start".into(),
@@ -1327,7 +1336,7 @@ mod tests {
     /// §9.4: a file that is not there is a machine rule; a thing this program has not written yet
     /// is a project state and is drawn differently. Proved red twice — by dropping the
     /// `missing_with` call, which offers to start a device whose drive was deleted an hour ago,
-    /// and by hard-coding `machine_rule` true the way `devices.slint:234` does, which tells the
+    /// and by hard-coding `machine_rule` true the way `devices.slint` used to, which tells the
     /// reader that building a composed device is a law of physics.
     #[test]
     fn start_names_the_part_that_has_gone_in_the_cradles_own_words() {

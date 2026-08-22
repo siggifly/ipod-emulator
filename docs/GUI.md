@@ -1962,6 +1962,16 @@ go is a page you re-learn every visit.
 | Disks | `Settings::disks` | what a device runs | `Build…` `Provide…` |
 | **Snapshots** | the parked machines | **what `press ● to resume` resumes** | `Discard` |
 
+**The two verbs this build draws live open the Composer.** `Synthesise…` under iPods and `Build…`
+under Disks are enabled because `rail::Caps::composer` is true — a verb that rewrites a recipe needs
+a surface that holds one, and this build has that surface — so `main.rs` routes both to it, the same
+entrance `+ New device ›` uses. `Fetch…` is live too, because every download goes through `curl` and
+`curl` is measured at launch, but nothing on this page reaches the fetcher yet: it refuses in §9.4's
+second kind and names `ipod-boot firmware get <family>`, which does the job from a terminal. What it
+must never say is `rail::Next`'s *reason* — those sentences are why a control is **disabled**, and
+using one under a live press had `Synthesise…` answering *there is no Composer in this build yet*
+one row from the page it opens.
+
 **Snapshots is the sixth group and it is here because 1.6 GB per park was invisible.** Close the
 window rather than quitting — which §12.4 says parks — four times across four devices, and 6.4 GB of
 snapshots exist that the user never asked for, cannot see, cannot total and cannot delete, on a
@@ -3771,6 +3781,46 @@ In order, because each depends on the one before it.
     itself, which hands off rather than booting; `geometry::BODY_ADVANCE`, which is a budget rather
     than a measurement and which `RAIL_VERB_W` and `CRADLE_LABEL_MAX_CHARS` are both derived from;
     and the 8 GiB-versus-30 GB question in §10.1, which is an operator decision.
+
+19. **DONE 2026-08-22. The three drawer pages are joined to their producers.** `parts.rs`,
+    `devices.rs` and `settings_page.rs` shipped tested and reachable from nothing: **six** callbacks
+    were declared, fired by controls drawn enabled, and registered by nobody — `device-expand`,
+    `device-row-action`, `parts-expand`, `parts-group-action`, `parts-row-action`,
+    `setting-toggled` — and **eighteen** `in property` declarations had no setter anywhere in the
+    program, so each drew its type's default. Parts was a header over three empty models; Settings
+    drew three rows with empty labels, two of them disabled carrying an empty `reason`; and Devices
+    never opened a row, which is where §7.2 puts `Start`, so the one control that page has was
+    unreachable.
+
+    `every_window_property_is_pushed_and_every_callback_registered` is the gate: every `in property`
+    on `MainWindow` has a `set_`, every `callback` an `on_`, with a dated exception list that is
+    asserted to hold **exactly** the properties that legitimately have neither. It holds one —
+    `running`, which §12.2 will fill when the bench starts a machine.
+
+    What the wiring found, none of it visible until the pages drew:
+
+    - **`ui/devices.slint` drew every act in `Ink.danger` and `ui/parts.slint` drew the same struct
+      in `Ink.accent`** — one `DetailRow`, one flattener, two colours — so `Edit…` was red. The
+      colour is a fact about the act, so `parts::RowAction::destructive` answers it and both files
+      bind the answer. `Remove` is the only true one.
+    - **`ui/devices.slint` had no paragraph branch**, so §9.4's machine rule — the one line on that
+      page whose teaching is the point — was drawn as a value in the fact column, indented past an
+      empty label at `label-size`.
+    - **`Synthesise…` refused with the sentence that says the Composer does not exist**, one row from
+      the page it now opens. See §11.4.
+    - **`Esc` closed the `Stack`'s expand id and nothing underneath it**, so the row a person had
+      just closed was drawn open again on the next push. `nav::Escape::ClosedExpand` closes the
+      cursor of whichever page owns it.
+    - **`on_escape_pressed` was the one thing that moved the stack without re-pushing the page it
+      moved to**, and `on_drawer_toggled` was the second: the drawer never writes `depth`, so closing
+      and reopening it returns to a page that was told nothing while it was away.
+    - **`ui/composer.slint` carried `back: "Devices"` as a literal.** The Composer has two entrances
+      now, and a `‹` naming a page the press does not return to is the one control whose whole job
+      is to say where you are going. `nav::Stack::under` is the answer and `drawer.slint` words it.
+
+    **Still open**: `Fetch…` is a live control that only refuses (§11.4); `parts-preview` is pushed
+    but a group verb's label elides to `F…` when the disabled sibling's reason widens its half of
+    the row; and §12.2's `running` is the one property with no producer.
 
 **Conditional on §17.Q10**: `Stats::enters_by_core: [[u64; WATCHED.len()]; 2]`, if the run loop can
 attribute an arrival to a core. Until it is answered, §12.8 draws one column.

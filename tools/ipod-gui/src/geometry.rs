@@ -237,7 +237,7 @@ geometry! {
     ///
     /// **It does not squeeze the Rail.** The drawer body is `DRAWER_W − 2 × PAGE_MARGIN` = 372;
     /// the entry row is a 16 px marker, `s2`, this column, `s2`, then `what` — which carries
-    /// `horizontal-stretch: 1; min-width: 0px;` (`ui/rail.slint:167-168`) — and a measure. The 24
+    /// `horizontal-stretch: 1; min-width: 0px;` (`ui/rail.slint:171-172`) — and a measure. The 24
     /// px comes out of `what`.
     RAIL_VERB_W:      Px = 88.0;
     /// §6.2's `label` line box.
@@ -1564,9 +1564,9 @@ mod tests {
     const COSMETIC_OPACITIES: &[&str] = &[
         "0.0", // off — `ipod.slint`'s dark panel and unlit hold switch
         "1.0", // on, and the identity every ternary above returns to
-        "0.55", // §7.4's four held wheel marks (`ipod.slint:350-381`)
-        "0.82", // the held centre button (`ipod.slint:403`)
-        "0.86", // §5's `Pressable` press state (`primitives.slint:163`)
+        "0.55", // §7.4's four held wheel marks (`ipod.slint:343-373`)
+        "0.82", // the held centre button (`ipod.slint:396`)
+        "0.86", // §5's `Pressable` press state (`primitives.slint:453`)
     ];
 
     /// **T-20. The ghost's 45 % cannot be typed into the markup.**

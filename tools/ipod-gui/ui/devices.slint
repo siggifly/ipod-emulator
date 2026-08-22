@@ -68,7 +68,13 @@ component MadeOfLine inherits VerticalLayout {
             text: root.d.act-label;
             font-size: Metric.body-size;
             font-weight: Metric.weight-strong;
-            color: root.d.enabled ? Ink.danger : Ink.fg-disabled;
+            // **The act's own answer, and it used to be a literal `Ink.danger`** — so `Edit…`, the
+            // first line on this page that is not a removal, was drawn in the destructive colour.
+            // `parts.slint` draws the same struct through the same flattener and said `Ink.accent`;
+            // one struct cannot have two colours. `parts::RowAction::destructive` decides.
+            color: !root.d.enabled
+                ? Ink.fg-disabled
+                : (root.d.destructive ? Ink.danger : Ink.accent);
             overflow: elide;
             vertical-alignment: center;
         }
@@ -82,7 +88,8 @@ component MadeOfLine inherits VerticalLayout {
         wrap: word-wrap;
     }
 
-    if !root.d.has-action && !root.d.mono: HorizontalLayout {
+    // A labelled fact — `devices::device_fact`, and every one of the five has a label.
+    if !root.d.has-action && !root.d.mono && root.d.label != "": HorizontalLayout {
         spacing: Metric.s2;
 
         Text {
@@ -101,9 +108,23 @@ component MadeOfLine inherits VerticalLayout {
             text: root.d.value;
             font-size: Metric.label-size;
             font-weight: Metric.weight-label;
-            color: root.d.machine-rule ? Ink.fg : Ink.fg-dim;
+            color: Ink.fg;
             wrap: word-wrap;
         }
+    }
+
+    // §9.4's machine rule — `devices::device_rule`, which carries no label. **It used to fall into
+    // the branch above**, so a sentence about a part that has left the library was drawn as a
+    // value in the fact column: indented past an empty label, wrapped into two thirds of the
+    // width, at `label-size`. It is prose, it is the one line on the page whose teaching is the
+    // point, and `parts.slint` has drawn it this way since it was written — one struct, one
+    // rendering, on both pages that draw it.
+    if !root.d.has-action && !root.d.mono && root.d.label == "": Text {
+        text: root.d.value;
+        font-size: Metric.body-size;
+        font-weight: Metric.weight-body;
+        color: root.d.machine-rule ? Ink.fg : Ink.fg-dim;
+        wrap: word-wrap;
     }
 }
 
@@ -119,6 +140,21 @@ export component DevicesPage inherits Rectangle {
     // `+ New device ›`. The sentence is the model's, not this file's.
     in property <string> empty-line;
     in property <FixRow> new-device;
+    // §7.2's `Start`, for the **one open device**, from `devices::start_row`.
+    //
+    // **Not `d.startable` and `d.cradle-label`.** Those two are the bench's cradle as well —
+    // `window.slint:486` and `:515` read them for the drawn iPod — so §7.2's refusal, *a machine
+    // exists, stop it first*, would be printed under the machine telling the operator to stop it.
+    // One field, two surfaces, and only one of them is asking this page's question.
+    //
+    // One row is enough for a page of nine devices because a closed `Expand` is `visible: false`
+    // (`primitives.slint:844`), so the control exists on screen for the open row and no other.
+    //
+    // **`start-row`, not `start`** — the same trap `start-device` was named around, four lines
+    // down: `start` is `LayoutAlignment`'s own value, so a property of that name makes
+    // `alignment: start;` two hundred lines below stop compiling with *Cannot convert FixRow to
+    // enum LayoutAlignment*, which points at the alignment rather than at the name.
+    in property <FixRow> start-row;
 
     callback back-pressed();
     callback expand(int, bool);
@@ -228,11 +264,19 @@ export component DevicesPage inherits Rectangle {
                             // refusal this program can already produce — and it is a machine rule,
                             // because a file that is not there cannot be read by anything.
                             Pressable {
-                                label: "Start";
-                                enabled: d.startable;
-                                reason: d.cradle-label;
-                                machine-rule: true;
-                                primary: d.startable && i == root.selected;
+                                label: root.start-row.label;
+                                enabled: root.start-row.enabled;
+                                reason: root.start-row.reason;
+                                escape-hatch: root.start-row.escape-hatch;
+                                // **Computed, not `true`.** It was a literal, and it is wrong for
+                                // the composed-and-unbuilt device: *building a composed device is
+                                // not wired yet* is §9.4's other kind — a project state — and
+                                // drawing it in `fg` as a law of physics tells the reader this
+                                // program will never do it. `devices::start_row` decides.
+                                machine-rule: root.start-row.machine-rule;
+                                presses: root.start-row.presses;
+                                consequence: root.start-row.consequence;
+                                primary: root.start-row.enabled && i == root.selected;
                                 pad: Geometry.page-margin;
                                 activated => {
                                     root.select(i);
@@ -243,10 +287,10 @@ export component DevicesPage inherits Rectangle {
                                 }
 
                                 Text {
-                                    text: "Start";
+                                    text: root.start-row.label;
                                     font-size: Metric.body-size;
                                     font-weight: Metric.weight-strong;
-                                    color: !d.startable
+                                    color: !root.start-row.enabled
                                         ? Ink.fg-disabled
                                         : (i == root.selected ? #ffffff : Ink.fg);
                                     overflow: elide;

@@ -163,6 +163,9 @@ export component MainWindow inherits Window {
     in property <bool> drawer-open: false;
     in property <int> drawer-depth: 0;
     in property <DrawerPage> drawer-page: DrawerPage.none;
+    // **What `‹` returns to** — `nav::Stack::under`, one level below the top. The Composer is
+    // reachable from two depth-1 pages, so its header cannot carry a literal.
+    in property <DrawerPage> drawer-under: DrawerPage.none;
 
     // ── The Rail and the Work page (§9.2, §9.3, §10.1) ──
     in property <[RailRow]> rail;
@@ -195,6 +198,13 @@ export component MainWindow inherits Window {
     in property <int> devices-detail-of: -1;
     in property <string> devices-empty-line;
     in property <FixRow> devices-new;
+    // §7.2's `Start`, for the **one open device** — the control lives inside that row's `Expand`
+    // and nowhere else, so one pushed row describes every one that can be on screen. It is not
+    // `DeviceRow.startable` and `DeviceRow.cradle-label`: those two are the **bench's** cradle as
+    // well (`:479`, `:508`), and §7.2's refusal — *a machine exists, stop it first* — printed under
+    // the drawn iPod would be the machine telling you to stop itself. `devices::start_row` is the
+    // producer; one field, two surfaces, two questions.
+    in property <FixRow> devices-start;
 
     // ── §11.4's Parts page ──
     in property <[GroupRow]> parts-groups;
@@ -563,6 +573,7 @@ export component MainWindow inherits Window {
                 open: root.drawer-on-stage;
                 depth: root.drawer-depth;
                 page: root.drawer-page;
+                under: root.drawer-under;
                 rail-failures: root.rail-failures;
 
                 rail: root.rail;
@@ -584,6 +595,7 @@ export component MainWindow inherits Window {
                 devices-detail-of: root.devices-detail-of;
                 devices-empty-line: root.devices-empty-line;
                 devices-new: root.devices-new;
+                devices-start: root.devices-start;
 
                 parts-groups: root.parts-groups;
                 parts-rows: root.parts-rows;

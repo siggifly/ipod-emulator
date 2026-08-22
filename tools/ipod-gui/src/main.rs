@@ -828,12 +828,18 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
     // ── The drawer: four entrances, one writer ──
     {
         let stack = stack.clone();
+        let repaint_all = repaint_all.clone();
         let weak = window.as_weak();
         window.on_drawer_toggled(move || {
             stack.borrow_mut().toggle();
             if let Some(w) = weak.upgrade() {
                 push_nav(&w, &stack.borrow());
             }
+            // **The drawer coming back is a page arriving**, and `toggle` never writes `depth` —
+            // close and reopen and you are where you were. Every registered re-push returns early
+            // while its page is off screen, so a library that moved during those seconds told it
+            // nothing; without this the page comes back showing what it showed when it left.
+            repaint_all();
         });
     }
     {
@@ -1192,23 +1198,380 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
         });
     }
 
+    // ── §11.4's Parts: three callbacks, one re-push ──────────────────────────────────────────────
+    //
+    // **The same shape as the Composer's, and deliberately so.** One cursor in a cell, three
+    // retained models, one `Repaint` registered at the end of the block. The difference is the
+    // cell: the Composer's is an `Option` because a recipe is a document that may not be open,
+    // and this page exists from startup — so `Parts` is a cursor, `push_parts` has no early
+    // return, and the page cannot draw blank-because-absent.
+    let parts = Rc::new(RefCell::new(parts::Parts::new()));
+    let p_groups: Rc<VecModel<GroupRow>> = Rc::new(VecModel::default());
+    let p_rows: Rc<VecModel<PartRow>> = Rc::new(VecModel::default());
+    let p_detail: Rc<VecModel<DetailRow>> = Rc::new(VecModel::default());
+    // Retained (§16.9): set once, mutated in place by `in_place` afterwards. A fresh `VecModel`
+    // per push tears down every repeater instance in six groups and takes focus with it.
+    window.set_parts_groups(ModelRc::from(p_groups.clone()));
+    window.set_parts_rows(ModelRc::from(p_rows.clone()));
+    window.set_parts_detail(ModelRc::from(p_detail.clone()));
+
+    let repaint_parts: Repaint = {
+        let parts = parts.clone();
+        let settings = settings.clone();
+        let stack = stack.clone();
+        let work = work.clone();
+        let (groups, rows_m, detail) = (p_groups.clone(), p_rows.clone(), p_detail.clone());
+        let weak = window.as_weak();
+        Rc::new(move || {
+            let Some(w) = weak.upgrade() else { return };
+            // **Off screen, do nothing** — this walks the whole library and the registry it is in
+            // is run by a 10 Hz tick. `on_open_page` and `on_drawer_toggled` both re-push after
+            // moving the stack, so the page is pushed at the moment it arrives.
+            if !on_screen(&stack.borrow(), nav::Page::Parts) {
+                return;
+            }
+            let busy = work.borrow().busy();
+            push_parts(
+                &w,
+                &mut parts.borrow_mut(),
+                &settings.borrow(),
+                caps,
+                busy,
+                &groups,
+                &rows_m,
+                &detail,
+            );
+        })
+    };
+    repaint.borrow_mut().push(repaint_parts.clone());
+
+    // One row opened or closed, **by part id and never by index** — `parts.slint:355` compares
+    // `parts-detail-of` against `r.id`, and a removal renumbers nothing because ids are never
+    // reused. The read that fills the body happens inside `open_row`, on this press, which is
+    // what keeps a hash of somebody's firmware off the repaint path.
+    {
+        let parts = parts.clone();
+        let settings = settings.clone();
+        let stack = stack.clone();
+        let repaint_parts = repaint_parts.clone();
+        window.on_parts_expand(move |id, open| {
+            parts.borrow_mut().open_row(&settings.borrow(), id, open);
+            // §16.8: `Esc` closes the open Expand before it leaves the page, and the id is how it
+            // names which. `Stack::expand_closed` closes only the one named, so a stale close from
+            // a row that has already gone cannot shut the one that is open now.
+            let mut s = stack.borrow_mut();
+            if open {
+                s.expand_opened(id.max(0) as u32);
+            } else {
+                s.expand_closed(id.max(0) as u32);
+            }
+            drop(s);
+            repaint_parts();
+        });
+    }
+
+    // A group's own verb. **Both ordinals are decoded exhaustively** and an unknown one is a
+    // no-op: `parts-group-action(int, int)` carries a `Group` and an `Action` that travel
+    // independently, so they can arrive paired with each other wrongly — `Group::offers` is the
+    // guard inside `group_action` for that, and this is the guard for a number nothing knows.
+    {
+        let parts = parts.clone();
+        let composer = composer.clone();
+        let stack = stack.clone();
+        let settings = settings.clone();
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let devices = devices.clone();
+        let work = work.clone();
+        let showing_welcome = showing_welcome.clone();
+        let redraw = redraw.clone();
+        let repaint_all = repaint_all.clone();
+        let weak = window.as_weak();
+        window.on_parts_group_action(move |g, a| {
+            let Some(w) = weak.upgrade() else { return };
+            let (Some(group), Some(action)) = (parts::Group::from_i32(g), parts::Action::from_i32(a))
+            else {
+                return;
+            };
+            // **The two verbs the Composer answers, routed here in the same way `Edit` is.**
+            // `Action::needs` says both are live *because this build has a Composer* — a surface
+            // that holds a recipe is what `Synthesise…` and `Build…` need — and opening a page is
+            // not something `parts.rs` can do, being toolkit-free. Until this, both were blue
+            // controls that answered *there is no Composer in this build yet*, which is the one
+            // thing that made them blue.
+            //
+            // The same entrance `+ New device ›` uses, deliberately: composing is where an iPod and
+            // a drive are both made in this program, and a second route into it that started
+            // somewhere else would be a second answer to what the page opens on.
+            if matches!(action, parts::Action::Synthesise | parts::Action::Build)
+                && group.offers(action)
+            {
+                *composer.borrow_mut() = Some(composer::Composer::new());
+                stack.borrow_mut().push(nav::Page::Composer);
+                redraw();
+                push_nav(&w, &stack.borrow());
+                return;
+            }
+            // Every borrow is scoped to this block and released before anything matches on what
+            // came out of it — §20 item 12, the `RefMut` that lived to the end of a `match`.
+            let outcome = {
+                let mut s = settings.borrow_mut();
+                parts.borrow_mut().group_action(&mut s, group, action)
+            };
+            library_moved(
+                &w,
+                outcome,
+                &settings,
+                &rail,
+                &rows,
+                &devices,
+                &work,
+                &showing_welcome,
+                caps,
+                cost,
+            );
+            repaint_all();
+        });
+    }
+
+    // One control inside one part. `Remove` is the only ordinal this markup writes as a literal
+    // (`parts.slint:248`); the rest arrive as `DetailRow.action`, which Rust put there.
+    {
+        let parts = parts.clone();
+        let settings = settings.clone();
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let devices = devices.clone();
+        let work = work.clone();
+        let showing_welcome = showing_welcome.clone();
+        let repaint_all = repaint_all.clone();
+        let weak = window.as_weak();
+        window.on_parts_row_action(move |a, id| {
+            let Some(w) = weak.upgrade() else { return };
+            let Some(action) = parts::RowAction::from_i32(a) else { return };
+            let outcome = {
+                let mut s = settings.borrow_mut();
+                parts.borrow_mut().row_action(&mut s, action, id, running_machine().as_deref())
+            };
+            library_moved(
+                &w,
+                outcome,
+                &settings,
+                &rail,
+                &rows,
+                &devices,
+                &work,
+                &showing_welcome,
+                caps,
+                cost,
+            );
+            repaint_all();
+        });
+    }
+
+    // ── §7.2's Devices page: what is INSIDE the open row ─────────────────────────────────────────
+    //
+    // **`device_page`, not `devices`** — that name is already the shelf's retained `VecModel`, and
+    // this is the page's cursor. `refresh_devices` keeps every property of the row itself; this
+    // block owns `devices-detail`, `devices-detail-of` and `devices-start`, and nothing else.
+    let device_page = Rc::new(RefCell::new(devices::Devices::new()));
+    let d_detail: Rc<VecModel<DetailRow>> = Rc::new(VecModel::default());
+    window.set_devices_detail(ModelRc::from(d_detail.clone()));
+
+    let repaint_devices: Repaint = {
+        let device_page = device_page.clone();
+        let settings = settings.clone();
+        let stack = stack.clone();
+        let detail = d_detail.clone();
+        let weak = window.as_weak();
+        Rc::new(move || {
+            let Some(w) = weak.upgrade() else { return };
+            if !on_screen(&stack.borrow(), nav::Page::Devices) {
+                return;
+            }
+            push_devices_detail(&w, &mut device_page.borrow_mut(), &settings.borrow(), caps, &detail);
+        })
+    };
+    repaint.borrow_mut().push(repaint_devices.clone());
+
+    // The row's own Expand. **The index is resolved to a name inside `open_row`** — a device
+    // inserted or removed above the open one moves every index below it, and a cursor holding one
+    // would then be showing somebody else's identity.
+    {
+        let device_page = device_page.clone();
+        let settings = settings.clone();
+        let stack = stack.clone();
+        let repaint_devices = repaint_devices.clone();
+        window.on_device_expand(move |index, open| {
+            device_page.borrow_mut().open_row(&settings.borrow(), index, open);
+            let mut s = stack.borrow_mut();
+            if open {
+                s.expand_opened(index.max(0) as u32);
+            } else {
+                s.expand_closed(index.max(0) as u32);
+            }
+            drop(s);
+            repaint_devices();
+        });
+    }
+
+    // One control inside one device's body. **The press carries an index and this ignores it**:
+    // every act is drawn inside the open row, so the subject is the cursor `Devices` is already
+    // holding by name — resolving the index a second time against a list that has moved is how
+    // `Remove` comes to forget the neighbour of the row somebody pressed.
+    {
+        let device_page = device_page.clone();
+        let composer = composer.clone();
+        let settings = settings.clone();
+        let stack = stack.clone();
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let devices = devices.clone();
+        let work = work.clone();
+        let showing_welcome = showing_welcome.clone();
+        let redraw = redraw.clone();
+        let repaint_all = repaint_all.clone();
+        let weak = window.as_weak();
+        window.on_device_row_action(move |a, _index| {
+            let Some(w) = weak.upgrade() else { return };
+            let Some(action) = parts::RowAction::from_i32(a) else { return };
+            // **§11.2's *existing and new look identical*, given its route at last.**
+            // `Composer::editing` is the only constructor that opens the Composer on a device that
+            // exists, and until this press nothing outside `devices.rs` reached it — so the
+            // `Mode::Editing` title `push_composer` already draws was drawn by nothing. It is
+            // answered here rather than by `Devices::row_action`, which refuses `Edit`
+            // deliberately: it changes no library and returns something that is not a `Wrote`.
+            if action == parts::RowAction::Edit {
+                let opened = device_page.borrow().editor(&settings.borrow());
+                // `None` is the same no-op an unknown ordinal gets: the cursor names a device the
+                // library no longer holds, so there is nothing to edit and nothing to say.
+                if let Some(c) = opened {
+                    *composer.borrow_mut() = Some(c);
+                    stack.borrow_mut().push(nav::Page::Composer);
+                    redraw();
+                    push_nav(&w, &stack.borrow());
+                }
+                return;
+            }
+            let outcome = {
+                let mut s = settings.borrow_mut();
+                device_page.borrow_mut().row_action(&mut s, action, running_machine().as_deref())
+            };
+            library_moved(
+                &w,
+                outcome,
+                &settings,
+                &rail,
+                &rows,
+                &devices,
+                &work,
+                &showing_welcome,
+                caps,
+                cost,
+            );
+            repaint_all();
+        });
+    }
+
+    // ── §11.6's Settings page: one callback for three rows ───────────────────────────────────────
+    let prefs = Rc::new(RefCell::new(settings_page::Prefs::new()));
+    let repaint_settings: Repaint = {
+        let prefs = prefs.clone();
+        let settings = settings.clone();
+        let stack = stack.clone();
+        let weak = window.as_weak();
+        Rc::new(move || {
+            let Some(w) = weak.upgrade() else { return };
+            if !on_screen(&stack.borrow(), nav::Page::Settings) {
+                return;
+            }
+            push_settings(&w, &prefs.borrow(), &settings.borrow(), caps);
+        })
+    };
+    repaint.borrow_mut().push(repaint_settings.clone());
+
+    {
+        let prefs = prefs.clone();
+        let settings = settings.clone();
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let work = work.clone();
+        let repaint_settings = repaint_settings.clone();
+        let weak = window.as_weak();
+        window.on_setting_toggled(move |n| {
+            let Some(w) = weak.upgrade() else { return };
+            let row = settings_page::Row::from_i32(n);
+            let outcome = {
+                let mut s = settings.borrow_mut();
+                prefs.borrow_mut().toggled(&mut s, n, caps)
+            };
+            match outcome {
+                // **This is the one producer that saves for itself**, so every arm answers
+                // `Wrote::Nothing` and there is no `save` here. `settings.slint:104` binds the
+                // failure to the toggle's own consequence, so the page has to *observe* the write
+                // to word the sentence; a save on top of it would regenerate the operator's file a
+                // second time, comments and all, for no change.
+                Ok(_) => {
+                    // §11.6: `toggled` answers WHETHER the path may be copied; the copy itself is
+                    // here, because this is the only file that may name a toolkit. The text is
+                    // `View::file_path`, so the row and the pasteboard cannot show two files.
+                    // `on_copy_text` is the one gate under it and refuses today, out loud.
+                    if row == Some(settings_page::Row::CopyPath) {
+                        let at = prefs.borrow().view(&settings.borrow(), caps).file_path;
+                        w.invoke_copy_text(at.into());
+                    }
+                }
+                Err(why) => drop(rail.borrow_mut().note(&why)),
+            }
+            sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+            repaint_settings();
+        });
+    }
+
     // ── `Esc`, which has ONE definition (§16.8) ──
     {
         let stack = stack.clone();
+        let parts = parts.clone();
+        let device_page = device_page.clone();
+        let composer = composer.clone();
+        let settings = settings.clone();
+        let repaint_all = repaint_all.clone();
         let weak = window.as_weak();
         window.on_escape_pressed(move || {
             // §12.2's four phases, `Off` included. There is no machine, so `Off` is not a default
             // somebody typed at this call site — it is the only phase this build can be in, and
             // when the bench starts one these two booleans are the whole of the handoff.
             let p = phase();
-            let what = stack.borrow_mut().escape(is_booting(&p), is_running(&p));
+            // Scoped, because every arm below borrows the stack again to ask which page is on
+            // screen — §20 item 12's `RefMut` living to the end of a `match` is exactly this shape.
+            let what = { stack.borrow_mut().escape(is_booting(&p), is_running(&p)) };
             match what {
                 // Both of these are reachable only once there is a machine, and `phase()` says
                 // there is not. They are matched rather than defaulted so that the day one exists,
                 // the compiler points here.
                 nav::Escape::Park | nav::Escape::PowerOff => {}
+                // **The Stack holds an id; the page holds the row.** `escape` clears the id, and
+                // until now nothing cleared the cursor underneath it — so `Esc` on an open Expand
+                // closed the Stack's idea of it and the next repaint drew the row open again, from
+                // `parts-detail-of` / `devices-detail-of` / `Composer::open`, which had not moved.
+                // One `Esc`, one closed row, on whichever page owns the one that was open.
+                nav::Escape::ClosedExpand => {
+                    let page = stack.borrow().page();
+                    match page {
+                        nav::Page::Parts => {
+                            parts.borrow_mut().open_row(&settings.borrow(), -1, false);
+                        }
+                        nav::Page::Devices => {
+                            device_page.borrow_mut().open_row(&settings.borrow(), -1, false);
+                        }
+                        _ => {
+                            if let Some(c) = composer.borrow_mut().as_mut() {
+                                c.set_open(None);
+                            }
+                        }
+                    }
+                }
                 nav::Escape::LeftFullscreen
-                | nav::Escape::ClosedExpand
                 | nav::Escape::WentBack
                 | nav::Escape::ClosedDrawer
                 | nav::Escape::Nothing => {}
@@ -1216,6 +1579,11 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
             if let Some(w) = weak.upgrade() {
                 push_nav(&w, &stack.borrow());
             }
+            // **`Esc` moves the stack, so it moves what is on screen** — and the registry's whole
+            // point is that arriving at a page pushes it. `on_start_device`, `on_open_page` and
+            // `on_drawer_back` all end here; this one did not, which left `Esc` the one way to
+            // reach a page without telling it.
+            repaint_all();
         });
     }
 
@@ -2275,6 +2643,10 @@ fn push_nav(window: &MainWindow, stack: &nav::Stack) {
     window.set_drawer_open(stack.open());
     window.set_drawer_depth(stack.depth());
     window.set_drawer_page(to_markup(stack.page()));
+    // **Which page `‹` returns to**, so the Composer's header can name it. It is the page rather
+    // than its name: a page's own word is a markup literal everywhere in this window — `back:
+    // "Menu"`, `title: "Parts"` — and a second spelling of it in Rust is how the two come apart.
+    window.set_drawer_under(to_markup(stack.under()));
 }
 
 /// §16.9: **mutate the retained model, never replace it.**
@@ -2653,15 +3025,17 @@ fn to_fix(f: &composer::FixRow) -> FixRow {
 /// `push_devices_detail` are written by different hands and a flattener each would be two answers
 /// to *what is a `DetailRow`*.
 ///
-/// It renames fields and decides nothing. The one thing that looks like a decision is not one:
+/// It renames fields and decides nothing. The two things that look like a decision are not:
 /// `machine_rule` comes from the `Detail` rather than from the `FixRow` inside it because
 /// `DetailRow` has exactly one such property and the markup binds it in both renderings —
-/// `parts.slint:63` on the act, and the paragraph branch below it. One property, one producer.
-#[allow(dead_code)] // retired when: `push_parts` or `push_devices_detail` calls it — the two `push_*` land with their producers
+/// `parts.slint`'s act, and the paragraph branch below it — and `destructive` is
+/// [`parts::RowAction::destructive`]'s answer about the act, asked rather than decided. That one
+/// exists because the two pages drew this struct in two colours: `Ink.accent` on Parts and
+/// `Ink.danger` on Devices, so `Edit…` was red. One struct, one flattener, one colour rule.
 fn to_detail(d: &parts::Detail) -> DetailRow {
-    let (action, has_action, act) = match &d.action {
-        Some((a, f)) => (a.as_i32(), true, f.clone()),
-        None => (0, false, composer::FixRow::default()),
+    let (action, has_action, destructive, act) = match &d.action {
+        Some((a, f)) => (a.as_i32(), true, a.destructive(), f.clone()),
+        None => (0, false, false, composer::FixRow::default()),
     };
     DetailRow {
         label: d.label.clone().into(),
@@ -2670,6 +3044,7 @@ fn to_detail(d: &parts::Detail) -> DetailRow {
         machine_rule: d.machine_rule,
         action,
         has_action,
+        destructive,
         act_label: act.label.into(),
         enabled: act.enabled,
         reason: act.reason.into(),
@@ -2677,6 +3052,73 @@ fn to_detail(d: &parts::Detail) -> DetailRow {
         presses: i32::from(act.presses),
         consequence: act.consequence.into(),
     }
+}
+
+/// One group of §11.4's six, across the boundary.
+///
+/// **`has-a` / `a` / `a-action` are one `Option` on the Rust side and three properties here**, and
+/// this is the only place they can come apart — which is why the three are written from one
+/// `match` on that `Option` rather than from three expressions over it.
+fn to_group(g: &parts::GroupView) -> GroupRow {
+    let (has_a, a_action, a) = match &g.a {
+        Some((a, f)) => (true, a.as_i32(), to_fix(f)),
+        None => (false, 0, FixRow::default()),
+    };
+    let (has_b, b_action, b) = match &g.b {
+        Some((b, f)) => (true, b.as_i32(), to_fix(f)),
+        None => (false, 0, FixRow::default()),
+    };
+    GroupRow {
+        group: g.group.as_i32(),
+        heading: g.heading.clone().into(),
+        count: g.count as i32,
+        verb: g.verb.clone().into(),
+        empty: g.empty.clone().into(),
+        a,
+        b,
+        has_a,
+        has_b,
+        a_action,
+        b_action,
+    }
+}
+
+/// One part, across the boundary.
+///
+/// There is no `open` here and `PartRow` has no such field: which row is open is `parts-detail-of`,
+/// compared against `r.id` by the page, and a second copy of it on every row is a cursor that can
+/// disagree with itself. `selected` is the *same* answer worded for the material — `PartView` is
+/// what computes it, once.
+fn to_part(p: &parts::PartView) -> PartRow {
+    PartRow {
+        id: p.id,
+        group: p.group.as_i32(),
+        kind: p.kind.as_i32(),
+        name: p.name.clone().into(),
+        fact: p.fact.clone().into(),
+        used_by: p.used_by.clone().into(),
+        expandable: p.expandable,
+        selected: p.selected,
+        removable: p.removable,
+        remove_consequence: p.remove_consequence.clone().into(),
+        locked_by: p.locked_by.clone().into(),
+    }
+}
+
+/// §11.4's boot-screen preview, into the one image type the markup can draw.
+///
+/// **`parts.rs` may not name a toolkit type** (§9 of the contract), so it answers in raw RGB8 and
+/// the wrapping happens here — the same boundary `dark_screen` crosses for the panel, and the same
+/// three bytes per pixel.
+fn to_image(p: &parts::Preview) -> slint::Image {
+    let mut buf = SharedPixelBuffer::<slint::Rgb8Pixel>::new(p.w, p.h);
+    let px = buf.make_mut_bytes();
+    // The producer's own contract: `w * h * 3`. A short buffer would draw a torn framebuffer
+    // rather than fail, so it is copied by the length the destination wants and asserted in
+    // `the_boot_screen_preview_crosses_the_boundary_whole`.
+    let n = px.len().min(p.rgb.len());
+    px[..n].copy_from_slice(&p.rgb[..n]);
+    slint::Image::from_rgb8(buf)
 }
 
 fn to_pick(p: &composer::Pick) -> PickRow {
@@ -3446,6 +3888,152 @@ fn rgb(c: Colour) -> (u8, u8, u8) {
 fn dark_screen() -> slint::Image {
     let buf = SharedPixelBuffer::new(emu::FB_W as u32, emu::FB_H as u32);
     slint::Image::from_rgb8(buf)
+}
+
+// ── The three drawer pages, across the boundary ─────────────────────────────────────────────────
+//
+// One `push_*` per page, each taking the page's cursor and the library and writing every property
+// the page declares. They are functions rather than closure bodies for §20 item 12's reason: a
+// closure registered inside [`wire`] is reachable from nothing, and the whole of what these do —
+// the walk of the library, the flattening, the retained-model update — would then be testable only
+// through a press.
+
+/// Which device the emulator is running, by name — **`None`, because there is no machine.**
+///
+/// Every page that draws §9.4's machine rule takes this as an argument rather than asking, for the
+/// reason `Composer::lock` states about `building`: *a gate wired to a phase nothing computes must
+/// not pretend to fire.* [`phase`] answers `Off` unconditionally, so the answer is `None` today and
+/// the three rules that key on it are drawn by those files' own tests and by nothing else.
+///
+/// It is one function rather than a `None` typed at each of the five call sites so that the day the
+/// bench starts a machine, there is exactly one place that learns its name — the same shape
+/// [`phase`] itself is, and for the same reason.
+fn running_machine() -> Option<String> {
+    None
+}
+
+/// §11.4's Parts page, whole.
+///
+/// **`busy` is the queue's, asked here rather than inside `parts.rs`**: a build owns the drive it
+/// is writing and the bundle it is reading, so `Build…` and `Discard` are refused while one is in
+/// flight — and `parts.rs` is toolkit-free and holds no queue.
+#[allow(clippy::too_many_arguments)] // one argument per retained model, which is what §16.9's in-place rule costs
+fn push_parts(
+    window: &MainWindow,
+    page: &mut parts::Parts,
+    settings: &Settings,
+    caps: rail::Caps,
+    busy: bool,
+    groups: &Rc<VecModel<GroupRow>>,
+    rows: &Rc<VecModel<PartRow>>,
+    detail: &Rc<VecModel<DetailRow>>,
+) {
+    // **One `Presence` per pass, shared by every row.** `Parts::view`'s own doc: the only
+    // filesystem work it does is `seen.exists`, and a second cache would stat the same paths twice
+    // and could answer differently between two rows of one page.
+    let mut seen = Presence::new();
+    let v = page.view(settings, &mut seen, caps, busy, running_machine().as_deref());
+    in_place(groups, &v.groups.iter().map(to_group).collect::<Vec<_>>());
+    in_place(rows, &v.rows.iter().map(to_part).collect::<Vec<_>>());
+    in_place(detail, &v.detail.iter().map(to_detail).collect::<Vec<_>>());
+    window.set_parts_detail_of(v.detail_of);
+    // **`has-preview` is the flag and the image is only pushed with it.** Pushing a stale
+    // framebuffer under a false flag leaves the last ROM's boot screen sitting in the property,
+    // ready to appear under the next row that asks for one before its own read lands.
+    match &v.preview {
+        Some(p) => {
+            window.set_parts_preview(to_image(p));
+            window.set_parts_has_preview(true);
+        }
+        None => {
+            window.set_parts_has_preview(false);
+            window.set_parts_preview(slint::Image::default());
+        }
+    }
+}
+
+/// §7.2's Devices page — **the open row's body, and nothing else.**
+///
+/// `refresh_devices` already pushes `devices`, `devices-empty-line` and `devices-new`; a second
+/// writer for a property one function already pushes is how two producers come to disagree about
+/// one page. What this adds is what is *inside* the open row.
+fn push_devices_detail(
+    window: &MainWindow,
+    page: &mut devices::Devices,
+    settings: &Settings,
+    caps: rail::Caps,
+    detail: &Rc<VecModel<DetailRow>>,
+) {
+    let mut seen = Presence::new();
+    let v = page.view(settings, &mut seen, caps, running_machine().as_deref());
+    in_place(detail, &v.detail.iter().map(to_detail).collect::<Vec<_>>());
+    window.set_devices_detail_of(v.detail_of);
+    // **`unwrap_or_default` writes a property nothing is drawing.** `View::start` is `None`
+    // exactly when no row is open, and a closed `Expand` is `visible: false` — so the default's
+    // empty label and empty reason reach no pixel. A default `FixRow` on a *drawn* control would
+    // be §9.4's forbidden construction: disabled, with nothing said.
+    window.set_devices_start(to_fix(&v.start.unwrap_or_default()));
+}
+
+/// Whether `p` is the page the drawer is actually showing.
+///
+/// **Both halves.** A page still on the stack behind a *closed* drawer is not on screen, and every
+/// re-push guarded by this walks the whole library — a cost the 10 Hz build tick would otherwise
+/// pay for a page nobody can see. `on_drawer_toggled` re-pushes when the drawer comes back, which
+/// is what makes the closed half safe rather than merely cheap.
+fn on_screen(stack: &nav::Stack, p: nav::Page) -> bool {
+    stack.open() && stack.page() == p
+}
+
+/// What every act on the three pages does afterwards: **say the refusal, and save only a move.**
+///
+/// `Wrote` is a save instruction — *whether the library moved, and therefore whether `main.rs`
+/// saves* — and `Settings::render` regenerates the file whole, taking any comment the operator
+/// added with it. So a refusal, which mutates nothing, must not rewrite somebody's file; it goes on
+/// the Rail instead, where §14.1 wants it. One function rather than three copies of that decision,
+/// because three copies is how one of them comes to save on a refusal.
+#[allow(clippy::too_many_arguments)] // the world the three pages share; a struct holding it would be the same fields under a new name
+fn library_moved(
+    window: &MainWindow,
+    outcome: Result<parts::Wrote, String>,
+    settings: &Rc<RefCell<Settings>>,
+    rail: &Rc<RefCell<rail::Rail>>,
+    rows: &Rc<VecModel<RailRow>>,
+    devices: &Rc<VecModel<DeviceRow>>,
+    work: &Rc<RefCell<work::Queue>>,
+    showing_welcome: &Rc<std::cell::Cell<bool>>,
+    caps: rail::Caps,
+    cost: compose::Cost,
+) {
+    match outcome {
+        Ok(parts::Wrote::Library) => {
+            save(&settings.borrow(), &mut rail.borrow_mut());
+            // **The measured bill from the first press onwards**, exactly as `on_start_device`
+            // takes it: on a volume without sparse files the real cost is 8.6 GB rather than 28 MB,
+            // and the shelf quoting the assumption the plan was drawn under is the whole run wrong.
+            let cost = work.borrow().measured_cost().unwrap_or(cost);
+            refresh_devices(window, devices, &settings.borrow(), showing_welcome, caps, cost);
+        }
+        Ok(parts::Wrote::Nothing) => {}
+        // §14.1: say the refusal. `Rail::note` folds a repeated sentence into one, so pressing a
+        // refused control twice does not stack two copies of it; its id is not wanted here.
+        Err(why) => drop(rail.borrow_mut().note(&why)),
+    }
+    sync_rail(window, rows, &rail.borrow(), caps, work.borrow().shape());
+}
+
+/// §11.6's Settings page — the nine `setting-*` properties, from the one bundle that holds nine.
+fn push_settings(window: &MainWindow, page: &settings_page::Prefs, settings: &Settings, caps: rail::Caps) {
+    let v = page.view(settings, caps);
+    window.set_setting_theme_value(v.theme_value.into());
+    window.set_setting_theme_enabled(v.theme_enabled);
+    window.set_setting_theme_reason(v.theme_reason.into());
+    window.set_setting_check_updates(v.check_updates);
+    window.set_setting_toggle_reason(v.toggle_reason.into());
+    window.set_setting_file_name(v.file_name.into());
+    window.set_setting_file_path(v.file_path.into());
+    window.set_setting_copy_enabled(v.copy_enabled);
+    window.set_setting_copy_reason(v.copy_reason.into());
 }
 
 #[cfg(test)]
@@ -8182,6 +8770,466 @@ pub(crate) mod tests {
         // §9.2's cradle line. `verb-width` is deliberately absent: it is an `out property`, so
         // there is no setter, and that asymmetry is the point of it.
         let _: fn(&MainWindow, slint::SharedString) = MainWindow::set_working_label;
+    }
+
+    /// **Every `in property` the window declares has a producer, and every `callback` a handler.**
+    ///
+    /// The gate this whole wave exists to satisfy, and the shape of defect it catches is the one no
+    /// compiler and no other sweep in this file can see: a property declared in `ui/window.slint`,
+    /// forwarded down through `drawer.slint` into a page, bound to a `Text` — and never written.
+    /// It draws. It draws the type's default: an empty string, a `false`, an empty model. So
+    /// `ui/settings.slint` shipped three rows with **empty labels**, two of them disabled carrying
+    /// an **empty** `reason` — the construction `primitives.slint:369` declares against — and
+    /// `ui/parts.slint` shipped a header over blank space. Eighteen properties and six callbacks
+    /// were in that state when this was written; a control that fires nothing is §19.1's first
+    /// fatal finding, and a control that draws nothing is the same fault one layer quieter.
+    ///
+    /// **It reads the shipped half of every module**, not just `main.rs`: `rust_sources` has
+    /// already cut each file at its own `mod tests {`, so a setter called only from a test does not
+    /// count. That is the whole point — a property a test pushes and the program does not is
+    /// exactly the hole this is looking for.
+    ///
+    /// **The exception list is dated and it is checked in both directions.** A property with no
+    /// setter is not automatically a defect — `running` is honestly absent, see below — but *which*
+    /// ones are exempt has to be a decision somebody wrote down rather than a silence. So the
+    /// assertion is an equality: a nineteenth unwritten property turns it red because the left side
+    /// grew, and an exception whose property has since gained a setter turns it red because the
+    /// right side has one too many. Neither can be added or left behind quietly.
+    ///
+    /// **`in-out` is deliberately not swept.** `selected` is the one, and the markup is a writer of
+    /// it — `selected <=> root.selected` all the way down to a Devices row — so *nothing in Rust
+    /// sets this* is not a defect there, it is the arrangement. It happens to have a setter anyway;
+    /// sweeping it would still be asking the wrong question.
+    #[test]
+    fn every_window_property_is_pushed_and_every_callback_registered() {
+        // ── The dated exception list ──────────────────────────────────────────────────────────
+        //
+        // One entry. Each names the property and the observation that would retire it, in the same
+        // shape `research/04` uses for a bypass and `every_dead_code_allow_says_what_would_retire_it`
+        // enforces for an allow: without one, an exemption is indistinguishable from an oversight.
+        const NO_SETTER: [(&str, &str); 1] = [(
+            "running",
+            "2026-08-22. §12.2's handoff, and there is no machine: `phase()` answers `Off` \
+             unconditionally, so this build starts nothing from the window. `running` lights the \
+             drawn panel (`window.slint:472`) and tells the bench it has a machine (`:480`), and \
+             the only value there is to push is a compile-time `false` — a window pushing that \
+             would be claiming to have asked something it has not. Retired when: the bench starts \
+             a machine and `emu::Link`'s `Out.phase` reaches this file, at which point `phase()` \
+             stops being a constant and this is pushed beside `screen-source`.",
+        )];
+
+        // ── Reading the markup ────────────────────────────────────────────────────────────────
+        let markup = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/window.slint"))
+            .expect("ui/window.slint");
+        let mut props: Vec<String> = Vec::new();
+        let mut callbacks: Vec<String> = Vec::new();
+        for line in markup.lines() {
+            let t = line.trim_start();
+            // Prose about a property is not a property — this file's own header argues about
+            // `in property` versus a constant in four places, and an instrument that read those
+            // would be reporting a defect it created by looking.
+            if t.starts_with("//") {
+                continue;
+            }
+            if let Some(rest) = t.strip_prefix("in property ") {
+                // `<[DeviceRow]> devices;` · `<bool> ghost: false;` · `<length> select-d: expr;`
+                let Some((_, after)) = rest.split_once("> ") else { continue };
+                let name: String =
+                    after.chars().take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
+                if !name.is_empty() {
+                    props.push(name);
+                }
+            } else if let Some(rest) = t.strip_prefix("callback ") {
+                let name: String =
+                    rest.chars().take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
+                if !name.is_empty() {
+                    callbacks.push(name);
+                }
+            }
+        }
+
+        // ── The controls, before any verdict ──────────────────────────────────────────────────
+        //
+        // A parser that reads nothing declares every property produced and every callback handled,
+        // and goes green. §6: before believing a zero, run the control that makes the instrument
+        // produce a non-zero.
+        assert!(
+            props.len() >= 50 && callbacks.len() >= 20,
+            "the markup sweep read {} properties and {} callbacks, which is not this window",
+            props.len(),
+            callbacks.len()
+        );
+        assert!(
+            props.iter().any(|p| p == "devices-detail") && props.iter().any(|p| p == "parts-groups"),
+            "the property parser missed a `<[DetailRow]>` declaration, so every model property is \
+             invisible to it"
+        );
+        assert!(
+            callbacks.iter().any(|c| c == "setting-toggled") && callbacks.iter().any(|c| c == "explain"),
+            "the callback parser missed a declaration"
+        );
+        // **The trailing `(` is the boundary**, and without it a shorter name is answered by a
+        // longer one's setter — `set_devices` by `set_devices_detail`, silently, for ever.
+        assert!(
+            !"w.set_devices_detail(&v);".contains("set_devices("),
+            "the matcher would count a longer setter as a shorter property's producer"
+        );
+
+        // ── Reading the program ───────────────────────────────────────────────────────────────
+        //
+        // Comment lines dropped: a doc naming `set_composer_open_field` is not a call to it, and
+        // this file names its own setters in prose more than once.
+        let code: String = rust_sources()
+            .iter()
+            .flat_map(|(_, t)| t.lines().filter(|l| !l.trim_start().starts_with("//")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains("set_rail(") && code.contains("on_start_device("),
+            "the source sweep read no shipped code at all"
+        );
+
+        let snake = |n: &str| n.replace('-', "_");
+
+        let mut unset: Vec<String> = props
+            .iter()
+            .filter(|p| !code.contains(&format!("set_{}(", snake(p))))
+            .cloned()
+            .collect();
+        unset.sort();
+        unset.dedup();
+        let mut exempt: Vec<String> = NO_SETTER.iter().map(|(n, _)| (*n).to_string()).collect();
+        exempt.sort();
+        for (name, why) in NO_SETTER {
+            assert!(
+                why.contains("2026-") && why.to_ascii_lowercase().contains("retired when"),
+                "the exception for `{name}` carries no date or no retirement condition"
+            );
+        }
+        assert_eq!(
+            unset, exempt,
+            "the set of `in property` declarations nothing writes is not the dated exception list. \
+             A name on the left and not the right is a property the window draws and no producer \
+             fills — it renders its type's default, which is an empty label or an empty `reason`. \
+             A name on the right and not the left is an exception that has been retired: delete it"
+        );
+
+        let unhandled: Vec<String> = callbacks
+            .iter()
+            .filter(|c| !code.contains(&format!("on_{}(", snake(c))))
+            .cloned()
+            .collect();
+        assert!(
+            unhandled.is_empty(),
+            "{unhandled:?}: declared, fired by a control that is drawn enabled, and registered by \
+             nobody — so the control does nothing and says nothing, which is §19.1's first fatal \
+             finding"
+        );
+    }
+
+
+    /// **§11.4's Parts page stops being a header over blank space.**
+    ///
+    /// Six groups declared, six models pushed, and a row that opens. Everything below was drawn by
+    /// nothing until this wave: `parts-groups`, `parts-rows`, `parts-detail` and `parts-detail-of`
+    /// had no setter anywhere in the program, so `PartsPage` rendered its `for` loops over three
+    /// empty models under a header — and `parts-expand` was declared, fired by every row's chevron,
+    /// and registered by nobody.
+    ///
+    /// **It drives the registered callbacks on the real markup**, which is §20 item 12's whole
+    /// lesson: a closure registered inside `wire` is reachable from nothing, and a test that
+    /// called `Parts::open_row` directly would prove the producer and not the wiring.
+    #[test]
+    fn the_parts_page_draws_its_groups_and_opens_a_row() {
+        let dir = temp_dir("parts-wired");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d);
+        let settings = Rc::new(RefCell::new(s));
+
+        let w = a_window();
+        let _wiring = wire(&w, settings.clone());
+        // Nothing is pushed while the page is off screen — the registry's guard, and the reason a
+        // 10 Hz build tick does not walk the library six times a second for a page nobody can see.
+        assert_eq!(w.get_parts_groups().row_count(), 0, "the page was pushed before it was opened");
+
+        w.invoke_open_page(DrawerPage::Parts, 1);
+
+        assert_eq!(
+            w.get_parts_groups().row_count(),
+            6,
+            "§11.4: six groups, always all six, even when empty"
+        );
+        let rows = w.get_parts_rows();
+        assert!(rows.row_count() >= 2, "the library's ROM and its drive are not on the page");
+        // The one expandable row this fixture has: the ROM. `Group::expandable` refuses disks.
+        let rom = (0..rows.row_count())
+            .filter_map(|i| rows.row_data(i))
+            .find(|r| r.expandable)
+            .expect("an expandable part");
+        assert_eq!(w.get_parts_detail_of(), -1, "a row is open before anything was pressed");
+
+        w.invoke_parts_expand(rom.id, true);
+
+        assert_eq!(w.get_parts_detail_of(), rom.id, "the press did not open the row it named");
+        assert!(
+            w.get_parts_detail().row_count() > 0,
+            "the row opened onto nothing; §11.4's Expand is the whole reason the id is carried"
+        );
+        // §16.8: `Esc` closes the open Expand — and the row is a cursor in `parts.rs`, not only an
+        // id in the `Stack`, so closing one without the other draws it open again on the next push.
+        w.invoke_escape_pressed();
+        assert_eq!(
+            w.get_parts_detail_of(),
+            -1,
+            "`Esc` cleared the Stack's expand id and left the page's cursor naming the row"
+        );
+        assert_eq!(w.get_drawer_page(), DrawerPage::Parts, "`Esc` left the page as well");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **§7.2's `Start` is reachable at last, and it is this page's own answer.**
+    ///
+    /// The button lives *inside* the row's `Expand` (`devices.slint:266`) and `devices-detail-of`
+    /// defaulted to `-1` with no setter, so `Expand.open` was false for every row for ever: the
+    /// five `Made of` lines were undrawn and so was the one control §7.2 puts on this page.
+    ///
+    /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
+    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:486` and
+    /// `:515` read for the drawn iPod, and `machine-rule` was a literal `true`.
+    #[test]
+    fn the_devices_page_opens_a_row_and_reaches_its_start() {
+        let dir = temp_dir("devices-wired");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d);
+        let settings = Rc::new(RefCell::new(s));
+
+        let w = a_window();
+        let _wiring = wire(&w, settings.clone());
+        w.invoke_open_page(DrawerPage::Devices, 1);
+        assert_eq!(w.get_devices_detail_of(), -1, "a device is open before anything was pressed");
+
+        w.invoke_device_expand(0, true);
+
+        assert_eq!(w.get_devices_detail_of(), 0, "the row did not open");
+        let detail = w.get_devices_detail();
+        assert!(
+            detail.row_count() >= 5,
+            "§7.2's five `Made of` lines are not all drawn: {} rows",
+            detail.row_count()
+        );
+        let start = w.get_devices_start();
+        assert_eq!(start.label, "Start", "the pushed `Start` row carries no label");
+        assert!(
+            start.enabled,
+            "a device whose parts are all present refuses to start: {:?}",
+            start.reason
+        );
+        // §9.4's construction, on the one control this page owns: live means no reason drawn.
+        assert!(start.reason.is_empty(), "a live control is carrying a refusal");
+        assert!(
+            !start.machine_rule,
+            "`machine-rule` is `true` again, which draws a project state as a law of physics"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **§11.2's *existing and new look identical*, given a surface at last.**
+    ///
+    /// `Composer::editing` is the only constructor that opens the Composer on a device that
+    /// exists. `devices::editor` gained it as a caller in the wave before this one and still had no
+    /// path from `main.rs`, so the `Mode::Editing` title `push_composer` already draws was drawn by
+    /// nothing and every entrance the window had constructed `Composer::new()`.
+    #[test]
+    fn editing_a_device_opens_the_composer_on_that_device() {
+        let dir = temp_dir("edit-wired");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d);
+        let settings = Rc::new(RefCell::new(s));
+
+        let w = a_window();
+        let _wiring = wire(&w, settings.clone());
+        w.invoke_open_page(DrawerPage::Devices, 1);
+        w.invoke_device_expand(0, true);
+
+        // The `Edit…` act's own ordinal, off the row that was pushed — never a number typed here.
+        let edit = w
+            .get_devices_detail()
+            .iter()
+            .find(|r| r.has_action && r.act_label.starts_with("Edit"))
+            .expect("§11.2's Edit route is not on the page");
+        w.invoke_device_row_action(edit.action, 0);
+
+        assert_eq!(w.get_drawer_page(), DrawerPage::Composer, "the press opened no page");
+        assert_eq!(
+            w.get_composer_title(),
+            "iPod 1",
+            "the Composer opened on `New device` rather than on the device that was pressed, so \
+             `Composer::editing` is still reachable from nothing"
+        );
+        // …and it opened on a recipe, not on an empty one: the iPod is the device's.
+        assert!(
+            !w.get_composer_which_value().is_empty(),
+            "the edit route opened a blank recipe"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **§11.6's three rows say what they are and why two of them are disabled.**
+    ///
+    /// Nine `setting-*` properties had no setter, so the page drew three rows with **empty labels**,
+    /// two of them disabled carrying an **empty** `reason` — the construction `primitives.slint:369`
+    /// declares against — and one live toggle that wrote nothing and reflected nothing.
+    #[test]
+    fn the_settings_page_states_every_refusal_and_the_toggle_sticks() {
+        let (settings, _held) = a_fresh_installation();
+        let w = a_window();
+        let _wiring = wire(&w, settings.clone());
+        w.invoke_open_page(DrawerPage::Settings, 1);
+
+        assert!(!w.get_setting_theme_value().is_empty(), "the Theme row has no value");
+        assert!(!w.get_setting_file_name().is_empty(), "the settings-file row has no name");
+        assert!(!w.get_setting_file_path().is_empty(), "…and no path");
+        // §9.4: non-empty whenever `!enabled`, on both rows this build refuses.
+        assert!(!w.get_setting_theme_enabled());
+        assert!(!w.get_setting_theme_reason().is_empty(), "Theme is disabled and says nothing");
+        assert!(!w.get_setting_copy_enabled());
+        assert!(!w.get_setting_copy_reason().is_empty(), "`Copy path` is disabled and says nothing");
+
+        // The one live control. `drawer.slint:544` fires this ordinal; `Row::CheckUpdates` is 1.
+        let before = settings.borrow().check_updates_on_start;
+        assert_eq!(w.get_setting_check_updates(), before, "the box does not reflect the library");
+        w.invoke_setting_toggled(1);
+        assert_eq!(
+            settings.borrow().check_updates_on_start,
+            !before,
+            "the toggle wrote nothing"
+        );
+        assert_eq!(
+            w.get_setting_check_updates(),
+            !before,
+            "the library moved and the box did not follow it"
+        );
+
+        // `Copy path` is refused, out loud, because there is no route to a pasteboard — and the
+        // refusal reaches the Rail rather than being swallowed.
+        let quiet = w.get_rail().row_count();
+        w.invoke_setting_toggled(2);
+        assert!(
+            w.get_rail().row_count() > quiet,
+            "a refused `Copy path` said nothing anywhere"
+        );
+    }
+
+    /// **A group verb that is drawn LIVE does something, and does not deny what made it live.**
+    ///
+    /// `Synthesise…` and `Build…` are blue because `rail::Caps::composer` is true — `Action::needs`
+    /// says in so many words that both are live *because this build has a Composer* — and pressing
+    /// either filed *there is no Composer in this build yet* on the Rail, one row from the page
+    /// that opens it. That is the same disease as an unregistered callback wearing a sentence: a
+    /// control that only apologises, and apologises for the wrong thing.
+    #[test]
+    fn a_live_group_verb_opens_the_composer_instead_of_denying_it() {
+        let dir = temp_dir("group-verb");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d);
+        let settings = Rc::new(RefCell::new(s));
+
+        let w = a_window();
+        let _wiring = wire(&w, settings.clone());
+        w.invoke_open_page(DrawerPage::Parts, 1);
+        let quiet = w.get_rail().row_count();
+
+        w.invoke_parts_group_action(parts::Group::Ipods.as_i32(), parts::Action::Synthesise.as_i32());
+
+        assert_eq!(
+            w.get_drawer_page(),
+            DrawerPage::Composer,
+            "`Synthesise…` opened no page, so it is still a live control that only files a sentence"
+        );
+        assert_eq!(
+            w.get_rail().row_count(),
+            quiet,
+            "it filed a refusal as well as opening the page, so the Rail carries an apology for \
+             something that happened"
+        );
+        assert_eq!(
+            w.get_composer_title(),
+            "New device",
+            "the route opened an editor rather than a new recipe"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The Composer's `‹` names the page it returns to, and there are two of them now.**
+    ///
+    /// `composer.slint` carried the literal `back: "Devices"` because that was the only entrance.
+    /// Parts' `Synthesise…` and `Build…` are a second one, and a header naming a page the press
+    /// does not return to is §16.9's stale claim on the one control whose whole job is to say
+    /// where you are going.
+    #[test]
+    fn the_composer_names_the_page_it_came_from() {
+        let dir = temp_dir("composer-back");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d);
+        let settings = Rc::new(RefCell::new(s));
+
+        let w = a_window();
+        let _wiring = wire(&w, settings.clone());
+
+        // From Parts.
+        w.invoke_open_page(DrawerPage::Parts, 1);
+        w.invoke_parts_group_action(parts::Group::Ipods.as_i32(), parts::Action::Synthesise.as_i32());
+        assert_eq!(w.get_drawer_page(), DrawerPage::Composer);
+        assert_eq!(
+            w.get_drawer_under(),
+            DrawerPage::Parts,
+            "the Composer opened from Parts and `‹` would send you to Devices"
+        );
+
+        // …and from Devices, which is the entrance the literal was right about.
+        w.invoke_drawer_back();
+        w.invoke_open_page(DrawerPage::Devices, 1);
+        w.invoke_device_expand(0, true);
+        let edit = w
+            .get_devices_detail()
+            .iter()
+            .find(|r| r.has_action && r.act_label.starts_with("Edit"))
+            .expect("§11.2's Edit route");
+        w.invoke_device_row_action(edit.action, 0);
+        assert_eq!(w.get_drawer_page(), DrawerPage::Composer);
+        assert_eq!(w.get_drawer_under(), DrawerPage::Devices);
+
+        // And `‹` goes where it says: back from the Composer lands on Devices, not on Parts.
+        w.invoke_drawer_back();
+        assert_eq!(w.get_drawer_page(), DrawerPage::Devices);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **§11.4's boot-screen preview crosses the boundary whole.**
+    ///
+    /// `parts.rs` may not name a toolkit type, so it answers in raw RGB8 and [`to_image`] wraps it.
+    /// Three bytes per pixel, in the producer's order, at the producer's size — a copy that
+    /// transposed or truncated would draw a torn framebuffer rather than fail.
+    #[test]
+    fn the_boot_screen_preview_crosses_the_boundary_whole() {
+        let p = parts::Preview {
+            w: 3,
+            h: 2,
+            rgb: (0..18u8).collect(),
+        };
+        let img = to_image(&p);
+        assert_eq!((img.size().width, img.size().height), (3, 2), "the preview changed size");
+        let back = img.to_rgb8().expect("an rgb8 image");
+        assert_eq!(
+            back.as_bytes(),
+            &p.rgb[..],
+            "the pixels that came back are not the pixels that went in"
+        );
+
+        // A short buffer is the one shape that would draw rather than fail. It must not panic, and
+        // what it draws is the part that was measured.
+        let short = parts::Preview { w: 3, h: 2, rgb: vec![7u8; 4] };
+        assert_eq!((to_image(&short).size().width, to_image(&short).size().height), (3, 2));
     }
 
     /// **The non-circular half of §20 item 11.**

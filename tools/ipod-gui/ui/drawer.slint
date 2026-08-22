@@ -228,6 +228,9 @@ export component Drawer inherits Rectangle {
     // state from two sides is how `Esc` came to have three meanings.
     in property <int> depth: 0;
     in property <DrawerPage> page: DrawerPage.none;
+    // What `‹` returns to — `nav::Stack::under`. Only the Composer's root reads it; every other
+    // page in this drawer is at depth 1 and returns to the menu, which each of them names itself.
+    in property <DrawerPage> under: DrawerPage.none;
     in property <int> rail-failures: 0;
     // The client height the drawer is being given. **Pushed in, because a component's root element
     // cannot read `parent`** — Slint says `Cannot access id 'parent'` — and the alternative, letting
@@ -261,6 +264,8 @@ export component Drawer inherits Rectangle {
     in property <int> devices-detail-of: -1;
     in property <string> devices-empty-line;
     in property <FixRow> devices-new;
+    // §7.2's `Start`, for the one open device. See `window.slint`'s own note beside it.
+    in property <FixRow> devices-start;
 
     // ── §11.4's Parts page ──
     in property <[GroupRow]> parts-groups;
@@ -477,6 +482,7 @@ export component Drawer inherits Rectangle {
                     detail-of: root.devices-detail-of;
                     empty-line: root.devices-empty-line;
                     new-device: root.devices-new;
+                    start-row: root.devices-start;
                     back-pressed => {
                         root.back();
                     }
@@ -554,6 +560,11 @@ export component Drawer inherits Rectangle {
                     width: 100%;
                     height: 100%;
                     visible: root.on-screen(3) && root.page == DrawerPage.composer;
+                    // What `‹` returns to. Worded here because `DrawerPage` is declared in this
+                    // file and this file imports `composer.slint`, so the enum cannot travel the
+                    // other way — and because the two words are already this file's, on the menu
+                    // rows at `:122` and `:135`.
+                    back-to: root.under == DrawerPage.parts ? "Parts" : "Devices";
                     device-title: root.composer-title;
                     which-value: root.composer-which-value;
                     runs-value: root.composer-runs-value;

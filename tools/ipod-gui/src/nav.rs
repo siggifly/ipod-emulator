@@ -123,6 +123,22 @@ impl Stack {
         self.pages.last().copied().unwrap_or(Page::None)
     }
 
+    /// The page one level **under** the top — what `back` returns to, and therefore what the
+    /// header's `‹` has to be named after.
+    ///
+    /// `Page::None` at depth 0 and 1, which is the menu, and the menu is what those pages already
+    /// name. It exists because the Composer is reachable from two depth-1 pages now — the Devices
+    /// row's `Edit…` and Parts' `Synthesise…` / `Build…` — and its header carried the literal
+    /// `back: "Devices"`, so arriving from Parts drew a `‹` naming a page the press would not
+    /// return to. The stack is the only thing that knows; a second answer computed anywhere else
+    /// is the same divergence one level along.
+    pub fn under(&self) -> Page {
+        if self.pages.len() < 2 {
+            return Page::None;
+        }
+        self.pages[self.pages.len() - 2]
+    }
+
     // **Not dead — not yet reached**, and the two are no longer waiting on the same thing.
     // Fullscreen (§12.6) is a surface this build still does not draw; the Expand (§8.1, §11.3)
     // landed with the Composer's pickers and `main.rs` drives it through `expand_opened` and

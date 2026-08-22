@@ -540,7 +540,7 @@ impl Composer {
     /// `the_verdict_the_plan_and_the_recipe_are_one_recipe` calls after every kind of edit.
     ///
     /// [`Composer::open`] sits in the middle of the run and is **not** gated: `push_composer` reads
-    /// it on every frame, through `set_composer_open_field` at `main.rs:2863`.
+    /// it on every frame, through `set_composer_open_field` at `main.rs:3305`.
     #[cfg(test)]
     pub fn region(&self) -> &Region {
         &self.region

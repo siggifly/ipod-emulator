@@ -3,7 +3,7 @@
 // **One page, three rows, and it is not a settings app.** `ui/settings.slint` draws the three and
 // this file answers every question they ask. Until it did, `window.slint`'s nine `setting-*`
 // properties were never written by anything: the page drew three rows with empty labels, two of
-// them disabled carrying an **empty** `reason` — the construction `primitives.slint:361` declares
+// them disabled carrying an **empty** `reason` — the construction `primitives.slint:369` declares
 // against (*"§9.4 — non-empty whenever `!enabled`"*) — and one live toggle that wrote nothing and
 // reflected nothing.
 //
@@ -14,8 +14,8 @@
 // it by number, so a renumbering here silently re-aims a live control — `Copy path` writing the
 // update preference, say. Measured in the file `build.rs` compiles:
 //
-//   - `Row::CheckUpdates` is **1** — `drawer.slint:541`, `root.setting-toggled(1)`.
-//   - `Row::CopyPath` is **2** — `drawer.slint:544`, `root.setting-toggled(2)`.
+//   - `Row::CheckUpdates` is **1** — `drawer.slint:544`, `root.setting-toggled(1)`.
+//   - `Row::CopyPath` is **2** — `drawer.slint:547`, `root.setting-toggled(2)`.
 //
 // `Row::Theme` is **0** and is ours: the theme row is drawn from `setting-theme-*` and fires
 // nothing yet. It is in the list because the page has three rows and a vocabulary with a hole in it
@@ -36,7 +36,7 @@
 // a global override for a per-device fact is how one setting comes to mean two things.
 //
 // **This is the one producer that saves for itself**, and [`Prefs::toggled`] returns `Wrote::Nothing`
-// from every arm because of it. `settings.slint:101` binds the failure to the toggle's own
+// from every arm because of it. `settings.slint:104` binds the failure to the toggle's own
 // `consequence` rather than to the Rail, so the page has to *observe* the write to word the
 // sentence — and a `Wrote::Library` on top of that would have `main.rs` write the file a second
 // time, which `Settings::render` regenerates whole, taking any comment the operator added with it.
@@ -52,7 +52,6 @@ use crate::rail::{Caps, Next};
 ///
 /// One handler for three rows, so Rust decides what each one writes — which is why the ordinal has
 /// to be exhaustively decoded here and an unknown one has to be a no-op.
-#[allow(dead_code)] // retired when: `wire` reaches `Prefs::toggled`, which decodes with `from_i32` already — what is dead is the call site, not this
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Row {
     Theme,
@@ -62,7 +61,6 @@ pub enum Row {
     CopyPath,
 }
 
-#[allow(dead_code)] // retired when: `wire` reaches `Prefs::toggled`; `from_i32` and `as_i32` are both called from this file already
 impl Row {
     pub const ALL: [Row; 3] = [Row::Theme, Row::CheckUpdates, Row::CopyPath];
 
@@ -73,6 +71,18 @@ impl Row {
     }
 
     /// Its index in [`Row::ALL`], which is the number the markup carries.
+    ///
+    /// **`#[cfg(test)]` rather than `#[allow(dead_code)]`**, and for the reason `parts::Kind`'s
+    /// other half now carries: an allow here would sit on a name `main.rs` calls half a dozen times
+    /// for other types, and the sweep that reads allows decides a call by text across files. This
+    /// vocabulary travels **one way** — `drawer.slint` fires `setting-toggled(1)` and `(2)` as
+    /// literals and nothing pushes a `Row` ordinal outward — so the shipped program decodes and
+    /// never encodes. What reads it is `the_markup_fires_the_ordinal_this_type_names`, which is the
+    /// sweep that would catch a renumbering re-aiming a live control at the wrong preference, and
+    /// deleting this would delete that.
+    ///
+    /// **Retired when:** something pushes a `Row` ordinal to the markup.
+    #[cfg(test)]
     pub fn as_i32(self) -> i32 {
         Row::ALL.iter().position(|r| *r == self).expect("ALL holds every variant") as i32
     }
@@ -102,7 +112,7 @@ const NO_THEME: &str = "there is one palette in this build and nothing keys on a
 /// its clipboard gate, where the identifier refusal comes before the missing-pasteboard sentence.
 const NO_PATH: &str = "this computer has nowhere to keep a settings file, so there is no path yet";
 
-/// What the page draws — **exactly the nine `setting-*` properties `window.slint:208-216`
+/// What the page draws — **exactly the nine `setting-*` properties `window.slint:215-223`
 /// declares**, and nothing else.
 ///
 /// One bundle rather than nine returns, so a dropped field is a shape mismatch rather than a silent
@@ -113,7 +123,6 @@ const NO_PATH: &str = "this computer has nowhere to keep a settings file, so the
 /// `file_path` is also **the string a `Copy path` would put on the pasteboard**. One producer for
 /// the path means the row and the clipboard cannot come to show two different files, and it is why
 /// this page needs no tenth field to carry the copy's payload.
-#[allow(dead_code)] // retired when: `push_settings` flattens one into the nine `setting-*` properties — the wiring wave, which is what is missing and not this
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct View {
     /// The Row's value column: the palette that exists.
@@ -142,12 +151,10 @@ pub struct View {
 ///
 /// **It is the last save's outcome and not a log**: a save that succeeds clears it, because a
 /// sentence about a failure that has since been repaired is a sentence that lies.
-#[allow(dead_code)] // retired when: `wire` holds one in a cell beside the Composer's — `Prefs::toggled` writes this field and `Prefs::view` draws it already, so what is dead is the construction
 pub struct Prefs {
     save_failed: String,
 }
 
-#[allow(dead_code)] // retired when: `wire` constructs one and the `setting-toggled` callback reaches `toggled` — the wiring wave
 impl Prefs {
     pub fn new() -> Prefs {
         Prefs { save_failed: String::new() }
@@ -458,7 +465,7 @@ mod tests {
 
     // ── §9.4, the invariant the page was breaking ───────────────────────────────────────────────
 
-    /// **No disabled row carries an empty reason** — `primitives.slint:361`'s own words.
+    /// **No disabled row carries an empty reason** — `primitives.slint:369`'s own words.
     ///
     /// This is the state the page shipped in and the worst-looking thing in the window: two rows
     /// drawn `fg-disabled` with a reason slot reserved and nothing in it, which is a control

@@ -221,6 +221,11 @@ component RefusalView inherits VerticalLayout {
 // ─── The root (§11.2) ───────────────────────────────────────────────────────────────────────────
 
 export component ComposerRoot inherits Rectangle {
+    // Which page `‹` returns to, worded by `drawer.slint` out of `nav::Stack::under`. `"Devices"`
+    // is the default because that was the only entrance until Parts gained two verbs that open
+    // this page, and a default that is one of the two real answers cannot draw a page that is not
+    // there.
+    in property <string> back-to: "Devices";
     in property <string> device-title;
 
     in property <string> which-value;
@@ -272,7 +277,12 @@ export component ComposerRoot inherits Rectangle {
         spacing: 0px;
 
         DrawerHeader {
-            back: "Devices";
+            // **Not a literal.** This page is reachable from two depth-1 pages — the Devices row's
+            // `Edit…` and Parts' `Synthesise…` / `Build…` — so `back: "Devices"` drew a `‹` naming
+            // a page the press would not return to. `nav::Stack::under` is the one thing that
+            // knows, and `drawer.slint` words it: `DrawerPage` is declared there and that file
+            // imports this one, so an import the other way is a cycle.
+            back: root.back-to;
             title: root.device-title;
             back-pressed => {
                 root.back-pressed();

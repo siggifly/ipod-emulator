@@ -18,15 +18,15 @@
 // `ui/parts.slint` and `ui/devices.slint`, and nothing imports `ui/preview.slint`, which is a
 // slint-viewer root and pins nothing at all:
 //
-//   - `Kind::Mounted` is **0** — `parts.slint:160`, `inert: root.r.kind == 0 && !root.r.expandable`.
+//   - `Kind::Mounted` is **0** — `parts.slint:166`, `inert: root.r.kind == 0 && !root.r.expandable`.
 //     §11.4's reserved plugged-in-iPod row is drawn as a line rather than a control, and that
 //     comparison is the only place the markup decides anything from a `kind`.
-//   - `RowAction::Remove` is **2** — `parts.slint:242`, `root.act(2, root.r.id)`. `Remove` is the
+//   - `RowAction::Remove` is **2** — `parts.slint:248`, `root.act(2, root.r.id)`. `Remove` is the
 //     row's own control rather than a `Detail`, so it is the one row action the markup fires by
 //     number instead of forwarding `DetailRow.action`.
 //
 // **That is all of it.** Every `Group` and every `Action` travels as `GroupRow.group` /
-// `GroupRow.a-action` and comes back through `group-action(int, int)` untouched — `parts.slint:264`
+// `GroupRow.a-action` and comes back through `group-action(int, int)` untouched — `parts.slint:270`
 // says so out loud: *in `parts::Group::ALL`'s order — which is written into the Rust type rather
 // than into this markup.* `ui/devices.slint` pins nothing whatever: every ordinal it fires is
 // `root.d.action`, which Rust put there. The rest of the order below is ours, and it is chosen to
@@ -48,9 +48,8 @@ use crate::rail::{Caps, Next};
 
 /// The six sections of the Parts page, in the order they are drawn.
 ///
-/// Not pinned by any markup — `parts.slint:264` defers to this type by name. Six, always, and an
+/// Not pinned by any markup — `parts.slint:270` defers to this type by name. Six, always, and an
 /// empty one keeps its heading and its verbs (§9.1).
-#[allow(dead_code)] // retired when: `Parts::view` builds a `GroupView` per group — the producer, next wave
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
     Ipods,
@@ -61,7 +60,6 @@ pub enum Group {
     Snapshots,
 }
 
-#[allow(dead_code)] // retired when: `Parts::group_action` decodes the ordinal `parts-group-action` sends
 impl Group {
     pub const ALL: [Group; 6] = [
         Group::Ipods,
@@ -89,7 +87,6 @@ impl Group {
 /// Not pinned: `GroupRow.a-action` and `.b-action` carry the ordinal to the markup and
 /// `group-action(g.group, g.a-action)` hands it straight back. Which two a group offers is
 /// per-group and is the producer's answer, not this list's order.
-#[allow(dead_code)] // retired when: `Group::actions` names the pair each group offers — the producer, next wave
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Action {
     AddDump,
@@ -100,7 +97,6 @@ pub enum Action {
     Discard,
 }
 
-#[allow(dead_code)] // retired when: `Parts::group_action` decodes the ordinal `parts-group-action` sends
 impl Action {
     pub const ALL: [Action; 6] = [
         Action::AddDump,
@@ -122,9 +118,8 @@ impl Action {
 
 /// What a part *is*, which decides how its row is drawn.
 ///
-/// **`Mounted` is 0 and the markup depends on it** — `parts.slint:160`. The rest is ours: a `kind`
+/// **`Mounted` is 0 and the markup depends on it** — `parts.slint:166`. The rest is ours: a `kind`
 /// other than 0 reaches the markup only as a value it stores and hands back.
-#[allow(dead_code)] // retired when: `Parts::view` sets `PartView::kind` from the library's resource kinds
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     /// §11.4's reserved row: a real iPod plugged into this machine. Pinned to 0.
@@ -137,7 +132,6 @@ pub enum Kind {
     Snapshot,
 }
 
-#[allow(dead_code)] // retired when: `to_part` flattens `PartView::kind` onto `PartRow.kind`
 impl Kind {
     pub const ALL: [Kind; 7] = [
         Kind::Mounted,
@@ -149,6 +143,20 @@ impl Kind {
         Kind::Snapshot,
     ];
 
+    /// **`#[cfg(test)]` rather than `#[allow(dead_code)]`**, which is `geometry.rs`'s own answer
+    /// to the same shape and the only one available here: the sweep that reads a bare allow decides
+    /// a call **by text across files**, and `from_i32(` is called five times in `main.rs` — for
+    /// `Group`, `Action`, `RowAction`, `Row` and `Field` — so an allow on this one would be
+    /// reported as a retirement condition already met by somebody else's function.
+    ///
+    /// `Kind` is the one member of this file's vocabulary that travels **one way**. The markup
+    /// reads it — `parts.slint:166`'s `r.kind == 0` — and no callback in `ui/` carries one back, so
+    /// nothing in the shipped program has a `Kind` ordinal to decode. It is kept rather than
+    /// deleted because the round trip is what makes a renumbering a no-op instead of a wrong
+    /// branch, and `every_kind_survives_the_boundary` is the test that holds it.
+    ///
+    /// **Retired when:** a callback sends a `Kind` back and `main.rs` decodes one.
+    #[cfg(test)]
     pub fn from_i32(n: i32) -> Option<Kind> {
         usize::try_from(n).ok().and_then(|i| Kind::ALL.get(i)).copied()
     }
@@ -162,7 +170,7 @@ impl Kind {
 /// declaring a second one — the two pages draw the same `DetailRow` through the same flattener, so
 /// a second copy of this list would be two vocabularies for one `int`.
 ///
-/// **`Remove` is 2 and the markup depends on it** — `parts.slint:242`. Everything else travels as
+/// **`Remove` is 2 and the markup depends on it** — `parts.slint:248`. Everything else travels as
 /// `DetailRow.action`, which Rust wrote, so the rest of the order is ours: the three a part can
 /// take, then the three a device can, then the three that need something drawn.
 ///
@@ -171,7 +179,6 @@ impl Kind {
 /// FireWire GUID to be drawn **masked, with a `Show`** — the same boundary `composer::Secret`
 /// already holds for the identity fields — and `Reveal` is a file manager, not a mask. Appending
 /// keeps every ordinal below it where the other two producers were written against.
-#[allow(dead_code)] // retired when: `Parts::row_action` and `Devices::row_action` decode what the two `row-action` callbacks send
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RowAction {
     Reveal,
@@ -187,7 +194,6 @@ pub enum RowAction {
     ShowIdentity,
 }
 
-#[allow(dead_code)] // retired when: `to_detail` turns a `Detail`'s action into `DetailRow.action` for a page that draws one
 impl RowAction {
     pub const ALL: [RowAction; 9] = [
         RowAction::Reveal,
@@ -220,14 +226,13 @@ impl RowAction {
 /// **The eight properties an act needs are one field**, so they cannot disagree — `has-action`,
 /// `action`, `act-label`, `enabled`, `reason`, `escape-hatch`, `presses` and `consequence` are
 /// derived from this one `Option` and from the `FixRow` inside it. A row that is disabled therefore
-/// cannot lose its reason on the way across, which `primitives.slint:360` states as the invariant.
+/// cannot lose its reason on the way across, which `primitives.slint:368` states as the invariant.
 ///
 /// **`machine_rule` is the line's, and the `FixRow`'s copy of it is deliberately not read.**
 /// `DetailRow` has exactly one `machine-rule` and the markup binds it twice — to the `Pressable`
 /// when there is an act (`parts.slint:63`, `devices.slint:56`) and to the paragraph when there is
 /// not. One property, so one producer: this field. Reading the `FixRow`'s as well would be two
 /// spellings of one fact arriving at the same pixel.
-#[allow(dead_code)] // retired when: `Parts::detail` and `Devices::view` build these — the producers, next wave
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Detail {
     /// `""` for a paragraph or a machine rule.
@@ -245,7 +250,6 @@ pub struct Detail {
 /// `Settings::render` regenerates the file whole and takes any comment the operator added with it,
 /// so a save on a callback that mutated nothing is somebody's file rewritten for no reason. A
 /// refusal mutates nothing and answers `Nothing`.
-#[allow(dead_code)] // retired when: a producer's `&mut self` method returns one and `main.rs` matches on it
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Wrote {
     Nothing,
@@ -258,7 +262,6 @@ pub enum Wrote {
 /// `reason` are answers about *this build* and *this moment* — they have to be recomputed on every
 /// push, and a line read off a file at the moment the row opened must not be. So the two are
 /// separate types and [`Parts::detail`] is the one place they meet.
-#[allow(dead_code)] // retired when: `Parts::detail` renders one — the wave that wires `push_parts`
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Line {
     /// A label leading, a value trailing.
@@ -302,7 +305,6 @@ impl Line {
 /// when it was opened. Closing and re-opening the row re-reads. That is a record rather than a
 /// live measurement, in exactly the sense [`settings::Provenance::line`] is one, and it is worded
 /// as one.
-#[allow(dead_code)] // retired when: `Parts::open_row` is reached from `on_parts_expand` — the wave that wires the callback
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Read {
     /// Nothing had to be read: everything this row's body says is already in the library.
@@ -319,7 +321,6 @@ enum Read {
 /// The identity is kept apart from the rest because it is the one part that is re-worded on a
 /// press this page owns — `Show` unmasks it — and re-reading a megabyte to change a mask would be
 /// a read for a decision that has already been made.
-#[allow(dead_code)] // retired when: `Parts::detail` renders one — the wave that wires `push_parts`
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Rom {
     /// The verdict, the image directory, the bootloader's build string.
@@ -337,10 +338,9 @@ struct Rom {
 
 /// The one open row, and what opening it cost.
 ///
-/// **A part ID, never an index.** `parts.slint:344` compares `parts-detail-of` against `r.id`, and
+/// **A part ID, never an index.** `parts.slint:355` compares `parts-detail-of` against `r.id`, and
 /// `parts-expand(id, on)` and `parts-row-action(a, id)` both carry the id — so a removal that
 /// renumbered the rows would leave an Expand open under somebody else's part.
-#[allow(dead_code)] // retired when: `Parts::view` reports one as `View::detail_of` — the wave that wires `push_parts`
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Open {
     id: i32,
@@ -357,7 +357,6 @@ struct Open {
 /// The two `Option`s are `has-a` + `a-action` + `a` as **one field each**, so the three cannot
 /// disagree about whether there is a verb — which is the shape `push_composer` lost `make_one` and
 /// `warning` through.
-#[allow(dead_code)] // retired when: `to_group` flattens one onto `GroupRow` — the wave that wires `push_parts`
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GroupView {
     pub group: Group,
@@ -372,7 +371,6 @@ pub struct GroupView {
 }
 
 /// One part, as the markup draws it.
-#[allow(dead_code)] // retired when: `to_part` flattens one onto `PartRow` — the wave that wires `push_parts`
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartView {
     pub id: i32,
@@ -387,7 +385,7 @@ pub struct PartView {
     pub expandable: bool,
     pub selected: bool,
     pub removable: bool,
-    /// What goes with it, named **before** the press (`parts.slint:236`).
+    /// What goes with it, named **before** the press (`parts.slint:248`).
     pub remove_consequence: String,
     /// §11.4's one machine rule. `""` when nothing is holding it.
     pub locked_by: String,
@@ -396,7 +394,6 @@ pub struct PartView {
 /// A framebuffer, in raw pixels, because `parts.rs` may not name a toolkit type.
 ///
 /// `main.rs`'s `to_image` wraps it. RGB8, three bytes per pixel, `w * h * 3` long.
-#[allow(dead_code)] // retired when: `to_image` wraps one for `set_parts_preview` — the wave that wires `push_parts`
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Preview {
     pub w: u32,
@@ -405,7 +402,6 @@ pub struct Preview {
 }
 
 /// **One bundle, one field per page property**, so the flattener cannot quietly drop one.
-#[allow(dead_code)] // retired when: `push_parts` reads every field of one — the wave that wires it
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View {
     pub groups: Vec<GroupView>,
@@ -422,7 +418,6 @@ pub struct View {
 /// holds one `Recipe` under.
 ///
 /// Not an `Option`: this page exists from startup, so there is no absent state to draw.
-#[allow(dead_code)] // retired when: `wire` holds one of these beside the Composer's cell — the wave that wires `push_parts`
 pub struct Parts {
     open: Option<Open>,
     /// A stable id per `(group, name)`. **Assigned on first sight and never reused**, so removing
@@ -433,7 +428,6 @@ pub struct Parts {
     next_id: i32,
 }
 
-#[allow(dead_code)] // retired when: `wire` constructs one and the three `on_parts_*` callbacks reach these — the wave after this one
 impl Parts {
     pub fn new() -> Parts {
         Parts {
@@ -580,12 +574,36 @@ impl Parts {
                 }
                 Ok(if moved { Wrote::Library } else { Wrote::Nothing })
             }
+            // Drawn disabled — there is neither a picker nor a drop target — so a press cannot
+            // reach here from the window and the sentence is the one under the greyed control.
             Action::AddDump | Action::Provide => Err(refused_because(&Next::Provide)),
-            Action::Fetch => Err(refused_because(&Next::Retry)),
-            Action::Synthesise | Action::Build => Err(refused_because(&Next::Fix {
-                label: a.label(),
-                presses: 1,
-            })),
+            // **Drawn LIVE, and this is not `Next::Retry`'s sentence.** That one says *every
+            // download in this program goes through curl, and it is not on this computer*, which
+            // `Next::reason`'s own doc reserves for the case `available` refuses — and it does not
+            // refuse here: `caps.download` is measured by running `curl --version`, so on every
+            // computer that has it the control is blue and the refusal claimed curl was missing on
+            // a machine that had just been asked. A control cannot be live *because* a capability
+            // exists and then blame its absence.
+            //
+            // What is true is narrower and is §9.4's second kind: the fetcher exists and nothing on
+            // this page reaches it. `work::Queue` fetches the first run's fixed plan and there is
+            // no per-part fetch, so the honest sentence names the command that does one (§14.1:
+            // state the refusal, state what follows, and name a route that is real).
+            Action::Fetch => Err(format!(
+                "{} is not wired to the fetcher yet, so nothing was downloaded. `ipod-boot \
+                 firmware get <family>` fetches one into the same cache this program reads.",
+                a.label()
+            )),
+            // **`main.rs` routes these two before they arrive**, in the same way it routes
+            // `RowAction::Edit`: the Composer is the surface that holds a recipe — which is what
+            // [`Action::needs`] says makes both of them live — and opening a page is not something
+            // a toolkit-free file can do. So this arm is the one `Devices::row_action` writes for
+            // `Edit`: reaching it at all is a defect in the window rather than in the library.
+            Action::Synthesise | Action::Build => Err(format!(
+                "{} opens the Composer rather than changing the library, so arriving here means \
+                 the press is not wired",
+                a.label()
+            )),
         }
     }
 
@@ -792,7 +810,6 @@ impl Parts {
 
 // ─── The vocabulary's own words ─────────────────────────────────────────────────────────────────
 
-#[allow(dead_code)] // retired when: `Parts::group_view` is reached through `push_parts` — the wave that wires it
 impl Group {
     /// §11.4's own heading for this section.
     pub fn heading(self) -> &'static str {
@@ -889,7 +906,6 @@ impl Group {
     }
 }
 
-#[allow(dead_code)] // retired when: `verb_row` is reached through `push_parts` — the wave that wires it
 impl Action {
     /// The control's label. §11.4's table words all six.
     pub fn label(self) -> String {
@@ -929,8 +945,23 @@ impl Action {
     }
 }
 
-#[allow(dead_code)] // retired when: `Parts::row_action`'s device arm is reached — it cannot be from this page
 impl RowAction {
+    /// Whether this control **destroys something** — the one fact about an act the two pages that
+    /// draw a [`Detail`] were answering differently.
+    ///
+    /// `ui/parts.slint` drew every act in `Ink.accent` and `ui/devices.slint` drew every act in
+    /// `Ink.danger`: one struct, one flattener, two colours, and the disagreement only became
+    /// visible when the devices page gained a line that is not a removal — `Edit…`, drawn in the
+    /// destructive colour. The colour is a fact about the act rather than about the page, so the
+    /// act answers it here and both files bind the answer.
+    ///
+    /// **`Remove` is the only one, and `PowerOff` is deliberately not.** §12.4 parks a machine
+    /// rather than discarding it, so stopping one destroys nothing; everything else reads,
+    /// reveals, or opens a page.
+    pub fn destructive(self) -> bool {
+        matches!(self, RowAction::Remove)
+    }
+
     /// The control's own word, for a refusal that has to name it.
     pub fn name(self) -> &'static str {
         match self {
@@ -954,7 +985,6 @@ impl RowAction {
 /// It exists so the six groups, the rows, the counts and the open row's body are all built from
 /// **one** walk of the library. Two walks is two answers, and the count and the rows it counts
 /// disagreeing is what §11.4's own six-group complaint is about one level up.
-#[allow(dead_code)] // retired when: `Parts::view` is reached through `push_parts` — the wave that wires it
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Entry {
     group: Group,
@@ -989,7 +1019,6 @@ struct Entry {
 /// **`seen` is the pass's shared stat cache and the only filesystem work this does.** A part whose
 /// file has left the disk says so on its own row, which is the state the shipped bench used to
 /// draw as fine.
-#[allow(dead_code)] // retired when: `Parts::view` is reached through `push_parts` — the wave that wires it
 fn inventory(s: &Settings, seen: &mut Presence, machine: Option<&str>) -> Vec<Entry> {
     let running = machine.and_then(|m| s.devices.iter().find(|d| d.name == m));
     // **The one resource a device references directly is its boot ROM.** Its drive is a `Disk`,
@@ -1131,7 +1160,6 @@ fn inventory(s: &Settings, seen: &mut Presence, machine: Option<&str>) -> Vec<En
 ///
 /// Never empty, because the control takes two presses and `primitives.slint` reserves the slot for
 /// whatever the second press will do — a blank there is a control that arms and says nothing.
-#[allow(dead_code)] // retired when: `inventory` is reached through `push_parts` — the wave that wires it
 fn remove_consequence(used_by: &[String], synthesised_seed: Option<u64>) -> String {
     let mut s = if used_by.is_empty() {
         "Nothing else names it. The entry goes; the file itself stays where it is.".to_string()
@@ -1156,7 +1184,6 @@ fn remove_consequence(used_by: &[String], synthesised_seed: Option<u64>) -> Stri
 // ─── What a press pays for ──────────────────────────────────────────────────────────────────────
 
 /// Read whatever this row's body needs, once, at the moment it is opened. See [`Read`].
-#[allow(dead_code)] // retired when: `Parts::open_row` is reached from `on_parts_expand` — the wave that wires the callback
 fn read_body(s: &Settings, e: &Entry) -> Read {
     match e.kind {
         Kind::Rom => match s.resources.iter().find(|it| it.name == e.key) {
@@ -1175,7 +1202,6 @@ fn read_body(s: &Settings, e: &Entry) -> Read {
 }
 
 /// §11.4's ROM body.
-#[allow(dead_code)] // retired when: `read_body` is reached from `on_parts_expand` — the wave that wires the callback
 fn read_rom(src: &nor::Source) -> Rom {
     let mut head: Vec<Line> = Vec::new();
     let mut tail: Vec<Line> = Vec::new();
@@ -1312,7 +1338,6 @@ fn read_rom(src: &nor::Source) -> Rom {
 const DECODED: [&str; 4] = ["SrNm", "FwId", "Mod#", "HwVr"];
 
 /// §11.4's `.ipsw` body — versions, checksums, and `firmware::identify`'s answer **by contents**.
-#[allow(dead_code)] // retired when: `read_body` is reached from `on_parts_expand` — the wave that wires the callback
 fn read_ipsw(path: &Path) -> Vec<Line> {
     let mut out: Vec<Line> = Vec::new();
     if let Ok(m) = std::fs::metadata(path) {
@@ -1347,7 +1372,6 @@ fn read_ipsw(path: &Path) -> Vec<Line> {
 /// The panel's own size, from `emu::FB_W` / `FB_H` — not a number typed here — because §6.1's rule
 /// is an exact integer scale and nearest neighbour, and a preview at any other size is a resampled
 /// framebuffer presented as a screenshot.
-#[allow(dead_code)] // retired when: `RowAction::ShowBootScreen` is reached from `on_parts_row_action` — the wave that wires the callback
 fn preview_of(src: &nor::Source) -> Preview {
     let (w, h) = (crate::emu::FB_W, crate::emu::FB_H);
     let fb = src.boot_screen(w, h);
@@ -1374,7 +1398,6 @@ fn preview_of(src: &nor::Source) -> Preview {
 ///
 /// `DetailView` draws `act-label` for a line with an action and reads neither `label` nor `value`,
 /// so both are empty rather than carrying a second copy of the label.
-#[allow(dead_code)] // retired when: `Parts::detail` is reached through `push_parts` — the wave that wires it
 fn act(a: RowAction, mut fix: FixRow) -> Detail {
     // **One property, one producer, and the value is MOVED rather than copied.** `DetailRow` has
     // exactly one `machine-rule`; the markup binds it to the `Pressable` when there is an act
@@ -1405,7 +1428,6 @@ fn act(a: RowAction, mut fix: FixRow) -> Detail {
 /// state names a command that exists and was run to check it; naming one that does something else
 /// is worse than naming none, so these two carry none. What they have instead is the `mono` path
 /// drawn immediately above them, which is the value the act would have produced.
-#[allow(dead_code)] // retired when: `Parts::detail` is reached through `push_parts` — the wave that wires it
 fn next_row(label: &str, n: &Next, caps: Caps) -> FixRow {
     let enabled = n.available(caps);
     FixRow {
@@ -1426,7 +1448,6 @@ fn next_row(label: &str, n: &Next, caps: Caps) -> FixRow {
 }
 
 /// One of a group's verbs.
-#[allow(dead_code)] // retired when: `Parts::group_view` is reached through `push_parts` — the wave that wires it
 fn verb_row(a: Action, rows: &[PartView], g: Group, caps: Caps, busy: bool) -> FixRow {
     let mut row = match a.needs() {
         Some(n) => next_row(&a.label(), &n, caps),
@@ -1474,8 +1495,16 @@ fn verb_row(a: Action, rows: &[PartView], g: Group, caps: Caps, busy: bool) -> F
     row
 }
 
-/// What `main.rs` files with `rail.note` when a control this build cannot honour is pressed anyway.
-#[allow(dead_code)] // retired when: `Parts::group_action` is reached from `on_parts_group_action` — the wave that wires the callback
+/// The sentence under a control this build draws **disabled**, for the arm that would run if one
+/// were pressed anyway.
+///
+/// **Only for the disabled ones**, and the doc used to say the opposite — *a control this build
+/// cannot honour is pressed anyway*, which describes a control that cannot be pressed. [`Next::
+/// reason`] is non-empty *exactly for the steps [`Next::available`] can refuse*, so reusing it for
+/// a **live** control puts a sentence about an absent capability under a press that only happened
+/// because the capability is present. That shipped: `Synthesise…` was blue because the Composer
+/// exists and refused with *there is no Composer in this build yet*, one row from the page that
+/// opens it. Every caller left is a control the window greys out.
 fn refused_because(n: &Next) -> String {
     drawable(n.reason())
 }
@@ -1494,7 +1523,6 @@ fn refused_because(n: &Next) -> String {
 /// substitution is that answer applied at the boundary, in one place, rather than a widened glyph
 /// set. Everything else passes through untouched, which is what leaves
 /// `no_line_carries_a_glyph_the_window_cannot_draw` able to go red on the next one.
-#[allow(dead_code)] // retired when: `Parts::detail` is reached through `push_parts` — the wave that wires it
 fn drawable(s: &str) -> String {
     s.replace(" \u{b7} ", ", ").replace('\u{b7}', ",")
 }
@@ -1859,7 +1887,7 @@ mod tests {
             .iter()
             .find(|r| r.kind == Kind::Mounted)
             .expect("the reserved row is drawn out of every library");
-        // `parts.slint:160` draws it inert on exactly this pair.
+        // `parts.slint:166` draws it inert on exactly this pair.
         assert_eq!(reserved.kind.as_i32(), 0);
         assert!(!reserved.expandable, "the reserved row would be drawn as a control");
         assert!(!reserved.removable);
@@ -1872,7 +1900,7 @@ mod tests {
     /// Every control this producer can emit, in every combination of build and phase it can be
     /// drawn in, and one rule over all of them.
     ///
-    /// `primitives.slint:360` declares a non-empty `reason` as the invariant on a disabled
+    /// `primitives.slint:368` declares a non-empty `reason` as the invariant on a disabled
     /// control, and the shipped Settings page draws three rows two of which are disabled with an
     /// **empty** reason. The sweep runs over both `Caps` arms because a rule checked in one is a
     /// rule checked where nothing is refused.
@@ -1924,7 +1952,7 @@ mod tests {
                         );
                     }
                     for r in v.rows.iter().filter(|r| r.removable) {
-                        // `parts.slint:232` binds `enabled` to `locked-by == ""` and `reason` to
+                        // `parts.slint:238` binds `enabled` to `locked-by == ""` and `reason` to
                         // `locked-by`, so the invariant is the same one asked of one field.
                         checked += 1;
                         assert!(
@@ -2417,15 +2445,34 @@ mod tests {
         assert!(p.group_action(&mut s, Group::Snapshots, Action::Fetch).is_err());
         assert!(p.group_action(&mut s, Group::Ipods, Action::Discard).is_err());
         assert_eq!(s, before, "a mismatched pair mutated the library");
-        // …and the refusals this build gives for the five verbs it cannot perform are the Rail's.
-        assert_eq!(
-            p.group_action(&mut s, Group::Firmware, Action::Fetch),
-            Err(Next::Retry.reason().to_string())
-        );
+        // …and a verb drawn DISABLED wears the Rail's own sentence for the missing capability.
         assert_eq!(
             p.group_action(&mut s, Group::Firmware, Action::Provide),
             Err(Next::Provide.reason().to_string())
         );
+        // **A verb drawn LIVE must not.** `Fetch…` is blue exactly when `caps.download` is true,
+        // and `Next::Retry`'s sentence is *curl is not on this computer* — so the press that only
+        // happened because curl is there used to answer that it is not.
+        let fetch = p
+            .group_action(&mut s, Group::Firmware, Action::Fetch)
+            .expect_err("nothing here fetches yet");
+        assert!(
+            !fetch.contains("not on this computer"),
+            "a live control refuses by naming the capability that made it live: {fetch}"
+        );
+        assert!(fetch.contains("ipod-boot firmware get"), "§9.4 wants a real route: {fetch}");
+        // …and the two the Composer answers say so, rather than claiming it does not exist.
+        for (g, a) in [(Group::Ipods, Action::Synthesise), (Group::Disks, Action::Build)] {
+            let why = p.group_action(&mut s, g, a).expect_err("the Composer's, not the library's");
+            assert!(
+                why.contains("opens the Composer"),
+                "{a:?} refuses with something other than its route: {why}"
+            );
+            assert!(
+                !why.contains("no Composer in this build"),
+                "{a:?} still denies the page it is about to open: {why}"
+            );
+        }
         assert_eq!(s, before);
     }
 
