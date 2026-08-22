@@ -123,17 +123,18 @@ impl Stack {
         self.pages.last().copied().unwrap_or(Page::None)
     }
 
-    // **Not dead — not yet reached.** Fullscreen (§12.6) and the Expand (§8.1) are surfaces this
-    // build does not draw, and `close` is the arm `Esc` deliberately does not share (see
-    // `escape`). `escape` handles all three today so that the order is written once and tested
-    // once; these are the entry points the surfaces themselves will call. **Retirement
-    // condition**: the allow comes off when fullscreen and the Expand land.
+    // **Not dead — not yet reached**, and the two are no longer waiting on the same thing.
+    // Fullscreen (§12.6) is a surface this build still does not draw; the Expand (§8.1, §11.3)
+    // landed with the Composer's pickers and `main.rs` drives it through `expand_opened` and
+    // `expand_closed`. What is left unreached here is the pair of *readers*: `escape` answers
+    // both questions on the one path that needs them today, so nothing outside this module has
+    // had to ask. `close` is a third thing again — the arm `Esc` deliberately does not share.
     #[allow(dead_code)]  // retired when: the bench can enter fullscreen — §12.6
     pub fn fullscreen(&self) -> bool {
         self.fullscreen
     }
 
-    #[allow(dead_code)]  // retired when: an Expand exists — §11.3
+    #[allow(dead_code)]  // retired when: a caller outside this module asks which Expand is open
     pub fn expand(&self) -> Option<u32> {
         self.expand
     }
@@ -210,14 +211,13 @@ impl Stack {
         self.open = false;
     }
 
-    #[allow(dead_code)]  // retired when: an Expand exists — §11.3
+    /// §11.3's picker opened. **The id is the field's**, so the close below can name it.
     pub fn expand_opened(&mut self, id: u32) {
         self.expand = Some(id);
     }
 
     /// Closes the Expand **only if it is the one named**, so a stale close from a subtree that has
     /// already been replaced cannot shut the one that is open now.
-    #[allow(dead_code)]  // retired when: an Expand exists — §11.3
     pub fn expand_closed(&mut self, id: u32) {
         if self.expand == Some(id) {
             self.expand = None;

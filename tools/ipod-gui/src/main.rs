@@ -1201,10 +1201,17 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
         let work = work.clone();
         let showing_welcome = showing_welcome.clone();
         let ticking = ticking.clone();
+        let composer = composer.clone();
+        let redraw = redraw.clone();
         let weak = window.as_weak();
         window.on_rail_next(move |id, which| {
             let Some(w) = weak.upgrade() else { return };
-            let retried = take_next_step(&rail, &stack, id as u64, which, caps);
+            let retried = take_next_step(&rail, &stack, &composer, id as u64, which, caps);
+            // **`Fix` is the one next step that navigates**, and a Composer page pushed without its
+            // contents pushed too is the blank panel `Stack::go` spends two guards preventing. This
+            // is the same `redraw` all eleven Composer callbacks end in; it returns at once when
+            // nothing is being composed, which is every other press that reaches this closure.
+            redraw();
             // **§10.3: a retry resumes, and it goes through the same press the centre button
             // goes through.** Two routes that both claim to retry and only one of which actually
             // runs anything is how §10.3's bug came back the first time — `Rail::retry` alone puts
@@ -1457,14 +1464,19 @@ fn is_running(p: &emu::Phase) -> bool {
 
 /// §9.3's next steps are only offered as live controls where the mechanism exists.
 ///
-/// **Six of these are compile-time facts about the build and one is measured about the machine.**
-/// The six: `cargo tree -p ipod-gui | grep -iE "rfd|native-dialog|ashpd"` is empty, §16.4's winit
-/// drop hook is not written, nothing here reaches a pasteboard, nothing opens a file manager, the
-/// drawer's Devices page does not exist, and there is no Composer crate or module. A control whose
-/// route does not exist is drawn disabled with its reason (§14.1), never live and never quietly
-/// dropped.
+/// **Four are literals about this build, two are asked of `Page::slot`, and one is measured about
+/// the machine.** The four: `cargo tree -p ipod-gui | grep -iE "rfd|native-dialog|ashpd"` is empty,
+/// §16.4's winit drop hook is not written, nothing here reaches a pasteboard, and nothing opens a
+/// file manager. A control whose route does not exist is drawn disabled with its reason (§14.1),
+/// never live and never quietly dropped.
 ///
-/// The seventh, `download`, is `eapp_loader::tooling::can_download()` — it runs `curl --version`,
+/// The two derived ones are `devices_page` and `composer`, and **both pages now exist** — the
+/// drawer draws Devices at level 1 and the Composer at level 2, with its three sub-levels under it.
+/// They are read from [`nav::Page::slot`] rather than typed, for the reason written on the line
+/// itself. This doc claimed the opposite of both for as long as it took the pages to land, which is
+/// §16.9's stale claim in prose rather than in a boolean.
+///
+/// The last, `download`, is `eapp_loader::tooling::can_download()` — it runs `curl --version`,
 /// because a `PATH` walk is a second implementation of what the OS is about to do and is wrong on
 /// Windows, where the extension list is a policy rather than a suffix.
 ///
@@ -1484,11 +1496,19 @@ fn caps() -> rail::Caps {
         // claim, applied to a boolean.
         devices_page: nav::Page::Devices.slot().is_some(),
         download: eapp_loader::tooling::can_download(),
-        // **Not derived, and deliberately so — there is no `Page::Composer` to ask.** The moment
-        // there is, this reads `nav::Page::Composer.slot().is_some()` like the line above, and it
-        // flips in the same commit that gives `main::take_next_step` a real `Next::Fix` arm.
-        // Flipping it first restores the live-but-inert control this file has shipped twice.
-        composer: false,
+        // **Derived from the same question, and it is now `true`.** `Page::Composer` answers
+        // `Some(2)`, so the surface a `Next::Fix` goes to exists — the four Composer pages ship and
+        // `mod composer;` is declared at the top of this file. This line read `false` beside them,
+        // under a comment saying *there is no `Page::Composer` to ask*, so the Rail's `Fix` shipped
+        // disabled wearing *there is no Composer in this build yet* while four Composer pages were
+        // drawn one level away. That comment named its own retirement condition and the condition
+        // had been met; §16.9 calls that a defect and not tidying.
+        //
+        // **Flipped in the same commit that gives `take_next_step` a real `Fix` arm**, as that
+        // comment required. Flipping it alone is the live-but-inert control this file has shipped
+        // twice, and `every_next_step_this_build_offers_is_wired_to_something` says so out loud:
+        // *`build from Apple's firmware instead` is drawn live and pressing it changed nothing.*
+        composer: nav::Page::Composer.slot().is_some(),
     }
 }
 
@@ -1629,6 +1649,7 @@ fn welcome(s: &mut Settings) -> bool {
 fn take_next_step(
     rail: &Rc<RefCell<rail::Rail>>,
     stack: &Rc<RefCell<nav::Stack>>,
+    composer: &Rc<RefCell<Option<composer::Composer>>>,
     id: u64,
     which: i32,
     caps: rail::Caps,
@@ -1661,20 +1682,41 @@ fn take_next_step(
         // two routes that both claim to cancel and only one of which does is how the first one came
         // to be wrong.
         rail::Next::CancelWrite => cancel_write(rail, id),
+        // **§11.3's route out of an impossible recipe, and it goes to the page that holds one.**
+        //
+        // `Fix` was the first of the two live-but-inert controls: `Next::available` returned `true`
+        // for it unconditionally, `Class::Incompatible` drew it live, and pressing it did nothing.
+        // It was then gated on `caps.composer` — which was `false` for as long as there was no
+        // Composer, and stayed `false` for the four Composer pages after that, so the control went
+        // on saying *there is no Composer in this build yet* beside one. Both halves are closed
+        // here: the cap is derived from `Page::Composer.slot()`, and this is the arm it required.
+        //
+        // **Two hops, and neither is arithmetic.** `Page::Composer.slot()` is 2 and `Stack::go`
+        // never jumps a level, so `go(Composer, 2)` from a closed drawer clamps to 1, misses the
+        // slot and lands on the menu — which is the guard doing its job, not a route. Devices is
+        // the level-1 page the Composer is entered from everywhere else (`+ New device ›`), so it
+        // is the level below this one here too, and `back` walks out the way it came in.
+        //
+        // **The recipe does not come with it, and that is a fact about the failure rather than a
+        // shortcut.** `compose::Fix::consequence` says it plainly — *the failure Rail builds its
+        // `Incompatible` class with no `Recipe` in hand* — and `rail::Entry` carries no device and
+        // no recipe either. So this opens the Composer on the recipe already being composed if
+        // there is one, and mints a new one if there is not. It never replaces one: a compose in
+        // flight is somebody's work, and `AGENTS.md` §3 does not let a press throw it away.
+        rail::Next::Fix { .. } => {
+            let mut held = composer.borrow_mut();
+            if held.is_none() {
+                *held = Some(composer::Composer::new());
+            }
+            drop(held);
+            let mut s = stack.borrow_mut();
+            s.go(nav::Page::Devices, 1);
+            s.push(nav::Page::Composer);
+        }
         // Every remaining arm needs a mechanism `caps` says this build does not have, so the guard
         // above has already returned. They are enumerated rather than defaulted so the day one
         // arrives the compiler points here.
-        //
-        // **`Fix` used to be handled below this line, and that arm is now deleted.** It was the
-        // first of the two live-but-inert controls: `Next::available` returned `true` for it
-        // unconditionally — this program talking to itself — so `Class::Incompatible` drew it live,
-        // and pressing it did nothing at all. The stopgap was a §9.4 project-state note, and its
-        // written retirement condition was *`rail::Caps` gains `composer` and `Next::Fix`'s
-        // `available` reads it*. That has happened, so the control is drawn disabled wearing
-        // *there is no Composer in this build yet*, the guard above returns before reaching here,
-        // and the stopgap is deleted rather than left standing beside the real gate.
-        rail::Next::Fix { .. }
-        | rail::Next::Provide
+        rail::Next::Provide
         | rail::Next::ChooseElsewhere
         | rail::Next::CopyDetails
         | rail::Next::Reveal => {}
@@ -4190,6 +4232,108 @@ pub(crate) mod tests {
         );
     }
 
+    /// **No `#[allow(dead_code)]` sits on a function the program already calls.**
+    ///
+    /// The other half of the rule above, and the half that was false. `expand_opened` and
+    /// `expand_closed` carried *retired when: an Expand exists — §11.3* while `main.rs` called both
+    /// of them from `on_composer_expand` — so `nav.rs` said it was waiting for a caller it already
+    /// had, and §16.9's rule about a stale claim is exactly that. **The compiler cannot report it:
+    /// the allow is the thing that silences the compiler.** So it is read here instead.
+    ///
+    /// **What a text sweep can decide is the call.** For every `fn` directly under an allow, this
+    /// looks for a call to it in the shipped half of every *other* module. `rust_sources` has
+    /// already cut each file at its own `mod tests {`, so a module exercising its own surface from
+    /// its own tests does not count — that is §20 item 12's designed shape, `rail.rs` and `nav.rs`
+    /// being written before their producers, and it is not a defect.
+    ///
+    /// **The honest boundary of a textual instrument, written down.** A method name `std` also
+    /// defines cannot be resolved this way: `name.as_str()` on a `String` is not a call to
+    /// `Class::as_str`, and `composer.rs` has twelve of the former. Those names are listed in
+    /// `AMBIGUOUS` and skipped. The list is the limit of the method rather than a carve-out for
+    /// convenience — a name joins it when `std` defines it too, never because a sweep went red.
+    #[test]
+    fn no_dead_code_allow_sits_on_a_function_the_program_already_calls() {
+        /// Method names `std` defines as well, which a text sweep cannot tell apart from these.
+        const AMBIGUOUS: [&str; 1] = ["as_str"];
+
+        /// A call to `name` in `text`, ignoring comments and requiring both boundaries — so
+        /// `set_fullscreen(` is not a call to `fullscreen`, and `expanded(` is not a call to
+        /// `expand`.
+        fn calls(name: &str, text: &str) -> bool {
+            text.lines().filter(|l| !l.trim_start().starts_with("//")).any(|line| {
+                let mut rest = line;
+                while let Some(i) = rest.find(name) {
+                    let before = rest[..i].chars().next_back();
+                    let after = rest[i + name.len()..].chars().next();
+                    if before.is_none_or(|c| !c.is_alphanumeric() && c != '_') && after == Some('(')
+                    {
+                        return true;
+                    }
+                    rest = &rest[i + name.len()..];
+                }
+                false
+            })
+        }
+
+        let sources = rust_sources();
+
+        // **The control, and it is the very call that made this test necessary.** A matcher that
+        // cannot see `main.rs` calling `expand_opened` would report every allow in the tree clean,
+        // which is the shape of instrument this repository keeps being bitten by.
+        let main_text = &sources.iter().find(|(n, _)| n == "main.rs").expect("main.rs").1;
+        assert!(
+            calls("expand_opened", main_text),
+            "the matcher cannot find `main.rs`'s call to `expand_opened`, so it is reading nothing"
+        );
+        assert!(
+            !calls("expand", main_text),
+            "the matcher counts `expand_opened(` as a call to `expand(`, so both boundaries are \
+             not being checked and every longer name matches its own prefix"
+        );
+
+        // Each allow, paired with the `fn` on the next line that is neither an attribute nor a doc
+        // comment. Anything else under an allow — a field, a variant, a `const`, a `mod` — is a
+        // different question and is not swept here.
+        let mut swept = 0usize;
+        let mut stale: Vec<String> = Vec::new();
+        for (file, text) in &sources {
+            let lines: Vec<&str> = text.lines().collect();
+            for (n, line) in lines.iter().enumerate() {
+                if line.trim_start().starts_with("//") || !line.contains("#[allow(dead_code)]") {
+                    continue;
+                }
+                let Some(item) = lines[n + 1..]
+                    .iter()
+                    .map(|l| l.trim_start())
+                    .find(|t| !t.starts_with("///") && !t.starts_with("#["))
+                else {
+                    continue;
+                };
+                let Some(after_fn) = item.split_once("fn ") else { continue };
+                let name: String =
+                    after_fn.1.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                if name.is_empty() || AMBIGUOUS.contains(&name.as_str()) {
+                    continue;
+                }
+                swept += 1;
+                if let Some((caller, _)) =
+                    sources.iter().find(|(o, t)| o != file && calls(&name, t))
+                {
+                    stale.push(format!("{file}:{} `{name}` (called from {caller})", n + 1));
+                }
+            }
+        }
+        assert!(
+            swept >= 5,
+            "only {swept} `#[allow(dead_code)]` were found on a `fn`; the sweep read nothing"
+        );
+        assert!(
+            stale.is_empty(),
+            "{stale:?}: the retirement condition has already been met — the program calls it. \
+             Delete the allow, or say what is still waiting"
+        );
+    }
+
     /// **T-8. The Rail's model is retained and never rebuilt — and so is the library's.**
     ///
     /// Two halves. The first is the source: each setter is called once, and never with a freshly
@@ -6505,8 +6649,12 @@ pub(crate) mod tests {
     /// build draws **live** does something when it is pressed, and it was false twice:
     /// `Next::CancelWrite` and `Next::Fix` both returned `true` from `available` unconditionally —
     /// this program talking to itself — so both passed `take_next_step`'s guard and landed in the
-    /// empty catch-all under it. `CancelWrite` is now wired to `cancel_write`; `Fix` is now gated on
-    /// `caps.composer` and drawn disabled, and its stopgap arm is deleted.
+    /// empty catch-all under it. `CancelWrite` is now wired to `cancel_write`; `Fix` was gated on
+    /// `caps.composer` and drawn disabled, and **it went on being drawn disabled for the four
+    /// Composer pages after that** — the gate was honest and the boolean behind it was stale. It is
+    /// now wired to the route those pages made real, and this sweep is what caught the gap:
+    /// flipping the cap without the arm fails on `build from Apple's firmware instead ... pressing
+    /// it changed nothing`.
     ///
     /// This is the closed sweep of that: for every failure class, every next step this build's
     /// `caps()` says is pressable has to be a variant `take_next_step` acts on.
@@ -6561,6 +6709,8 @@ pub(crate) mod tests {
 
                     let rail = Rc::new(RefCell::new(rail::Rail::new()));
                     let stack = Rc::new(RefCell::new(nav::Stack::new()));
+                    let composer: Rc<RefCell<Option<composer::Composer>>> =
+                        Rc::new(RefCell::new(None));
                     let id = rail.borrow_mut().failed(
                         "fetch",
                         "Apple's firmware",
@@ -6578,7 +6728,7 @@ pub(crate) mod tests {
                         stack.borrow().depth(),
                     );
 
-                    take_next_step(&rail, &stack, id, which as i32, caps());
+                    take_next_step(&rail, &stack, &composer, id, which as i32, caps());
 
                     let after = (
                         rail.borrow().entries().to_vec(),
@@ -6593,6 +6743,18 @@ pub(crate) mod tests {
                         c,
                         step.label()
                     );
+                    // **And a page arrived at is a page with something on it.** `Fix` is the one
+                    // step here that navigates, and `push_composer` returns immediately when
+                    // nothing is being composed — so a press that moved the drawer to the Composer
+                    // without minting one would satisfy the assertion above and still draw the
+                    // blank 420 px panel `Stack::go` spends two guards preventing.
+                    if stack.borrow().page() == nav::Page::Composer {
+                        assert!(
+                            composer.borrow().is_some(),
+                            "{:?} sent the drawer to the Composer with no recipe in hand",
+                            c
+                        );
+                    }
                 }
             }
         }
@@ -6615,11 +6777,15 @@ pub(crate) mod tests {
             caps().download,
             "`Retry` is live exactly when this computer can download, and it is not: {live:?}"
         );
-        // `Fix` was the second live-but-inert control. It is now gated on `caps.composer`, which is
-        // false in this build, so it must be nowhere in this list.
-        assert!(
-            !live.iter().any(|l| *l == compose::Fix::BuildFromIpsw.label()),
-            "`Fix` is drawn live and there is no Composer to change a recipe: {live:?}"
+        // `Fix` was the second live-but-inert control, and it is now the third thing this sweep
+        // pins rather than an exception to it: live exactly when there is a Composer page to send
+        // it to. Written as an equality, like `Retry`'s, so it goes red in **both** directions —
+        // a `Fix` drawn live with no page behind it, and a `Fix` still drawn disabled beside one.
+        assert_eq!(
+            live.iter().any(|l| *l == compose::Fix::BuildFromIpsw.label()),
+            caps().composer,
+            "`Fix` is live exactly when this build has a Composer to change a recipe in, and it is \
+             not: {live:?}"
         );
     }
 

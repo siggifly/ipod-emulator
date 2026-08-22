@@ -1262,9 +1262,12 @@ pub const NO_CLIPBOARD: &str =
 /// which `false` is which, and the two mean opposite kinds of thing — one is *a build is running on
 /// this machine right now*, the other *this program was compiled without a route to a clipboard*.
 ///
-/// It is not `rail::Caps` itself because `tests/composer.rs` mounts this file standalone, where
-/// there is no `crate::rail` to name. `main::wire` converts at the boundary, which is the one place
-/// that holds both.
+/// It is not `rail::Caps` itself because this module does not depend on `rail` and must not start
+/// to: `Caps` is seven booleans about the whole window and one of them is measured per launch, and
+/// a page that took the lot would be reading six answers it has no business asking. `main::wire`
+/// converts at the boundary, which is the one place that holds both. (The original reason was that
+/// `tests/composer.rs` mounted this file standalone with no `crate::rail` to name; that harness is
+/// deleted — `main.rs` declares `mod composer;` — and the reason above outlived it.)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Clipboard {
     Present,
