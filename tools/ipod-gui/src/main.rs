@@ -6134,6 +6134,18 @@ pub(crate) mod tests {
 
     /// A headless `MainWindow`. **Every window test in this file goes through here.**
     ///
+    /// **It carries a rasterizer, which is what lets [`shoot`] work**, and one platform shape per
+    /// thread is the reason it is done here rather than in a second helper beside this one. Slint's
+    /// platform can be installed once per thread and never replaced, and `libtest` runs tests on
+    /// the calling thread when `--test-threads=1` — so two helpers installing two shapes would be
+    /// a test that passes alone and panics with *"platform already initialized"* in a serial run.
+    /// There is one shape.
+    ///
+    /// What it costs: the mock renderer answers `text_size` out of a fixed test font, and Skia
+    /// answers it out of the real one, so text measures the way it measures in the shipped window.
+    /// Nothing in this file asserts a text measurement — the only geometry any test here reads is
+    /// [`drawer_rows`]'s dedup key — so the change is visible only in a shot.
+    ///
     /// **The guard is per THREAD, and a `static Once` is the wrong shape.** Slint's platform lives
     /// in `GLOBAL_CONTEXT`, which is a **thread-local**
     /// (`i-slint-core-1.17.1/platform.rs:257-277`), and `init_no_event_loop`'s own documentation
@@ -6155,7 +6167,20 @@ pub(crate) mod tests {
         }
         READY.with(|ready| {
             if !ready.replace(true) {
-                i_slint_backend_testing::init_no_event_loop();
+                // **`init_no_event_loop()` with a rasterizer in it, and that is the only
+                // difference.** The two fields below are exactly what that function sets
+                // (`i-slint-backend-testing-1.17.1/lib.rs:37-45`); it fills the third with
+                // `Default::default()`, which is `None`, which is the mock renderer.
+                slint::platform::set_platform(Box::new(
+                    i_slint_backend_testing::TestingBackend::new(
+                        i_slint_backend_testing::TestingBackendOptions {
+                            mock_time: true,
+                            threading: false,
+                            renderer_name: Some("skia".into()),
+                        },
+                    ),
+                ))
+                .expect("no platform is installed on this thread yet");
             }
         });
         MainWindow::new().expect("the headless backend makes a window")
@@ -6508,6 +6533,280 @@ pub(crate) mod tests {
     /// row in it is geometrically clipped away, which reads exactly like the gating being broken.
     fn let_the_drawer_settle() {
         i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1_000));
+    }
+
+    /// Where a shot lands: `_out/gui/`, at the repository root, which `.gitignore` already covers.
+    ///
+    /// From `CARGO_MANIFEST_DIR` and not from the process's working directory, because the two are
+    /// only the same by accident. `_out/` is the emulator's own run-output directory — the frame
+    /// dumps `--bcm-dump` writes and the self-test shots `emu.rs` writes go there too, and a
+    /// screenshot of the window belongs beside them rather than in a directory of its own.
+    fn shots_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../_out/gui")
+    }
+
+    /// A page, drawn, on disk, and in memory.
+    struct Shot {
+        /// Where the PNG was written. Named so a failure can say which file to go and look at.
+        at: std::path::PathBuf,
+        w: u32,
+        h: u32,
+        /// `w * h * 3`, row-major, top row first — [`png::encode`]'s shape.
+        rgb: Vec<u8>,
+    }
+
+    impl Shot {
+        /// How many distinct colours are in the picture.
+        ///
+        /// **This is the number that tells a drawn page from a blank one.** A frame holding
+        /// nothing but the window's own `background` answers 1, and so does a buffer nobody
+        /// rendered into. Anything this window actually draws — a gradient, an anti-aliased edge,
+        /// a glyph — is hundreds.
+        fn colours(&self) -> usize {
+            let mut seen = std::collections::HashSet::new();
+            for px in self.rgb.chunks_exact(3) {
+                seen.insert([px[0], px[1], px[2]]);
+            }
+            seen.len()
+        }
+
+        /// The outer 8 pixels of the right edge and of the bottom edge, together.
+        ///
+        /// **Its own question, and not a weaker version of [`Shot::colours`].** A snapshot is taken
+        /// into a buffer the size of the *window*, while the content is drawn at the size of the
+        /// root item's *geometry*, and those are two numbers. Let them come apart and the shot is a
+        /// picture of a small window in a large frame — right dimensions, hundreds of colours, and
+        /// two flat edges where the window stopped.
+        ///
+        /// **The two far edges rather than the far quadrant**, because the quadrant does not
+        /// separate the two cases and the edges separate them completely. Measured over the six
+        /// pages, drawn and then drawn again with `shoot`'s `show()` removed:
+        ///
+        /// | | bench | menu | devices | parts | work | settings |
+        /// |---|---|---|---|---|---|---|
+        /// | quadrant, drawn | 980 | — | — | — | 673 | — |
+        /// | quadrant, stopped short | 611 | — | — | — | 76 | — |
+        /// | **these two edges, drawn** | **73** | **80** | **82** | **80** | **82** | **80** |
+        /// | **these two edges, stopped short** | **1** | **1** | **1** | **1** | **1** | **1** |
+        ///
+        /// A quadrant threshold that passes `work` drawn (673) also passes `bench` stopped short
+        /// (611). There is no such number. On the edges there is nothing but a number to pick.
+        fn far_edges_colours(&self) -> usize {
+            let mut seen = std::collections::HashSet::new();
+            for y in 0..self.h {
+                for x in (self.w - 8)..self.w {
+                    let i = ((y * self.w + x) * 3) as usize;
+                    seen.insert([self.rgb[i], self.rgb[i + 1], self.rgb[i + 2]]);
+                }
+            }
+            for y in (self.h - 8)..self.h {
+                for x in 0..self.w {
+                    let i = ((y * self.w + x) * 3) as usize;
+                    seen.insert([self.rgb[i], self.rgb[i + 1], self.rgb[i + 2]]);
+                }
+            }
+            seen.len()
+        }
+    }
+
+    /// **Draw the window, with no window, and write the page to `_out/gui/<name>.png`.**
+    ///
+    /// This is the whole of the headless-screenshot path, and it exists so that looking at a page
+    /// never costs the operator an application stealing focus. `cargo test --release -p ipod-gui
+    /// every_page_this_window_draws_can_be_shot_with_no_window` writes one PNG per page; open them
+    /// with anything.
+    ///
+    /// `at` is *where you are* rather than a page, because that is what the window is told: a page
+    /// at depth 2 is not reachable by naming it — [`nav::Stack::go`] refuses to jump a level on
+    /// purpose — so the caller drives a `Stack` exactly as [`wire`] does and hands it over. The
+    /// same argument makes the closed bench expressible, which "a page" is not.
+    ///
+    /// The mechanics, none of which opens anything:
+    ///
+    ///   * **The two lines below do three things between them and each of the three is load-bearing.**
+    ///     What follows was measured by removing them one at a time and reading which assertion
+    ///     died, because the first version of this comment reasoned it out instead and got it
+    ///     wrong. A **size** and a **root-item geometry** are two numbers, and the shot needs both.
+    ///
+    ///     | | size | root geometry | drawer slid |
+    ///     |---|---|---|---|
+    ///     | neither line | 800x600 | 800x600 | no |
+    ///     | `show()` only | 1180x846 | 1180x846 | **no** |
+    ///     | the clock tick only | 1180x846 | **800x600** | yes |
+    ///     | both | 1180x846 | 1180x846 | yes |
+    ///
+    ///     The *size* has two independent suppliers, which is why it is the assertion that survives
+    ///     the most breakage: `show()` calls `update_window_properties` directly
+    ///     (`i-slint-core-1.17.1/window.rs:1635`), and so, one tick later, does the single-shot
+    ///     `Timer` that `WindowPropertiesTracker` arms when a property goes dirty (`window.rs:386-
+    ///     393`) — which `mock_elapsed_time` runs. Either way `TestingWindow::update_window_
+    ///     properties` fills the zero size from the component's *preferred* size, so the shot comes
+    ///     out at `Geometry.pref-width` x `pref-height` with no number named in this file.
+    ///
+    ///     The *root-item geometry* has one supplier, and it is `show()`'s
+    ///     `set_window_item_geometry` (`window.rs:1641`). Row three of that table is the interesting
+    ///     one: a 1180x846 buffer holding a window laid out at 800x600 — right dimensions, hundreds
+    ///     of colours, and two flat edges where the window stopped. [`Shot::far_edges_colours`] is
+    ///     the only thing in this test that can see it.
+    ///
+    ///     `show()` is re-entrant (`ensure_tree_instantiated` guards the instantiation), so a caller
+    ///     that has already shown its window may still call this.
+    ///   * The *drawer slide* is [`let_the_drawer_settle`]'s own reason, and the backend running on
+    ///     mock time is why it is needed at all: a drawer that just opened is still parked at
+    ///     `x == client.width` until somebody advances the clock. Row two of the table is what that
+    ///     costs — six pages that are all the bench.
+    ///   * `take_snapshot` renders into a buffer, not onto a surface. See the Cargo.toml note.
+    ///
+    /// A shot is about 3 MB, because [`png::encode`] writes a *stored* deflate stream — the trade
+    /// that module was written to make, at 1180x846 rather than at the framebuffer's 320x240. Six
+    /// of them is 18 MB per run, in a directory whose whole purpose is to be thrown away.
+    fn shoot(w: &MainWindow, at: &nav::Stack, name: &str) -> Shot {
+        push_nav(w, at);
+        w.show().expect("the headless backend shows a window");
+        let_the_drawer_settle();
+
+        let rgba = w
+            .window()
+            .take_snapshot()
+            .expect("the testing backend was built with a rasterizer; see this crate's Cargo.toml");
+        let (width, height) = (rgba.width(), rgba.height());
+
+        // Alpha is dropped rather than composited: `MainWindow` sets an opaque `background`, so
+        // every pixel is already over something. A shot that came out transparent would show up as
+        // one colour in `colours()` rather than as a plausible-looking picture.
+        let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);
+        for px in rgba.as_slice() {
+            rgb.extend_from_slice(&[px.r, px.g, px.b]);
+        }
+
+        let dir = shots_dir();
+        std::fs::create_dir_all(&dir).expect("the shots directory");
+        let file = dir.join(format!("{name}.png"));
+        std::fs::write(&file, png::encode(&rgb, width as usize, height as usize))
+            .expect("the shot is written");
+        Shot { at: file, w: width, h: height, rgb }
+    }
+
+    /// **Every page this window draws, drawn, with nothing on screen.**
+    ///
+    /// This is the end-to-end proof of [`shoot`] and it is also the tool: run it and
+    /// `_out/gui/*.png` is six pictures of the program, taken without a window ever existing and
+    /// without an operator's focus being stolen. That was the whole point.
+    ///
+    /// **What it asserts about the pixels, and why each one can go red:**
+    ///
+    ///   1. *the size is the window's own preferred size* — the shot is not `TestingWindow`'s
+    ///      800x600 default, which is what a window whose layout never ran answers;
+    ///   2. *no page is one flat colour* — the assertion that dies on a buffer nobody rendered
+    ///      into, and on a helper that fabricates pixels instead of asking the renderer for them;
+    ///   3. *every page is drawn all the way to the far edges of its frame* — because (2) is
+    ///      satisfied by a picture of an 800x600 window sitting in the corner of an 1180x846 frame,
+    ///      which is exactly what `shoot` produces without its `show()`;
+    ///   4. *no two pages are the same picture* — which is the half (2) and (3) cannot see: a
+    ///      rasterizer wired up correctly but handed the same page six times draws six rich,
+    ///      correctly-sized, identical pictures, and so does a `shoot` that ignores the `Stack`.
+    ///
+    /// Each was measured red before it was believed, and by breaking the drawing rather than the
+    /// arithmetic. In `shoot`: (1) by removing both the `show()` and the clock tick — *"bench came
+    /// out 800x600"*; (2) by handing back a buffer of the window's background instead of the
+    /// renderer's — *"bench is 1 colour(s) over 1180x846"*; (3) by removing the `show()` alone —
+    /// *"bench's right and bottom edges are 1 colour(s)"*; (4) by removing the `push_nav` — *"bench
+    /// and menu are the same picture"* — and again, differently, by removing the clock tick alone,
+    /// which leaves the drawer parked off screen: *"menu and devices are the same picture"*.
+    #[test]
+    fn every_page_this_window_draws_can_be_shot_with_no_window() {
+        let w = a_window();
+
+        // Furnished, because an unfurnished shot is a picture of nothing and this test is the tool
+        // as much as it is the gate. Same pushes as
+        // `the_composed_window_takes_everything_this_file_pushes`.
+        w.set_devices(ModelRc::from(Rc::new(VecModel::from(device_rows(&Settings::default())))));
+        w.set_empty_device(empty_device(false, caps(), no_cost()));
+        w.set_screen_source(dark_screen());
+        w.set_panel_description(panel_description(&phase()).into());
+        w.global::<Motion>().set_scale(motion::scale());
+        w.global::<Metric>().set_mono_family(mono_family().into());
+        push_fit(
+            &w,
+            &fit::Fit {
+                k: 2,
+                hero_logical: 655.751,
+                panel_w: 320.0,
+                panel_h: 240.0,
+                too_short: false,
+            },
+            2.0,
+        );
+        push_ledger(&w, None, &temp_dir("shots"), None);
+        let rows: Rc<VecModel<RailRow>> = Rc::new(VecModel::default());
+        w.set_rail(ModelRc::from(rows.clone()));
+        sync_rail(&w, &rows, &rail::Rail::new(), caps(), work::Shape::default());
+
+        // `None` is the bench — the drawer shut. Every other entry names a page, at the level
+        // `Page::slot` says draws it, which is the only level `Stack::go` will accept.
+        let pages: [(&str, Option<nav::Page>); 6] = [
+            ("bench", None),
+            ("menu", Some(nav::Page::None)),
+            ("devices", Some(nav::Page::Devices)),
+            ("parts", Some(nav::Page::Parts)),
+            ("work", Some(nav::Page::Work)),
+            ("settings", Some(nav::Page::Settings)),
+        ];
+
+        let shots: Vec<(&str, Shot)> = pages
+            .into_iter()
+            .map(|(name, page)| {
+                let mut at = nav::Stack::new();
+                if let Some(p) = page {
+                    let slot = p.slot().unwrap_or_else(|| {
+                        panic!("nothing draws {p:?}, so there is no picture of it to take")
+                    });
+                    at.go(p, slot);
+                }
+                (name, shoot(&w, &at, name))
+            })
+            .collect();
+
+        for (name, shot) in &shots {
+            assert_eq!(
+                (shot.w, shot.h),
+                (geometry::PREF_WIDTH as u32, geometry::PREF_HEIGHT as u32),
+                "{name} came out {}x{}; the window's preferred size is the size a shown window \
+                 takes, so this is a snapshot of a window whose layout never ran",
+                shot.w,
+                shot.h
+            );
+            let colours = shot.colours();
+            assert!(
+                colours > 256,
+                "{name} is {colours} colour(s) over {}x{} — nothing was drawn into it. {}",
+                shot.w,
+                shot.h,
+                shot.at.display()
+            );
+            let edges = shot.far_edges_colours();
+            assert!(
+                edges > 8,
+                "{name}'s right and bottom edges are {edges} colour(s): the frame is {}x{} and the \
+                 window was laid out at some other size, so this is a picture of a small window in \
+                 a large one. {}",
+                shot.w,
+                shot.h,
+                shot.at.display()
+            );
+        }
+
+        // `assert!` and not `assert_ne!`: the latter prints both operands, and both operands are
+        // three megabytes of decimal channel values. The failure has to be readable.
+        for (i, (a_name, a)) in shots.iter().enumerate() {
+            for (b_name, b) in &shots[i + 1..] {
+                assert!(
+                    a.rgb != b.rgb,
+                    "{a_name} and {b_name} are the same picture, pixel for pixel; the page the \
+                     window was told to draw is not reaching the drawing"
+                );
+            }
+        }
     }
 
     // **Ignored in a release profile rather than failing there.** `build.rs` emits Slint's debug

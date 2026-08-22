@@ -113,11 +113,37 @@ windows-sys = { version = "0.61", features = [
 [build-dependencies]
 slint-build = "1.17"
 
-# A headless backend, for one test: `a_missing_winit_window_is_none_not_a_panic`. The client-height
-# reader's `None` branch — no winit window yet, which is the state at startup, which is when it is
-# first called — cannot be reached without a `slint::Window`, and a `slint::Window` cannot be made
-# without a platform. `default-features = false` is not decoration here: this crate's optional
-# features pull prost, protox and an image stack, and none of them is wanted. What is left is
-# `i-slint-core` and `i-slint-common`, both already in the tree.
+# A headless backend. It began as one test's dependency — `a_missing_winit_window_is_none_not_a_
+# panic`, whose `None` branch needs a `slint::Window`, which needs a platform — and it is now the
+# platform every window test in `main.rs` runs on. `default-features = false` is not decoration:
+# this crate's optional features (`mcp`, `system-testing`) pull prost, protox and an image stack,
+# and none of them is wanted.
+#
+# ── `renderer-skia`, so a page can be drawn with no window (docs/GUI.md §20 item 22) ─────────────
+#
+# **This is what makes `shoot` possible**, and it is the whole of the mechanism. Read out of
+# `i-slint-backend-testing-1.17.1` rather than guessed at:
+#
+#   * `TestingBackendOptions::renderer_name` (`testing_backend.rs:150`) — its own doc says *"windows
+#     embed a real rasterizer so headless rendering (e.g. `Window::take_snapshot`) works"*. Left
+#     `None`, which is what `init_no_event_loop()` does, the window's renderer is a MOCK with fixed
+#     test-font metrics and `Window::take_snapshot` returns `Err("WindowAdapter::take_snapshot is
+#     not implemented by the platform")` (`i-slint-core-1.17.1/renderer.rs:154`).
+#   * `create_headless_renderer` (`testing_backend.rs:576`) resolves `"skia"` to
+#     `SkiaRenderer::default_software`, which is Skia's CPU rasterizer.
+#   * `SkiaRenderer::take_snapshot` (`i-slint-renderer-skia-1.17.1/lib.rs:1009`) wraps a
+#     `SharedPixelBuffer` with `skia_safe::surfaces::wrap_pixels` and renders straight into it. It
+#     never touches `self.surface`, so no surface, no winit window, and nothing opens.
+#
+# **The measured cost is zero crates.** `cargo tree -p ipod-gui --prefix none | sed 's/ (\*)//' |
+# sort -u | wc -l` is 353 before and 353 after: `i-slint-renderer-skia` is already compiled for the
+# `renderer-skia` on `slint` above, and the feature only makes the testing backend hand it out.
+#
+# `renderer-software` is the alternative and was measured too: 355, because
+# `i-slint-renderer-software` and `integer-sqrt` are new. Two crates is not much, but it would also
+# be a SECOND rasterizer — a screenshot drawn by code the program never ships. Skia's software
+# surface runs the same itemrenderer the window runs, which is the point of taking the shot.
 [dev-dependencies]
-i-slint-backend-testing = { version = "1.17", default-features = false }
+i-slint-backend-testing = { version = "1.17", default-features = false, features = [
+    "renderer-skia",
+] }

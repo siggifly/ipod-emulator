@@ -3927,6 +3927,47 @@ In order, because each depends on the one before it.
     carries a behavioural half over all three `Start` variants, and `composer.rs`'s one-line
     `!body.contains("fn raw(")` sits inside a test that has already proved the mask holds.
 
+22. **DONE 2026-08-22. A page of this window can be drawn to a PNG with no window, so looking at the
+    program never costs the operator their focus again.** Six pages — the bench, the menu, Devices,
+    Parts, Work, Settings — land in `_out/gui/*.png` from `cargo test --release -p ipod-gui
+    every_page_this_window_draws_can_be_shot_with_no_window`. Nothing opens, nothing takes focus,
+    and there is no event loop.
+
+    **The mechanism, found by reading `i-slint-backend-testing-1.17.1` rather than guessed at.**
+    `TestingBackendOptions::renderer_name` (`testing_backend.rs:150`) is the whole of it: its own doc
+    says *"windows embed a real rasterizer so headless rendering (e.g. `Window::take_snapshot`)
+    works"*. `init_no_event_loop()` leaves it `None`, which is a **mock** renderer with fixed
+    test-font metrics whose `take_snapshot` answers `Err("WindowAdapter::take_snapshot is not
+    implemented by the platform")`. Set to `"skia"` it resolves to `SkiaRenderer::default_software`,
+    whose `take_snapshot` wraps a `SharedPixelBuffer` with `skia_safe::surfaces::wrap_pixels` and
+    renders into it — never touching `self.surface`, which is why no surface and no window are
+    needed. `a_window` sets the two fields `init_no_event_loop` sets and that third one; every window
+    test in `main.rs` now runs on a real rasterizer, and any of them can take a shot.
+
+    **It costs no crates.** `cargo tree -p ipod-gui --prefix none | sed 's/ (\*)//' | sort -u | wc -l`
+    is **353 before and 353 after**: `i-slint-renderer-skia` is already compiled for the window's own
+    `renderer-skia`, and the feature only makes the testing backend hand it out. `renderer-software`
+    was measured too — **355**, and it would also be a second rasterizer, drawing the shot with code
+    the program never ships.
+
+    **A size and a root-item geometry are two numbers, and the assertion that reads the first cannot
+    see the second.** Measured by removing `shoot`'s two setup lines one at a time: with neither, the
+    shot is 800x600; with the clock tick alone it is a **1180x846 buffer holding a window laid out at
+    800x600** — right dimensions, 1 451 colours, and two flat edges where the window stopped. Only
+    `show()`'s `set_window_item_geometry` (`i-slint-core-1.17.1/window.rs:1641`) supplies the second
+    number. The *size* has two suppliers, `show()` and the single-shot `Timer` that
+    `WindowPropertiesTracker` arms and `mock_elapsed_time` runs, which is why it is the assertion
+    that survives the most breakage and therefore proves the least.
+
+    So the test asserts four things and each was shown red by breaking the drawing: the size (remove
+    both lines), *no page is one flat colour* (hand back a buffer of the window background instead of
+    the renderer's — `1 colour`), *the far edges are drawn* (remove the `show()` — the two outer
+    bands read **1** colour where a drawn page reads 73 to 82), and *no two pages are the same
+    picture* (remove the `push_nav`; and again, differently, remove the clock tick, which parks the
+    drawer off screen). The far-quadrant version of the third was tried first and **discarded on
+    measurement**: `work` drawn is 673 colours and `bench` stopped short is 611, so there is no
+    threshold. On the two edges there is nothing but a number to pick.
+
 **Conditional on §17.Q10**: `Stats::enters_by_core: [[u64; WATCHED.len()]; 2]`, if the run loop can
 attribute an arrival to a core. Until it is answered, §12.8 draws one column.
 
