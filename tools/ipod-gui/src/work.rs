@@ -142,12 +142,26 @@ pub fn cost(holes: Holes) -> Cost {
 /// identifies it is that its boot ROM resolves to a *synthesised* recipe with a seed somebody's
 /// press produced — `seed != 0`, because [`nor::Source::default`] is seed 0 and a default is not a
 /// mint. That distinction is exactly why [`nor::mint_seed`] never returns 0.
+///
+/// **And a composed device is excluded, because that test alone answered *yes* for it.**
+/// `Composer::make_one` mints the same shape this looks for, so every device the Composer filed
+/// read as the first run's — which is what everything downstream then did with it: `press` reused
+/// *its* boot ROM and built into *its* name, `resume_from` measured progress against it, and the
+/// window offered to *finish making* it by running the fixed first-run plan. That plan reads no
+/// `Recipe`, so a device composed as Rockbox-only was pointed at a build of Apple's firmware onto
+/// an 8 GiB drive. [`Device::composed`] is the fact that separates them, and it is a fact about
+/// where the device came from rather than about how far it got.
+///
+/// With two devices in the library the old test was wrong in a second way that this closes: it
+/// returned the **first** synthesised one in list order, so a composed device sorting ahead of a
+/// half-made first run handed its own identity and its own name to `press`.
 pub fn minted(s: &Settings) -> Option<&Device> {
     s.devices.iter().find(|d| {
-        matches!(
-            s.nor_of(d),
-            Some(nor::Source::Synthetic { seed, .. }) if *seed != 0
-        )
+        !d.composed
+            && matches!(
+                s.nor_of(d),
+                Some(nor::Source::Synthetic { seed, .. }) if *seed != 0
+            )
     })
 }
 

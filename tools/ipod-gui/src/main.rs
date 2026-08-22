@@ -606,8 +606,25 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
                 // welcome already shown it was **false**, so the promise §9.1 makes was drawn and
                 // then refused; and with a composed device sitting beside a half-made one it was
                 // **true for every row**, so pressing the composed device resumed the first run.
+                //
+                // **The third route is a composed device**, and it is here rather than inside
+                // `resolve_for_start` because there is nothing wrong with such a device to resolve:
+                // it names every part it was composed from, `Settings::missing` sees nothing gone,
+                // and `run_device` accepts it — so without this arm the press answered *resolves
+                // and would start here* about an iPod with no drive.
+                //
+                // Read out before the branch, not in an `else if let`: the scrutinee of an `if let`
+                // holds its borrow of `s` to the end of the whole chain, which is the borrow this
+                // block's own comment above is about.
+                let unwired = s
+                    .devices
+                    .get(index as usize)
+                    .filter(|d| composed_and_unbuilt(d))
+                    .map(|d| d.name.clone());
                 if press_is_first_run(&s, index as usize) {
                     Route::First(work.borrow_mut().press(&mut s, &mut r, caps.download))
+                } else if let Some(name) = unwired {
+                    Route::Unwired(name)
                 } else {
                     Route::Existing(resolve_for_start(&mut s, index as usize))
                 }
@@ -618,7 +635,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
             // when there is something to save. Every other route may have moved the library: a
             // first-run press mints the identity and files it away — *even the one that then
             // refuses*, which is exactly the corner §10.3's argument turns on.
-            let mutated = !matches!(outcome, Route::Existing(Err(_)));
+            let mutated = !matches!(outcome, Route::Existing(Err(_)) | Route::Unwired(_));
             match outcome {
                 Route::First(work::Press::Running { from, embodied }) => {
                     // **§10.3, said out loud.** A press that did not mint anything and did not
@@ -681,6 +698,18 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
                         "{name} resolves and would start here. Running is not wired to the window \
                          yet — `ipod-boot retail` boots it from a terminal today."
                     ));
+                }
+                Route::Unwired(name) => {
+                    // **The refusal, and no remedy after it.** The sentence this replaced on the
+                    // Composer's own save named one — *press the centre button on it to finish
+                    // making it* — and that button ran the fixed first-run plan, so the remedy built
+                    // something else. §14.1: say what cannot be done and why, and stop there.
+                    rail.borrow_mut().note(&format!(
+                        "{name} was composed here, and building a composed device is not wired \
+                         yet. Its drive has not been made, and this button cannot make one."
+                    ));
+                    stack.borrow_mut().go(nav::Page::Work, 1);
+                    push_nav(&w, &stack.borrow());
                 }
                 Route::Existing(Err(f)) => {
                     // **No machine is started, and nothing is mutated** — the resolution refuses
@@ -1077,11 +1106,19 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
                     save(&settings.borrow(), &mut rail.borrow_mut());
                     // §9.2 wants the work where work is reported. **The build is not wired**:
                     // `work::Queue` has no `compose`, so this says so rather than leaving a device
-                    // that looks built. §10's unfinished-device wording is what the bench then
-                    // draws for it.
+                    // that looks built.
+                    //
+                    // **And it offers no remedy, which is the fix.** It used to end *press the
+                    // centre button on it to finish making it*, and that button did not build this
+                    // recipe: `press_is_first_run` sent a freshly composed device into the **fixed**
+                    // first-run plan — Apple's firmware, an 8 GiB drive, Apple's software, no
+                    // `Recipe` consulted — so a device composed as Rockbox-only was told to press a
+                    // button that builds an Apple drive. The press refuses it now, and §14.1 is what
+                    // this sentence follows instead: state the refusal, state what follows from it,
+                    // and name no route that does something different.
                     rail.borrow_mut().note(&format!(
-                        "{} is in the library. Building a composed device is not wired yet — \
-                         press the centre button on it to finish making it.",
+                        "{} is in the library. Building a composed device is not wired yet, so no \
+                         drive has been made for it.",
                         done.device
                     ));
                     stack.borrow_mut().go(nav::Page::Work, 1);
@@ -1284,6 +1321,11 @@ enum Route {
     First(work::Press),
     /// A device already in the library, resolved (or refused) the way it always was.
     Existing(Result<String, (String, rail::Failure)>),
+    /// A device the Composer filed and this build cannot make a drive for — see
+    /// [`composed_and_unbuilt`]. It is neither of the other two: the first run's plan is not this
+    /// device's, and there is nothing to resolve because the drive was never built. It mutates
+    /// nothing and files one sentence.
+    Unwired(String),
 }
 
 /// **Everything one tick does to the window, in one function**, so a test drives exactly what the
@@ -1544,6 +1586,13 @@ fn first_run_offer(s: &Settings) -> Offer {
 ///
 /// Two rows route to the first run and no others: the empty bench, which has no device to start,
 /// and the minted-but-unfinished device, which is a run that stopped part way.
+///
+/// **A composed device is neither, and it used to be the second one.** [`work::minted`] identified
+/// the first-run device by its synthesised boot ROM, which is exactly the shape
+/// `Composer::make_one` produces, so a device somebody had just composed answered to it — and what
+/// this returned `true` for, `work::Queue::press` then built from the **fixed** first-run plan,
+/// consulting no `Recipe`. `minted` is where that is fixed, so this function and `first_run_offer`
+/// ask one question rather than two.
 fn press_is_first_run(s: &Settings, index: usize) -> bool {
     if s.devices.is_empty() {
         return true;
@@ -1814,6 +1863,22 @@ fn gone_sentence(d: &Device, absent: &[Absent]) -> String {
     format!("{}.", parts.join(", and "))
 }
 
+/// Whether this is a device the Composer filed whose drive this program cannot yet make.
+///
+/// **One boolean, consulted by the ring, the label and the press**, for the reason `empty_device`
+/// gives for its own: three answers to *can this be pressed* is how two of them come to disagree
+/// silently. `work::Queue` has no compose entry — a device composed here is saved and not built,
+/// and nothing in this build can build it — so §14.1 applies exactly as written: the control is
+/// drawn, refused, and says why, rather than being drawn live over a route that does something
+/// else.
+///
+/// **Retirement condition**, in the shape `research/04` uses: when `work::Queue` takes a `Recipe`,
+/// this predicate is deleted and the press routes a composed device into that queue. Nothing here
+/// becomes true again — it becomes a build.
+fn composed_and_unbuilt(d: &Device) -> bool {
+    d.composed && !d.names_a_disk()
+}
+
 /// §7.3's cradle label: **what pressing will cost, or why it cannot be pressed**, before it is
 /// pressed.
 ///
@@ -1838,6 +1903,11 @@ fn gone_sentence(d: &Device, absent: &[Absent]) -> String {
 fn cradle_label(d: &Device, absent: &[Absent]) -> String {
     if !absent.is_empty() {
         return gone_sentence(d, absent);
+    }
+    // **Before the unfinished arm, because a composed device is unfinished in the same way and the
+    // remedy below is not its remedy.** See [`composed_and_unbuilt`].
+    if composed_and_unbuilt(d) {
+        return "Building a composed device is not wired yet".into();
     }
     // **§10.3: a first run that stopped part-way must not be captioned with a promise to start.**
     // A device that names no drive is *unfinished*, not *broken* — `Settings::missing` sees nothing
@@ -2816,7 +2886,10 @@ fn device_rows(settings: &Settings) -> Vec<DeviceRow> {
             DeviceRow {
                 name: d.name.clone().into(),
                 summary: summary(settings, d, &mut seen).into(),
-                startable: gone.is_empty(),
+                // **The label's own boolean**, so a cradle that says *not wired* is not also drawn
+                // pressable. `gone.is_empty()` alone answered `true` for a composed device, because
+                // nothing about it is missing — it was never made.
+                startable: gone.is_empty() && !composed_and_unbuilt(d),
                 cradle_label: cradle_label(d, &gone).into(),
                 // §7.5's row-1 trailing slot: **the state, and time since.**
                 state: shelf_state(d).into(),
@@ -5603,6 +5676,67 @@ pub(crate) mod tests {
         assert!(press_is_first_run(&Settings::default(), 0));
     }
 
+    /// **A device the Composer filed is not the first run's device, and the centre button must not
+    /// treat it as one.**
+    ///
+    /// `work::minted` answers *the first-run device* by asking whether the boot ROM is a synthesised
+    /// one with a seed somebody's press produced — and `Composer::make_one` mints exactly that
+    /// shape. So a device composed here was indistinguishable from a half-made first run, and both
+    /// routes that consult `minted` believed it: `press_is_first_run` sent it to
+    /// `work::Queue::press`, which runs the **fixed** first-run plan — Apple's firmware, an 8 GiB
+    /// drive, Apple's software — and reads no `Recipe` at all. A device composed as Rockbox-only was
+    /// told to press a button that builds an Apple drive.
+    #[test]
+    fn a_composed_device_is_not_routed_to_the_first_run() {
+        let _held = use_a_scratch_data_dir();
+        let mut s = Settings::default();
+        let mut c = composer::Composer::new();
+        c.make_one();
+        c.set_start(compose::Start::FromIpsw("iPod_25.1.3.ipsw".into()));
+        c.set_name("Rockbox only");
+        let done = c.commit(&mut s).expect("an empty library takes the name");
+
+        let i = s
+            .devices
+            .iter()
+            .position(|d| d.name == done.device)
+            .expect("the Composer filed no device");
+        assert!(
+            !s.devices[i].names_a_disk(),
+            "the fixture is not the state this is about: the drive has still to be built"
+        );
+        assert!(
+            !press_is_first_run(&s, i),
+            "the centre button on a composed device runs the fixed first-run plan — Apple's \
+             firmware, an 8 GiB drive — and never the recipe it was composed from"
+        );
+        // The same mistake one surface up: `Offer::Finish` is the cradle promising to *finish
+        // making* it, and finishing it means the same fixed plan.
+        assert_ne!(
+            first_run_offer(&s),
+            Offer::Finish { device: done.device.clone() },
+            "the bench offers to finish a composed device by running the first-run plan"
+        );
+
+        // **And §7.3's own line, because a press that refuses under a label promising to finish is
+        // the same lie moved one control along.** §14.1: drawn, refused, and saying why.
+        let row = &device_rows(&s)[i];
+        assert!(
+            !row.startable,
+            "the cradle is drawn live over a device this build cannot make a drive for"
+        );
+        assert!(
+            !row.cradle_label.contains("finish making"),
+            "the cradle promises to finish making a composed device: {:?}",
+            row.cradle_label
+        );
+        assert!(
+            row.cradle_label.contains("not wired"),
+            "the cradle refuses without saying why: {:?}",
+            row.cradle_label
+        );
+    }
+
     /// **The cradle carries the work while there is work**, which is §9.2's bench mirror.
     ///
     /// The shelf's bar and its rail line moved during a build and the cradle did not, so the one
@@ -6554,11 +6688,13 @@ pub(crate) mod tests {
             ..Device::default()
         };
         let half_made = Device { name: compose::FIRST_RUN_DEVICE.into(), ..Device::default() };
+        let composed = Device { composed: true, ..Device::default() };
         let typed = [
             ("the startable device", cradle_label(&made, &[])),
             // §10.3's half-made one. `FIRST_RUN_DEVICE` is the name a first run gives, so this is
             // the longest label this program composes without a person having renamed anything.
             ("the half-made device", cradle_label(&half_made, &[])),
+            ("the composed device", cradle_label(&composed, &[])),
             ("the first-run bench", empty_device(true, caps(), a_cost()).cradle_label.to_string()),
             ("the empty bench", empty_device(false, caps(), no_cost()).cradle_label.to_string()),
         ];

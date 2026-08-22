@@ -1150,6 +1150,13 @@ impl Composer {
             d.firmware = filed.clone();
             d.disk = disk_name;
             d.disk_path = disk_path;
+            // **The one thing that tells this device apart from the first run's**, and without it
+            // nothing could. A device filed here carries a synthesised boot ROM with a minted seed,
+            // which is the whole of what `work::minted` asks — so the window read a composed device
+            // as a half-made first run and offered to *finish* it by running the fixed first-run
+            // plan, which consults no `Recipe`. It is set on a re-save as well as on a `Create`:
+            // the fact is where the device came from, and a second save does not change it.
+            d.composed = true;
             if shape_changed {
                 // GUI.md §12.3: a denominator learned on one system is a lie about another.
                 d.boot_instructions = None;

@@ -489,6 +489,24 @@ pub struct Device {
     /// has broken — a device whose drive was touched by something else keeps its park time and is
     /// offered `Discard the snapshot`, which is what makes that offer explicable.
     pub parked_at: Option<u64>,
+    /// Whether this device was described in the Composer rather than made by the first run.
+    ///
+    /// **It exists because nothing else could tell the two apart.** The first-run device is
+    /// identified by its boot ROM — a synthesised recipe with a seed somebody's press produced —
+    /// and the Composer's `make one` mints exactly that shape, so a composed device answered *yes*
+    /// to the only question the window was asking. What follows from that answer is the fixed
+    /// first-run plan, which reads no recipe at all: a device composed as Rockbox-only was routed
+    /// into a build of Apple's firmware onto an 8 GiB drive.
+    ///
+    /// **A fact about where the device came from, so it does not expire.** It is not *unbuilt* —
+    /// [`Device::names_a_disk`] answers that, and it changes — and it is not the recipe, which is
+    /// deliberately not stored under a device (see [`Settings::render_devices`]). A device the
+    /// Composer filed goes on being one after its drive exists, because what may be done to it is
+    /// still the recipe's and not the first run's.
+    ///
+    /// `false` for everything written before this field, which is the truth about those devices:
+    /// there was no route to an existing device through the Composer at all.
+    pub composed: bool,
 }
 
 impl Device {
@@ -799,6 +817,9 @@ impl Settings {
                             s.devices[i].boot_shape = Some(v.to_string())
                         }
                         "parked_at" => s.devices[i].parked_at = v.parse::<u64>().ok(),
+                        // Written only when true, so anything but the word is `false` — which is
+                        // what a hand-edited file that says nothing means as well.
+                        "composed" => s.devices[i].composed = v == "true",
                         _ => {
                             // `unwrap_or_default` reproduces the old start point exactly: the
                             // resolved ROM defaulted to a synthetic A446 seed 0, so a lone
@@ -1331,6 +1352,12 @@ impl Settings {
             if let Some(t) = d.parked_at {
                 out.push_str(&format!("device.{i}.parked_at = {t}\n"));
             }
+            // **Written only when true.** `device.N.composed = false` on every device this program
+            // has ever made would be a line per device stating the default, and the file is meant
+            // to be read and hand-edited.
+            if d.composed {
+                out.push_str(&format!("device.{i}.composed = true\n"));
+            }
         }
         out
     }
@@ -1380,6 +1407,11 @@ impl Settings {
             boot_shape: existing.and_then(|d| d.boot_shape.clone()),
             // The park time belongs to the saved device and is not derivable from the live fields.
             parked_at: existing.and_then(|d| d.parked_at),
+            // **Kept, for the same reason the boot shape is.** Where a device came from is not
+            // derivable from the live fields, and `remember_as` runs on routes that are not the
+            // Composer — a save from anywhere else would otherwise quietly re-file a composed
+            // device as the first run's and hand it back to the fixed plan.
+            composed: existing.is_some_and(|d| d.composed),
         }
     }
 
@@ -4121,6 +4153,51 @@ mod device_tests {
         assert!(!text.contains("device.0.flash"), "{text}");
         assert!(!text.contains("device.0.nor_model"), "{text}");
         assert!(!text.contains("device.0.nor_seed"), "{text}");
+    }
+
+    /// **Where a device came from survives the file, and survives `as_device`.**
+    ///
+    /// It is the one thing separating a device the Composer filed from the first run's own — both
+    /// carry a synthesised boot ROM with a minted seed — and the consequence of losing it is not
+    /// cosmetic: the window reads a composed device as a half-made first run and offers to finish
+    /// it by running the fixed first-run plan, which builds Apple's firmware onto an 8 GiB drive
+    /// whatever the recipe said. A field that is written and not read back is that lie with a
+    /// delay on it.
+    ///
+    /// Both halves are checked, because they fail differently: the file, and the
+    /// `run_device`/`remember_as` round trip through [`Settings::as_device`] — which is the trap
+    /// §20 item 6 names for `boot_shape`, and this field is reachable by the same route.
+    #[test]
+    fn where_a_device_came_from_survives_a_round_trip() {
+        let mut s = a_device_called("Rockbox only");
+        s.devices[0].composed = true;
+
+        let text = s.render();
+        assert!(
+            text.contains("device.0.composed = true"),
+            "the file does not say where the device came from:\n{text}"
+        );
+        let back = Settings::parse(&text);
+        assert!(back.devices[0].composed, "it did not come back");
+
+        // A device nobody composed says nothing rather than saying `false`, and reads back `false`.
+        let plain = a_device_called("My 5.5G");
+        let plain_text = plain.render();
+        assert!(
+            !plain_text.contains("composed"),
+            "every device states the default:\n{plain_text}"
+        );
+        assert!(!Settings::parse(&plain_text).devices[0].composed);
+
+        // And the in-memory round trip: a save from anywhere but the Composer must not re-file a
+        // composed device as the first run's.
+        let mut live = back;
+        assert!(live.run_device("Rockbox only"), "the fixture does not resolve");
+        live.remember_as("Rockbox only");
+        assert!(
+            live.devices[0].composed,
+            "`remember_as` handed a composed device back to the first run"
+        );
     }
 
     // ── §12.3 / §20 item 6: what a device boots, and the number measured on it ──────────────────
