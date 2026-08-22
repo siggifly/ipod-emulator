@@ -6504,16 +6504,34 @@ pub(crate) mod tests {
     /// index (`search_api.rs:330-336`), and `Row inherits Pressable inherits Rectangle` is ten of
     /// them. The role is declared once, on the outermost.
     ///
-    /// **And deduplicated by position**, which is the third thing this query needed. A chain of
-    /// elements optimised into a single `ItemRc` is reported once per element index
-    /// (`search_api.rs:329-336`), and `Row inherits Pressable inherits Rectangle` is ten of them
-    /// carrying one role between them — so an undeduplicated query answers 70 for seven rows.
+    /// **And deduplicated by position**, which is the third thing this query needed — see
+    /// [`elements_by_role`], which is where that half now lives, because Parts and Devices ask the
+    /// same question of the same role about their own rows.
     fn drawer_rows(w: &MainWindow) -> Vec<i_slint_backend_testing::ElementHandle> {
+        elements_by_role(w, i_slint_backend_testing::AccessibleRole::ListItem)
+    }
+
+    /// Every **visible** element in the window reporting `role`, deduplicated by position.
+    ///
+    /// **Deduplicated, because a chain of elements optimised into a single `ItemRc` is reported
+    /// once per element index** (`search_api.rs:329-336`), and `Row inherits Pressable inherits
+    /// Rectangle` is ten of them carrying one role between them — so an undeduplicated query
+    /// answers 70 for seven rows. Two elements of one window never share an absolute position and
+    /// two element indices of one item always do, which is what makes the position the key.
+    ///
+    /// **Visible is Slint's doing rather than this function's**, and it is what makes a query about
+    /// a drawer at depth 1 answer about the page on screen instead of about the four parked beside
+    /// it: `visit_descendants` skips an item `is_visible()` denies (`search_api.rs:376-378`), and
+    /// `ui/drawer.slint`'s `on-screen(n)` is what sets that boolean per page.
+    fn elements_by_role(
+        w: &MainWindow,
+        role: i_slint_backend_testing::AccessibleRole,
+    ) -> Vec<i_slint_backend_testing::ElementHandle> {
         let mut seen: Vec<(u32, u32)> = Vec::new();
         let mut out = Vec::new();
         for e in i_slint_backend_testing::ElementQuery::from_root(w)
             .match_descendants()
-            .match_accessible_role(i_slint_backend_testing::AccessibleRole::ListItem)
+            .match_accessible_role(role)
             .find_all()
         {
             let at = e.absolute_position();
@@ -6524,6 +6542,22 @@ pub(crate) mod tests {
             }
         }
         out
+    }
+
+    /// What a set of elements is called, in the order they were found.
+    fn labels(es: &[i_slint_backend_testing::ElementHandle]) -> Vec<String> {
+        es.iter()
+            .map(|e| e.accessible_label().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    /// Every string the window is drawing right now.
+    ///
+    /// A `Text` reports its own string as its accessible label, which is the same fact
+    /// [`drawer_rows`] has to work around — there it is a hazard, and here it is the instrument.
+    /// It answers what a person would read off the screen and nothing about how it got there.
+    fn text_on_screen(w: &MainWindow) -> Vec<String> {
+        labels(&elements_by_role(w, i_slint_backend_testing::AccessibleRole::Text))
     }
 
     /// Let the drawer's slide finish. **Not decoration**: the testing backend runs on mock time, so
@@ -6609,24 +6643,276 @@ pub(crate) mod tests {
         }
     }
 
-    /// **Draw the window, with no window, and write the page to `_out/gui/<name>.png`.**
+    /// **A library with something in it**, and every name in it the model's own.
     ///
-    /// This is the whole of the headless-screenshot path, and it exists so that looking at a page
-    /// never costs the operator an application stealing focus. `cargo test --release -p ipod-gui
-    /// every_page_this_window_draws_can_be_shot_with_no_window` writes one PNG per page; open them
-    /// with anything.
+    /// §9.1's empty library is a legitimate state and gets a shot of its own; this is the other
+    /// one. Parts is six sections of nothing until a library fills them, and a Parts page drawn
+    /// over an empty `Settings` is indistinguishable from a Parts page whose repeaters never ran —
+    /// which is what `parts.png` was, for as long as `shoot` pushed the navigation and nothing
+    /// else.
+    ///
+    /// **Nothing here is a typed-in name.** `suggest_nor_name`, `suggest_device_name` and
+    /// `suggest_disk_stem` are the three functions the running program names things with, and the
+    /// disk's `built_from` + `installed` are written in the shape `work.rs` writes them after an
+    /// install. So the picture reads the way a real library reads rather than the way a fixture's
+    /// author imagined one.
+    ///
+    /// **Through the settings file and back**, at the end, because that is the only shape a saved
+    /// device has: `remember_as` leaves `disk_path` filled, `Settings::parse` does not, and every
+    /// device from its second launch on is the second of those. A fixture in a shape the program
+    /// cannot produce is the same defect as a gate that cannot fail.
+    ///
+    /// **The files are fabricated and are the size of nothing.** A closed Parts row reads its file
+    /// only through `Presence::exists`, so what is wanted from these bytes is that they are there;
+    /// the one that is a megabyte is the boot ROM, because that is what a boot ROM is. `AGENTS.md`
+    /// §2 is why they are made here rather than pointed at `resources/` — nothing under that tree
+    /// may be named by a tracked file, and a fixture that needs somebody's own dump is a fixture
+    /// that runs on one machine.
+    fn a_furnished_library(at: &std::path::Path) -> Settings {
+        use eapp_loader::settings::{self, Provenance, Resource, Verification};
+
+        let file = |name: &str, len: usize| -> std::path::PathBuf {
+            let p = at.join(name);
+            std::fs::write(&p, vec![0u8; len]).expect("a fabricated part");
+            p
+        };
+        let mut s = Settings::default();
+
+        // Two iPods. `Group::Ipods` draws a recipe and a dump differently — *synthesised, seed
+        // 5e5510* against *dumped* — and the group's third row is `parts.rs`'s reserved *No iPod is
+        // plugged in* line, which is there whether or not anything is.
+        let synth = eapp_loader::nor::Source::Synthetic {
+            model: eapp_loader::nor::DEFAULT_MODEL.into(),
+            seed: 0x5e_5510,
+            serial: None,
+            guid: None,
+            splash: None,
+        };
+        let dump = eapp_loader::nor::Source::File(file("nor-a146.bin", 1 << 20));
+        // `None` for the recipe and `Dumped` for the file: `normalised` derives a synthetic's
+        // provenance from the recipe itself, and cannot tell a dump from a download.
+        s.file_away(
+            Resource::Firmware(synth.clone()),
+            &settings::suggest_nor_name(&synth),
+            None,
+        );
+        s.file_away(
+            Resource::Firmware(dump.clone()),
+            &settings::suggest_nor_name(&dump),
+            Some(Provenance::Dumped),
+        );
+
+        // One of each remaining resource kind, so that all six groups have a row and the page is a
+        // picture of the design rather than of one populated section.
+        let ipsw = s.file_away(
+            Resource::Installer(file("iPod_33.1.1.ipsw", 64)),
+            "iPod_33.1.1.ipsw",
+            Some(Provenance::Fetched {
+                verified: Verification::Sha256,
+            }),
+        );
+        s.file_away(
+            Resource::Bootloader(file("ipodloader2", 64)),
+            "ipodloader2",
+            Some(Provenance::Built),
+        );
+        s.file_away(
+            Resource::Software(file("rockbox.zip", 64)),
+            "rockbox.zip",
+            Some(Provenance::Fetched {
+                verified: Verification::SizeOnly,
+            }),
+        );
+
+        // The drive, and what went onto it. `work.rs`'s own bookkeeping for a finished install is
+        // `built_from = <the installer's entry>` plus one `Os::label()` per operating system, and
+        // the first of those is what puts `used by 1` on the `.ipsw`'s row.
+        let stem = settings::suggest_disk_stem(&synth);
+        let image = file(&format!("{stem}.img"), 64);
+        let disk = s.file_disk(image.clone(), &stem);
+        let k = s
+            .disks
+            .iter_mut()
+            .find(|d| d.name == disk)
+            .expect("the disk that was just filed");
+        k.built_from = Some(ipsw);
+        k.installed = vec![
+            compose::Os::Apple.label().to_string(),
+            compose::Os::Rockbox.label().to_string(),
+        ];
+
+        // The device made of them, saved the way the program saves one: the live fields, then
+        // `remember_as`. It files nothing new — both halves are already in the lists — and the
+        // device comes out naming them rather than copying them.
+        s.nor = synth.clone();
+        s.disk = Some(image);
+        s.remember_as(&settings::suggest_device_name(&synth));
+
+        // A second device, parked, which is the only producer `Group::Snapshots` has: a device with
+        // no `parked_at` contributes no row there, so without this the sixth group is the one
+        // section of the page nothing proves.
+        let second = "Rockbox on a 5G";
+        s.nor = dump;
+        s.disk = None;
+        s.remember_as(second);
+        assert!(
+            s.record_park(second, settings::now_unix().saturating_sub(3 * 60 * 60)),
+            "the device that was just remembered is not in the list"
+        );
+
+        Settings::parse(&s.render())
+    }
+
+    /// **What [`wire`] holds behind the three drawer pages**, and nothing else.
+    ///
+    /// The pushes themselves are free functions — [`push_parts`], [`push_devices_detail`],
+    /// [`push_settings`], [`refresh_devices`] — for §20 item 12's reason, which is that a closure
+    /// registered inside `wire` is reachable from nothing. So a test does not have to reimplement
+    /// what they would have written; it calls the shipped producers. What it does have to supply is
+    /// the *state they close over*: one cursor per page and one retained model per repeater. This
+    /// is that state.
+    struct Furniture {
+        settings: Settings,
+        parts: RefCell<parts::Parts>,
+        p_groups: Rc<VecModel<GroupRow>>,
+        p_rows: Rc<VecModel<PartRow>>,
+        p_detail: Rc<VecModel<DetailRow>>,
+        device_page: RefCell<devices::Devices>,
+        d_detail: Rc<VecModel<DetailRow>>,
+        prefs: settings_page::Prefs,
+        shelf: Rc<VecModel<DeviceRow>>,
+        /// §10.3's latch. A library with devices in it is past the first run and an empty one is
+        /// not, which is the difference between the welcome bench and the later-empty one.
+        welcome: Rc<std::cell::Cell<bool>>,
+        /// The plan's bill. Only the first-run bench quotes one, so it goes with the latch.
+        cost: compose::Cost,
+    }
+
+    impl Furniture {
+        fn new(settings: Settings) -> Furniture {
+            let first = settings.devices.is_empty();
+            Furniture {
+                settings,
+                parts: RefCell::new(parts::Parts::new()),
+                p_groups: Rc::new(VecModel::default()),
+                p_rows: Rc::new(VecModel::default()),
+                p_detail: Rc::new(VecModel::default()),
+                device_page: RefCell::new(devices::Devices::new()),
+                d_detail: Rc::new(VecModel::default()),
+                prefs: settings_page::Prefs::new(),
+                shelf: Rc::new(VecModel::default()),
+                welcome: latch(first),
+                cost: if first { a_cost() } else { no_cost() },
+            }
+        }
+
+        /// Open the first device's body.
+        ///
+        /// **Not for a prettier picture.** `push_devices_detail`'s whole output is what is *inside*
+        /// the open row, so over a page with nothing open it writes `detail-of = -1` and reaches no
+        /// pixel — calling it there would be a push nobody could check, which is the shape this
+        /// commit exists to delete. It is also where §7.2's `Start` and its refusal are drawn, and
+        /// `to_detail` is the flattener Parts shares, so one open body exercises both pages'.
+        ///
+        /// **Parts is deliberately left closed**, which is the state pressing `Parts` lands in.
+        /// Measured, an open row costs the rest of that page: a furnished Parts page with the first
+        /// iPod expanded shows *one* of six sections and two of eight parts, because the body fills
+        /// the drawer. Closed it shows four sections and eight rows, and the shape of the page is
+        /// worth more than the insides of one row of it.
+        fn open_the_first_device(&self) {
+            self.device_page.borrow_mut().open_row(&self.settings, 0, true);
+        }
+
+        /// Everything `wire`'s four producers would have written for this library, at this place in
+        /// the drawer.
+        ///
+        /// **The three page pushes are gated exactly as `wire`'s three repaints are** — see
+        /// [`on_screen`]. That is not a saving here; it is the difference between a picture of the
+        /// page the drawer is showing and a picture of a page drawn out of a library it is not.
+        ///
+        /// **The retained models are set on every push rather than once**, which §16.9 forbids in
+        /// the running window and cannot cost anything here: its rule is about focus, hover and an
+        /// in-flight animation surviving across frames, and a shot is one frame with none of the
+        /// three. Two libraries cannot share one model object, and this file shoots two.
+        fn push(&self, w: &MainWindow, at: &nav::Stack) {
+            w.set_parts_groups(ModelRc::from(self.p_groups.clone()));
+            w.set_parts_rows(ModelRc::from(self.p_rows.clone()));
+            w.set_parts_detail(ModelRc::from(self.p_detail.clone()));
+            w.set_devices_detail(ModelRc::from(self.d_detail.clone()));
+            w.set_devices(ModelRc::from(self.shelf.clone()));
+
+            // The shelf, the cradle, the ghost, and the Devices page's own empty line and its
+            // pinned `+ New device` row — which is the control that shipped in the old shot as a
+            // blue block with no text on it, because nothing had pushed its label.
+            refresh_devices(w, &self.shelf, &self.settings, &self.welcome, caps(), self.cost);
+
+            if on_screen(at, nav::Page::Parts) {
+                push_parts(
+                    w,
+                    &mut self.parts.borrow_mut(),
+                    &self.settings,
+                    caps(),
+                    false,
+                    &self.p_groups,
+                    &self.p_rows,
+                    &self.p_detail,
+                );
+            }
+            if on_screen(at, nav::Page::Devices) {
+                push_devices_detail(
+                    w,
+                    &mut self.device_page.borrow_mut(),
+                    &self.settings,
+                    caps(),
+                    &self.d_detail,
+                );
+            }
+            if on_screen(at, nav::Page::Settings) {
+                push_settings(w, &self.prefs, &self.settings, caps());
+            }
+        }
+    }
+
+    /// Where in the drawer a page is drawn, as a [`nav::Stack`] standing there.
+    ///
+    /// `Stack::go` refuses to jump a level on purpose, so a page is reachable only at the depth
+    /// [`nav::Page::slot`] draws it at — which is why every caller here names the page and lets
+    /// this find the level rather than typing one.
+    fn a_stack(page: nav::Page) -> nav::Stack {
+        let mut at = nav::Stack::new();
+        let slot = page
+            .slot()
+            .unwrap_or_else(|| panic!("nothing draws {page:?}, so there is no picture of it"));
+        at.go(page, slot);
+        at
+    }
+
+    /// **Draw the window, with no window, standing at `at` with `f`'s library on it.**
+    ///
+    /// This is the whole of the headless-drawing path. [`shoot`] photographs what it leaves on the
+    /// screen and `every_page_this_window_shoots_is_drawn_with_what_is_on_it` reads the elements
+    /// out of it, which is why the two live either side of this rather than each doing it once.
     ///
     /// `at` is *where you are* rather than a page, because that is what the window is told: a page
     /// at depth 2 is not reachable by naming it — [`nav::Stack::go`] refuses to jump a level on
     /// purpose — so the caller drives a `Stack` exactly as [`wire`] does and hands it over. The
     /// same argument makes the closed bench expressible, which "a page" is not.
     ///
-    /// The mechanics, none of which opens anything:
+    /// **[`Furniture::push`] is the second line and it is the one this function was missing.** It
+    /// shipped as `push_nav` alone — a window told which page to draw and nothing about what is on
+    /// it — so `parts.png` was a header over 800 px of white and `settings.png` was three labels
+    /// with no values beside them, and the assertions on those pixels could not tell either from a
+    /// drawn page, because a header's own text is enough to make a page rich and unique. The pages
+    /// are pushed by the shipped producers rather than by anything written for a test; see
+    /// [`Furniture`].
     ///
-    ///   * **The two lines below do three things between them and each of the three is load-bearing.**
-    ///     What follows was measured by removing them one at a time and reading which assertion
-    ///     died, because the first version of this comment reasoned it out instead and got it
-    ///     wrong. A **size** and a **root-item geometry** are two numbers, and the shot needs both.
+    /// The rest of the mechanics, none of which opens anything:
+    ///
+    ///   * **`show()` and the clock tick do three things between them and each of the three is
+    ///     load-bearing.** What follows was measured by removing them one at a time and reading
+    ///     which assertion died, because the first version of this comment reasoned it out instead
+    ///     and got it wrong. A **size** and a **root-item geometry** are two numbers, and the shot
+    ///     needs both.
     ///
     ///     | | size | root geometry | drawer slid |
     ///     |---|---|---|---|
@@ -6654,16 +6940,26 @@ pub(crate) mod tests {
     ///   * The *drawer slide* is [`let_the_drawer_settle`]'s own reason, and the backend running on
     ///     mock time is why it is needed at all: a drawer that just opened is still parked at
     ///     `x == client.width` until somebody advances the clock. Row two of the table is what that
-    ///     costs — six pages that are all the bench.
+    ///     costs — every page a picture of the bench.
     ///   * `take_snapshot` renders into a buffer, not onto a surface. See the Cargo.toml note.
-    ///
-    /// A shot is about 3 MB, because [`png::encode`] writes a *stored* deflate stream — the trade
-    /// that module was written to make, at 1180x846 rather than at the framebuffer's 320x240. Six
-    /// of them is 18 MB per run, in a directory whose whole purpose is to be thrown away.
-    fn shoot(w: &MainWindow, at: &nav::Stack, name: &str) -> Shot {
+    fn draw(w: &MainWindow, at: &nav::Stack, f: &Furniture) {
         push_nav(w, at);
+        f.push(w, at);
         w.show().expect("the headless backend shows a window");
         let_the_drawer_settle();
+    }
+
+    /// **[`draw`] the window and write the page to `_out/gui/<name>.png`.**
+    ///
+    /// It exists so that looking at a page never costs the operator an application stealing focus.
+    /// `cargo test --release -p ipod-gui every_page_this_window_draws_can_be_shot_with_no_window`
+    /// writes one PNG per page; open them with anything.
+    ///
+    /// A shot is about 3 MB, because [`png::encode`] writes a *stored* deflate stream — the trade
+    /// that module was written to make, at 1180x846 rather than at the framebuffer's 320x240. Seven
+    /// of them is 21 MB per run, in a directory whose whole purpose is to be thrown away.
+    fn shoot(w: &MainWindow, at: &nav::Stack, f: &Furniture, name: &str) -> Shot {
+        draw(w, at, f);
 
         let rgba = w
             .window()
@@ -6687,47 +6983,18 @@ pub(crate) mod tests {
         Shot { at: file, w: width, h: height, rgb }
     }
 
-    /// **Every page this window draws, drawn, with nothing on screen.**
+    /// **The furniture every shot of this window stands on**, which is the bench's and not a page's.
     ///
-    /// This is the end-to-end proof of [`shoot`] and it is also the tool: run it and
-    /// `_out/gui/*.png` is six pictures of the program, taken without a window ever existing and
-    /// without an operator's focus being stolen. That was the whole point.
-    ///
-    /// **What it asserts about the pixels, and why each one can go red:**
-    ///
-    ///   1. *the size is the window's own preferred size* — the shot is not `TestingWindow`'s
-    ///      800x600 default, which is what a window whose layout never ran answers;
-    ///   2. *no page is one flat colour* — the assertion that dies on a buffer nobody rendered
-    ///      into, and on a helper that fabricates pixels instead of asking the renderer for them;
-    ///   3. *every page is drawn all the way to the far edges of its frame* — because (2) is
-    ///      satisfied by a picture of an 800x600 window sitting in the corner of an 1180x846 frame,
-    ///      which is exactly what `shoot` produces without its `show()`;
-    ///   4. *no two pages are the same picture* — which is the half (2) and (3) cannot see: a
-    ///      rasterizer wired up correctly but handed the same page six times draws six rich,
-    ///      correctly-sized, identical pictures, and so does a `shoot` that ignores the `Stack`.
-    ///
-    /// Each was measured red before it was believed, and by breaking the drawing rather than the
-    /// arithmetic. In `shoot`: (1) by removing both the `show()` and the clock tick — *"bench came
-    /// out 800x600"*; (2) by handing back a buffer of the window's background instead of the
-    /// renderer's — *"bench is 1 colour(s) over 1180x846"*; (3) by removing the `show()` alone —
-    /// *"bench's right and bottom edges are 1 colour(s)"*; (4) by removing the `push_nav` — *"bench
-    /// and menu are the same picture"* — and again, differently, by removing the clock tick alone,
-    /// which leaves the drawer parked off screen: *"menu and devices are the same picture"*.
-    #[test]
-    fn every_page_this_window_draws_can_be_shot_with_no_window() {
-        let w = a_window();
-
-        // Furnished, because an unfurnished shot is a picture of nothing and this test is the tool
-        // as much as it is the gate. Same pushes as
-        // `the_composed_window_takes_everything_this_file_pushes`.
-        w.set_devices(ModelRc::from(Rc::new(VecModel::from(device_rows(&Settings::default())))));
-        w.set_empty_device(empty_device(false, caps(), no_cost()));
+    /// The panel, the fit, the ledger and an empty Rail. They are pushed once per window rather
+    /// than once per shot because none of them varies with the library or with where the drawer is
+    /// standing — unlike [`Furniture`], which is exactly the half that does.
+    fn dress_the_bench(w: &MainWindow) {
         w.set_screen_source(dark_screen());
         w.set_panel_description(panel_description(&phase()).into());
         w.global::<Motion>().set_scale(motion::scale());
         w.global::<Metric>().set_mono_family(mono_family().into());
         push_fit(
-            &w,
+            w,
             &fit::Fit {
                 k: 2,
                 hero_logical: 655.751,
@@ -6737,33 +7004,81 @@ pub(crate) mod tests {
             },
             2.0,
         );
-        push_ledger(&w, None, &temp_dir("shots"), None);
+        push_ledger(w, None, &temp_dir("shots"), None);
         let rows: Rc<VecModel<RailRow>> = Rc::new(VecModel::default());
         w.set_rail(ModelRc::from(rows.clone()));
-        sync_rail(&w, &rows, &rail::Rail::new(), caps(), work::Shape::default());
+        sync_rail(w, &rows, &rail::Rail::new(), caps(), work::Shape::default());
+    }
+
+    /// **Every page this window draws, drawn, with nothing on screen.**
+    ///
+    /// This is the end-to-end proof of [`shoot`] and it is also the tool: run it and
+    /// `_out/gui/*.png` is seven pictures of the program, taken without a window ever existing and
+    /// without an operator's focus being stolen. That was the whole point.
+    ///
+    /// **Seven, because Parts is shot twice.** `parts-empty.png` is §9.1's answer to a library with
+    /// nothing in it — six headings, six counts of `0`, six sentences saying what belongs there and
+    /// the verbs that would fill it — and `parts.png` is the same page over [`a_furnished_library`],
+    /// which is the one that proves the repeaters run. Neither is the other's placeholder; a page
+    /// that only ever draws the empty state has never been seen working.
+    ///
+    /// **What it asserts about the pixels, and why each one can go red:**
+    ///
+    ///   1. *the size is the window's own preferred size* — the shot is not `TestingWindow`'s
+    ///      800x600 default, which is what a window whose layout never ran answers;
+    ///   2. *no page is one flat colour* — the assertion that dies on a buffer nobody rendered
+    ///      into, and on a helper that fabricates pixels instead of asking the renderer for them;
+    ///   3. *every page is drawn all the way to the far edges of its frame* — because (2) is
+    ///      satisfied by a picture of an 800x600 window sitting in the corner of an 1180x846 frame,
+    ///      which is exactly what `draw` produces without its `show()`;
+    ///   4. *no two pages are the same picture* — which is the half (2) and (3) cannot see: a
+    ///      rasterizer wired up correctly but handed the same page seven times draws seven rich,
+    ///      correctly-sized, identical pictures, and so does a `draw` that ignores the `Stack`.
+    ///
+    /// Each was measured red before it was believed, and by breaking the drawing rather than the
+    /// arithmetic. In `draw`: (1) by removing both the `show()` and the clock tick — *"bench came
+    /// out 800x600"*; (2) by handing back a buffer of the window's background instead of the
+    /// renderer's — *"bench is 1 colour(s) over 1180x846"*; (3) by removing the `show()` alone —
+    /// *"bench's right and bottom edges are 1 colour(s)"*; (4) by removing the `push_nav` — *"bench
+    /// and menu are the same picture"* — and again, differently, by removing the clock tick alone,
+    /// which leaves the drawer parked off screen: *"menu and devices are the same picture"*.
+    ///
+    /// **All four of those survive an unfurnished page**, which is the whole of this commit's
+    /// finding: a header's own text is enough to make a page rich, edge-to-edge and unlike its
+    /// neighbour, so every one of them passed over a Parts page with nothing on it. The assertion
+    /// that can see that is not about pixels at all — it is
+    /// `every_page_this_window_shoots_is_drawn_with_what_is_on_it`, one function down.
+    #[test]
+    fn every_page_this_window_draws_can_be_shot_with_no_window() {
+        // Held for the length of the test rather than for the length of `a_window`: `push_settings`
+        // draws `Settings::path()`, which resolves through the data directory, and a shot of the
+        // Settings page taken while `work.rs` had the variable pointed at one of its own scratch
+        // directories would be a picture of somebody else's path.
+        let _held = use_a_scratch_data_dir();
+        let w = a_window();
+        dress_the_bench(&w);
+
+        let full = Furniture::new(a_furnished_library(&temp_dir("library")));
+        full.open_the_first_device();
+        let empty = Furniture::new(Settings::default());
 
         // `None` is the bench — the drawer shut. Every other entry names a page, at the level
         // `Page::slot` says draws it, which is the only level `Stack::go` will accept.
-        let pages: [(&str, Option<nav::Page>); 6] = [
-            ("bench", None),
-            ("menu", Some(nav::Page::None)),
-            ("devices", Some(nav::Page::Devices)),
-            ("parts", Some(nav::Page::Parts)),
-            ("work", Some(nav::Page::Work)),
-            ("settings", Some(nav::Page::Settings)),
+        let pages: [(&str, Option<nav::Page>, &Furniture); 7] = [
+            ("bench", None, &full),
+            ("menu", Some(nav::Page::None), &full),
+            ("devices", Some(nav::Page::Devices), &full),
+            ("parts", Some(nav::Page::Parts), &full),
+            ("parts-empty", Some(nav::Page::Parts), &empty),
+            ("work", Some(nav::Page::Work), &full),
+            ("settings", Some(nav::Page::Settings), &full),
         ];
 
         let shots: Vec<(&str, Shot)> = pages
             .into_iter()
-            .map(|(name, page)| {
-                let mut at = nav::Stack::new();
-                if let Some(p) = page {
-                    let slot = p.slot().unwrap_or_else(|| {
-                        panic!("nothing draws {p:?}, so there is no picture of it to take")
-                    });
-                    at.go(p, slot);
-                }
-                (name, shoot(&w, &at, name))
+            .map(|(name, page, f)| {
+                let at = page.map_or_else(nav::Stack::new, a_stack);
+                (name, shoot(&w, &at, f, name))
             })
             .collect();
 
@@ -6807,6 +7122,190 @@ pub(crate) mod tests {
                 );
             }
         }
+    }
+
+    /// **A page is drawn with what is on it, and a header is not a page.**
+    ///
+    /// This is the assertion the shot test cannot make, and the reason it exists is that the shot
+    /// test *passed* over the defect: `parts.png` was a header above 420 px of white, `settings.png`
+    /// was three labels with the space beside each of them empty, and all four pixel assertions were
+    /// satisfied — a header carries its own words, so the page is not one flat colour, it reaches
+    /// the far edges of a window laid out correctly, and its title makes it unlike every other page.
+    /// **Nothing that counts colours can tell a drawn page from a drawn header.** So this one counts
+    /// elements instead, through the same accessible tree a screen reader is handed.
+    ///
+    /// What each page has to have on it, and where the number comes from:
+    ///
+    ///   * **Parts** — six group headings, in `Group::ALL`'s order, each carrying its own
+    ///     `Resource::verb`; and one drawn row per row in the pushed model, on top of those six. The
+    ///     first half is `parts.slint:318`'s `for g in root.groups` having something to walk; the
+    ///     second is every part reaching a pixel rather than the model being written and drawn once.
+    ///   * **Devices** — one row per device in the library, named by it; and a label on the pinned
+    ///     `+ New device` control, which is the finding the first shot handed over: with nothing
+    ///     pushed it draws as a blue block with no text on it, and `Pressable`'s own contract says
+    ///     *an empty label is a defect, not a state*.
+    ///   * **Settings** — the two `Row`s and the one `ToggleRow`, and each one's *value*: the theme,
+    ///     the settings file's name and its path all drawn, and the box reading what
+    ///     `Settings::check_updates_on_start` says. The values are the half that was missing, and
+    ///     they are compared against `Prefs::view`'s answer rather than against a literal, so this
+    ///     cannot pass by agreeing with itself.
+    ///
+    /// **Measured red by reverting [`draw`] to `push_nav(w, at)` alone**, which is the shape it
+    /// shipped in. In that state it fails at the first page with *"Parts drew 0 group headings; the
+    /// page is six sections and `parts.slint:318` walks a model nobody filled"* — and, with Parts
+    /// skipped, at *"the Devices page drew 0 rows for a library of 2 devices"* and at *"the Settings
+    /// page's theme value is empty, so `push_settings` did not run"*.
+    ///
+    /// **Ignored in a release profile rather than failing there**, for the same reason as the test
+    /// below it: `build.rs` emits Slint's debug info in debug profiles only, and without it
+    /// `ElementQuery` finds *nothing* rather than refusing — `element_count` answers `None`,
+    /// `collect_elements` logs a line and yields zero (`search_api.rs:329-335`). An element gate
+    /// that reads empty because the compiler was not asked for names is an instrument reporting an
+    /// absence it could not observe, which is the one thing this file is not allowed to add.
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "needs SLINT_EMIT_DEBUG_INFO, which build.rs emits in debug profiles only"
+    )]
+    #[test]
+    fn every_page_this_window_shoots_is_drawn_with_what_is_on_it() {
+        use i_slint_backend_testing::AccessibleRole;
+
+        let _held = use_a_scratch_data_dir();
+        let w = a_window();
+        dress_the_bench(&w);
+        let f = Furniture::new(a_furnished_library(&temp_dir("library")));
+        f.open_the_first_device();
+
+        // ── §11.4's Parts ───────────────────────────────────────────────────────────────────────
+        draw(&w, &a_stack(nav::Page::Parts), &f);
+
+        // **Both halves of the boundary, and neither alone is worth anything.** `push_parts` filling
+        // the models is one half; `parts.slint` drawing what it was handed is the other, and a test
+        // that read only the models would pass over a markup that drew none of them.
+        assert_eq!(
+            f.p_groups.row_count(),
+            parts::Group::ALL.len(),
+            "`push_parts` filed {} groups; §11.4's page is six sections whatever the library holds",
+            f.p_groups.row_count()
+        );
+        let filed = f.p_rows.row_count();
+        assert!(
+            filed >= parts::Group::ALL.len(),
+            "the fixture library filed only {filed} parts, so a page that drew half of them would \
+             still look full"
+        );
+
+        // The page's own order, flattened out of the two models exactly as `parts.slint:318`
+        // composes it: each group's heading, then the parts filed in that group.
+        let want: Vec<String> = f
+            .p_groups
+            .iter()
+            .flat_map(|g| {
+                std::iter::once(g.heading.to_string()).chain(
+                    f.p_rows
+                        .iter()
+                        .filter(move |r| r.group == g.group)
+                        .map(|r| r.name.to_string()),
+                )
+            })
+            .collect();
+
+        // **What the query answers is what is on the SCREEN, which is less than the page.** An item
+        // clipped away by the `Scroll` fails `ItemRc::is_visible` (`i-slint-core-1.17.1/item_tree.rs
+        // :399-408`), and six sections over eight parts is 14 rows against a 420 px drawer — so nine
+        // of them are on screen and the rest are below the fold. That is the honest thing to assert
+        // about a picture, and the assertion is therefore *the top of the page, in order, with
+        // nothing else in it*: rows drawn under the wrong heading, or one row from anywhere else,
+        // breaks it.
+        let drawn = labels(&drawer_rows(&w));
+        assert!(
+            drawn.len() <= want.len(),
+            "Parts drew {} rows and the models hold {}. {drawn:?}",
+            drawn.len(),
+            want.len()
+        );
+        // Past the end of the first section, which is what says the page is a list of sections
+        // rather than one section that happened to draw. Derived, so no number is typed here.
+        let first = 1 + f.p_rows.iter().filter(|r| r.group == 0).count();
+        assert!(
+            drawn.len() > first,
+            "Parts drew {} rows and its first section is {first} of them, so either `push_parts` \
+             walked no library or `parts.slint:318` drew none of what it was handed. {drawn:?}",
+            drawn.len()
+        );
+        assert_eq!(drawn, want[..drawn.len()], "Parts is not drawing the top of its own page");
+
+        // The sections themselves, by their own role. `parts.slint:320` puts `AccessibleRole.list`
+        // on the group wrapper with `heading + ", " + verb` as its label — the one place this page
+        // says out loud what a section is *for* — so the ones on screen are the first few of six.
+        let sections = labels(&elements_by_role(&w, AccessibleRole::List));
+        let all: Vec<String> = parts::Group::ALL
+            .iter()
+            .map(|g| format!("{}, {}", g.heading(), g.verb()))
+            .collect();
+        assert!(
+            !sections.is_empty() && sections[..] == all[..sections.len()],
+            "the sections on screen are not the first {} of §11.4's six: {sections:?}",
+            sections.len()
+        );
+
+
+        // ── §7.2's Devices ──────────────────────────────────────────────────────────────────────
+        draw(&w, &a_stack(nav::Page::Devices), &f);
+        let drawn = labels(&drawer_rows(&w));
+        let names: Vec<String> = f.settings.devices.iter().map(|d| d.name.clone()).collect();
+        assert_eq!(
+            drawn,
+            names,
+            "the Devices page drew {} rows for a library of {} devices",
+            drawn.len(),
+            names.len()
+        );
+        // §9.1's pinned row. `refresh_devices` is its only producer, and a `FixRow` nobody wrote is
+        // an empty label on a control that is still drawn, still blue and still pressable.
+        let new = w.get_devices_new().label.to_string();
+        assert!(
+            !new.is_empty(),
+            "the pinned new-device control has no label, so it draws as a blue block with nothing \
+             written on it"
+        );
+        assert!(
+            text_on_screen(&w).contains(&new),
+            "the new-device control's label was pushed and is not on the screen"
+        );
+
+        // ── §11.6's Settings ────────────────────────────────────────────────────────────────────
+        draw(&w, &a_stack(nav::Page::Settings), &f);
+        let v = settings_page::Prefs::new().view(&f.settings, caps());
+        assert_eq!(
+            labels(&drawer_rows(&w)),
+            vec!["Theme".to_string(), "Settings file".to_string()],
+            "the Settings page is three rows — two of them `Row`s and one a `ToggleRow` — and this \
+             is not those two"
+        );
+        let drawn = text_on_screen(&w);
+        for (what, value) in [
+            ("theme value", &v.theme_value),
+            ("settings-file name", &v.file_name),
+            ("settings-file path", &v.file_path),
+        ] {
+            assert!(
+                !value.is_empty(),
+                "the Settings page's {what} is empty, so `push_settings` did not run"
+            );
+            assert!(
+                drawn.contains(value),
+                "the Settings page's {what} is {value:?} and no `Text` on the screen says it"
+            );
+        }
+        // The third row's value is a box rather than a string, and it is a value all the same.
+        let boxes = elements_by_role(&w, AccessibleRole::Checkbox);
+        assert_eq!(boxes.len(), 1, "the Settings page drew {} check boxes", boxes.len());
+        assert_eq!(
+            boxes[0].accessible_checked(),
+            Some(v.check_updates),
+            "the update toggle does not read what the library says"
+        );
     }
 
     // **Ignored in a release profile rather than failing there.** `build.rs` emits Slint's debug
