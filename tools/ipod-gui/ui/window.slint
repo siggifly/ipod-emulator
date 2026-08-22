@@ -143,6 +143,11 @@ export component MainWindow inherits Window {
     // only the text renderer knows, and `Geometry.rail-verb-w` is a budget until it is compared
     // against this. `IPOD_LAYOUT=1` prints it and `tests/startup_fit.rs` asserts on it.
     out property <length> verb-width: verb-probe.preferred-width;
+    // The same question asked of §11.4's group verbs, which is a **different** measurement:
+    // `Metric.weight-strong` rather than `weight-body`, and `Add a dump…` rather than `synthesise`.
+    // `Geometry.parts-verb-w` is the floor those two controls carry so the row cannot shrink a verb
+    // to `F…`; this is what says the floor is enough in the face this platform gave us.
+    out property <length> group-verb-width: group-verb-probe.preferred-width;
     // §7.5's row-2 trailing slot: the one number a bug report can quote.
     in property <string> fidelity;
     // §7.3: the drawn device is the picture, and this is what an assistive technology is told is on
@@ -450,6 +455,26 @@ export component MainWindow inherits Window {
                 text: "synthesise";
                 font-size: Metric.body-size;
                 font-weight: Metric.weight-body;
+            }
+
+            // **The second probe, and it measures a different thing.** §11.4's group verbs are
+            // `parts::Action::label`'s six, drawn at `Metric.weight-strong` inside a `Pressable`
+            // whose sibling on the same row carries a two-line refusal.
+            //
+            // **The literal is the WIDEST of the six, and it is not the one with the most
+            // characters** — measured 2026-08-22 at `Metric.body-size` 14, `weight-strong` 600:
+            // `Add a dump…` 95 px, `Synthesise…` 88, `Provide…` 66, `Fetch…` 52, `Discard` 52,
+            // `Build…` 49. Both of the first two are eleven characters. So a character count is not
+            // a width, and this file says which one was actually asked.
+            // `the_group_verb_column_holds_every_verb_this_page_draws` re-derives the literal out of
+            // `parts::Action::ALL` and fails if a longer verb arrives.
+            group-verb-probe := Text {
+                x: 0;
+                y: 0;
+                visible: false;
+                text: "Add a dump…";
+                font-size: Metric.body-size;
+                font-weight: Metric.weight-strong;
             }
 
             // §7. Full width, always: §9.5's decision is that the shelf's band and its 1 px top rule

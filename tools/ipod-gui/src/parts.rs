@@ -577,23 +577,17 @@ impl Parts {
             // Drawn disabled — there is neither a picker nor a drop target — so a press cannot
             // reach here from the window and the sentence is the one under the greyed control.
             Action::AddDump | Action::Provide => Err(refused_because(&Next::Provide)),
-            // **Drawn LIVE, and this is not `Next::Retry`'s sentence.** That one says *every
-            // download in this program goes through curl, and it is not on this computer*, which
-            // `Next::reason`'s own doc reserves for the case `available` refuses — and it does not
-            // refuse here: `caps.download` is measured by running `curl --version`, so on every
-            // computer that has it the control is blue and the refusal claimed curl was missing on
-            // a machine that had just been asked. A control cannot be live *because* a capability
-            // exists and then blame its absence.
+            // **Drawn DISABLED, and the sentence is the one under the greyed control.** It shipped
+            // LIVE: [`Action::needs`] answered `Some(Next::Retry)`, which asks *is curl on this
+            // computer*, `caps.download` measures that by running `curl --version`, and so on every
+            // computer that has curl the control was blue and every press failed. `Fetch…` was a
+            // control that only refused — the same defect as a callback nobody registered, one
+            // layer quieter.
             //
-            // What is true is narrower and is §9.4's second kind: the fetcher exists and nothing on
-            // this page reaches it. `work::Queue` fetches the first run's fixed plan and there is
-            // no per-part fetch, so the honest sentence names the command that does one (§14.1:
-            // state the refusal, state what follows, and name a route that is real).
-            Action::Fetch => Err(format!(
-                "{} is not wired to the fetcher yet, so nothing was downloaded. `ipod-boot \
-                 firmware get <family>` fetches one into the same cache this program reads.",
-                a.label()
-            )),
+            // What is true is narrower and is §9.4's second kind: the fetchers exist —
+            // `firmware::download` and `rockbox::download` — and nothing on this page reaches
+            // either. So [`Action::unwired`] words it once and both sides say it.
+            Action::Fetch => Err(refused_because_unwired(a, g)),
             // **`main.rs` routes these two before they arrive**, in the same way it routes
             // `RowAction::Edit`: the Composer is the surface that holds a recipe — which is what
             // [`Action::needs`] says makes both of them live — and opening a page is not something
@@ -894,6 +888,29 @@ impl Group {
         x == Some(a) || y == Some(a)
     }
 
+    /// **The command that fetches what belongs in this group, from a terminal.**
+    ///
+    /// §9.4's rule for a project state: name a route that is real and was run to check it. Both of
+    /// these exist in `ipod-boot` today and both **download**:
+    ///
+    ///   - `firmware get` takes an `UpdaterFamilyID` or a filename and lands the bundle in
+    ///     `firmware::cache_dir()` — the same cache this page reads. `firmware list` prints the
+    ///     numbers to put in `<family>`.
+    ///   - `rockbox-install` downloads Rockbox's bootloader **and** its release, verifies both by
+    ///     SHA-256, and installs each into the half of a drive that wants it. It does more than
+    ///     fetch, and it is named here rather than a narrower command because there is no narrower
+    ///     one: nothing in this program downloads a bootloader on its own.
+    ///
+    /// `None` for the three groups that do not offer [`Action::Fetch`] at all — an unreachable
+    /// route named anyway is the phantom this page is about.
+    pub fn fetch_route(self) -> Option<&'static str> {
+        match self {
+            Group::Firmware => Some("ipod-boot firmware get <family>"),
+            Group::Bootloaders | Group::Software => Some("ipod-boot rockbox-install"),
+            Group::Ipods | Group::Disks | Group::Snapshots => None,
+        }
+    }
+
     /// Whether a part filed in this group can be opened at all.
     ///
     /// **The four resource groups can; disks and snapshots cannot, and that is a scope decision
@@ -926,21 +943,58 @@ impl Action {
     ///
     ///   - a file has to arrive from outside — a picker or a drop — for `Add a dump…` and
     ///     `Provide…`;
-    ///   - a download for `Fetch…`, and every download in this program goes through curl;
     ///   - a surface that holds a recipe for `Synthesise…` and `Build…`, which is the Composer,
     ///     and this build has one — so both are drawn live.
     ///
-    /// `Discard` is the one verb that needs nothing: the parked machines are this program's own
-    /// files on this computer, in the same way `Next::CancelWrite` needs no capability.
+    /// **Two answer `None`, for two different reasons, and neither is *no capability is needed*
+    /// alone.** `Discard` needs nothing: the parked machines are this program's own files on this
+    /// computer, in the same way `Next::CancelWrite` needs no capability. `Fetch…` needs nothing
+    /// **because no capability is what is missing** — see [`Action::unwired`]. It used to answer
+    /// `Some(Next::Retry)`, which asks *is curl on this computer*, and on every computer that has
+    /// curl the answer was yes and the control was drawn blue. It was blue and it only ever
+    /// refused. A capability question is the wrong question when the mechanism behind the control
+    /// does not exist, and asking it draws a live control over a hole.
     pub fn needs(self) -> Option<Next> {
         match self {
             Action::AddDump | Action::Provide => Some(Next::Provide),
-            Action::Fetch => Some(Next::Retry),
             Action::Synthesise | Action::Build => Some(Next::Fix {
                 label: self.label(),
                 presses: 1,
             }),
-            Action::Discard => None,
+            Action::Fetch | Action::Discard => None,
+        }
+    }
+
+    /// **The verb this build DRAWS and has no mechanism for**, and the sentence that says so.
+    ///
+    /// §14.1: a control that cannot do the thing is disabled, states why, and names what to do
+    /// instead — it is never drawn live so it can apologise on press. `Fetch…` was drawn live on
+    /// three groups and every press failed, because there is no per-part fetch behind it: the only
+    /// download this build starts is `work::Queue`'s first-run plan, whose releases are fixed at
+    /// `compose::FIRST_RUN_FAMILY`.
+    ///
+    /// **This is §9.4's second kind — a project state, not a machine rule.** Nothing about the
+    /// computer refuses. `eapp_loader::firmware::download` and `eapp_loader::rockbox::download`
+    /// both exist and both work; what does not exist is a route from a group's verb to either one,
+    /// and the group's own [`Group::fetch_route`] is the command that has it today.
+    ///
+    /// `None` for the other five: their availability is a capability question and [`Action::needs`]
+    /// asks `rail::Next` it.
+    ///
+    /// **One producer for two use sites.** `verb_row` words the disabled control and
+    /// `Parts::group_action` words the arm that runs if a press arrives anyway, and a refusal
+    /// written twice is a refusal that comes to be worded twice.
+    pub fn unwired(self) -> Option<&'static str> {
+        match self {
+            Action::Fetch => Some(
+                "nothing on this page reaches a fetcher yet — the only download this build starts \
+                 is the first run's own plan",
+            ),
+            Action::AddDump
+            | Action::Synthesise
+            | Action::Provide
+            | Action::Build
+            | Action::Discard => None,
         }
     }
 }
@@ -1463,6 +1517,17 @@ fn verb_row(a: Action, rows: &[PartView], g: Group, caps: Caps, busy: bool) -> F
             consequence: String::new(),
         },
     };
+    // **§14.1 for the one verb with no mechanism behind it.** It is disabled here rather than left
+    // blue to refuse on press, and the sentence is [`Action::unwired`]'s so the drawn refusal and
+    // the pressed one are the same words. The escape hatch is the group's, because what you would
+    // fetch differs per group and a command that fetches the wrong thing is worse than none.
+    if let Some(why) = a.unwired() {
+        row.enabled = false;
+        row.reason = drawable(why);
+        row.escape = g.fetch_route().unwrap_or_default().into();
+        // Not a machine rule: nothing about this computer refuses. See [`Action::unwired`].
+        row.machine_rule = false;
+    }
     if a == Action::Discard {
         let parked: Vec<&PartView> = rows.iter().filter(|r| r.group == g).collect();
         if parked.is_empty() {
@@ -1507,6 +1572,24 @@ fn verb_row(a: Action, rows: &[PartView], g: Group, caps: Caps, busy: bool) -> F
 /// opens it. Every caller left is a control the window greys out.
 fn refused_because(n: &Next) -> String {
     drawable(n.reason())
+}
+
+/// The sentence under a control this build draws **disabled because it has no mechanism**, for the
+/// arm that would run if a press arrived anyway.
+///
+/// [`refused_because`]'s sibling, and the difference is which question was refused: that one is for
+/// a control an absent **capability** greys out, this one for a control an absent **route** greys
+/// out. Both are §9.4; only the second names a command, because only the second has one.
+///
+/// **What a press produces is the drawn sentence plus the route**, joined rather than re-worded, so
+/// `every_verb_with_no_mechanism_is_drawn_disabled_with_a_route` can hold the two to each other with
+/// a `starts_with`.
+fn refused_because_unwired(a: Action, g: Group) -> String {
+    let why = drawable(a.unwired().expect("the caller is an unwired verb"));
+    match g.fetch_route() {
+        Some(cmd) => format!("{why}. `{cmd}` does it from a terminal."),
+        None => why,
+    }
 }
 
 /// The window's font draws ASCII, an em dash, an ellipsis and a section mark, and nothing else
@@ -2031,17 +2114,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The verbs are refused **in `rail::Next`'s own words**, so the Rail and this page cannot
-    /// word one absent capability two ways.
+    /// The verbs an absent **capability** refuses are refused **in `rail::Next`'s own words**, so
+    /// the Rail and this page cannot word one absent capability two ways.
+    ///
+    /// `Fetch…` is deliberately absent from this test now: no capability refuses it, and the
+    /// capability that used to be asked said yes.
+    /// `every_verb_with_no_mechanism_is_drawn_disabled_with_a_route` is where it went.
     #[test]
     fn a_verb_this_build_cannot_perform_wears_rails_own_sentence() {
         let s = library();
         let v = view_of(&mut Parts::new(), &s, Caps::default());
-        let fetch = &group(&v, Group::Firmware).a.as_ref().expect("Fetch…").1;
-        assert!(!fetch.enabled || eapp_loader::tooling::can_download());
-        if !fetch.enabled {
-            assert_eq!(fetch.reason, Next::Retry.reason());
-        }
         let provide = &group(&v, Group::Firmware).b.as_ref().expect("Provide…").1;
         assert!(!provide.enabled, "this build has neither a picker nor a drop target");
         assert_eq!(provide.reason, Next::Provide.reason());
@@ -2052,6 +2134,65 @@ mod tests {
         let synth = &group(&live, Group::Ipods).b.as_ref().expect("Synthesise…").1;
         assert!(synth.enabled, "a build with a Composer still refuses Synthesise…");
         assert!(synth.reason.is_empty());
+    }
+
+    /// **A verb with no mechanism behind it is drawn DISABLED, says why, and names a route.**
+    ///
+    /// §14.1, and `Fetch…` was the counter-example: [`Action::needs`] answered `Some(Next::Retry)`,
+    /// which asks *is curl on this computer*, `caps.download` answers that by running
+    /// `curl --version`, and so on every computer that has curl the control was **blue on all three
+    /// groups that offer it** and every press failed. A live control that only refuses is the same
+    /// defect as a callback nobody registered.
+    ///
+    /// **Three claims, and the third is the one worth having.** It is drawn disabled in the fixture
+    /// where every capability — `download` included — answers yes, so curl cannot be what greys it
+    /// out; its sentence is a project state naming a real command rather than a machine rule blaming
+    /// the computer; and **the drawn refusal and the pressed one are the same words**, which is what
+    /// stops one refusal from coming to be worded twice.
+    #[test]
+    fn every_verb_with_no_mechanism_is_drawn_disabled_with_a_route() {
+        let s = library();
+        // `all_on()` is the fixture where every capability answers yes — including `download`, so
+        // curl cannot be what greys this out.
+        assert!(all_on().download, "the fixture that proves the point has no curl in it");
+        let v = view_of(&mut Parts::new(), &s, all_on());
+        let mut checked = 0;
+        for g in Group::ALL {
+            if !g.offers(Action::Fetch) {
+                assert_eq!(g.fetch_route(), None, "{g:?} names a route to a verb it does not offer");
+                continue;
+            }
+            let row = &group(&v, g).a.as_ref().expect("Fetch… is the first of the pair").1;
+            assert_eq!(row.label, Action::Fetch.label());
+            assert!(!row.enabled, "`Fetch…` is drawn live on {g:?} and pressing it only refuses");
+            assert!(!row.reason.is_empty(), "a disabled control with nothing to say (§9.4)");
+            assert!(
+                !row.machine_rule,
+                "`Fetch…` on {g:?} blames the computer; nothing about this computer refuses"
+            );
+            let cmd = g.fetch_route().expect("a group that offers Fetch… has a route");
+            assert_eq!(row.escape, cmd, "{g:?} greys a verb out and offers no way round it");
+            assert!(
+                !row.reason.contains("curl"),
+                "{g:?} still names the capability that made it live: {}",
+                row.reason
+            );
+
+            // …and the arm that runs if a press arrives anyway says the same thing.
+            let mut s2 = s.clone();
+            let said = Parts::new()
+                .group_action(&mut s2, g, Action::Fetch)
+                .expect_err("nothing here fetches yet");
+            assert!(
+                said.starts_with(&row.reason),
+                "{g:?} draws `{}` and refuses with `{said}`",
+                row.reason
+            );
+            assert!(said.contains(cmd), "the press refused without naming the route: {said}");
+            assert_eq!(s2, s, "a refusal mutated the library");
+            checked += 1;
+        }
+        assert_eq!(checked, 3, "only {checked} groups offer `Fetch…`; §11.4's table says three");
     }
 
     /// A build owns the drive it is writing. A verb that would start a second one waits — and

@@ -339,6 +339,19 @@ impl Next {
             // is `Class::ToolMissing`'s command, not a control.
             Next::Retry => "every download in this program goes through curl, and it is not on this \
                             computer",
+            // **This one is unreachable in the shipping build, and it is kept rather than
+            // reworded.** `available` asks `caps.composer`, `main::caps()` derives that from
+            // `nav::Page::Composer.slot()`, and that answers `Some(2)` unconditionally — so nothing
+            // a person can see draws this sentence. The all-off fixture does, which is what keeps
+            // it swept by `the_preview_fixture_draws_a_disabled_next_step_with_its_reason`.
+            //
+            // It is kept because it is **correct whenever it is shown**, and there is exactly one
+            // condition that shows it: `Page::Composer` losing its slot, which is a fact about the
+            // build and is the one thing `caps.composer` is derived from. A cap derived from a
+            // question needs the answer to that question worded for both outcomes, or the day the
+            // page is removed the control greys out saying nothing. The alternative — replacing it
+            // with a reason a `Fix` can be refused for *today* — has nothing to say: `available` is
+            // the only thing that refuses a `Fix`, and this is what `available` refuses on.
             Next::Fix { .. } => "there is no Composer in this build yet",
             Next::CancelWrite => "",
         }

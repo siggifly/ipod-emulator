@@ -9242,6 +9242,108 @@ pub(crate) mod tests {
         );
     }
 
+    /// **§11.4's group-verb column holds every verb this page draws, and a verb elided to `F…`.**
+    ///
+    /// §17.Q12 named `RAIL_VERB_W` as the constant nobody had measured and predicted a verb would
+    /// elide. One did — and **it was not that column.** The Rail's is 88 px against a `synthesise`
+    /// that the renderer draws at 67. What elided is a *group* verb, on Parts, in a row
+    /// `geometry.rs` had no constant for at all: two `Pressable`s sharing a `HorizontalLayout`,
+    /// each `horizontal-stretch: 1`, each floored at one ellipsis because a `Text` with
+    /// `overflow: elide` reports that as its minimum. When the row is too narrow the solver shrinks
+    /// **by stretch**, taking the same number of pixels off each — so the half whose reason is a
+    /// sentence kept its width and the half whose label is a word lost it.
+    ///
+    /// **Three claims, and each one bites on its own.**
+    ///
+    ///   1. **The budget holds every verb.** `chars × BODY_SIZE × BODY_ADVANCE`, over
+    ///      `parts::Action::ALL` rather than over a second copy of the six labels — so a seventh and
+    ///      longer verb fails here rather than eliding on the page.
+    ///   2. **The probe measures the longest of them.** `ui/window.slint`'s `group-verb-probe` is
+    ///      one literal and this re-derives which literal it has to be — **by character count, which
+    ///      is not the same question as width and is the checkable half of it**. The two agree here:
+    ///      `Add a dump…` and `Synthesise…` are both eleven characters and the renderer draws them
+    ///      at 95 and 88, so the longest is also the widest and claim 1 bounds any label of that
+    ///      length at 95.5 either way. Without this the probe goes stale the day a longer verb
+    ///      arrives and its measurement quietly stops being about the worst case.
+    ///   3. **The renderer agrees.** `MainWindow.group-verb-width` is the platform's own answer for
+    ///      that literal at `weight-strong`, which is the only place the number exists — Slint 1.17
+    ///      gives Rust no text-measurement API. `Add a dump…` draws 95 px against a 104 px column.
+    ///
+    /// **And the floor is bound.** A constant no control carries is arithmetic about a page that
+    /// does not obey it, which is what `ui/parts.slint` was before this.
+    #[test]
+    fn the_group_verb_column_holds_every_verb_this_page_draws() {
+        // ── 1. The budget, over the labels the page actually draws ────────────────────────────
+        for a in parts::Action::ALL {
+            let label = a.label();
+            let need = label.chars().count() as f64 * geometry::BODY_SIZE * geometry::BODY_ADVANCE;
+            assert!(
+                geometry::PARTS_VERB_W >= need,
+                "`{label}` budgets {need:.1} px at {} px body and PARTS_VERB_W is {}; it elides in \
+                 its group's verb row",
+                geometry::BODY_SIZE,
+                geometry::PARTS_VERB_W
+            );
+        }
+
+        // **Proof the floor can refuse something**, which is the only thing that makes it worth
+        // having: what the row had before was one ellipsis, and that is not a column.
+        let widest = parts::Action::ALL
+            .iter()
+            .map(|a| a.label())
+            .reduce(|a, b| if b.chars().count() > a.chars().count() { b } else { a })
+            .expect("six verbs");
+        let need = widest.chars().count() as f64 * geometry::BODY_SIZE * geometry::BODY_ADVANCE;
+        assert!(
+            need > 16.0,
+            "`{widest}` fits inside an ellipsis, so the floor this test is about buys nothing"
+        );
+
+        // ── 2. The probe is measuring that verb, not a stale one ──────────────────────────────
+        //
+        // `reduce` keeps the FIRST maximum where `max_by_key` keeps the last, and the two eleven-
+        // character labels are `Add a dump…` then `Synthesise…` in `ALL`'s order — so this names the
+        // one the renderer actually draws widest. See the probe's own comment for the six numbers.
+        let markup = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/window.slint"))
+            .expect("ui/window.slint");
+        assert!(
+            markup.contains(&format!("text: \"{widest}\";")),
+            "`group-verb-probe` does not measure `{widest}`, which is the widest verb \
+             `parts::Action` has; the measurement below is about some other string"
+        );
+
+        // ── 3. The renderer's own answer, in the face this platform gave us ───────────────────
+        let w = a_window();
+        let drawn = f64::from(w.get_group_verb_width());
+        assert!(
+            drawn > 0.0,
+            "the group-verb probe measured {drawn} px, which is not a measurement — §6: run the \
+             control before believing the number"
+        );
+        assert!(
+            drawn <= geometry::PARTS_VERB_W,
+            "`{widest}` draws {drawn:.1} px in this platform's face and the group's verb column is \
+             {:.1} px, so it ELIDES — which is what `F…` was",
+            geometry::PARTS_VERB_W
+        );
+
+        // ── …and the column is a floor the controls carry, not a number in a header ───────────
+        let page = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/parts.slint"))
+            .expect("ui/parts.slint");
+        assert_eq!(
+            page.matches("min-width: Geometry.parts-verb-w;").count(),
+            2,
+            "§11.4's verb row draws two controls and {} of them carry the floor; the one that does \
+             not is the one that elides",
+            page.matches("min-width: Geometry.parts-verb-w;").count()
+        );
+        eprintln!(
+            "`{widest}` draws {drawn:.1} logical px against a {:.1} px column — measured by the \
+             renderer, headless",
+            geometry::PARTS_VERB_W
+        );
+    }
+
     /// The feature is on in a default build, so nobody can quietly drop it back the way
     /// `default-features = false` dropped it the first time.
     #[allow(clippy::assertions_on_constants)]

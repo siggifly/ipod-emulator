@@ -1965,12 +1965,25 @@ go is a page you re-learn every visit.
 **The two verbs this build draws live open the Composer.** `Synthesise…` under iPods and `Build…`
 under Disks are enabled because `rail::Caps::composer` is true — a verb that rewrites a recipe needs
 a surface that holds one, and this build has that surface — so `main.rs` routes both to it, the same
-entrance `+ New device ›` uses. `Fetch…` is live too, because every download goes through `curl` and
-`curl` is measured at launch, but nothing on this page reaches the fetcher yet: it refuses in §9.4's
-second kind and names `ipod-boot firmware get <family>`, which does the job from a terminal. What it
-must never say is `rail::Next`'s *reason* — those sentences are why a control is **disabled**, and
-using one under a live press had `Synthesise…` answering *there is no Composer in this build yet*
-one row from the page it opens.
+entrance `+ New device ›` uses. What a live verb must never say is `rail::Next`'s *reason* — those
+sentences are why a control is **disabled**, and using one under a live press had `Synthesise…`
+answering *there is no Composer in this build yet* one row from the page it opens.
+
+**`Fetch…` is drawn DISABLED on all three groups that offer it, and it used to be live.** It asked
+`Next::Retry`, which asks *is curl on this computer*; `curl` is measured at launch by running it; so
+on every computer that has curl the verb was blue and every press failed, because there is no
+per-part fetch behind it — the only download this build starts is the first run's own plan. **A
+capability question is the wrong question when the mechanism behind the control does not exist**, and
+asking it draws a live control over a hole. So it is §14.1's construction instead: disabled, wearing
+§9.4's second kind — *nothing on this page reaches a fetcher yet* — and naming the group's own route,
+which is `ipod-boot firmware get <family>` under Apple firmware and `ipod-boot rockbox-install` under
+Bootloaders and Software. The fetchers themselves exist and work; what does not exist is a way here
+to reach them.
+
+**Both verbs carry `geometry::PARTS_VERB_W` as a floor**, because without one `Fetch…` drew as `F…`.
+The two share a row by `horizontal-stretch`, an eliding `Text` floors at one ellipsis, and Slint
+shrinks a too-narrow row **by stretch** — the same pixels off each — so the half whose reason is a
+sentence kept its width and the half whose label is a word lost it. §20 item 20 has the measurement.
 
 **Snapshots is the sixth group and it is here because 1.6 GB per park was invisible.** Close the
 window rather than quitting — which §12.4 says parks — four times across four devices, and 6.4 GB of
@@ -3343,22 +3356,36 @@ which `k` is in force, so it is a stated limitation rather than a mystery. If it
 the cheapest fix is a one-line offer in that slot (`2× fits this window — relaunch to use it`), not a
 live recompute.
 
-**Q12 — four numbers in `src/geometry.rs` that this document does not state, and one that nobody has
-measured.** Added 2026-08-21, because they are load-bearing and were derived rather than read:
+**Q12 — five numbers in `src/geometry.rs` that this document does not state.** Added 2026-08-21,
+because they are load-bearing and were derived rather than read. **The verb columns are answered**;
+the shelf is still open.
 
 | constant | value | where it came from |
 |---|---|---|
 | `DRAWER_HEADER_H` | 44 | one `Row`, so a header and the rows under it share a rhythm. §11.2's *"≈ 60"* covers *the page header **and** the group rules together* — an approximation inside a total, not a declaration |
 | `WORK_FOOTER_H` | 72 | §10.1's three `label` line boxes, plus 12 above and 12 below |
-| `RAIL_VERB_W` | 64 | **nobody has measured this one.** Every other constant here is quoted or derived; the longest verb is `synthesise` and it appears at first-run step 1, the first thing a new user ever sees this program do. If it elides, it elides there |
+| `RAIL_VERB_W` | **88** — *answered 2026-08-21* | it shipped at 64, which this question said nobody had measured. Budgeted at `10 × 14 × 0.62 = 86.8` and rounded up; **measured at 67.0** by `verb-probe` in `ui/window.slint`, which `IPOD_LAYOUT=1` prints and `tests/startup_fit.rs` asserts against the real binary. The prediction — *the longest verb is `synthesise`, it appears at first-run step 1, and if it elides it elides there* — was right about 64 and the column is now comfortable |
+| `PARTS_VERB_W` | **104** — *added 2026-08-22* | §11.4's group verbs, which had no constant at all. Budgeted at `11 × 14 × 0.62 = 95.5` plus `Metric.s2`; **measured at 95** for `Add a dump…` at `weight-strong`. The margin is not decoration: `BODY_ADVANCE` 0.62 is generous at `weight-body`, where the measurement is 0.479, and is not at `weight-strong`, where it is 0.617 |
 | `SHELF`'s decomposition | 12 + 26 + 20 + 16 + 12 = **86**, or 87 with the top rule, against a declared **88** | §7.5's own parts do not sum to §7.5's own total, and `CHROME_MIN` (154) and `CHROME_PREF` (190) are both built on the 88, so the 88 is the load-bearing half. Two pixels sit below row 3 inside the bottom padding |
 
-**Recommendation: look at all four on screen before Phase 5, and answer the shelf one first.** The
-first three are inventions with their derivations written down, which is the least bad kind; the
-fourth is a disagreement between two numbers in one section, and **do not invent a `SHELF_SPARE` term
-to absorb it** — that is a second source of truth inside the section whose rule is that constants live
-in one place. `the_shelf_rows_and_its_padding_fit_the_declared_shelf` measures the leftover and fails
-if it grows past 4 px, so it is visible rather than forgotten.
+**A verb did elide, and this question was pointing at the wrong column when it happened.** The one
+that elided was a group verb on Parts — `Fetch…`, drawn as `F…` — and `RAIL_VERB_W` had nothing to do
+with it. §11.4's two verbs share one row, each carrying `horizontal-stretch: 1` and no floor; a
+`Text` set to elide reports one ellipsis as its minimum width, and when the row is too narrow Slint
+shrinks **by stretch** — the same number of pixels off each. So the half whose reason is a sentence
+kept its width and the half whose label is a word lost it. **The disabled sibling's reason was the
+cause; the absent floor was the defect.** All four numbers were measured: the row holds 360 px,
+`Provide…`'s disabled half prefers **411** because a disabled control prefers the width of its
+*reason* rather than of its label, `Fetch…`'s prefers **52** because it is a word, and 463 shed into
+360 asks 51.5 off each — so the one that had 52 hit its ellipsis floor. Widening a column would have
+fixed nothing, which is the useful half of this: a measurement that was never taken is a good suspect
+and not a verdict.
+
+**What remains open is the shelf**, and it is the one that was a disagreement rather than an
+invention: two numbers in one section that do not agree. **Do not invent a `SHELF_SPARE` term to
+absorb it** — that is a second source of truth inside the section whose rule is that constants live in
+one place. `the_shelf_rows_and_its_padding_fit_the_declared_shelf` measures the leftover and fails if
+it grows past 4 px, so it is visible rather than forgotten.
 
 ---
 
@@ -3779,8 +3806,10 @@ In order, because each depends on the one before it.
     **Still open**, and none of them is this phase's to close: §9.5's pane, so a 1280 × 800 display
     still has no drawn route to a press (§10.4 calls it the escape hatch that matters); `Verb::Start`
     itself, which hands off rather than booting; `geometry::BODY_ADVANCE`, which is a budget rather
-    than a measurement and which `RAIL_VERB_W` and `CRADLE_LABEL_MAX_CHARS` are both derived from;
-    and the 8 GiB-versus-30 GB question in §10.1, which is an operator decision.
+    than a measurement and which `RAIL_VERB_W`, `PARTS_VERB_W` and `CRADLE_LABEL_MAX_CHARS` are all
+    three derived from — **and which item 20 found is generous at `weight-body` and not at
+    `weight-strong`**, where the measured advance is 0.617 against the 0.62 budgeted; and the
+    8 GiB-versus-30 GB question in §10.1, which is an operator decision.
 
 19. **DONE 2026-08-22. The three drawer pages are joined to their producers.** `parts.rs`,
     `devices.rs` and `settings_page.rs` shipped tested and reachable from nothing: **six** callbacks
@@ -3818,9 +3847,38 @@ In order, because each depends on the one before it.
       now, and a `‹` naming a page the press does not return to is the one control whose whole job
       is to say where you are going. `nav::Stack::under` is the answer and `drawer.slint` words it.
 
-    **Still open**: `Fetch…` is a live control that only refuses (§11.4); `parts-preview` is pushed
-    but a group verb's label elides to `F…` when the disabled sibling's reason widens its half of
-    the row; and §12.2's `running` is the one property with no producer.
+    **Still open**: §12.2's `running` is the one property with no producer. The two this item left
+    open at Parts — `Fetch…` drawn live and only refusing, and a group verb eliding to `F…` — are
+    item 20. The prediction made here was that the fix was *in `Pressable`'s own width*; it was not.
+    See below.
+
+20. **DONE 2026-08-22. The group verb that elided, and the one that only refused.** Two defects one
+    row apart on §11.4, and the first was not where it looked.
+
+    **`Fetch…` elided to `F…`, and `RAIL_VERB_W` was not the reason.** §17.Q12 had named that
+    constant as the one nobody measured and predicted a verb would elide; a verb did, and it was a
+    different column. §11.4's two group verbs share one `HorizontalLayout`, each carrying
+    `horizontal-stretch: 1` and nothing else. A `Text` set to `overflow: elide` reports **one
+    ellipsis** as its minimum width, so each control's floor was about four pixels; and when the row
+    cannot hold both preferred widths Slint shrinks **by stretch**, which for two equal stretches is
+    the same number of pixels off each. `Provide…`'s half prefers **411 px**, which is its reason
+    drawn as one line rather than its label — a disabled control prefers the width of what it has to
+    say — and `Fetch…`'s prefers **52**, which is its label. 463 px shed into a 360 px row asks 51.5 off each, and the half that had 52
+    hit its ellipsis floor. **The sibling's reason was the cause and the absent floor was the
+    defect.** `geometry::PARTS_VERB_W` is that floor, both controls carry it, and §17.Q12 now records
+    the measurement rather than the question.
+
+    **`Fetch…` was drawn live on all three groups that offer it and every press failed.** The verb
+    asked `rail::Next::Retry`, which asks *is curl on this computer*; `caps.download` answers that by
+    running `curl --version`; so on every computer with curl the control was blue over a hole. There
+    is no per-part fetch — the only download this build starts is the first run's own plan — so it is
+    now **disabled with a reason and a route** (§14.1, §9.4's second kind): the fetchers exist
+    (`firmware::download`, `rockbox::download`) and nothing on this page reaches them, and the
+    command that does it from a terminal is the group's own — `ipod-boot firmware get <family>` for
+    Apple firmware, `ipod-boot rockbox-install` for a bootloader or for Rockbox. **A capability
+    question is the wrong question when the mechanism behind the control does not exist**, and asking
+    it draws a live control over a hole; that is the general form and it is worth more than the
+    instance.
 
 **Conditional on §17.Q10**: `Stats::enters_by_core: [[u64; WATCHED.len()]; 2]`, if the run loop can
 attribute an arrival to a core. Until it is answered, §12.8 draws one column.

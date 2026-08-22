@@ -240,6 +240,43 @@ geometry! {
     /// `horizontal-stretch: 1; min-width: 0px;` (`ui/rail.slint:171-172`) — and a measure. The 24
     /// px comes out of `what`.
     RAIL_VERB_W:      Px = 88.0;
+    /// §11.4's group-verb column — the floor under `Add a dump…` / `Synthesise…`, `Fetch…` /
+    /// `Provide…`, `Build…`, `Discard`.
+    ///
+    /// **A group verb elided to `F…`, and [`RAIL_VERB_W`] was not the reason.** The two verbs share
+    /// one `HorizontalLayout`, each carrying `horizontal-stretch: 1` and nothing else; a `Text` with
+    /// `overflow: elide` reports a minimum width of one ellipsis
+    /// (`i-slint-core-1.17.1/items/text.rs:656-659`), so each control's floor was about four pixels.
+    /// When the row cannot hold both preferred widths the solver shrinks **by stretch**, which for
+    /// two equal stretches is the same number of pixels off each
+    /// (`i-slint-core-1.17.1/layout.rs:190-251`). **All four numbers measured**: the row holds
+    /// `DRAWER_W − 2 × PAGE_MARGIN − Metric.s3` = 360; `Provide…`'s disabled half prefers **411**,
+    /// which is its reason drawn as one line at `Metric.label-size`, not its label; `Fetch…`'s
+    /// prefers **52**, which is its label. 463 into 360 is 103 px to shed and each half is asked
+    /// for 51.5 — so the one that had 52 hit its ellipsis floor and drew `F…` while the one that had
+    /// 411 paid the rest. **The sibling's reason was the cause and the missing floor was the
+    /// defect** — a wider Rail column would have changed nothing.
+    ///
+    /// **MEASURED 2026-08-22, macOS 27.0**, by `group-verb-probe` in `ui/window.slint` at
+    /// `BODY_SIZE` 14 and `Metric.weight-strong` 600, read back through
+    /// `MainWindow.group-verb-width`: `Add a dump…` **95 px**, `Synthesise…` 88, `Provide…` 66,
+    /// `Fetch…` 52, `Discard` 52, `Build…` 49. **The widest is not the longest** — the first two are
+    /// both eleven characters — which is the whole reason this was measured rather than counted.
+    ///
+    /// **The budget**: `11 chars × BODY_SIZE 14 px × BODY_ADVANCE 0.62 = 95.48`, plus `Metric.s2` 8
+    /// of margin, rounded up to a whole logical pixel — the same shape [`FIELD_LABEL_W`] is written
+    /// in. The margin is not decoration: [`BODY_ADVANCE`] is generous at `weight-body`, where the
+    /// measured advance is 0.479, and is **not** generous at `weight-strong`, where this
+    /// measurement makes it `95 / 11 / 14 = 0.617` against a 0.62 budget. A column derived from the
+    /// budget alone would clear this platform's face by half a pixel and a one-percent wider face by
+    /// nothing at all, which is a coincidence rather than a column.
+    ///
+    /// **It does not squeeze the row.** The drawer body is `DRAWER_W − 2 × PAGE_MARGIN` = 372 and
+    /// the two verbs are separated by `Metric.s3`, so two floors and a gutter are 220 of 372.
+    /// `the_group_verb_column_holds_every_verb_this_page_draws` re-derives the widest verb out of
+    /// `parts::Action::ALL` rather than out of a second copy here, so a seventh and longer verb
+    /// fails that rather than eliding on the page.
+    PARTS_VERB_W:     Px = 104.0;
     /// §6.2's `label` line box.
     ///
     /// **`Text` has no `line-height` in Slint 1.17** — the property does not exist — so a line box
