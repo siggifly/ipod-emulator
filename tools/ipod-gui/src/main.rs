@@ -815,6 +815,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
                 c,
                 &settings.borrow(),
                 building,
+                caps.clipboard.into(),
                 space.as_ref(),
                 &picks,
                 &fields,
@@ -2486,6 +2487,10 @@ fn push_composer(
     c: &composer::Composer,
     settings: &Settings,
     building: bool,
+    // **A fact about the build, carried in rather than assumed.** `Composer` is toolkit-free and
+    // knows nothing of `rail::Caps`; `wire` holds both, so the conversion happens here and the copy
+    // control is only drawn live where there is somewhere for it to copy to.
+    clipboard: composer::Clipboard,
     space: Option<&volume::Space>,
     picks: &Rc<VecModel<PickRow>>,
     fields: &Rc<VecModel<FieldRow>>,
@@ -2495,7 +2500,7 @@ fn push_composer(
     refusals: &Rc<VecModel<RefusalRow>>,
 ) {
     let root = c.root(settings, building);
-    let which = c.which(settings, building);
+    let which = c.which(settings, building, clipboard);
     let runs = c.runs(settings, building);
     let named = c.named(settings, building);
 

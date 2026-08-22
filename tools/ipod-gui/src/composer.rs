@@ -1240,6 +1240,40 @@ impl Default for Composer {
 pub const NO_IPOD: &str = "An iPod states its model, capacity, serial and GUID, and those decide \
                            which firmware can follow. Choose one first.";
 
+/// Why nothing on this page can be copied, when the build has no pasteboard.
+///
+/// **It opens with `rail.rs`'s own words for the same fact** — `Next::CopyDetails`'s reason — and
+/// then says what that costs *here*. One fact worded two ways on two surfaces is how a person comes
+/// to believe they are two different problems, and `a_build_with_no_clipboard_does_not_offer_the_copy`
+/// pins the shared half by reading it out of `rail.rs`.
+pub const NO_CLIPBOARD: &str =
+    "this build has no clipboard, so there is nowhere for the command to go.";
+
+/// Whether this build can reach a pasteboard: `rail::Caps::clipboard`, **as its own type**.
+///
+/// It is not a second `bool` beside `building` because `which(&s, false, false)` says nothing about
+/// which `false` is which, and the two mean opposite kinds of thing — one is *a build is running on
+/// this machine right now*, the other *this program was compiled without a route to a clipboard*.
+///
+/// It is not `rail::Caps` itself because `tests/composer.rs` mounts this file standalone, where
+/// there is no `crate::rail` to name. `main::wire` converts at the boundary, which is the one place
+/// that holds both.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Clipboard {
+    Present,
+    Absent,
+}
+
+impl From<bool> for Clipboard {
+    fn from(present: bool) -> Clipboard {
+        if present {
+            Clipboard::Present
+        } else {
+            Clipboard::Absent
+        }
+    }
+}
+
 /// GUI.md §11.2's third behaviour, and the UI must not flatten it.
 pub const SERIAL_NEEDS_GUID: &str =
     "A typed serial needs a GUID too: the GUID is the field with teeth, and without one the serial \
@@ -1614,7 +1648,11 @@ impl Composer {
     }
 
     /// Level ①'s rows.
-    pub fn which(&self, s: &Settings, building: bool) -> Which {
+    ///
+    /// `clipboard` is the one thing here that is a fact about the *build* rather than about the
+    /// iPod, and it is carried in rather than assumed: the copy control is only real where a
+    /// pasteboard is.
+    pub fn which(&self, s: &Settings, building: bool, clipboard: Clipboard) -> Which {
         let lock = |f: Field| self.lock(f, s, building);
         let serial = self.serial();
         let guid = self.guid();
@@ -1634,7 +1672,7 @@ impl Composer {
             guid: self.field(Field::Guid, &guid, lock(Field::Guid)),
             title_auth: self.title_auth().map(|(_, l)| l.to_string()).unwrap_or_default(),
             warning: self.oui_warning().unwrap_or_default(),
-            copy_command: self.copy_command_row(),
+            copy_command: self.copy_command_row(clipboard),
         }
     }
 
@@ -1679,8 +1717,15 @@ impl Composer {
     ///
     /// A **typed** identity has no seed that reproduces it, so the control is disabled and says so
     /// rather than quietly copying a command that would rebuild a different iPod.
-    fn copy_command_row(&self) -> FixRow {
+    ///
+    /// And **the build's own gate comes first.** `main::caps()` reports no clipboard, and
+    /// `on_copy_text` under this control can only decline — so a live accent-coloured `Copy the
+    /// command line` over it is §14.1's phantom control, which this row shipped. The capability is
+    /// asked before the identity because it is the answer for *every* iPod: telling somebody no
+    /// seed reproduces theirs implies that some other iPod could be copied, and here none can.
+    fn copy_command_row(&self, clipboard: Clipboard) -> FixRow {
         let (enabled, reason) = match &self.rom {
+            _ if clipboard == Clipboard::Absent => (false, NO_CLIPBOARD.to_string()),
             Some(nor::Source::Synthetic { guid: Some(_), .. })
             | Some(nor::Source::Synthetic { serial: Some(_), .. }) => (
                 false,
@@ -2462,13 +2507,13 @@ mod tests {
 
         let mut synth = with_ipod();
         synth.set_level(Level::WhichIpod);
-        let a = synth.which(&s, false);
+        let a = synth.which(&s, false, Clipboard::Present);
 
         let mut dump = with_ipod();
         dump.rom = Some(nor::Source::File("/dumps/mine.rom".into()));
         dump.recompute();
         dump.set_level(Level::WhichIpod);
-        let b = dump.which(&s, false);
+        let b = dump.which(&s, false, Clipboard::Present);
 
         // Same rows, same fields, in the same places.
         assert_eq!(a.model.field, b.model.field);
@@ -2607,7 +2652,7 @@ mod tests {
     fn changing_the_colour_says_it_changes_the_ipod() {
         let s = library("My 5.5G");
         let c = with_ipod();
-        let row = c.which(&s, false).colour;
+        let row = c.which(&s, false, Clipboard::Present).colour;
         assert!(
             row.note.contains("changes the serial") && row.note.contains("FireWire GUID"),
             "the colour row does not say what pressing it does: {}",
@@ -2885,7 +2930,7 @@ mod tests {
             assert!(!cmd.contains(&serial), "the command carries the serial: {cmd}");
             assert!(!cmd.contains(&id.guid_hex()), "the command carries the GUID: {cmd}");
             assert!(cmd.contains("--nor-seed"), "{cmd}");
-            assert!(c.which(&s, false).copy_command.enabled, "reveal={reveal}");
+            assert!(c.which(&s, false, Clipboard::Present).copy_command.enabled, "reveal={reveal}");
         }
     }
 
@@ -2898,7 +2943,7 @@ mod tests {
         c.set_reveal(Field::Guid);
         c.set_guid("000A270011223344").expect("a valid Apple GUID");
 
-        let row = c.which(&s, false).copy_command;
+        let row = c.which(&s, false, Clipboard::Present).copy_command;
         assert!(!row.enabled, "a typed identity was offered as a command line");
         assert!(
             row.reason.contains("no seed reproduces them"),
@@ -2906,6 +2951,67 @@ mod tests {
             row.reason
         );
         assert_eq!(c.command_line(), "", "a command was produced anyway");
+    }
+
+    /// **A build with no clipboard does not draw a live control over one.**
+    ///
+    /// `main::caps()` reports `clipboard: false` — nothing in this dependency graph reaches a
+    /// pasteboard — and `main::wire`'s `on_copy_text` declines with that sentence. This row shipped
+    /// `enabled: true` regardless, so `Copy the command line` was drawn live, in accent, over a
+    /// route that could only refuse. §14.1's phantom control, and the same defect family as the
+    /// ordinal the markup was sending one line below the label.
+    ///
+    /// The capability is checked **before** the identity's own gate, because it is the one that is
+    /// true of every iPod: saying *no seed reproduces them* implies a different iPod could be
+    /// copied, and on this build none can.
+    #[test]
+    fn a_build_with_no_clipboard_does_not_offer_the_copy() {
+        let s = library("My 5.5G");
+        let c = with_ipod();
+
+        // The control: with a pasteboard this same iPod *is* offered, so the refusal below is the
+        // capability talking rather than something about the identity.
+        assert!(
+            c.which(&s, false, Clipboard::Present).copy_command.enabled,
+            "a generated iPod is not offered as a command line even where there is a clipboard"
+        );
+
+        let row = c.which(&s, false, Clipboard::Absent).copy_command;
+        assert!(!row.enabled, "the copy control is drawn live on a build with no clipboard");
+        assert!(!row.reason.is_empty(), "a disabled control with nothing to tell you");
+        assert!(!row.machine_rule, "a missing clipboard is a project state, not a machine rule");
+
+        // One fact, worded once: `rail.rs` already says it for `Next::CopyDetails`, and this reads
+        // that sentence out of it rather than restating it — two wordings of one absence is how a
+        // person comes to believe they have two problems.
+        //
+        // Anchored on `Next::reason` by name, because `Next::CopyDetails` appears in seven `match`
+        // arms in that file and the first one this reached was the control's **label**. The wrong
+        // arm is why the sentence below is quoted in the failure rather than merely compared.
+        let said = include_str!("rail.rs")
+            .split_once("pub fn reason(&self) -> &'static str {")
+            .expect("rail.rs declares `Next::reason`")
+            .1
+            .split_once("Next::CopyDetails => \"")
+            .expect("`Next::reason` words a reason for `Next::CopyDetails`")
+            .1
+            .split_once('"')
+            .expect("its closing quote")
+            .0;
+        assert!(
+            row.reason.starts_with(said),
+            "the Composer words the missing clipboard as `{}`; rail.rs words it as `{said}`",
+            row.reason
+        );
+
+        // And the identity's own refusal still stands where a clipboard exists, so the new gate has
+        // not swallowed the old one.
+        let mut typed = with_ipod();
+        typed.set_reveal(Field::Guid);
+        typed.set_guid("000A270011223344").expect("a valid Apple GUID");
+        let row = typed.which(&s, false, Clipboard::Present).copy_command;
+        assert!(!row.enabled, "a typed identity was offered as a command line");
+        assert!(row.reason.contains("no seed reproduces them"), "{}", row.reason);
     }
 
     /// **There is no `raw()` and there must never be one.** While masked, the value that crosses
@@ -2918,7 +3024,7 @@ mod tests {
         let id = c.identity().expect("an identity");
         let serial = id.serial.clone().expect("a serial");
 
-        let w = c.which(&s, false);
+        let w = c.which(&s, false, Clipboard::Present);
         assert!(w.serial.masked && w.guid.masked);
         assert_eq!(w.serial.raw, "", "the markup holds the serial while it is masked");
         assert_eq!(w.guid.raw, "", "the markup holds the GUID while it is masked");
@@ -2929,7 +3035,7 @@ mod tests {
         // `Show` reveals and enables in one act, so the drawn text and the editable text are never
         // two different things.
         c.set_reveal(Field::Serial);
-        let w = c.which(&s, false);
+        let w = c.which(&s, false, Clipboard::Present);
         assert_eq!(w.serial.value, serial);
         assert_eq!(w.serial.raw, serial);
         assert!(!w.serial.masked);
@@ -2940,7 +3046,7 @@ mod tests {
         c.set_level(Level::WhichIpod);
         c.set_reveal(Field::Serial);
         c.set_level(Level::Root);
-        assert!(c.which(&s, false).serial.masked, "a reveal outlived the page");
+        assert!(c.which(&s, false, Clipboard::Present).serial.masked, "a reveal outlived the page");
 
         // And no accessor hands the full value out while it is masked.
         let secret = Secret::serial(&serial, false);

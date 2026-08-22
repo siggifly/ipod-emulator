@@ -812,3 +812,96 @@ fn a_row_with_a_fact_line_costs_one_named_line_box() {
          `Field`, which are the two things §11.1's *same heights* claim is about"
     );
 }
+
+/// The `Field` variants `src/composer.rs` lists in `Field::ALL`, **in order**.
+///
+/// Read out of the declaration rather than typed here, because the `int` that crosses into the
+/// markup *is* a position in that array — `Field::from_i32` indexes it and `Field::as_i32` searches
+/// it. A list typed in this file would be a second copy of the ordinals, and a second copy is what
+/// the defect below already looked like from inside the markup.
+fn field_ordinals() -> Vec<String> {
+    let p = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/composer.rs"));
+    let text = std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let body = text
+        .split_once("pub const ALL:")
+        .expect("src/composer.rs declares `Field::ALL`")
+        .1
+        .split_once("= [")
+        .expect("the array's opening bracket")
+        .1
+        .split_once("];")
+        .expect("the array's closing bracket")
+        .0;
+    body.split(',')
+        .map(|v| v.trim().trim_start_matches("Field::").to_string())
+        .filter(|v| !v.is_empty())
+        .collect()
+}
+
+/// **`Copy the command line` does not mint a new iPod.**
+///
+/// `Field` crosses the boundary as an `int` so the vocabulary stays in Rust (`src/composer.rs`'s own
+/// words), which means the markup carries a bare ordinal and nothing in the compiler checks which
+/// control it names. This file is the only thing that can.
+///
+/// It shipped as `root.act(0)`. Zero is `Field::Ipod`, the first variant of `Field::ALL`, and
+/// `main::wire`'s `on_composer_act` answers `Field::Ipod` by calling `Composer::make_one` — so the
+/// button labelled *Copy the command line* **minted a new iPod and discarded the seed on screen**,
+/// and the `Field::Serial` arm that builds and copies the command was reachable from nothing.
+///
+/// A wrong ordinal is silent in every other instrument in this tree: it type-checks, it compiles, it
+/// draws, and `Field::from_i32` turns an out-of-range one into a no-op rather than a panic. The only
+/// place the two halves can be compared is here, against the array the ordinal indexes.
+#[test]
+fn the_copy_command_control_does_not_mint_a_new_ipod() {
+    let fields = field_ordinals();
+    // The control: a reader that found nothing would wave any ordinal through, and the two
+    // assertions below would both be comparing against `None.position()` — so pin the shape of what
+    // was read before trusting a position in it.
+    assert!(
+        fields.len() >= 10,
+        "only {} `Field` variants were read out of `Field::ALL`: {fields:?}",
+        fields.len()
+    );
+    let mint = fields
+        .iter()
+        .position(|v| v == "Ipod")
+        .expect("`Field::ALL` lists `Ipod`");
+    let copy = fields
+        .iter()
+        .position(|v| v == "Serial")
+        .expect("`Field::ALL` lists `Serial`");
+    assert_eq!(
+        mint, 0,
+        "`Field::Ipod` is no longer the ordinal a forgotten `act(0)` would send"
+    );
+
+    let lines = code(&ui("composer.slint"));
+    let at = lines
+        .iter()
+        .position(|l| l == "label: root.copy-command.label;")
+        .expect("ui/composer.slint draws a Pressable off `root.copy-command`");
+    // Bounded to the control: `activated` is a handful of lines below the label, and an unbounded
+    // search would happily read the *next* control's ordinal if this one had lost its handler.
+    let sent = lines[at..]
+        .iter()
+        .take(20)
+        .find_map(|l| l.split_once("root.act("))
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(n, _)| n.trim().to_string())
+        .expect("the copy-command Pressable's `activated` handler calls `root.act(…)`");
+
+    assert_ne!(
+        sent,
+        mint.to_string(),
+        "ui/composer.slint's `Copy the command line` sends {sent}, which is `Field::Ipod` — the \
+         button mints a new iPod and throws away the seed it was showing"
+    );
+    assert_eq!(
+        sent,
+        copy.to_string(),
+        "ui/composer.slint's `Copy the command line` sends {sent}; `main::wire`'s \
+         `on_composer_act` builds and copies the command line under `Field::Serial`, which is \
+         ordinal {copy} in `Field::ALL`"
+    );
+}

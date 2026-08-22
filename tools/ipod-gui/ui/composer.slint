@@ -676,7 +676,9 @@ export component WhichIpodPage inherits Rectangle {
                 // `Identity::generate` is a pure function of `(model, seed)`. Where the identity was
                 // typed rather than generated, no seed reproduces it and the control is disabled
                 // with that as its reason. A clipboard outlives the screen, so `Show` does not
-                // unlock it.
+                // unlock it. And on a build that has no pasteboard it is disabled before any of
+                // that, because there is nowhere for the command to go — `copy_command_row` asks
+                // the capability first, since that answer is the same for every iPod.
                 Pressable {
                     label: root.copy-command.label;
                     enabled: root.copy-command.enabled;
@@ -687,7 +689,16 @@ export component WhichIpodPage inherits Rectangle {
                     consequence: root.copy-command.consequence;
                     pad: Geometry.page-margin;
                     activated => {
-                        root.act(0);
+                        // `Field::Serial` — ordinal 3 in `composer.rs`'s `Field::ALL`, which is the
+                        // array `Field::from_i32` indexes. That is the arm of `on_composer_act`
+                        // that builds the command line and hands it to `copy_text`. **It shipped
+                        // sending zero**, which is `Field::Ipod`, so this button minted a new iPod
+                        // and discarded the seed it was showing. Nothing in the compiler checks an
+                        // `int` against the vocabulary it stands for; `markup_discipline.rs`'s
+                        // `the_copy_command_control_does_not_mint_a_new_ipod` reads the ordinal out
+                        // of `Field::ALL` and compares it with this line, and is the only thing
+                        // that can.
+                        root.act(3);
                     }
                     gained-focus => {
                         scroll.ensure-visible(self.absolute-position.y, self.height);
