@@ -493,7 +493,11 @@ impl Composer {
     /// `recipe` is the caller's, resolved through the settings — the model owns the rules for
     /// turning a `Device` into a `Recipe`, and a second copy of them here is the drift this file
     /// exists to prevent. `None` when there is no device of that name.
-    #[allow(dead_code)]  // retired when: something outside this file calls it — `push_composer` already draws the `Mode::Editing` title this returns, and every entrance the window has constructs `Composer::new()`, so nothing constructs `Mode::Editing` and §11.1's *existing and new look identical* has nothing making the existing half
+    ///
+    /// **Its retirement condition is met.** The allow this carried said *retired when something
+    /// outside this file calls it*, and `devices::Devices::editor` now does — §11.2's *existing
+    /// and new look identical* has the surface it was missing, and the `Mode::Editing` title
+    /// `push_composer` has always drawn is finally constructed by something.
     pub fn editing(s: &Settings, device: &str, recipe: Recipe) -> Option<Composer> {
         let d = s.devices.iter().find(|d| d.name == device)?;
         let rom = s.nor_of(d).cloned();
