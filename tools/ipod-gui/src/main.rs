@@ -7,9 +7,11 @@
 //! **The separation is the point.** `settings.rs`, `compose.rs`, `identity.rs` and `nor.rs` hold
 //! the device model, the compatibility rules and the identity validation, and none of them has ever
 //! imported a UI crate. That is why replacing an 8,039-line window cost one file, and it is worth
-//! keeping for whoever replaces this one. `rail.rs`, `nav.rs`, `fit.rs`, `geometry.rs` and
-//! `motion.rs` are toolkit-free for the same reason; this file and `client_height.rs` are the only
-//! two that name a Slint type at all.
+//! keeping for whoever replaces this one. `rail.rs`, `nav.rs`, `fit.rs`, `geometry.rs`, `motion.rs`,
+//! `args.rs` and `bundle.rs` are toolkit-free for the same reason; this file and `client_height.rs`
+//! are the only two that name a Slint type at all. **The command line is toolkit-free too, and that
+//! is not incidental**: `--help`, `--check-update`, `--check-images` and `--make-app` all answer
+//! before a platform is set, so a window that will not open cannot stop them answering.
 //!
 //! **§20 item 12, and it is why this revision exists.** Every action about to be reconnected — the
 //! centre button, Create, Fetch, Build, Install — needs somewhere to narrate and somewhere to fail.
@@ -18,20 +20,31 @@
 //! now, and the drawer opens on it.
 
 // The window is not a console program; on Windows a console would flash up behind it.
+//
+// **The cost of that, stated rather than discovered:** a release build on Windows has no console
+// of its own, so `--help` and `--check-update` print into nothing unless the caller redirects —
+// `ipod-emulator --help > out.txt` works, `ipod-emulator --help` in a terminal shows nothing. The
+// egui window carried no such attribute and had no such gap. Retired when a Windows build calls
+// `AttachConsole(ATTACH_PARENT_PROCESS)` before `args::run`, which needs `windows-sys`'s
+// `Win32_System_Console` and a Windows machine to prove on; neither is here, and an untested
+// `unsafe` call into a platform nobody can run is worse than a gap somebody can read about.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-// **These five modules are not dead. They are not yet reconnected.**
+// **These four modules are not dead. They are not yet reconnected.**
 //
 // The view layer that called them went with `main.rs` when the old window was deleted, and each
 // comes back as its surface is rebuilt: `emu` and `wheel` with Running (GUI.md §16), `control` with
-// the readout Rail, `png` with the screenshot key, `update` with Reference (§17). Their own tests
-// still run — 28 of them pass, counted with `--list` rather than copied — so this is unreferenced
-// code, not unverified code.
+// the readout Rail, `png` with the screenshot key. Their own tests still run — so this is
+// unreferenced code, not unverified code.
 //
 // **The allow is a debt and it has a retirement condition**, in the shape research/04 uses for
 // bypasses: it comes off when Running lands, and at that point anything *still* unreferenced is
 // genuinely dead and gets deleted rather than allowed. Scoped per module deliberately — a blanket
 // `#![allow(dead_code)]` at the crate root would outlive the rebuild and swallow the next real one.
+//
+// **`update` used to be the fifth and is not any more.** `--check-update` calls it, so the module
+// is reachable in the shipped binary and its allow came off; the one item still waiting for §17's
+// Reference page carries its own condition, beside itself, where it can be read.
 #[allow(dead_code)]
 mod control;
 #[allow(dead_code)]
@@ -39,11 +52,9 @@ mod emu;
 #[allow(dead_code)]
 mod png;
 #[allow(dead_code)]
-mod update;
-#[allow(dead_code)]
 mod wheel;
 
-// These six are wired.
+// These eleven are wired.
 //
 // `geometry` is the single source of truth for every ratio and every size constant — `build.rs`
 // compiles that same file and renders it into the `.slint` the markup imports, so the tests read
@@ -52,6 +63,13 @@ mod wheel;
 // display. `client_height` is the only part that has to ask the platform (§9.6). `motion` asks the
 // platform one further question §8.4 needs and Slint cannot answer. `rail` is where the program
 // narrates and fails (§9.2, §9.3); `nav` is the single writer of where you are (§4, §16.8).
+//
+// `args` is the command line and `bundle` is the macOS `.app` writer — the two halves of what this
+// binary does when it is asked to do something other than open. They are toolkit-free like the
+// rest: `args` names no generated type, and outside its own tests `fn main` is its only caller,
+// on the first line of the program, before a window exists to be opened by mistake.
+mod args;
+mod bundle;
 mod client_height;
 mod composer;
 mod fit;
@@ -59,6 +77,7 @@ mod geometry;
 mod motion;
 mod nav;
 mod rail;
+mod update;
 mod work;
 
 // And these three are the producers for the drawer's remaining pages, **stubs today**: each holds
@@ -210,6 +229,23 @@ impl Drop for DataDirLock {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    // **The command line comes first, and it decides whether there is a window at all.**
+    //
+    // This function used to go straight to `opaque_window` and read `argv` nowhere, which is not
+    // the same as taking no flags: every flag was *accepted and ignored*, and a window opened. CI
+    // had been running `--check-update` and `--help` against that for weeks — the first silently
+    // did nothing and the second opened a window on a runner, which is a job that hangs or a
+    // backend that fails, and neither reads as *the flag is gone*.
+    //
+    // `args::parse` is pure and `args::run` names no toolkit type, so everything below this point
+    // is reached only by a launch that asked for the window. Nothing in `args` can open one: the
+    // window arm is matched off here, before `run` is called with anything.
+    let cli = args::parse(&std::env::args().skip(1).collect::<Vec<_>>());
+    if cli != args::Cli::Window {
+        let code = args::run(&cli, &mut std::io::stdout(), &mut std::io::stderr());
+        std::process::exit(code);
+    }
+
     opaque_window()?;
 
     // **Before the first read, and it had zero callers until now** (§20 item 13). `migrate_legacy`
@@ -5315,15 +5351,22 @@ pub(crate) mod tests {
     /// `composer.rs`'s wrote its own in the paragraph above itself. That blanket is deleted and
     /// this crate has none, so that justification now describes nothing — and a rule justified by
     /// nothing is §16.9's defect wearing a doc comment. The rule stays because a different shape
-    /// keeps it true: the five parked modules at the top of `main.rs` are a run of
-    /// `#[allow(dead_code)] mod x;` pairs that share **one** condition, and five copies of one
-    /// sentence is five sentences that drift. That is why the scan steps over the run's own
+    /// keeps it true: the parked modules at the top of `main.rs` are a run of
+    /// `#[allow(dead_code)] mod x;` pairs that share **one** condition, and four copies of one
+    /// sentence is four sentences that drift. That is why the scan steps over the run's own
     /// attribute and `mod x;` lines on its way up. It steps over **nothing else** — not a blank
     /// line, not code — so a condition cannot be inherited from a paragraph that was written about
     /// something else.
     ///
-    /// Measured with this function, over the whole crate: 23 conditions sit beside their attribute
-    /// and 5 above it, and all five above are that one run.
+    /// Measured with this function, over the whole crate: **23 conditions sit beside their attribute
+    /// and 4 above it**, and all four above are that one run — `control`, `emu`, `png`, `wheel`.
+    ///
+    /// **Both halves of that pair were wrong when it was last written**, in opposite directions, and
+    /// the correction is the argument for measuring rather than editing a number: the run was five
+    /// modules and is now four, because `update` was reconnected by `--check-update` and its blanket
+    /// came off; and the *beside* figure said 23 when the tree held 22, so the one that did not
+    /// change is the one that had been wrong all along. `update::spawn`'s own condition — the one
+    /// item of that module still waiting on §17 — is what puts it back at 23.
     fn says_what_retires_it(lines: &[&str], n: usize) -> bool {
         if names_a_condition(lines[n]) {
             return true;
@@ -5405,7 +5448,15 @@ pub(crate) mod tests {
     }
 
     /// Method names `std` defines as well, which a text sweep cannot tell apart from these.
-    const AMBIGUOUS: [&str; 1] = ["as_str"];
+    ///
+    /// **`spawn` was added after the sweep reported one**, and the report was wrong in the way this
+    /// constant exists for: `update::spawn` is genuinely unreachable — deleting its allow makes the
+    /// compiler say `function spawn is never used`, which is the control — but `control.rs` writes
+    /// `std::thread::spawn(` and `work.rs` defines a `Worker::spawn` of its own, and a matcher that
+    /// reads a bare name preceded by anything non-alphanumeric counts a `::` and a `.` as a
+    /// boundary. Three unrelated things called `spawn` in one crate is the population, not the
+    /// exception. The instrument was reporting a defect it created by looking.
+    const AMBIGUOUS: [&str; 2] = ["as_str", "spawn"];
 
     /// A call to `name` in `text`, ignoring comments and requiring both boundaries — so
     /// `set_fullscreen(` is not a call to `fullscreen`, and `expanded(` is not a call to `expand`.

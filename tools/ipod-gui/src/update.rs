@@ -208,6 +208,11 @@ pub fn parse_version(tag: &str) -> Option<(u32, u32, u32)> {
 /// The window must never block on a socket: a five-second `curl` on the UI thread is five seconds
 /// of a frozen iPod, and the whole point of failing silently is that nobody notices the check
 /// happened at all.
+///
+/// **The one part of this module the shipped binary does not reach.** `--check-update` calls
+/// [`check`] on the process's own thread and then exits, which is what a command line wants; this
+/// is the shape a *window* wants, and there is no page on it yet.
+#[allow(dead_code)] // retired when: GUI.md §17's Reference page runs the check — it is the only caller this shape has, and `--check-update` deliberately is not one, because a process that is about to exit has no UI thread to keep free
 pub fn spawn(slot: std::sync::Arc<std::sync::Mutex<Option<Option<Found>>>>) {
     std::thread::Builder::new()
         .name("update-check".into())
