@@ -3880,6 +3880,53 @@ In order, because each depends on the one before it.
     it draws a live control over a hole; that is the general form and it is worth more than the
     instance.
 
+21. **DONE 2026-08-22. Three guards that read source text instead of watching the program, and two
+    of them were green through a working defect.** The fourth of the family was found in
+    `compose.rs` the day before — an `include_str!("install.rs")` + `.contains(…)` that stayed green
+    when `(0..4)` became `(0..1)`, which makes every real iPod fail to find its data partition, and
+    **panicked** when `.unwrap_or(0)` was respelled `.unwrap_or(0u8)`, which changes nothing. A
+    sweep classified the rest. Each was measured blind first, then measured again against the same
+    plant.
+
+    - **`the_rail_never_dismisses_itself`'s model half** greps `src/rail.rs` for `std::time`,
+      `Instant`, `SystemTime`, `Duration`. A `Rail` stamping `note` and `failed` from
+      `eapp_loader::settings::now_unix()` and a `line()` that skips an entry four seconds old — a
+      failure fading off the bench out from under somebody reading it, **§14.4's ban by name** —
+      passed it and passed **all 342 tests in the crate**. The clock a program reaches for is the
+      one its own workspace already has, and a vocabulary of four `std` spellings could not see it.
+      `nothing_the_rail_says_changes_because_time_passed` watches instead: one Rail read twice
+      across four seconds and a fifth, and a twin driven by the same calls compared against it. The
+      grep survives, widened to that vocabulary and **renamed `no_clock_is_named_anywhere_in_rail_rs`
+      so nobody mistakes it for protection**; the two bound different things, and the doc on each
+      names the other.
+    - **`the_window_computes_no_compatibility_rule_of_its_own`** refused the literals `0x0b`/`0x0c`
+      in `composer.rs`. `if t == 11u8 { self.recipe.loader = compose::Loader::Apple; }` in
+      `took_reading` — a volume type resetting somebody's bootloader — was green across the whole
+      crate; the bytes `0x0b` in a **doc comment** saying volume types are not this page's business
+      made it panic. It keeps its name and drives the page now, over 216 recipes: every answer it
+      gives about a recipe is the model's answer for that recipe, and **every recipe it produces is
+      one the model produced** — the second half being the one a duplicated rule cannot pass, since
+      `set_volume_type` moves no bootloader.
+    - **`the_identity_is_stored_before_anything_that_can_fail`** was the honest one, and its defect
+      is narrower: `unwrap_or(usize::MAX)` read a needle that was not there as *infinitely late*,
+      which compares as fine. Writing `Worker::spawn (plan, …)` with one extra space left it green
+      while it had stopped checking the spawn at all. Needles are required now. Its behavioural half
+      **exists after all**: its own note said the data directory could not be made unwritable
+      because every test in the binary reads it, and `crate::data_dir_lock` — one re-entrant lock
+      over `IPOD_EMULATOR_DATA` for the whole binary — is what made that false.
+      `a_press_whose_save_fails_still_holds_the_ipod_it_minted` puts a regular file where the data
+      directory should be, presses three times and finds one GUID. The source-order lock is
+      **renamed `press_names_no_way_out_above_the_store_but_the_two_that_mint_nothing`** and kept for
+      the half behaviour cannot reach: a way out that does not exist yet.
+
+    **The general form.** A test that reads source text fails on spelling and passes on behaviour,
+    which is the exact inverse of what a test is for; and where one is genuinely the right
+    instrument — markup, an ordering, a word that must not appear — it has to say so in its own name
+    and name the test that watches. Two further greps in this family survive on purpose and are
+    recorded rather than fixed: `the_verdict_region_reads_the_predicate_and_not_the_string` already
+    carries a behavioural half over all three `Start` variants, and `composer.rs`'s one-line
+    `!body.contains("fn raw(")` sits inside a test that has already proved the mask holds.
+
 **Conditional on §17.Q10**: `Stats::enters_by_core: [[u64; WATCHED.len()]; 2]`, if the run loop can
 attribute an arrival to a core. Until it is answered, §12.8 draws one column.
 

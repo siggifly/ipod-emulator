@@ -8,8 +8,10 @@
 //
 //   - **Never a toast.** There is no `Timer` in this file and there must never be one. §7.4 records
 //     a four-second self-dismissing message and §14.4 bans it by name; `Timer` IS a real element
-//     (`builtins.slint:2695`), so the ban is a live risk. `the_rail_never_dismisses_itself` is the
-//     mechanical form.
+//     (`builtins.slint:2695`), so the ban is a live risk. `the_rail_never_dismisses_itself` sweeps
+//     the markup for one; `nothing_the_rail_says_changes_because_time_passed` watches the model
+//     across four seconds, which is the half that caught a working self-dismiss the grep beside it
+//     could not see.
 //   - **Never a spinner** (§8.3). `about_to_wait` calls `request_redraw()` for every window with an
 //     active animation and Skia partial rendering is off by default, so one perpetual spinner pins
 //     the main thread at display refresh with full-window repaints while an ARM7 runs at 24 % of

@@ -1771,14 +1771,16 @@ mod tests {
     ///
     /// The queue survives; the library does not. So on the second press `minted()` finds nothing
     /// and the only thing standing between this person and a second iPod is that the ROM was stored
-    /// before the save. **A save that fails leaves exactly this state** — which is why the
-    /// scenario is reproduced by handing each press a fresh empty `Settings`, rather than by
-    /// pointing the process-wide data directory at something unwritable: that variable is read by
-    /// every test in this binary, and making saving fail for all of them made another test flaky
-    /// once in twelve runs.
+    /// before the save. **A save that fails leaves exactly this state**, and this reproduces it by
+    /// handing each press a fresh empty `Settings`.
     ///
-    /// [`the_identity_is_stored_before_anything_that_can_fail`] is the other half, and it is the
-    /// half that pins the ordering.
+    /// **The note here used to say the real thing could not be reached** — *that variable is read
+    /// by every test in this binary, and making saving fail for all of them made another test flaky
+    /// once in twelve runs* — and `crate::data_dir_lock` is what made that false: one re-entrant
+    /// lock over `IPOD_EMULATOR_DATA` for the whole binary, so a test holding it can point the
+    /// directory at something that cannot be written.
+    /// [`a_press_whose_save_fails_still_holds_the_ipod_it_minted`] does exactly that, and this
+    /// stays as the cheap sibling: same corner, no environment, three presses of one queue.
     #[test]
     fn a_press_that_persisted_nothing_does_not_re_mint_the_identity() {
         let data = DataDir::new("persisted-nothing");
@@ -1808,22 +1810,99 @@ mod tests {
         }
     }
 
-    /// **The identity is stored before anything that can fail**, and that is an ordering rather
-    /// than a behaviour — so it is checked where it is written.
+    /// **THE ordering, observed.** A save that fails leaves the iPod that was already minted, and
+    /// the next press resumes with it rather than making a second one.
     ///
-    /// A behavioural test cannot see the difference while the save succeeds, and making the save
-    /// fail means making it fail for every other test in this binary. This reads the one function
-    /// the ordering lives in.
+    /// [`a_press_that_persisted_nothing_does_not_re_mint_the_identity`]'s own note said this could
+    /// not be reached — *"rather than by pointing the process-wide data directory at something
+    /// unwritable: that variable is read by every test in this binary"* — and that was true when it
+    /// was written and is not true now. `crate::data_dir_lock` is one lock over that variable for
+    /// the whole binary, it is re-entrant, and `DataDir` holds it: while this test runs, **no other
+    /// test in this binary can be reading `IPOD_EMULATOR_DATA`**, so it can point at something that
+    /// cannot be written and put it back on the way out. The flake that argument was made about was
+    /// two locks over one variable, which is the thing that lock exists to have fixed.
     ///
-    /// **It sweeps every way out of `press`, not a list of four calls.** A byte-offset comparison
-    /// against a hand-written list is blind to the fifth thing somebody adds — and the thing most
-    /// likely to be added is an early `return`, which is a way of not reaching the store rather
-    /// than a call that can fail. So: nothing that leaves this function may appear above the line
-    /// that stores the ROM, except the two that are deliberately there — a run already in flight,
-    /// which mints nothing because there is already one, and no `curl`, which mints nothing
-    /// because the whole plan is refused before it starts.
+    /// **The refusal is checked by `attempted`, not by class.** `Class::Permission` is what the
+    /// volume probe refuses with too, so a press that failed one step earlier than intended would
+    /// look identical — and one step earlier is *before* the store, which is the whole question.
+    ///
+    /// This is what [`press_names_no_way_out_above_the_store_but_the_two_that_mint_nothing`] used
+    /// to stand in for. `settings.save()` is the first thing in `press` that can fail, so a store
+    /// that happens before it happens before all four of the others as well.
     #[test]
-    fn the_identity_is_stored_before_anything_that_can_fail() {
+    fn a_press_whose_save_fails_still_holds_the_ipod_it_minted() {
+        let data = DataDir::new("save-refused");
+        // `Settings::save` opens with `create_dir_all(data_dir())`, so a regular file where the
+        // directory should be refuses it on every platform without asking for a permission this
+        // suite does not have — `blocked`'s trick, pointed at the data directory instead of at a
+        // drives directory.
+        let wall = blocked(&data.at);
+        // SAFETY: `DataDir` holds `crate::data_dir_lock`, which serialises every test in this
+        // binary that touches this variable, and `DataDirLock`'s own `Drop` puts it back.
+        unsafe { std::env::set_var("IPOD_EMULATOR_DATA", &wall) };
+        assert!(
+            Settings::default().save().is_err(),
+            "the fixture's data directory is writable, so this test is not about a failed save"
+        );
+
+        let mut q = Queue::at(data.at.join("drives"), data.at.join("firmware"));
+        let mut first = None;
+        for attempt in 1..=3 {
+            // A fresh `Settings` each time, because that is what a save that failed leaves: the
+            // library on disk never learned about the iPod.
+            let mut settings = Settings::default();
+            let mut rail = Rail::new();
+            match q.press(&mut settings, &mut rail, true) {
+                Press::Refused(f) => {
+                    assert_eq!(f.class, Class::Permission, "attempt {attempt}: {}", f.said);
+                    assert_eq!(
+                        f.attempted, "remembering the iPod that was just made",
+                        "attempt {attempt} was refused somewhere other than the save, so this \
+                         proves nothing about the ordering: {f:?}"
+                    );
+                }
+                other => panic!("attempt {attempt}: a save that cannot happen went through: {other:?}"),
+            }
+            let guid = q
+                .rom
+                .as_ref()
+                .expect("the identity is stored before the save that just failed")
+                .identity()
+                .expect("a synthesised identity")
+                .guid;
+            assert_ne!(guid, 0, "attempt {attempt} is holding the never-chosen default");
+            match first {
+                None => first = Some(guid),
+                Some(f) => assert_eq!(
+                    f, guid,
+                    "attempt {attempt} minted a second iPod after a save that failed"
+                ),
+            }
+        }
+    }
+
+    /// **Nothing leaves `press` above the store except the two that mint nothing** — a source-order
+    /// lock, which is the whole of what it claims.
+    ///
+    /// **It cannot fail on behaviour**, and it names calls by their spelling: rename one and its
+    /// clause measures nothing. That was silent until 2026-08-22, because a needle it could not
+    /// find was `unwrap_or(usize::MAX)` — *infinitely late*, which compares as fine. Measured:
+    /// writing `Worker::spawn (plan, …)` with one extra space, which changes nothing at all, left
+    /// this **green** while it had stopped checking anything about the spawn. Each needle is now
+    /// required to be there, so a rename goes red saying which one went, rather than quietly
+    /// shrinking the sweep.
+    ///
+    /// [`a_press_whose_save_fails_still_holds_the_ipod_it_minted`] is the behavioural half and is
+    /// the one that watches: it makes the save fail and presses again. This is kept beside it for
+    /// the half behaviour cannot reach — **a way out that does not exist yet**. A byte-offset
+    /// comparison against a hand-written list of calls is blind to the fifth thing somebody adds,
+    /// and the thing most likely to be added is an early `return`, which is a way of not reaching
+    /// the store rather than a call that can fail. So: nothing that leaves this function may appear
+    /// above the line that stores the ROM, except the two that are deliberately there — a run
+    /// already in flight, which mints nothing because there is already one, and no `curl`, which
+    /// mints nothing because the whole plan is refused before it starts.
+    #[test]
+    fn press_names_no_way_out_above_the_store_but_the_two_that_mint_nothing() {
         let body = SOURCE
             .split("pub fn press(")
             .nth(1)
@@ -1833,7 +1912,14 @@ mod tests {
             .expect("identity follows it");
         let stored = body.find("self.rom = Some(").expect("press stores the minted ROM");
         for after in ["settings.save()", "volume::probe(", "Plan::of(", "gate(", "Worker::spawn("] {
-            let at = body.find(after).unwrap_or(usize::MAX);
+            // **Required, not optional.** A needle that is not there used to read as *infinitely
+            // late* and pass, so a renamed call silently dropped out of the sweep.
+            let at = body.find(after).unwrap_or_else(|| {
+                panic!(
+                    "`press` no longer names `{after}`, so this sweep had stopped checking it — \
+                     rename it here too, or drop it from the list on purpose"
+                )
+            });
             assert!(
                 stored < at,
                 "`self.rom` is stored after `{after}` — a failure there would mint a second iPod \

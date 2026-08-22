@@ -3362,40 +3362,194 @@ mod tests {
 
     // ── the sweep ─────────────────────────────────────────────────────────────────────────────
 
+    /// Every state of this page a rule could be written into: nine starts, eight sets of systems,
+    /// three bootloaders.
+    ///
+    /// The starts are the three variants times every `fat_type` a read can produce —
+    /// `install::data_partition_type` ends `.find(|t| matches!(t, 0x0b | 0x0c)).unwrap_or(0)`, so
+    /// an `Ok(_)` is exactly one of `0x00`/`0x0B`/`0x0C` and `None` is *nobody has looked yet*.
+    /// **The literals live here in the tests, deliberately**: they are inputs to drive the page
+    /// with, which is the opposite of the thing the sweep below refuses.
+    fn every_recipe_state() -> Vec<Recipe> {
+        let mut starts = vec![Start::FromIpsw("iPod_25.1.3.ipsw".into())];
+        for t in [None, Some(0x00), Some(0x0b), Some(0x0c)] {
+            starts.push(Start::FromImage {
+                path: "/drives/mine.img".into(),
+                fat_type: t,
+            });
+            starts.push(Start::FromDisk {
+                name: "The good one".into(),
+                fat_type: t,
+            });
+        }
+        let mut out = Vec::new();
+        for start in &starts {
+            for bits in 0..8u8 {
+                let oses: BTreeSet<Os> = Os::ALL
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(i, _)| bits & (1 << i) != 0)
+                    .map(|(_, o)| o)
+                    .collect();
+                for loader in Loader::ALL {
+                    out.push(Recipe {
+                        start: start.clone(),
+                        loader,
+                        oses: oses.clone(),
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// A page standing in one of those states, with an iPod and a name so that nothing except the
+    /// recipe can be what refuses.
+    ///
+    /// The bootloader is picked **last**, because `set_os` moves it — this is the state the page is
+    /// in after somebody chose systems and then chose a bootloader, which is the order §11.3 lays
+    /// the rows out in.
+    fn page_at(r: &Recipe) -> Composer {
+        let mut c = with_ipod();
+        c.set_start(r.start.clone());
+        for o in Os::ALL {
+            c.set_os(o, r.oses.contains(&o));
+        }
+        c.set_loader(r.loader);
+        c.set_name("A name");
+        c
+    }
+
     /// **The window computes no compatibility rule of its own.** Every one of them lives in
     /// `compose.rs`, where it is measured and cited; a second copy here is a rule that drifts.
+    ///
+    /// **This was four greps over this file's own text, and it was blind to the thing it names.**
+    /// It refused the literals `0x0b`/`0x0c` and any line pairing `Os::IPodLinux` with `Loader::`.
+    /// Measured both ways, 2026-08-22. Planting a real rule in `took_reading` —
+    /// `if t == 11u8 { self.recipe.loader = compose::Loader::Apple; }`, a volume type quietly
+    /// resetting somebody's bootloader — left **all 342 tests in this crate green**. Adding the
+    /// bytes `0x0b` to a *doc comment* saying volume types are not this page's business made it
+    /// **panic**. Green through the defect, red on prose; `compose.rs` held one of the same shape
+    /// and it was rewritten to call the function, and this is that, here.
+    ///
+    /// It asks the question by driving the page instead, over [`every_recipe_state`] — 216
+    /// recipes — in two halves that catch different mistakes:
+    ///
+    /// 1. **Every answer the page gives about a recipe is the model's answer for that recipe.** The
+    ///    verdict, whether `Create` is live, and each bootloader row's live-or-greyed and its
+    ///    sentence. A rule re-derived here shows up the moment it disagrees, which is the moment it
+    ///    matters.
+    /// 2. **Every recipe the page produces is one the model produced.** For each writer, the recipe
+    ///    afterwards is compared against the same edit made to `compose`'s own [`Recipe`] and
+    ///    nothing else — so a page that moves a bootloader, a system or a volume type on its own
+    ///    behalf fails here **whether or not it happens to agree with a rule**. This is the half the
+    ///    `11u8` plant goes red on: `set_volume_type` moves no bootloader, so neither may this.
+    ///
+    /// [`consistent`] is the third member of the family and is **not** the same check: it holds
+    /// that the region, the plan and the bill are derived from *this* recipe, which stays true of a
+    /// page that edited the recipe on its own behalf and then recomputed from it.
     #[test]
     fn the_window_computes_no_compatibility_rule_of_its_own() {
-        let body = shipped();
+        let s = library("Somebody else's");
+        for r in every_recipe_state() {
+            let c = page_at(&r);
+            let recipe = c.recipe().clone();
 
-        // The volume types are the model's business.
-        for bad in ["0x0b", "0x0c", "0x0B", "0x0C"] {
-            assert!(!body.contains(bad), "a volume type is decided here: {bad}");
-        }
-        // And no line pairs a system with a bootloader, which is rule (1) written a second time.
-        for (n, line) in body.lines().enumerate() {
-            assert!(
-                !(line.contains("Os::IPodLinux") && line.contains("Loader::")),
-                "line {} states rule (1) again: {line}",
-                n + 1
+            // ---- 1. every answer about a recipe is the model's answer for it.
+            let verdict = recipe.check();
+            assert_eq!(
+                c.region().text(),
+                verdict.text(),
+                "the page worded the verdict for {recipe:?} itself"
             );
-        }
-        // The control: the matcher can see one when there is one, so a matcher that saw nothing is
-        // not mistaken for a file that holds nothing.
-        let planted = "if oses.contains(&Os::IPodLinux) { loader = Loader::IPodLoader2 }";
-        assert!(planted.contains("Os::IPodLinux") && planted.contains("Loader::"));
-        assert!("let t = 0x0c;".contains("0x0c"));
+            assert_eq!(
+                c.region().claims_a_plan(),
+                verdict.ok(),
+                "the page and the model disagree about whether {recipe:?} works"
+            );
+            assert_eq!(
+                c.can_commit().is_ok(),
+                verdict.ok(),
+                "`Create` is {} for {recipe:?}; the model calls it {}: {:?}",
+                if c.can_commit().is_ok() { "live" } else { "refused" },
+                if verdict.ok() { "fine" } else { "impossible" },
+                c.can_commit()
+            );
+            let rows = c.options_of(&s, Field::Bootloader);
+            assert_eq!(rows.len(), Loader::ALL.len(), "a bootloader is absent, not disabled");
+            for (row, l) in rows.iter().zip(Loader::ALL) {
+                assert_eq!(
+                    row.enabled,
+                    l.offered() && recipe.loader_works(l),
+                    "`{}` is {} for {recipe:?} and the model says otherwise",
+                    l.label(),
+                    if row.enabled { "live" } else { "greyed" }
+                );
+                // A machine rule is greyed *by the recipe*, and its sentence is the model's own.
+                if row.machine_rule {
+                    assert_eq!(row.reason, recipe.why_not(l), "the page worded a machine rule");
+                }
+            }
 
-        // And the verdict is never computed in a binding: it is written by `recompute`, once.
-        assert_eq!(
-            body.matches("fn recompute").count(),
-            1,
-            "there is more than one recomputation"
-        );
-        assert_eq!(
-            body.matches(".check()").count(),
-            2,
-            "the verdict is computed somewhere other than `region` and `can_commit`"
-        );
+            // ---- 2. every recipe the page produces is one the model produced. Each writer runs
+            // on its own page, from the same state, against the same edit made to a `Recipe`.
+            let mut expect = recipe.clone();
+            for t in [0x00u8, 0x0b, 0x0c] {
+                let mut c = page_at(&r);
+                c.took_reading(Ok(t));
+                let mut model = recipe.clone();
+                model.set_volume_type(t);
+                assert_eq!(
+                    *c.recipe(),
+                    model,
+                    "reading a volume as {t:#04x} did more to {recipe:?} than record it"
+                );
+            }
+            // A read that failed records nothing at all.
+            let mut c = page_at(&r);
+            c.took_reading(Err("no such file".into()));
+            assert_eq!(*c.recipe(), recipe, "a volume nobody could read changed the recipe");
+
+            for o in Os::ALL {
+                for on in [true, false] {
+                    let mut c = page_at(&r);
+                    c.set_os(o, on);
+                    let mut model = recipe.clone();
+                    if on {
+                        model.oses.insert(o);
+                    } else {
+                        model.oses.remove(&o);
+                    }
+                    // §11.3: the bootloader follows the systems, and `best_loader` **is** the rule.
+                    model.loader = model.best_loader();
+                    assert_eq!(
+                        *c.recipe(),
+                        model,
+                        "turning {} {} on {recipe:?} left a recipe the model would not have made",
+                        o.label(),
+                        if on { "on" } else { "off" }
+                    );
+                }
+            }
+            for l in Loader::ALL {
+                let mut c = page_at(&r);
+                c.set_loader(l);
+                expect.loader = l;
+                assert_eq!(*c.recipe(), expect, "picking `{}` moved something else too", l.label());
+            }
+            expect.loader = recipe.loader;
+            for st in [
+                Start::FromIpsw("iPod_25.1.3.ipsw".into()),
+                Start::FromImage {
+                    path: "/drives/other.img".into(),
+                    fat_type: Some(0x0c),
+                },
+            ] {
+                let mut c = page_at(&r);
+                c.set_start(st.clone());
+                expect.start = st;
+                assert_eq!(*c.recipe(), expect, "choosing a drive moved something else too");
+            }
+        }
     }
 }

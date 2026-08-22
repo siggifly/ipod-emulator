@@ -1913,12 +1913,18 @@ mod tests {
         );
     }
 
-    /// **T-3. The Rail never dismisses itself, and there is no clock anywhere near it.**
+    /// **T-3. The Rail never dismisses itself.**
     ///
     /// §14.4 bans the four-second self-dismissing message by name, and `Timer` **is** a real
     /// element in Slint 1.17 (`builtins.slint:2695`), so the ban is a live risk rather than a
-    /// theoretical one. Three mechanical halves: no `Timer` in any markup, no `animate` on a
-    /// visibility, and no unit of time anywhere in `src/rail.rs`.
+    /// theoretical one. Two markup halves: no `Timer` anywhere, and no `animate` on a visibility in
+    /// the Rail's own files. Markup read on purpose, like `the_generated_geometry_is_the_rust_one`
+    /// — the thing being checked *is* the text.
+    ///
+    /// **The model half moved out of here**, into
+    /// [`nothing_the_rail_says_changes_because_time_passed`], which watches the Rail instead of
+    /// reading it; [`no_clock_is_named_anywhere_in_rail_rs`] is what is left of the grep and says
+    /// so in its own name.
     #[test]
     fn the_rail_never_dismisses_itself() {
         for (name, text) in markup() {
@@ -1950,16 +1956,193 @@ mod tests {
                 }
             }
         }
+    }
 
-        // And the model half: an entry that cannot hold a time cannot expire.
+    /// A Rail holding one of every kind §9.2 has: a finished step, a step working against a byte
+    /// count with a part-file behind it, a failed step, four still planned, and a note.
+    fn a_rail_holding_one_of_everything() -> crate::rail::Rail {
+        use eapp_loader::compose::{Holes, Loader, Os, Recipe, Start};
+
+        let recipe = Recipe {
+            start: Start::FromIpsw("iPod_25.1.3".into()),
+            loader: Loader::Rockbox,
+            oses: [Os::Apple, Os::Rockbox].into_iter().collect(),
+        };
+        let mut rail = crate::rail::Rail::new();
+        let ids = rail.plan(&recipe.steps(Holes::Sparse));
+        assert!(ids.len() >= 3, "the fixture filed {} steps", ids.len());
+        rail.done(ids[0]);
+        rail.progress(
+            ids[1],
+            crate::rail::Progress::Bytes {
+                done: 4_100_000,
+                total: 6_500_000,
+            },
+        );
+        rail.writing(ids[1], std::path::PathBuf::from("/drives/mine.img.part"));
+        rail.fail(
+            ids[2],
+            crate::rail::Failure::saying(
+                crate::rail::Class::Verification,
+                "fetching Rockbox",
+                "the bytes do not match the checksum",
+            ),
+        );
+        rail.note("Already making an iPod. The steps below are what it is doing.");
+        // **And a failure with no step in front of it** — the centre button refusing. It is a
+        // different producer from `fail`, which moves a planned step, and leaving it out is how the
+        // first version of this test missed the very defect it was written for: the plant stamped
+        // `note` and `failed`, the fixture exercised `fail`, and it passed.
+        rail.failed(
+            "making",
+            "an iPod",
+            crate::rail::Failure::new(
+                crate::rail::Class::ToolMissing(crate::rail::Tool::Curl),
+                "making an iPod",
+            ),
+        );
+        rail
+    }
+
+    /// Everything a Rail hands the window — the entries themselves and every value derived from
+    /// them, because a clock could be read in any of them.
+    ///
+    /// **One labelled line each rather than one string**, so a difference reports the one thing
+    /// that moved instead of two screenfuls of `Debug` with a clause changed in the middle.
+    fn everything_the_rail_says(r: &crate::rail::Rail) -> Vec<String> {
+        let mut v = vec![
+            format!("line: {:?}", r.line()),
+            format!("announce: {:?}", r.announce()),
+            format!("failures: {}", r.failures()),
+            format!("entries: {}", r.entries().len()),
+        ];
+        for e in r.entries() {
+            v.push(format!("entry {}: {e:?}", e.id));
+            v.push(format!(
+                "entry {} derived: fraction {} measure {:?} happened {:?} cancel {:?}",
+                e.id,
+                e.fraction(),
+                e.measure(),
+                e.happened(),
+                e.cancel_cost()
+            ));
+        }
+        v
+    }
+
+    /// Report the **first** line that moved, and say how many did.
+    fn the_same_rail(before: &[String], after: &[String], how: &str) {
+        for (b, a) in before.iter().zip(after.iter()) {
+            assert_eq!(b, a, "{how}");
+        }
+        assert_eq!(before.len(), after.len(), "{how} — and it is a different number of entries");
+    }
+
+    /// **T-3b. Nothing on the Rail moves because time passed.** §14.4's four-second
+    /// self-dismissing message, observed rather than spelled.
+    ///
+    /// **The grep this replaces was green through a working one.** Measured 2026-08-22: a
+    /// `filed: Vec<(u64, u64)>` on `Rail`, stamped in `note` and `failed` from
+    /// `eapp_loader::settings::now_unix()`, and a `line()` that skips an entry four seconds old —
+    /// a failure fading off the bench out from under somebody reading it, which is precisely the
+    /// thing §14.4 names — passed [`no_clock_is_named_anywhere_in_rail_rs`] and **all 342 tests in
+    /// this crate**, because `now_unix` is not `std::time`, `Instant`, `SystemTime` or `Duration`.
+    /// The clock a program reaches for is the one its own workspace already has.
+    ///
+    /// Two observations across one gap:
+    ///
+    /// * **The same Rail, read again.** Anything that expires, fades, ages or counts down has
+    ///   moved by the time the second read happens.
+    /// * **A second Rail, driven by the same calls.** Anything *stamped* into the model differs
+    ///   between two runs separated by the gap — at nanosecond granularity because the two builds
+    ///   are microseconds apart at least, and at second granularity because the gap crosses a
+    ///   whole second. `Entry` is `PartialEq` and ids are minted per-Rail, so the twin is
+    ///   comparable byte for byte.
+    ///
+    /// **The gap is four seconds and a fifth, and that number is the cost of this test.** It is
+    /// §14.4's own number: this proves nothing expires *within four seconds*, which is the case the
+    /// doctrine names and every shorter one. A longer timer than that is out of reach of any test
+    /// that finishes, and is what [`no_clock_is_named_anywhere_in_rail_rs`] is still for. Sleeping
+    /// longer than needed cannot make this pass — an entry that has already gone stays gone — so
+    /// there is no flake here, only 4.2 s of wall clock in a binary that otherwise runs in 1.7.
+    #[test]
+    fn nothing_the_rail_says_changes_because_time_passed() {
+        // §14.4's four seconds, and a fifth of one so the gap cannot land exactly on the boundary.
+        const GAP: std::time::Duration = std::time::Duration::from_millis(4_200);
+
+        let rail = a_rail_holding_one_of_everything();
+        let before = everything_the_rail_says(&rail);
+        // The fixture has to be worth watching: a Rail with nothing on it cannot lose anything.
+        assert!(rail.line().is_some(), "the fixture puts no line on the bench");
+        assert!(rail.failures() > 0, "the fixture holds no failure to dismiss itself");
+
+        std::thread::sleep(GAP);
+
+        the_same_rail(
+            &before,
+            &everything_the_rail_says(&rail),
+            &format!(
+                "the Rail said something different {} s later, with nothing having been asked of it",
+                GAP.as_secs_f32()
+            ),
+        );
+
+        let twin = a_rail_holding_one_of_everything();
+        the_same_rail(
+            &before,
+            &everything_the_rail_says(&twin),
+            &format!(
+                "the same calls built a different Rail {} s later, so something in a Rail is \
+                 stamped with the time it happened",
+                GAP.as_secs_f32()
+            ),
+        );
+    }
+
+    /// **T-3c. No clock is named anywhere in `src/rail.rs`** — and this is a spelling lock, which
+    /// is the whole of what it claims.
+    ///
+    /// **It cannot fail on behaviour.** It reads the file as text and asks which words are in it;
+    /// a clock spelled a way this list does not know is invisible to it, which is exactly what
+    /// happened — see [`nothing_the_rail_says_changes_because_time_passed`], which is the
+    /// behavioural half and the one that watches the Rail. This is kept beside it because the two
+    /// bound different things: that one proves nothing expires inside four seconds and cannot
+    /// reach a longer timer; this one reaches any timer at all, and only if somebody spells it in
+    /// the vocabulary below.
+    ///
+    /// **The vocabulary is the workspace's, not `std`'s.** The four words it used to hold were all
+    /// `std::time`'s, and the clock nearest to hand here is
+    /// [`eapp_loader::settings::now_unix`] — one `use` away, a whole second of granularity, and
+    /// named by none of them. `parked_for` is its consumer and is on the list for the same reason.
+    #[test]
+    fn no_clock_is_named_anywhere_in_rail_rs() {
+        const CLOCKS: [&str; 10] = [
+            "std::time",
+            "core::time",
+            "Instant",
+            "SystemTime",
+            "Duration",
+            "Timer",
+            "now_unix",
+            "parked_for",
+            "elapsed",
+            "sleep",
+        ];
         let rail = include_str!("rail.rs");
-        for word in ["std::time", "Instant", "SystemTime", "Duration"] {
+        for word in CLOCKS {
             assert!(
                 !rail.contains(word),
                 "src/rail.rs names `{word}`; nothing in the Rail expires, so nothing in it needs \
                  a clock"
             );
         }
+        // The control: the matcher can see one when there is one, so a matcher that found nothing
+        // is not mistaken for a file that holds nothing.
+        let planted = "self.filed.push((id, eapp_loader::settings::now_unix()));";
+        assert!(
+            CLOCKS.iter().any(|w| planted.contains(w)),
+            "the vocabulary cannot see the clock this rule was written for"
+        );
     }
 
     /// **T-6. The value column fits the drawer, and `PAGE_MARGIN` is still the space scale's 24.**
