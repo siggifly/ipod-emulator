@@ -167,10 +167,18 @@ property. **§11 makes it visible**, because a safety property nobody can see is
 
 **`work_on_copy` is tri-state, and the third state is load-bearing — but it is not the state the
 previous revision described.** `None` means *nobody has said*, and it resolves to **a copy, always**:
-`write_target()` is `d.work_on_copy.unwrap_or(true)` and nothing else. What `built_from` decides is
-something different — **whether an explicit choice to write gets the `warn` colour**. The previous
-revision wrote those two rules as one and got the sentence backwards. Four sentences, not three, and
-§7.5 spells all four.
+which of §7.5's sentences appears is `d.work_on_copy.unwrap_or(true)` and nothing else. What
+`built_from` decides is something different — **whether an explicit choice to write gets the `warn`
+colour**. The previous revision wrote those two rules as one and got the sentence backwards. Four
+sentences about a drive that resolves, and a fifth for one that no longer does; §7.5 spells all
+five.
+
+**And the drive is resolved by `Settings::disk_of` rather than read off the device.** A device names
+its drive by name — that is what makes the paragraph above true — so a device that has been through
+the settings file once carries no `disk_path`, and `write_target()` read exactly that field until
+2026-08-22. From the second launch on, row 3 said *no drive yet — nothing will be written* about
+every saved device, while the `warn` colour, resolved the other way, was painted underneath those
+words. One resolver, and one producer returning the sentence and the colour together.
 
 ### 3.1 A synthesised boot ROM is a resource, exactly like a dumped one
 
@@ -1057,20 +1065,36 @@ drawer you are already inside. Row 3's leading slot then keeps the full narrowed
 | 3 | 16 | **the write target, permanently** (`label`) | `MENU ›  Devices · Parts · Games · Work · Readout` — **empty while the drawer is open** |
 
 **Row 3 never goes away.** It is `write_target()` and it is the one line standing between an
-afternoon and somebody's only image of an iPod they own. **Four sentences, not three**, because
-`work_on_copy`'s `None` and `built_from`'s `Some`/`None` are two different questions and the previous
-revision's prose fused them into one and got it backwards:
+afternoon and somebody's only image of an iPod they own. **Four sentences about a drive that
+resolves, not three**, because `work_on_copy`'s `None` and `built_from`'s `Some`/`None` are two
+different questions and the previous revision's prose fused them into one and got it backwards —
+and two more for a device whose drive does not resolve:
 
 ```
 works on a copy of my-5.5g.img                                             ← Some(true)
 works on a copy of my-5.5g.img — nobody has said, so a copy it is          ← None, always a copy
 writes to my-5.5g.img — we built it from iPod_25.1.3, so it is regenerable ← Some(false), built_from Some
 writes to rockbox-test.img — you chose this, and we did not build it       ← Some(false), built_from None · warn
+no drive yet — nothing will be written                                     ← names no drive
+cannot write to mine — it is not in the library any more                   ← names a drive the library dropped
 ```
 
-`write_target()` is `d.work_on_copy.unwrap_or(true)` and nothing else; `built_from` decides only
-whether the `warn` colour appears on the explicit-write case. Three tests hold that behaviour and the
-sentences now agree with them.
+Which of the first four appears is `d.work_on_copy.unwrap_or(true)` and nothing else; `built_from`
+decides only whether the `warn` colour appears on the explicit-write case.
+
+**The last two are about the drive rather than about the choice, and they are two states, not one.**
+A device that names no drive is *unfinished* and is finished by making one; a device naming a drive
+the library no longer lists is *broken* and is repaired by finding it. Sharing a sentence between
+them read as reassurance about a device the shelf was refusing in the same breath. `cannot write to`
+carries no `warn` colour: `Settings::run_device` refuses that device, so there is no write to raise
+an alarm about, and the alarm is raised where the remedy is — the cradle names the missing part.
+
+**The sentence and the colour are one value.** They were two functions resolving the device's drive
+two different ways, and from a device's second launch on they disagreed — in the direction that costs
+somebody an afternoon. `write_target()` returns both out of one `match` now, so the arm that says
+`writes to` is the arm that sets the flag. Seven tests hold that behaviour, one of which puts its
+device through `render` + `parse` first, because a fixture carrying a shape no save produces is how
+the defect stayed green for as long as it did.
 
 **Row 3 has a long and a short form, and the verb is never what goes.** At the narrowed measure the
 qualifier after the em-dash is dropped and lives on the device's drawer page instead. `works on a
@@ -3488,6 +3512,12 @@ In order, because each depends on the one before it.
    started with no drive at all while `missing()` was already reporting the name as absent. Three of
    the four `disk_of` outcomes had the two functions disagreeing. It refuses now, and naming **no**
    disk still starts, because that is an unfinished device rather than a broken one.
+   **And §7.5's row 3 got it on 2026-08-22**, being the last place still reading `Device::disk_path`
+   directly: it told every saved device from its second launch on that there was *no drive yet —
+   nothing will be written*, while `writes_to_your_own_image` resolved the same drive by name and
+   painted the `warn` colour under those words. `Settings::disk_of` is public now — one function
+   knows how a device becomes an image — and the sentence and the colour come out of one `match`
+   together, so there is no second producer left to disagree with the first.
 2. **DONE.** `Item` gains `from: Option<Provenance>` (§3.2), and the hard-coded
    `fetched and verified` / `dumped from a real iPod` strings in `main.rs` are deleted — every
    trailing column is `Provenance::line()` now, and an item nobody recorded one for contributes the

@@ -1568,7 +1568,16 @@ impl Settings {
 
     /// The drive image a device actually runs. `None` when it names no disk at all — which is an
     /// **unfinished** device, not a broken one, and belongs to first run rather than to a refusal.
-    fn disk_of(&self, d: &Device) -> Option<Result<PathBuf, Absent>> {
+    ///
+    /// **Public because it is the only function that knows how a device becomes an image**, and
+    /// every caller that answered the question for itself got it wrong. The window's §7.5 row 3 read
+    /// `d.disk_path` directly and so said *no drive yet — nothing will be written* about every saved
+    /// device from its second launch on: `render_devices` writes the name and [`Settings::parse`]
+    /// reads it back as a name, and `disk_path` is the pre-name fallback that a modern save does not
+    /// produce. The two-field `match` below is the whole of that knowledge and it is not to be
+    /// copied — [`Settings::run_device`], [`Settings::missing_with`] and the window's row 3 all come
+    /// here, so a device that resolves for the machine resolves for the sentence describing it.
+    pub fn disk_of(&self, d: &Device) -> Option<Result<PathBuf, Absent>> {
         match (&d.disk, &d.disk_path) {
             (Some(name), _) => Some(
                 self.disks

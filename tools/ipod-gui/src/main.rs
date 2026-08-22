@@ -3105,6 +3105,8 @@ fn device_rows(settings: &Settings) -> Vec<DeviceRow> {
             // before it is pressed rather than only after. It costs no extra `stat`: `seen` is the
             // pass's shared [`Presence`] and `summary` below asks again into the same cache.
             let gone = settings.missing_with(d, &mut seen);
+            // §7.5's row 3, in one call, so the words and the colour cannot be two answers.
+            let writes = write_target(settings, d);
             DeviceRow {
                 name: d.name.clone().into(),
                 summary: summary(settings, d, &mut seen).into(),
@@ -3115,8 +3117,8 @@ fn device_rows(settings: &Settings) -> Vec<DeviceRow> {
                 cradle_label: cradle_label(d, &gone).into(),
                 // §7.5's row-1 trailing slot: **the state, and time since.**
                 state: shelf_state(d).into(),
-                write_target: write_target(settings, d).into(),
-                write_target_is_warning: writes_to_your_own_image(settings, d),
+                write_target: writes.line.into(),
+                write_target_is_warning: writes.warn,
                 chassis: chassis_colour(chassis),
                 dark_chassis: is_dark(chassis),
             }
@@ -3282,40 +3284,110 @@ fn summary(settings: &Settings, d: &Device, seen: &mut Presence) -> String {
     parts.join(", ")
 }
 
+/// §7.5's row 3, whole: **the sentence and the colour it is drawn in.**
+///
+/// **One value, because they are one statement.** They were two functions until now —
+/// `write_target` and `writes_to_your_own_image` — called side by side in [`device_rows`] and
+/// resolving the device's drive two different ways: one through `Device::disk_path`, the other
+/// through [`built_from`], which walks the library by name. A saved device carries only the name,
+/// so from its second launch on the two disagreed, and they disagreed in the direction that costs
+/// somebody an afternoon: the row drew the warn colour underneath the words *nothing will be
+/// written*. Returning both out of one `match` is what makes that unrepeatable. The arm that says
+/// `writes to` is the arm that sets the flag, on the same line, in view of each other.
+struct WriteTarget {
+    /// What row 3 says. Also its `accessible-label`, so it is never empty.
+    line: String,
+    /// Whether §7.5 paints it in the warn colour: the machine will write to an image the operator
+    /// supplied rather than one this program built. The only routine use of that colour here, and
+    /// the line standing between an afternoon and somebody's only image of an iPod they own.
+    warn: bool,
+}
+
+impl WriteTarget {
+    /// Row 3 in the ordinary colour: a write that costs nothing, or one that will not happen.
+    fn calm(line: impl Into<String>) -> Self {
+        Self {
+            line: line.into(),
+            warn: false,
+        }
+    }
+}
+
 /// §7.5's row 3 — whose file is about to be written to, said out loud, before the machine starts.
 ///
 /// **Four sentences, not two.** `work_on_copy`'s `None` and `built_from`'s `Some`/`None` are two
 /// different questions, and collapsing them lost the two that teach: *nobody has said, so a copy it
 /// is* is what makes the safe default legible, and *we built it from `<bundle>`, so it is
-/// regenerable* is what makes the unsafe-looking case safe to agree to. `write_target` is
+/// regenerable* is what makes the unsafe-looking case safe to agree to. Which of the four is
 /// `d.work_on_copy.unwrap_or(true)` and nothing else; `built_from` decides only the qualifier and
-/// (through [`writes_to_your_own_image`]) whether the warn colour appears.
+/// whether the warn colour appears.
 ///
-/// The verb is the first thing on the line in every one of the four, so a hard truncation at the
-/// narrowed measure preserves the dangerous one.
-fn write_target(settings: &Settings, d: &Device) -> String {
-    let Some(p) = d.disk_path.as_ref() else {
+/// **The drive comes from [`Settings::disk_of`] and is not resolved here.** A device names its
+/// drive by name; `disk_path` is the pre-name fallback, and a device that has been through the
+/// settings file once no longer carries one — so reading that field directly answered *no drive
+/// yet* for every saved device this program has ever had. There is one function that knows how a
+/// device becomes an image, the machine already asks it in `run_device`, and the sentence
+/// describing what the machine will do now asks the same one.
+///
+/// The verb is the first thing on the line in all five that name a drive, so a hard truncation at
+/// the narrowed measure preserves the dangerous one — and of those five only two begin with
+/// `writes`, neither of which is the refusal. The sixth is the device that has no drive to name.
+fn write_target(settings: &Settings, d: &Device) -> WriteTarget {
+    let Some(disk) = settings.disk_of(d) else {
         // **A device with no drive still has to fill this row**, and not only because §7.5 says row
         // 3 never goes away: the row is a control, its `accessible-label` is this string, and an
         // empty one is a button with no name. It is also the true answer — a machine with no drive
         // writes nowhere.
-        return "no drive yet — nothing will be written".into();
+        return WriteTarget::calm("no drive yet — nothing will be written");
     };
-    let name = p
+    let path = match disk {
+        Ok(p) => p,
+        // **A device naming a drive the library no longer lists**, which is a different state from
+        // having no drive and gets different words. It says `cannot write to <name>` rather than
+        // reusing *nothing will be written*, because the two have different remedies — one is
+        // finished by making a drive, the other by finding one — and because the row must never
+        // read as reassurance about a device the shelf is simultaneously refusing.
+        //
+        // No warn colour: `run_device` returns `false` on exactly this, so the machine does not
+        // start and there is no write to warn about. The alarm is raised where the remedy is — the
+        // cradle already refuses this device by name, in `gone_sentence`'s words.
+        //
+        // `disk_of` resolves a name against the library and never stats, so this is always
+        // `Unlisted`; `Gone` is `missing_with`'s and reaches the cradle rather than this row. The
+        // reason is read off the variant anyway, because wording that is true for only one of two
+        // cases is the defect this row already had once. The label and never the path: row 3 is a
+        // narrow measure and `Absent::label` exists for exactly that.
+        Err(absent) => {
+            let reason = match &absent {
+                Absent::Unlisted(_) => "it is not in the library any more",
+                Absent::Gone(_) => "it is not where it was",
+            };
+            return WriteTarget::calm(format!("cannot write to {} — {reason}", absent.label()));
+        }
+    };
+    let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     match d.work_on_copy {
-        Some(true) => format!("works on a copy of {name}"),
+        Some(true) => WriteTarget::calm(format!("works on a copy of {name}")),
         // `None` is not "no". With nobody having said, a drive this program built is regenerable
         // and a drive the operator supplied might be their only copy — so the honest default is a
         // copy, and the line says which of the two it is being.
-        None => format!("works on a copy of {name} — nobody has said, so a copy it is"),
+        None => WriteTarget::calm(format!(
+            "works on a copy of {name} — nobody has said, so a copy it is"
+        )),
         Some(false) => match built_from(settings, d) {
-            Some(bundle) => {
-                format!("writes to {name} — we built it from {bundle}, so it is regenerable")
-            }
-            None => format!("writes to {name} — you chose this, and we did not build it"),
+            // Built by us means regenerable byte for byte, so writing to it warrants no colour.
+            Some(bundle) => WriteTarget::calm(format!(
+                "writes to {name} — we built it from {bundle}, so it is regenerable"
+            )),
+            // Anything else is theirs until proven otherwise. The one arm that warns, and it is the
+            // one whose words say `writes to`.
+            None => WriteTarget {
+                line: format!("writes to {name} — you chose this, and we did not build it"),
+                warn: true,
+            },
         },
     }
 }
@@ -3326,18 +3398,6 @@ fn built_from(settings: &Settings, d: &Device) -> Option<String> {
         .as_ref()
         .and_then(|n| settings.disks.iter().find(|k| &k.name == n))
         .and_then(|k| k.built_from.clone())
-}
-
-/// True when the machine will write to an image the operator supplied rather than one we built.
-///
-/// This is the only routine use of the warn colour in the program, and it is the line standing
-/// between an afternoon and somebody's only image of an iPod they own.
-fn writes_to_your_own_image(settings: &Settings, d: &Device) -> bool {
-    if d.work_on_copy.unwrap_or(true) {
-        return false;
-    }
-    // Built by us means regenerable byte for byte; anything else is theirs until proven otherwise.
-    built_from(settings, d).is_none()
 }
 
 /// Whether the case is dark enough that its markings and highlights have to invert.
@@ -3646,6 +3706,15 @@ pub(crate) mod tests {
     }
 
     /// §7.5's four sentences, and each one is a different pair of answers.
+    ///
+    /// **The device names its drive and carries no `disk_path`, which is the only shape a saved
+    /// device has.** `render_devices` writes `device.N.disk = <name>` and `parse` reads it back as a
+    /// name, so `disk_path` is `None` for every device that has been through the settings file once
+    /// — that is, for every device from the second launch on. This fixture used to set **both**
+    /// fields, which only `remember_as` produces and only until the file is next read, and that is
+    /// why it stayed green while the shipped row said *no drive yet — nothing will be written*
+    /// about a device that had a drive and was about to write to it. A fixture that cannot occur is
+    /// the same defect as a gate that cannot fail.
     #[test]
     fn a_device_with_a_disk_always_says_what_it_writes_to() {
         let mut s = Settings::default();
@@ -3657,12 +3726,11 @@ pub(crate) mod tests {
         });
         let mut d = Device {
             disk: Some("mine".into()),
-            disk_path: Some(std::path::PathBuf::from("/tmp/my-5.5g.img")),
             ..Device::default()
         };
 
         d.work_on_copy = Some(false);
-        let line = write_target(&s, &d);
+        let line = write_target(&s, &d).line;
         assert!(
             line.starts_with("writes to my-5.5g.img"),
             "the dangerous verb has to be the first thing on the line: {line}"
@@ -3673,7 +3741,7 @@ pub(crate) mod tests {
         );
 
         s.disks[0].built_from = Some("iPod_25.1.3.ipsw".into());
-        let line = write_target(&s, &d);
+        let line = write_target(&s, &d).line;
         assert!(
             line.contains("regenerable") && line.contains("iPod_25.1.3.ipsw"),
             "one we built has to name the bundle, or writing to it looks as dangerous as the \
@@ -3682,12 +3750,12 @@ pub(crate) mod tests {
 
         d.work_on_copy = Some(true);
         assert!(
-            write_target(&s, &d).starts_with("works on a copy of"),
+            write_target(&s, &d).line.starts_with("works on a copy of"),
             "a device on a copy has to say that too — silence reads as 'writes to it'"
         );
 
         d.work_on_copy = None;
-        let line = write_target(&s, &d);
+        let line = write_target(&s, &d).line;
         assert!(
             line.starts_with("works on a copy of") && line.contains("nobody has said"),
             "the unanswered case reads exactly like the answered one, so the safe default is \
@@ -3704,10 +3772,91 @@ pub(crate) mod tests {
             s.disks[0].built_from = built;
             d.work_on_copy = copy;
             assert!(
-                seen.insert(write_target(&s, &d)),
+                seen.insert(write_target(&s, &d).line),
                 "two of §7.5's four cases render the same sentence"
             );
         }
+    }
+
+    /// **The sentence survives the settings file**, which is where it used to stop being true.
+    ///
+    /// A device is written as `device.N.disk = <name>` and read back as a name, so `disk_path` —
+    /// which `remember_as` also fills — is `None` from the second launch on. Every fixture in this
+    /// module builds its devices by hand, and a hand-built device can carry a shape a save never
+    /// produces; this one is put through `render` and `parse` so it carries the shape the shipped
+    /// program actually holds. Red before the repair with the exact sentence the window drew: *no
+    /// drive yet — nothing will be written*, about a drive that is right there.
+    #[test]
+    fn a_device_round_tripped_through_the_settings_file_still_says_what_it_writes_to() {
+        let mut s = Settings {
+            nor: eapp_loader::nor::Source::Synthetic {
+                model: "5.5G 80 GB".into(),
+                seed: 7,
+                serial: None,
+                guid: None,
+                splash: None,
+            },
+            disk: Some(std::path::PathBuf::from("/drives/mine.img")),
+            work_on_copy: Some(false),
+            ..Settings::default()
+        };
+        s.file_disk(std::path::PathBuf::from("/drives/mine.img"), "mine");
+        s.remember_as("My 5.5G");
+
+        let s = Settings::parse(&s.render());
+        let d = s.devices[0].clone();
+        assert_eq!(
+            d.disk_path, None,
+            "the fixture did not go through the file, so it is measuring the shape that was \
+             already green"
+        );
+        assert_eq!(d.disk.as_deref(), Some("mine"), "the name did not survive");
+
+        let w = write_target(&s, &d);
+        assert!(
+            w.line.starts_with("writes to mine.img"),
+            "a saved device that will write to its drive has to say so: {}",
+            w.line
+        );
+        assert!(
+            w.warn,
+            "an image with no `built_from` is the operator's, and this is the one row that says so"
+        );
+    }
+
+    /// **A drive the library no longer lists is not a drive that was never there**, and the two get
+    /// different words because they have different remedies.
+    ///
+    /// It must not say *nothing will be written* in the shape reserved for the unfinished device —
+    /// that reads as reassurance about a device the shelf is refusing in the same breath.
+    #[test]
+    fn a_device_naming_a_drive_the_library_dropped_says_it_cannot_write() {
+        let s = Settings::default();
+        let d = Device {
+            disk: Some("mine".into()),
+            work_on_copy: Some(false),
+            ..Device::default()
+        };
+        let w = write_target(&s, &d);
+        assert!(
+            w.line.starts_with("cannot write to mine"),
+            "it has to name the drive it cannot reach, verb first: {}",
+            w.line
+        );
+        assert!(
+            w.line.contains("not in the library"),
+            "it has to say which kind of gone: {}",
+            w.line
+        );
+        assert!(
+            !w.line.contains("no drive yet"),
+            "a device whose drive was dropped is not a device that never had one: {}",
+            w.line
+        );
+        assert!(
+            !w.warn,
+            "`run_device` refuses this, so there is no write to raise the alarm about"
+        );
     }
 
     /// **Nobody having said is not the same as having said no.**
@@ -3717,16 +3866,24 @@ pub(crate) mod tests {
     /// on it is how an afternoon disappears.
     #[test]
     fn an_unanswered_device_works_on_a_copy() {
-        let s = Settings::default();
+        let mut s = Settings::default();
+        s.disks.push(eapp_loader::settings::Disk {
+            name: "x.img".into(),
+            path: "/tmp/x.img".into(),
+            built_from: None,
+            installed: vec![],
+        });
         let d = Device {
-            disk_path: Some(std::path::PathBuf::from("/tmp/x.img")),
+            disk: Some("x.img".into()),
             ..Device::default()
         };
+        let w = write_target(&s, &d);
         assert!(
-            write_target(&s, &d).contains("copy"),
-            "with nobody having said, the default has to be the safe one"
+            w.line.contains("copy"),
+            "with nobody having said, the default has to be the safe one: {}",
+            w.line
         );
-        assert!(!writes_to_your_own_image(&s, &d));
+        assert!(!w.warn);
     }
 
     /// The warn colour appears when — and only when — the machine will write to an image we did
@@ -3747,22 +3904,117 @@ pub(crate) mod tests {
             installed: vec![],
         });
         assert!(
-            writes_to_your_own_image(&s, &d),
+            write_target(&s, &d).warn,
             "an image with no `built_from` is the operator's until proven otherwise"
         );
 
         s.disks[0].built_from = Some("iPod_25.1.3.ipsw".into());
         assert!(
-            !writes_to_your_own_image(&s, &d),
+            !write_target(&s, &d).warn,
             "one we built from a bundle is regenerable, so writing to it warrants no warning"
         );
 
         d.work_on_copy = Some(true);
         s.disks[0].built_from = None;
         assert!(
-            !writes_to_your_own_image(&s, &d),
+            !write_target(&s, &d).warn,
             "on a copy nothing of theirs is touched, whoever made the original"
         );
+    }
+
+    /// **The colour and the words are one answer, over every shape a device can have.**
+    ///
+    /// This is the invariant the repair exists for. The warn colour used to be computed by a
+    /// second function resolving the drive a second way, and the two disagreed for every saved
+    /// device: the alarming colour was painted underneath *nothing will be written*. So the rule is
+    /// stated as a rule — **the colour appears if and only if the line says `writes to` and does
+    /// not say `regenerable`** — and it is swept over the whole cross product rather than sampled.
+    #[test]
+    fn the_warn_colour_never_disagrees_with_the_sentence() {
+        let mut s = Settings::default();
+        s.disks.push(eapp_loader::settings::Disk {
+            name: "mine".into(),
+            path: "/tmp/mine.img".into(),
+            built_from: None,
+            installed: vec![],
+        });
+        let mut checked = 0;
+        for named in [None, Some("mine"), Some("dropped")] {
+            for built in [None, Some("iPod_25.1.3.ipsw".to_string())] {
+                for copy in [None, Some(true), Some(false)] {
+                    s.disks[0].built_from = built.clone();
+                    let d = Device {
+                        disk: named.map(str::to_string),
+                        work_on_copy: copy,
+                        ..Device::default()
+                    };
+                    let w = write_target(&s, &d);
+                    let dangerous =
+                        w.line.starts_with("writes to") && !w.line.contains("regenerable");
+                    assert_eq!(
+                        w.warn, dangerous,
+                        "the colour and the words are two answers for {d:?}: {}",
+                        w.line
+                    );
+                    assert!(!w.line.is_empty(), "row 3 is a control and this is its name");
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 18, "the sweep stopped covering the cross product");
+    }
+
+    /// **And the row the markup binds carries both halves**, because that is where they used to be
+    /// pulled apart.
+    ///
+    /// The producer being one function proves nothing on its own: `device_rows` fills
+    /// `write_target` and `write_target_is_warning` as two fields, and it filled them from two
+    /// functions until now. So the wiring is measured as well as the answer — the row equals what
+    /// `write_target` said, **and** what it said here is the dangerous sentence with its colour on,
+    /// so a hand-written `false` cannot pass by agreeing with a producer nobody consulted.
+    #[test]
+    fn the_shelf_row_carries_both_halves_of_row_three() {
+        let dir = temp_dir("row-three");
+        let img = dir.join("mine.img");
+        std::fs::write(&img, b"not really a drive").expect("the image");
+
+        let mut s = Settings {
+            nor: eapp_loader::nor::Source::Synthetic {
+                model: "5.5G 80 GB".into(),
+                seed: 9,
+                serial: None,
+                guid: None,
+                splash: None,
+            },
+            disk: Some(img.clone()),
+            work_on_copy: Some(false),
+            ..Settings::default()
+        };
+        s.file_disk(img, "mine");
+        s.remember_as("My 5.5G");
+        let s = Settings::parse(&s.render());
+
+        let row = &device_rows(&s)[0];
+        let w = write_target(&s, &s.devices[0]);
+        assert_eq!(
+            row.write_target.to_string(),
+            w.line,
+            "the shelf draws a sentence §7.5's producer did not write"
+        );
+        assert_eq!(
+            row.write_target_is_warning, w.warn,
+            "the colour on the row is a second answer to the question the sentence answered"
+        );
+        assert!(
+            row.write_target.to_string().starts_with("writes to mine.img"),
+            "the shipped row does not say what it writes to: {:?}",
+            row.write_target
+        );
+        assert!(
+            row.write_target_is_warning,
+            "the warn colour is missing from the one row that needs it"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A device made of a synthesised iPod and a drive image that is really there.

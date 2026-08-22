@@ -379,31 +379,16 @@ fn made_of(
     // is `main.rs`'s and is called rather than re-worded**: the shelf and this page saying two
     // things about whose file is about to be written to is the defect that line exists to prevent.
     //
-    // **And what it says today is wrong on every launch but the first, measured while writing
-    // this.** `main.rs:3297` reads `d.disk_path` and returns *no drive yet — nothing will be
-    // written* when it is `None`. `Settings::render_devices` writes only `device.N.disk = <name>`
-    // and `parse` reads a value with no separator back into `d.disk`, so after one round trip
-    // through the settings file `disk_path` is `None` for **every** device that names its drive by
-    // name — which `settings.rs`'s own `a_device_whose_drive_is_gone_refuses_and_missing_agrees`
-    // asserts out loud: *the fixture must have been through the file, which is where the fallback
-    // vanishes*. `remember_as` sets both fields, so the sentence is right in the session that made
-    // the device and wrong in every session after it, which is why nothing caught it:
-    // `a_device_with_a_disk_always_says_what_it_writes_to` (`main.rs:3650`) builds a `Device` with
-    // `disk` **and** `disk_path` set — the shape only a live save produces.
-    //
-    // The consequence is the safety-critical one rather than a cosmetic one. `writes_to_your_own
-    // _image` resolves the drive the other way — through `built_from`, which walks `settings.disks`
-    // by name — so for a supplied image with `work_on_copy: Some(false)` it answers **true** and
-    // `devices.slint` draws the warn colour under the words *nothing will be written*. Two
-    // producers, one row, and they disagree in the direction that costs somebody an afternoon.
-    //
-    // Not repaired here, and deliberately not asserted here either. The repair is the model's:
-    // `Settings::disk_of` is the one function that knows how a device resolves to an image and it
-    // is private, so every fix that stays inside `main.rs` is a third copy of its `match` — which
-    // is the drift this page's whole no-second-writer rule exists to stop. A test pinning the
-    // sentence this produces today would go red the moment somebody fixed it, so the finding is
-    // written down instead of nailed down.
-    out.push(device_fact("Writes to", crate::write_target(s, d)));
+    // **The finding written down here has been repaired**, and by the model, as it said it had to
+    // be. `write_target` read `d.disk_path` directly and answered *no drive yet — nothing will be
+    // written* for every device that had been through the settings file once — which is every
+    // device from its second launch on, because `render_devices` writes `device.N.disk = <name>`
+    // and `parse` reads it back as a name. Meanwhile `writes_to_your_own_image` resolved the same
+    // drive the other way, through `built_from`, and painted the warn colour underneath those
+    // words. `Settings::disk_of` is public now and is the only resolver; the two functions are one
+    // that returns the sentence and the colour together, so this page and the shelf take the same
+    // value out of the same `match`. `.line` is the sentence — a fact row has no colour of its own.
+    out.push(device_fact("Writes to", crate::write_target(s, d).line));
 
     // §9.4's machine rule, one per part that has gone, worded by the function the cradle and the
     // Rail both call. A one-element slice, so each line names one part — `gone_sentence` joins a
