@@ -311,7 +311,9 @@ impl Next {
             // disabled wearing that sentence, and `Class::ToolMissing`'s `mono_remedy` is the other
             // half.
             Next::Retry => caps.download,
-            // A `Fix` rewrites the recipe, and nothing in this build holds one.
+            // A `Fix` rewrites a recipe, so it needs a surface that holds one. This build has one
+            // — `Page::Composer` answers `Some(2)` and `main::caps()` derives the flag from that —
+            // so the cap is `true` here and the sentence below is drawn only by a fixture.
             Next::Fix { .. } => caps.composer,
             // Cancelling really is this program talking to itself: the file is this program's, it
             // is on this computer, and `cancel_write` is wired. It needs no capability.
@@ -424,14 +426,20 @@ impl Next {
 ///
 /// **Seven booleans, not the three the design first named**, and every one past the third is the
 /// same rule applied again: `Reveal` needs a file manager this build has no way to open, `Devices`
-/// needs a drawer page that is not written, `Retry` needs a downloader, and `Fix` needs a surface
-/// that holds a recipe. A control whose mechanism does not exist is disabled and says so; it is
-/// never drawn live and never quietly dropped.
+/// needs a drawer page, `Retry` needs a downloader, and `Fix` needs a surface that holds a recipe.
+/// A control whose mechanism does not exist is disabled and says so; it is never drawn live and
+/// never quietly dropped.
 ///
-/// **Six of the seven are decided at compile time and one is measured.** `download` is the odd one:
-/// every download in this program goes through `curl`, and whether `curl` is on this computer is a
-/// fact about the computer rather than about the build — so `main::caps()` asks
-/// `eapp_loader::tooling::can_download()` once per launch and the other six are literals.
+/// **Two of the seven have since been earned, and this paragraph is not the place their answer
+/// lives.** The Devices page and the Composer both ship now, so `devices_page` and `composer` are
+/// `true` in the running program. Neither is typed as `true`: `main::caps()` derives both from
+/// `Page::slot()`, so the flag and the markup cannot disagree, and a sentence here saying *not
+/// written* would be the §16.9 defect all over again.
+///
+/// **Four of the seven are literals, two are derived, and one is measured.** `download` is the odd
+/// one: every download in this program goes through `curl`, and whether `curl` is on this computer
+/// is a fact about the computer rather than about the build — so `main::caps()` asks
+/// `eapp_loader::tooling::can_download()` once per launch.
 ///
 /// **There is deliberately no `build` cap.** It would be a lie the moment this phase landed: this
 /// build *can* build a drive, and a boolean claiming otherwise would disable the one control §10
@@ -442,15 +450,24 @@ pub struct Caps {
     pub drop_target: bool,
     pub clipboard: bool,
     pub reveal: bool,
-    /// The drawer's Devices page. `Work` is the only page this phase builds.
+    /// The drawer's Devices page. **Derived, never declared** — `main::caps()` asks
+    /// `Page::Devices.slot()`, which answers `Some(1)` the day `ui/drawer.slint` gains a child that
+    /// draws the page. All four of the depth-1 pages answer `Some(1)` today, so this is `true` in
+    /// the running program and `false` only in the all-off fixture the disabled-control sweep needs.
     pub devices_page: bool,
     /// Whether anything on this computer can fetch a file. §10.4: *every download in this program
     /// goes through curl.* **Probed once per launch, never assumed** — the other six are facts
     /// about the build and this one is a fact about the machine it is running on.
     pub download: bool,
-    /// The Composer. A [`Next::Fix`] changes a recipe, and there is no surface in this build that
-    /// holds one — so the control that offers to change it is drawn disabled, wearing that reason,
-    /// rather than drawn live and doing nothing.
+    /// The Composer. A [`Next::Fix`] changes a recipe, and this build has a surface that holds one:
+    /// `Page::Composer` answers `Some(2)`, `main::caps()` derives this from that answer, and
+    /// `take_next_step` has a `Fix` arm that pushes the page. So the control is drawn **live**.
+    ///
+    /// **Live is not the same as reachable, and the difference is written down rather than
+    /// implied.** Nothing this build files produces a `Class::Incompatible`, so no `Fix` is ever
+    /// drawn for a person to press; `main.rs` records that beside the arm. What this flag decides
+    /// is only whether the control would be pressable if one were drawn — and `false`, in the
+    /// all-off fixture, is what keeps the disabled sentence below swept.
     pub composer: bool,
 }
 
@@ -974,10 +991,13 @@ mod tests {
         composer: true,
     };
 
-    /// This phase, exactly: no picker, no drop target, no clipboard, no file manager, no page, no
-    /// Composer — and, for the sweep's purposes, no downloader either. `download` is the one cap
-    /// that is measured rather than declared, so a machine **with** `curl` still has to leave
-    /// `Retry` swept as a disabled control somewhere, and this fixture is where.
+    /// **Every cap off**, which is what a sweep of disabled controls needs and no longer what this
+    /// phase is: `main::caps()` answers `true` for `devices_page` and `composer` now, both derived
+    /// from `Page::slot()`. The name is kept and the claim is not — a fixture is allowed to be a
+    /// shape the program has outgrown, but it is not allowed to say it *is* the program.
+    ///
+    /// `download` is the one cap that is measured rather than declared, so a machine **with**
+    /// `curl` still has to leave `Retry` swept as a disabled control somewhere, and this is where.
     const THIS_PHASE: Caps = Caps {
         file_picker: false,
         drop_target: false,
@@ -1126,8 +1146,8 @@ mod tests {
         assert!(
             !Next::Fix { label: "build from Apple's firmware instead".into(), presses: 2 }
                 .available(THIS_PHASE),
-            "`Fix` is live with no Composer. It rewrites a recipe and there is no surface in this \
-             build that holds one"
+            "`Fix` is live with every cap off. It rewrites a recipe, so it is gated on a surface \
+             that holds one — and a fixture that has none must not draw it pressable"
         );
         // `Cancel` genuinely needs nothing: the file is this program's, in this run, on this
         // computer. It is the control the other two were wrongly grouped with.

@@ -25,7 +25,8 @@
 // The view layer that called them went with `main.rs` when the old window was deleted, and each
 // comes back as its surface is rebuilt: `emu` and `wheel` with Running (GUI.md §16), `control` with
 // the readout Rail, `png` with the screenshot key, `update` with Reference (§17). Their own tests
-// still run — 30 of them pass — so this is unreferenced code, not unverified code.
+// still run — 28 of them pass, counted with `--list` rather than copied — so this is unreferenced
+// code, not unverified code.
 //
 // **The allow is a debt and it has a retirement condition**, in the shape research/04 uses for
 // bypasses: it comes off when Running lands, and at that point anything *still* unreferenced is
@@ -4285,13 +4286,20 @@ pub(crate) mod tests {
     /// Whether the allow at `n` says what would retire it — **on its own line, or in the comment
     /// block directly above it**.
     ///
-    /// Both forms are load-bearing in this crate and neither is a concession to a sweep that went
-    /// red. An attribute with no item has no line to write a condition on, so `composer.rs`'s
-    /// blanket writes its own in the paragraph above itself; and the five parked modules at the top of
-    /// `main.rs` are a run of `#[allow(dead_code)] mod x;` pairs sharing one paragraph above the
-    /// run, which is why the scan steps over the run's own attribute and `mod x;` lines on its way
-    /// up. It steps over **nothing else** — not a blank line, not code — so a condition cannot be
-    /// inherited from a paragraph that was written about something else.
+    /// **The second form has one live shape, and it is not the one this was written for.** It was
+    /// written for a blanket: an attribute with no item has no line to write a condition on, so
+    /// `composer.rs`'s wrote its own in the paragraph above itself. That blanket is deleted and
+    /// this crate has none, so that justification now describes nothing — and a rule justified by
+    /// nothing is §16.9's defect wearing a doc comment. The rule stays because a different shape
+    /// keeps it true: the five parked modules at the top of `main.rs` are a run of
+    /// `#[allow(dead_code)] mod x;` pairs that share **one** condition, and five copies of one
+    /// sentence is five sentences that drift. That is why the scan steps over the run's own
+    /// attribute and `mod x;` lines on its way up. It steps over **nothing else** — not a blank
+    /// line, not code — so a condition cannot be inherited from a paragraph that was written about
+    /// something else.
+    ///
+    /// Measured with this function, over the whole crate: 23 conditions sit beside their attribute
+    /// and 5 above it, and all five above are that one run.
     fn says_what_retires_it(lines: &[&str], n: usize) -> bool {
         if names_a_condition(lines[n]) {
             return true;
@@ -4325,20 +4333,28 @@ pub(crate) mod tests {
     /// `research/04`'s rule for a bypass applies unchanged — *a bypass with no retirement condition
     /// is a lie with a comment on it.*
     ///
-    /// **The blanket used to be invisible here**, and it is the strongest form of the thing this
-    /// sweep exists to police: `composer.rs:41` carries `#![allow(dead_code)]` over 3,197 lines. The
-    /// filter read `!line.contains("#[allow(dead_code)]")`, and
-    /// `"#![allow(dead_code)]".contains("#[allow(dead_code)]")` is **false** — the `!` sits between
-    /// the `#` and the `[`. So the one attribute in the crate that silences a whole module was the
-    /// one attribute the sweep never counted. [`dead_code_allow`] is now the only reader of either
-    /// spelling, in both sweeps.
+    /// **The blanket used to be invisible here**, and it was the strongest form of the thing this
+    /// sweep exists to police. `composer.rs` carried `#![allow(dead_code)]` on line 41, over the
+    /// 3,272 lines below it, while the filter read `!line.contains("#[allow(dead_code)]")` — and
+    /// `"#![allow(dead_code)]".contains("#[allow(dead_code)]")` is **false**, because the `!` sits
+    /// between the `#` and the `[`. So the one attribute in the crate that silenced a whole module
+    /// was the one attribute the sweep never counted. [`dead_code_allow`] is now the only reader of
+    /// either spelling, in both sweeps.
     ///
-    /// **And the condition may be stated above rather than beside.** An attribute with no item has
-    /// no line to write it on: `composer.rs`'s blanket states its own in the paragraph directly
-    /// above it, and the five parked modules at the top of `main.rs` are a run of `#[allow(dead_code)]
-    /// mod x;` pairs sharing one paragraph above the run. Both were previously handled by exempting
-    /// the whole of `main.rs` — a hole wide enough to hide a blanket in — and both are now read by
-    /// [`says_what_retires_it`], so no file is exempt from this sweep any more.
+    /// That blanket is gone — deleted, not narrowed round, in the commit that measured what it was
+    /// hiding — and **this paragraph is past tense on purpose**. The crate has no `#![...]` anywhere
+    /// today. The span above is corrected too: the figure two of these doc comments carried was
+    /// short by 75 lines, having been measured once and copied twice. A gate whose prose describes
+    /// a world that ended is the same defect §16.9 names one level up; a gate that also gets the
+    /// world wrong is that defect with a number on it, and neither is fixed by silence. **How a
+    /// file's own length gets written into prose at all is the recurring half of this**, and it is
+    /// why no current line count appears anywhere above — a count of a file that is still being
+    /// edited is stale on the next commit, by construction.
+    ///
+    /// **And the condition may be stated above rather than beside** — see [`says_what_retires_it`]
+    /// for which shape still needs that and which one no longer exists. Both shapes were previously
+    /// handled by exempting the whole of `main.rs`, a hole wide enough to hide a blanket in, and
+    /// no file is exempt from this sweep any more.
     #[test]
     fn every_dead_code_allow_says_what_would_retire_it() {
         let mut bare: Vec<String> = Vec::new();
@@ -4364,6 +4380,80 @@ pub(crate) mod tests {
         );
     }
 
+    /// Method names `std` defines as well, which a text sweep cannot tell apart from these.
+    const AMBIGUOUS: [&str; 1] = ["as_str"];
+
+    /// A call to `name` in `text`, ignoring comments and requiring both boundaries — so
+    /// `set_fullscreen(` is not a call to `fullscreen`, and `expanded(` is not a call to `expand`.
+    fn calls(name: &str, text: &str) -> bool {
+        text.lines().filter(|l| !l.trim_start().starts_with("//")).any(|line| {
+            let mut rest = line;
+            while let Some(i) = rest.find(name) {
+                let before = rest[..i].chars().next_back();
+                let after = rest[i + name.len()..].chars().next();
+                if before.is_none_or(|c| !c.is_alphanumeric() && c != '_') && after == Some('(') {
+                    return true;
+                }
+                rest = &rest[i + name.len()..];
+            }
+            false
+        })
+    }
+
+    /// The modules whose blanket has stopped being true: every `pub fn` they ship is already
+    /// called from somewhere else, so *nothing in here is reconnected* is false of all of it.
+    ///
+    /// **Lifted out of the test so it can be handed something other than this crate**, which is
+    /// the whole reason it is a function. This crate carries **no** `#![allow(dead_code)]` — the
+    /// last one was deleted from `composer.rs` rather than narrowed — so the loop below hits its
+    /// `continue` on every file and decides nothing at all. A sweep that reads nothing is green,
+    /// and this repository has been bitten by that shape often enough that a zero here must not
+    /// be mistaken for a verdict. The controls beside the call site hand it two synthetic modules
+    /// and require both answers, so the emptiness is proved to be *the tree's* and not the
+    /// instrument's.
+    fn redundant_blankets(sources: &[(String, String)]) -> Vec<String> {
+        let mut redundant: Vec<String> = Vec::new();
+        for (file, text) in sources {
+            if !text.lines().any(|l| dead_code_allow(l) == Some(true)) {
+                continue;
+            }
+            let mut surface = 0usize;
+            let mut waiting: Vec<&str> = Vec::new();
+            for line in text.lines() {
+                let t = line.trim_start();
+                if t.starts_with("//") {
+                    continue;
+                }
+                let Some(rest) = ["pub fn ", "pub(crate) fn ", "pub const fn "]
+                    .iter()
+                    .find_map(|kw| t.strip_prefix(kw))
+                else {
+                    continue;
+                };
+                let name = &rest[..rest
+                    .find(|c: char| !c.is_alphanumeric() && c != '_')
+                    .unwrap_or(rest.len())];
+                if name.is_empty() {
+                    continue;
+                }
+                surface += 1;
+                // An `AMBIGUOUS` name counts as still waiting. The skip is conservative in this
+                // direction on purpose: it can only keep this quiet, never make it fire.
+                if AMBIGUOUS.contains(&name)
+                    || !sources.iter().any(|(o, t)| o != file && calls(name, t))
+                {
+                    waiting.push(name);
+                }
+            }
+            // `surface > 0` is not decoration: a module with no public surface at all would
+            // otherwise satisfy "every one of them is called" by having none.
+            if surface > 0 && waiting.is_empty() {
+                redundant.push(format!("{file} ({surface} `pub fn`, all called from elsewhere)"));
+            }
+        }
+        redundant
+    }
+
     /// **No `#[allow(dead_code)]` sits on a function the program already calls.**
     ///
     /// The other half of the rule above, and the half that was false. `expand_opened` and
@@ -4380,49 +4470,32 @@ pub(crate) mod tests {
     ///
     /// **The honest boundary of a textual instrument, written down.** A method name `std` also
     /// defines cannot be resolved this way: `name.as_str()` on a `String` is not a call to
-    /// `Class::as_str`, and `composer.rs` has twelve of the former. Those names are listed in
-    /// `AMBIGUOUS` and skipped. The list is the limit of the method rather than a carve-out for
-    /// convenience — a name joins it when `std` defines it too, never because a sweep went red.
+    /// `Class::as_str`, and `composer.rs` has nine of the former in the half this sweep reads.
+    /// Those names are listed in `AMBIGUOUS` and skipped. The list is the limit of the method
+    /// rather than a carve-out for convenience — a name joins it when `std` defines it too, never
+    /// because a sweep went red.
     ///
     /// **A blanket is not on an item; it is on the module**, and it used to be filtered out here
-    /// along with everything else the outer spelling misses — see [`dead_code_allow`]. Pairing it
-    /// with the line under it would be a widening that reads nothing: the line under
-    /// `composer.rs:41` is a `use`. What `#![allow(dead_code)]` claims in this crate is *this module
-    /// is not reconnected yet*, and the falsification of that claim is not one caller — a blanket
-    /// legitimately covers a **mixture** — it is the module's whole public surface already being
-    /// reached from outside. At that point nothing under it is waiting for a caller, and whatever
-    /// the compiler still warns about is per-item debt that belongs on the items.
+    /// along with everything else the outer spelling misses — see [`dead_code_allow`]. What
+    /// `#![allow(dead_code)]` claims is *this module is not reconnected yet*, and the falsification
+    /// of that claim is not one caller — a blanket legitimately covers a **mixture** — it is the
+    /// module's whole public surface already being reached from outside. At that point nothing
+    /// under it is waiting for a caller, and whatever the compiler still warns about is per-item
+    /// debt that belongs on the items. Only a `pub fn` counts towards it: another module cannot
+    /// call a private one, so a textual match on a private name is a false positive by
+    /// construction.
     ///
-    /// **Only a `pub fn` counts towards that, and that is the boundary of the instrument rather
-    /// than a convenience.** Another module cannot call a private one, so a textual match on a
-    /// private name is a false positive by construction. Measured while this was written, with the
-    /// same matcher: 41 of `composer.rs`'s 68 shipped `pub fn`s are named in another module, so its
-    /// blanket is not redundant and this does not fire on it. The day the last 27 are wired, it
-    /// does — which is the same finding the compiler cannot make, for the same reason.
+    /// **The paragraph that used to end this doc is deleted rather than reworded.** It carved
+    /// `composer.rs` out by name — *41 of its 68 shipped `pub fn`s are named in another module, so
+    /// its blanket is not redundant and this does not fire on it* — and that sentence has stopped
+    /// being about anything twice over: the file's blanket is deleted, so [`redundant_blankets`]
+    /// skips it before counting anything, and the count itself had drifted to 40 of 72 by the time
+    /// anybody checked. A carve-out is an exemption, and an exemption for a thing that is gone is
+    /// the widest hole a sweep can carry. Deleting it changes nothing this test catches — the
+    /// carve-out was prose, never a branch — and what it costs is the one worked example of the
+    /// verdict, which [`redundant_blankets`]'s own controls now supply instead.
     #[test]
     fn no_dead_code_allow_sits_on_a_function_the_program_already_calls() {
-        /// Method names `std` defines as well, which a text sweep cannot tell apart from these.
-        const AMBIGUOUS: [&str; 1] = ["as_str"];
-
-        /// A call to `name` in `text`, ignoring comments and requiring both boundaries — so
-        /// `set_fullscreen(` is not a call to `fullscreen`, and `expanded(` is not a call to
-        /// `expand`.
-        fn calls(name: &str, text: &str) -> bool {
-            text.lines().filter(|l| !l.trim_start().starts_with("//")).any(|line| {
-                let mut rest = line;
-                while let Some(i) = rest.find(name) {
-                    let before = rest[..i].chars().next_back();
-                    let after = rest[i + name.len()..].chars().next();
-                    if before.is_none_or(|c| !c.is_alphanumeric() && c != '_') && after == Some('(')
-                    {
-                        return true;
-                    }
-                    rest = &rest[i + name.len()..];
-                }
-                false
-            })
-        }
-
         let sources = rust_sources();
 
         // **The control, and it is the very call that made this test necessary.** A matcher that
@@ -4441,9 +4514,13 @@ pub(crate) mod tests {
 
         // **And the second control is the one this sweep shipped without.** The blanket half below
         // reads nothing at all if the attribute matcher cannot see the inner spelling, and a sweep
-        // that reads nothing is green — which is exactly how a module-wide allow over 3,197 lines
+        // that reads nothing is green — which is exactly how a module-wide allow over 3,272 lines
         // stayed invisible to both of these tests. Pinned as three facts about the matcher rather
         // than as a fact about the tree, so it keeps its meaning after the last blanket is gone.
+        //
+        // **The last blanket is now gone**, so this is no longer a precaution: these three are the
+        // only reason the attribute matcher is known to work at all, and the two beside the blanket
+        // half below are the only reason its empty answer is known to be a reading.
         assert_eq!(
             dead_code_allow("#![allow(dead_code)]"),
             Some(true),
@@ -4502,53 +4579,286 @@ pub(crate) mod tests {
              Delete the allow, or say what is still waiting"
         );
 
-        // The blanket half. A module carrying `#![allow(dead_code)]` says *nothing in here is
-        // reconnected*; it has stopped being true when every `pub fn` the module ships is called
-        // from another module.
-        let mut redundant: Vec<String> = Vec::new();
-        for (file, text) in &sources {
-            if !text.lines().any(|l| dead_code_allow(l) == Some(true)) {
-                continue;
-            }
-            let mut surface = 0usize;
-            let mut waiting: Vec<&str> = Vec::new();
-            for line in text.lines() {
-                let t = line.trim_start();
-                if t.starts_with("//") {
-                    continue;
-                }
-                let Some(rest) = ["pub fn ", "pub(crate) fn ", "pub const fn "]
-                    .iter()
-                    .find_map(|kw| t.strip_prefix(kw))
-                else {
-                    continue;
-                };
-                let name = &rest[..rest
-                    .find(|c: char| !c.is_alphanumeric() && c != '_')
-                    .unwrap_or(rest.len())];
-                if name.is_empty() {
-                    continue;
-                }
-                surface += 1;
-                // An `AMBIGUOUS` name counts as still waiting. The skip is conservative in this
-                // direction on purpose: it can only keep this quiet, never make it fire.
-                if AMBIGUOUS.contains(&name)
-                    || !sources.iter().any(|(o, t)| o != file && calls(name, t))
-                {
-                    waiting.push(name);
-                }
-            }
-            // `surface > 0` is not decoration: a module with no public surface at all would
-            // otherwise satisfy "every one of them is called" by having none.
-            if surface > 0 && waiting.is_empty() {
-                redundant.push(format!("{file} ({surface} `pub fn`, all called from elsewhere)"));
-            }
-        }
+        // ── The blanket half, and **it reads zero files today** ───────────────────────────────
+        //
+        // A module carrying `#![allow(dead_code)]` says *nothing in here is reconnected*; it has
+        // stopped being true when every `pub fn` the module ships is called from another module.
+        // No module in this crate carries one any more — `composer.rs`'s was the only one and it
+        // was deleted, not narrowed — so [`redundant_blankets`] `continue`s past every file and
+        // returns empty without deciding anything. **That is a green from reading nothing**, which
+        // is the exact shape §6 names and the one this file has now shipped twice.
+        //
+        // So the emptiness is proved to be the tree's rather than the instrument's, here, before
+        // it is trusted. Two synthetic modules, differing in one call: with the caller present the
+        // blanket is redundant and must be named; with it removed the same blanket is legitimate
+        // and must not be. Neither control mentions a real file, so they keep their meaning
+        // whatever the crate does next — and the day a blanket comes back, the sweep that meets it
+        // is one that has been proved able to fire.
+        let blanketed = "#![allow(dead_code)]\npub fn arm(&self) -> u8 { 0 }\n";
+        let both = [
+            ("parked.rs".to_string(), blanketed.to_string()),
+            ("caller.rs".to_string(), "fn go() { thing.arm(); }\n".to_string()),
+        ];
+        assert_eq!(
+            redundant_blankets(&both),
+            vec!["parked.rs (1 `pub fn`, all called from elsewhere)".to_string()],
+            "the blanket verdict does not fire on a module whose whole public surface is called \
+             from another module, so its empty answer about this crate means nothing"
+        );
+        let alone =
+            [both[0].clone(), ("caller.rs".to_string(), "fn go() { thing.other(); }\n".to_string())];
+        assert!(
+            redundant_blankets(&alone).is_empty(),
+            "the blanket verdict fires on a module nothing outside calls, so it reports a legitimate \
+             blanket as redundant"
+        );
+
+        let redundant = redundant_blankets(&sources);
         assert!(
             redundant.is_empty(),
             "{redundant:?}: the module blanket says nothing here is reconnected, and the whole of \
              each module's public surface is already called from another module. Narrow it to the \
              items the compiler still warns about, each with its own retirement condition"
+        );
+    }
+
+    /// Every `file.rs:line` a comment writes, paired with what the comment's own sentence says is
+    /// there — and whether the line still says it.
+    ///
+    /// Returns the ones that no longer do, and **how many were checked at all**, because a
+    /// citation sweep that finds no citations is the same green as one that finds no defects.
+    ///
+    /// **The method, and its two honest boundaries.** A backticked span spelled exactly
+    /// `something.rs:123` is a citation. Every *other* backticked span in the same sentence is an
+    /// anchor — verbatim, plus its last `::` segment, so `Composer::open` anchors on `open` as well
+    /// as on itself. The citation holds if any one anchor appears on the cited line. First
+    /// boundary: a citation whose file is not in the set is **skipped**, which is how a pointer
+    /// into a dependency's source or into a file this crate deleted stays writable. Second: a
+    /// citation whose sentence names nothing is reported, because a line number with no claim
+    /// beside it is a thing no reader and no sweep can check.
+    ///
+    /// **It is deliberately exact about the line, and that costs something.** Insert a line above
+    /// a cited one and this goes red on prose that was true when it was written. That is the
+    /// trade taken on purpose: a `file:line` citation *is* brittle, and the choice is between a
+    /// sweep that says so and a comment that quietly stops being true. The report names the line
+    /// the anchor moved to, so the correction is a number and not an investigation.
+    fn stale_citations(sources: &[(String, String)]) -> (Vec<String>, usize) {
+        /// The text after this line's comment marker, or `None` if it is not a comment.
+        fn comment_body(line: &str) -> Option<&str> {
+            let t = line.trim_start();
+            ["///", "//!", "//"].iter().find_map(|m| t.strip_prefix(*m))
+        }
+
+        /// The backticked spans of `text`, in order.
+        fn spans(text: &str) -> impl Iterator<Item = &str> {
+            text.split('`').skip(1).step_by(2)
+        }
+
+        /// The sentences of a joined comment paragraph.
+        ///
+        /// Splits on a `.` followed by a space, stepping over the emphasis and closing marks this
+        /// file writes between the two — `not.** Each` ends a sentence and `main.rs` does not.
+        /// Never inside a backticked span, so a citation cannot be cut in half.
+        fn sentences(para: &str) -> Vec<&str> {
+            let b = para.as_bytes();
+            let mut out: Vec<&str> = Vec::new();
+            let (mut start, mut i, mut tick) = (0usize, 0usize, false);
+            while i < b.len() {
+                if b[i] == b'`' {
+                    tick = !tick;
+                } else if !tick && b[i] == b'.' {
+                    let mut j = i + 1;
+                    while j < b.len() && matches!(b[j], b'*' | b'_' | b')' | b'"' | b'\'') {
+                        j += 1;
+                    }
+                    if b.get(j) == Some(&b' ') {
+                        out.push(&para[start..j]);
+                        start = j + 1;
+                        i = j + 1;
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+            if start < b.len() {
+                out.push(&para[start..]);
+            }
+            out
+        }
+
+        /// `Some((file, line))` for a span spelled exactly `something.rs:123`.
+        fn citation(span: &str) -> Option<(&str, usize)> {
+            let (file, num) = span.rsplit_once(':')?;
+            let stem = file.strip_suffix(".rs")?;
+            if stem.is_empty() || !stem.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                return None;
+            }
+            Some((file, num.parse().ok()?))
+        }
+
+        let mut found: Vec<String> = Vec::new();
+        let mut checked = 0usize;
+        for (name, text) in sources {
+            let lines: Vec<&str> = text.lines().collect();
+            let mut n = 0;
+            while n < lines.len() {
+                if comment_body(lines[n]).is_none() {
+                    n += 1;
+                    continue;
+                }
+                // One paragraph is one contiguous run of comment lines, joined — a sentence in
+                // this file wraps across four of them as often as not.
+                let start = n;
+                let mut para = String::new();
+                while let Some(body) = lines.get(n).and_then(|l| comment_body(l)) {
+                    if !para.is_empty() {
+                        para.push(' ');
+                    }
+                    para.push_str(body.trim());
+                    n += 1;
+                }
+                for sentence in sentences(&para) {
+                    let anchors: Vec<&str> = spans(sentence)
+                        .filter(|s| citation(s).is_none() && s.len() >= 3)
+                        .flat_map(|s| {
+                            [
+                                Some(s),
+                                s.rsplit_once("::").map(|(_, seg)| seg).filter(|g| g.len() >= 3),
+                            ]
+                        })
+                        .flatten()
+                        .collect();
+                    for span in spans(sentence) {
+                        let Some((file, num)) = citation(span) else { continue };
+                        let Some((_, target)) = sources.iter().find(|(o, _)| o == file) else {
+                            continue;
+                        };
+                        checked += 1;
+                        let at =
+                            (start..n).find(|&i| lines[i].contains(span)).unwrap_or(start) + 1;
+                        let tlines: Vec<&str> = target.lines().collect();
+                        if num == 0 || num > tlines.len() {
+                            found.push(format!(
+                                "{name}:{at} cites `{span}`, and {file} has {} lines",
+                                tlines.len()
+                            ));
+                            continue;
+                        }
+                        if anchors.is_empty() {
+                            found.push(format!(
+                                "{name}:{at} cites `{span}` and its sentence names nothing that \
+                                 could be checked against that line"
+                            ));
+                            continue;
+                        }
+                        let line = tlines[num - 1];
+                        if anchors.iter().any(|a| line.contains(*a)) {
+                            continue;
+                        }
+                        // Where it moved to, hunted with the most specific anchor first and
+                        // never in a comment: `open` occurs in the word *opens* in a paragraph at
+                        // the top of `main.rs`, and a hint that points there is worse than none.
+                        let mut by_length = anchors.clone();
+                        by_length.sort_by_key(|a| std::cmp::Reverse(a.len()));
+                        let elsewhere = by_length.iter().find_map(|a| {
+                            tlines
+                                .iter()
+                                .position(|l| !l.trim_start().starts_with("//") && l.contains(*a))
+                                .map(|i| (*a, i))
+                        });
+                        found.push(match elsewhere {
+                            Some((a, i)) => format!(
+                                "{name}:{at} cites `{span}`, which reads `{}` — `{a}` is at :{}",
+                                line.trim(),
+                                i + 1
+                            ),
+                            None => format!(
+                                "{name}:{at} cites `{span}`, which reads `{}`, and {anchors:?} is \
+                                 nowhere in that file",
+                                line.trim()
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+        (found, checked)
+    }
+
+    /// **A comment that names a line of this crate still describes that line.**
+    ///
+    /// The general form of the defect this wave was written to clear. Sweeps, headers and field
+    /// docs across these three files described a world that had ended: a blanket allow deleted two
+    /// commits earlier, still present tense and still carrying a carve-out by name; a Rail cap
+    /// saying its page was not written, beside a page that ships; an entrance that had stopped
+    /// being the only one. **Prose is exactly what this project has repeatedly found its gates
+    /// cannot see** — the compiler reads none of it, and every one of those was found by a person
+    /// re-reading, which is the instrument this repository trusts least.
+    ///
+    /// Most of that is not mechanisable and this test does not pretend otherwise. *`Work` is the
+    /// only page this phase builds* is a sentence about intent; no sweep decides it. But one shape
+    /// is decidable and it is the sharpest one, because it is the shape that goes stale **without
+    /// anybody editing the comment at all** — a comment that names `file.rs:line`, where inserting
+    /// a line anywhere above the target silently moves what is being pointed at. Four citations
+    /// into this crate's own files existed when this was written and **three of them were wrong**:
+    /// two named the deleted blanket's line, and the third had `composer.rs` saying `push_composer`
+    /// read `Composer::open` at a line that had drifted into the middle of a `match`. Nobody had
+    /// touched that third comment. This test found it, and then found it again one line out after
+    /// an unrelated edit above it — which is the whole argument for having it.
+    ///
+    /// What it cannot reach is written down in [`stale_citations`] rather than here, and the
+    /// narrower honest thing is the count below: the sweep must have read at least two citations,
+    /// so a crate that stops writing them cannot be mistaken for a crate whose citations are true.
+    /// Two is exactly what it reads today — `main.rs` into `work.rs` and `composer.rs` back into
+    /// `main.rs` — so the floor sits **on** the population rather than under it. Deleting either
+    /// citation turns this red, which is the point: they are the two claims in this crate that no
+    /// human re-reading would ever re-check.
+    #[test]
+    fn every_comment_that_names_a_line_still_describes_it() {
+        // ── The controls, one per branch, none of them naming a real file ──────────────────────
+        //
+        // A citation sweep is the easiest kind of instrument to ship dead: read no comments, find
+        // no citations, report nothing, go green. Each of these hands the matcher two synthetic
+        // files and requires a specific answer, so the verdict on the real tree below is known to
+        // be a reading.
+        let target = ("target.rs".to_string(), "fn one() {}\nfn two() {}\n".to_string());
+        let with = |text: &str| [target.clone(), ("cite.rs".to_string(), text.to_string())];
+
+        let (found, checked) = stale_citations(&with("// `two` is what this points at, `target.rs:2`.\n"));
+        assert!(found.is_empty(), "{found:?}: a citation whose anchor is on the cited line is reported");
+        assert_eq!(checked, 1, "the sweep did not read the one citation it was handed");
+
+        let (found, _) = stale_citations(&with("// `two` is what this points at, `target.rs:1`.\n"));
+        assert_eq!(found.len(), 1, "a citation naming the wrong line is not reported");
+        assert!(found[0].contains(":2"), "{found:?} does not name the line the anchor moved to");
+
+        let (found, _) = stale_citations(&with("// `two` is what this points at, `target.rs:9`.\n"));
+        assert_eq!(found.len(), 1, "a citation past the end of the file is not reported");
+        assert!(found[0].contains("2 lines"), "{found:?} does not say how long the file is");
+
+        let (found, _) = stale_citations(&with("// see `target.rs:1` for it.\n"));
+        assert_eq!(found.len(), 1, "a citation with nothing to check it against is not reported");
+
+        let (found, checked) = stale_citations(&with("// `two` is at `elsewhere.rs:9`.\n"));
+        assert!(
+            found.is_empty() && checked == 0,
+            "a citation into a file this crate does not have is being decided rather than skipped"
+        );
+
+        // ── And the tree ──────────────────────────────────────────────────────────────────────
+        //
+        // Whole files, not `rust_sources`'s shipped halves: a doc comment in a test module names a
+        // line as readily as one above `fn main`, and two of the four this crate had were in one.
+        let (stale, checked) = stale_citations(&rust_sources_whole());
+        assert!(
+            checked >= 2,
+            "only {checked} citations into this crate were read; below two, an empty verdict is \
+             the sweep reading nothing rather than the comments being true"
+        );
+        assert!(
+            stale.is_empty(),
+            "{stale:?}: the comment names a line that no longer says what the comment says. \
+             Re-measure the number, or say what is there now"
         );
     }
 
@@ -4700,13 +5010,12 @@ pub(crate) mod tests {
         );
     }
 
-    /// Every `.rs` file in this crate, name and text, **with its test module cut off**.
+    /// Every `.rs` file in this crate, name and text, **whole** — test module included.
     ///
-    /// The cut is load-bearing rather than tidy: the two sweeps below look for `set_rail(` and
-    /// `on_winit_window_event`, and their own assertion messages name both. Without it each one
-    /// counts itself and reports three registrations where there is one — an instrument reporting
-    /// a defect it created by looking.
-    pub(crate) fn rust_sources() -> Vec<(String, String)> {
+    /// [`rust_sources`] is this with each file cut at its test module, and that is the only
+    /// difference between them. One reader wants the uncut text: a doc comment can name a line of
+    /// this crate from either half, and two of the four that did were in a test module.
+    pub(crate) fn rust_sources_whole() -> Vec<(String, String)> {
         let dir = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
         let mut out: Vec<(String, String)> = std::fs::read_dir(&dir)
             .expect("the src directory")
@@ -4715,17 +5024,41 @@ pub(crate) mod tests {
             .filter(|p| p.extension().is_some_and(|x| x == "rs"))
             .map(|p| {
                 let name = p.file_name().unwrap().to_string_lossy().into_owned();
-                let text = std::fs::read_to_string(&p).expect("a source file");
-                let shipped: String = text
-                    .lines()
-                    .take_while(|l| !l.trim_end().ends_with("mod tests {"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                (name, shipped)
+                (name, std::fs::read_to_string(&p).expect("a source file"))
             })
             .collect();
         out.sort();
         assert!(out.len() > 5, "the source sweep found {} files", out.len());
+        out
+    }
+
+    /// Every `.rs` file in this crate, name and text, **with its test module cut off**.
+    ///
+    /// The cut is load-bearing rather than tidy: the two sweeps below look for `set_rail(` and
+    /// `on_winit_window_event`, and their own assertion messages name both. Without it each one
+    /// counts itself and reports three registrations where there is one — an instrument reporting
+    /// a defect it created by looking.
+    pub(crate) fn rust_sources() -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = Vec::new();
+        for (name, text) in rust_sources_whole() {
+            let kept: Vec<&str> =
+                text.lines().take_while(|l| !l.trim_end().ends_with("mod tests {")).collect();
+            // **The cut must have landed on a declaration.** `take_while` stops at the first line
+            // that *ends with* `mod tests {`, and a comment could end with it as easily as code —
+            // the twin of the `#[cfg(test)]` split `composer.rs` was cut short by, where a header
+            // bullet naming the attribute moved three sweeps' bodies from 2,043 lines to 42.
+            // Checked here because a cut that lands early takes every sweep above it with it,
+            // and does so in silence.
+            let cut = text.lines().nth(kept.len());
+            assert!(
+                cut.is_none_or(|l| !l.trim_start().starts_with("//")),
+                "{name}'s test-module cut landed on a comment at :{}, so every sweep that reads \
+                 this file is reading {} lines of it",
+                kept.len() + 1,
+                kept.len()
+            );
+            out.push((name, kept.join("\n")));
+        }
         // The control: the cut must not have taken the shipped half with it.
         assert!(
             out.iter().any(|(n, t)| n == "main.rs" && t.contains("fn main()")),

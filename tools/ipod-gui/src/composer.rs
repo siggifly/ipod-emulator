@@ -46,7 +46,10 @@
 //   outside a test can call is one of those.
 //
 // **The window registers ten Composer callbacks**, in one run in `main.rs`: the nine `composer-*`
-// ones `window.slint` declares, and `device-new`, which is this page's only entrance.
+// ones `window.slint` declares, and `device-new`, which is one of this page's two entrances. The
+// other is the Rail's `Fix`, which pushes `Page::Composer` from `take_next_step`; no press a person
+// can make reaches it in this build, and `main.rs` says so beside the arm rather than pretending
+// the arm is not there. Both entrances construct `Composer::new()`.
 
 use std::collections::BTreeSet;
 
@@ -490,7 +493,7 @@ impl Composer {
     /// `recipe` is the caller's, resolved through the settings — the model owns the rules for
     /// turning a `Device` into a `Recipe`, and a second copy of them here is the drift this file
     /// exists to prevent. `None` when there is no device of that name.
-    #[allow(dead_code)]  // retired when: the Devices page opens an existing device — `push_composer` already draws the `Mode::Editing` title this returns, and `on_device_new` is the only entrance the window has, so §11.1's *existing and new look identical* has nothing making the existing half
+    #[allow(dead_code)]  // retired when: something outside this file calls it — `push_composer` already draws the `Mode::Editing` title this returns, and every entrance the window has constructs `Composer::new()`, so nothing constructs `Mode::Editing` and §11.1's *existing and new look identical* has nothing making the existing half
     pub fn editing(s: &Settings, device: &str, recipe: Recipe) -> Option<Composer> {
         let d = s.devices.iter().find(|d| d.name == device)?;
         let rom = s.nor_of(d).cloned();
@@ -533,7 +536,7 @@ impl Composer {
     /// `the_verdict_the_plan_and_the_recipe_are_one_recipe` calls after every kind of edit.
     ///
     /// [`Composer::open`] sits in the middle of the run and is **not** gated: `push_composer` reads
-    /// it on every frame, at `main.rs:2683`.
+    /// it on every frame, through `set_composer_open_field` at `main.rs:2747`.
     #[cfg(test)]
     pub fn region(&self) -> &Region {
         &self.region
@@ -2107,10 +2110,23 @@ mod tests {
     /// read this, and all three split on the attribute — which named the same place for exactly as
     /// long as the test module was the only thing in this file wearing one. Replacing the
     /// module-wide `allow(dead_code)` with per-item gates put eight of them above line 600, and
-    /// the old split then handed each sweep the first two hundred lines of the file: one of the
+    /// the old split then handed each sweep a body that stopped short of all of them: one of the
     /// three went red on an arithmetic it could no longer see, and **the other two went green on a
     /// body they had not read** — §6's shape, and the reason this is one function and not three
     /// expressions. `main.rs`'s `rust_sources` makes the same cut for the same reason.
+    ///
+    /// **How short, measured, because the commit that fixed this guessed it and a commit message
+    /// cannot be amended.** That message said the old split handed each sweep *the first two
+    /// hundred lines*. It handed them **42**, and the reason is worse than the guess: a `split` on
+    /// a literal cannot tell an attribute from prose about one, and the first `#[cfg(test)]` in
+    /// this file is not an attribute at all — it is the module header's own bullet counting them,
+    /// on line 42, written by that same commit. So the commit that moved the cut off the attribute
+    /// also wrote the line that made the attribute worst: the split ran at 2,043 lines before it
+    /// and at 42 after, and not one of the eight per-item gates was inside either sweep's body.
+    /// Cutting on the module line has no such twin, and the difference is `ends_with` rather than
+    /// `contains`: prose may name that line without moving the cut, because a sentence about it
+    /// does not end on it. `main.rs`'s `rust_sources` asserts that outright now, per file — a
+    /// comment that ever does end there is caught rather than quietly obeyed.
     fn shipped() -> String {
         source()
             .lines()
