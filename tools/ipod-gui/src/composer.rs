@@ -28,17 +28,25 @@
 //! change it — [`compose::Recipe::volume_decides`] is the predicate, and it is a three-way trial
 //! rather than a guess about which answer is coming.
 
-// **This module is not dead. It is not yet reconnected**, and the allow is the same debt `main.rs`
-// carries on its five parked modules, in the same shape `research/04` uses for a bypass.
+// ## What is silenced here, and by what
 //
-// Everything below is either called by the window today or waiting for the callback that will call
-// it, and every one of them is exercised by the tests at the bottom of this file — so this is
-// unreferenced code, not unverified code. Scoped to this module deliberately: a crate-root allow
-// would outlive the wiring and swallow the next genuinely dead thing.
+// **Nothing is silenced by a blanket.** Every allow in this file sits on one item and names, on its
+// own line, the observation that would retire it. What decides which items get one is the boundary:
+// the flattened row structs at the bottom of this file are what crosses to `main.rs`, and a fact
+// that does not cross cannot have a caller out there, whatever anybody intends to build later.
 //
-// **Retirement condition**: `main.rs` registers the eighteen Composer callbacks. Anything still
-// unreferenced at that point is dead and gets deleted rather than allowed.
-#![allow(dead_code)]
+// - **Six `#[allow(dead_code)]`.** Each waits on a specific piece of window that is not built: the
+//   two halves of the volume read, the three [`VolumeRead`] states they construct, and
+//   [`Composer::editing`], whose `Mode::Editing` title `push_composer` already draws and nothing
+//   constructs.
+// - **Eight `#[cfg(test)]`.** Six accessors and two rules that only this file's tests can reach,
+//   because the row structs carry the same values across and the tests use the accessors to check
+//   that the row and the recipe say one thing rather than two. `geometry.rs` states the precedent
+//   twice: a thing kept alive by an allow is the shape §16.9 deletes, and something nothing
+//   outside a test can call is one of those.
+//
+// **The window registers ten Composer callbacks**, in one run in `main.rs`: the nine `composer-*`
+// ones `window.slint` declares, and `device-new`, which is this page's only entrance.
 
 use std::collections::BTreeSet;
 
@@ -198,6 +206,18 @@ impl Lock {
     ///
     /// Two for [`Lock::Shared`], for the same reason [`compose::Fix::BuildFromIpsw`] takes two: the
     /// press changes something other than the thing under the finger.
+    ///
+    /// **`#[cfg(test)]`, and what retires it is [`Pick`] growing a press count.** A `Lock` reaches
+    /// the window only as a `Pick` or a [`FieldState`], and neither carries one — `Pick` has nine
+    /// fields, `locked` and `reason` among them, and no tenth — so this rule is stated and checked
+    /// here and cannot yet be drawn.
+    ///
+    /// An `#[allow(dead_code)]` would be the wrong shape and not merely a second-best one:
+    /// `rail.rs` defines a `Next::presses` too, `main.rs` calls **that** one at `to_row`, and
+    /// `no_dead_code_allow_sits_on_a_function_the_program_already_calls` cannot tell the two apart
+    /// by reading text. Its `AMBIGUOUS` list is where that limit is written down, and its own rule
+    /// for the list is *never because a sweep went red*.
+    #[cfg(test)]
     pub fn presses(&self) -> u8 {
         match self {
             Lock::Shared { .. } => 2,
@@ -242,6 +262,11 @@ impl Region {
     /// Whether it asserts a plan. **False for three of the four**, which is the whole correction:
     /// the region used to read `Starts Apple's software, the way the iPod shipped.` before anybody
     /// had chosen a firmware.
+    ///
+    /// `#[cfg(test)]`: the window picks its colour from [`Region::emphatic`] and its words from
+    /// [`Region::text`], and asks nothing else — so this predicate states the rule for the tests
+    /// that check it and has nowhere else to be called from.
+    #[cfg(test)]
     pub fn claims_a_plan(&self) -> bool {
         matches!(self, Region::Ok(_))
     }
@@ -253,11 +278,14 @@ pub enum VolumeRead {
     /// Nothing has been asked.
     Idle,
     /// A read is outstanding.
+    #[allow(dead_code)]  // retired when: something outside this file calls [`Composer::asked_for_reading`] — nothing spawns a volume read, so the only state the shipped program can be in is `Idle`
     Pending,
     /// It answered.
+    #[allow(dead_code)]  // retired when: a volume read lands through [`Composer::took_reading`] — the arithmetic under it is written and tested; the read is not wired
     Read(u8),
     /// It could not be done, and said why. **Not a refusal of the recipe** — a drive nobody could
     /// read is not a drive that fails, and the verdict goes on without it.
+    #[allow(dead_code)]  // retired when: a volume read fails on a live page — same unwired path as `Pending` and `Read`
     Failed(String),
 }
 
@@ -462,6 +490,7 @@ impl Composer {
     /// `recipe` is the caller's, resolved through the settings — the model owns the rules for
     /// turning a `Device` into a `Recipe`, and a second copy of them here is the drift this file
     /// exists to prevent. `None` when there is no device of that name.
+    #[allow(dead_code)]  // retired when: the Devices page opens an existing device — `push_composer` already draws the `Mode::Editing` title this returns, and `on_device_new` is the only entrance the window has, so §11.1's *existing and new look identical* has nothing making the existing half
     pub fn editing(s: &Settings, device: &str, recipe: Recipe) -> Option<Composer> {
         let d = s.devices.iter().find(|d| d.name == device)?;
         let rom = s.nor_of(d).cloned();
@@ -495,27 +524,43 @@ impl Composer {
     pub fn generation(&self) -> u32 {
         self.generation
     }
+    /// **The five below are `#[cfg(test)]`, and the sixth in the run is not.** Each is a private
+    /// field's accessor, and the window never asks for one: [`Root`] hands it the region, the plan
+    /// and the two totals; [`Which`] hands it what the ROM resolved to, since `Which::ipod` is
+    /// `suggest_ipod_name` of it; and `filed_as` is read only by [`Composer::devices_sharing`], one
+    /// level below either. What the tests do with these is check that the row and the recipe say
+    /// the same thing rather than two things — `consistent`, which
+    /// `the_verdict_the_plan_and_the_recipe_are_one_recipe` calls after every kind of edit.
+    ///
+    /// [`Composer::open`] sits in the middle of the run and is **not** gated: `push_composer` reads
+    /// it on every frame, at `main.rs:2683`.
+    #[cfg(test)]
     pub fn region(&self) -> &Region {
         &self.region
     }
+    #[cfg(test)]
     pub fn plan(&self) -> &[Step] {
         &self.steps
     }
+    #[cfg(test)]
     pub fn cost(&self) -> Cost {
         self.cost
     }
-    pub fn name(&self) -> &str {
-        &self.name
-    }
+    #[cfg(test)]
     pub fn rom(&self) -> Option<&nor::Source> {
         self.rom.as_ref()
     }
+    #[cfg(test)]
     pub fn filed_as(&self) -> &str {
         &self.filed_as
     }
     pub fn open(&self) -> Option<Field> {
         self.open
     }
+    /// `#[cfg(test)]` for the same reason as the five above, and one more: the window's half of the
+    /// volume read is the pair that *writes* it — [`Composer::asked_for_reading`] and
+    /// [`Composer::took_reading`] — and neither hands the state back out.
+    #[cfg(test)]
     pub fn read(&self) -> &VolumeRead {
         &self.read
     }
@@ -1035,6 +1080,7 @@ impl Composer {
 
     /// Say that a volume read has been asked for. The region goes to *reading …* only if the answer
     /// can still change the verdict — [`compose::Recipe::volume_decides`] decides that, not this.
+    #[allow(dead_code)]  // retired when: something spawns the background volume read — this is the half that arms it, and no callback, no timer and no worker in `main.rs` reaches either half, so the shipped `VolumeRead` never leaves `Idle`
     pub fn asked_for_reading(&mut self) {
         if self.recipe.has_a_volume() && self.recipe.volume_type().is_none() {
             self.read = VolumeRead::Pending;
@@ -1047,6 +1093,7 @@ impl Composer {
     /// **A failure leaves the verdict alone rather than refusing.** A drive nobody could read is not
     /// a drive that fails — and leaving the region in `Reading` for ever is the one outcome that is
     /// certainly wrong, because the region would then be a spinner nothing ever stops.
+    #[allow(dead_code)]  // retired when: the background volume read lands somewhere other than a test; this is the half that receives it, and it is the second of the two recomputes the header counts, the one that is not an edit
     pub fn took_reading(&mut self, r: Result<u8, String>) {
         match r {
             Ok(t) => {
@@ -2054,6 +2101,24 @@ mod tests {
         include_str!("composer.rs")
     }
 
+    /// The shipped half of this file — everything above the line that opens the test module.
+    ///
+    /// **The cut is that line, and it used to be the first `#[cfg(test)]`.** Three sweeps below
+    /// read this, and all three split on the attribute — which named the same place for exactly as
+    /// long as the test module was the only thing in this file wearing one. Replacing the
+    /// module-wide `allow(dead_code)` with per-item gates put eight of them above line 600, and
+    /// the old split then handed each sweep the first two hundred lines of the file: one of the
+    /// three went red on an arithmetic it could no longer see, and **the other two went green on a
+    /// body they had not read** — §6's shape, and the reason this is one function and not three
+    /// expressions. `main.rs`'s `rust_sources` makes the same cut for the same reason.
+    fn shipped() -> String {
+        source()
+            .lines()
+            .take_while(|l| !l.trim_end().ends_with("mod tests {"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// The 30 GB black 5.5G this program makes when nobody has said which.
     fn synthetic() -> nor::Source {
         nor::Source::Synthetic {
@@ -2246,8 +2311,7 @@ mod tests {
     /// the model cannot drift; comparing against it would put the drift straight back.
     #[test]
     fn the_verdict_region_reads_the_predicate_and_not_the_string() {
-        let src = source();
-        let body = src.split("#[cfg(test)]").next().expect("a body");
+        let body = shipped();
         for bad in [
             "== compose::NOTHING_CHOSEN",
             "== NOTHING_CHOSEN",
@@ -3062,8 +3126,7 @@ mod tests {
         let secret = Secret::serial(&serial, false);
         assert_eq!(secret.editable(), None);
         assert_ne!(secret.text(), serial);
-        let body = source();
-        let body = body.split("#[cfg(test)]").next().expect("a body");
+        let body = shipped();
         assert!(!body.contains("fn raw("), "a raw() reader exists");
     }
 
@@ -3277,8 +3340,7 @@ mod tests {
     /// `compose.rs`, where it is measured and cited; a second copy here is a rule that drifts.
     #[test]
     fn the_window_computes_no_compatibility_rule_of_its_own() {
-        let src = source();
-        let body = src.split("#[cfg(test)]").next().expect("a body");
+        let body = shipped();
 
         // The volume types are the model's business.
         for bad in ["0x0b", "0x0c", "0x0B", "0x0C"] {

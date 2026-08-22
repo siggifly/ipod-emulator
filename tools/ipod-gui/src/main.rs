@@ -811,7 +811,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
         });
     }
 
-    // ── §11.2's Composer: eleven callbacks, one redraw ──────────────────────────────────────────
+    // ── §11.2's Composer: ten callbacks, one redraw ─────────────────────────────────────────────
     //
     // **One function re-pushes the whole page**, and every writer below ends in it. `Composer`'s own
     // setters each end in `recompute()`, which rewrites the verdict, the plan and the two totals
