@@ -5,6 +5,17 @@
 # uses only `std` — and it still had a hard Linux build break sitting in it (eframe with
 # `default-features = false` and neither `x11` nor `wayland`, which winit answers with a
 # `compile_error!`). Nothing but a Linux runner was ever going to find that.
+#
+# **Nothing in this file has ever run.** `gh api repos/siggifly/ipod-emulator/actions/runs` answered
+# `total_count: 0` on 2026-08-23 — both workflows are `active` and neither has executed once, because
+# nothing has been pushed since they were written: `origin/master` is 235 commits behind the branch
+# this is being edited on, and that branch has no remote at all. That is the whole explanation for
+# how a step could go on invoking `--check-update` against a binary that ignored it, and a recipe
+# name that had been retired, for weeks without anybody seeing red.
+#
+# So every step below was run BY HAND on macOS on 2026-08-23, with its output recorded in the commit
+# that changed it. That is not the same as a green run, and it is not claimed to be. **The first
+# push is the first execution**, and Linux and Windows are where the surprises will be.
 name: ci
 
 on:
@@ -43,6 +54,14 @@ jobs:
     # says so **in advance**, on that leg and no other. The test refuses to infer it: a backend left
     # unset answers "Could not initialize backend." and is indistinguishable from a headless runner
     # from the outside, so an inferred skip passed green through a real regression once already.
+    #
+    # **It licenses a skip; it does not prevent a window.** Measured on macOS 2026-08-23: with
+    # `IPOD_GUI_NO_DISPLAY=1` set, `--test startup_fit` opened the window anyway and drove the
+    # external resize — `the external-resize half ran: 846.0 -> 780.0 logical, driven from outside`.
+    # The variable is read in exactly one place (`startup_fit.rs`'s `declared_headless`) and is
+    # consulted only on the branch where the child has ALREADY failed to put a window on a display.
+    # On a machine that has one it changes nothing, so anybody reaching for it to keep a window off
+    # a screen is reaching for the wrong lever.
     #
     # This is therefore also the line that says **the Linux leg does not measure that test.** Making
     # it real means `xvfb-run` plus the runtime GL/X11 libraries — not the `-dev` packages below,
@@ -101,8 +120,38 @@ jobs:
       # file, the image validator.
       # `startup_fit` opens a real window here — see the job's `env:` block for which leg measures
       # it and which one declares it cannot.
-      - name: test the workspace
-        run: cargo test --release --workspace
+      #
+      # **The count is read, and that is the gate.** `RELEASING.md` has said *a green line with a
+      # zero in it is not a pass* in prose since 0.4.0 and nothing mechanical read it. An exit code
+      # cannot tell a suite that ran from one that did not: a filter matching nothing, a
+      # `#[cfg(test)]` module that stopped being compiled, and a test target dropped out of a
+      # manifest all print `test result: ok.` and exit 0. Every such line is summed here.
+      #
+      # **A floor, not the number.** 799 passing on 2026-08-23 (macOS, the one doc-test included);
+      # the floor is 700. An equality would have to be hand-edited by every commit that adds a test,
+      # which is precisely how a count stops being a measurement and becomes a number people edit
+      # from memory — `RELEASING.md` carries that lesson because its own count did it twice in a
+      # day. The floor only has to catch the suite COLLAPSING, and it was proved to: summed over an
+      # empty log it is 0, and over the single `test result: ok. 0 passed` line the checklist warns
+      # about it is 0. Both controls run by hand, same date.
+      #
+      # `grep`/`tr`/`sed` and shell arithmetic rather than `awk`, because this runs on Git for
+      # Windows' bash too and the three above are not in question there.
+      - name: test the workspace, and read the count
+        shell: bash
+        run: |
+          set -eo pipefail
+          cargo test --release --workspace 2>&1 | tee tests.log
+          sum=$(grep -oE '^test result: ok\. [0-9]+ passed' tests.log \
+                | grep -oE '[0-9]+' | tr '\n' '+' | sed 's/+$//')
+          passed=$(( ${sum:-0} ))
+          echo "passing tests: $passed"
+          if [ "$passed" -lt 700 ]; then
+            echo "the suite reported $passed passing tests. The floor is 700 and it was 799 on"
+            echo "2026-08-23. A zero-ish count under a green exit code is the failure this reads"
+            echo "for; re-measure and move the floor deliberately rather than deleting the check."
+            exit 1
+          fi
 
       # **Again, with its output visible.** `cargo test` captures the stderr of a PASSING test, so
       # everything that test says about what it could and could not measure — the SKIPPED line, the
@@ -111,6 +160,26 @@ jobs:
       # how a "read the SKIPPED line in the CI log" instruction came to point at a line that could
       # never be printed. Two seconds, and the log says which half ran.
       - name: the window's platform test, with its output visible
+        if: runner.os != 'Linux'
+        run: cargo test --release -p ipod-gui --test startup_fit -- --nocapture
+
+      # **The same file on Linux, under a name that does not claim it measured anything.** It ran
+      # here before under the name above, which is a step title that reads as coverage on the one
+      # leg that has none: the window cannot open, `declared_headless` licenses the skip, both tests
+      # return early and the leg is green having observed nothing. Splitting it is the cheapest
+      # honest fix available from a machine that cannot verify an `xvfb-run` step.
+      #
+      # It still RUNS, and that is worth the two seconds: the test binary has to compile and link
+      # against the winit backend on Linux, which is where this project's one hard cross-platform
+      # break lived. What it does not do is measure the fit.
+      #
+      # Making it real means `xvfb-run` plus the RUNTIME GL/X11 libraries — not the `-dev` packages
+      # installed above, which are link-time only — the `IPOD_GUI_NO_DISPLAY` declaration deleted,
+      # **and the leg verified to go red under a deliberate break.** That last clause is the whole
+      # condition: `startup_fit.rs`'s own header states it, and this repository has shipped enough
+      # gates that passed while doing nothing to insist on it.
+      - name: startup_fit stands down on this leg and measures nothing
+        if: runner.os == 'Linux'
         run: cargo test --release -p ipod-gui --test startup_fit -- --nocapture
 
       # The binaries have to LINK, not merely compile as libraries, and their argument parsing has
@@ -120,27 +189,79 @@ jobs:
 
       # `--print` composes the recipe's argv without touching a disk, so it runs on a machine with
       # no `resources/` — which every CI runner is, and which is the whole point of checking it.
+      # Verified rather than assumed: all seven compose and exit 0 with `HOME` pointed at an empty
+      # directory, falling back to the repository defaults and saying so.
+      #
+      # **`cold` was in this list and is not a recipe.** `Recipe::parse` has no arm for it — the
+      # word gets `unknown recipe \`cold\`` and **exit 2**, measured — so under `shell: bash`, which
+      # is `-e`, this step could only ever have failed. It survived because the file has never run.
+      # `RELEASING.md` retired the recipe on 2026-08-18 and says in the same breath that it must not
+      # come back: it was the prototype's NOR, it boots a partition the retail ROM correctly
+      # rejects, and it cost somebody hours.
+      #
+      # **`loader` was missing and is a recipe** — ipodloader2 out of the drive's own firmware
+      # partition, the iPodLinux path, aliased `ipodlinux`. A list that names a recipe which does
+      # not exist while omitting one that does is wrong in both directions at once, which is what a
+      # hand-maintained list beside a `match` does eventually.
+      #
+      # **`--clock=5` is gone.** CHANGELOG 0.5.0 retires it with the honest-clock change — the
+      # invented idle time was deleted and the flag turned out to cost nothing. It could never have
+      # failed this step either way: `ipod-boot` passes everything it does not recognise through to
+      # `trace` unchanged, so a flag's presence here tests the pass-through and not the flag.
       - name: the recipes compose the same argv they do on macOS
         shell: bash
         run: |
           BIN=target/release/ipod-boot
           if [ "${{ runner.os }}" = "Windows" ]; then BIN="$BIN.exe"; fi
           "$BIN" --help
-          for r in retail cold warm flsh rockbox flash-update from-idle; do
+          for r in retail warm flsh rockbox loader flash-update from-idle; do
             echo "--- $r"
-            "$BIN" "$r" --print --clock=5
+            "$BIN" "$r" --print
           done
 
-      # The update check must be silent and must exit 0 whether or not the network answers. A CI
-      # runner has one; the offline path is covered by a unit test against an RFC 2606 `.invalid`
-      # host, which is deterministic either way.
-      - name: the update check does not fail the program
+      # **The flags that answer with no window at all.** Every one of these is decided before a
+      # platform is set, so a runner that cannot open a window cannot stop it answering — which is
+      # what makes them safe here, and it is new. Until 24dd262 `fn main` read argv nowhere:
+      # `--check-update` was accepted and silently ignored, and `--help` OPENED A WINDOW on the
+      # runner, which is a job that hangs or a backend that fails. Neither reads as *the flag is
+      # gone*, which is why this step went on reporting for weeks about a program that did not
+      # exist. Both spellings are back and both were run by hand on macOS 2026-08-23.
+      #
+      # On Windows a release build has no console of its own (`main.rs`'s `windows_subsystem`
+      # attribute, with the cost stated there), so these print into nothing IN A TERMINAL.
+      # Everything below is piped or redirected, which is the case that file records as working.
+      # Empty output from a step that passed on the Windows leg is that attribute, not the flag.
+      - name: the flags that answer without a window
         shell: bash
         run: |
+          set -eo pipefail
           BIN=target/release/ipod-emulator
           if [ "${{ runner.os }}" = "Windows" ]; then BIN="$BIN.exe"; fi
+
+          # The runner has a network, so this normally takes the answering path — normally, because
+          # unauthenticated api.github.com is rate-limited per IP and runners share theirs. Either
+          # answer exits 0; that is the flag's whole contract and why it cannot fail a build.
           "$BIN" --check-update
-          "$BIN" --help > /dev/null
+
+          # ...and this takes the other one, deterministically, without cutting a network: a
+          # repository that does not exist answers 404, which `update::check` turns into the same
+          # `None` a dead host produces. Measured: "No answer from GitHub. That is the expected
+          # result offline, and it is not an error", exit 0.
+          IPOD_EMULATOR_UPDATE_REPO=siggifly/no-such-repository "$BIN" --check-update
+
+          # `--help` must NAME the flag `release.yml` depends on. `--help > /dev/null`, which this
+          # was, passes equally well when help prints nothing at all — and the entire reason the
+          # help text is hand-written rather than generated from `FLAGS` is so that a flag lost from
+          # one half is caught by the other. A gate that cannot tell empty from correct is not one.
+          "$BIN" --help | grep -q -- '--make-app'
+
+          # An unrecognised word must exit 2 rather than open a window. That is the failure that
+          # would HANG this runner instead of failing it, so it is checked and not assumed.
+          set +e
+          "$BIN" --no-such-flag > /dev/null 2>&1
+          code=$?
+          set -e
+          [ "$code" -eq 2 ] || { echo "an unrecognised flag exited $code; it must exit 2"; exit 1; }
 
       # A fresh clone has no images, and what it does about that is a supported path, not an edge
       # case: it must say which file is missing and where to read about it, and exit non-zero.

@@ -7,6 +7,17 @@
 # SmartScreen's on Windows, and the README says so plainly so that nobody files it as a bug. Buying
 # a certificate to make a reverse-engineering tool look official is the wrong trade for this
 # project, and the source is right there to build.
+#
+# **This workflow has never run, and its macOS legs could not have succeeded if it had.**
+# `gh api repos/siggifly/ipod-emulator/actions/runs` answered `total_count: 0` on 2026-08-23, and
+# every release from v0.1.0 to v0.4.0 was cut by hand — `RELEASING.md` describes doing exactly that.
+# The `--make-app` line below had been `sh ipod-emulator …` since eaf0e82, which is `exit 127` under
+# `set -eu` from a directory with no such file; it is measured and replaced in this commit.
+#
+# **It runs no tests.** The gate is `ci.yml` on the commit the tag points at, and `RELEASING.md`'s
+# checklist for what a human runs against the built archives. Re-running the suite here would be
+# worth its minutes if it could run everywhere it builds, and it cannot: the `macos-x86_64` leg
+# cross-compiles, so its binaries do not execute natively on the runner that produced them.
 name: release
 
 on:
@@ -88,14 +99,48 @@ jobs:
           # The emulator at the top, the six developer tools in `tools/`. Somebody who unpacked
           # this used exactly one of the seven and had to guess which; six of them are for reading
           # firmware apart, not for playing anything.
+          #
+          # `--bins` builds an eighth, `ipod-film`, and it is deliberately not here: it rebuilds
+          # this repository's own animations and stills from a run, which is a thing you do to the
+          # documentation, not to an iPod. Named so that the seven-out-of-eight is a decision
+          # somebody made rather than one somebody forgot.
           mkdir -p "dist/$DIR/tools"
           cp "$BIN/ipod-emulator$EXE" "dist/$DIR/"
           for b in trace ipod-boot dis tcb eapp-inspect disasm ; do
             cp "$BIN/$b$EXE" "dist/$DIR/tools/"
           done
-          # A double-clickable app on macOS. No certificate involved — see ipod-emulator --make-app.
+          # A double-clickable app on macOS. No certificate involved — see `--make-app` in
+          # `ipod-emulator --help`, whose signature is `--make-app OUT [ICON]`: OUT is a DIRECTORY,
+          # and what lands in it is `ipod-emulator.app`.
+          #
+          # **This line had never worked.** eaf0e82 rewrote `sh tools/ipod-gui/make-app.sh "$BIN/…"
+          # "dist/$DIR"` into `sh ipod-emulator --make-app "$BIN/…" "dist/$DIR"` and left both the
+          # `sh` and the old script's argument order behind — so it ran the emulator THROUGH a
+          # shell, from a directory holding no such file: `sh: ipod-emulator: No such file or
+          # directory`, exit 127, and under `set -eu` that is both macOS legs of this workflow
+          # failing here. Then the flag itself died with the egui window, so for the last stretch it
+          # was invoking a hole. Measured 2026-08-23, and the replacement was run by hand: it prints
+          # the path it wrote, `plutil -lint` accepts the plist, and the binary inside is
+          # sha256-identical to the one that made it.
+          #
+          # **It must be THIS archive's binary that runs it.** `--make-app` bundles whatever
+          # executed it (`current_exe`), which is what makes a bundle built around a stale binary
+          # impossible — and it means the runner's own `ipod-emulator` is the wrong one to use on
+          # the `macos-x86_64` leg, where the archive's binary is cross-compiled and the runner is
+          # arm64. Whether these images carry Rosetta 2 is not answerable from the machine this was
+          # written on, so it is asked rather than assumed, and a leg that cannot answer says which
+          # step to add instead of shipping an archive with no app in it.
           if [ "${{ runner.os }}" = "macOS" ]; then
-            sh ipod-emulator --make-app "$BIN/ipod-emulator" "dist/$DIR"
+            if ! "$BIN/ipod-emulator" --help > /dev/null 2>&1; then
+              echo "the ${{ matrix.target }} binary does not run on this runner, so the .app cannot"
+              echo "be built from it. Bundling with the runner's own binary would put the wrong"
+              echo "architecture inside this archive, which is the failure --make-app bundling"
+              echo "ITSELF exists to prevent. The fix is a rosetta install step on this leg:"
+              echo "  softwareupdate --install-rosetta --agree-to-license"
+              echo "It is not written here because it has never been run."
+              exit 1
+            fi
+            "$BIN/ipod-emulator" --make-app "dist/$DIR" docs/media/icon-1024.png
           fi
           cp README.md "dist/$DIR/README.md"
           cp tools/ipod-gui/README.md "dist/$DIR/README-window.md"
@@ -123,7 +168,7 @@ jobs:
           first launch of anything downloaded and unsigned. On macOS 15 and later the old
           right-click -> Open shortcut no longer works: open it, let it be blocked, then go to
           System Settings -> Privacy & Security, where a button offers to open it anyway. Once.
-          `xattr -dr com.apple.quarantine "iPod 5G.app"` does the same thing from a terminal.
+          `xattr -dr com.apple.quarantine ipod-emulator.app` does the same thing from a terminal.
           On Windows, SmartScreen shows "More info" -> "Run anyway". Built from source, neither
           happens, because nothing built locally is quarantined.
           EOF
