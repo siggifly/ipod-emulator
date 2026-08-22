@@ -61,6 +61,17 @@ mod nav;
 mod rail;
 mod work;
 
+// And these three are the producers for the drawer's remaining pages, **stubs today**: each holds
+// the vocabulary that crosses its page's boundary and nothing that decides anything yet. They are
+// declared now rather than with their first producer because `parts` owns two types `devices` uses
+// — `Detail` and `RowAction` — and one definition written before either producer is what stops
+// there being two afterwards. Every item in the three carries its own retirement condition; none of
+// them carries a module blanket, which is the attribute that let a computed-and-dropped field hide
+// in `composer.rs` for as long as it was there.
+mod devices;
+mod parts;
+mod settings_page;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -502,6 +513,34 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
     sync_rail(window, &rows, &rail.borrow(), caps, work.borrow().shape());
     push_nav(window, &stack.borrow());
 
+    // ── Every open page is re-pushed by whoever moved the library ───────────────────────────────
+    //
+    // **`redraw` is reachable from nothing but the Composer's own callbacks**, so everything the
+    // page draws about the *world* rather than about the recipe went stale between presses: a run
+    // that started or finished while the page was open left `Lock::Building` on every picker and
+    // `Create` disabled until somebody happened to touch an unrelated control, and a device filed
+    // from anywhere else was a name the page did not know was taken. A page re-pushed only by its
+    // own controls is stale the moment anything else moves, and three more pages are about to be
+    // written against exactly that shape.
+    //
+    // So every page registers its re-push here and the tick runs all of them. Adding a page cannot
+    // forget it: the registration is one line at the end of the page's own block, beside the
+    // closure it registers, rather than a name to be remembered in a list somewhere else.
+    let repaint: Rc<RefCell<Vec<Repaint>>> = Rc::new(RefCell::new(Vec::new()));
+    let repaint_all: Repaint = {
+        let repaint = repaint.clone();
+        Rc::new(move || {
+            // **Cloned out of the cell before any of them runs.** A re-push that reached this again
+            // — one that files a Rail note, or a page that arrives at another page — would
+            // otherwise borrow the registry while the loop walking it still holds it, which is §20
+            // item 12 in a new place and on the path that works.
+            let all: Vec<Repaint> = repaint.borrow().clone();
+            for f in all {
+                f();
+            }
+        })
+    };
+
     // ── The one timer, and the one place it is started ──────────────────────────────────────────
     //
     // **A `slint::Timer` stops the moment it is dropped** — `i-slint-core-1.17.1/timers.rs:44`:
@@ -535,6 +574,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
         let settings = settings.clone();
         let showing_welcome = showing_welcome.clone();
         let composer = composer.clone();
+        let repaint_all = repaint_all.clone();
         let weak = window.as_weak();
         Rc::new(move || {
             let Some(w) = weak.upgrade() else { return };
@@ -547,6 +587,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
                 &settings,
                 &showing_welcome,
                 &composer,
+                &repaint_all,
                 &timer,
                 caps,
                 cost,
@@ -582,6 +623,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
         let work = work.clone();
         let showing_welcome = showing_welcome.clone();
         let ticking = ticking.clone();
+        let repaint_all = repaint_all.clone();
         let weak = window.as_weak();
         window.on_start_device(move |index| {
             let Some(w) = weak.upgrade() else { return };
@@ -745,6 +787,9 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
                 volume::space(&eapp_loader::settings::drives_dir()).as_ref(),
             );
             sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+            // The press mints an iPod, files it and starts a run: the library moved and a build is
+            // now in flight, which is both halves of what a registered page draws about the world.
+            repaint_all();
         });
     }
 
@@ -793,22 +838,31 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
     }
     {
         let stack = stack.clone();
+        let repaint_all = repaint_all.clone();
         let weak = window.as_weak();
         window.on_open_page(move |page, depth| {
             stack.borrow_mut().go(from_markup(page), depth);
             if let Some(w) = weak.upgrade() {
                 push_nav(&w, &stack.borrow());
             }
+            // **Arriving at a page pushes it.** Each registered re-push may return early when its
+            // own page is not the one on screen — that is what keeps a library walk off the 10 Hz
+            // tick — so a page that has been off screen has been told nothing since it left, and
+            // this is the moment it is on screen again. After `push_nav`, because that is what
+            // moves the stack the guards read.
+            repaint_all();
         });
     }
     {
         let stack = stack.clone();
+        let repaint_all = repaint_all.clone();
         let weak = window.as_weak();
         window.on_drawer_back(move || {
             stack.borrow_mut().back();
             if let Some(w) = weak.upgrade() {
                 push_nav(&w, &stack.borrow());
             }
+            repaint_all();
         });
     }
 
@@ -856,6 +910,10 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
             );
         })
     };
+    // **The Composer stops being a special case and becomes the registry's first member.** It is
+    // one line, it sits at the end of the block that built the closure, and it is the only thing a
+    // page has to do to stop going stale.
+    repaint.borrow_mut().push(redraw.clone());
 
     // `+ New device ›`, from the Devices page. §11.2: it **mints nothing** — three cancelled visits
     // to this page leave zero iPods, because `nor::mint_seed` happens on `Make one` and not on a
@@ -1329,6 +1387,13 @@ struct Wiring {
     tick: Rc<dyn Fn()>,
 }
 
+/// One page's whole re-push, in one call.
+///
+/// `Rc` rather than `Box` because each one is held twice over: once by the registry the tick walks,
+/// and once by every callback of the page that owns it. Named because the registry is a `Vec` of
+/// them inside an `Rc<RefCell<…>>`, and three levels of that written out is a type nobody reads.
+type Repaint = Rc<dyn Fn()>;
+
 /// Which of the two things the centre button is, on this press.
 ///
 /// Named rather than nested so that `on_start_device` can scope every borrow it takes to one block
@@ -1355,7 +1420,7 @@ enum Route {
 /// **The queue is the only thing that writes the library during a run**, and it does it here, on
 /// this thread, in `pump`: §10.2 wants a save after every completed step, so a run interrupted
 /// between two of them resumes from the one it reached.
-#[allow(clippy::too_many_arguments)] // every one of these is a distinct thing the window owns; bundling them into a struct would be one indirection and the same nine fields
+#[allow(clippy::too_many_arguments)] // every one of these is a distinct thing the window owns; bundling them into a struct would be one indirection and the same fields under a new name
 fn pump_once(
     window: &MainWindow,
     work: &Rc<RefCell<work::Queue>>,
@@ -1365,6 +1430,8 @@ fn pump_once(
     settings: &Rc<RefCell<Settings>>,
     showing_welcome: &Rc<std::cell::Cell<bool>>,
     composer: &Rc<RefCell<Option<composer::Composer>>>,
+    // Every page that has registered a re-push, run as one. The registry is built in `wire`.
+    repaint: &Repaint,
     timer: &slint::Timer,
     caps: rail::Caps,
     cost: compose::Cost,
@@ -1442,10 +1509,27 @@ fn pump_once(
         sync_rail(window, rows, &rail.borrow(), caps, work.borrow().shape());
     }
 
+    // ── Every open page, and not only the Rail, the shelf and the ledger ────────────────────────
+    //
+    // Everything above this line pushes one of those three. A drawer page drawn from `building` or
+    // from the library held whatever it had been told the last time somebody pressed one of *its*
+    // controls, which is the whole of the registry's reason for existing.
+    //
+    // **`idle` is in the condition because it is the half that was actually visible.** The three
+    // `Tick` fields cover a run in flight; the *end* of one need set none of them — `pump` drains
+    // the channel twice, so the last report of a run is usually taken on the tick before the worker
+    // exits, leaving a final tick that changed nothing and on which `busy()` goes false. That is
+    // exactly the tick where `Lock::Building` has to come off. It is also the tick that stops the
+    // timer, so one read of `busy()` decides both and there is no tick between the two answers.
+    let idle = !work.borrow().busy();
+    if idle || tick.changed || tick.library_changed || !tick.completed.is_empty() {
+        repaint();
+    }
+
     // **Nothing is running, so stop looking.** A 10 Hz wakeup for the life of a window that is not
     // building anything is a cost nobody agreed to, and `ticking` starts this again on the next
     // press. `sync_rail` has already pushed the final `progress`, which is negative.
-    if !work.borrow().busy() {
+    if idle {
         timer.stop();
     }
 }
@@ -2560,6 +2644,38 @@ fn to_fix(f: &composer::FixRow) -> FixRow {
         machine_rule: f.machine_rule,
         presses: i32::from(f.presses),
         consequence: f.consequence.clone().into(),
+    }
+}
+
+/// One line inside an expanded row, for **both** pages that draw one.
+///
+/// Written here, once, in the same pass that froze `parts::Detail`: `push_parts` and
+/// `push_devices_detail` are written by different hands and a flattener each would be two answers
+/// to *what is a `DetailRow`*.
+///
+/// It renames fields and decides nothing. The one thing that looks like a decision is not one:
+/// `machine_rule` comes from the `Detail` rather than from the `FixRow` inside it because
+/// `DetailRow` has exactly one such property and the markup binds it in both renderings —
+/// `parts.slint:63` on the act, and the paragraph branch below it. One property, one producer.
+#[allow(dead_code)] // retired when: `push_parts` or `push_devices_detail` calls it — the two `push_*` land with their producers
+fn to_detail(d: &parts::Detail) -> DetailRow {
+    let (action, has_action, act) = match &d.action {
+        Some((a, f)) => (a.as_i32(), true, f.clone()),
+        None => (0, false, composer::FixRow::default()),
+    };
+    DetailRow {
+        label: d.label.clone().into(),
+        value: d.value.clone().into(),
+        mono: d.mono,
+        machine_rule: d.machine_rule,
+        action,
+        has_action,
+        act_label: act.label.into(),
+        enabled: act.enabled,
+        reason: act.reason.into(),
+        escape_hatch: act.escape.into(),
+        presses: i32::from(act.presses),
+        consequence: act.consequence.into(),
     }
 }
 
@@ -4178,6 +4294,13 @@ pub(crate) mod tests {
         assert!(timer.running(), "the fixture's timer is not armed, so the check below proves nothing");
 
         let before = settings.borrow().devices.len();
+        // The registry, counted rather than ignored: an idle tick is the tick a finished run ends
+        // on, and it is the one that has to take `Lock::Building` back off every open page.
+        let repaints = Rc::new(std::cell::Cell::new(0u32));
+        let repaint: Repaint = {
+            let repaints = repaints.clone();
+            Rc::new(move || repaints.set(repaints.get() + 1))
+        };
         pump_once(
             &w,
             &wiring.work,
@@ -4187,9 +4310,16 @@ pub(crate) mod tests {
             &settings,
             &latch(true),
             &Rc::new(RefCell::new(None)),
+            &repaint,
             &timer,
             caps(),
             a_cost(),
+        );
+        assert_eq!(
+            repaints.get(),
+            1,
+            "the tick that stops the timer did not re-push the registered pages, so a build that \
+             finishes while one is open leaves it disabled"
         );
         assert_eq!(
             settings.borrow().devices.len(),
@@ -4197,6 +4327,60 @@ pub(crate) mod tests {
             "a tick with nothing running changed the library"
         );
         assert!(!timer.running(), "the timer keeps looking at 10 Hz with nothing to look at");
+    }
+
+    /// **A page is re-pushed by a change it did not make.**
+    ///
+    /// The Composer's `redraw` used to be reachable from nothing but the Composer's own callbacks,
+    /// so everything the page draws about the *world* rather than about the recipe — the build's
+    /// lock, the names the library has already taken — was whatever it had been at the last press
+    /// of one of its own controls.
+    ///
+    /// Everything here goes through the registered handlers: `device-new` opens the page and
+    /// `composer-type` names the device. Then the library gains a device of that name from
+    /// somewhere that is not this page — a finished run, the Devices page, a second window — and
+    /// **nothing on the Composer is touched afterwards.** One tick is.
+    ///
+    /// `composer-taken` is the property under test because [`composer::Composer::named`] reads it
+    /// from `Settings::devices` on every push and from nothing the page holds, so the only way it
+    /// can come true is by being pushed again. The middle assertion is what makes that argument
+    /// rather than assumes it: the page must still be saying the old thing after the library has
+    /// moved and before the tick, or the tick is not what is being measured.
+    #[test]
+    fn a_tick_re_pushes_a_page_that_a_change_elsewhere_made_stale() {
+        let (settings, _held) = a_fresh_installation();
+        let w = a_window();
+        let wiring = wire(&w, settings.clone());
+
+        w.invoke_device_new();
+        w.invoke_composer_type(composer::Field::Name.as_i32(), "Zeppelin".into());
+        assert_eq!(
+            w.get_composer_taken(),
+            "",
+            "the fixture opens with the name already taken, so nothing below would prove anything"
+        );
+
+        // The world moves, and the Composer is not what moved it.
+        settings.borrow_mut().devices.push(Device {
+            name: "Zeppelin".into(),
+            firmware: "an iPod".into(),
+            ..Device::default()
+        });
+        assert_eq!(
+            w.get_composer_taken(),
+            "",
+            "the page followed the library with no push at all, so the tick below is not what is \
+             being measured"
+        );
+
+        (wiring.tick)();
+
+        assert_eq!(
+            w.get_composer_taken(),
+            "There is already a device called Zeppelin.",
+            "the tick did not re-push the Composer, so a page still goes stale the moment anything \
+             but its own controls moves the world"
+        );
     }
 
     /// **T-7. There is exactly one `on_winit_window_event` registration in this program.**
