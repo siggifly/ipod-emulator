@@ -1982,20 +1982,62 @@ mod tests {
     }
 
     /// **The reading state is a three-way trial, not a second copy of rule (2)** — and the trial
-    /// set is closed by `install::data_partition_type`'s own last line, which is asserted here
-    /// rather than assumed, because a fourth answer would make `volume_decides` say *the read
-    /// cannot change this* about a read that can.
+    /// set is closed because `install::data_partition_type` cannot answer a fourth thing, which
+    /// is a fact about what that function *does* and is measured here by running it.
+    ///
+    /// A fourth answer would make [`Recipe::volume_decides`] say *the read cannot change this*
+    /// about a read that can; a rule written for an answer no drive can produce is a refusal
+    /// nobody ever reaches. So the join is asserted in both directions — every answer the read
+    /// can give is a case `check_parts` writes a rule for, and every value `check_parts` singles
+    /// out is one the read can actually give.
+    ///
+    /// **This used to read `install.rs` as text**, asserting it still contained
+    /// `.find(|t| matches!(t, 0x0b | 0x0c))` and `.unwrap_or(0)`. Measured both ways, that guard
+    /// was blind where it mattered and loud where it did not: narrowing the scan from `(0..4)` to
+    /// `(0..1)` — which makes every real iPod, whose data partition is the *second* entry, answer
+    /// *no FAT32 partition* — left it green, while respelling `.unwrap_or(0)` as
+    /// `.unwrap_or(0u8)`, which changes nothing whatsoever, made it panic.
+    ///
+    /// The six tests in `install.rs` cover what the function answers for which layout. This one
+    /// covers the join, and builds its drives in the layout a real iPod has — Apple's firmware
+    /// partition first at type `0x00`, the data partition second — because that is the drive the
+    /// rules are about.
     #[test]
     fn the_three_answers_a_volume_read_can_give_are_the_three_the_verdict_is_tried_against() {
-        let install = include_str!("install.rs");
-        assert!(
-            install.contains(".find(|t| matches!(t, 0x0b | 0x0c))"),
-            "data_partition_type no longer narrows to 0x0B/0x0C, so the trial set is open"
-        );
-        assert!(
-            install.contains(".unwrap_or(0)"),
-            "data_partition_type no longer answers 0 for a drive with neither, so 0x00 may not be \
-             the third answer"
+        use std::collections::{BTreeMap, BTreeSet};
+
+        // A 512-byte MBR in the layout [`crate::install::install_os`] expects: entry 0 is Apple's
+        // firmware partition at type 0x00, entry 1 is the data partition, the last two are empty.
+        let drive = |data_type: u8| {
+            let p = std::env::temp_dir().join(format!(
+                "ipod-compose-coupling-{data_type:02x}-{}.img",
+                std::process::id()
+            ));
+            let mut img = vec![0u8; 512];
+            let e = 446 + 16;
+            img[e + 4] = data_type;
+            // A non-zero start and length, so the entry is a partition and not an empty slot.
+            img[e + 8..e + 12].copy_from_slice(&63u32.to_le_bytes());
+            img[e + 12..e + 16].copy_from_slice(&8192u32.to_le_bytes());
+            img[510] = 0x55;
+            img[511] = 0xAA;
+            std::fs::write(&p, &img).unwrap();
+            p
+        };
+
+        // What the read can answer, by reading — every byte a data partition entry can carry,
+        // rather than the three that are expected back. A fourth answer is the thing being looked
+        // for and it would not announce itself.
+        let mut answers = BTreeSet::new();
+        for t in 0..=u8::MAX {
+            let p = drive(t);
+            answers.insert(crate::install::data_partition_type(&p).expect("512 bytes is an MBR"));
+            let _ = std::fs::remove_file(&p);
+        }
+        assert_eq!(
+            answers,
+            BTreeSet::from([0x00, 0x0b, 0x0c]),
+            "a drive can make the read answer something the verdict is never tried against"
         );
 
         // An unread volume whose verdict the read decides.
@@ -2019,6 +2061,42 @@ mod tests {
             verdict(0x00).text(),
             verdict(0x0c).text(),
             "two of the three answers are one answer, so the trial cannot see the difference"
+        );
+
+        // And what the rules single out, by running them over every value a volume type could
+        // conceivably be. A value no rule is written about reads exactly like every other such
+        // value, so the largest group is the accepting one and everything outside it is a value
+        // some rule names.
+        let mut groups: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        for t in 0..=u8::MAX {
+            groups.entry(verdict(t).text().to_string()).or_default().push(t);
+        }
+        let accepting: BTreeSet<u8> = groups
+            .values()
+            .max_by_key(|g| g.len())
+            .expect("256 verdicts")
+            .iter()
+            .copied()
+            .collect();
+        let singled: BTreeSet<u8> = (0..=u8::MAX).filter(|t| !accepting.contains(t)).collect();
+
+        // The join, both ways — and the rules' side is never written down here, only stated in
+        // terms of the read's, so that a change to either one goes red rather than to a number
+        // somebody typed twice.
+        //
+        // No rule for an answer no drive can produce: a refusal keyed to a volume type the read
+        // cannot give is a sentence nobody ever reaches.
+        assert!(
+            singled.is_subset(&answers),
+            "check_parts is written against volume types no drive can make the read answer: {:?}",
+            singled.difference(&answers).collect::<Vec<_>>()
+        );
+        // And no answer with no rule: exactly one of the three is the accepted one, so neither of
+        // the other two is being quietly absorbed into it.
+        assert_eq!(
+            answers.difference(&singled).copied().collect::<Vec<u8>>(),
+            vec![0x0b],
+            "the read's answers do not split into one accepted and the rest each refused"
         );
 
         // Once the read has landed there is nothing left to wait for.
