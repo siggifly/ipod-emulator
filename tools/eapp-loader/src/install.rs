@@ -484,14 +484,20 @@ fn loader_menu(has_rockbox: bool, has_apple: bool) -> String {
 
 /// The MBR type byte of the drive's FAT32 data partition, or `0` if it has none.
 ///
-/// **Named, because two callers need the same question.** `install_linux` asks it to refuse a drive
-/// it cannot install onto; the window's disk composer asks it so the verdict it shows is about
-/// *that* image rather than about drives in general. `0x0B` is the CHS form and `0x0C` the LBA one;
-/// both are legitimate FAT32 and `ipodloader2` reads only the first.
+/// **One caller today, and the second is why it has a name.** `install_linux` asks it to refuse a
+/// drive it cannot install onto. The window's disk composer has the half that *receives* the
+/// answer — `composer::took_reading`, so the verdict it shows is about *that* image rather than
+/// about drives in general — but that half is `#[allow(dead_code)]` and its own note says the
+/// background read lands nowhere but a test. The doc here used to say "two callers need the same
+/// question", which was a promise written in the present tense.
+///
+/// `0x0B` is the CHS form and `0x0C` the LBA one; both are legitimate FAT32 and `ipodloader2`
+/// reads only the first. The tests below are the contract `compose` reasons against.
 pub fn data_partition_type(src: &Path) -> Result<u8, String> {
     let mut mbr = [0u8; 512];
     let mut f = std::fs::File::open(src).map_err(|e| format!("{}: {e}", src.display()))?;
-    std::io::Read::read_exact(&mut f, &mut mbr).map_err(|e| e.to_string())?;
+    std::io::Read::read_exact(&mut f, &mut mbr)
+        .map_err(|e| format!("{}: cannot read an MBR: {e}", src.display()))?;
     Ok((0..4)
         .map(|i| mbr[446 + i * 16 + 4])
         .find(|t| matches!(t, 0x0b | 0x0c))
@@ -588,4 +594,135 @@ pub fn install_linux(
         if has_rockbox { ", Rockbox" } else { "" }
     ));
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 512-byte MBR carrying `types` in its four partition entries, and nothing else true.
+    ///
+    /// Built here rather than taken from anything under `resources/` for the reason
+    /// [`crate::fat`]'s own `synth` gives: the bug being guarded against is *which of the four
+    /// entries got looked at*, and that bug hides behind a drive whose layout you did not choose.
+    /// A real image has one plausible answer in one plausible slot; this one can put it anywhere.
+    fn mbr_with(path: &Path, types: [u8; 4]) {
+        let mut img = vec![0u8; 512];
+        for (i, t) in types.iter().enumerate() {
+            img[446 + i * 16 + 4] = *t;
+            // A non-zero LBA and length, so the entry is a partition rather than an empty slot.
+            img[446 + i * 16 + 8..446 + i * 16 + 12]
+                .copy_from_slice(&(63u32 + i as u32).to_le_bytes());
+            img[446 + i * 16 + 12..446 + i * 16 + 16].copy_from_slice(&8192u32.to_le_bytes());
+        }
+        img[510] = 0x55;
+        img[511] = 0xAA;
+        std::fs::write(path, &img).unwrap();
+    }
+
+    fn tmp(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("ipod-install-{name}-{}.img", std::process::id()))
+    }
+
+    /// `0x0B` is what `ipodloader2` reads and what `ipod-boot make-disk` writes, so this is the
+    /// answer the whole refusal in [`install_linux`] is calibrated against.
+    #[test]
+    fn data_partition_type_answers_0x0b_wherever_the_0x0b_partition_sits() {
+        let p = tmp("0x0b-first");
+        mbr_with(&p, [0x0b, 0x00, 0x00, 0x00]);
+        assert_eq!(data_partition_type(&p).unwrap(), 0x0b);
+
+        // And in the layout an actual iPod has: Apple's firmware partition first, data second.
+        let p = tmp("0x0b-apple-layout");
+        mbr_with(&p, [0x00, 0x0b, 0x00, 0x00]);
+        assert_eq!(data_partition_type(&p).unwrap(), 0x0b);
+    }
+
+    /// **`0x0C` must come back as `0x0C` and not be folded into "FAT32".**
+    ///
+    /// Both types are legitimate FAT32 — `0x0B` the CHS form, `0x0C` the LBA one — and every drive
+    /// image in this project taken off real hardware is `0x0C`. `ipodloader2`'s `vfs.c` has
+    /// `case 0xB` and no `case 0xC`, so a function that answered "FAT32" for both would let
+    /// [`install_linux`] build a drive that installs cleanly and then cannot boot. The distinction
+    /// is the refusal.
+    #[test]
+    fn data_partition_type_keeps_0x0c_distinct_from_0x0b() {
+        let p = tmp("0x0c-apple-layout");
+        mbr_with(&p, [0x00, 0x0c, 0x00, 0x00]);
+        assert_eq!(data_partition_type(&p).unwrap(), 0x0c);
+
+        // The refusal that rests on it, end to end: a 0x0C drive is turned away by name.
+        let loader = tmp("0x0c-loader");
+        std::fs::write(&loader, b"not really a loader").unwrap();
+        let tree =
+            std::env::temp_dir().join(format!("ipod-install-0x0c-tree-{}", std::process::id()));
+        for d in ZEROSLACKR_DIRS {
+            std::fs::create_dir_all(tree.join(d)).unwrap();
+        }
+        let out = tmp("0x0c-out");
+        let e = install_linux(&p, &loader, &tree, &out).unwrap_err();
+        assert!(e.contains("0x0C"), "{e}");
+        let _ = std::fs::remove_dir_all(&tree);
+    }
+
+    /// **The function scans all four entries, and nothing else proves it.**
+    ///
+    /// It reads `(0..4)`, and a regression to `mbr[446 + 4]` — the spelling three other readers in
+    /// this tree use, [`install_os`] and `fat::Fat32::open` and `inspect` among them — would still
+    /// answer correctly for the first-entry case above and for every synthetic image `make-disk`
+    /// writes. It would answer `0` for a real iPod, whose data partition is the second entry, and
+    /// `compose`'s rule (2a) would then refuse the drive as having no FAT32 partition at all.
+    #[test]
+    fn data_partition_type_looks_in_all_four_entries() {
+        for t in [0x0bu8, 0x0c] {
+            for slot in 0..4usize {
+                // Every other slot holds something that is a partition but is not FAT32.
+                let mut types = [0x83u8; 4];
+                types[slot] = t;
+                let p = tmp(&format!("slot-{slot}-{t:#04x}"));
+                mbr_with(&p, types);
+                assert_eq!(
+                    data_partition_type(&p).unwrap(),
+                    t,
+                    "{t:#04x} in entry {slot} was not found"
+                );
+            }
+        }
+    }
+
+    /// The `0` half of the contract `compose::check_parts` rule (2a) is written against: a drive
+    /// whose MBR names no `0x0B` and no `0x0C` answers `0`, rather than erroring or guessing.
+    #[test]
+    fn data_partition_type_answers_zero_for_a_drive_with_no_fat32_partition() {
+        let p = tmp("no-fat32");
+        mbr_with(&p, [0x00, 0x83, 0x07, 0xaf]);
+        assert_eq!(data_partition_type(&p).unwrap(), 0);
+    }
+
+    /// **Too short is an error, not a `0`.** A truncated download and a drive with no FAT32
+    /// partition are different facts, and `0` is already spoken for by the second one — rule (2a)
+    /// turns it into "this is not an iPod drive image", which is a confident sentence to say about
+    /// a file nobody managed to read.
+    #[test]
+    fn data_partition_type_errs_rather_than_answering_zero_for_a_file_too_short_for_an_mbr() {
+        let p = tmp("short");
+        std::fs::write(&p, vec![0u8; 511]).unwrap();
+        let e = data_partition_type(&p).unwrap_err();
+        assert!(
+            e.contains(&p.display().to_string()),
+            "the short-read error does not name the file: {e}"
+        );
+    }
+
+    /// A path that is not there names itself, because the caller's next question is *which one*.
+    #[test]
+    fn data_partition_type_names_the_path_when_the_file_is_not_there() {
+        let p = tmp("definitely-not-here");
+        let _ = std::fs::remove_file(&p);
+        let e = data_partition_type(&p).unwrap_err();
+        assert!(
+            e.contains(&p.display().to_string()),
+            "the open error does not name the file: {e}"
+        );
+    }
 }
