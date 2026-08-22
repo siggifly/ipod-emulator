@@ -4188,6 +4188,70 @@ pub(crate) mod tests {
         (calls, wholesale)
     }
 
+    /// The dead-code allow **in either spelling**, and the only reader of it in this file.
+    ///
+    /// `Some(true)` for the inner `#![allow(dead_code)]`, which blankets a whole module;
+    /// `Some(false)` for the outer `#[allow(dead_code)]`, which sits on one item; `None` for
+    /// anything else, including prose *about* the attribute — `geometry.rs` explains twice in doc
+    /// comments why a constant is `#[cfg(test)]` "rather than `#[allow(dead_code)]`", and an
+    /// instrument that read those as allows would be reporting a defect it created by looking.
+    ///
+    /// **The two spellings do not contain one another**, which is the whole reason this exists:
+    /// `"#![allow(dead_code)]".contains("#[allow(dead_code)]")` is `false`. Both sweeps below were
+    /// written with the outer form as their filter, so a module-wide blanket read as *no allow
+    /// here at all* — §6's shape, an absence the instrument could not have observed.
+    fn dead_code_allow(line: &str) -> Option<bool> {
+        if line.trim_start().starts_with("//") {
+            return None;
+        }
+        if line.contains("#![allow(dead_code)]") {
+            Some(true)
+        } else if line.contains("#[allow(dead_code)]") {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    /// The two spellings this crate uses for a retirement condition, in either case.
+    fn names_a_condition(text: &str) -> bool {
+        let lower = text.to_ascii_lowercase();
+        lower.contains("retired when") || lower.contains("retirement condition")
+    }
+
+    /// Whether the allow at `n` says what would retire it — **on its own line, or in the comment
+    /// block directly above it**.
+    ///
+    /// Both forms are load-bearing in this crate and neither is a concession to a sweep that went
+    /// red. An attribute with no item has no line to write a condition on, so `composer.rs`'s
+    /// blanket writes its own in the paragraph above itself; and the five parked modules at the top of
+    /// `main.rs` are a run of `#[allow(dead_code)] mod x;` pairs sharing one paragraph above the
+    /// run, which is why the scan steps over the run's own attribute and `mod x;` lines on its way
+    /// up. It steps over **nothing else** — not a blank line, not code — so a condition cannot be
+    /// inherited from a paragraph that was written about something else.
+    fn says_what_retires_it(lines: &[&str], n: usize) -> bool {
+        if names_a_condition(lines[n]) {
+            return true;
+        }
+        let mut i = n;
+        while i > 0 {
+            let above = lines[i - 1].trim_start();
+            let in_run = dead_code_allow(lines[i - 1]).is_some()
+                || (above.starts_with("mod ") && above.ends_with(';'));
+            if !in_run {
+                break;
+            }
+            i -= 1;
+        }
+        let mut block = String::new();
+        while i > 0 && lines[i - 1].trim_start().starts_with("//") {
+            block.insert(0, '\n');
+            block.insert_str(0, lines[i - 1]);
+            i -= 1;
+        }
+        names_a_condition(&block)
+    }
+
     /// **No `#[allow(dead_code)]` is bare.** Every one carries the observation that retires it.
     ///
     /// `rail.rs` and `nav.rs` are written before their producers — that is the whole point of §20
@@ -4198,28 +4262,32 @@ pub(crate) mod tests {
     /// `research/04`'s rule for a bypass applies unchanged — *a bypass with no retirement condition
     /// is a lie with a comment on it.*
     ///
-    /// The five at the top of `main.rs` are exempt: they are module-level and share one written
-    /// condition, in prose, immediately above them.
+    /// **The blanket used to be invisible here**, and it is the strongest form of the thing this
+    /// sweep exists to police: `composer.rs:41` carries `#![allow(dead_code)]` over 3,197 lines. The
+    /// filter read `!line.contains("#[allow(dead_code)]")`, and
+    /// `"#![allow(dead_code)]".contains("#[allow(dead_code)]")` is **false** — the `!` sits between
+    /// the `#` and the `[`. So the one attribute in the crate that silences a whole module was the
+    /// one attribute the sweep never counted. [`dead_code_allow`] is now the only reader of either
+    /// spelling, in both sweeps.
+    ///
+    /// **And the condition may be stated above rather than beside.** An attribute with no item has
+    /// no line to write it on: `composer.rs`'s blanket states its own in the paragraph directly
+    /// above it, and the five parked modules at the top of `main.rs` are a run of `#[allow(dead_code)]
+    /// mod x;` pairs sharing one paragraph above the run. Both were previously handled by exempting
+    /// the whole of `main.rs` — a hole wide enough to hide a blanket in — and both are now read by
+    /// [`says_what_retires_it`], so no file is exempt from this sweep any more.
     #[test]
     fn every_dead_code_allow_says_what_would_retire_it() {
         let mut bare: Vec<String> = Vec::new();
         let mut seen = 0usize;
         for (name, text) in rust_sources() {
-            for (n, line) in text.lines().enumerate() {
-                // Prose *about* the attribute is not the attribute. `geometry.rs` explains in a doc
-                // comment why one constant is `#[cfg(test)]` "rather than `#[allow(dead_code)]`",
-                // and an instrument that reads that as an allow is reporting a defect it created by
-                // looking.
-                if line.trim_start().starts_with("//") || !line.contains("#[allow(dead_code)]") {
+            let lines: Vec<&str> = text.lines().collect();
+            for n in 0..lines.len() {
+                if dead_code_allow(lines[n]).is_none() {
                     continue;
                 }
                 seen += 1;
-                // The module-level five in `main.rs`, whose shared condition is the paragraph above
-                // them, in prose, naming the slice that retires all five at once.
-                if name == "main.rs" {
-                    continue;
-                }
-                if !line.contains("retired when:") {
+                if !says_what_retires_it(&lines, n) {
                     bare.push(format!("{name}:{}", n + 1));
                 }
             }
@@ -4228,7 +4296,8 @@ pub(crate) mod tests {
         assert!(
             bare.is_empty(),
             "{bare:?} carry no retirement condition. Write `// retired when: <the observation that \
-             makes this reachable>` on the same line, or delete the item"
+             makes this reachable>` on the same line, or — for a blanket, which has no item to sit \
+             beside — in the comment block directly above it"
         );
     }
 
@@ -4251,6 +4320,22 @@ pub(crate) mod tests {
     /// `Class::as_str`, and `composer.rs` has twelve of the former. Those names are listed in
     /// `AMBIGUOUS` and skipped. The list is the limit of the method rather than a carve-out for
     /// convenience — a name joins it when `std` defines it too, never because a sweep went red.
+    ///
+    /// **A blanket is not on an item; it is on the module**, and it used to be filtered out here
+    /// along with everything else the outer spelling misses — see [`dead_code_allow`]. Pairing it
+    /// with the line under it would be a widening that reads nothing: the line under
+    /// `composer.rs:41` is a `use`. What `#![allow(dead_code)]` claims in this crate is *this module
+    /// is not reconnected yet*, and the falsification of that claim is not one caller — a blanket
+    /// legitimately covers a **mixture** — it is the module's whole public surface already being
+    /// reached from outside. At that point nothing under it is waiting for a caller, and whatever
+    /// the compiler still warns about is per-item debt that belongs on the items.
+    ///
+    /// **Only a `pub fn` counts towards that, and that is the boundary of the instrument rather
+    /// than a convenience.** Another module cannot call a private one, so a textual match on a
+    /// private name is a false positive by construction. Measured while this was written, with the
+    /// same matcher: 41 of `composer.rs`'s 68 shipped `pub fn`s are named in another module, so its
+    /// blanket is not redundant and this does not fire on it. The day the last 27 are wired, it
+    /// does — which is the same finding the compiler cannot make, for the same reason.
     #[test]
     fn no_dead_code_allow_sits_on_a_function_the_program_already_calls() {
         /// Method names `std` defines as well, which a text sweep cannot tell apart from these.
@@ -4291,6 +4376,27 @@ pub(crate) mod tests {
              not being checked and every longer name matches its own prefix"
         );
 
+        // **And the second control is the one this sweep shipped without.** The blanket half below
+        // reads nothing at all if the attribute matcher cannot see the inner spelling, and a sweep
+        // that reads nothing is green — which is exactly how a module-wide allow over 3,197 lines
+        // stayed invisible to both of these tests. Pinned as three facts about the matcher rather
+        // than as a fact about the tree, so it keeps its meaning after the last blanket is gone.
+        assert_eq!(
+            dead_code_allow("#![allow(dead_code)]"),
+            Some(true),
+            "the matcher does not see the inner spelling, so the blanket sweep reads nothing"
+        );
+        assert_eq!(
+            dead_code_allow("    #[allow(dead_code)]  // retired when: something"),
+            Some(false),
+            "the matcher does not see the outer spelling, so the item sweep reads nothing"
+        );
+        assert_eq!(
+            dead_code_allow("// prose about #[allow(dead_code)] is not the attribute"),
+            None,
+            "the matcher reads a comment about the attribute as the attribute"
+        );
+
         // Each allow, paired with the `fn` on the next line that is neither an attribute nor a doc
         // comment. Anything else under an allow — a field, a variant, a `const`, a `mod` — is a
         // different question and is not swept here.
@@ -4299,7 +4405,7 @@ pub(crate) mod tests {
         for (file, text) in &sources {
             let lines: Vec<&str> = text.lines().collect();
             for (n, line) in lines.iter().enumerate() {
-                if line.trim_start().starts_with("//") || !line.contains("#[allow(dead_code)]") {
+                if dead_code_allow(line).is_none() {
                     continue;
                 }
                 let Some(item) = lines[n + 1..]
@@ -4331,6 +4437,55 @@ pub(crate) mod tests {
             stale.is_empty(),
             "{stale:?}: the retirement condition has already been met — the program calls it. \
              Delete the allow, or say what is still waiting"
+        );
+
+        // The blanket half. A module carrying `#![allow(dead_code)]` says *nothing in here is
+        // reconnected*; it has stopped being true when every `pub fn` the module ships is called
+        // from another module.
+        let mut redundant: Vec<String> = Vec::new();
+        for (file, text) in &sources {
+            if !text.lines().any(|l| dead_code_allow(l) == Some(true)) {
+                continue;
+            }
+            let mut surface = 0usize;
+            let mut waiting: Vec<&str> = Vec::new();
+            for line in text.lines() {
+                let t = line.trim_start();
+                if t.starts_with("//") {
+                    continue;
+                }
+                let Some(rest) = ["pub fn ", "pub(crate) fn ", "pub const fn "]
+                    .iter()
+                    .find_map(|kw| t.strip_prefix(kw))
+                else {
+                    continue;
+                };
+                let name = &rest[..rest
+                    .find(|c: char| !c.is_alphanumeric() && c != '_')
+                    .unwrap_or(rest.len())];
+                if name.is_empty() {
+                    continue;
+                }
+                surface += 1;
+                // An `AMBIGUOUS` name counts as still waiting. The skip is conservative in this
+                // direction on purpose: it can only keep this quiet, never make it fire.
+                if AMBIGUOUS.contains(&name)
+                    || !sources.iter().any(|(o, t)| o != file && calls(name, t))
+                {
+                    waiting.push(name);
+                }
+            }
+            // `surface > 0` is not decoration: a module with no public surface at all would
+            // otherwise satisfy "every one of them is called" by having none.
+            if surface > 0 && waiting.is_empty() {
+                redundant.push(format!("{file} ({surface} `pub fn`, all called from elsewhere)"));
+            }
+        }
+        assert!(
+            redundant.is_empty(),
+            "{redundant:?}: the module blanket says nothing here is reconnected, and the whole of \
+             each module's public surface is already called from another module. Narrow it to the \
+             items the compiler still warns about, each with its own retirement condition"
         );
     }
 
@@ -6781,11 +6936,25 @@ pub(crate) mod tests {
         // pins rather than an exception to it: live exactly when there is a Composer page to send
         // it to. Written as an equality, like `Retry`'s, so it goes red in **both** directions —
         // a `Fix` drawn live with no page behind it, and a `Fix` still drawn disabled beside one.
+        //
+        // **The right-hand side is `Page::slot`, and it was `caps().composer` — which made this a
+        // tautology.** `Next::available` gates `Fix` on `caps.composer`, so `live` can only hold the
+        // label when that boolean is true; comparing the set against the same boolean is the
+        // expression on both sides of an `assert_eq!`. It was proved by mutation rather than by
+        // reading: `caps()`'s `composer` field set to a literal `false` moved **not one assertion
+        // in the crate** — `234 passed; 0 failed` — so the guard written to catch a `Fix` drawn
+        // disabled beside a Composer could not catch it. §6's rule about an instrument, applied to
+        // a guard: before believing a green, run the control that makes it red.
+        //
+        // `Page::Composer.slot()` is what `caps().composer` is *derived from*, one file away and
+        // answering the same question — so the two sides are now independent, and the direction
+        // that matters goes red: a `caps()` that contradicts the page table it reads.
         assert_eq!(
             live.iter().any(|l| *l == compose::Fix::BuildFromIpsw.label()),
-            caps().composer,
-            "`Fix` is live exactly when this build has a Composer to change a recipe in, and it is \
-             not: {live:?}"
+            nav::Page::Composer.slot().is_some(),
+            "`Fix` is live exactly when there is a Composer page to send it to, and it is not — \
+             `caps().composer` and `Page::Composer.slot()` disagree about whether this build has \
+             one: {live:?}"
         );
     }
 
