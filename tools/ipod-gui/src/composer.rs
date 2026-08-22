@@ -3029,11 +3029,17 @@ mod tests {
 
     /// **A build with no clipboard does not draw a live control over one.**
     ///
-    /// `main::caps()` reports `clipboard: false` — nothing in this dependency graph reaches a
-    /// pasteboard — and `main::wire`'s `on_copy_text` declines with that sentence. This row shipped
-    /// `enabled: true` regardless, so `Copy the command line` was drawn live, in accent, over a
-    /// route that could only refuse. §14.1's phantom control, and the same defect family as the
-    /// ordinal the markup was sending one line below the label.
+    /// `main::caps()` reports `clipboard: false` — this program declares no clipboard dependency
+    /// and calls no clipboard API — and `main::wire`'s `on_copy_text` declines with that sentence.
+    /// This row shipped `enabled: true` regardless, so `Copy the command line` was drawn live, in
+    /// accent, over a route that could only refuse. §14.1's phantom control, and the same defect
+    /// family as the ordinal the markup was sending one line below the label.
+    ///
+    /// **That is not what this line used to say.** It said *nothing in this dependency graph
+    /// reaches a pasteboard*, and copypasta is in the graph — under `i-slint-backend-winit`, which
+    /// is where Slint's own text fields get their copy and paste. `main::caps`'s doc carries the
+    /// measurement and the route that does exist; the two claims are different and only one of
+    /// them is true.
     ///
     /// The capability is checked **before** the identity's own gate, because it is the one that is
     /// true of every iPod: saying *no seed reproduces them* implies a different iPod could be

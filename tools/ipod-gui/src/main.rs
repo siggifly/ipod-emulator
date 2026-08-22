@@ -1209,7 +1209,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
             let retried = take_next_step(&rail, &stack, &composer, id as u64, which, caps);
             // **`Fix` is the one next step that navigates**, and a Composer page pushed without its
             // contents pushed too is the blank panel `Stack::go` spends two guards preventing. This
-            // is the same `redraw` all eleven Composer callbacks end in; it returns at once when
+            // is the same `redraw` all ten Composer callbacks end in; it returns at once when
             // nothing is being composed, which is every other press that reaches this closure.
             redraw();
             // **§10.3: a retry resumes, and it goes through the same press the centre button
@@ -1237,11 +1237,20 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
     }
 
     // **The single route to a clipboard, and the gate on it.** `Copy the details` is gated on
-    // `caps.clipboard`, which is false because nothing in this dependency graph provides a
-    // clipboard, so no control can fire this today. It says so rather than silently succeeding — a
-    // handler that swallows the request is the visible-control-that-does-nothing defect one level
-    // down — and it refuses an identifier **before** it says that, because the refusal is the rule
-    // and the missing clipboard is only the state of this build.
+    // `caps.clipboard`, which is false because **this program declares no clipboard dependency and
+    // calls no clipboard API** — so no control can fire this today. It says so rather than silently
+    // succeeding — a handler that swallows the request is the visible-control-that-does-nothing
+    // defect one level down — and it refuses an identifier **before** it says that, because the
+    // refusal is the rule and the missing clipboard is only the state of this build.
+    //
+    // **That is deliberately not the claim this comment used to make**, which was *nothing in this
+    // dependency graph provides a clipboard*, and which is false: `cargo tree -p ipod-gui | grep -c
+    // copypasta` is **1** — copypasta 0.10.2 arrives under `i-slint-backend-winit`, which is where
+    // Slint's own text fields get their copy and paste. In the graph and available to us are
+    // different claims: a transitive dependency of the backend is not an API this crate can call,
+    // `use copypasta::` does not compile without a `copypasta` line in `Cargo.toml`, and there is
+    // none. What is absent is a route **we** can reach, not a pasteboard on the machine. See
+    // [`caps`] for the route that does exist and is not taken here.
     {
         let rail = rail.clone();
         let rows = rows.clone();
@@ -1482,10 +1491,40 @@ fn is_running(p: &emu::Phase) -> bool {
 ///
 /// **It is called once per launch**, in [`wire`], and the answer is carried on `Caps` from there.
 /// Asking again per control would spawn a process inside a binding.
+///
+/// **One of the four is a decision rather than an absence, and it is `clipboard`.** *Nothing here
+/// reaches a pasteboard* is a fact about this crate's own code and stays true; *nothing could* is
+/// not, and this doc must not be read as saying it. Measured against the pinned `slint = "1.17"`,
+/// in `~/.cargo/registry/src/`, rather than assumed:
+///
+/// - **There is no Rust-side clipboard API.** `slint/lib.rs:422` is `pub mod platform { pub use
+///   i_slint_core::platform::*; }`, and what that exports is the `Platform` **trait** — whose
+///   `set_clipboard_text` and `clipboard_text` a *backend* implements — plus the `Clipboard` enum
+///   and `set_platform`. There is no accessor for the platform already installed: reaching it goes
+///   through `i_slint_core::context::with_global_context`, in a crate this one does not depend on.
+///   Nothing on `slint::Window` copies text.
+/// - **There is a markup-side one, and it is documented and stable.** `i-slint-compiler-1.17.1/
+///   builtins.slint` declares `TextInput::select-all()` at `:1718` and `TextInput::copy()` at
+///   `:1727`, both as documented functions on a built-in element this crate's `.slint` files
+///   already have. `copy()` lands on `i-slint-core-1.17.1/items/text.rs:1919`, which asks the
+///   window's context for the platform and calls `set_clipboard_text` — and winit's backend does
+///   exactly that at `i-slint-backend-winit-1.17.1/lib.rs:883`, through `clipboard.rs`, through
+///   `copypasta`. That is the same copypasta the `on_copy_text` comment names: it is reachable, but
+///   only from the `.slint` side and only with a selection, since `copy_clipboard` returns early
+///   when `anchor == cursor`.
+///
+/// So this is `false` because the route is not built, not because none exists. **Retirement
+/// condition:** a `TextInput` — `read-only`, off-screen or zero-height — that `on_copy_text` fills,
+/// focuses, `select-all()`s and `copy()`s, at which point this becomes `true` and every disabled
+/// reason in `rail.rs` and `composer.rs` that names the missing pasteboard goes with it. It is
+/// deliberately **not** done in the commit that wrote this paragraph: a control that fires is a
+/// behaviour to design and test, and the finding is worth having on its own.
 fn caps() -> rail::Caps {
     rail::Caps {
         file_picker: false,
         drop_target: false,
+        // Not *no clipboard exists* — see this function's doc. No route from here to the one that
+        // does, and the route is a `.slint` `TextInput`, not a crate.
         clipboard: false,
         reveal: false,
         // **Derived, not typed.** `Page::slot()` returns `Some` on the day `ui/drawer.slint` gains
@@ -1703,6 +1742,30 @@ fn take_next_step(
         // no recipe either. So this opens the Composer on the recipe already being composed if
         // there is one, and mints a new one if there is not. It never replaces one: a compose in
         // flight is somebody's work, and `AGENTS.md` §3 does not let a press throw it away.
+        //
+        // ── **NOT REACHABLE IN THE RUNNING PROGRAM, and that is written here on purpose** ────────
+        //
+        // The arm is correct and the gate is now honest, and no press a person can make gets here.
+        // Traced rather than assumed: the only `Class::Incompatible` constructed outside a test is
+        // `work::Plan::of`'s defensive refusal at `work.rs:332`, which fires when a step's verb is
+        // `Verb::Copy` — and the only producer of `Verb::Copy` is `compose::Recipe::steps` under
+        // `Start::FromImage` or `Start::FromDisk` (`compose.rs:913` and `:926`). `work::plan` is
+        // `Verb::Synthesise`, then `work::recipe()`'s steps, then `Verb::Start`, and `recipe()`
+        // hard-codes `Start::FromIpsw`. So no plan this build files can carry a `Copy`, no
+        // `Incompatible` reaches the Rail, no `Fix` is ever drawn, and this arm runs never.
+        //
+        // **What would make it reachable is the thing `composed_and_unbuilt` names as its own
+        // retirement condition**: `work::Queue` taking a `Recipe` instead of the fixed first-run
+        // plan. A device composed from a drive somebody already has then reaches `Plan::of` with a
+        // `Copy` step, is refused with `Class::Incompatible`, and the `Fix` on that entry is the
+        // first press that arrives here. Building that path is later work and is deliberately not
+        // done here.
+        //
+        // It is recorded rather than deleted or disabled because it is a **control enabled this
+        // week that no user action can reach**, which is exactly the shape that becomes a surprise:
+        // `every_next_step_this_build_offers_is_wired_to_something` asserts `Fix` is live and wired,
+        // and passes, and neither half of that is a claim that anything produces the failure it
+        // hangs off. Un-recorded, the next reader takes a green sweep for a route.
         rail::Next::Fix { .. } => {
             let mut held = composer.borrow_mut();
             if held.is_none() {
@@ -6033,6 +6096,94 @@ pub(crate) mod tests {
             row.cradle_label.contains("not wired"),
             "the cradle refuses without saying why: {:?}",
             row.cradle_label
+        );
+    }
+
+    /// **The sentence `Route::Unwired` files, word for word, because the sentence IS the press.**
+    ///
+    /// `a_composed_device_is_not_routed_to_the_first_run` above pins the routing — that this press
+    /// does not reach `work::Queue::press` — and `cradle_label`'s arm pins the caption before it.
+    /// Nothing pinned what a person actually reads *after* pressing, and on this route that is the
+    /// whole of the behaviour: `mutated` is `false` for `Route::Unwired`, so nothing is started,
+    /// nothing is minted and nothing is saved. One note is the entire observable effect.
+    ///
+    /// **It carried a remedy once and the remedy built something else.** The sentence this replaced
+    /// on the Composer's own save said *press the centre button on it to finish making it*, and
+    /// that button ran the fixed first-run plan — Apple's firmware onto an 8 GiB drive — for a
+    /// device that may have been composed as Rockbox-only. §14.1: say what cannot be done and why,
+    /// and stop there. Unasserted, the *and stop there* half can be rewritten back into a promise
+    /// without one test moving, which is how it got there the first time.
+    ///
+    /// So this is an equality on the whole string rather than a `contains`: a `contains` on *not
+    /// wired* would stay green through a sentence that then went on to name a button.
+    #[test]
+    fn the_press_on_a_composed_device_files_the_refusal_verbatim_and_offers_no_remedy() {
+        let _held = use_a_scratch_data_dir();
+        let mut s = Settings::default();
+        let mut c = composer::Composer::new();
+        c.make_one();
+        c.set_start(compose::Start::FromIpsw("iPod_25.1.3.ipsw".into()));
+        c.set_name("Rockbox only");
+        let done = c.commit(&mut s).expect("an empty library takes the name");
+        let i = s
+            .devices
+            .iter()
+            .position(|d| d.name == done.device)
+            .expect("the Composer filed no device");
+        // The fixture is the state the route is about, not merely a device that happens to be
+        // there: `composed_and_unbuilt` is the one boolean the press, the ring and the label share.
+        assert!(
+            composed_and_unbuilt(&s.devices[i]),
+            "the fixture does not take the `Unwired` route, so what it asserts below is not it"
+        );
+
+        let settings = Rc::new(RefCell::new(s));
+        let w = a_window();
+        let _wiring = wire(&w, settings.clone());
+        // Counted rather than assumed to be zero: `wire` files §10.1's plan, and one more entry on
+        // top of it on a machine with no `curl`. What this test is about is the row the press adds.
+        let before = w.get_rail().row_count();
+        // The whole library as it would be written to disk. `Route::Unwired` is excluded from
+        // `mutated`, so `save` is not called — and the model it would have rendered must be the one
+        // it was. Taken *after* `wire`, which mints and writes §10.3's welcome flag, and compared
+        // against itself: `current` is already `Some` here because `Composer::commit` made the
+        // device live, so asserting `None` would be asserting something the press never did.
+        let library_before = settings.borrow().render();
+
+        w.invoke_start_device(i as i32);
+
+        assert_eq!(
+            w.get_rail().row_count(),
+            before + 1,
+            "the press filed something other than exactly one note"
+        );
+        let row = w.get_rail().row_data(before).expect("the note the press filed");
+        assert_eq!(row.kind, RailKind::Note, "a refusal that mutates nothing is filed as a failure");
+        // `Rail::note` puts its text in `what`, and `ui/rail.slint:173` draws `e.what` — so this is
+        // the string that reaches a pixel, not a field beside it.
+        assert_eq!(
+            row.what.as_str(),
+            format!(
+                "{} was composed here, and building a composed device is not wired yet. Its \
+                 drive has not been made, and this button cannot make one.",
+                done.device
+            ),
+            "the sentence the refusal draws is not the one this route was written to say"
+        );
+        // §14.1's second half, said as its own assertion so a reworded sentence that puts a remedy
+        // back fails on the reason rather than on the diff.
+        assert!(
+            !row.what.contains("centre button"),
+            "the refusal points at a button again: {:?}",
+            row.what
+        );
+        // And it mutated nothing, which is the other half of *say what cannot be done and stop*:
+        // a refusal that quietly starts a build, mints an identity or renames something is the
+        // same defect as one that promises a remedy, one layer down where nobody reads it.
+        assert_eq!(
+            settings.borrow().render(),
+            library_before,
+            "the refusing press changed the library"
         );
     }
 
