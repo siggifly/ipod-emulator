@@ -22,7 +22,10 @@
 //!    refusal the program is about to fix itself.
 //! 3. **Recomputation happens exactly twice**, and both are that same function: on an edit, and when
 //!    a background volume read lands through [`Composer::took_reading`]. There is no timer on this
-//!    path, so nothing changes without an edit or a completed read.
+//!    path, so nothing changes without an edit or a completed read. `main.rs` spawns that read off
+//!    [`Composer::volume_to_read`] and lands it through [`Composer::took_reading_of`], which is the
+//!    same verb with the drive's name on it — an answer about a file that is no longer the chosen
+//!    one is dropped rather than written onto the one that is.
 //!
 //! And the region says *reading …* rather than a verdict for exactly as long as the answer can still
 //! change it — [`compose::Recipe::volume_decides`] is the predicate, and it is a three-way trial
@@ -30,20 +33,24 @@
 
 // ## What is silenced here, and by what
 //
-// **Nothing is silenced by a blanket.** Every allow in this file sits on one item and names, on its
-// own line, the observation that would retire it. What decides which items get one is the boundary:
-// the flattened row structs at the bottom of this file are what crosses to `main.rs`, and a fact
-// that does not cross cannot have a caller out there, whatever anybody intends to build later.
+// **Nothing is silenced at all any more.** This file carries **no `#[allow(dead_code)]`**, on an
+// item or otherwise. The five that were left all named the same missing piece of window — the two
+// halves of the volume read and the three [`VolumeRead`] states they construct — and `main.rs` now
+// spawns that read, so every one of their retirement conditions is met and all five are gone rather
+// than reworded.
 //
-// - **Six `#[allow(dead_code)]`.** Each waits on a specific piece of window that is not built: the
-//   two halves of the volume read, the three [`VolumeRead`] states they construct, and
-//   [`Composer::editing`], whose `Mode::Editing` title `push_composer` already draws and nothing
-//   constructs.
-// - **Eight `#[cfg(test)]`.** Six accessors and two rules that only this file's tests can reach,
-//   because the row structs carry the same values across and the tests use the accessors to check
-//   that the row and the recipe say one thing rather than two. `geometry.rs` states the precedent
-//   twice: a thing kept alive by an allow is the shape §16.9 deletes, and something nothing
-//   outside a test can call is one of those.
+// **Both counts this paragraph used to carry were wrong, which is the argument against writing
+// counts in prose.** It said *six* allows over five, because `Composer::editing`'s was deleted the
+// day `devices.rs` gave it a caller and nobody re-read the summary two hundred lines up; and it
+// said *eight* `#[cfg(test)]` over seven, because `Lock::presses` stopped being one the day `Pick`
+// grew a press count. Neither drift could go red: a number in a comment is nothing's contract.
+// Zero is the one count that stays true by itself, and the allows are at zero now.
+//
+// - **Seven `#[cfg(test)]`**, measured: six accessors and [`Region::claims_a_plan`], all of them
+//   things only this file's tests can reach — the row structs carry the same values across, and
+//   the tests use the accessors to check that the row and the recipe say one thing rather than
+//   two. `geometry.rs` states the precedent twice: a thing kept alive by an allow is the shape
+//   §16.9 deletes, and something nothing outside a test can call is one of those.
 //
 // **The window registers ten Composer callbacks**, in one run in `main.rs`: the nine `composer-*`
 // ones `window.slint` declares, and `device-new`, which is one of this page's two entrances. The
@@ -52,6 +59,7 @@
 // the arm is not there. Both entrances construct `Composer::new()`.
 
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use eapp_loader::compose::{self, Cost, Fix, Holes, Loader, Os, Recipe, Start, Step, Verdict};
 use eapp_loader::firmware;
@@ -282,14 +290,11 @@ pub enum VolumeRead {
     /// Nothing has been asked.
     Idle,
     /// A read is outstanding.
-    #[allow(dead_code)]  // retired when: something outside this file calls [`Composer::asked_for_reading`] — nothing spawns a volume read, so the only state the shipped program can be in is `Idle`
     Pending,
     /// It answered.
-    #[allow(dead_code)]  // retired when: a volume read lands through [`Composer::took_reading`] — the arithmetic under it is written and tested; the read is not wired
     Read(u8),
     /// It could not be done, and said why. **Not a refusal of the recipe** — a drive nobody could
     /// read is not a drive that fails, and the verdict goes on without it.
-    #[allow(dead_code)]  // retired when: a volume read fails on a live page — same unwired path as `Pending` and `Read`
     Failed(String),
 }
 
@@ -549,7 +554,7 @@ impl Composer {
     /// `the_verdict_the_plan_and_the_recipe_are_one_recipe` calls after every kind of edit.
     ///
     /// [`Composer::open`] sits in the middle of the run and is **not** gated: `push_composer` reads
-    /// it on every frame, through `set_composer_open_field` at `main.rs:3399`.
+    /// it on every frame, through `set_composer_open_field` at `main.rs:3501`.
     #[cfg(test)]
     pub fn region(&self) -> &Region {
         &self.region
@@ -1098,14 +1103,86 @@ impl Composer {
         true
     }
 
+    /// Whether the recipe starts from a volume nobody has read.
+    ///
+    /// **One copy, and both readers of it are below.** [`Composer::asked_for_reading`] arms on it
+    /// and [`Composer::volume_to_read`] answers the file on it, and they have to agree or the page
+    /// spawns a read it never renders, or renders a read it never spawned.
+    ///
+    /// It is deliberately *not* [`compose::Recipe::volume_decides`], which is a stricter question
+    /// — *would the answer change the verdict* — and is the one [`region`] draws *reading …* on.
+    /// The read is asked for whenever there is something to read, because the answer is written
+    /// onto the recipe and is worth having whether or not today's rules turn on it; what a person
+    /// is told they are waiting for is the narrower question.
+    fn unread_volume(&self) -> bool {
+        self.recipe.has_a_volume() && self.recipe.volume_type().is_none()
+    }
+
     /// Say that a volume read has been asked for. The region goes to *reading …* only if the answer
     /// can still change the verdict — [`compose::Recipe::volume_decides`] decides that, not this.
-    #[allow(dead_code)]  // retired when: something spawns the background volume read — this is the half that arms it, and no callback, no timer and no worker in `main.rs` reaches either half, so the shipped `VolumeRead` never leaves `Idle`
     pub fn asked_for_reading(&mut self) {
-        if self.recipe.has_a_volume() && self.recipe.volume_type().is_none() {
+        if self.unread_volume() {
             self.read = VolumeRead::Pending;
             self.recompute();
         }
+    }
+
+    /// The drive file a background read is **due on**, or `None`.
+    ///
+    /// Pure, and the caller's cue to call [`Composer::asked_for_reading`] and spawn one. Three
+    /// things have to hold: nothing has been asked yet, the chosen volume has not been read, and it
+    /// resolves to a file. The first is what makes it safe to ask on every re-push — a page that
+    /// asked twice would spawn a second thread for the same drive on the next frame, for ever.
+    ///
+    /// `set_start` puts the read back to `VolumeRead::Idle` whenever the drive moves, so choosing a
+    /// different disk is what makes the next read due; nothing else does.
+    pub fn volume_to_read(&self, s: &Settings) -> Option<PathBuf> {
+        if !matches!(self.read, VolumeRead::Idle) || !self.unread_volume() {
+            return None;
+        }
+        self.volume_on_disk(s)
+    }
+
+    /// The file the chosen volume **is**, whatever has been read about it.
+    ///
+    /// `None` for a bundle, which has no volume yet, and `None` for a library disk the settings no
+    /// longer hold — a device can name a disk that has been removed from the library, and a read
+    /// of a drive nobody can resolve is a read of nothing.
+    ///
+    /// **All three variants, in one match, once.** [`compose::Recipe::volume_type`]'s own doc says
+    /// a second copy of this match is where the third variant gets forgotten; this is the window's
+    /// half of the same question and it is written out here rather than at each caller.
+    fn volume_on_disk(&self, s: &Settings) -> Option<PathBuf> {
+        match &self.recipe.start {
+            Start::FromIpsw(_) => None,
+            Start::FromImage { path, .. } => {
+                (!path.is_empty()).then(|| PathBuf::from(path.as_str()))
+            }
+            Start::FromDisk { name, .. } => s
+                .disks
+                .iter()
+                .find(|d| d.name == *name)
+                .map(|d| d.path.clone()),
+        }
+    }
+
+    /// A background read landed, **about a named drive**. `true` when it was taken.
+    ///
+    /// This is the guard [`Composer::took_reading`] cannot carry, and it is not hypothetical: the
+    /// read is asked for the moment a disk is chosen and answers whenever the filesystem gets round
+    /// to it, and a person choosing a second disk in that window would otherwise have the first
+    /// drive's partition type written onto the second drive's recipe. That is a verdict about a
+    /// file nobody read — the exact shape of the false `Ok` this whole path exists to stop, arrived
+    /// at from the other end.
+    ///
+    /// **Compared against the drive as it is now**, not against what was armed, so a person who
+    /// picks a drive, picks another and picks the first one again is answered rather than ignored.
+    pub fn took_reading_of(&mut self, s: &Settings, file: &Path, r: Result<u8, String>) -> bool {
+        if self.volume_on_disk(s).as_deref() != Some(file) {
+            return false;
+        }
+        self.took_reading(r);
+        true
     }
 
     /// A background read landed.
@@ -1113,7 +1190,6 @@ impl Composer {
     /// **A failure leaves the verdict alone rather than refusing.** A drive nobody could read is not
     /// a drive that fails — and leaving the region in `Reading` for ever is the one outcome that is
     /// certainly wrong, because the region would then be a spinner nothing ever stops.
-    #[allow(dead_code)]  // retired when: the background volume read lands somewhere other than a test; this is the half that receives it, and it is the second of the two recomputes the header counts, the one that is not an edit
     pub fn took_reading(&mut self, r: Result<u8, String>) {
         match r {
             Ok(t) => {
@@ -2628,6 +2704,163 @@ mod tests {
         bundle.set_start(Start::FromIpsw("iPod_25.1.3.ipsw".into()));
         bundle.asked_for_reading();
         assert!(!matches!(bundle.region(), Region::Reading(_)));
+    }
+
+    /// A library with two drives in it, so that a read about one can land onto the other.
+    fn two_drives(at: &std::path::Path) -> Settings {
+        let mut s = library("My 5.5G");
+        for (name, file) in [("off my 5.5G", "a.img"), ("off my 4G", "b.img")] {
+            let path = at.join(file);
+            std::fs::write(&path, b"a drive, as far as this file is concerned").expect("a drive");
+            s.disks.push(settings::Disk {
+                name: name.into(),
+                path,
+                built_from: None,
+                installed: Vec::new(),
+            });
+        }
+        s
+    }
+
+    /// **The file a read is due on is the one the library says the chosen disk is** — and it is due
+    /// exactly once per chosen drive.
+    ///
+    /// The once matters as much as the file: `main.rs` asks this on every re-push of the page,
+    /// which is every keystroke and every tick, so an answer that stayed `Some` while a read was
+    /// already going would spawn a thread per frame for the rest of the window's life.
+    #[test]
+    fn a_read_is_due_once_per_chosen_drive_on_the_file_the_library_names() {
+        let at = std::env::temp_dir().join(format!("ipod-composer-due-{}", std::process::id()));
+        std::fs::create_dir_all(&at).expect("a scratch directory");
+        let s = two_drives(&at);
+        let mut c = with_ipod();
+
+        // A bundle has no volume yet, so there is nothing to read about it.
+        c.set_start(Start::FromIpsw("iPod_25.1.3.ipsw".into()));
+        assert_eq!(c.volume_to_read(&s), None, "a bundle is not a drive");
+
+        // A disk out of the library resolves through the library, not through its label.
+        c.choose(&s, Field::Disk, 1).expect("the first disk");
+        assert_eq!(c.volume_to_read(&s), Some(at.join("a.img")));
+
+        // Asked for, and no longer due — this is what makes it safe to ask on every frame.
+        c.asked_for_reading();
+        assert_eq!(c.volume_to_read(&s), None, "a second thread would be spawned for one drive");
+        c.took_reading(Ok(0x0b));
+        assert_eq!(c.volume_to_read(&s), None, "a drive that has been read is read");
+
+        // A different drive is a different read, and `set_start` is what arms it.
+        c.choose(&s, Field::Disk, 2).expect("the second disk");
+        assert_eq!(c.volume_to_read(&s), Some(at.join("b.img")));
+
+        // A disk the library no longer holds resolves to nothing rather than to a guess.
+        let empty = library("My 5.5G");
+        assert_eq!(c.volume_to_read(&empty), None, "a drive nobody can resolve was read anyway");
+        let _ = std::fs::remove_dir_all(&at);
+    }
+
+    /// **An answer about a drive that is no longer chosen is dropped**, rather than written onto
+    /// the drive that is.
+    ///
+    /// Reachable in one move and not hypothetical: the read is asked for the moment a disk is
+    /// picked and answers whenever the filesystem gets round to it, so picking a second disk in
+    /// that window is one press. Without the guard the second drive wears the first drive's
+    /// partition type — a verdict about a file nobody read, which is the same false `Ok` this
+    /// whole path exists to stop, arrived at from the other end.
+    #[test]
+    fn a_read_that_lands_about_another_drive_is_not_taken() {
+        let at = std::env::temp_dir().join(format!("ipod-composer-stale-{}", std::process::id()));
+        std::fs::create_dir_all(&at).expect("a scratch directory");
+        let s = two_drives(&at);
+
+        let mut c = with_ipod();
+        c.set_os(Os::IPodLinux, true);
+        c.choose(&s, Field::Disk, 1).expect("the first disk");
+        let asked_about = c.volume_to_read(&s).expect("a drive to read");
+        c.asked_for_reading();
+
+        // …and the person picks the other one before it answers. `set_start` puts the read back to
+        // `Idle` and `main.rs`'s re-push arms the next one, which is the pair of lines below.
+        c.choose(&s, Field::Disk, 2).expect("the second disk");
+        let mine = c.volume_to_read(&s).expect("the second drive is due");
+        c.asked_for_reading();
+
+        assert!(
+            !c.took_reading_of(&s, &asked_about, Ok(0x0c)),
+            "an answer about {} was taken as an answer about {}",
+            asked_about.display(),
+            c.recipe().start.label()
+        );
+        assert_eq!(
+            c.recipe().volume_type(),
+            None,
+            "the second drive is wearing the first drive's partition type"
+        );
+        assert!(
+            matches!(c.region(), Region::Reading(_)),
+            "the page stopped waiting on a drive nothing has answered about: {}",
+            c.region().text()
+        );
+
+        // The drive that IS chosen is answered.
+        assert!(c.took_reading_of(&s, &mine, Ok(0x0c)), "the chosen drive's own answer was dropped");
+        assert_eq!(c.recipe().volume_type(), Some(0x0c));
+        consistent(&c);
+        let _ = std::fs::remove_dir_all(&at);
+    }
+
+    /// **A drive read as `0x0C` refuses the one bootloader that cannot start it** — and the answer
+    /// arrives by the route the window uses, not by writing the field.
+    ///
+    /// `0x0C` is FAT32's LBA form. Both forms are legitimate; `ipodloader2` 2.9.0d reads only
+    /// `0x0B` — its `vfs.c` has `case 0x83` and `case 0xB` and nothing else — and every drive taken
+    /// off real hardware is `0x0C`. So this is the drive the reading state exists for: it looks
+    /// like every other library disk until somebody reads its MBR, and the plan that installs onto
+    /// it produces a drive that cannot boot.
+    ///
+    /// **Level ②'s tick box for iPodLinux is drawn disabled in this build** (`Os::OFFERED` holds
+    /// Apple and Rockbox), so no press a person can make composes this recipe today and the window
+    /// cannot show this refusal. That is a fact about what is offered, not about the rule — the
+    /// rule is written, tested and correct, and the day `Os::OFFERED` grows this is what it does.
+    /// `main.rs`'s `a_library_disk_stops_reading_ok_about_a_drive_nobody_has_read` is the half of
+    /// the same defect that IS reachable by presses, and it goes through the window end to end.
+    #[test]
+    fn a_drive_read_as_0x0c_refuses_the_one_loader_that_cannot_boot_it() {
+        let at = std::env::temp_dir().join(format!("ipod-composer-0x0c-{}", std::process::id()));
+        std::fs::create_dir_all(&at).expect("a scratch directory");
+        let s = two_drives(&at);
+
+        let mut c = with_ipod();
+        c.choose(&s, Field::Disk, 1).expect("the first disk");
+        c.set_os(Os::IPodLinux, true);
+        assert_eq!(c.recipe().loader, Loader::IPodLoader2, "the fixture's bootloader did not follow");
+
+        // Before the read: waiting, and claiming nothing.
+        c.asked_for_reading();
+        assert!(!c.region().claims_a_plan(), "{}", c.region().text());
+
+        let file = at.join("a.img");
+        assert!(c.took_reading_of(&s, &file, Ok(0x0c)), "the chosen drive's own answer was dropped");
+        match c.region() {
+            Region::No { why, fix } => {
+                assert!(why.contains("0x0C"), "the refusal does not name what was read: {why}");
+                assert!(why.contains("No valid paritions found!"), "{why}");
+                assert_eq!(fix.as_ref(), Some(&Fix::BuildFromIpsw), "no way out was offered");
+            }
+            other => panic!("a 0x0C drive under ipodloader2 read {other:?}"),
+        }
+
+        // The same drive read as `0x0B` is the one `ipodloader2` can start, so it does not refuse —
+        // which is what stops the assertion above being satisfied by a page that refuses every
+        // drive it manages to read.
+        let mut ok = with_ipod();
+        ok.choose(&s, Field::Disk, 1).expect("the first disk");
+        ok.set_os(Os::IPodLinux, true);
+        ok.asked_for_reading();
+        assert!(ok.took_reading_of(&s, &file, Ok(0x0b)));
+        assert!(ok.region().claims_a_plan(), "a 0x0B drive was refused: {}", ok.region().text());
+        consistent(&ok);
+        let _ = std::fs::remove_dir_all(&at);
     }
 
     /// **A spinner nothing stops is the one outcome that is certainly wrong.**

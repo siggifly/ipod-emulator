@@ -1,8 +1,12 @@
-//! The five steps a first run performs, and the one thread they run on.
+//! The five steps a first run performs, and the threads this window does its waiting on.
 //!
 //! `docs/GUI.md` §10. **Press the button**: this synthesises a boot ROM, downloads Apple's firmware,
 //! builds a drive from it, installs Apple's software onto it, and hands the machine off to be
 //! started. Nobody has to have an iPod, a NOR dump, or any file at all.
+//!
+//! [`Worker`] is that run and it is one thread. [`Reads`] is the other kind of waiting this crate
+//! does — §11.2's Composer asking a chosen drive what its data partition is — and it is here for
+//! the same reason: **the window's thread draws, and everything that can block belongs off it.**
 //!
 //! **There is no toolkit in this file**, and none may enter it. It names no generated type, takes
 //! no window, and every sentence in it is testable with no display — the same rule `rail.rs` and
@@ -853,6 +857,119 @@ fn space_or_permission(plan: &Plan, said: &str) -> Fault {
             class: Class::Permission,
             said: said.to_string(),
         },
+    }
+}
+
+// ── the drive nobody has read yet ───────────────────────────────────────────────────────────────
+
+/// Background reads of what a drive's data partition **is**, and the answers that have landed.
+///
+/// `install::data_partition_type` opens a drive image and reads its first 512 bytes. Both of those
+/// are the operating system's work and neither of them is bounded: a library disk can be a 55.9 GB
+/// file on an external drive, a network mount or a sleeping spindle, and `File::open` on one of
+/// those blocks for as long as it blocks. §11.2's picker is a control a person presses, so the
+/// answer cannot be fetched under the press — which is the whole of why this type exists and why
+/// [`Reads::start`] hands control straight back.
+///
+/// **Every answer is tagged with the file it is about**, because it can land after somebody has
+/// chosen a different drive. `composer::Composer::took_reading_of` is what compares the two, and
+/// an answer about a drive that is no longer chosen is dropped rather than written onto the one
+/// that is.
+pub struct Reads {
+    tx: mpsc::Sender<(PathBuf, Result<u8, String>)>,
+    rx: mpsc::Receiver<(PathBuf, Result<u8, String>)>,
+    /// One per read still going. **Handles rather than a counter**: a counter that a panicking
+    /// thread never decrements is a window that wakes at 10 Hz for the rest of its life, and
+    /// nothing would ever say so. A thread that ended without answering stops being outstanding
+    /// here whatever it ended by.
+    running: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl Default for Reads {
+    fn default() -> Reads {
+        Reads::new()
+    }
+}
+
+impl Reads {
+    pub fn new() -> Reads {
+        let (tx, rx) = mpsc::channel();
+        Reads {
+            tx,
+            rx,
+            running: Vec::new(),
+        }
+    }
+
+    /// Read the MBR of `path` on a thread of its own.
+    pub fn start(&mut self, path: PathBuf) {
+        let file = path.clone();
+        self.answer(path, move || eapp_loader::install::data_partition_type(&file));
+    }
+
+    /// Run `ask` on a thread of its own and post what it says, tagged with the drive it is about.
+    ///
+    /// **Infallible, unlike [`Worker::spawn`], and the difference is what there is to do about a
+    /// failure.** A first run whose worker could not be spawned has four steps left undone and
+    /// nothing to show for it, so `press` has to say so. A volume read that could not be spawned
+    /// has one honest rendering already written — [`composer::VolumeRead::Failed`], *a drive nobody
+    /// could read is not a drive that fails* — so the spawn error is posted down the same channel
+    /// the read would have used. The one outcome that is certainly wrong is the region left saying
+    /// *reading …* for ever, and posting the failure is what stops it.
+    ///
+    /// **`pub(crate)` and not private**, which is one seam and it is the honest one. What has to be
+    /// proved about this type is *when* and *where* it answers, and a read of a real MBR finishes
+    /// in microseconds — so neither is observable through [`Reads::start`], which is the only thing
+    /// that ever calls this in the program. A probe that answers when the test says so is what
+    /// makes `pump_once`'s *a drive being read holds the timer open* assertable at all, and
+    /// `a_volume_read_answers_with_what_the_drives_mbr_says` is what pins that `start` hands this
+    /// the function that reads an MBR.
+    ///
+    /// [`Worker::spawn`]: crate::work::Worker::spawn
+    /// [`composer::VolumeRead::Failed`]: crate::composer::VolumeRead::Failed
+    pub(crate) fn answer(
+        &mut self,
+        about: PathBuf,
+        ask: impl FnOnce() -> Result<u8, String> + Send + 'static,
+    ) {
+        let tx = self.tx.clone();
+        let named = about.clone();
+        match std::thread::Builder::new()
+            .name("ipod-volume-read".into())
+            .spawn(move || {
+                let answer = ask();
+                // The window may have closed between the spawn and here; nobody is owed an error
+                // about a receiver that has gone.
+                let _ = tx.send((named, answer));
+            }) {
+            Ok(h) => self.running.push(h),
+            Err(e) => {
+                let _ = self
+                    .tx
+                    .send((about, Err(format!("no thread to read the drive on: {e}"))));
+            }
+        }
+    }
+
+    /// Everything that has landed since the last call. **Never blocks.**
+    pub fn landed(&mut self) -> Vec<(PathBuf, Result<u8, String>)> {
+        let mut out = Vec::new();
+        while let Ok(a) = self.rx.try_recv() {
+            out.push(a);
+        }
+        out
+    }
+
+    /// Whether any read is still going.
+    ///
+    /// **Asked before [`Reads::landed`] and never after**, and the order is the whole of why no
+    /// answer is lost. A thread sends before it finishes, so a `false` here means every send has
+    /// already happened and the drain that follows takes the lot. Asked the other way round, a
+    /// thread that sent and finished in the gap between the two calls would leave its answer in the
+    /// channel and the tick that would have drained it stopped.
+    pub fn outstanding(&mut self) -> bool {
+        self.running.retain(|h| !h.is_finished());
+        !self.running.is_empty()
     }
 }
 
@@ -2367,6 +2484,109 @@ mod tests {
         );
         let mut settings = Settings::default();
         assert_eq!(q.stop(&mut settings, &mut rail), Stopped::Idle);
+    }
+
+    // ── the drive nobody has read yet ───────────────────────────────────────────────────────────
+
+    /// An MBR whose four partition entries say `types`, and nothing else.
+    ///
+    /// The same fabrication `install.rs`'s own tests use, and for the reason stated there: the
+    /// thing that has to be true is *which entry got looked at*, and a real drive image has one
+    /// plausible answer in one plausible slot. `[0x00, 0x0c, …]` is the layout an actual iPod has —
+    /// Apple's firmware partition first, the data partition second.
+    fn a_drive_whose_mbr_says(at: &Path, types: [u8; 4]) -> PathBuf {
+        let mut img = vec![0u8; 512];
+        for (i, t) in types.iter().enumerate() {
+            img[446 + i * 16 + 4] = *t;
+        }
+        img[510] = 0x55;
+        img[511] = 0xAA;
+        std::fs::write(at, &img).expect("a fabricated drive");
+        at.to_path_buf()
+    }
+
+    /// **The read does not happen on the thread that asked for it**, which is the whole reason this
+    /// type exists rather than a call to `install::data_partition_type` under the picker.
+    ///
+    /// A `Reads::start` on a real file finishes in microseconds, so *when* it answered cannot be
+    /// observed by looking. **Where** it answered can: the probe below reports the thread it ran on
+    /// and the test compares that against its own. `answer` is the seam and `start` is its one
+    /// production caller — `a_volume_read_answers_with_what_the_drives_mbr_says` is the other half,
+    /// and it is what proves the function `start` hands it is the one that reads an MBR.
+    ///
+    /// **Deterministic in both worlds, and it terminates in both.** `recv()` blocks until the probe
+    /// has run wherever it is going to run: on this thread, `answer` runs it before returning and
+    /// the id comes back equal; on its own, the id differs. Measured red by deleting the spawn and
+    /// calling `ask()` inline — *the read ran on the thread that asked for it*.
+    #[test]
+    fn a_volume_read_does_not_run_on_the_thread_that_asked_for_it() {
+        let here = std::thread::current().id();
+        let (where_tx, where_rx) = mpsc::channel();
+
+        let mut reads = Reads::new();
+        reads.answer(PathBuf::from("/drives/mine.img"), move || {
+            where_tx.send(std::thread::current().id()).expect("the test is listening");
+            Ok(0x0c)
+        });
+
+        let there = where_rx.recv().expect("the read never ran at all");
+        assert_ne!(
+            there, here,
+            "the read ran on the thread that asked for it — a drive on a sleeping spindle or a \
+             network mount blocks `File::open` for as long as it blocks, and §11.2's picker is a \
+             control somebody is holding down"
+        );
+
+        // …and the answer comes back afterwards, tagged with the drive it is about.
+        let mut landed = Vec::new();
+        for _ in 0..600 {
+            landed = reads.landed();
+            if !landed.is_empty() {
+                break;
+            }
+            std::thread::sleep(TICK);
+        }
+        assert_eq!(landed, vec![(PathBuf::from("/drives/mine.img"), Ok(0x0c))]);
+        assert!(!reads.outstanding(), "a finished read is still holding the timer open");
+    }
+
+    /// **`start` reads an MBR**, which is the half a probe cannot prove.
+    ///
+    /// `0x0C` in the second entry, because that is the drive the whole path exists for: FAT32 in
+    /// its LBA form, which is what every drive off a real iPod is and what `ipodloader2` refuses.
+    #[test]
+    fn a_volume_read_answers_with_what_the_drives_mbr_says() {
+        let dir = scratch("volume-read");
+        let mut reads = Reads::new();
+
+        let apple = a_drive_whose_mbr_says(&dir.join("off-a-real-ipod.img"), [0x00, 0x0c, 0, 0]);
+        let built = a_drive_whose_mbr_says(&dir.join("built-here.img"), [0x00, 0x0b, 0, 0]);
+        // A drive that is not there at all. **Not a refusal of the recipe** — the answer is an
+        // `Err`, and `Composer::took_reading` leaves the verdict alone rather than failing it.
+        let gone = dir.join("never-existed.img");
+        for f in [&apple, &built, &gone] {
+            reads.start(f.clone());
+        }
+
+        let mut said: Vec<(PathBuf, Result<u8, String>)> = Vec::new();
+        for _ in 0..600 {
+            said.extend(reads.landed());
+            if said.len() == 3 {
+                break;
+            }
+            std::thread::sleep(TICK);
+        }
+        let answer = |p: &PathBuf| {
+            said.iter().find(|(f, _)| f == p).map(|(_, a)| a.clone()).expect("an answer")
+        };
+        assert_eq!(answer(&apple), Ok(0x0c), "a real iPod's drive did not read as 0x0C");
+        assert_eq!(answer(&built), Ok(0x0b));
+        assert!(
+            answer(&gone).is_err(),
+            "a drive that is not there answered a partition type: {:?}",
+            answer(&gone)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ── the boundary ────────────────────────────────────────────────────────────────────────────

@@ -484,12 +484,16 @@ fn loader_menu(has_rockbox: bool, has_apple: bool) -> String {
 
 /// The MBR type byte of the drive's FAT32 data partition, or `0` if it has none.
 ///
-/// **One caller today, and the second is why it has a name.** `install_linux` asks it to refuse a
-/// drive it cannot install onto. The window's disk composer has the half that *receives* the
-/// answer — `composer::took_reading`, so the verdict it shows is about *that* image rather than
-/// about drives in general — but that half is `#[allow(dead_code)]` and its own note says the
-/// background read lands nowhere but a test. The doc here used to say "two callers need the same
-/// question", which was a promise written in the present tense.
+/// **Two callers, and the second is why it has a name.** `install_linux` asks it to refuse a drive
+/// it cannot install onto. The window's disk composer asks it the moment somebody picks a drive —
+/// `work::Reads` runs it on a thread of its own and `composer::took_reading_of` lands the answer,
+/// so the verdict §11.3 draws is about *that* image rather than about drives in general.
+///
+/// That second caller was a promise written in the present tense for a long time, and the cost of
+/// its absence was precise. `Recipe::check`'s rules (2) and (2a) are the only two that ask what a
+/// drive is, both ask `volume_type()`, and nothing in the window ever wrote one — so it was `None`
+/// for every drive, neither rule could fire, and **every library disk verdicted `Ok`**, including
+/// a drive with no FAT32 data partition on it at all.
 ///
 /// `0x0B` is the CHS form and `0x0C` the LBA one; both are legitimate FAT32 and `ipodloader2`
 /// reads only the first. The tests below are the contract `compose` reasons against.

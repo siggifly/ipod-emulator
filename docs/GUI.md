@@ -1935,6 +1935,45 @@ a refusal with no fix, not a dead end with one that fails.
 to `check()`, every bootloader would grey out reading `nothing chosen yet` before a firmware is
 picked, which is a non-sequitur in a bootloader tooltip.
 
+**Who reads the drive — and what it cost that for a long time nobody did.** *Still reading* is a
+rendering of a fact about a **background read**, and the read is `install::data_partition_type` on a
+thread of its own (`work::Reads`), started from the Composer's own re-push and landed in `pump_once`.
+Everything about that sentence was true of the design and false of the program until 2026-08-23:
+`Composer::asked_for_reading` and `Composer::took_reading` were written, documented and tested, and
+**called by nothing outside their own test module**. So `VolumeRead` never left `Idle`, *still
+reading* was unreachable, and — the part that matters — `Recipe::volume_type()` was `None` for every
+drive for ever. Rule (2a) refuses a drive whose MBR names no FAT32 data partition and rule (2)
+refuses a `0x0C` one under `ipodloader2`; both fire on that field; so **every library disk verdicted
+`Ok`**, including drives the plan cannot be carried out on at all. A verdict region that is never
+stale because it never learns anything is not the promise.
+
+Four things make the wired version honest, and each is a rule rather than a habit:
+
+- **The read is armed in the page's own re-push**, not beside the disk picker. Four other routes
+  reach a chosen drive — opening on an existing device, a `Fix`, a re-entered `+ New device`, the
+  Rail's own `Fix` — and a read armed at the picker is a read four routes arrive without.
+  `Composer::volume_to_read` answers `Some` only from `VolumeRead::Idle`, which is what makes asking
+  on every frame cost one thread per chosen drive rather than one per frame.
+- **The answer is tagged with the drive it is about**, and `Composer::took_reading_of` drops one
+  about a drive that is no longer chosen. Picking a second disk before the first answers is one
+  press; without the guard the second drive wears the first drive's partition type, which is a
+  verdict about a file nobody read.
+- **A drive being read holds the 10 Hz timer open exactly as a build does.** `pump_once` stopping on
+  `!work.busy()` alone would stop the tick on the first frame after a pick, leaving *reading …* on
+  screen until the next press — a spinner nothing stops, which is the one outcome that is certainly
+  worse than either verdict.
+- **A read that fails is not a refusal.** A drive nobody could read is not a drive that fails; the
+  verdict goes on without it, which is also what a thread that could not be spawned reports.
+
+**One correction to what §11.3 implies about which half of this a person can reach today.** Rule
+(2)'s trigger is `ipodloader2` — selected or required — and `Os::OFFERED` and `Loader::OFFERED` hold
+Apple and Rockbox only, so both of its triggers are drawn **disabled** in this build (§9.4, and
+`KNOWN-BUGS.md` for why). The `0x0C` refusal is therefore correct, tested and **not reachable by any
+press** until iPodLinux is offered. What *was* reachable, and was the live false `Ok`, is rule (2a):
+a drive whose MBR names no FAT32 partition at all — a Mac-formatted iPod with an Apple Partition Map
+rather than an MBR is the everyday way to hold one — verdicted `Ok` and would have been installed
+onto.
+
 **The plan is one list rendered twice**: `Recipe::steps()` as *this is what will be downloaded* here,
 and as a ticking checklist on the Work page while it runs. One source, so they cannot disagree.
 

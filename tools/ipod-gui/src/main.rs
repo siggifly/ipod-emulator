@@ -485,6 +485,19 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
     let c_opts: Rc<VecModel<OptionRow>> = Rc::new(VecModel::default());
     let c_plan: Rc<VecModel<PlanRow>> = Rc::new(VecModel::default());
     let c_refusals: Rc<VecModel<RefusalRow>> = Rc::new(VecModel::default());
+    // **What the chosen drive turns out to be, asked off this thread.**
+    //
+    // §11.3's rules (2) and (2a) are both about `Recipe::volume_type()`, and **nothing in this
+    // window ever wrote it** — so it was `None` for every drive for ever, neither rule could fire,
+    // and a library disk verdicted `Ok` whatever was on it. Rule (2a) is the half a person could
+    // reach: a drive whose MBR names no FAT32 data partition at all — a Mac-formatted iPod carries
+    // an Apple Partition Map — read `Ok` and would have been installed onto. Rule (2)'s `0x0C`
+    // refusal is the half that waits on `Os::OFFERED` growing, because both of its triggers are
+    // drawn disabled in this build.
+    //
+    // `Reads` is the producer that fills the field in; the `Composer` is the consumer; `pump_once`
+    // is where the two meet.
+    let reads: Rc<RefCell<work::Reads>> = Rc::new(RefCell::new(work::Reads::new()));
     window.set_composer_picks(ModelRc::from(c_picks.clone()));
     window.set_composer_fields(ModelRc::from(c_fields.clone()));
     window.set_composer_ticks(ModelRc::from(c_ticks.clone()));
@@ -610,6 +623,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
         let settings = settings.clone();
         let showing_welcome = showing_welcome.clone();
         let composer = composer.clone();
+        let reads = reads.clone();
         let repaint_all = repaint_all.clone();
         let weak = window.as_weak();
         Rc::new(move || {
@@ -623,6 +637,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
                 &settings,
                 &showing_welcome,
                 &composer,
+                &reads,
                 &repaint_all,
                 &timer,
                 caps,
@@ -920,6 +935,8 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
         let settings = settings.clone();
         let work = work.clone();
         let space = space.clone();
+        let reads = reads.clone();
+        let ticking = ticking.clone();
         let (picks, fields, ticks, opts, plan_m, refusals) = (
             c_picks.clone(),
             c_fields.clone(),
@@ -931,6 +948,40 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
         let weak = window.as_weak();
         Rc::new(move || {
             let Some(w) = weak.upgrade() else { return };
+
+            // ── the volume read is armed HERE, and here is the only place it cannot be forgotten ─
+            //
+            // Not in `on_composer_pick` beside the disk picker, which is the obvious place and the
+            // wrong one. Four other things reach a chosen drive: `Composer::editing` opens on a
+            // device that already names one, §11.3's `Fix` moves the recipe, `device-new` can be
+            // re-entered, and the Rail's own `Fix` pushes this page. A read armed at the picker is
+            // a read four routes arrive without, and 2f54003's finding was exactly that shape one
+            // layer up — *a page that only its own controls could refresh*.
+            //
+            // So it goes in the function **every writer on this page already ends in**, which is
+            // also the one the repaint registry runs. What makes that safe to do on every frame is
+            // that `volume_to_read` answers `Some` only from `VolumeRead::Idle`, and
+            // `asked_for_reading` leaves `Pending` — so the second frame asks nothing. `set_start`
+            // is the one thing that puts it back to `Idle`, which is to say: one read per chosen
+            // drive, and a new one exactly when the drive moves.
+            //
+            // **And it starts the timer**, because the answer lands in `pump_once` and `pump_once`
+            // is what the timer runs. `ticking` is idempotent — a build already running keeps its
+            // own tick and this adds nothing.
+            let due = {
+                let s = settings.borrow();
+                let mut held = composer.borrow_mut();
+                held.as_mut().and_then(|c| {
+                    let file = c.volume_to_read(&s)?;
+                    c.asked_for_reading();
+                    Some(file)
+                })
+            };
+            if let Some(file) = due {
+                reads.borrow_mut().start(file);
+                ticking();
+            }
+
             // **Every borrow is scoped and released before anything is pushed.** §20 item 12: a
             // `RefMut` held across a `match` scrutinee is what panicked on the path that worked.
             let building = work.borrow().busy();
@@ -1824,6 +1875,9 @@ enum Route {
 /// **The queue is the only thing that writes the library during a run**, and it does it here, on
 /// this thread, in `pump`: §10.2 wants a save after every completed step, so a run interrupted
 /// between two of them resumes from the one it reached.
+///
+/// **It is also where a background volume read lands**, which is the tick's second job and the
+/// only other thing in this window that waits on something it did not do itself.
 #[allow(clippy::too_many_arguments)] // every one of these is a distinct thing the window owns; bundling them into a struct would be one indirection and the same fields under a new name
 fn pump_once(
     window: &MainWindow,
@@ -1834,6 +1888,8 @@ fn pump_once(
     settings: &Rc<RefCell<Settings>>,
     showing_welcome: &Rc<std::cell::Cell<bool>>,
     composer: &Rc<RefCell<Option<composer::Composer>>>,
+    // What the Composer's chosen drive is being asked about, off this thread. `redraw` arms them.
+    reads: &Rc<RefCell<work::Reads>>,
     // Every page that has registered a re-push, run as one. The registry is built in `wire`.
     repaint: &Repaint,
     timer: &slint::Timer,
@@ -1913,6 +1969,36 @@ fn pump_once(
         sync_rail(window, rows, &rail.borrow(), caps, work.borrow().shape());
     }
 
+    // ── §11.3's fourth verdict rendering, taken down ────────────────────────────────────────────
+    //
+    // The Composer asked a drive what its data partition is; this is where the answer arrives and
+    // becomes the second of `Composer::recompute`'s two callers — *on an edit, and when a
+    // background volume read lands*, which is what `composer.rs`'s header has said all along about
+    // a read nothing spawned.
+    //
+    // **`outstanding()` is asked before the drain and never after**, which is `Reads`'s own
+    // contract and the reason no answer is lost: a `false` here means every thread has already
+    // sent, so the drain below takes the lot, and the timer may stop. Asked the other way round,
+    // an answer that arrived in the gap between the two calls would sit in the channel with
+    // nothing left running to drain it.
+    //
+    // **The answer names its drive and the Composer compares.** A read is asked for the moment a
+    // disk is chosen; somebody who chooses a second one before the first answers would otherwise
+    // have one drive's partition type written onto the other's recipe — a verdict about a file
+    // nobody read, which is the same false `Ok` from the other end.
+    let reading = reads.borrow_mut().outstanding();
+    let landed = reads.borrow_mut().landed();
+    let mut read_landed = false;
+    if !landed.is_empty() {
+        let s = settings.borrow();
+        let mut held = composer.borrow_mut();
+        if let Some(c) = held.as_mut() {
+            for (file, answer) in landed {
+                read_landed |= c.took_reading_of(&s, &file, answer);
+            }
+        }
+    }
+
     // ── Every open page, and not only the Rail, the shelf and the ledger ────────────────────────
     //
     // Everything above this line pushes one of those three. A drawer page drawn from `building` or
@@ -1925,8 +2011,24 @@ fn pump_once(
     // exits, leaving a final tick that changed nothing and on which `busy()` goes false. That is
     // exactly the tick where `Lock::Building` has to come off. It is also the tick that stops the
     // timer, so one read of `busy()` decides both and there is no tick between the two answers.
-    let idle = !work.borrow().busy();
-    if idle || tick.changed || tick.library_changed || !tick.completed.is_empty() {
+    //
+    // **A drive being read holds the timer open exactly as a build does**, and for the same reason:
+    // it is the one thing on this tick that nobody on this thread can finish. Without it the very
+    // first tick after a disk is chosen stops the timer, and the region says *reading …* until the
+    // next press — a spinner nothing stops, which is the one outcome `took_reading`'s own doc
+    // singles out as certainly wrong.
+    //
+    // **`idle` is read before `repaint()` and acted on after it, and that is only sound because a
+    // re-push cannot arm a read.** `redraw` is where reads are armed, `repaint()` runs it, and a
+    // read armed there and then stopped by the line below would answer into a window that had gone
+    // back to sleep. It cannot happen: `volume_to_read` is due only on a drive the recipe has
+    // newly chosen, nothing in this function writes `Composer::recipe` — `device_vanished` files a
+    // sentence and `took_reading_of` *closes* a read — and every route that does change the drive
+    // is a press, which arms and calls `ticking` on the spot. Written down rather than defended,
+    // because a second `outstanding()` after the re-push would trade this for a narrower race and
+    // read as though the first one had been wrong.
+    let idle = !work.borrow().busy() && !reading;
+    if idle || read_landed || tick.changed || tick.library_changed || !tick.completed.is_empty() {
         repaint();
     }
 
@@ -2236,7 +2338,7 @@ fn take_next_step(
         //
         // The arm is correct and the gate is now honest, and no press a person can make gets here.
         // Traced rather than assumed: the only `Class::Incompatible` constructed outside a test is
-        // `work::Plan::of`'s defensive refusal at `work.rs:332`, which fires when a step's verb is
+        // `work::Plan::of`'s defensive refusal at `work.rs:336`, which fires when a step's verb is
         // `Verb::Copy` — and the only producer of `Verb::Copy` is `compose::Recipe::steps` under
         // `Start::FromImage` or `Start::FromDisk` (`compose.rs:913` and `:926`). `work::plan` is
         // `Verb::Synthesise`, then `work::recipe()`'s steps, then `Verb::Start`, and `recipe()`
@@ -5240,6 +5342,7 @@ pub(crate) mod tests {
             &settings,
             &latch(true),
             &Rc::new(RefCell::new(None)),
+            &Rc::new(RefCell::new(work::Reads::new())),
             &repaint,
             &timer,
             caps(),
@@ -5257,6 +5360,79 @@ pub(crate) mod tests {
             "a tick with nothing running changed the library"
         );
         assert!(!timer.running(), "the timer keeps looking at 10 Hz with nothing to look at");
+    }
+
+    /// **A drive being read holds the timer open exactly as a build does.**
+    ///
+    /// The timer stops on `idle`, and `idle` used to mean *the worker is not busy* alone — so the
+    /// very first tick after somebody picked a disk stopped it, and nothing was left to take the
+    /// answer. The region would have gone on saying *reading …* until the next press, which is the
+    /// one outcome `Composer::took_reading`'s own doc singles out as certainly wrong: a spinner
+    /// nothing stops. The queue is idle throughout here; the read is the only thing keeping the
+    /// window awake, which is the point.
+    ///
+    /// **The probe is why this is assertable at all.** A real MBR read finishes in microseconds, so
+    /// a test that started one and then looked would be racing it; this one answers when the test
+    /// lets go of the channel, and until then it is a read that is genuinely still going.
+    #[test]
+    fn a_drive_being_read_keeps_the_window_looking() {
+        let (settings, _held) = a_fresh_installation();
+        let w = a_window();
+        let wiring = wire(&w, settings.clone());
+
+        let rail = Rc::new(RefCell::new(rail::Rail::new()));
+        let rows: Rc<VecModel<RailRow>> = Rc::new(VecModel::default());
+        let devices: Rc<VecModel<DeviceRow>> = Rc::new(VecModel::default());
+        let repaint: Repaint = Rc::new(|| {});
+        let timer = slint::Timer::default();
+        timer.start(slint::TimerMode::Repeated, work::TICK, || {});
+
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let reads = Rc::new(RefCell::new(work::Reads::new()));
+        reads.borrow_mut().answer(std::path::PathBuf::from("/drives/mine.img"), move || {
+            // Held until the test lets go, and never a panic if it never does.
+            held.recv().ok();
+            Ok(0x0b)
+        });
+
+        let tick = || {
+            pump_once(
+                &w,
+                &wiring.work,
+                &rail,
+                &rows,
+                &devices,
+                &settings,
+                &latch(true),
+                &Rc::new(RefCell::new(None)),
+                &reads,
+                &repaint,
+                &timer,
+                caps(),
+                a_cost(),
+            );
+        };
+
+        tick();
+        assert!(
+            timer.running(),
+            "the window stopped looking while a drive was still being read, so the answer would \
+             have landed on nobody and the region would say `reading …` until the next press"
+        );
+
+        // Let it answer, and wait for the thread to be gone rather than for a duration — a sleep
+        // long enough to be reliable is a sleep this suite pays on every run.
+        drop(release);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while reads.borrow_mut().outstanding() {
+            assert!(std::time::Instant::now() < deadline, "the read never finished");
+            std::thread::sleep(work::TICK);
+        }
+        tick();
+        assert!(
+            !timer.running(),
+            "the read has answered and nothing is running; the timer keeps looking at 10 Hz"
+        );
     }
 
     /// **A page is re-pushed by a change it did not make.**
@@ -6091,6 +6267,168 @@ pub(crate) mod tests {
             w.invoke_device_new();
         }
         assert_eq!(settings.borrow().resources.len(), before);
+    }
+
+    /// A library holding one drive, whose MBR partition entries say `types`.
+    ///
+    /// The image is 512 bytes and holds nothing but the MBR, which is all
+    /// `install::data_partition_type` reads and all this needs to be a drive as far as the read is
+    /// concerned. `[0x83, 0, 0, 0]` is a Linux filesystem and no FAT32 — the drive §11.3's rule
+    /// (2a) refuses — and `[0x00, 0x0c, 0, 0]` is the layout a real iPod has, firmware first and a
+    /// FAT32 data partition second, in the LBA form every dumped iPod carries.
+    fn a_library_holding_one_drive(
+        at: &std::path::Path,
+        called: &str,
+        types: [u8; 4],
+    ) -> Rc<RefCell<Settings>> {
+        let path = at.join(format!("{called}.img"));
+        let mut img = vec![0u8; 512];
+        for (i, t) in types.iter().enumerate() {
+            img[446 + i * 16 + 4] = *t;
+        }
+        img[510] = 0x55;
+        img[511] = 0xAA;
+        std::fs::write(&path, &img).expect("a fabricated drive");
+
+        let mut s = Settings::default();
+        s.disks.push(eapp_loader::settings::Disk {
+            name: called.into(),
+            path,
+            built_from: None,
+            installed: Vec::new(),
+        });
+        Rc::new(RefCell::new(s))
+    }
+
+    /// Tick until `done`, at the rate the window's own timer runs at, or panic saying what the
+    /// region was left holding.
+    fn tick_until(w: &MainWindow, wiring: &Wiring, done: impl Fn(&MainWindow) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done(w) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the window never took the answer: the region still reads {:?}",
+                w.get_composer_region_text().to_string()
+            );
+            (wiring.tick)();
+            std::thread::sleep(work::TICK);
+        }
+    }
+
+    /// **A library disk stops reading `Ok` about a drive nobody has read.**
+    ///
+    /// This is the gate on the whole path, and it is driven through the registered callbacks —
+    /// `device-new`, `composer-act`, `composer-pick` — rather than through the model beside them,
+    /// which is §20 item 12's lesson: what was broken here was the *wiring*, and a test that called
+    /// `Composer::asked_for_reading` directly would have been green for as long as the defect
+    /// lasted. It was: `composer.rs`'s own tests drove both halves of the read and passed, while
+    /// the two halves had no caller in the program at all.
+    ///
+    /// **What was wrong.** `compose`'s rule (2a) refuses a drive whose MBR names no FAT32 data
+    /// partition — *a plan that installs onto a drive with no volume is a plan for a file that
+    /// cannot take one* — and it fires on `Recipe::volume_type()`, which nothing in this window
+    /// ever wrote. So `Start::FromDisk { fat_type: None }` was every library disk for ever, rule
+    /// (2a) never fired, and the verdict region said **`Ok`** over a drive the plan cannot be
+    /// carried out on. Measured red by deleting the four lines in `redraw` that arm the read:
+    ///
+    /// ```text
+    /// left: "Starts Apple's software, the way the iPod shipped."  right: "reading a 5.5G's drive…"
+    /// ```
+    ///
+    /// **And §11.3's fourth rendering is on screen here for the first time.** `Region::Reading` was
+    /// unreachable in the shipped program — nothing constructed `VolumeRead::Pending` — so the one
+    /// rendering of the four that exists to stop the region taking something back had never been
+    /// drawn. It is asserted before the answer and again after it, because a spinner that starts is
+    /// only half of the promise; the other half is that something stops it.
+    #[test]
+    fn a_library_disk_stops_reading_ok_about_a_drive_nobody_has_read() {
+        let _held = use_a_scratch_data_dir();
+        let dir = temp_dir("volume-read-wired");
+        // A Linux filesystem and no FAT32 anywhere. Rule (2a) refuses it whatever is on the rest of
+        // the page, which is why this is the drive the *reachable* half of the defect shows on.
+        let settings = a_library_holding_one_drive(&dir, "a 5.5G's drive", [0x83, 0, 0, 0]);
+
+        let w = a_window();
+        let wiring = wire(&w, settings.clone());
+        w.invoke_device_new();
+        // Level ② is disabled without an iPod, so this is the press that unlocks the disk picker
+        // rather than a decoration: `Make one`.
+        w.invoke_composer_act(composer::Field::Ipod.as_i32());
+        // Option 0 of the disk picker is `Build one`; the library's own disks follow it.
+        w.invoke_composer_pick(composer::Field::Disk.as_i32(), 1);
+
+        assert_eq!(
+            w.get_composer_region_text().to_string(),
+            "reading a 5.5G's drive…",
+            "the region claimed a plan about a drive nothing has looked at"
+        );
+        assert!(
+            !w.get_composer_region_emphatic(),
+            "a drive being read is not a refusal and must not take the page's attention"
+        );
+        assert!(!w.get_composer_has_fix(), "a `Fix` was offered for a verdict nobody has reached");
+
+        tick_until(&w, &wiring, |w| !w.get_composer_region_text().starts_with("reading "));
+
+        let said = w.get_composer_region_text().to_string();
+        assert!(
+            said.contains("no FAT32 data partition"),
+            "the drive was read and the verdict did not change: {said}"
+        );
+        assert!(
+            w.get_composer_region_emphatic(),
+            "the refusal is drawn in `fg-dim` beside three renderings that are not refusals"
+        );
+        assert!(
+            w.get_composer_has_fix(),
+            "§11.3 gives every refusal one press that resolves it; this one was drawn without"
+        );
+        assert_eq!(
+            w.get_composer_refusal_why().to_string(),
+            said,
+            "level ②'s paragraph and the root's region are two answers to one question"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A drive that reads clean says so, and the region stops waiting either way.**
+    ///
+    /// The other half of the gate above, and the one that keeps it from being satisfied by a page
+    /// that refuses everything: the same presses over a drive that is a real iPod's — firmware
+    /// partition first, FAT32 data partition second — end in a plan rather than in a refusal.
+    ///
+    /// **`0x0C` and not `0x0B`, deliberately.** It is the LBA form, it is what every drive taken
+    /// off real hardware carries, and it is the one `ipodloader2` cannot read. Under the recipes
+    /// this build offers that does not refuse — Apple's bootloader reads both forms — so `Ok` is
+    /// the honest answer here and asserting a refusal would be asserting a lie. What the read buys
+    /// is that the answer is now *known*: `composer.rs`'s
+    /// `a_drive_read_as_0x0c_refuses_the_one_loader_that_cannot_boot_it` is the same drive under
+    /// the recipe that cares, and it is a refusal there.
+    #[test]
+    fn a_drive_that_reads_clean_ends_in_a_plan_rather_than_a_spinner() {
+        let _held = use_a_scratch_data_dir();
+        let dir = temp_dir("volume-read-clean");
+        let settings = a_library_holding_one_drive(&dir, "off a real 5.5G", [0x00, 0x0c, 0, 0]);
+
+        let w = a_window();
+        let wiring = wire(&w, settings.clone());
+        w.invoke_device_new();
+        w.invoke_composer_act(composer::Field::Ipod.as_i32());
+        w.invoke_composer_pick(composer::Field::Disk.as_i32(), 1);
+        assert_eq!(w.get_composer_region_text().to_string(), "reading off a real 5.5G…");
+
+        tick_until(&w, &wiring, |w| !w.get_composer_region_text().starts_with("reading "));
+
+        assert!(
+            !w.get_composer_region_emphatic(),
+            "a drive a real iPod would carry was refused: {}",
+            w.get_composer_region_text()
+        );
+        assert!(
+            w.get_composer_create().enabled,
+            "`Create` is disabled on a recipe the verdict accepts"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// **A press that changes nothing in the library does not rewrite the library's file.**
@@ -7058,6 +7396,27 @@ pub(crate) mod tests {
             self.stand(composer::Composer::new(), open_the_picker);
         }
 
+        /// Stand §11.2's Composer at its **root**, waiting on a drive.
+        ///
+        /// §11.3's fourth verdict rendering — *reading …* — and it is why this page is shot at all.
+        /// It was unreachable in the shipped program: nothing constructed `VolumeRead::Pending`, so
+        /// the one rendering of the four that exists to stop the region taking something back had
+        /// never reached a pixel, and the root of this page had never been photographed either.
+        ///
+        /// Through `Composer::choose` and never by writing a field, like [`Furniture::compose_over`]
+        /// — the indices are the pickers' own: option 0 of the iPod picker is `Make one` and the
+        /// library's filed iPods follow it; option 0 of the disk picker is `Build one` and the
+        /// library's disks follow that.
+        fn compose_waiting_on_a_drive(&self) {
+            let mut c = composer::Composer::new();
+            c.choose(&self.settings, composer::Field::Ipod, 1)
+                .expect("a filed iPod can be chosen");
+            c.choose(&self.settings, composer::Field::Disk, 1)
+                .expect("a library disk can be chosen");
+            c.asked_for_reading();
+            *self.composer.borrow_mut() = Some(c);
+        }
+
         fn stand(&self, mut c: composer::Composer, open_the_picker: bool) {
             // `set_level` clears the open picker, so it goes first or the picker never opens.
             c.set_level(composer::Level::WhichIpod);
@@ -7387,9 +7746,15 @@ pub(crate) mod tests {
         let shared = Furniture::new(shared_lib);
         shared.compose_over(&shared_ipod, false);
 
+        // And §11.2's **root**, which nothing had ever taken a picture of either — standing in the
+        // one state of the four the shipped program could not reach, because nothing spawned the
+        // read that produces it.
+        let reading = Furniture::new(a_furnished_library(&temp_dir("reading")));
+        reading.compose_waiting_on_a_drive();
+
         // `None` is the bench — the drawer shut. Every other entry names a page, at the level
         // `Page::slot` says draws it, which is the only level `Stack::go` will accept.
-        let pages: [(&str, Option<nav::Page>, &Furniture); 9] = [
+        let pages: [(&str, Option<nav::Page>, &Furniture); 10] = [
             ("bench", None, &full),
             ("menu", Some(nav::Page::None), &full),
             ("devices", Some(nav::Page::Devices), &full),
@@ -7397,6 +7762,7 @@ pub(crate) mod tests {
             ("parts-empty", Some(nav::Page::Parts), &empty),
             ("work", Some(nav::Page::Work), &full),
             ("settings", Some(nav::Page::Settings), &full),
+            ("composer-reading", Some(nav::Page::Composer), &reading),
             ("composer-ipod-dumped", Some(nav::Page::ComposerIpod), &dumped),
             ("composer-ipod-shared", Some(nav::Page::ComposerIpod), &shared),
         ];
