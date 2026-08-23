@@ -118,7 +118,7 @@ export component Preview inherits Window {
             fix: {
                 label: "add iPodLinux",
                 enabled: false,
-                reason: "iPodLinux boots, then ZeroLauncher stalls at Finishing Up.",
+                reason: "iPodLinux stalls at Finishing Up",
                 escape-hatch: "ipod-boot install-linux",
                 machine-rule: false,
                 presses: 1,
@@ -276,7 +276,7 @@ export component Preview inherits Window {
                     dismissible: true,
                     next-a-label: "Choose somewhere else",
                     next-a-enabled: false,
-                    next-a-reason: "There is no file picker in this build yet.",
+                    next-a-reason: "no file picker in this build",
                     next-a-escape: "IPOD_EMULATOR_DATA=/path/to/somewhere",
                     next-a-presses: 1,
                     // **Disabled, with a reason and NO escape hatch**, because that is what this
@@ -412,7 +412,7 @@ export component Preview inherits Window {
                     label: "iPodLinux",
                     on: false,
                     enabled: false,
-                    reason: "boots, then ZeroLauncher stalls at Finishing Up.",
+                    reason: "stalls at Finishing Up",
                     escape-hatch: "ipod-boot install-linux",
                 },
             ];
@@ -446,7 +446,7 @@ export component Preview inherits Window {
                     empty: "An iPod is a boot ROM. Dump one, or make one.",
                     has-a: true,
                     a-action: 0,
-                    a: { label: "Add a dump", enabled: false, reason: "There is no file picker in this build yet.", escape-hatch: "ipod-boot facts FILE", machine-rule: false, presses: 1 },
+                    a: { label: "Add a dump", enabled: false, reason: "no file picker in this build", escape-hatch: "ipod-boot facts FILE", machine-rule: false, presses: 1 },
                     has-b: true,
                     b-action: 1,
                     b: { label: "Synthesise", enabled: true, machine-rule: true, presses: 1 },
@@ -462,7 +462,7 @@ export component Preview inherits Window {
                     a: { label: "Fetch", enabled: true, machine-rule: true, presses: 1 },
                     has-b: true,
                     b-action: 3,
-                    b: { label: "Provide", enabled: false, reason: "There is no file picker in this build yet.", escape-hatch: "ipod-boot firmware get 25", machine-rule: false, presses: 1 },
+                    b: { label: "Provide", enabled: false, reason: "no file picker in this build", escape-hatch: "ipod-boot firmware get 25", machine-rule: false, presses: 1 },
                 },
                 {
                     group: 2,
@@ -475,7 +475,7 @@ export component Preview inherits Window {
                     a: { label: "Fetch", enabled: true, machine-rule: true, presses: 1 },
                     has-b: true,
                     b-action: 3,
-                    b: { label: "Provide", enabled: false, reason: "There is no file picker in this build yet.", escape-hatch: "ipod-boot firmware get 25", machine-rule: false, presses: 1 },
+                    b: { label: "Provide", enabled: false, reason: "no file picker in this build", escape-hatch: "ipod-boot firmware get 25", machine-rule: false, presses: 1 },
                 },
                 {
                     group: 3,
@@ -488,7 +488,7 @@ export component Preview inherits Window {
                     a: { label: "Fetch", enabled: true, machine-rule: true, presses: 1 },
                     has-b: true,
                     b-action: 3,
-                    b: { label: "Provide", enabled: false, reason: "There is no file picker in this build yet.", escape-hatch: "ipod-boot firmware get 25", machine-rule: false, presses: 1 },
+                    b: { label: "Provide", enabled: false, reason: "no file picker in this build", escape-hatch: "ipod-boot firmware get 25", machine-rule: false, presses: 1 },
                 },
                 {
                     group: 4,
@@ -501,7 +501,7 @@ export component Preview inherits Window {
                     a: { label: "Build", enabled: true, machine-rule: true, presses: 1 },
                     has-b: true,
                     b-action: 3,
-                    b: { label: "Provide", enabled: false, reason: "There is no file picker in this build yet.", escape-hatch: "ipod-boot make-disk", machine-rule: false, presses: 1 },
+                    b: { label: "Provide", enabled: false, reason: "no file picker in this build", escape-hatch: "ipod-boot make-disk", machine-rule: false, presses: 1 },
                 },
                 {
                     group: 5,
@@ -561,7 +561,7 @@ export component Preview inherits Window {
             // ── §11.6's Settings, and both disabled rows say why ──
             setting-theme-value: "System";
             setting-theme-enabled: false;
-            setting-theme-reason: "this build has one palette; §6.4's dark values are not in tokens.slint yet.";
+            setting-theme-reason: "one palette in this build";
             setting-check-updates: true;
             setting-file-name: "settings.txt";
             setting-file-path: "~/Library/Application Support/ipod-emulator/settings.txt";

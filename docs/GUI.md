@@ -1236,16 +1236,16 @@ what to do next — with the next step as a **real pressable control**, never pr
 
 | class | example wording | next step |
 |---|---|---|
-| **network** | `Apple's server did not answer.` | `Retry` · `Provide the file yourself…` |
-| **not served** | `Apple no longer serves this release (403). Five of the 71 are refused; that is a fact about Apple's servers, not about your network.` | `Provide the file yourself…` |
+| **network** | `Apple's server did not answer.` | `Retry` · `Provide a file…` |
+| **not served** | `Apple no longer serves this release (403). Five of the 71 are refused; that is a fact about Apple's servers, not about your network.` | `Provide a file…` |
 | **verification** | `The SHA-256 does not match the one on record. That is interesting and should not be shrugged off.` | `Retry` · **`Copy the details`** |
 | **incompatible** | `Verdict::No.why`, verbatim | the `Fix` — one press, or two where it detaches a resource (§11.3) |
-| **space, pre-flight** | `<dir> needs 95 MB to build in — 28 MB for the drive and 67 MB of room to work in — and /Volumes/Work has 51 MB free. Nothing has been written.` | `Choose somewhere else…` |
-| **space, mid-write** | `Stopped at 41.2 GB. my-5.5g.img.part is 41.2 GB and cancelling deletes it.` | `Choose somewhere else…` · `Cancel` |
-| **volume** | `That folder is on a FAT32 volume. FAT32 cannot hold a file larger than 4 GiB and has no sparse files, so an 8 GiB drive image would be written in full and would stop at exactly 4 294 967 296 bytes.` | `Choose somewhere else…` |
+| **space, pre-flight** | `<dir> needs 95 MB to build in — 28 MB for the drive and 67 MB of room to work in — and /Volumes/Work has 51 MB free. Nothing has been written.` | `Choose a folder…` |
+| **space, mid-write** | `Stopped at 41.2 GB. my-5.5g.img.part is 41.2 GB and cancelling deletes it.` | `Choose a folder…` · `Cancel` |
+| **volume** | `That folder is on a FAT32 volume. FAT32 cannot hold a file larger than 4 GiB and has no sparse files, so an 8 GiB drive image would be written in full and would stop at exactly 4 294 967 296 bytes.` | `Choose a folder…` |
 | **permission** | the path, and what to change | `Reveal` |
 | **tool missing** | `7z is not on the path, and it is what this step runs.` | — · **a named command in `mono`**, one per tool |
-| **missing** *(added 2026-08-21)* | `my-5.5g.img is not where it was — /Volumes/Work/my-5.5g.img.` | `Provide the file yourself…` · `Devices` |
+| **missing** *(added 2026-08-21)* | `my-5.5g.img is not where it was — /Volumes/Work/my-5.5g.img.` | `Provide a file…` · `Devices` |
 
 **`missing` is the tenth and §20 items 1 and 12 are why.** §3.3's refusal — *a part of this device
 is no longer on disk* — is the one failure this program can already produce, and none of the nine
@@ -1255,15 +1255,23 @@ filesystem it did not observe.
 **Two things about it that are true today and are worth saying rather than discovering.** First,
 `tool missing` is the one class with **no** next step at all: there is no control this program could
 draw that installs 7-Zip, so what it carries instead is a command a person can paste, in `mono`,
-under the paragraph. Second, `missing` currently resolves to **zero live controls**: `Provide the
-file yourself…` needs a file picker or a drop target and this build has neither, and `Devices` needs
+under the paragraph. Second, `missing` currently resolves to **zero live controls**: `Provide a
+file…` needs a file picker or a drop target and this build has neither, and `Devices` needs
 a drawer page that is not built. Both are drawn **disabled with their reason** per §14.1. That is
 the honest state of the first failure anybody will see, and §17.Q3 is the operator's call that
 changes it.
 
+**Two labels got shorter, and it is the same measurement §9.4 records** *(2026-08-23)*. Six of the
+ten classes offer **two** next steps and `geometry::RAIL_NEXT_W` makes each one exactly half the
+block, so a label is drawn in the same 146 px a reason is. `Provide the file yourself…` and
+`Choose somewhere else…` did not fit: they drew as *Provide the file you…*, losing their own
+trailing `…`, which is the one character that says a picker opens. They are `Provide a file…` and
+`Choose a folder…` — §11.4 already calls the same acts `Provide…` and `Add a dump…` on Parts, so
+this is that name with the object put back rather than a new vocabulary.
+
 **Both of them carry a real escape hatch now, and three classes had none at all.** §9.4's rule for a
 project state is *say what does work, and always name the escape hatch* — and after one retry
-`verification` offered `Provide the file yourself…` and `Copy the details`, both disabled, both with
+`verification` offered `Provide a file…` and `Copy the details`, both disabled, both with
 nothing behind them; a live `403` offered `Provide` alone on the same terms; and `permission`
 offered `Reveal`. Each of those is a person told *we have not built this* and given nothing else.
 The commands exist in `ipod-boot` today: `ipod-boot firmware get <family>` lands the bundle in the
@@ -1290,7 +1298,7 @@ issue URL in this design, and a visible control that does nothing is the same cl
 document indicts twice — two dead tabs and twelve missing glyphs. `Copy the details` puts the release
 name, the URL, the recorded size and SHA-256, the computed size and SHA-256, and the platform string
 on the clipboard, which is what a bug report needs and is the same mechanism §12.8 already uses.
-**`Retry` counts**: after the second mismatch it is replaced by `Provide the file yourself…` with
+**`Retry` counts**: after the second mismatch it is replaced by `Provide a file…` with
 `two downloads of this release have failed the same check; that points at the file, not the
 connection.` — because `firmware.rs`'s present-but-wrong path prints "already here but does not
 verify — downloading again" and will loop for as long as a mirror serves the wrong bytes.
@@ -1321,6 +1329,72 @@ colour, and you can tell them apart at a glance.
 **A `Fix` that names a value the picker disables is itself disabled**, wearing the same reason and the
 same escape hatch — §11.3, and it exists because the two surfaces contradicted each other on the first
 refusal a curious user hits.
+
+#### A reason is one clause, and the clause has a width *(added 2026-08-23)*
+
+The examples above are paragraphs, and the slot is **34 px with `overflow: elide` and no wrap**. So
+what those two sentences actually drew was `That image's data partition is FAT32 type 0x0C, th…` —
+and §9.4's whole argument for disabling a control rather than hiding it is that the control says why.
+A reason you cannot finish reading is not doing its job.
+
+**The rule: every reason is one clause that fits the narrowest column that draws one, which is 146 px
+— `geometry::REASON_MEASURE`.** Not wrapped, not two lines, not a taller slot. §17.Q1 already made
+this trade once, for the shelf: *46 px of permanent chrome to hold a paragraph is a bad trade*, and
+§9.6's whole vertical budget is built on fixed row heights that a wrapping reason would make variable.
+The same answer applies one level down.
+
+Four columns draw a reason and the budget is the smallest of them, not each one's own: §9.3's
+next-step pair is **146**, §11.4's group verbs **180**, a Parts or Devices act **324**, a Settings row
+**372**. `rail::Next::reason` alone is drawn in three of those four, so a sentence written to the
+column it happens to be in today elides the first time it is reused one column over.
+
+**Measured, never counted.** `Add a dump…` is wider than `Synthesise…` at equal length (§17.Q12), so a
+character budget is not a width. `MainWindow.reason-probe` is a `Text` at `label-size` /
+`weight-label` with the eliding taken off, and
+`every_reason_this_window_draws_fits_the_column_it_is_drawn_in` sweeps every sentence the four
+producers — `rail.rs`, `parts.rs`, `devices.rs`, `settings_page.rs` — can word, measures each one
+through the renderer and fails on any that is wider. Fourteen sentences; the widest is 142 px.
+
+**What this costs, and where the long form went.** Nowhere on screen. There is no `why ›` route to
+put it behind: that control is the bench's (§7.6) and its job is to open the drawer page owning a
+refusal — and these refusals are already *on* their drawer page, so it has nowhere to take you. The
+long form lives in each producer's doc comment and in this section, which is where somebody who wants
+the argument reads it. The drawn half is the half a person standing at the control needs:
+
+| was, and what it drew | is |
+|---|---|
+| `there is no file picker in this build yet, and nothing here accepts a dropped file` — 411 px, drew *…and not…* | `no file picker in this build` |
+| `there is one palette in this build and nothing keys on a scheme, so the control would write a preference no pixel reads` — 623 px, drew *…so t…* | `one palette in this build` |
+| `nothing on this page reaches a fetcher yet — the only download this build starts is the first run's own plan` — 558 px | `no fetcher on this page yet` |
+| `every download in this program goes through curl, and it is not on this computer` — 423 px | `no curl on this computer` |
+| `My 5.5G is running. Stop it first.` — 168 px, drew *…Stop it f…* | `My 5.5G is running` |
+
+The last one is the shape to copy where a sentence carries the operator's own words: ` is running` is
+64 px and the rest of the column is the **name's**. A device somebody called
+`Rockbox on a 5G, second try` elides, and that is right — this window does not shorten a person's
+name for their own iPod, it just stops spending the line on its own prose first.
+
+**And the column has to be a column.** A reason budget is arithmetic about a row that does not obey
+it unless both halves of a two-control row carry the half-share as a floor — otherwise the shrink
+gives one half's pixels to the sibling whose `mono` escape hatch is wider, and the reason that fits
+in theory elides in fact. `geometry::PARTS_VERB_W` and `geometry::RAIL_NEXT_W` are those floors; both
+were measured off `_out/gui/*.png` after the sentences were already short, because a page is where
+this is visible and no assertion in the suite could see it.
+
+**Not yet applied to `composer.rs`**, which is the fifth producer of §9.4 sentences and words §11.1's
+and §11.2's locks. Read off `_out/gui/composer-ipod-dumped.png`:
+`Read from the dump; a device's identity is the ROM's, not ours.` draws as *…not …* under both locked
+pickers, and `composer::NO_CLIPBOARD` as *this build has no clipboard, so there is nowhere for the
+co…* — the same sentence, built the same way out of `rail::Next::CopyDetails`, that the Settings page
+had. Same defect, same fix, not done here.
+
+**Still elided, and named rather than left to be discovered:** the `mono` escape hatch —
+`ipod-boot firmware get <family>` is 30 characters of monospace in a 180 px column and there is
+nothing to shorten, since it is a command that has to be typed as written. And §11.3's `consequence`,
+which shares the slot: `The entry goes. Its iPod A446, seed 6182160 and its drive stay in the library,
+and neither file is deleted.` is 880 px. That one is a real question rather than an oversight — a
+destructive act's cost is the one sentence that has to be read *before* the press — and it is left
+for the operator with the measurement attached.
 
 ### 9.5 And a fifth, because the alternative is the 560 px bug again
 
@@ -2020,6 +2094,9 @@ Bootloaders and Software. The fetchers themselves exist and work; what does not 
 to reach them.
 
 **Both verbs carry `geometry::PARTS_VERB_W` as a floor**, because without one `Fetch…` drew as `F…`.
+It is the **half-share** rather than the label's own budget, because the same shrink that ate the
+label also eats the reason under it: at 104 the two halves were 256 and 104, and Apple firmware's
+`no file picker in this build` elided in the narrow one while Bootloaders drew it whole — see §9.4.
 The two share a row by `horizontal-stretch`, an eliding `Text` floors at one ellipsis, and Slint
 shrinks a too-narrow row **by stretch** — the same pixels off each — so the half whose reason is a
 sentence kept its width and the half whose label is a word lost it. §20 item 20 has the measurement.
@@ -3318,6 +3395,16 @@ operator's own machine has 81. One display class, not two.
 it; 46 px of permanent chrome to hold a paragraph that is one keypress away is a bad trade even at
 one display. But the number moved, so the trade is worth re-reading rather than inheriting.
 
+> **Answered for the drawer, 2026-08-23, and the answer is this one applied consistently.** Every
+> §9.4 reason on every drawer page was drawing the same way this shelf line does — elided, mid-word —
+> and the choice was the same: grow the slot, or shorten the sentence. It shortens. §9.4 now carries
+> the rule, the 146 px it is measured against, and the fourteen sentences that were re-worded to fit
+> it. **What does not transfer is the second half of this recommendation:** a bench refusal really is
+> one keypress from its paragraph, and a drawer refusal is not — `why ›` opens the page that owns a
+> refusal, and these refusals are already on their page. So the long form is not one keypress away;
+> it is in the source and in §9.4. That is the cost, and it is named rather than glossed. This
+> question stays open for the shelf itself.
+
 **Q2 — the cradle.** A permanent 2 px outline 10 px around the device, plus two clamp marks, plus a
 broken-ring variant for refusals and an `fg` focus ring 4 px outside. It is the mechanism that keeps
 UI state off the object (principle 3) and it is the largest untested aesthetic bet in this document —
@@ -3327,8 +3414,8 @@ are: clamps only, no outline; or accept a tinted device and lose principle 3.
 paragraph.** If it reads as clutter, drop to clamps-only before dropping principle 3 — and note that
 clamps-only returns 32 px to the budget, which is most of what Q1 wants.
 
-**Q3 — a file picker.** `Provide…`, `Add a dump…` and `Choose somewhere else…` all need one — and
-`Choose somewhere else…` is now the next step for **three** failure classes, not one, because §9.3
+**Q3 — a file picker.** `Provide…`, `Add a dump…` and `Choose a folder…` all need one — and
+`Choose a folder…` is now the next step for **three** failure classes, not one, because §9.3
 split `space` and added `volume`. Nothing in the dependency graph provides it; `rfd` pulls GTK or
 xdg-desktop-portal on Linux.
 **Recommendation: add `rfd`.** Drag-and-drop is the better route and it is window-wide, but "the only
@@ -3408,7 +3495,8 @@ the shelf is still open.
 | `DRAWER_HEADER_H` | 44 | one `Row`, so a header and the rows under it share a rhythm. §11.2's *"≈ 60"* covers *the page header **and** the group rules together* — an approximation inside a total, not a declaration |
 | `WORK_FOOTER_H` | 72 | §10.1's three `label` line boxes, plus 12 above and 12 below |
 | `RAIL_VERB_W` | **88** — *answered 2026-08-21* | it shipped at 64, which this question said nobody had measured. Budgeted at `10 × 14 × 0.62 = 86.8` and rounded up; **measured at 67.0** by `verb-probe` in `ui/window.slint`, which `IPOD_LAYOUT=1` prints and `tests/startup_fit.rs` asserts against the real binary. The prediction — *the longest verb is `synthesise`, it appears at first-run step 1, and if it elides it elides there* — was right about 64 and the column is now comfortable |
-| `PARTS_VERB_W` | **104** — *added 2026-08-22* | §11.4's group verbs, which had no constant at all. Budgeted at `11 × 14 × 0.62 = 95.5` plus `Metric.s2`; **measured at 95** for `Add a dump…` at `weight-strong`. The margin is not decoration: `BODY_ADVANCE` 0.62 is generous at `weight-body`, where the measurement is 0.479, and is not at `weight-strong`, where it is 0.617 |
+| `PARTS_VERB_W` | **180** — *added 2026-08-22 at 104, raised 2026-08-23* | §11.4's group verbs, which had no constant at all. The 104 was the label budget — `11 × 14 × 0.62 = 95.5` plus `Metric.s2`, **measured at 95** for `Add a dump…` at `weight-strong` — and it holds the verb. It does not hold the half of the row the verb's **refusal** is drawn in, because 104 is not the half-share and the shrink takes the difference: with every reason already cut to 146 px, `_out/gui/parts.png` still drew **Apple firmware**'s `no file picker in this build` as *no file picker in this …* while **Bootloaders** drew it whole, and the only difference between the two rows is the width of the `mono` command under the *other* half. So it is now `(372 − 12) / 2`, and two halves and their gutter are the row exactly |
+| `RAIL_NEXT_W` | **170** — *added 2026-08-23* | §9.3's next-step pair, which had no floor at all — the same defect one surface over, and photographed before it was believed: `_out/gui/work-failed.png` drew a live **`Retry` in 98 px** with its own consequence elided to *Runs this step …*, beside a 194 px sibling, and `Copy the details` in **114** on the entry below. `(372 − 2 × 12 − 8) / 2`, so `170 + 8 + 170` is the failure block exactly. `REASON_MEASURE` — the 146 px budget every reason in the program is written to — is this less the control's own padding |
 | `SHELF`'s decomposition | 12 + 26 + 20 + 16 + 12 = **86**, or 87 with the top rule, against a declared **88** | §7.5's own parts do not sum to §7.5's own total, and `CHROME_MIN` (154) and `CHROME_PREF` (190) are both built on the 88, so the 88 is the load-bearing half. Two pixels sit below row 3 inside the bottom padding |
 
 **A verb did elide, and this question was pointing at the wrong column when it happened.** The one

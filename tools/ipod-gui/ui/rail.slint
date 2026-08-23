@@ -312,11 +312,23 @@ export component RailEntryView inherits VerticalLayout {
             // §16.3's anti-shuffle argument does not reach these: a next step is fixed for the life
             // of a failed entry — it is not a line that comes and goes while something is working —
             // which is the carve-out the `Cancel` control and this whole block already take.
+            //
+            // **Both halves carry `Geometry.rail-next-w`, and without it the row is not halves.**
+            // Two `horizontal-stretch: 1` controls with no floor between them are shrunk by stretch
+            // (`i-slint-core-1.17.1/layout.rs:190-251`), and a disabled half prefers the width of
+            // its REASON and its `mono` hatch rather than of its label — so the half whose label is
+            // a word paid for the half whose reason is a sentence. Measured off
+            // `_out/gui/work-failed.png`: a live `Retry` drew in **98 px** with its own consequence
+            // elided to *Runs this step …*, and `Copy the details` drew in **114** on the entry
+            // below. The floor is the half-share, so `170 + Metric.s2 + 170` is the row exactly and
+            // neither half can be squeezed by its sibling. §11.4's group verbs carry the same fix
+            // for the same reason; the constant's own doc has every number.
             if root.e.next-a-label != "": HorizontalLayout {
                 spacing: Metric.s2;
 
                 a := Pressable {
                     horizontal-stretch: 1;
+                    min-width: Geometry.rail-next-w;
                     label: root.e.next-a-label;
                     enabled: root.e.next-a-enabled;
                     reason: root.e.next-a-reason;
@@ -361,6 +373,7 @@ export component RailEntryView inherits VerticalLayout {
 
                 if root.e.next-b-label != "": Pressable {
                     horizontal-stretch: 1;
+                    min-width: Geometry.rail-next-w;
                     label: root.e.next-b-label;
                     enabled: root.e.next-b-enabled;
                     reason: root.e.next-b-reason;

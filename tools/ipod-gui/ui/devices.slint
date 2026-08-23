@@ -198,6 +198,10 @@ export component DevicesPage inherits Rectangle {
 
                 if root.devices.length == 0: Text {
                     x: Geometry.page-margin;
+                    // The same inset `ui/parts.slint`'s empty line needed: binding `x` inside a
+                    // layout moves the paragraph and does not narrow it, so a sentence longer than
+                    // this page's `No devices yet.` would run off the drawer's right edge.
+                    width: parent.width - 2 * Geometry.page-margin;
                     text: root.empty-line;
                     font-size: Metric.body-size;
                     font-weight: Metric.weight-body;

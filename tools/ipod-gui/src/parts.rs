@@ -986,10 +986,15 @@ impl Action {
     /// written twice is a refusal that comes to be worded twice.
     pub fn unwired(self) -> Option<&'static str> {
         match self {
-            Action::Fetch => Some(
-                "nothing on this page reaches a fetcher yet — the only download this build starts \
-                 is the first run's own plan",
-            ),
+            // **One clause, measured.** It is drawn in §11.4's group-verb pair and, through
+            // [`refused_because_unwired`], in a Rail entry as well — and a reason slot elides and
+            // cannot wrap. What shipped here — *nothing on this page reaches a fetcher yet — the
+            // only download this build starts is the first run's own plan* — measures **558 px**
+            // against a 146 px column, so what a person read was
+            // *nothing on this page reaches a …*. The half that is gone said which download this
+            // build *does* start; `Group::fetch_route`'s command is drawn directly underneath and
+            // is the answer a person at this control actually needs.
+            Action::Fetch => Some("no fetcher on this page yet"),
             Action::AddDump
             | Action::Synthesise
             | Action::Provide
@@ -1083,7 +1088,7 @@ fn inventory(s: &Settings, seen: &mut Presence, machine: Option<&str>) -> Vec<En
     let holds_resource = |key: &str| running.is_some_and(|d| d.firmware == key);
     let held = |by: bool| -> String {
         match (by, machine) {
-            (true, Some(m)) => format!("{m} is running. Stop it first."),
+            (true, Some(m)) => format!("{m} is running"),
             _ => String::new(),
         }
     };
@@ -1102,7 +1107,7 @@ fn inventory(s: &Settings, seen: &mut Presence, machine: Option<&str>) -> Vec<En
         key: String::new(),
         name: "No iPod is plugged in".into(),
         kind: Kind::Mounted,
-        fact: "nothing is watching for one yet — a volume scan belongs off this thread".into(),
+        fact: "nothing is watching yet".into(),
         path: None,
         expandable: false,
         removable: false,
@@ -1532,7 +1537,7 @@ fn verb_row(a: Action, rows: &[PartView], g: Group, caps: Caps, busy: bool) -> F
         let parked: Vec<&PartView> = rows.iter().filter(|r| r.group == g).collect();
         if parked.is_empty() {
             row.enabled = false;
-            row.reason = "there is no parked machine to discard".into();
+            row.reason = "nothing is parked".into();
         } else {
             // §11.3: anything that detaches a reference arms first, and the consequence is drawn
             // before the press rather than after it.
@@ -1554,7 +1559,7 @@ fn verb_row(a: Action, rows: &[PartView], g: Group, caps: Caps, busy: bool) -> F
     // `Remove` is not gated at all, because `remove_resource` and `remove_disk` touch no file.
     if busy && row.enabled && a.needs().is_some() {
         row.enabled = false;
-        row.reason = "a build is running — this would start a second one".into();
+        row.reason = "a build is already running".into();
         row.escape = String::new();
     }
     row
@@ -2236,7 +2241,7 @@ mod tests {
         let held = p.view(&s, &mut seen, Caps::default(), false, Some("My 5.5G"));
         let rom = row_named(&held, "Black 5.5G");
         assert!(
-            rom.locked_by.contains("My 5.5G") && rom.locked_by.contains("Stop it first"),
+            rom.locked_by == "My 5.5G is running",
             "the ROM the machine boots is removable while it runs: {:?}",
             rom.locked_by
         );

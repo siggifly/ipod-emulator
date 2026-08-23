@@ -335,6 +335,12 @@ export component PartsPage inherits Rectangle {
                     // the group's own verbs below it are the one action that fills it.
                     if g.count == 0: Text {
                         x: Geometry.page-margin;
+                        // **`x` alone is not an inset.** A layout sets a child's x *and* its width;
+                        // binding x overrides the first and leaves the second at the layout's full
+                        // 420, so this paragraph started at the margin and ran 24 px off the right
+                        // edge of the drawer — every line of §9.1's six sentences clipped by the
+                        // window frame, which is what `_out/gui/parts-empty.png` showed.
+                        width: parent.width - 2 * Geometry.page-margin;
                         text: g.empty;
                         font-size: Metric.body-size;
                         font-weight: Metric.weight-body;

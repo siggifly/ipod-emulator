@@ -240,6 +240,33 @@ geometry! {
     /// `horizontal-stretch: 1; min-width: 0px;` (`ui/rail.slint:171-172`) — and a measure. The 24
     /// px comes out of `what`.
     RAIL_VERB_W:      Px = 88.0;
+    /// §9.3's next-step column — the floor under `Retry` / `Provide a file…`,
+    /// `Choose a folder…` / `Cancel`, `Provide a file…` / `Copy the details`.
+    ///
+    /// **The same defect [`PARTS_VERB_W`] was written for, one surface over, and photographed
+    /// before it was believed.** The two halves of a failure's next-step row are
+    /// `horizontal-stretch: 1` with **no floor at all**, and a `Text` with `overflow: elide` reports
+    /// a minimum of one ellipsis — so the row shrank by stretch and the half whose reason is a
+    /// sentence kept its width at the expense of the half whose label is a word. Measured off
+    /// `_out/gui/work-failed.png`, before this constant existed: `Class::Network` drew a live
+    /// **`Retry`** in **98 px** with its own consequence elided to *Runs this step …*, beside its
+    /// sibling in 194; `Class::Verification` after one retry drew `Copy the details` in **114**
+    /// beside a sibling in 178. Neither pair is half and half, and neither half is the one the row
+    /// is about. (The sibling in both was `Provide the file yourself…`, which the same measurement
+    /// then shortened to `Provide a file…` — a label does not fit half a block either.)
+    ///
+    /// **It is the half-share, so two of them and the gutter are the row exactly.** The Rail is
+    /// [`REFUSAL_MEASURE`] 372 wide (`ui/work.slint`'s body pads by `Metric.s5`, which is
+    /// [`PAGE_MARGIN`]); the failure block pads by `Metric.s3` on each side, leaving 348; the two
+    /// halves are separated by `Metric.s2`. `(372 − 24 − 8) / 2 = 170`, and `170 + 8 + 170` is 348 —
+    /// so under any pressure at all both halves are exactly 170 and neither can be squeezed by its
+    /// sibling. A row with one next step still stretches to the whole 348.
+    ///
+    /// Written as the expression so a re-decided page margin moves it. The two literals are
+    /// `Metric.s3` and `Metric.s2` off §6.3's closed space scale; `the_next_step_column_is_the_half_
+    /// share_of_the_row_it_is_in` reads both out of `ui/tokens.slint` as text, which is the
+    /// arrangement [`PAGE_MARGIN`] already has with `s5`.
+    RAIL_NEXT_W:      Px = (REFUSAL_MEASURE - 2.0 * 12.0 - 8.0) / 2.0;
     /// §11.4's group-verb column — the floor under `Add a dump…` / `Synthesise…`, `Fetch…` /
     /// `Provide…`, `Build…`, `Discard`.
     ///
@@ -271,12 +298,26 @@ geometry! {
     /// budget alone would clear this platform's face by half a pixel and a one-percent wider face by
     /// nothing at all, which is a coincidence rather than a column.
     ///
-    /// **It does not squeeze the row.** The drawer body is `DRAWER_W − 2 × PAGE_MARGIN` = 372 and
-    /// the two verbs are separated by `Metric.s3`, so two floors and a gutter are 220 of 372.
-    /// `the_group_verb_column_holds_every_verb_this_page_draws` re-derives the widest verb out of
-    /// `parts::Action::ALL` rather than out of a second copy here, so a seventh and longer verb
-    /// fails that rather than eliding on the page.
-    PARTS_VERB_W:     Px = 104.0;
+    /// **104 was enough for the label and not for the reason, and the picture is what said so.**
+    /// The floor above holds the verb; it does not hold the half of the row the verb's *refusal* is
+    /// drawn in, because 104 is not the half-share and the shrink is free to take the difference.
+    /// Measured off `_out/gui/parts.png` with every reason already cut to
+    /// `REASON_MEASURE`: **Apple firmware** drew `no file picker in this build` as
+    /// *no file picker in this …* while **Bootloaders** drew the same string whole, and the only
+    /// difference between the two rows is the `mono` escape hatch under the *other* half —
+    /// `ipod-boot firmware get <family>` against `ipod-boot rockbox-install`. A wider sibling took
+    /// the pixels, exactly as `Provide…`'s reason took them from `Fetch…` before this constant
+    /// existed; the fix is the same one [`RAIL_NEXT_W`] carries, which is that the floor must be the
+    /// share and not merely enough.
+    ///
+    /// **So it is the half-share, and two of them and the gutter are the row exactly.** The drawer
+    /// body is [`REFUSAL_MEASURE`] 372 and the two verbs are separated by `Metric.s3`:
+    /// `(372 − 12) / 2 = 180`, and `180 + 12 + 180` is 372. Under any pressure at all both halves
+    /// are exactly 180, a lone verb still stretches to the whole 372, and every reason clears its
+    /// column by 34 px. `the_group_verb_column_holds_every_verb_this_page_draws` re-derives the
+    /// widest verb out of `parts::Action::ALL` rather than out of a second copy here, so a seventh
+    /// and longer verb fails that rather than eliding on the page.
+    PARTS_VERB_W:     Px = (REFUSAL_MEASURE - 12.0) / 2.0;
     /// §6.2's `label` line box.
     ///
     /// **`Text` has no `line-height` in Slint 1.17** — the property does not exist — so a line box
@@ -561,6 +602,34 @@ pub const BODY_SIZE: f64 = 14.0;
 /// conservative for both. [`RAIL_VERB_W`] is now checked against the platform's own answer as well,
 /// by `the_verb_column_holds_the_verb_this_platform_draws`; this stays the floor under it.
 pub const BODY_ADVANCE: f64 = 0.62;
+
+/// **The narrowest measure §9.4's reason is ever drawn at**, and therefore the budget every reason
+/// in this program has to clear.
+///
+/// A reason is one line with `overflow: elide` in a 34 px slot (`primitives.slint`'s `ReasonSlot`).
+/// It cannot wrap — §9.6's vertical budget is built on fixed row heights, and §17.Q1 has already
+/// decided once that a paragraph does not get permanent chrome — so the only way a reason is
+/// legible is by being short enough for the narrowest column that draws it.
+///
+/// **Four columns draw one, and this is the smallest**: §9.3's next-step pair at [`RAIL_NEXT_W`]
+/// less the control's own `Metric.s3` of padding on each side, `170 − 24 = 146`. The other three are
+/// wider and clear it with room — §11.4's group verbs at `(372 − 12) / 2 = 180`, a Parts or Devices
+/// act at `420 − 4 × PAGE_MARGIN = 324`, a Settings row or a Parts fact line at
+/// [`REFUSAL_MEASURE`] 372.
+///
+/// **One number rather than four, on purpose.** A per-column budget makes a reason legible where it
+/// happens to be drawn today and illegible the first time it is reused one column over, and
+/// `Next::reason` is already drawn in three of the four. The cost is that a reason with 372 px in
+/// front of it is written to a 146 px budget; §9.4 now says that is the rule and not an accident.
+///
+/// **It is not a character count.** `the_group_verb_column_holds_every_verb_this_page_draws` found
+/// `Add a dump…` wider than `Synthesise…` at equal length, so this is checked with the renderer —
+/// `MainWindow.reason-width`, at `Metric.label-size` and `Metric.weight-label`, which is the face
+/// `ReasonSlot` draws in. `every_reason_this_window_draws_fits_the_column_it_is_drawn_in` is the
+/// gate; [`BODY_ADVANCE`] is not in it anywhere, because a budget derived from an average advance
+/// is the guess that measurement replaces.
+#[cfg(test)]
+pub const REASON_MEASURE: f64 = RAIL_NEXT_W - 2.0 * 12.0;
 
 /// How many characters §7.3's cradle label may carry before it elides.
 ///
@@ -2207,6 +2276,147 @@ mod tests {
             .and_then(|v| v.strip_suffix("px;"))
             .and_then(|v| v.parse::<f64>().ok())
             .expect("ui/tokens.slint declares body-size")
+    }
+
+    /// One of §6.3's closed space scale, out of `ui/tokens.slint`.
+    ///
+    /// [`RAIL_NEXT_W`] is derived from two of them, and a spacing token re-decided there has to move
+    /// the column rather than leave a stale literal in this file — the arrangement [`PAGE_MARGIN`]
+    /// already has with `s5`.
+    fn markup_space(step: &str) -> f64 {
+        let want = format!("out property <length> {step}: ");
+        read("tokens.slint")
+            .lines()
+            .map(str::trim)
+            .find_map(|l| l.strip_prefix(want.as_str()))
+            .and_then(|v| v.strip_suffix("px;"))
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or_else(|| panic!("ui/tokens.slint declares {step}"))
+    }
+
+    /// Every element in one markup file that binds `x:` — its name, and its own block's lines.
+    ///
+    /// The block is delimited by indentation rather than by brace matching: a `.slint` element is
+    /// closed by a `}` outdented past the line that opened it, and every file in this tree is
+    /// written that way. Cheap, and it fails loudly rather than quietly — a file that stops obeying
+    /// it makes the control below stop finding anything.
+    fn blocks_that_position_themselves(text: &str) -> Vec<Vec<String>> {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut out: Vec<Vec<String>> = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if !line.trim_start().starts_with("x: ") {
+                continue;
+            }
+            let indent = line.len() - line.trim_start().len();
+            let mut block: Vec<String> = Vec::new();
+            for later in &lines[i..] {
+                let t = later.trim_start();
+                if t == "}" && later.len() - t.len() < indent {
+                    break;
+                }
+                block.push(t.to_string());
+            }
+            out.push(block);
+        }
+        out
+    }
+
+    /// **An `x` is not an inset**, and two pages had been drawn as though it were.
+    ///
+    /// A Slint layout sets each child's x **and** its width. Binding `x` overrides the first and
+    /// leaves the second at the layout's own — so `x: Geometry.page-margin` on a wrapping `Text`
+    /// moves it in at the leading edge and lets it run the same 24 px off the trailing one. It is
+    /// invisible until a sentence is long enough to reach the edge, which is why it survived: on
+    /// the Devices page the empty line is `No devices yet.` and never got there. On Parts it is
+    /// §9.1's six paragraphs, and `_out/gui/parts-empty.png` had every one of them clipped by the
+    /// window frame.
+    ///
+    /// The rule is narrow on purpose — a wrapping `Text` is the shape that shows the defect, and a
+    /// `Pressable` positioned this way already carries an explicit width — so it fires on the thing
+    /// that was actually wrong rather than on every absolute position in the tree.
+    #[test]
+    fn no_wrapping_paragraph_is_inset_at_one_edge_only() {
+        let mut checked = 0usize;
+        for (name, text) in markup() {
+            for block in blocks_that_position_themselves(&text) {
+                if !block.iter().any(|l| l.starts_with("wrap: word-wrap;")) {
+                    continue;
+                }
+                checked += 1;
+                assert!(
+                    block.iter().any(|l| l.starts_with("width:")),
+                    "ui/{name} positions a wrapping paragraph with `x` and never narrows it, so it \
+                     is inset at the leading edge and overhangs the trailing one by the same \
+                     amount:\n  {}",
+                    block.join("\n  ")
+                );
+            }
+        }
+        assert!(
+            checked >= 2,
+            "the sweep found {checked} wrapping paragraphs positioned by `x`; it is reading \
+             nothing and would pass over the defect it was written for"
+        );
+    }
+
+    /// The control. A sweep that parses no blocks passes every file, and this one parses by
+    /// indentation — so the thing worth proving is that it can still see a paragraph with no width.
+    #[test]
+    fn the_inset_sweep_can_see_a_paragraph_that_overhangs() {
+        let bad = "        Text {\n            x: Geometry.page-margin;\n            \
+                   text: root.empty-line;\n            wrap: word-wrap;\n        }\n";
+        let blocks = blocks_that_position_themselves(bad);
+        assert_eq!(blocks.len(), 1, "the block parser found {} blocks in one", blocks.len());
+        assert!(
+            blocks[0].iter().any(|l| l.starts_with("wrap: word-wrap;")),
+            "the parser lost the `wrap` line, so the sweep would skip every paragraph"
+        );
+        assert!(
+            !blocks[0].iter().any(|l| l.starts_with("width:")),
+            "the parser reports a width in a block that has none, so the sweep can never fail"
+        );
+    }
+
+    /// **§9.3's next-step pair is halves, and both of them carry the floor.**
+    ///
+    /// Three claims, each of which bites on its own:
+    ///
+    ///   1. **The constant is the half-share exactly.** `2 × RAIL_NEXT_W + s2` is the failure
+    ///      block's inner width, so two floors and their gutter are the row and neither half can be
+    ///      shrunk by its sibling. A floor below the share leaves the shrink free to squeeze; a
+    ///      floor above it overflows the row. Both spacing terms are read out of `ui/tokens.slint`
+    ///      as text, so re-deciding one moves this rather than leaving two numbers to disagree.
+    ///   2. **Both controls carry it.** A constant no control carries is arithmetic about a page
+    ///      that does not obey it, which is exactly what `ui/rail.slint` was — measured off
+    ///      `_out/gui/work-failed.png`, a live `Retry` drew in 98 px beside a 194 px sibling.
+    ///   3. **`REASON_MEASURE` is what is left of it.** The budget every reason in the program is
+    ///      written to is this column less the control's own padding, and the two must not drift.
+    #[test]
+    fn the_next_step_column_is_the_half_share_of_the_row_it_is_in() {
+        let (s2, s3) = (markup_space("s2"), markup_space("s3"));
+        assert_eq!(
+            2.0 * RAIL_NEXT_W + s2,
+            REFUSAL_MEASURE - 2.0 * s3,
+            "two {RAIL_NEXT_W} px halves and an {s2} px gutter are not the {} px the failure \
+             block leaves; the halves either overflow the row or leave room the shrink can take",
+            REFUSAL_MEASURE - 2.0 * s3
+        );
+
+        let markup = read("rail.slint");
+        assert_eq!(
+            markup.matches("min-width: Geometry.rail-next-w;").count(),
+            2,
+            "§9.3's next-step row draws two controls and {} of them carry the floor; the one that \
+             does not is the one its sibling squeezes",
+            markup.matches("min-width: Geometry.rail-next-w;").count()
+        );
+
+        assert_eq!(
+            REASON_MEASURE,
+            RAIL_NEXT_W - 2.0 * s3,
+            "the reason budget is not this column less its own padding, so every sentence in the \
+             program is written to a width nothing draws"
+        );
     }
 
     /// Every verb the Rail can draw, **read out of `ui/rail.slint`'s own list** rather than out of a

@@ -7674,6 +7674,59 @@ pub(crate) mod tests {
         sync_rail(w, &rows, &rail::Rail::new(), caps(), work::Shape::default());
     }
 
+    /// **A Rail with two failures on it**, so §9.3's failure block is in a picture.
+    ///
+    /// The two are chosen for their next-step columns, which is the narrowest place in this program
+    /// a §9.4 refusal is drawn:
+    ///
+    ///   * `Class::Network` offers `Retry` **and** `Provide a file…`. On a computer with
+    ///     `curl` the first is live and the second is not, so the row is one short live label beside
+    ///     one long refusal — the pair that shrinks worst.
+    ///   * `Class::Verification` after one retry offers `Provide a file…` and `Copy the details`,
+    ///     and this build has neither a picker nor a clipboard, so **both** halves are disabled and
+    ///     both carry a reason.
+    ///   * `Class::SpaceMidWrite` offers `Choose a folder…` and `Cancel`, which is the third shape:
+    ///     a live half beside a refused one, the other way round from the first.
+    ///
+    /// It replaces the window's Rail model rather than mutating the empty one, which is what
+    /// `dress_the_bench` does and what `wire` does once at startup.
+    fn dress_a_failed_rail(w: &MainWindow) {
+        let rows: Rc<VecModel<RailRow>> = Rc::new(VecModel::default());
+        w.set_rail(ModelRc::from(rows.clone()));
+
+        let mut rail = rail::Rail::new();
+        rail.failed(
+            "fetch",
+            "iPod_33.1.1.ipsw",
+            rail::Failure::new(rail::Class::Network, "a download"),
+        );
+        let id = rail.failed(
+            "verify",
+            "rockbox.zip",
+            rail::Failure::new(rail::Class::Verification, "a download"),
+        );
+        // `Class::next` reads `retries`, and `Verification` offers `Retry` until it has been tried
+        // once — after that it stops, because a mirror serving the wrong bytes serves them again.
+        // `retry` is what raises the count, and it puts the entry back to `Planned`; `fail` is what
+        // the second attempt landing wrong does to it. Both are the real methods the window calls.
+        rail.retry(id);
+        rail.fail(id, rail::Failure::new(rail::Class::Verification, "a download"));
+        // …and the third pair, which is the other two-control shape: one live half (`Cancel` needs
+        // no capability) beside one refused one, the other way round from the first. It falls below
+        // the fold in the shot — the Rail scrolls — and was read by putting it second for one run:
+        // `Choose a folder…` and `no folder picker yet` both draw whole in their 146 px half.
+        rail.failed(
+            "build",
+            "my-5.5g.img",
+            rail::Failure::saying(
+                rail::Class::SpaceMidWrite,
+                "a drive",
+                "Stopped at 41.2 GB. my-5.5g.img.part is 41.2 GB and cancelling deletes it.",
+            ),
+        );
+        sync_rail(w, &rows, &rail, caps(), work::Shape::default());
+    }
+
     /// **Every page this window draws, drawn, with nothing on screen.**
     ///
     /// This is the end-to-end proof of [`shoot`] and it is also the tool: run it and
@@ -7767,13 +7820,25 @@ pub(crate) mod tests {
             ("composer-ipod-shared", Some(nav::Page::ComposerIpod), &shared),
         ];
 
-        let shots: Vec<(&str, Shot)> = pages
+        let mut shots: Vec<(&str, Shot)> = pages
             .into_iter()
             .map(|(name, page, f)| {
                 let at = page.map_or_else(nav::Stack::new, a_stack);
                 (name, shoot(&w, &at, f, name))
             })
             .collect();
+
+        // **§9.3, and nothing had ever taken a picture of it.** Every shot above stands on an
+        // EMPTY Rail — `dress_the_bench` pushes `Rail::new()` — so `work.png` is the *nothing is
+        // happening* sentence and the failure block below it had reached no picture at all: not the
+        // paragraph, not the `mono` remedy, and not the two next-step controls that carry §9.4's
+        // refusals. Those controls are where `rail::Next::reason` is drawn narrowest in the whole
+        // program, which is the one width a reason budget has to clear.
+        //
+        // It is taken last because it replaces the window's Rail model, and every shot above is of
+        // a window standing on the empty one.
+        dress_a_failed_rail(&w);
+        shots.push(("work-failed", shoot(&w, &a_stack(nav::Page::Work), &full, "work-failed")));
 
         for (name, shot) in &shots {
             assert_eq!(
@@ -10638,7 +10703,18 @@ pub(crate) mod tests {
         // One entry. Each names the property and the observation that would retire it, in the same
         // shape `research/04` uses for a bypass and `every_dead_code_allow_says_what_would_retire_it`
         // enforces for an allow: without one, an exemption is indistinguishable from an oversight.
-        const NO_SETTER: [(&str, &str); 1] = [(
+        const NO_SETTER: [(&str, &str); 2] = [(
+            "reason-probe",
+            "2026-08-23. §17.Q12's third probe, and the only `in property` in this window that is \
+             an instrument rather than a page. `reason-probe-text` is `visible: false` and outside \
+             every layout, so nothing a person sees reads it; what writes it is \
+             `every_reason_this_window_draws_fits_the_column_it_is_drawn_in`, one string at a time, \
+             to ask the renderer how wide §9.4's reason draws — the one number Slint 1.17 gives \
+             Rust no other way of getting. A shipped setter for it would be the window measuring a \
+             string it is not drawing. Retired when: something in the running window needs a text \
+             measurement of its own — a reason that reflows, or `IPOD_LAYOUT=1` printing this the \
+             way it prints `verb`.",
+        ), (
             "running",
             "2026-08-22. §12.2's handoff, and there is no machine: `phase()` answers `Off` \
              unconditionally, so this build starts nothing from the window. `running` lights the \
@@ -11172,6 +11248,307 @@ pub(crate) mod tests {
             "`{widest}` draws {drawn:.1} logical px against a {:.1} px column — measured by the \
              renderer, headless",
             geometry::PARTS_VERB_W
+        );
+    }
+
+    /// **Every sentence these four modules put in §9.4's reason slot**, with the producer it came
+    /// out of, so a failure names the function to edit rather than the string.
+    ///
+    /// **Swept out of the shipped producers, not typed out here.** `Parts::view`,
+    /// `Devices::view` and `Prefs::view` are the three functions that word a refusal on a drawer
+    /// page, and each is driven over both `Caps` arms and over every state its own module's tests
+    /// reach — so a **seventh** reason arrives in this list the day somebody writes one, which a
+    /// second copy of the sentences here could not do. `rail::Next` and `parts::Action` are
+    /// enumerated instead, because their reasons are constants that no fixture makes a page draw:
+    /// `Next::Fix`'s is unreachable in this build by design (see its own note), and
+    /// `Action::unwired` is asked of all six verbs whether or not a group offers them.
+    ///
+    /// **What is deliberately not in it, all three named rather than silently skipped:**
+    ///
+    ///   * **`consequence`, which shares the same slot.** `primitives.slint:515` is
+    ///     `text: root.enabled ? root.consequence : root.reason`, so §11.3's sentences elide exactly
+    ///     the way §9.4's did — `The entry goes. Its iPod A446, seed 6182160 and its drive stay in
+    ///     the library, and neither file is deleted.` measures **880 px** against 146. It is not
+    ///     gated because the fix is not the same fix: a reason can lose its second clause and still
+    ///     be a reason, and a destructive act's cost is the one sentence that has to be read
+    ///     *before* the press. That is the operator's call, in §17's shape, and §9.4 now carries the
+    ///     measurement so it can be made.
+    ///   * **A row's `sub` line** — `Provenance::line`, `used by N`, a park's age. Same font, same
+    ///     eliding, but it is a fact about a part rather than a refusal, it is `settings.rs`'s
+    ///     wording and not this crate's, and it is drawn at 372 px where a reason is drawn at 146.
+    ///     The one exception is in: §11.4's reserved *No iPod is plugged in* row, whose second line
+    ///     is worded here and is a §9.4 project state in everything but the field it lands in.
+    ///   * **A control's `label`.** It is drawn at `Metric.body-size` in the row cell, not at
+    ///     `label-size` in the slot, so this probe would measure it in the wrong face. The two that
+    ///     did not fit their half of §9.3's block were re-worded and read off
+    ///     `_out/gui/work-failed.png` instead.
+    ///
+    /// **And the fifth producer is not swept, which is a boundary rather than an oversight.**
+    /// `composer.rs` words §11.1's and §11.2's refusals and they are drawn in the same slot: read
+    /// off `_out/gui/composer-ipod-dumped.png`, `Read from the dump; a device's identity is the
+    /// ROM's, not ours.` draws as *…not …* under both locked pickers, and `composer::NO_CLIPBOARD`
+    /// as *this build has no clipboard, so there is nowhere for the co…* — which is the same
+    /// sentence, built the same way out of `Next::CopyDetails`, that `settings_page.rs` had. Same
+    /// defect, same fix; a different file's, and it is named here so that a green gate is not read
+    /// as a clean window.
+    fn every_reason_these_four_modules_can_word() -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = Vec::new();
+        let mut say = |from: &str, text: &str| {
+            if !text.is_empty() {
+                out.push((from.to_string(), text.to_string()));
+            }
+        };
+
+        // ── rail.rs: `Next`, every variant, both sentences ────────────────────────────────────
+        //
+        // Written out rather than derived from a `Next::ALL`, because there is no such constant —
+        // `Next::Fix` carries a label and a press count, so the type has no fixed list to walk. A
+        // ninth variant is a compile error in `reason` and `consequence` before it is a gap here.
+        let fix = |presses: u8| rail::Next::Fix {
+            label: compose::Fix::BuildFromIpsw.label(),
+            presses,
+        };
+        for n in [
+            rail::Next::Retry,
+            rail::Next::Provide,
+            rail::Next::ChooseElsewhere,
+            rail::Next::CopyDetails,
+            rail::Next::Reveal,
+            rail::Next::CancelWrite,
+            rail::Next::Devices,
+            fix(1),
+            fix(2),
+        ] {
+            say(&format!("rail::Next::{n:?}'s reason"), n.reason());
+        }
+
+        // ── parts.rs: the verb with no mechanism behind it ────────────────────────────────────
+        for a in parts::Action::ALL {
+            if let Some(why) = a.unwired() {
+                say(&format!("parts::Action::{a:?}::unwired"), why);
+            }
+        }
+
+        // ── settings_page.rs's one unreachable sentence, named rather than skipped ────────────
+        //
+        // `Settings::path()` is `Some(data_dir().join(FILE))` and `data_dir` always answers, so no
+        // fixture makes the Settings page draw this. A sweep that quietly omits a sentence it
+        // cannot reach is an instrument reporting an absence it could not have observed
+        // (AGENTS.md §6), so it is listed here by name and the constant is `pub` for this.
+        say("settings_page.rs: NO_PATH", settings_page::NO_PATH);
+
+        // ── The three drawer pages, swept out of what they would draw ─────────────────────────
+        //
+        // **The devices are renamed to one letter, and that is the measurement being honest.** Two
+        // of these sentences carry a device name — `devices::running_rule` and `parts::inventory`'s
+        // `held` — and a name is the operator's word, not this program's. Swept over `My 5.5G` the
+        // gate would be measuring seven characters somebody else chose and calling the result a
+        // budget; swept over `X` it measures ` is running`, which is the part this file decides. The
+        // room left over is the name's, and a name longer than it elides — which is the operator's
+        // choice about their own iPod and not this window's to shorten.
+        let at = temp_dir("reason-widths");
+        let mut s = a_furnished_library(&at);
+        for (i, d) in s.devices.iter_mut().enumerate() {
+            d.name = char::from(b'X' + u8::try_from(i).unwrap_or(0)).to_string();
+        }
+        let machine = s.devices.first().map(|d| d.name.clone());
+        // **Empty as well as furnished.** Two of `verb_row`'s refusals only exist over a library
+        // with nothing in the group — `Discard` with nothing parked is the one that shipped — and a
+        // sweep of the furnished library alone never reaches them.
+        let empty = Settings::default();
+        for caps in [rail::Caps::default(), caps()] {
+            for busy in [false, true] {
+                for running in [None, machine.as_deref()] {
+                    let mut p = parts::Parts::new();
+                    let mut seen = eapp_loader::settings::Presence::new();
+                    for g in &p.view(&empty, &mut seen, caps, busy, None).groups {
+                        for (a, f) in [&g.a, &g.b].into_iter().flatten() {
+                            say(
+                                &format!("parts.rs: an empty {}'s `{a:?}` reason", g.heading),
+                                &f.reason,
+                            );
+                        }
+                    }
+                    let ids: Vec<i32> = {
+                        let v = p.view(&s, &mut seen, caps, busy, running);
+                        v.rows.iter().filter(|r| r.expandable).map(|r| r.id).collect()
+                    };
+                    assert!(!ids.is_empty(), "no Parts row opens, so no act was swept");
+                    for id in ids {
+                        p.open_row(&s, id, true);
+                        let v = p.view(&s, &mut seen, caps, busy, running);
+                        for g in &v.groups {
+                            for (a, f) in [&g.a, &g.b].into_iter().flatten() {
+                                say(
+                                    &format!("parts.rs: {}'s `{a:?}` reason", g.heading),
+                                    &f.reason,
+                                );
+                            }
+                        }
+                        for d in &v.detail {
+                            let Some((act, f)) = &d.action else { continue };
+                            say(&format!("parts.rs: the act `{act:?}`'s reason"), &f.reason);
+                        }
+                        for r in &v.rows {
+                            say(&format!("parts.rs: `{}`'s machine rule", r.name), &r.locked_by);
+                        }
+                        // §11.4's reserved row — the one `fact` this crate words itself.
+                        let reserved = v
+                            .rows
+                            .iter()
+                            .find(|r| r.name == "No iPod is plugged in")
+                            .expect("§11.4 reserves the plugged-in row whether or not one is");
+                        say("parts.rs: the reserved iPod row's fact", &reserved.fact);
+                    }
+
+                    let mut dp = devices::Devices::new();
+                    for (i, d) in s.devices.iter().enumerate() {
+                        dp.open_row(&s, i32::try_from(i).expect("nine devices"), true);
+                        let v = dp.view(&s, &mut seen, caps, running);
+                        for line in &v.detail {
+                            let Some((act, f)) = &line.action else { continue };
+                            say(&format!("devices.rs: `{act:?}`'s reason on {}", d.name), &f.reason);
+                        }
+                        // **`Start`'s other three arms are not this module's sentences.**
+                        // `start_row` answers `running_rule` for a machine and `crate::cradle_
+                        // label` for everything else, and that function is the *cradle's* caption
+                        // before it is this page's refusal — it carries its own budget,
+                        // `geometry::CRADLE_LABEL_MAX_CHARS`, which is 48 characters and therefore
+                        // about 260 px. The two budgets disagree and the sentence cannot satisfy
+                        // both; it is `main.rs`'s to settle, not this sweep's to fail on.
+                        if let (Some(f), Some(_)) = (&v.start, running) {
+                            say(
+                                &format!("devices.rs: `Start`'s reason on {}", d.name),
+                                &f.reason,
+                            );
+                        }
+                    }
+                }
+            }
+
+            // ── settings_page.rs ──────────────────────────────────────────────────────────────
+            //
+            // The page has no `busy` and no machine — see its own header — so it is swept once per
+            // `Caps` arm. The failed-save sentence is not a `view` output until a save has failed,
+            // and a read-only home is what makes one fail; `Prefs::toggled` is the shipped route.
+            let prefs = settings_page::Prefs::new();
+            let v = prefs.view(&s, caps);
+            say("settings_page.rs: the Theme row's reason", &v.theme_reason);
+            say("settings_page.rs: the Settings-file row's reason", &v.copy_reason);
+        }
+
+        // **Deduplicated by the sentence, keeping the first producer that worded it.** The sweep
+        // drives three pages over two `Caps` arms, two `busy` arms, two machine arms and every
+        // openable row, so one constant arrives dozens of times — 559 entries for the distinct
+        // sentences below it, measured. A failure list with fifty copies of one line in it is a
+        // failure list nobody reads to the end.
+        out.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        out.dedup_by(|a, b| a.1 == b.1);
+        out
+    }
+
+    /// **Every §9.4 reason this window draws, measured in the face it is drawn in, against the
+    /// narrowest column that draws one.**
+    ///
+    /// §9.4's whole argument for disabling a control rather than hiding it is that the control says
+    /// why. A reason that runs off the end of its slot — *"there is one palette in this build and
+    /// nothing keys on a scheme, so t…"* — has spent 34 px of every page it is on and delivered
+    /// half a clause, and §17.Q1 has already refused the other answer once: the shelf stays 88 px
+    /// and a paragraph does not get permanent chrome. So the sentences get shorter. This is what
+    /// makes that stick.
+    ///
+    /// **Measured, never counted.** `the_group_verb_column_holds_every_verb_this_page_draws` found
+    /// `Add a dump…` wider than `Synthesise…` at equal length, so a character budget is not a width.
+    /// `MainWindow.reason-probe` is a `Text` at `Metric.label-size` and `Metric.weight-label` —
+    /// `ReasonSlot`'s own two properties — with the eliding taken off, and `reason-width` is its
+    /// `preferred-width`: the width the string wants, from the renderer, headless.
+    ///
+    /// **One budget for four columns**, and `geometry::REASON_MEASURE` carries the argument: a
+    /// reason written to the column it happens to be drawn in today is a reason that elides the
+    /// first time it is reused one column over, and `Next::reason` is already drawn in three of
+    /// them.
+    ///
+    /// **The control is the second half of the test**, per AGENTS.md §6: a probe wired to nothing
+    /// answers zero for every string, and zero clears every budget. So the sentence this commit
+    /// deleted is measured too, and it has to come back over budget — if it does not, the
+    /// instrument is not measuring.
+    #[test]
+    fn every_reason_this_window_draws_fits_the_column_it_is_drawn_in() {
+        let _held = use_a_scratch_data_dir();
+        let w = a_window();
+        let measure = |text: &str| -> f64 {
+            w.set_reason_probe(text.into());
+            f64::from(w.get_reason_width())
+        };
+
+        // The control, first, so a probe that measures nothing cannot pass this test quietly. This
+        // is the Theme row's sentence as it shipped, and it drew *…nothing keys on a scheme, so t…*
+        // on a 372 px page — the widest column of the four.
+        let was = "there is one palette in this build and nothing keys on a scheme, so the control \
+                   would write a preference no pixel reads";
+        let control = measure(was);
+        assert!(
+            control > geometry::REASON_MEASURE,
+            "the probe measured the sentence this commit deleted at {control:.1} px against a \
+             {:.1} px budget it visibly did not fit — so the probe is not measuring and every \
+             assertion below it is about the number zero",
+            geometry::REASON_MEASURE
+        );
+
+        let mut widest: (f64, String) = (0.0, String::new());
+        let mut over: Vec<String> = Vec::new();
+        let reasons = every_reason_these_four_modules_can_word();
+        for (from, text) in &reasons {
+            let drawn = measure(text);
+            assert!(
+                drawn > 0.0,
+                "`{text}` measured {drawn} px, which is not a measurement — AGENTS.md §6: run the \
+                 control before believing the number"
+            );
+            if drawn > widest.0 {
+                widest = (drawn, format!("{from} — {text:?}"));
+            }
+            if drawn > geometry::REASON_MEASURE {
+                over.push(format!(
+                    "  {from}\n    {drawn:.1} px against {:.1}: {text:?}",
+                    geometry::REASON_MEASURE
+                ));
+            }
+        }
+
+        // A filter that matches nothing prints `0 passed`; a sweep that collects nothing prints
+        // nothing at all. Both read as green.
+        assert!(
+            reasons.len() > 12,
+            "only {} sentences were swept, and this window words more than that — the sweep is \
+             collecting from a page it is not driving",
+            reasons.len()
+        );
+        assert!(
+            over.is_empty(),
+            "{} of {} reasons are wider than the column that draws them, so each one is cut off \
+             mid-clause where a person reads it (§9.4):\n{}",
+            over.len(),
+            reasons.len(),
+            over.join("\n")
+        );
+        // **Every sentence and its width, printed.** `-- --nocapture` is how the operator reads
+        // what the window now says without opening one, and it is the same habit `_out/gui/*.png`
+        // serves for the pixels.
+        let mut listed: Vec<(f64, &str, &str)> = reasons
+            .iter()
+            .map(|(from, text)| (measure(text), from.as_str(), text.as_str()))
+            .collect();
+        listed.sort_by(|a, b| b.0.total_cmp(&a.0));
+        for (drawn, from, text) in &listed {
+            eprintln!("{drawn:6.1}  {text:?}  \u{2014} {from}");
+        }
+        eprintln!(
+            "{} sentences fit a {:.1} px column; the widest is {:.1} px — {}",
+            reasons.len(),
+            geometry::REASON_MEASURE,
+            widest.0,
+            widest.1
         );
     }
 

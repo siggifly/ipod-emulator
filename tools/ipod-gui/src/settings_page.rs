@@ -102,15 +102,27 @@ const THEME: &str = "Light";
 /// real one or none. `Ink` is one measured light palette with no dark values and nothing in the
 /// program keys on a scheme, so a Theme control would write a field no pixel reads — which is
 /// exactly the landmine §17.Q8 names about `Settings::mode`.
-const NO_THEME: &str = "there is one palette in this build and nothing keys on a scheme, so the \
-                        control would write a preference no pixel reads";
+///
+/// **One clause, measured.** The sentence this replaced ran to **623 px** in a slot that elides at
+/// `geometry::REASON_MEASURE`, so the Settings page drew *there is one palette in this build and
+/// nothing keys on a scheme, so t…* — a reason cut off before it reaches its own verb. The half that
+/// is gone said what a Theme control *would* do, which is this doc comment's job and not the row's.
+const NO_THEME: &str = "one palette in this build";
 
 /// Why there is no path to copy, when this computer has nowhere to keep a settings file.
 ///
 /// **Asked before the clipboard**, because the absence of the thing to copy is a fact about this
 /// computer and the clipboard is only the state of this build — the same ordering `main.rs` gives
 /// its clipboard gate, where the identifier refusal comes before the missing-pasteboard sentence.
-const NO_PATH: &str = "this computer has nowhere to keep a settings file, so there is no path yet";
+///
+/// **Nothing on this computer can reach it**, and that is worth writing down rather than leaving as
+/// a surprise: `Settings::path()` is `Some(data_dir().join(FILE))` and `data_dir` always answers, so
+/// the `None` arm below has no input that produces it. It is kept because the arm is a `match` on an
+/// `Option` and an arm with no sentence is a disabled row with an empty reason — the exact shape
+/// `primitives.slint:369` forbids — the day `path` learns to answer `None`. It is also why
+/// `every_reason_this_window_draws_fits_the_column_it_is_drawn_in` names this constant instead of
+/// sweeping it: no fixture can make a page draw it.
+pub const NO_PATH: &str = "nowhere to keep one";
 
 /// What the page draws — **exactly the nine `setting-*` properties `window.slint:215-223`
 /// declares**, and nothing else.
@@ -195,9 +207,14 @@ impl Prefs {
                 // different problems — `composer::NO_CLIPBOARD` is built the same way, from the
                 // same `Next`, and `the_copy_row_wears_rails_own_sentence_for_an_absent_clipboard`
                 // pins the shared half by reading it out of `rail.rs` rather than repeating it.
-                Some(_) if !clipboard => {
-                    format!("{}, so there is nowhere for the path to go", Next::CopyDetails.reason())
-                }
+                // **`rail.rs`'s sentence and nothing appended to it.** It used to carry
+                // `, so there is nowhere for the path to go` on the end, which took the line to
+                // 345 px in a slot that elides at `geometry::REASON_MEASURE` — so the page drew
+                // *this build has no clipboard, so there is nowher…*, and the appended half, which
+                // was the only part this page contributed, was the part that fell off. The row is
+                // called `Settings file` and the control is `Copy path`; where the path would have
+                // gone is not a fact the reader is missing.
+                Some(_) if !clipboard => Next::CopyDetails.reason().to_string(),
                 Some(_) => String::new(),
             },
         }

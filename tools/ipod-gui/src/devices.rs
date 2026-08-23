@@ -82,8 +82,8 @@
 //     to arm.
 //
 // **3. §7.2's `Start` rule has no producer anywhere, and it cannot be given one in `DeviceRow`.**
-// *"`Start` — disabled while a machine exists, with the machine-rule reason `My 5.5G is running.
-// Stop it first.`"* The button reads `d.startable` and `d.cradle-label`, both built by
+// *"`Start` — disabled while a machine exists, with the machine-rule reason `My 5.5G is
+// running.`"* The button reads `d.startable` and `d.cradle-label`, both built by
 // `device_rows`, which is handed no machine and asks no such question — so today a page opened
 // beside a running ARM7 draws a live `Start` on every other device in the library.
 //
@@ -645,8 +645,21 @@ fn start_row(s: &Settings, d: &Device, seen: &mut Presence, machine: Option<&str
 /// Retirement condition, in the shape `research/04` uses for a bypass: it comes off when the model
 /// owns the sentence — `Settings::run_device` is what knows a device is live — and both callers
 /// read it from there.
+///
+/// **It lost `Stop it first.`, and that is the reason budget, not brevity for its own sake.** A
+/// reason is one eliding line and §9.4's rule is that it be legible; the sentence measured 168 px
+/// against `geometry::REASON_MEASURE` 146 for a device called `My 5.5G`, so what a person read
+/// was *My 5.5G is running. Stop it f…* — the imperative cut off, which is the only half that was
+/// an instruction. What is left names the machine, and stopping it is what the bench's own control
+/// does.
+///
+/// **The name is the operator's and this program does not shorten it.** ` is running` is 64 px, so
+/// a name has about 82 px — fifteen characters or so — before the line elides. That is a budget on
+/// *this program's* words and not on theirs: a device the operator called
+/// `Rockbox on a 5G, second try` is what they called it, and truncating it here would be the window
+/// deciding a person's own name for their own iPod is too long.
 fn running_rule(machine: &str) -> String {
-    format!("{machine} is running. Stop it first.")
+    format!("{machine} is running")
 }
 
 /// The name at a repeater index, or `None`.
@@ -1294,8 +1307,8 @@ mod tests {
     /// **§7.2, verbatim: while there is a machine, every other device's `Start` is refused, and
     /// the sentence names the machine.**
     ///
-    /// `My 5.5G is running. Stop it first.` is the doc's own example and the reason a person with
-    /// four devices can act on it. Nothing in this program produced it before: `device_rows` is
+    /// `My 5.5G is running` is the doc's own example, shortened to §9.4's reason budget by
+    /// [`running_rule`], and naming the machine is why a person with four devices can act on it. Nothing in this program produced it before: `device_rows` is
     /// handed no machine, so a page opened beside a running ARM7 drew a live `Start` on every row.
     /// Proved red by asking `machine == d.name` — the rule the two acts below it ask — which
     /// leaves the two devices that are *not* the machine offering to start a second one.
@@ -1332,7 +1345,7 @@ mod tests {
                 !start.enabled,
                 "device {i} offers to start a second machine while one is running"
             );
-            assert_eq!(start.reason, "My 5.5G is running. Stop it first.");
+            assert_eq!(start.reason, "My 5.5G is running");
             assert!(start.machine_rule, "§7.2 calls this a machine rule");
             assert!(start.escape.is_empty(), "no command gets round a running machine");
         }
@@ -1564,7 +1577,7 @@ mod tests {
         for a in [RowAction::Edit, RowAction::Remove] {
             let f = act_of(&v, a);
             assert!(!f.enabled, "{a:?} is pressable on the running device");
-            assert_eq!(f.reason, "Second is running. Stop it first.");
+            assert_eq!(f.reason, "Second is running");
             // **And the refusal disarms it.** `Second` shares its iPod with `My 5.5G`, so `Edit…`
             // was two presses and carried the sentence naming both, and `Remove` is two presses
             // always — a control that cannot be pressed at all still reserving §11.3's *press
@@ -1590,7 +1603,7 @@ mod tests {
 
         assert_eq!(
             p.row_action(&mut s, RowAction::Remove, Some("Second")),
-            Err("Second is running. Stop it first.".into())
+            Err("Second is running".into())
         );
         assert_eq!(s.devices.len(), 3, "the running device was removed anyway");
 

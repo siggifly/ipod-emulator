@@ -148,6 +148,17 @@ export component MainWindow inherits Window {
     // `Geometry.parts-verb-w` is the floor those two controls carry so the row cannot shrink a verb
     // to `F…`; this is what says the floor is enough in the face this platform gave us.
     out property <length> group-verb-width: group-verb-probe.preferred-width;
+    // **The third probe, and the one that takes a string in.** The two above measure a literal
+    // this file names; §9.4's refusals are worded in Rust and there are dozens of them, so what
+    // this measures is whatever `reason-probe` is set to — at `Metric.label-size` and
+    // `Metric.weight-label`, which is `ReasonSlot`'s own `Text` (`primitives.slint:332-333`) and
+    // not the body face the two above use.
+    //
+    // `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` sets it once per reason and
+    // reads this back. Without it a reason budget is a character count, and §17.Q12's whole finding
+    // is that a character count is not a width.
+    in property <string> reason-probe;
+    out property <length> reason-width: reason-probe-text.preferred-width;
     // §7.5's row-2 trailing slot: the one number a bug report can quote.
     in property <string> fidelity;
     // §7.3: the drawn device is the picture, and this is what an assistive technology is told is on
@@ -478,6 +489,23 @@ export component MainWindow inherits Window {
                 text: "Add a dump…";
                 font-size: Metric.body-size;
                 font-weight: Metric.weight-strong;
+            }
+
+            // **The third probe, and its text comes from Rust.** `ReasonSlot`'s own `Text` is
+            // `Metric.label-size` at `Metric.weight-label` with `overflow: elide`, so this is that
+            // `Text` with the eliding taken off — a `preferred-width` is the width the string
+            // WANTS, which is exactly the number a budget has to clear.
+            //
+            // It is `visible: false` and absolutely positioned for the same reason as the two above
+            // (§16.3), and it costs nothing when nobody sets `reason-probe`: an empty string
+            // prefers zero.
+            reason-probe-text := Text {
+                x: 0;
+                y: 0;
+                visible: false;
+                text: root.reason-probe;
+                font-size: Metric.label-size;
+                font-weight: Metric.weight-label;
             }
 
             // §7. Full width, always: §9.5's decision is that the shelf's band and its 1 px top rule

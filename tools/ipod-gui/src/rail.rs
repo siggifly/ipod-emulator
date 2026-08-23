@@ -275,11 +275,18 @@ pub enum Next {
 }
 
 impl Next {
+    /// **Short enough for half a failure block**, which is a measurement and not a preference.
+    /// Six of the ten failure classes offer two next steps and `geometry::RAIL_NEXT_W` makes each
+    /// one exactly half the row, so a label is drawn in the same 146 px a reason is. The two that
+    /// were sentences — `Provide the file yourself…` and `Choose somewhere else…` — drew as
+    /// *Provide the file you…* and lost their own trailing `…`, which is the one character that
+    /// says a picker opens. §11.4 already calls the same act `Provide…` on Parts; these are that
+    /// name with the object put back.
     pub fn label(&self) -> String {
         match self {
             Next::Retry => "Retry".into(),
-            Next::Provide => "Provide the file yourself…".into(),
-            Next::ChooseElsewhere => "Choose somewhere else…".into(),
+            Next::Provide => "Provide a file…".into(),
+            Next::ChooseElsewhere => "Choose a folder…".into(),
             // **Never `Report it`.** There is no network reporting path in this program and no
             // issue URL in this design, and a visible control that does nothing is the defect this
             // document indicts twice.
@@ -324,21 +331,40 @@ impl Next {
     /// Why it is not pressable — **non-empty exactly for the steps [`Next::available`] can refuse**.
     ///
     /// §9.4: a project state says *this is not finished, by us*, names what does work, and names the
-    /// escape hatch. Every sentence below is the second kind; none of these is a machine rule.
+    /// escape hatch. Every sentence below is the second kind but one; that one says so.
+    ///
+    /// **One clause each, and that is a rule with a measurement behind it.** These are drawn in
+    /// §9.3's next-step pair, which is `geometry::REASON_MEASURE` 146 px wide — the narrowest
+    /// column in the program that draws a reason — in a slot that **elides and cannot wrap**. What
+    /// shipped here was a sentence: *there is no file picker in this build yet, and nothing here
+    /// accepts a dropped file* measures **411 px**, so what a person actually read was
+    /// *there is no file picker in this build yet, and not…*, and §9.4's whole argument for
+    /// disabling a control rather than hiding it is that the control says why. §17.Q1 refused the
+    /// other answer for the shelf and it is refused here for the same reason: 34 px of permanent
+    /// chrome will not hold a paragraph, so the paragraph is not what goes in it.
+    ///
+    /// Every string below was measured with the renderer, not counted:
+    /// `every_reason_this_window_draws_fits_the_column_it_is_drawn_in` fails on a longer one.
+    ///
+    /// **What the shortening dropped, and where it went.** The clauses that named the *second* half
+    /// of an absence — *and nothing here accepts a dropped file*, *every download in this program
+    /// goes through curl* — are gone from the screen. There is no `why ›` route to put them behind:
+    /// that control is the bench's (§7.6) and opens the drawer page owning a refusal, and these
+    /// refusals are already **on** their drawer page. The long form survives in these doc comments
+    /// and in §9.4, which is where a person who wants the whole argument reads it, and the drawn
+    /// half is the half a person standing at the control needs.
     pub fn reason(&self) -> &'static str {
         match self {
-            Next::Provide => "there is no file picker in this build yet, and nothing here accepts a \
-                              dropped file",
-            Next::ChooseElsewhere => "there is no folder picker in this build yet",
+            Next::Provide => "no file picker in this build",
+            Next::ChooseElsewhere => "no folder picker yet",
             Next::CopyDetails => "this build has no clipboard",
-            Next::Reveal => "this build cannot open a file manager",
-            Next::Devices => "the Devices page is not built yet",
+            Next::Reveal => "no file manager here",
+            Next::Devices => "no Devices page yet",
             // **A machine rule, not a project state**, and the only one in this function. The other
             // five say *we have not finished this*; this one says *your computer cannot do it*, and
             // the difference matters because no amount of work on this program fixes it. The remedy
             // is `Class::ToolMissing`'s command, not a control.
-            Next::Retry => "every download in this program goes through curl, and it is not on this \
-                            computer",
+            Next::Retry => "no curl on this computer",
             // **This one is unreachable in the shipping build, and it is kept rather than
             // reworded.** `available` asks `caps.composer`, `main::caps()` derives that from
             // `nav::Page::Composer.slot()`, and that answers `Some(2)` unconditionally — so nothing
@@ -352,7 +378,7 @@ impl Next {
             // page is removed the control greys out saying nothing. The alternative — replacing it
             // with a reason a `Fix` can be refused for *today* — has nothing to say: `available` is
             // the only thing that refuses a `Fix`, and this is what `available` refuses on.
-            Next::Fix { .. } => "there is no Composer in this build yet",
+            Next::Fix { .. } => "no Composer in this build",
             Next::CancelWrite => "",
         }
     }
