@@ -1016,9 +1016,10 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     let mut bcm = Bcm::new(0x3000_0000);
     bcm.registry = true;
     // The boot screen. A real NOR carries a `logo` image and Apple's bootloader blits it; a
-    // synthesised one has none, and could not carry Apple's artwork if it wanted to. So the
-    // project's own mark goes up instead, in the colours the model boots in — white iPods dark on
-    // white, black and U2 white on black.
+    // synthesised one carries the project's own mark, because it could not carry Apple's artwork
+    // if it wanted to. Either way it is white on black — every iPod with video boots the same
+    // screen whatever colour its case is, corrected 2026-08-19 by the operator, who owned a white
+    // one. `Source::boot_screen` is the one place that decides which picture it is.
     if synthetic {
         // Whatever the source says to show — the built-in mark, or an image somebody chose.
         let px = cfg.nor.boot_screen(FB_W, FB_H);

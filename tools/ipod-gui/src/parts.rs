@@ -1292,8 +1292,8 @@ fn read_rom(src: &nor::Source) -> Rom {
             // drawn in `fg` rather than `fg-dim`.
             let v = inspect::flash(p);
             head.push(match v.ok() {
-                true => Line::Para(drawable(v.text())),
-                false => Line::Rule(drawable(v.text())),
+                true => Line::Para(v.text().into()),
+                false => Line::Rule(v.text().into()),
             });
             if let Ok(nor) = std::fs::read(p) {
                 let images = inspect::nor_images(&nor);
@@ -1396,10 +1396,10 @@ fn read_rom(src: &nor::Source) -> Rom {
             title_auth = id.title_auth().line().to_string();
             // The strongest evidence there is that a dump did not parse.
             if let Some(w) = id.oui_warning() {
-                rules.push(drawable(&w));
+                rules.push(w);
             }
         }
-        Err(why) => head.push(Line::Rule(drawable(&why))),
+        Err(why) => head.push(Line::Rule(why)),
     }
 
     Rom {
@@ -1422,7 +1422,7 @@ fn read_ipsw(path: &Path) -> Vec<Line> {
         out.push(Line::Fact("On disk".into(), si(m.len())));
     }
     for (label, value) in inspect::ipsw_facts(path) {
-        out.push(Line::Fact(label.to_string(), drawable(&value)));
+        out.push(Line::Fact(label.to_string(), value));
     }
     // **By contents, never by extension or by name.** People rename downloads and browsers add
     // `(1)`; a file called `iPod_25.1.3.ipsw` is not evidence of anything, and the hash is. This
@@ -1430,10 +1430,7 @@ fn read_ipsw(path: &Path) -> Vec<Line> {
     match std::fs::read(path) {
         Ok(bytes) => {
             let p = firmware::identify(&bytes);
-            out.push(Line::Fact(
-                "Identified by contents".into(),
-                drawable(&p.line()),
-            ));
+            out.push(Line::Fact("Identified by contents".into(), p.line()));
             // `Unrecognised` is explicitly allowed: modified firmware is a legitimate reason to
             // want an emulator, and it is reported so you know rather than to stop you.
             if let Some(w) = p.warning() {
@@ -1514,7 +1511,7 @@ fn next_row(label: &str, n: &Next, caps: Caps) -> FixRow {
         reason: if enabled {
             String::new()
         } else {
-            drawable(n.reason())
+            n.reason().into()
         },
         escape: String::new(),
         // §9.4's two kinds: `Next::Retry` is the one sentence in that function that says *your
@@ -1547,7 +1544,7 @@ fn verb_row(a: Action, rows: &[PartView], g: Group, caps: Caps, busy: bool) -> F
     // fetch differs per group and a command that fetches the wrong thing is worse than none.
     if let Some(why) = a.unwired() {
         row.enabled = false;
-        row.reason = drawable(why);
+        row.reason = why.into();
         row.escape = g.fetch_route().unwrap_or_default().into();
         // Not a machine rule: nothing about this computer refuses. See [`Action::unwired`].
         row.machine_rule = false;
@@ -1595,7 +1592,7 @@ fn verb_row(a: Action, rows: &[PartView], g: Group, caps: Caps, busy: bool) -> F
 /// exists and refused with *there is no Composer in this build yet*, one row from the page that
 /// opens it. Every caller left is a control the window greys out.
 fn refused_because(n: &Next) -> String {
-    drawable(n.reason())
+    n.reason().into()
 }
 
 /// The sentence under a control this build draws **disabled because it has no mechanism**, for the
@@ -1609,29 +1606,11 @@ fn refused_because(n: &Next) -> String {
 /// `every_verb_with_no_mechanism_is_drawn_disabled_with_a_route` can hold the two to each other with
 /// a `starts_with`.
 fn refused_because_unwired(a: Action, g: Group) -> String {
-    let why = drawable(a.unwired().expect("the caller is an unwired verb"));
+    let why = a.unwired().expect("the caller is an unwired verb");
     match g.fetch_route() {
         Some(cmd) => format!("{why}. `{cmd}` does it from a terminal."),
-        None => why,
+        None => why.into(),
     }
-}
-
-/// The window's font draws ASCII, an em dash, an ellipsis and a section mark, and nothing else
-/// (§6.7) — so `·` is `.notdef`, an empty square, and **nothing in `.slint` can ask whether a
-/// glyph exists**.
-///
-/// The model words several sentences this page draws verbatim and joins lists in three of them
-/// with `·`: `inspect::flash`'s Good verdict, `inspect::rom_facts`, `inspect::ipsw_facts` and
-/// `nor::Source::describe`. §6.7's sweep reads `tools/ipod-gui/src` only, so none of those is
-/// covered by it, and every one of them would have drawn empty squares here.
-///
-/// A comma is this program's own answer for a joined list — `rail::Tool::remedy` says so, `parts
-/// .slint:155` joins with one, and `ipod-boot syscfg` prints its record tags with one. So the
-/// substitution is that answer applied at the boundary, in one place, rather than a widened glyph
-/// set. Everything else passes through untouched, which is what leaves
-/// `no_line_carries_a_glyph_the_window_cannot_draw` able to go red on the next one.
-fn drawable(s: &str) -> String {
-    s.replace(" \u{b7} ", ", ").replace('\u{b7}', ",")
 }
 
 #[cfg(test)]
@@ -1864,17 +1843,19 @@ mod tests {
         d
     }
 
-    /// A 1 MiB NOR that `inspect::flash` passes, written where a `Source::File` can find it.
+    /// A 1 MiB NOR that stands in for a retail dump, written where a `Source::File` can find it.
     ///
-    /// **`nor::synthesise` writes no `flsh` image directory**, so `inspect::flash` calls this
-    /// program's own generated ROM `Wrong` — *1 MiB and a plausible reset vector, but no `flsh`
-    /// image directory at 0xffe00*. Measured here rather than assumed, and it is not this file's
-    /// to fix; what it means for the fixture is that a synthesised NOR cannot stand in for a dump.
+    /// `nor::synthesise` writes a `flsh` directory of its own now — one record, for the one image a
+    /// generated ROM can honestly carry, its own boot logo. (It wrote none at all until 2026-08-23,
+    /// and `inspect::flash` called this program's output `Wrong` for it.) A **retail** dump indexes
+    /// four, and four is what makes the Good verdict a *list*, which is the shape
+    /// `no_line_carries_a_glyph_the_window_cannot_draw` is about. So three more names go in beside
+    /// the real one, at the slots after it.
     ///
-    /// So the directory is written in. Four images at the 5G's own load address is what a retail
-    /// dump carries, and the Good verdict it produces is also the one sentence this page renders
-    /// verbatim that carries U+00B7 — which is what gives
-    /// `no_line_carries_a_glyph_the_window_cannot_draw` something to measure.
+    /// Those three index nothing, and that is deliberate rather than lazy: `inspect::flash` reads a
+    /// record's tag and its load address, and a body for `diag` would be Apple's program, which is
+    /// not ours to invent. The `logo` record `synthesise` wrote is left exactly as it is, so the
+    /// one image this file claims to have is one it really has.
     fn write_nor(at: &Path) {
         let src = nor::Source::Synthetic {
             model: "MA146".into(),
@@ -1885,11 +1866,16 @@ mod tests {
         };
         let mut nor_bytes = src.bytes().expect("a synthesised NOR");
         assert_eq!(nor_bytes.len() as u64, inspect::NOR_LEN, "a 5G/5.5G NOR is exactly 1 MiB");
+        assert_eq!(
+            inspect::nor_images(&nor_bytes).len(),
+            1,
+            "the synthesiser stopped writing its own image directory"
+        );
         // The record layout `inspect::nor_images` reads: `hslf`, then the tag as a little-endian
         // u32 of four characters — so the bytes go in backwards — then `addr` at +0x14.
-        const DIRECTORY: usize = 0x000f_fe00;
-        for (i, tag) in ["disk", "diag", "logo", "vmcs"].iter().enumerate() {
-            let rec = DIRECTORY + i * 40;
+        let dir = inspect::NOR_DIRECTORY as usize;
+        for (i, tag) in ["disk", "diag", "vmcs"].iter().enumerate() {
+            let rec = dir + (i + 1) * inspect::IMAGE_RECORD;
             nor_bytes[rec..rec + 4].copy_from_slice(b"hslf");
             let backwards: Vec<u8> = tag.bytes().rev().collect();
             nor_bytes[rec + 4..rec + 8].copy_from_slice(&backwards);
@@ -1897,10 +1883,16 @@ mod tests {
                 .copy_from_slice(&inspect::LOAD_ADDR_5G.to_le_bytes());
         }
         std::fs::write(at, nor_bytes).expect("writing the NOR");
+        let v = inspect::flash(at);
         assert!(
-            inspect::flash(at).ok(),
+            v.ok(),
             "the fixture does not pass the check the body is built out of: {}",
-            inspect::flash(at).text()
+            v.text()
+        );
+        assert!(
+            v.text().contains("logo, disk, diag, vmcs"),
+            "the verdict is not the joined list this fixture exists to produce: {}",
+            v.text()
         );
     }
 
@@ -2645,11 +2637,16 @@ mod tests {
 
     /// **The closed glyph set, applied to what the window actually draws.**
     ///
-    /// `geometry.rs`'s sweep reads *string literals in source* and cannot see this: the ROM body's
-    /// longest lines are `inspect::flash`'s verdict and `inspect::ipsw_facts`' joined lists, which
-    /// are built in `eapp-loader` — a crate that sweep does not read — and joined with `·`, which
-    /// is not in the set and renders as an empty square. So this asks the same question of the
-    /// finished `View`.
+    /// `geometry.rs`'s sweep reads *string literals in source*; this reads the finished `View`, and
+    /// the two catch different things. A tag cut out of a `flsh` directory, a filename, an OS error
+    /// — none of those is a literal anywhere, and all three end up in a row on this page.
+    ///
+    /// **The control is a reach, not a substitution.** It used to be *"the model's verdict for this
+    /// file carries U+00B7"*, which was true because `inspect::flash` joined its image list with
+    /// one and `parts.rs` swapped it for a comma on the way past. The model words the comma itself
+    /// now and that boundary substitution is deleted, so there is nothing left to have something to
+    /// substitute — the honest control is that the sweep reaches the model's own sentence at all,
+    /// and that the predicate can say no.
     ///
     /// The three permitted non-ASCII characters are the same three `geometry.rs` permits; they are
     /// written out rather than imported because that module's list is private to its own test
@@ -2660,17 +2657,6 @@ mod tests {
         let dir = scratch("glyphs");
         let at = dir.join("rom.bin");
         write_nor(&at);
-
-        // **The control, and it is the whole reason this test is not decoration**: the model's own
-        // verdict for this very file carries the character, so a `drawable` that did nothing would
-        // fail below rather than pass silently.
-        let raw = inspect::flash(&at);
-        assert!(
-            raw.text().contains('\u{b7}'),
-            "the model's verdict no longer carries the middle dot, so this test is measuring a \
-             substitution that has nothing to substitute: {}",
-            raw.text()
-        );
 
         let mut s = library();
         s.resources.push(Item {
@@ -2688,6 +2674,7 @@ mod tests {
             .map(|r| r.id)
             .collect();
         let mut swept = 0usize;
+        let mut drawn: Vec<String> = Vec::new();
         for id in ids {
             p.open_row(&s, id, true);
             let v = p.view(&s, &mut seen, Caps::default(), false, Some("My 5.5G"));
@@ -2703,9 +2690,27 @@ mod tests {
                         c as u32
                     );
                 }
+                drawn.push(text);
             }
         }
         assert!(swept > 100, "only {swept} strings were swept, so the reach is not the page's");
+
+        // **The reach control**: the sentence this test exists for has to be among the strings it
+        // just read. `inspect::flash`'s Good verdict is the longest line the ROM body draws and the
+        // one that joined its image list with a middle dot; if the page stops drawing it, the sweep
+        // above goes on passing over whatever is left.
+        let verdict = inspect::flash(&at);
+        assert!(
+            verdict.ok() && drawn.iter().any(|t| t == verdict.text()),
+            "the model's verdict is not on the page, so this sweep is not reading the model:\n  {}",
+            verdict.text()
+        );
+        // …and the predicate can refuse, which a sweep that found nothing cannot demonstrate.
+        let planted = format!("{} \u{b7} logo", verdict.text());
+        assert!(
+            planted.chars().any(|c| !c.is_ascii() && !DRAWN.contains(&c)),
+            "the check cannot see the character it exists to refuse"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

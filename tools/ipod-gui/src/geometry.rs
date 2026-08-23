@@ -3077,20 +3077,81 @@ mod tests {
         depth
     }
 
-    /// **T-19. No UI string carries a glyph outside that set — in the markup OR in Rust.**
+    /// **The model's own sources — `eapp-loader`'s library, and not its command-line programs.**
+    ///
+    /// §6.7's rule is about a glyph rendered by *this program's* font. Half the sentences that font
+    /// is asked to draw are not written in this crate at all: `inspect::flash`'s verdict, the fact
+    /// lists behind every Parts row, `nor::Source::describe` and every `Provenance` line are worded
+    /// in `eapp-loader` and rendered here verbatim. Four of them joined their lists with U+00B7 and
+    /// nothing looked, because this sweep read `tools/ipod-gui/src` and that is the other crate.
+    ///
+    /// **The line is the crate's own shape.** `src/*.rs` is the library the window links; a
+    /// function in it can be handed to a `Text` tomorrow whether or not one is today. `src/bin/*.rs`
+    /// is a `main` that owns a terminal, in whatever font the operator set, which this program
+    /// neither chooses nor can interrogate — so those are excluded, by not recursing into the
+    /// directory rather than by a list that would have to be maintained.
+    ///
+    /// The exclusion is real rather than nominal: `bin/trace.rs` prints `✅` and `⚠️`, and
+    /// `bin/ipod-boot.rs` still joins with `·`. Both are correct where they are, and both would
+    /// fail this sweep if it read them. What the library costs is nothing — after the four
+    /// sentences were reworded there is not one non-ASCII character left in any string literal it
+    /// ships, outside the three the window's font is trusted for.
+    ///
+    /// The cut is `#[cfg(test)]` at the start of a line, not `mod tests {`: that crate names its
+    /// test modules `naming_tests`, `syscfg_tests`, `figure_tests` and a dozen other things, and
+    /// `lib.rs` has no module called `tests` at all — so the window's own rule would have swept
+    /// 9 300 lines of `lib.rs` including its tests, and `settings.rs` planted middle dot with them.
+    fn model_sources() -> Vec<(String, String)> {
+        let dir =
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../eapp-loader/src"));
+        let mut out: Vec<(String, String)> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+            .map(|p| {
+                let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                let text = std::fs::read_to_string(&p).expect("a source file");
+                let kept: Vec<&str> = text
+                    .lines()
+                    .take_while(|l| !l.starts_with("#[cfg(test)]"))
+                    .collect();
+                (name, kept.join("\n"))
+            })
+            .collect();
+        out.sort();
+        // The control on the cut: it must not have taken the shipped half with it. `lib.rs` is the
+        // machine and `nor.rs` is where a sentence this sweep exists for is worded.
+        assert!(
+            out.iter()
+                .any(|(n, t)| n == "lib.rs" && t.contains("pub fn step")),
+            "the test cut removed the model"
+        );
+        assert!(
+            out.iter()
+                .any(|(n, t)| n == "nor.rs" && t.contains("pub fn synthesise")),
+            "the test cut removed the ROM synthesiser"
+        );
+        out
+    }
+
+    /// **T-19. No UI string carries a glyph outside that set — in the markup, in this crate's Rust,
+    /// or in the model's.**
     ///
     /// Comments are stripped first, so the prose above every one of these files does not count —
     /// only what the window actually draws.
     ///
-    /// **Both halves, and the Rust half was ungated.** §6.7's own wording is *"no source file may
-    /// contain a non-ASCII character rendered as UI text"*, and it names ` · ` (U+00B7) as the
-    /// character the shipped window built into UI strings with no coverage gate at all. That is
-    /// where the strings live: `ui/*.slint` carries almost no prose, and every sentence the bench
-    /// and the Rail draw is built in `src/*.rs`. A sweep over the half with no glyphs in it, and
-    /// none over the half with all of them, is a gate passing on the wrong file.
+    /// **Three halves, and two of them were ungated in turn.** §6.7's own wording is *"no source
+    /// file may contain a non-ASCII character rendered as UI text"*, and it names ` · ` (U+00B7) as
+    /// the character the shipped window built into UI strings with no coverage gate at all. The
+    /// first widening added this crate's `src/*.rs`, because `ui/*.slint` carries almost no prose
+    /// and every sentence the bench and the Rail draw is built in Rust. That left the *model*: four
+    /// sentences worded in `eapp-loader` and drawn here verbatim, joining their lists with the very
+    /// character §6.7 names. `parts.rs` substituted a comma for them at its own boundary, which
+    /// covered one page and left every other caller drawing empty squares. See [`model_sources`].
     #[test]
     fn no_ui_string_carries_a_glyph_outside_the_closed_set() {
-        let mut swept = 0usize;
+        let (mut markup_files, mut window_files, mut model_files) = (0usize, 0usize, 0usize);
         // `rust_sources` cuts each file at its own test module, so this sweeps what the program
         // ships rather than what its tests write down. It lives beside the sweeps that first needed
         // it (`main.rs`), and there is one of it rather than two.
@@ -3101,9 +3162,18 @@ mod tests {
                 crate::tests::rust_sources()
                     .into_iter()
                     .map(|(n, t)| (format!("src/{n}"), t)),
+            )
+            .chain(
+                model_sources()
+                    .into_iter()
+                    .map(|(n, t)| (format!("eapp-loader/src/{n}"), t)),
             );
         for (name, text) in files {
-            swept += 1;
+            match name.split('/').next() {
+                Some("ui") => markup_files += 1,
+                Some("src") => window_files += 1,
+                _ => model_files += 1,
+            }
             // **A string that goes to a terminal is not UI text.** §6.7's rule is about a glyph
             // rendered by *this program's* font, in a `Text` whose family it chose and cannot
             // interrogate. `IPOD_LAYOUT`'s box-drawing rule and a panic message land in whatever
@@ -3143,13 +3213,16 @@ mod tests {
                 }
             }
         }
-        // The control for the sweep's own reach: it has to have seen both halves.
-        assert!(
-            swept > DECLARED_MARKUP.len(),
-            "the sweep saw {swept} files and there are {} markup files alone, so the Rust half \
-             read nothing",
+        // The control for the sweep's own reach: it has to have seen all three halves, and a sweep
+        // that found nothing looks exactly like a set that carries nothing.
+        assert_eq!(
+            markup_files,
+            DECLARED_MARKUP.len(),
+            "the markup half read {markup_files} files and there are {}",
             DECLARED_MARKUP.len()
         );
+        assert!(window_files > 5, "the window half read {window_files} files");
+        assert!(model_files > 15, "the model half read {model_files} files");
     }
 
     /// Every string literal on one line, comments excluded.

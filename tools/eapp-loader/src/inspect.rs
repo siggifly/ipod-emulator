@@ -87,13 +87,19 @@ pub const LOAD_ADDR_5G: u32 = 0x1000_0000;
 /// The retail 5G/5.5G NOR is one megabyte.
 pub const NOR_LEN: u64 = 1024 * 1024;
 /// The image directory inside it.
-const NOR_DIRECTORY: u64 = 0x000f_fe00;
+///
+/// Public because [`crate::nor::synthesise`] writes one. A generated ROM with no `flsh` directory
+/// is a ROM [`flash`] calls `Wrong`, which is a bad thing for this program to hand out about its
+/// own output.
+pub const NOR_DIRECTORY: u64 = 0x000f_fe00;
+/// One directory record, `flsh` or `!ATA`. Both are the same 40 bytes; only the magic differs.
+pub const IMAGE_RECORD: usize = 40;
 /// The `!ATA` directory, relative to the start of the firmware partition.
 const DISK_DIRECTORY: u64 = 0x4200;
 
 fn parse_entries(buf: &[u8], magic: &[u8; 4]) -> Vec<Entry> {
     let mut out = Vec::new();
-    for e in buf.chunks_exact(40) {
+    for e in buf.chunks_exact(IMAGE_RECORD) {
         if &e[0..4] != magic {
             break;
         }
@@ -177,7 +183,7 @@ fn read_at(path: &Path, at: u64, n: usize) -> std::io::Result<Vec<u8>> {
 //
 // So a file is described by what is *inside* it, and the filename is what you get on hover. This
 // matters more the moment there is more than one iPod: `internal_rom_000000-0FFFFF.bin` three times
-// is a list of nothing, and "iPod Video · 5A82…" three times is a list of iPods.
+// is a list of nothing, and "iPod Video, 5A82" three times is a list of iPods.
 
 /// What a boot ROM is, in a few words — the model, and the device it came off.
 ///
@@ -213,9 +219,9 @@ pub fn describe_rom(path: &Path, model: &str) -> Option<String> {
             .into_iter()
             .rev()
             .collect();
-        return Some(format!("{model} · {tail}"));
+        return Some(format!("{model}, {tail}"));
     }
-    cfg.guid.map(|g| format!("{model} · {:04X}", g & 0xffff))
+    cfg.guid.map(|g| format!("{model}, {:04X}", g & 0xffff))
 }
 
 /// The version and content fingerprint of an Apple software bundle.
@@ -279,7 +285,7 @@ pub fn rom_facts(path: &Path) -> Vec<Fact> {
         let images = parse_entries(dir, b"hslf");
         if !images.is_empty() {
             let names: Vec<&str> = images.iter().map(|e| e.tag.as_str()).collect();
-            out.push(("Images", names.join(" · ")));
+            out.push(("Images", names.join(", ")));
         }
     }
     if let Some(cfg) = syscfg(&nor) {
@@ -306,7 +312,7 @@ pub fn drive_facts(path: &Path) -> Vec<Fact> {
     }
     if let Ok(state) = crate::ipsw::firmware_state(path) {
         if !state.tags.is_empty() {
-            out.push(("Firmware images", state.tags.join(" · ")));
+            out.push(("Firmware images", state.tags.join(", ")));
         }
         out.push((
             "Operating system",
@@ -382,7 +388,7 @@ pub fn volume_software(path: &Path) -> Option<String> {
     {
         found.push("a Linux kernel".into());
     }
-    (!found.is_empty()).then(|| found.join(" · "))
+    (!found.is_empty()).then(|| found.join(", "))
 }
 
 /// What an Apple software bundle turned out to contain.
@@ -406,7 +412,7 @@ pub fn ipsw_facts(path: &Path) -> Vec<Fact> {
     let images = crate::ipsw::images(&fw);
     if !images.is_empty() {
         let names: Vec<&str> = images.iter().map(|i| i.tag.as_str()).collect();
-        out.push(("Images", names.join(" · ")));
+        out.push(("Images", names.join(", ")));
     }
     out
 }
@@ -699,12 +705,17 @@ pub fn flash(path: &Path) -> Verdict {
         ));
     }
 
+    // **`1 image`, not `1 images`.** A retail dump indexes four and a synthesised one indexes its
+    // own boot logo, so the singular became reachable the day `nor::synthesise` started writing a
+    // directory — and a verdict this program shows about its own output is the last place for a
+    // sentence that reads like a placeholder.
     let mut s = format!(
-        "1 MiB, reset vector {head:#010x} (ARM branch), {} images at {LOAD_ADDR_5G:#010x}: ",
-        dir.len()
+        "1 MiB, reset vector {head:#010x} (ARM branch), {} image{} at {LOAD_ADDR_5G:#010x}: ",
+        dir.len(),
+        if dir.len() == 1 { "" } else { "s" }
     );
     let names: Vec<&str> = dir.iter().map(|e| e.tag.as_str()).collect();
-    s.push_str(&names.join(" · "));
+    s.push_str(&names.join(", "));
     if let Some(b) = build_string(path) {
         let _ = write!(s, "\n{b}");
     }
@@ -802,7 +813,7 @@ pub fn disk(path: &Path) -> Verdict {
         return Verdict::Wrong(format!(
             "the `!ATA` directory lists {} but no `osos`. \
              `osos` is the OS image the bootloader loads; without it there is nothing to boot.",
-            names.join(" · ")
+            names.join(", ")
         ));
     };
     if osos.addr != LOAD_ADDR_5G {
@@ -837,7 +848,7 @@ pub fn disk(path: &Path) -> Verdict {
         .map(|e| format!("{} {}", e.tag, bytes(e.len as u64)))
         .collect();
     if !others.is_empty() {
-        let _ = write!(s, ", plus {}", others.join(" · "));
+        let _ = write!(s, ", plus {}", others.join(", "));
     }
     // `aupd` present and unmarked means the ROM will run Apple's flash updater instead of the OS —
     // correct behaviour, a genuinely different boot, and not what somebody expecting a main menu
@@ -1050,7 +1061,7 @@ mod naming_tests {
         std::fs::write(&with_serial, &nor).unwrap();
         assert_eq!(
             describe_rom(&with_serial, "iPod Video").as_deref(),
-            Some("iPod Video · K2VQK"),
+            Some("iPod Video, K2VQK"),
             "the distinguishing part of a serial is its tail"
         );
 

@@ -814,9 +814,17 @@ Slint — so there are no dashed rules and no draw-on stroke animations in this 
 refused cradle is a **broken** ring (arcs with gaps) rather than a dashed one.
 
 **The glyph test survives and widens**: no source file may contain a non-ASCII character rendered as
-UI text unless the font in use is proven to have it. It catches something today — the shipped window
-builds ` · ` (U+00B7) into UI strings with no coverage gate at all, which is precisely the class of
-thing the rule was written after.
+UI text unless the font in use is proven to have it. It caught the thing it was written after — the
+shipped window built ` · ` (U+00B7) into UI strings with no coverage gate at all — and then caught
+it a second time one crate over.
+
+**The sweep reads the model as well as the window.** Half the sentences this font is asked to draw
+are written in `eapp-loader`: `inspect::flash`'s verdict, the fact lists behind every Parts row,
+`nor::Source::describe`, every `Provenance` line. Four of them joined their lists with U+00B7 and no
+gate looked, because the sweep read `tools/ipod-gui/src` and that is the other crate. The line is now
+the crate's own shape — `eapp-loader/src/*.rs` is the library the window links and is swept;
+`eapp-loader/src/bin/*.rs` is a `main` that owns a terminal, in a font this program neither chooses
+nor can interrogate, and is not. `bin/trace.rs` prints `✅` and `⚠️`; both are correct where they are.
 
 ---
 
@@ -3339,7 +3347,7 @@ glyphs, then two more within the hour.
 | `dropped_files_route_themselves_in_either_order` | comes across unchanged, and keeps its two-file scope |
 | **`an_ambiguous_drop_files_and_makes_no_device`** | §11.4's rule for two ROMs or two `.ipsw`s |
 | **`a_fix_that_changes_a_resource_reference_says_so_and_needs_two_presses`** | §11.3, and it is the assertion `every_fix_resolves_the_thing_it_is_offered_for` does not make |
-| `no_ui_string_contains_a_glyph_the_font_is_not_proven_to_have` | widened per §6.7 — and it catches the shipped ` · ` today |
+| `no_ui_string_carries_a_glyph_outside_the_closed_set` | widened per §6.7, twice: markup, then this crate's Rust, then the model's library. It caught the shipped ` · ` in the window and then four more in `eapp-loader`. *(Listed as `no_ui_string_contains_a_glyph_the_font_is_not_proven_to_have` until 2026-08-23; no test was ever called that.)* |
 | `the_menu_preview_is_in_the_order_the_loader_writes` | already exists in `compose.rs`; the window renders it verbatim. (Earlier drafts called this `the_verdict_preview_matches_what_the_installer_writes`, which no test has ever been called) |
 | `every_fix_resolves_the_thing_it_is_offered_for` | already exists in `compose.rs`, and is now swept over three `Start`s — a fix that lands on rule (0)'s nothing-chosen state is a terminus, and one that lands anywhere else carrying a fix still fails |
 | **`a_zero_c_volume_refuses_ipodlinux_whatever_bootloader_is_showing`** | §11.3 rule (2), which is a fact about the volume and so must fire on every bootloader **and from either way of choosing a drive** — the guard that made rule (1)'s fix chain into rule (2)'s refusal, and the `Start::FromDisk` half it skipped |

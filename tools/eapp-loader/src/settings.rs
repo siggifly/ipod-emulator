@@ -199,8 +199,9 @@ impl Provenance {
     /// `·` is U+00B7, which is not in the window's closed glyph set (§6.7: a symbol is *drawn* as a
     /// `Path`, and `ui/bench.slint` draws this one) — so a `Text` asked for it falls to `.notdef`,
     /// an empty square, and nothing in `.slint` can ask whether a glyph exists. It went unnoticed
-    /// because the window's sweep reads `tools/ipod-gui/src` only and this is a model sentence the
-    /// window renders verbatim. `every_provenance_line_is_ascii_or_an_em_dash` is what holds it.
+    /// because the window's sweep read `tools/ipod-gui/src` only, and this is a model sentence the
+    /// window renders verbatim; that sweep now reads this crate's library too.
+    /// `every_provenance_line_is_ascii_or_an_em_dash` is the local half of the same rule.
     ///
     /// **`Sha256` says *when* it was verified, and the tense is the point.** This is a record of
     /// how a file arrived, not a measurement of the bytes on disk now: an entry is keyed on its
@@ -4652,8 +4653,9 @@ mod device_tests {
     /// trusts falls to `.notdef` — an empty square — in the middle of a row. `·` (U+00B7) is not in
     /// that set: it is a *symbol*, and §6.7's answer for a symbol is a drawn `Path`.
     ///
-    /// The window's own sweep reads `tools/ipod-gui/src` only, so it has never looked at this
-    /// function. Parts is the first surface that draws it.
+    /// The window's own sweep now reads this crate's library as well, so the rule is enforced over
+    /// every sentence the model words and not only over this one. This stays because it names the
+    /// set a `Provenance` line is allowed to draw from, which is narrower than the sweep's.
     #[test]
     fn every_provenance_line_is_ascii_or_an_em_dash() {
         let all = [

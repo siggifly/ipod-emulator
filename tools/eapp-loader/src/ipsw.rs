@@ -965,7 +965,7 @@ pub fn inspect(path: &Path) -> Ipsw {
         return Ipsw::Wrong(format!(
             "`{}` lists {} but no `osos` — there is no OS image in it to boot.",
             m.name,
-            names.join(" · ")
+            names.join(", ")
         ));
     };
     if osos.addr != LOAD_ADDR_5G {
@@ -986,7 +986,7 @@ pub fn inspect(path: &Path) -> Ipsw {
         .iter()
         .map(|i| format!("{} {} KiB @ {:#010x}", i.tag, i.len / 1024, i.addr))
         .collect();
-    s.push_str(&list.join(" · "));
+    s.push_str(&list.join(", "));
     // The load-address check above rejects bundles for a different *iPod*. It does not catch a
     // bundle for a different *updater family* of the same iPod, because they all load `osos` at the
     // same address — and that mismatch does not fail loudly. RetailOS boots, does not recognise the

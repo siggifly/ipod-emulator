@@ -232,7 +232,9 @@ pub fn install_os(src: &Path, os: &Path, out: &Path) -> Result<Vec<String>, Stri
         }
         if sum != img.chksum {
             return Err(format!(
-                "`{}`: the checksum in the directory is {:#010x} but its bytes sum to {sum:#010x}.                  Either this image is already damaged, or this tool has the firmware layout wrong                  — and in both cases writing to it would make things worse.",
+                "`{}`: the checksum in the directory is {:#010x} but its bytes sum to {sum:#010x}. \
+                 Either this image is already damaged, or this tool has the firmware layout \
+                 wrong — and in both cases writing to it would make things worse.",
                 img.tag, img.chksum
             ));
         }
@@ -245,7 +247,7 @@ pub fn install_os(src: &Path, os: &Path, out: &Path) -> Result<Vec<String>, Stri
             .iter()
             .map(|i| i.tag.as_str())
             .collect::<Vec<_>>()
-            .join(" · ")
+            .join(", ")
     ));
 
     // Where the new image goes. Re-installing over a previous one reuses the same slot rather than
