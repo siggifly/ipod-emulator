@@ -1206,13 +1206,15 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
                     let mut held = composer.borrow_mut();
                     let Some(c) = held.as_mut() else { return };
                     // **`Composer::make_one` mints into the page and files nothing**, so there is
-                    // no save here. §11.2 asks for the iPod to be filed at the mint — *cancelling
-                    // the device keeps the identity you just tuned* — and `composer.rs` files it in
-                    // `commit` instead. Adding a `save` here would write the settings file on a
-                    // press that changed nothing in it, which `render` turns into somebody's
-                    // comments being deleted for no reason; adding a `file_away` here would be a
-                    // second place that decides what an iPod is called. Both belong on the same
-                    // side of the boundary as the minting, and that side is `composer.rs`.
+                    // no save here — and §11.2 says so now rather than asking for the opposite.
+                    // The design used to ask for the iPod to be filed at the mint; nothing ever
+                    // built that, this comment recorded the gap, and the gap is closed from the
+                    // other end: filing is on `Create`, in `Composer::commit`. Adding a `save`
+                    // here would write the settings file on a press that changed nothing in it,
+                    // which `render` turns into somebody's comments being deleted for no reason;
+                    // adding a `file_away` here would be a second place that decides what an iPod
+                    // is called. Both belong on the same side of the boundary as the minting, and
+                    // that side is `composer.rs`.
                     c.make_one();
                 }
                 composer::Field::Serial => {

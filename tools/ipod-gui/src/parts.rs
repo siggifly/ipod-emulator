@@ -172,13 +172,32 @@ impl Kind {
 ///
 /// **`Remove` is 2 and the markup depends on it** — `parts.slint:248`. Everything else travels as
 /// `DetailRow.action`, which Rust wrote, so the rest of the order is ours: the three a part can
-/// take, then the three a device can, then the three that need something drawn.
+/// take, then the three a device can, then the two that need something drawn.
 ///
 /// **`ShowIdentity` is the one variant added after the vocabulary was frozen**, and it is added
 /// rather than borrowed because none of the eight meant it. §11.4 asks for the ROM's serial and
 /// FireWire GUID to be drawn **masked, with a `Show`** — the same boundary `composer::Secret`
 /// already holds for the identity fields — and `Reveal` is a file manager, not a mask. Appending
 /// keeps every ordinal below it where the other two producers were written against.
+///
+/// **`Rename` was the seventh of nine and it is deleted rather than built**, which is the one
+/// decision in this list that removed a word instead of adding one. It had a label and two *exhaustive* arms
+/// that refused it, and the two disagreed about whose control it was — `row_action` below called
+/// it a device's, `devices.rs` called it not a device's — because nothing on either page built
+/// the row and neither arm was ever reached to be checked. The reason nothing built it is
+/// structural rather than an omission: a row control travels as `row-action(int, int)`, **two
+/// integers and no string**, and a rename is typed text. The only thing a `Rename` row could ever
+/// have done is open a page with a field on it, and that page already has a control that opens it
+/// — `Edit…`, onto §11.2's level ③ *Name it*, where `Composer::commit` calls
+/// `Settings::rename_device`. One destination does not need two doors.
+///
+/// **`PowerOff` has no producer either and stays**, and the difference between the two is the
+/// test: §12.5 puts `Cmd::PowerOff | PowerOn | PowerCycle | Boot(BootTarget)` *on the device's
+/// drawer page and in the Machine menu*, and §11.4 names it again — *the device's drawer page
+/// carries `Power off` immediately above it*. A variant a section asks for is a control not built
+/// yet. A variant no section anywhere asks for is a control nobody wanted, and the vocabulary is
+/// where that shows. (Cited by section rather than by line: this doc outlived one GUI.md edit
+/// already, in this same commit.)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RowAction {
     Reveal,
@@ -188,21 +207,19 @@ pub enum RowAction {
     PowerOff,
     Start,
     Edit,
-    Rename,
     ShowBootScreen,
     /// §11.4's masked identity. Toggles; the label says what the press will do next.
     ShowIdentity,
 }
 
 impl RowAction {
-    pub const ALL: [RowAction; 9] = [
+    pub const ALL: [RowAction; 8] = [
         RowAction::Reveal,
         RowAction::CopyPath,
         RowAction::Remove,
         RowAction::PowerOff,
         RowAction::Start,
         RowAction::Edit,
-        RowAction::Rename,
         RowAction::ShowBootScreen,
         RowAction::ShowIdentity,
     ];
@@ -672,10 +689,13 @@ impl Parts {
             }
             RowAction::Reveal => Err(refused_because(&Next::Reveal)),
             RowAction::CopyPath => Err(refused_because(&Next::CopyDetails)),
-            // The four a device's rows fire. They arrive here only if `ui/devices.slint`'s
+            // **The three that belong to a device**, and the sentence says whose they are rather
+            // than what this page does with them — which is the half of the pair `devices.rs`'s
+            // own catch-all no longer duplicates. They arrive here only if `ui/devices.slint`'s
             // ordinals ever reached this page's callback, which they do not — `devices.rs` owns
-            // them — so this is the exhaustive arm rather than a route.
-            RowAction::PowerOff | RowAction::Start | RowAction::Edit | RowAction::Rename => {
+            // them — so this is the exhaustive arm rather than a route. `PowerOff` is drawn by
+            // nothing yet (§12.5 asks for it); `Start` is the bench's; `Edit` opens §11.2.
+            RowAction::PowerOff | RowAction::Start | RowAction::Edit => {
                 Err(format!("{} is a device's control, not a part's", a.name()))
             }
         }
@@ -1030,7 +1050,6 @@ impl RowAction {
             RowAction::PowerOff => "Power off",
             RowAction::Start => "Start",
             RowAction::Edit => "Edit",
-            RowAction::Rename => "Rename",
             RowAction::ShowBootScreen => "Show its boot screen",
             RowAction::ShowIdentity => "Show",
         }

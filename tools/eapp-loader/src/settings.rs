@@ -1040,15 +1040,21 @@ fn one_line(s: &str) -> String {
 /// The name to file a boot ROM under when nobody has given it one.
 ///
 /// One place, because four callers need the same spelling: seeding, [`Settings::remember_as`], the
-/// migration of a device that carried its recipe inline, and — since §11.2 — the Composer, which
-/// files an iPod **at the mint** rather than on `Create`. Four copies of a format string is four
-/// chances for one of them to mint a duplicate entry under a slightly different name.
+/// migration of a device that carried its recipe inline, and the Composer, which files an iPod on
+/// `Create`. Four copies of a format string is four chances for one of them to mint a duplicate
+/// entry under a slightly different name.
 ///
-/// **Public for the Composer, and it is the fourth caller that made it so.** §11.2: *the iPod
-/// becomes a filed resource the moment it is made, under `<model>, seed <n>`* — this string and
-/// nothing else. A window that formatted its own would be a fifth spelling, and
-/// [`Settings::restate_firmware`] re-derives through this function when an identity is tuned, so
-/// the name a mint files under and the name a restate produces cannot be two names.
+/// **Public for the Composer, and it is the fourth caller that made it so.** §11.2 says what the
+/// name is — `<model>, seed <n>` — and this string is it. A window that formatted its own would be
+/// a fifth spelling, and [`Settings::restate_firmware`] re-derives through this function when an
+/// identity is tuned, so the name a filing produces and the name a restatement produces cannot be
+/// two names.
+///
+/// **It does not file at the mint, and the doc used to say it did.** §11.2 asked for the iPod to
+/// become a filed resource the moment it was made; nothing ever implemented that, and two doc
+/// comments in this file asserted it as fact. `Composer::make_one` mints into the page and touches
+/// no library; `Composer::commit` is the filing. GUI.md §11.2 is corrected to match, because the
+/// program the design describes has to be the program.
 pub fn suggest_nor_name(src: &crate::nor::Source) -> String {
     match src {
         crate::nor::Source::File(p) => p
@@ -1065,8 +1071,10 @@ pub fn suggest_nor_name(src: &crate::nor::Source) -> String {
 /// a row in a list of recipes. This is what first run puts on the shelf, and `seed 12873491` is not
 /// something anybody would say out loud.
 ///
-/// An unknown model falls back to the number itself rather than to a placeholder: a name nobody
-/// recognises is still a name, and `unnamed` is not.
+/// An unknown model falls back to [`suggest_nor_name`] rather than to a placeholder — the model
+/// number and seed for a synthesised iPod, the file stem for a dump this build cannot read. A name
+/// nobody recognises is still a name, and `unnamed` is not. A dump it CAN read is named by what it
+/// is; see [`model_of`], which is where that used to go wrong.
 pub fn suggest_ipod_name(src: &crate::nor::Source) -> String {
     match model_of(src) {
         Some(m) => format!("{} {}", m.colour().label(), m.generation.label()),
@@ -1118,12 +1126,22 @@ pub fn file_stem_of(name: &str) -> String {
     }
 }
 
-/// The model a source describes, when this build knows it.
+/// The model a source describes, when this build knows it — **[`crate::nor::Source::model`]'s
+/// answer, asked rather than re-derived.**
+///
+/// It used to answer `None` for every [`crate::nor::Source::File`], which made this a *second*
+/// answer to a question `nor.rs` already had one for, and the two disagreed on the surface that
+/// draws both. §11.2's level ① reads the model at the `Model` row and the name at the `iPod` row
+/// two above it, so one readable dump came out as `5G, 30 GB` on one line and `foreign-oui` — its
+/// **file stem**, by way of [`suggest_nor_name`]'s fallback — on the other. One iPod, two names,
+/// and the devices page's `Made of` line had the same pair for the same reason.
+///
+/// A dump this program cannot read still falls back: `Source::model` reads the file and parses its
+/// SysCfg, and a path that is not there, not a NOR image, or carries no model block answers `None`
+/// exactly as before — which is why `a_disk_stem_is_a_filename_on_every_platform`'s
+/// `/roms/My Dump (2).bin` is still `my-ipod`.
 fn model_of(src: &crate::nor::Source) -> Option<&'static crate::identity::Model> {
-    match src {
-        crate::nor::Source::Synthetic { model, .. } => crate::identity::Model::lookup(model),
-        crate::nor::Source::File(_) => None,
-    }
+    src.model()
 }
 
 /// Where drives this program builds land.
@@ -1779,11 +1797,18 @@ impl Settings {
 
     /// **Replace what one filed iPod IS, keeping every reference pointing at it.**
     ///
-    /// §11.2's level ① tunes a synthesised identity — a model, a colour, a serial, a GUID — and the
-    /// iPod is already a filed resource by then, because it is filed at the mint rather than on
-    /// `Create`. So tuning is a *restatement* of one entry, not the filing of a second: without
-    /// this, five edits to one seed leave five near-identical entries in the resources and four
-    /// devices pointing at the one nobody is looking at.
+    /// §11.2's level ① tunes an identity — a model, a colour, a serial, a GUID — and on the Edit
+    /// route the iPod it is tuning is **already** a filed resource: `Composer::editing` opens on a
+    /// device and carries the name that device's firmware is filed under. So saving is a
+    /// *restatement* of one entry, not the filing of a second: without this, five saves over one
+    /// seed leave five near-identical entries in the resources and four devices pointing at the one
+    /// nobody is looking at.
+    ///
+    /// **Not because the iPod was filed at the mint.** It is not — `Composer::make_one` mints into
+    /// the page and files nothing, and `Composer::commit` is the only filing. This doc asserted the
+    /// mint-filing as fact for as long as GUI.md §11.2 asked for it and nothing built it; both are
+    /// corrected. An unfiled iPod reaches `commit` with an empty `filed_as`, which this function
+    /// refuses, and the caller files it.
     ///
     /// Four things happen together, and they are one act because doing three of them is a broken
     /// library:
@@ -4740,6 +4765,56 @@ mod first_run_naming_tests {
         );
         // The device name and the design's own word for it are one string.
         assert_eq!(suggest_device_name(&src), crate::compose::FIRST_RUN_DEVICE);
+    }
+
+    /// **A dump this program can read is named by what it IS, not by what the file is called.**
+    ///
+    /// `suggest_ipod_name` asks [`model_of`], which used to refuse every
+    /// [`crate::nor::Source::File`] outright and fall through to [`suggest_nor_name`] — the file
+    /// **stem**. So one readable dump had two names on one page: §11.2's level ① drew
+    /// `foreign-oui` at the `iPod` row and `5G, 30 GB` at the `Model` row two below it, off the
+    /// same bytes, because `nor::Source::model` reads the file and this did not.
+    ///
+    /// Both arms, because the fallback is still the answer for a dump nothing can read and
+    /// deleting it would be worse than the defect: a name nobody recognises is still a name.
+    #[test]
+    fn a_dump_this_program_can_read_is_named_by_what_it_is() {
+        use crate::identity::{Identity, Model, Source};
+
+        let dir = temp_dir("dump-name");
+        let m = Model::lookup("MA146").expect("the reference 5G");
+        let spec = crate::nor::Spec::new(
+            m,
+            Identity {
+                serial: Some("AB1234XYZQR".into()),
+                guid: 0x001B_6300_ABCD_EF01,
+                source: Source::RealDevice,
+            },
+        );
+        let path = dir.join("some-dump-i-was-sent.rom");
+        std::fs::write(&path, crate::nor::synthesise(&spec)).expect("a fabricated dump");
+        let readable = crate::nor::Source::File(path);
+
+        assert_eq!(
+            suggest_ipod_name(&readable),
+            format!("{} {}", m.colour().label(), m.generation.label()),
+            "the iPod is named after the file rather than after the iPod"
+        );
+        assert_eq!(suggest_device_name(&readable), format!("My {}", m.generation.label()));
+        assert_ne!(
+            suggest_ipod_name(&readable),
+            suggest_nor_name(&readable),
+            "the two spellings collapsed; the stem is back"
+        );
+
+        // And a path that is not a NOR image at all keeps the fallback, which is the half that
+        // must not be lost: `model_of` reads the file, so an unreadable one answers `None` and the
+        // stem is still a name.
+        let unreadable = crate::nor::Source::File(dir.join("nothing-is-here.bin"));
+        assert_eq!(suggest_ipod_name(&unreadable), "nothing-is-here");
+        assert_eq!(suggest_device_name(&unreadable), "My iPod");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// **A stem has to be a filename on every platform this program runs on**, and it is never

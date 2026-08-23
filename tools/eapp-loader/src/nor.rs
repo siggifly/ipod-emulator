@@ -525,7 +525,17 @@ impl Source {
         }
     }
 
-    /// The model, where it is known without reading anything.
+    /// The model this source describes — **and for a dump that means reading it.**
+    ///
+    /// The doc here used to say *where it is known without reading anything*, which was false of
+    /// the arm below it from the day it was written: a [`Source::File`] is opened, all
+    /// [`crate::inspect::NOR_LEN`] of it, and its SysCfg parsed. Naming the cost matters now that
+    /// `settings::model_of` delegates here rather than answering `None` for every file — a picker
+    /// listing N filed iPods asks this N times per push, which is N × 1 MiB off the page cache.
+    /// It is worth it: the alternative was the same iPod wearing its model on one row and its file
+    /// stem on the row above.
+    ///
+    /// `None` for a path that is not there, is not a NOR image, or carries no model record.
     pub fn model(&self) -> Option<&'static Model> {
         match self {
             Source::File(p) => {

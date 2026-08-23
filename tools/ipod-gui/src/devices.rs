@@ -63,10 +63,13 @@
 //     so `commit` is the rename — and it calls `rename_device` rather than assigning `d.name`, so
 //     the refusals are asked, `current` moves with the device, and `Commit.renamed` reports
 //     nothing when the device went out from under the page instead of a rename that did not
-//     happen. **There is no `Rename` control anywhere in this window**: `RowAction::Rename` has a
-//     label and two *exhaustive* arms that refuse it, and the two contradict each other —
-//     `parts.rs:678` calls it *a device's control, not a part's* and `row_action` below calls it
-//     *not one of a device's controls*. Nothing builds the row on either page.
+//     happen. **`RowAction::Rename` is deleted, and the vocabulary is where that decision is
+//     written down** — see `parts.rs`'s enum. It had a label and two *exhaustive* arms that
+//     refused it, and the two contradicted each other about whose control it was, because nothing
+//     built the row on either page and neither arm was ever reached to be checked. Two integers
+//     cannot carry a name, so the only row a `Rename` could ever have been is a second door onto
+//     the page `Edit…` already opens. **`Edit…` is the route to a device's name, and
+//     `the_only_route_to_a_devices_name_is_the_page_edit_opens` is the assertion.**
 //   - `Device::boot_shape` is written by `commit` now, through `set_boot_shape`, which owns the
 //     same-shape-keep-the-number rule whole rather than half of it. The consequence lands **on
 //     this page**: `Settings::recipe_of` treats `boot_shape` as the authority on what a device
@@ -272,10 +275,9 @@ impl Devices {
             RowAction::Reveal
             | RowAction::CopyPath
             | RowAction::PowerOff
-            | RowAction::Rename
             | RowAction::ShowBootScreen
             | RowAction::ShowIdentity => {
-                Err(format!("{} is not one of a device's controls", a.name()))
+                Err(format!("{} is not a control this page draws", a.name()))
             }
         }
     }
@@ -1618,8 +1620,16 @@ mod tests {
     }
 
     /// **An act this page does not draw acts on nothing and says so**, which is the exhaustive arm
-    /// rather than a route: the six below are `parts.rs`'s controls, the bench's own `Start`, and
-    /// `Edit`, which changes no library at all.
+    /// rather than a route: the five below are `parts.rs`'s four controls and `PowerOff`, plus the
+    /// bench's own `Start` and `Edit`, which changes no library at all.
+    ///
+    /// **The sentence says what this page does with the act, not whose act it is**, and that is the
+    /// repair rather than a rewording. It used to read *not one of a device's controls* — which is
+    /// false of `PowerOff`, a control §12.5 puts *on the device's drawer page* and that nothing has
+    /// built yet, and which contradicted `parts.rs`'s own catch-all saying the same act **was** a
+    /// device's. Two exhaustive arms answering *whose control is this* differently is a
+    /// disagreement neither could notice, because neither is reachable. One of them answers a
+    /// different question now, and the pair is consistent whatever is built next.
     ///
     /// **The `|| a == RowAction::Start` escape this shipped with is deleted.** It exempted the one
     /// arm whose sentence is written by hand rather than by `format!`, so that arm's message could
@@ -1649,5 +1659,82 @@ mod tests {
         assert_eq!(s.devices, was.devices, "a refusal changed the library");
         assert_eq!(s.disks, was.disks);
         assert_eq!(s.resources.len(), was.resources.len());
+    }
+
+    /// **`Edit…` is the only route to a device's name, and there is no second one.**
+    ///
+    /// The vocabulary used to carry a `Rename` that nothing built, refused by two exhaustive arms
+    /// that disagreed about whose control it was. It is deleted, and this is the assertion that
+    /// replaces it — stated as the route rather than as the absence, because an absence is what a
+    /// respelling can satisfy and a route is not.
+    ///
+    /// **Both halves.** Every act in the vocabulary is fired at the open device and none of them
+    /// produces a name nobody typed; then the page's own `Edit…` opens the Composer on that
+    /// device, level ③ carries the name it already has, and `commit` renames it **in place** —
+    /// same list, same position, `current` following it — which is what `Settings::rename_device`
+    /// buys over `forget` plus `remember_as`.
+    ///
+    /// Proved red both ways. Renaming instead of forgetting in `row_action`'s `Remove` arm fails
+    /// the first half — *Remove produced the device name "My 5.5G (old)", which nobody typed*.
+    /// Swapping `commit`'s `rename_device` call for a bare `forget` — which is what the
+    /// hand-written rename was before `rename_device` got its production caller — fails the
+    /// second: `remember_as` appends, so `devices[0]` comes out `"Second"` against
+    /// `"The one in the car"`, and the device the operator renamed is at the end of the list.
+    #[test]
+    fn the_only_route_to_a_devices_name_is_the_page_edit_opens() {
+        let dir = scratch("rename-route");
+        let mut s = library(&dir);
+        let typed: Vec<String> = s.devices.iter().map(|d| d.name.clone()).collect();
+
+        // A fresh page per act: `Remove` closes the cursor, and a loop sharing one page would be
+        // firing the five acts after it at a device nothing has open.
+        for a in RowAction::ALL {
+            let mut copy = s.clone();
+            let mut p = Devices::new();
+            p.open_row(&copy, 0, true);
+            let _ = p.row_action(&mut copy, a, None);
+            for d in &copy.devices {
+                assert!(
+                    typed.contains(&d.name),
+                    "{a:?} produced the device name {:?}, which nobody typed",
+                    d.name
+                );
+            }
+        }
+
+        // …and the route that does rename. `editor` is what `Edit…` fires.
+        let mut p = Devices::new();
+        p.open_row(&s, 0, true);
+        let mut c = p.editor(&s).expect("Edit… opens the Composer on the open device");
+        assert_eq!(
+            c.named(&s, false).name.value,
+            "My 5.5G",
+            "level ③ opened on a name that is not this device's"
+        );
+
+        c.set_name("The one in the car");
+        let done = c.commit(&mut s).expect("a name no other device holds");
+        assert_eq!(
+            done.renamed,
+            Some(("My 5.5G".to_string(), "The one in the car".to_string())),
+            "the commit did not report the rename"
+        );
+        assert_eq!(s.devices.len(), 3, "a rename added or removed a device");
+        assert_eq!(
+            s.devices[0].name, "The one in the car",
+            "the device did not keep its place in the list"
+        );
+        assert_eq!(
+            s.current.as_deref(),
+            Some("The one in the car"),
+            "`current` stayed on a name no device holds"
+        );
+
+        // The page's cursor was on the old name, so the body follows the device rather than
+        // pointing at a name the library no longer has.
+        p.open_row(&s, 0, true);
+        let v = view_of(&mut p, &s, all_on());
+        assert_eq!(v.detail_of, 0);
+        assert_eq!(fact(&v, "Drive"), "my-5.5g.img", "the body is somebody else's");
     }
 }

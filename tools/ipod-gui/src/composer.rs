@@ -554,7 +554,7 @@ impl Composer {
     /// `the_verdict_the_plan_and_the_recipe_are_one_recipe` calls after every kind of edit.
     ///
     /// [`Composer::open`] sits in the middle of the run and is **not** gated: `push_composer` reads
-    /// it on every frame, through `set_composer_open_field` at `main.rs:3624`.
+    /// it on every frame, through `set_composer_open_field` at `main.rs:3626`.
     #[cfg(test)]
     pub fn region(&self) -> &Region {
         &self.region
@@ -3051,6 +3051,87 @@ mod tests {
         }
     }
 
+    /// **One iPod, one name — the `iPod` row and the `Model` row two below it are about the same
+    /// machine.**
+    ///
+    /// They were not. `suggest_ipod_name` asks `settings::model_of`, which refused to read a file,
+    /// so a dump fell through to its **file stem** while the `Model` row read the same bytes
+    /// through `nor::Source::model` and answered properly. `_out/gui/composer-ipod-dumped.png` is
+    /// the picture of it: `iPod  foreign-oui` over `Model  5G, 30 GB`, and the picker below drawing
+    /// `foreign-oui` twice — once as the name the library files it under and once as its own
+    /// description of it.
+    ///
+    /// **The assertion reads the drawn values against each other rather than against a literal**,
+    /// which is what makes it a statement about the page instead of about a format string: the
+    /// name has to be the `Colour` row's word followed by the `Model` row's generation, whatever
+    /// those two say.
+    #[test]
+    fn one_ipod_has_one_name_on_this_page() {
+        use eapp_loader::identity::{Identity, Model, Source as IdSource};
+
+        let at = std::env::temp_dir().join(format!("ipod-composer-onename-{}", std::process::id()));
+        std::fs::create_dir_all(&at).expect("a scratch directory");
+        let m = Model::lookup("MA146").expect("the reference 5G");
+        let path = at.join("foreign-oui.rom");
+        std::fs::write(
+            &path,
+            nor::synthesise(&nor::Spec::new(
+                m,
+                Identity {
+                    serial: Some("AB1234XYZQR".into()),
+                    guid: 0x001B_6300_ABCD_EF01,
+                    source: IdSource::RealDevice,
+                },
+            )),
+        )
+        .expect("a fabricated dump");
+
+        let mut s = Settings::default();
+        let dump = nor::Source::File(path);
+        let filed = s.file_away(
+            Resource::Firmware(dump.clone()),
+            &settings::suggest_nor_name(&dump),
+            Some(settings::Provenance::Dumped),
+        );
+
+        let mut c = Composer::new();
+        c.rom = Some(dump);
+        c.filed_as = filed.clone();
+        c.recompute();
+        c.set_level(Level::WhichIpod);
+        let w = c.which(&s, false, Clipboard::Present);
+
+        let generation = w
+            .model
+            .value
+            .split(',')
+            .next()
+            .expect("the Model row names a generation")
+            .trim();
+        assert!(!generation.is_empty() && !w.colour.value.is_empty());
+        assert_eq!(
+            w.ipod.value,
+            format!("{} {generation}", w.colour.value),
+            "the iPod row and the two rows under it are about different iPods: iPod {:?},              Model {:?}, Colour {:?}",
+            w.ipod.value,
+            w.model.value,
+            w.colour.value
+        );
+        assert_ne!(w.ipod.value, filed, "the row is drawing the file's name, not the iPod's");
+
+        // The root says the same thing as the level it opens onto — one iPod, one name, twice.
+        assert_eq!(c.root(&s, false).which.value, w.ipod.value);
+
+        // …and the picker's own row: the label is what the library files it under, the sub is what
+        // it is. Two facts, or the row says one thing twice.
+        let options = c.options_of(&s, Field::Ipod);
+        let row = options.iter().find(|o| o.label == filed).expect("the filed dump is offered");
+        assert_eq!(row.sub, w.ipod.value);
+        assert_ne!(row.sub, row.label, "the picker row draws its own label back as its description");
+
+        std::fs::remove_dir_all(&at).ok();
+    }
+
     /// **Only iPods this program can be.** libgpod's table is 197 rows and this machine is a
     /// PP5021C with a 320x240 panel; offering a Nano is offering a machine that cannot start.
     #[test]
@@ -3605,6 +3686,62 @@ mod tests {
         c
     }
 
+    /// **The mint files nothing; `Create` is the filing — and GUI.md §11.2 says that now.**
+    ///
+    /// §11.2 asked for the opposite for as long as this file has existed — *the iPod becomes a
+    /// filed resource the moment it is made, not on `Create`* — and nothing ever built it. Two doc
+    /// comments in `eapp_loader::settings` stated the mint-filing as fact, and a comment in
+    /// `main.rs`'s `on_composer_act` recorded the gap without closing it. This is the assertion
+    /// that keeps the design and the program together from the program's side: whichever way the
+    /// decision goes next, it cannot go silently.
+    ///
+    /// Proved red both ways. Filing the ROM at the mint — one `file_away` between the two halves,
+    /// which is exactly what implementing §11.2's old sentence would put there — fails the first:
+    /// *the mint filed something: ["A446, seed 6754884334582999373"]*. Deleting `commit`'s
+    /// `file_away` fallback fails the second, and **on `filed_as` rather than on the resources
+    /// list** — `left: ""`, `right: "A446, seed …"` — which is worth writing down: `remember_as`
+    /// files the live ROM by value a few lines later and under the same spelling, so the library
+    /// comes out looking right either way. What cannot be faked is the page knowing what its own
+    /// iPod is filed under, which is what `Edit` and `restate_firmware` both read.
+    #[test]
+    fn the_mint_files_nothing_and_create_is_the_filing() {
+        let mut s = Settings::default();
+        let mut c = Composer::new();
+        c.make_one();
+
+        assert!(
+            s.resources.is_empty(),
+            "the mint filed something: {:?}",
+            s.resources.iter().map(|i| i.name.as_str()).collect::<Vec<_>>()
+        );
+        assert!(s.devices.is_empty(), "the mint made a device");
+        assert!(
+            c.filed_as().is_empty(),
+            "the page thinks its iPod is filed as {:?}",
+            c.filed_as()
+        );
+
+        // …and `Create` is what files it, once, under §11.2's own spelling.
+        c.set_start(Start::FromIpsw("iPod_25.1.3.ipsw".into()));
+        c.set_name("My 5.5G");
+        let done = c.commit(&mut s).expect("an empty library");
+        let filed = settings::suggest_nor_name(c.rom().expect("an iPod"));
+        assert_eq!(
+            s.resources
+                .iter()
+                .filter(|i| matches!(i.what, Resource::Firmware(_)))
+                .map(|i| i.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![filed.as_str()],
+            "`Create` filed no iPod, or filed more than one"
+        );
+        assert_eq!(c.filed_as(), filed);
+        assert_eq!(
+            s.devices.iter().find(|d| d.name == done.device).map(|d| d.firmware.as_str()),
+            Some(filed.as_str()),
+        );
+    }
+
     /// **`remember_as` replaces a device of the same name outright**, so the refusal has to happen
     /// before it — otherwise `Create` silently destroys a device somebody built by hand.
     #[test]
@@ -3652,7 +3789,7 @@ mod tests {
         assert_eq!(
             d.firmware,
             settings::suggest_nor_name(c.rom().expect("an iPod")),
-            "the mint filed the iPod under a name no other route spells"
+            "`Create` filed the iPod under a name no other route spells"
         );
 
         // And the chassis follows the model, so a white iPod does not draw black.

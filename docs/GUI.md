@@ -1925,8 +1925,32 @@ them, `fg-dim`, with `Read from the dump; a device's identity is the ROM's, not 
 picker **stays a picker** rather than collapsing to a line of text — that is the only way the page
 does not jump when you switch between the two.
 
-**The iPod becomes a filed resource the moment it is made**, under `<model>, seed <n>`, not on
-`Create`. Cancelling the device keeps the identity you just tuned.
+**Level ③ is where a device is named, and it is the only place.** A new device takes its name here
+on `Create`; an existing one is renamed here on `Save`, in place, through `Settings::rename_device`
+— so it keeps its boot denominator and its park time, which discarding and re-adding it would drop,
+and `current` moves with it. **There is no `Rename` control on any row, on any page.** A row control
+travels as `row-action(int, int)` — two integers and no string — so a `Rename` row could never have
+done the renaming; it could only have opened a page with a field on it, and `Edit…` already opens
+this one. One destination does not need two doors.
+
+**The iPod becomes a filed resource on `Create`**, under `<model>, seed <n>` — one entry per iPod,
+*restated* rather than duplicated when a device that already names it is saved again. Filing at the
+mint was the earlier design and it is withdrawn, because the two things it would have bought are
+both already paid for elsewhere and it costs a third:
+
+- *Cancelling keeps the identity you just tuned* was its point, and the mint's own confirmation
+  already tells the truth instead — replacing an iPod costs two presses and names the seed, because
+  **the seed is not kept**. Filing at the mint would make that sentence false: the old identity
+  would still be in the library, and the control would be over-stating what a press destroys.
+- Tuning an identity would then have to restate a filed entry on every keystroke in the `Serial`
+  field, which is the settings file written per character typed.
+- And a compose somebody abandons would leave an iPod in Parts that nobody asked for, removable
+  only by going and removing it.
+
+So the identity is filed when a device is made of it, and leaving level ① without `Create` discards
+it. Nothing in the program disagrees: `Composer::make_one` mints into the page and touches no
+library, `Composer::commit` files, and `Settings::restate_firmware` is what keeps the Edit route to
+one entry.
 
 **Validation returns the model's own sentences, verbatim**, into a **34 px two-line slot reserved
 whether or not it is filled** — and that reservation is what sets the Field's height, which is what
@@ -3587,6 +3611,8 @@ is cheap rather than archaeological.
 | **The eight-primitive vocabulary** | eight, no scroll container | **nine — Scroll** | Three drawer pages overflow their pane by 30–60 % and Slint neither shrinks nor clips |
 | **The `space` failure class** | one class, `Nothing has been written.` | **`space, pre-flight` · `space, mid-write` · `volume`** | The wording is false 41 GB in, and free bytes are not the only thing FAT32 refuses |
 | **`Fix`** | "one press applies it" | **one press, except `BuildFromIpsw`, and none when the value is disabled** | One of the four shapes silently detached a 55.9 GB reference; another set a value the picker forbids |
+| **When the iPod is filed** | at the mint — *"the moment it is made, not on `Create`"* (§11.2) | **on `Create`**, restated rather than duplicated on a re-save | It was asserted for months and built by nothing, in the design and in two doc comments in `settings.rs`. Its own promise is already kept better by the mint's two-press confirmation naming the seed, and filing at the mint would make that sentence false, restate an entry per keystroke in `Serial`, and leave an iPod in Parts behind every abandoned compose |
+| **`Rename` as a row control** | the seventh of nine `RowAction`s, with a label and two refusals | **deleted; §11.2 level ③ is the route** | Nothing built the row on either page, so the two *exhaustive* arms refusing it were free to disagree about whose control it was — and did. A row control carries two integers; a name is text |
 
 ### 18.2 Settled
 
