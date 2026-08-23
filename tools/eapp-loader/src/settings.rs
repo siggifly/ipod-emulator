@@ -210,10 +210,19 @@ impl Provenance {
     /// about a file nobody had re-opened, which is the same shape as the `fetched and verified`
     /// string literal this field exists to delete, one level down. See [`Provenance::is_verified`]
     /// for how a surface re-establishes it.
+    ///
+    /// **The seed is decimal, and it used to be hex here and decimal one function down.** This is
+    /// the base [`Settings::parse`] reads back and [`render_nor_of`] writes, so it is the base
+    /// every surface prints in — see [`suggest_nor_name`], which drew the other one directly above
+    /// this line on the Parts page: `A446, seed 6182160` over `synthesised, seed 5e5510`, one iPod,
+    /// two numbers. The cost of the pretty one is not cosmetic: a hex seed made only of digits
+    /// parses back as a decimal that is a *different* number, and regenerates a different serial
+    /// and a different FireWire GUID with nothing said.
+    /// `every_seed_the_parts_page_prints_reads_back_as_the_same_ipod` holds every surface to it.
     pub fn line(&self) -> String {
         match self {
             Provenance::Dumped => "dumped from a real iPod".to_string(),
-            Provenance::Synthesised { seed } => format!("synthesised, seed {seed:x}"),
+            Provenance::Synthesised { seed } => format!("synthesised, seed {seed}"),
             Provenance::Fetched {
                 verified: Verification::Sha256,
             } => "fetched — SHA-256 verified when it arrived".to_string(),
@@ -1063,6 +1072,52 @@ pub fn suggest_nor_name(src: &crate::nor::Source) -> String {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default(),
         crate::nor::Source::Synthetic { model, seed, .. } => format!("{model}, seed {seed}"),
+    }
+}
+
+/// The `ipod-boot` command that rebuilds this iPod, as argv. `None` when nothing rebuilds it.
+///
+/// **It lives here because it was written down twice and only one copy was a program.** The window
+/// emitted `ipod-boot retail --nor-model A446 --nor-seed 6182160`; `grep -c 'nor-seed\|nor-model'`
+/// over `bin/ipod-boot.rs` was **0**. Neither flag has ever existed. And `retail` passes every flag
+/// it does not recognise through to `trace` unchanged and without complaint, so the command did not
+/// fail — it booted whichever NOR the setup screen was pointed at, dropped the two flags on the
+/// floor, and exited 0. A command that reproduces a *different* iPod in silence is worse than one
+/// that refuses. The composer's test pinned the spelling of the flag that did not exist.
+///
+/// `make-nor` is the spelling that moved, rather than `retail` growing two flags, because
+/// `make-nor` is the only subcommand that builds an iPod out of a model and a seed — `retail`
+/// boots a ROM, it does not mint one — and `docs/GETTING-THE-FILES.md` already documents it. A
+/// second spelling would have had to live in the one subcommand where a typo is passed through
+/// rather than caught.
+///
+/// **Argv rather than a string, so the test that matters can run it.** `ipod-boot`'s own
+/// `the_command_the_window_copies_rebuilds_the_ipod_it_names` hands `[2..]` straight to
+/// `make_nor_cmd` and reads the identity back out of the file it wrote. A test over the joined
+/// string could only have agreed with the string.
+///
+/// A typed serial or GUID is not reproducible from a seed, so those get `None` and the window's
+/// control is disabled with a sentence saying why — see `Composer::copy_command_row`.
+pub fn reproduce_command(src: &crate::nor::Source) -> Option<Vec<String>> {
+    match src {
+        crate::nor::Source::Synthetic {
+            model,
+            seed,
+            serial: None,
+            guid: None,
+            ..
+        } => Some(vec![
+            "ipod-boot".into(),
+            "make-nor".into(),
+            "--model".into(),
+            model.clone(),
+            "--seed".into(),
+            seed.to_string(),
+            // Named for the recipe, so two iPods cannot land on one file, and carrying nothing the
+            // window masks — the model and the seed are already the two flags above it.
+            format!("{model}-{seed}.bin"),
+        ]),
+        _ => None,
     }
 }
 

@@ -737,13 +737,13 @@ mod tests {
         Settings {
             resources: vec![
                 Item {
-                    name: "MA146, seed 4f2a".into(),
-                    what: Resource::Firmware(synthetic("MA146", 0x4f2a)),
+                    name: "MA146, seed 20266".into(),
+                    what: Resource::Firmware(synthetic("MA146", 20_266)),
                     from: None,
                 },
                 Item {
                     name: "the other one".into(),
-                    what: Resource::Firmware(synthetic("MA002", 0x11)),
+                    what: Resource::Firmware(synthetic("MA002", 17)),
                     from: None,
                 },
                 Item {
@@ -767,8 +767,8 @@ mod tests {
                 },
             ],
             devices: vec![
-                device("My 5.5G", "MA146, seed 4f2a", Some("my-5.5g.img")),
-                device("Second", "MA146, seed 4f2a", Some("spare.img")),
+                device("My 5.5G", "MA146, seed 20266", Some("my-5.5g.img")),
+                device("Second", "MA146, seed 20266", Some("spare.img")),
                 device("Third", "the other one", None),
             ],
             ..Settings::default()
@@ -1064,7 +1064,7 @@ mod tests {
         // The drive leaves the disk, and the iPod leaves the library.
         let path = s.disks[0].path.clone();
         std::fs::remove_file(&path).expect("removing the image this test wrote");
-        s.resources.retain(|it| it.name != "MA146, seed 4f2a");
+        s.resources.retain(|it| it.name != "MA146, seed 20266");
 
         let v = view_of(&mut p, &s, all_on());
         let rules: Vec<&str> = v
@@ -1075,7 +1075,7 @@ mod tests {
             .collect();
         assert_eq!(rules.len(), 2, "both absences were expected, got {rules:?}");
         assert!(
-            rules[0].contains("MA146, seed 4f2a") && rules[0].contains("not in the library"),
+            rules[0].contains("MA146, seed 20266") && rules[0].contains("not in the library"),
             "the iPod's absence is not named first: {rules:?}"
         );
         assert!(
@@ -1083,7 +1083,7 @@ mod tests {
             "the drive's absence does not name the path: {rules:?}"
         );
         // And the fact lines still say what the device names, rather than going blank.
-        assert_eq!(fact(&v, "iPod"), "MA146, seed 4f2a");
+        assert_eq!(fact(&v, "iPod"), "MA146, seed 20266");
         assert_eq!(fact(&v, "Drive"), "my-5.5g.img");
     }
 
@@ -1472,7 +1472,7 @@ mod tests {
         assert_eq!(r.presses, 2, "§11.3: detaching a reference does not arm");
         assert_eq!(
             r.consequence,
-            "The entry goes. Its iPod MA146, seed 4f2a and its drive stay in the library, and \
+            "The entry goes. Its iPod MA146, seed 20266 and its drive stay in the library, and \
              neither file is deleted."
         );
 
@@ -1529,14 +1529,14 @@ mod tests {
         p.open_row(&s, 0, true);
         assert_eq!(
             fact(&view_of(&mut p, &s, all_on()), "iPod"),
-            "Black 5G, filed as MA146, seed 4f2a"
+            "Black 5G, filed as MA146, seed 20266"
         );
 
         // Filed under the name a person uses, which is what `Composer::commit` does. One name, said
         // once.
         s.resources[0].name = "Black 5G".into();
         for d in &mut s.devices {
-            if d.firmware == "MA146, seed 4f2a" {
+            if d.firmware == "MA146, seed 20266" {
                 d.firmware = "Black 5G".into();
             }
         }

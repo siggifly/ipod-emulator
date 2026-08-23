@@ -417,6 +417,17 @@ ipod-boot — Apple's firmware, booted under the emulator
                                      window's setup screen asks the same two and writes the same
                                      file; this is for a machine with no window to open.
 
+  ipod-boot make-nor  [--model A146] [--seed N] [--from FILE] [--serial S] [--guid HEX]
+                      [--hwvr HEX] [--preview PNG] OUT.bin
+                                     build a boot ROM from a model number and a seed, for anyone
+                                     who does not own the hardware to dump one. The seed is the
+                                     whole recipe: the same model and the same seed produce the
+                                     same serial and the same FireWire GUID, every time, so the
+                                     seed is decimal here and decimal everywhere the window
+                                     prints it. This is the command the window's `Copy the command
+                                     line` row hands you. --from carries an identity off a real
+                                     NOR dump or drive image instead of generating one.
+
   ipod-boot make-disk IPSW OUT.img [SECTORS]
                                      build a bootable drive image from an IPSW. This is the way
                                      to get a disk if you do not already have one: an IPSW is
@@ -1801,6 +1812,64 @@ mod tests {
             ],
         );
         assert_eq!(q, "/x/trace '/res/My Firmware Dumps/t.bin' --clock=5");
+    }
+
+    /// **The command the window copies is run here, not spelled here.**
+    ///
+    /// `Composer::command_line` used to emit `ipod-boot retail --nor-model A446 --nor-seed N` and
+    /// the composer's own test asserted the line contained `--nor-seed`. Neither flag existed in
+    /// this file — `grep -c` said 0 — and `retail` forwards a flag it does not know to `trace`
+    /// unchanged, so the copied line ran, booted whatever NOR the setup screen held, dropped both
+    /// flags and exited 0. The test agreed with the string and the string agreed with nothing.
+    ///
+    /// So this takes [`settings::reproduce_command`]'s argv, hands `[2..]` to the function `main`
+    /// dispatches for `argv[1]`, and asks the **file it wrote** who it is. A flag that does not
+    /// exist is not a failure in `make_nor_cmd` — it is silently defaulted, `--model` to `A146` and
+    /// `--seed` to `0` — so the old spelling fails here on the identity rather than on the parse,
+    /// which is exactly the way it failed in the operator's hands.
+    ///
+    /// `Recipe::parse` is asked first because the old command claimed to be a boot recipe. A
+    /// command that reproduces an iPod builds a ROM; it does not boot one.
+    #[test]
+    fn the_command_the_window_copies_rebuilds_the_ipod_it_names() {
+        use eapp_loader::identity::Identity;
+        use eapp_loader::nor;
+        use eapp_loader::settings;
+
+        // 0x123456 — a seed whose hex spelling is made only of digits, so a hex surface would not
+        // fail here either. It would build a different iPod.
+        let src = nor::Source::Synthetic {
+            model: "A446".into(),
+            seed: 1_193_046,
+            serial: None,
+            guid: None,
+            splash: None,
+        };
+        let argv = settings::reproduce_command(&src).expect("a synthesised iPod has a command");
+        assert_eq!(argv[0], "ipod-boot", "the command names another program: {argv:?}");
+        let (name, rest) = argv[1..].split_first().expect("a subcommand and its flags");
+        assert_eq!(
+            Recipe::parse(name),
+            None,
+            "`{name}` is a boot recipe; a command that reproduces an iPod mints a ROM"
+        );
+        assert_eq!(name, "make-nor", "nothing in main dispatches `{name}`");
+
+        // The output goes under the platform temp dir rather than the working directory, for the
+        // reason `the_per_run_disk_lives_under_the_platform_temp_dir` gives.
+        let dir = std::env::temp_dir().join(format!("ipod-boot-reproduce-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a temp dir");
+        let mut args = rest.to_vec();
+        let out = dir.join(args.last().expect("an output file"));
+        *args.last_mut().expect("an output file") = out.to_string_lossy().into_owned();
+
+        make_nor_cmd(&args).expect("the window's own command line did not run");
+
+        let built = Identity::from_nor(&out).expect("the command wrote no readable ROM");
+        let want = src.identity().expect("the recipe has an identity");
+        assert_eq!(built.guid, want.guid, "a different FireWire GUID came back");
+        assert_eq!(built.serial, want.serial, "a different serial came back");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

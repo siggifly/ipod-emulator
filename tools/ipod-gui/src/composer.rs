@@ -858,7 +858,7 @@ impl Composer {
         let (presses, consequence) = match &self.rom {
             Some(nor::Source::Synthetic { seed, .. }) => (
                 2,
-                format!("seed {seed:x} is not kept; a new serial and FireWire GUID"),
+                format!("seed {seed} is not kept; a new serial and FireWire GUID"),
             ),
             Some(nor::Source::File(_)) => (
                 2,
@@ -2029,17 +2029,20 @@ impl Composer {
     }
 
     /// The command that reproduces this iPod, **carrying no identifier**. Empty when there is none.
+    ///
+    /// **Composed by the model, not here.** What this used to write —
+    /// `ipod-boot retail --nor-model {model} --nor-seed {seed}` — named two flags that have never
+    /// existed in `ipod-boot`, and `retail` hands a flag it does not know to `trace` unchanged, so
+    /// the copied line ran, booted somebody else's NOR and exited 0. See
+    /// [`settings::reproduce_command`] for the whole of that and for why `make-nor` is the spelling
+    /// that moved. Both halves are gated where they can be *run* rather than read: `ipod-boot`'s
+    /// own test executes the argv this returns and reads the identity back out of the ROM it wrote.
     pub fn command_line(&self) -> String {
-        match &self.rom {
-            Some(nor::Source::Synthetic {
-                model,
-                seed,
-                serial: None,
-                guid: None,
-                ..
-            }) => format!("ipod-boot retail --nor-model {model} --nor-seed {seed}"),
-            _ => String::new(),
-        }
+        self.rom
+            .as_ref()
+            .and_then(settings::reproduce_command)
+            .map(|argv| argv.join(" "))
+            .unwrap_or_default()
     }
 
     /// Level ②'s rows.
@@ -3506,10 +3509,35 @@ mod tests {
     /// **The clipboard copies a recipe, never a value.** The seed is the iPod, so the command
     /// reproduces the machine exactly while carrying no identifier — and `Show` does not unlock it,
     /// because a clipboard outlives the screen.
+    ///
+    /// **The line that asserted `--nor-seed` is deleted rather than corrected.** No such flag has
+    /// ever existed in `ipod-boot`, and the subcommand the line named — `retail` — forwards a flag
+    /// it does not recognise to `trace` unchanged, so the copied command ran, booted whichever NOR
+    /// the setup screen held, and exited 0. **A test over a string can only ever agree with the
+    /// string.** What replaces it is here in two halves, in the two places each half can be run:
+    ///
+    /// - the seed the line carries is read back **through the loader** and has to name the same
+    ///   iPod, below;
+    /// - and the argv itself is **executed** — `ipod-boot`'s own
+    ///   `the_command_the_window_copies_rebuilds_the_ipod_it_names` hands it to `make_nor_cmd` and
+    ///   reads the identity out of the ROM it wrote. A flag that does not exist is silently
+    ///   defaulted there rather than refused, so that test fails on the iPod and not on the parse,
+    ///   which is exactly how this failed in the operator's hands.
+    ///
+    /// The seed here is `0x123456`, whose hex spelling is made only of digits: a hex rendering
+    /// would parse back without complaint, as a different number, naming a different iPod.
     #[test]
-    fn the_copied_command_line_carries_no_identifier() {
+    fn the_copied_command_line_carries_no_identifier_and_a_seed_that_reads_back() {
         let s = library("My 5.5G");
         let mut c = with_ipod();
+        c.rom = Some(nor::Source::Synthetic {
+            model: nor::DEFAULT_MODEL.into(),
+            seed: 1_193_046,
+            serial: None,
+            guid: None,
+            splash: None,
+        });
+        c.recompute();
         let id = c.identity().expect("an identity");
         let serial = id.serial.clone().expect("a generated serial");
 
@@ -3522,7 +3550,21 @@ mod tests {
             assert!(!cmd.is_empty(), "there is no command for a generated iPod");
             assert!(!cmd.contains(&serial), "the command carries the serial: {cmd}");
             assert!(!cmd.contains(&id.guid_hex()), "the command carries the GUID: {cmd}");
-            assert!(cmd.contains("--nor-seed"), "{cmd}");
+
+            let seed = cmd
+                .split_whitespace()
+                .skip_while(|w| *w != "--seed")
+                .nth(1)
+                .unwrap_or_else(|| panic!("the command names no seed at all: {cmd}"));
+            let back = Settings::parse(&format!(
+                "nor_model = {}\nnor_seed = {seed}\n",
+                nor::DEFAULT_MODEL
+            ));
+            assert_eq!(
+                back.nor.identity().expect("the parsed recipe has an identity").guid,
+                id.guid,
+                "the command's `{seed}` rebuilds another iPod: {cmd}"
+            );
             assert!(c.which(&s, false, Clipboard::Present).copy_command.enabled, "reveal={reveal}");
         }
     }

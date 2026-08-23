@@ -1253,7 +1253,7 @@ fn remove_consequence(used_by: &[String], synthesised_seed: Option<u64>) -> Stri
     // regenerable only from it.
     if let Some(seed) = synthesised_seed {
         s.push_str(&format!(
-            " This iPod is a recipe: only seed {seed:x} regenerates its identity."
+            " This iPod is a recipe: only seed {seed} regenerates its identity."
         ));
     }
     s
@@ -1382,7 +1382,7 @@ fn read_rom(src: &nor::Source) -> Rom {
                     None => model.clone(),
                 },
             ));
-            tail.push(Line::Fact("Seed".into(), format!("{seed:x}")));
+            tail.push(Line::Fact("Seed".into(), format!("{seed}")));
         }
     }
 
@@ -1783,7 +1783,7 @@ mod tests {
         Settings {
             resources: vec![
                 rom("Black 5.5G", "/tmp/ipod-parts-nowhere/rom.bin"),
-                synthetic("From my 30 GB", 0x4f2a),
+                synthetic("From my 30 GB", 20_266),
                 filed(
                     "iPod_25.1.3.ipsw",
                     Resource::Installer(PathBuf::from("/tmp/ipod-parts-nowhere/a.ipsw")),
@@ -2360,7 +2360,169 @@ mod tests {
         let free = &row_named(&v, "iPod_20.1.3.ipsw").remove_consequence;
         assert!(free.contains("Nothing else names it"), "{free}");
         let synth = &row_named(&v, "From my 30 GB").remove_consequence;
-        assert!(synth.contains("4f2a"), "a synthesised iPod's seed is not named: {synth}");
+        // Decimal, and the literal in `library()` is decimal too. It was `0x4f2a` on both sides —
+        // a seed written in the base the settings file cannot read back, asserted in the same
+        // base, so the pair agreed with each other and with nothing else. See
+        // `every_seed_the_parts_page_prints_reads_back_as_the_same_ipod`.
+        assert!(synth.contains("20266"), "a synthesised iPod's seed is not named: {synth}");
+    }
+
+    // ─── One seed, one base ─────────────────────────────────────────────────────────────────────
+
+    /// The two seeds swept, and neither of them is a round number.
+    ///
+    /// `0x123456` is **the quiet one**: its hex spelling is made only of digits, so a surface that
+    /// printed it in hex would not fail — `123456` parses back perfectly well as decimal 123 456,
+    /// and the iPod that comes out has a different serial and a different FireWire GUID with
+    /// nothing said at all. The seed the operator screenshotted, `0x5e5510`, has letters in it and
+    /// fails to parse instead; that is the loud half, and a gate that only sees the loud half is
+    /// the wrong half.
+    ///
+    /// `u64::MAX` is **the widest one**, because [`nor::mint_seed`] returns a whole `u64` and every
+    /// seed a person actually gets is around twenty digits rather than the seven in the
+    /// screenshots. It round-trips in decimal; in hex it is `ffffffffffffffff`, which does not.
+    const SWEPT_SEEDS: [u64; 2] = [1_193_046, u64::MAX];
+
+    /// One device made of one synthesised iPod, filed the way `Create` files it.
+    ///
+    /// `remember_as` rather than a hand-built `Item`, because it is the real filing path: it names
+    /// the resource through [`settings::suggest_nor_name`] and `normalised` stamps
+    /// `Provenance::Synthesised` on it. Both of those are surfaces that print the seed, and
+    /// `library()` above can produce neither — it names its rows by hand and files them with no
+    /// provenance at all.
+    fn one_synthesised_ipod(seed: u64) -> Settings {
+        let mut s = Settings {
+            nor: nor::Source::Synthetic {
+                model: nor::DEFAULT_MODEL.into(),
+                seed,
+                serial: None,
+                guid: None,
+                splash: None,
+            },
+            ..Settings::default()
+        };
+        s.remember_as("My 5.5G");
+        s
+    }
+
+    /// Every number a drawn string offers as a seed, as a reader would take it off the screen.
+    ///
+    /// A `Seed` fact's value is the whole of it and bare; everywhere else it is the run of
+    /// characters after the word `seed` — which catches `--seed 1193046` in the copied command
+    /// line as well as `seed 1193046` in prose, both being that word followed by a space.
+    ///
+    /// **Prose is filtered by hex digits *and* at least one decimal digit.** `no seed reproduces
+    /// them` yields `reproduces`, which is not hex; `a seed, and whatever identity` is followed by
+    /// a comma and yields nothing. A word that is all hex letters and no digit — `added`, `beef` —
+    /// is not a rendering of a number and is not swept.
+    fn seeds_read_off(label: &str, text: &str) -> Vec<String> {
+        if label == "Seed" {
+            return vec![text.trim().to_string()];
+        }
+        text.match_indices("seed ")
+            .map(|(i, _)| {
+                text[i + "seed ".len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect::<String>()
+            })
+            .filter(|t| {
+                t.chars().all(|c| c.is_ascii_hexdigit()) && t.chars().any(|c| c.is_ascii_digit())
+            })
+            .collect()
+    }
+
+    /// **A seed printed in a base the program cannot read back is a lost iPod**, and until this
+    /// existed the window printed one seed in two bases on one page.
+    ///
+    /// `parts.png` drew `A446, seed 6182160` directly above `synthesised, seed 5e5510`. That is
+    /// the same number: `0x5e5510 == 6182160`. Four sites printed it in hex and two in decimal,
+    /// each grown on its own; and the one that reads a seed *back* — `Settings::parse`'s
+    /// `nor_seed` — is decimal, because decimal is what `render_nor_of` writes into the file.
+    ///
+    /// **The cosmetics were never the defect.** A hex seed containing `a`–`f` fails to parse, and
+    /// a failure is recoverable. A hex seed made only of digits parses fine, as a *different*
+    /// number, and regenerates a different iPod — different serial, different FireWire GUID, no
+    /// message. So [`SWEPT_SEEDS`] leads with the quiet kind, and the assertion is on the identity
+    /// that comes back rather than on the characters that went out.
+    ///
+    /// **It sweeps the page rather than a list of functions.** Every row, every one of its five
+    /// strings, and every expandable row's body opened — so a seventh surface added to Parts
+    /// tomorrow is covered by having been drawn, not by being remembered here. The Composer's two
+    /// are named, because a `Which` is a struct of fields rather than a list and enumerating it
+    /// here would be the list rotting instead.
+    ///
+    /// The round trip goes through [`Settings::parse`] — the loader's own door, the one that runs
+    /// when the program starts — so this is the program reading its own output and not a second
+    /// parser written beside it to agree with it.
+    #[test]
+    fn every_seed_the_parts_page_prints_reads_back_as_the_same_ipod() {
+        for seed in SWEPT_SEEDS {
+            one_seed_reads_back(seed);
+        }
+    }
+
+    /// One seed, every surface. Split out so the two in [`SWEPT_SEEDS`] are one body and not two.
+    fn one_seed_reads_back(seed: u64) {
+        let s = one_synthesised_ipod(seed);
+        let want = s.nor.identity().expect("the recipe has an identity");
+
+        let mut p = Parts::new();
+        let mut seen = Presence::new();
+        // (which surface, the `Detail` label if it has one, the drawn string)
+        let mut said: Vec<(String, String, String)> = Vec::new();
+        let v = p.view(&s, &mut seen, Caps::default(), false, None);
+        let bodies: Vec<i32> = v.rows.iter().filter(|r| r.expandable).map(|r| r.id).collect();
+        for r in &v.rows {
+            for (what, text) in [
+                ("the row's name", &r.name),
+                ("the row's fact", &r.fact),
+                ("`used by`", &r.used_by),
+                ("the removal consequence", &r.remove_consequence),
+                ("the machine rule", &r.locked_by),
+            ] {
+                said.push((format!("{what} on `{}`", r.name), String::new(), text.clone()));
+            }
+        }
+        for id in bodies {
+            p.open_row(&s, id, true);
+            for d in &p.view(&s, &mut seen, Caps::default(), false, None).detail {
+                said.push((format!("an open row's `{}` line", d.label), d.label.clone(), d.value.clone()));
+            }
+        }
+
+        // …and the two the Composer draws about the same iPod.
+        let device = s.devices.first().expect("`remember_as` made one").clone();
+        let c = crate::composer::Composer::editing(&s, &device.name, s.recipe_of(&device))
+            .expect("the device is there");
+        said.push(("`Make one`'s consequence".into(), String::new(), c.make_one_row().consequence));
+        said.push(("the copied command line".into(), String::new(), c.command_line()));
+
+        let mut swept: Vec<String> = Vec::new();
+        for (surface, label, text) in &said {
+            for token in seeds_read_off(label, text) {
+                let back = Settings::parse(&format!(
+                    "nor_model = {}\nnor_seed = {token}\n",
+                    nor::DEFAULT_MODEL
+                ));
+                let got = back.nor.identity().expect("the parsed recipe has an identity");
+                assert_eq!(
+                    (got.serial.as_deref(), got.guid),
+                    (want.serial.as_deref(), want.guid),
+                    "{surface} printed `{token}`, which reads back as another iPod — from `{text}`"
+                );
+                swept.push(format!("{surface}: {token}"));
+            }
+        }
+        // The control on the sweep: an extractor that quietly found nothing would pass every
+        // assertion above it. Six surfaces print this seed — the filed resource's name, its
+        // provenance line, the removal consequence, the `Seed` fact in its open body, the
+        // Composer's `Make one`, and the copied command line's `--seed`.
+        assert!(
+            swept.len() >= 6,
+            "the sweep read {} seeds off a page that prints six of them, seed {seed}: {swept:#?}",
+            swept.len()
+        );
     }
 
     // ─── What a row is allowed to claim ─────────────────────────────────────────────────────────

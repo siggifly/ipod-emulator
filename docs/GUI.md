@@ -1763,7 +1763,7 @@ In order, narrated in the Work Rail, as a `Recipe` with ticked `Step`s:
    percentage — until the recipe changes, and §12.3 says what happens then.
 
 **Everything it made is a named, editable resource.** `MENU › Parts` afterwards shows the synthesised
-iPod under `Black 5.5G · synthesised · seed 8f21c4`, the `.ipsw` under its filename with
+iPod under `Black 5.5G · synthesised · seed 9380292`, the `.ipsw` under its filename with
 `fetched · SHA-256 verified`, and the drive under `my-5.5g.img · 8.0 GB · FAT32 0x0B · from
 iPod_25.1.3`. Nothing was magic.
 
@@ -2188,7 +2188,7 @@ these belong in it, with sizes, with the device each pairs with, and with a `Dis
  │ iPods                            2   │
  │  No iPod is plugged in               │  ← reserved, always. fg-disabled
  │▓▓Black 5.5G▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓› │  ← the material: the selected row
- │▓▓synthesised · seed 4f2a · used by 2▓│
+ │▓synthesised · seed 20266 · used by 2▓│
  │  From my 30 GB                     › │
  │  dumped from a real iPod · used by 1 │
  │  Add a dump…      Synthesise…        │
@@ -2736,21 +2736,41 @@ their absence reads as a carve-out rather than an omission:
   promising three seconds.
 
 **The honest bridge is one row** on the device's drawer page: `Copy the command line for this
-device ›`, which emits `ipod-boot --print`'s already-shell-quoted argv — including its provenance
-annotation for every input path (`# NOR dump: /path — environment | setup screen | repository
-default`).
+device ›`. **What it emits today is `ipod-boot make-nor --model <m> --seed <n> <m>-<n>.bin`** — the
+recipe, and nothing else. That is one command and it runs; this section used to describe a second,
+wider one, and the window shipped a third that was neither.
 
-**And it masks by default, because the other surface does.** `--print` shell-quotes the full argv,
-which for a synthesised ROM includes `--serial` and `--guid` in the clear and for a dumped one names
-the dump's path — so the program was protecting those identifiers on §11.2 and putting them on the
-clipboard here, with no sentence at all. The row states what it is about to copy, `--serial` and
-`--guid` are elided as `…`, and a sibling toggle `include the serial and GUID`, **default off**,
-turns them back on for the person who actually needs to reproduce a run.
+- The design was `ipod-boot --print`'s already-shell-quoted argv, with its provenance annotation for
+  every input path (`# NOR dump: /path — environment | setup screen | repository default`). Nothing
+  built it, and it is still the right shape for *running* a device from a terminal. It is not what
+  the row does.
+- The window emitted `ipod-boot retail --nor-model <m> --nor-seed <n>`. **Neither flag has ever
+  existed**, and `retail` forwards a flag it does not recognise to `trace` unchanged — so the copied
+  line did not fail. It booted whichever NOR the setup screen was pointed at, dropped both flags, and
+  exited 0: a command that reproduced somebody else's iPod in silence. The composer's own test
+  asserted that the string contained `--nor-seed`, which is a test agreeing with a string.
+- `make-nor` is the spelling that moved, because it is the only subcommand that builds an iPod out of
+  a model and a seed — `retail` boots a ROM, it does not mint one — and `GETTING-THE-FILES.md`
+  already documented it. `settings::reproduce_command` composes the argv, the window joins it, and
+  `ipod-boot`'s own test **executes** it and reads the identity back out of the ROM it wrote.
+
+**And it masks by default, because the other surface does** — which the shipped row reaches by
+carrying no identifier at all rather than by eliding one. `--print` shell-quotes the full argv, which
+for a synthesised ROM includes `--serial` and `--guid` in the clear and for a dumped one names the
+dump's path, so the program was protecting those identifiers on §11.2 and putting them on the
+clipboard here with no sentence at all. When that wider bridge is built, the row states what it is
+about to copy, `--serial` and `--guid` are elided as `…`, and a sibling toggle `include the serial
+and GUID`, **default off**, turns them back on for the person who actually needs to reproduce a run.
+Until then there is nothing to elide: `make-nor --model --seed` is a recipe, a typed identity has no
+seed that reproduces it, and that case is refused with a sentence instead of copied.
 
 **What does earn a surface**: `facts`, `syscfg`, `fat` browsing, `rsrc`, the firmware cache,
-`make-nor --preview`, and `open-drive`. Separately: **six `ipod-boot` subcommands are missing from
-its own `--help`** — `syscfg`, `ghidra`, `make-nor`, `firmware`, `fat`, `rsrc`. Four of them get a
-window; the help text is still a bug and should be fixed.
+`make-nor --preview`, and `open-drive`. Separately: **five `ipod-boot` subcommands are missing from
+its own `--help`** — `syscfg`, `ghidra`, `firmware`, `fat`, `rsrc`. It was six. `make-nor` came off
+that list when the row above started handing people a `make-nor` command line: a command the window
+copies has to be findable in the program's own help, or the first thing a reader does with it is
+look it up and conclude it does not exist. Four of the five get a window; the help text is still a
+bug and should be fixed.
 
 ---
 
