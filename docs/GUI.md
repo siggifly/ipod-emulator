@@ -991,6 +991,50 @@ about the program.
   gains a drawn mark beside a shorter sentence. **Unresolved, and it is an operator decision** — the
   table above is the design's own wording and this document is not the place to quietly reword it.
 
+#### And two the model added, both measured rather than argued *(2026-08-23)*
+
+`machine.rs` is this table evaluated — `machine::cradle(press, &Stand)` returns the ring, the
+continuity and the label, so the window asks rather than deciding. Building it measured two things
+about the table itself that no reading had.
+
+- **`·` is not a character this program may type, and every caption above is built on it.**
+  `geometry::GLYPHS` is a closed set of three — `—`, `…`, `§` — and the paragraph beside it says why
+  `·` is deliberately *off* it: *"A symbol — `·`, `×`, `›` — is drawn as a `Path`, which
+  `ui/bench.slint` does for the shelf's own MENU list."* Rust has no `Path`, and these labels come
+  from Rust. So the shipped captions use an em dash and a comma where the table above writes a middle
+  dot — `Press the centre button — cold boot, about 75 s`, `Press the centre button to stop —
+  booting, 62 %`. **The same sentence in the vocabulary the window can render**, and the alternative
+  was four `.notdef` squares on the one line the whole bench is built around. This is the `●`
+  question one row down, answered the only way it can be answered before somebody draws a mark.
+- **Two rows above do not fit the row they are drawn on, and losing the `●` costs a third.**
+  `geometry::CRADLE_LABEL_MAX_CHARS` is **48** characters at the smallest window this program draws
+  a device on, and nothing had measured the table against it. Counted:
+
+  | row | as written, with `●` | shipped, with `Press the centre button` |
+  |---|---|---|
+  | `startable, never booted` | 40 | `— cold boot, about 75 s` — **47** |
+  | `startable, parked` | 29 | `— resume, about 3 s` — **43** |
+  | **`parked, pair broken`** | **71** | `— no resume, about 75 s` — **47** |
+  | `booting`, with a fraction | 32 | `to stop — booting, 62 %` — **47** |
+  | `booting`, counted | 46 | `to stop — booting, 412 M instr` — **54** |
+  | `stopped` | as long as the `Stop` is | unchanged, unbudgeted |
+  | **`a control was pressed…`** | **72** | unchanged; there is no press in it to shorten |
+
+  **The measurement lands on the `●` question above, and it is the argument for keeping it.**
+  `press ●` is seven characters and `Press the centre button` is twenty-three, so every press row
+  pays sixteen for a glyph nothing can prove — enough to push the counted boot caption from 46 to
+  54, over a 48-character row. Five of the seven fit as the table writes them. That is not a reason
+  to type a glyph this program cannot verify; it is the size of what a **drawn** mark beside a short
+  sentence would buy, which is the thing §6.7 says to do and nobody has done.
+
+  Two of the shortenings are decisions rather than arithmetic. **The booting row is reversed**: the
+  table writes `booting · 62 % · press ● to stop` and the stop is the half that elides at every
+  width — which is the half the row was *added* for, against a twenty-one-minute boot with no stop
+  control at all. Put first, it survives. **And `parked, pair broken` loses its explanation, not its
+  warning**: `no resume` is what a person needs before pressing, and *why* the snapshot is not being
+  used is a paragraph, which this section already puts on the device's drawer page beside `Discard
+  the snapshot`.
+
 ### 7.4 The wheel, the buttons and the hold switch — all of them the machine's
 
 **Every drawn control goes to the machine, always, and to nothing else.** With no machine the only
@@ -2494,6 +2538,23 @@ with a flat battery. It is not a pause and it is not drawn as one: a powered-off
 `#08080a` and empty, never a frozen last frame, because a frozen frame is a paused machine
 pretending.
 
+*(**Built, toolkit-free** — `tools/ipod-gui/src/machine.rs`, 2026-08-23. `Life` is this table with the
+evidence each phase is entitled to attached, and `Life::read` — which takes an `emu::Out` — is its
+only constructor, so it is this table evaluated and never a second opinion about what the machine is
+doing. Three states the previous shape allowed are gone by construction rather than by discipline:
+`Off` carries no pace, so a dead machine cannot draw a speed; `Stopped` carries a `Reason` that is
+never empty, so a `danger` ring cannot sit over a blank sentence; and `Progress` splits `Counted`
+from `Fraction { of: NonZeroU64 }`, so §12.3's *"no fraction and no bar"* is a variant rather than a
+rule somebody has to remember. `Glass` is the third column, `Life::shelf` the fourth, and
+`machine::cradle` is §7.3. **One trap the building found**: the `target` in the `Booting { target }`
+row above is `Config::snap_at`, the instruction count the *snapshot* is taken at — not §12.3's
+denominator, which is `Device::boot_instructions`. Two numbers, two questions, and each is a
+plausible-looking substitute for the other — a bar drawn over the wrong one is still a bar, moving
+at a plausible rate, and nothing would report it.
+`the_boot_bar_divides_by_the_last_cold_boot_and_not_by_the_snapshot_instant` is the test, and it
+carries the substitution as its own control so a reading that proves nothing cannot pass it.
+**Nothing is wired to the window** — that is a separate pass, and this is the model it will read.)*
+
 `Stopped` is the opposite and for the opposite reason: **the last frame is evidence** and is kept.
 Row 2 carries the reason in `fg`, row 3's trailing slot offers `Cold boot` and `Copy the reason`, and
 it stays until dismissed.
@@ -2573,6 +2634,24 @@ PNG is absent the glass is dark, which is the honest fallback.
 
 `Resume` and `Cold boot` are **two separate, both-visible rows** on the device's drawer page, joined
 by `Discard the snapshot` when the pair is broken. Never a modifier you have to know.
+
+**Two things this section asks for that nothing in the program can answer yet** *(measured
+2026-08-23, building `machine.rs`)*.
+
+- **`parking · 0.7 of 1.6 GB` has no numerator and no denominator.** `Link::saving` is an
+  `AtomicBool`; nothing anywhere publishes bytes written or bytes to write, and the snapshot writer
+  does not count as it goes. So the cradle reads **`parking`** and stops — a fraction invented from
+  the snapshot's nominal size would be a bar moving at a rate nobody measured, which is the one
+  thing §12.3 is written about. The sentence becomes possible when the writer reports progress;
+  until then the honest row is the short one.
+- **A resume is reachable only by *building* the machine thread, so `Resume` is not a command.**
+  `Cmd::PowerOn`'s own doc says *"always a cold boot, never a restore"*, and the only code that
+  restores is `emu::run`'s entry, gated on `Config::may_restore(first)` with `first` false for every
+  power cycle inside a session. A window that has built a machine, powered it off, and then wants
+  the parked state back has no route to it: `machine::Launch::Resume` returns `None` for its command
+  rather than quietly handing back `PowerOn`, which would be the bench cold-booting a machine whose
+  own label had promised three seconds. **The fix is a `Cmd::Resume` the run loop honours by
+  rebuilding**, and it is not written.
 
 **`Device::parked_at` is a stored field, not an inference** (§3.3). The shelf renders `parked ·
 4 min ago` and the model carried nothing to render it from — the same shape as the `fetched and
@@ -2767,6 +2846,25 @@ decides.** `sim_usec_here` earns a row — it is the honest simulated-versus-wal
 costs what running costs. `queued` does not: `input_dropped` is the number that matters, because a
 refused step is a lie about what you did and a deep queue is only ever the reason for one. The allow
 comes off both.
+
+**Two corrections to the picture above, both found by trying to compute it** *(2026-08-23)*.
+
+- **`ratio · 24.1 % of real` has no stated divisor, and the numbers in this very diagram match
+  neither candidate.** `Config::clock`'s own doc says *"5 is what every recipe uses; 75 is real"*, so
+  `14.2 M instr/s` against a real 5G is **18.9 %**. `simulated` against `wall` — 21.5 s against
+  34.8 s, both read off this diagram — is **61.8 %**. And the diagram is not consistent with itself:
+  `487 220 016` instructions in `21.5 s` of simulated time is **22.7** instructions per simulated
+  microsecond, which is neither 5 nor 75. One of those four rows is wrong and nothing here says
+  which. `machine::Pace` therefore publishes the speed it can measure — `here / wall_secs`, which is
+  a division of two numbers the run loop actually keeps — and **no ratio at all**. The row comes back
+  when somebody writes down what it divides by.
+- **§7.3 wants `queued` on the cradle and this section refuses it a row.** The cradle's running line
+  is specified as `running` — *or* `running · wheel 41 queued`, and `Stats::queued` is the field that
+  would fill it. Two sections of one document asking opposite things of one number is the shape §16.9
+  exists to delete. This section's argument is the stronger one and holds: `machine::Life` reads
+  `queued` nowhere, and the running caption carries the measured speed instead. **§7.3's row should
+  lose the clause**; it is left in place here rather than edited silently, because that table is the
+  design's own wording.
 
 **Cost discipline.** The run loop takes the `out` lock once per `SLICE` = 250 000 instructions —
 about 56 times a second at 14 M instr/s — and memcpys 230 400 bytes into `out.fb` on refresh frames.

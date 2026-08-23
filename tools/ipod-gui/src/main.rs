@@ -54,6 +54,20 @@ mod png;
 #[allow(dead_code)]
 mod wheel;
 
+// **And a fifth, which was never connected rather than disconnected.** `machine` is §12 and §7.3
+// with no toolkit in it — the states a machine can be in, what each one permits, and the caption
+// §7.3 wants for each — written before the window can draw any of it, exactly as `rail` and `nav`
+// were. Its whole surface is exercised by its own tests, so this is unreferenced code and not
+// unverified code.
+//
+// **This declaration is the only line of `main.rs` the model touches, and deliberately.** Joining
+// it to the window is a separate pass: a callback, a property and a `refresh_*` that pushes what
+// [`machine::cradle`] returns. Retired when that pass lands and `cradle_label`'s second arm — *"
+// running is not wired"* — is deleted along with it, at which point anything here still
+// unreferenced is dead and gets removed rather than allowed.
+#[allow(dead_code)]
+mod machine;
+
 // These eleven are wired.
 //
 // `geometry` is the single source of truth for every ratio and every size constant — `build.rs`
