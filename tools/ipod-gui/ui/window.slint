@@ -33,6 +33,7 @@ import { RailRow } from "rail.slint";
 import {
     DetailRow,
     DeviceRow,
+    Field,
     FieldRow,
     FixRow,
     GroupRow,
@@ -40,6 +41,7 @@ import {
     PartRow,
     PickRow,
     PlanRow,
+    Pressable,
     RefusalRow,
     TickRow,
 } from "primitives.slint";
@@ -166,6 +168,22 @@ export component MainWindow inherits Window {
     // is that a character count is not a width.
     in property <string> reason-probe;
     out property <length> reason-width: reason-probe-text.preferred-width;
+    // **The fourth and fifth probes, and they measure the SLOT rather than the sentence.** Every
+    // budget above is a width a string wants; these two are the width it is given. A `Field` and a
+    // `Pressable` are instantiated at the same outer measure, the `Pressable` padded the way every
+    // `Row` / `Check` / act in this markup pads, and each reports what its own `ReasonSlot` handed
+    // its `Text`. The difference between them is `2 × Geometry.page-margin`, and until these
+    // existed it was a difference nothing in the program could observe — see `ReasonSlot`'s header
+    // for the sentence that drew two ways because of it.
+    out property <length> field-reason-w: slot-probe-field.reason-measure;
+    out property <length> act-reason-w: slot-probe-act.reason-measure;
+    // **The third of the pair, and it is the one that proves the knob is connected.** The two above
+    // differ, and they would differ just as much if `Field` still reached `0px` by omission — its
+    // shipped `pad` IS `0px`, so `pad: root.pad` and the default are the same number and removing
+    // the binding changes neither. This one hands a `Field` the same `pad` a `Row` carries and asks
+    // whether it gets the same slot. Same pad, same width: that is the reconciliation, and it goes
+    // red the moment `Field` stops passing its `pad` down.
+    out property <length> padded-field-reason-w: slot-probe-padded-field.reason-measure;
     // §7.5's row-2 trailing slot: the one number a bug report can quote.
     in property <string> fidelity;
     // §7.3: the drawn device is the picture, and this is what an assistive technology is told is on
@@ -513,6 +531,53 @@ export component MainWindow inherits Window {
                 text: root.reason-probe;
                 font-size: Metric.label-size;
                 font-weight: Metric.weight-label;
+            }
+
+            // **The fourth and fifth probes, and they are whole controls rather than a `Text`.** A
+            // slot's measure is its owner's width less two of its owner's `pad`, and neither term
+            // is knowable from outside the component — so the only honest way to ask is to build
+            // one and read what it gave. Both sit in a `Geometry.refusal-measure` box because that
+            // is the drawer body every page lays out in, and the `Pressable` carries
+            // `Geometry.page-margin` because that is what `Row`, `Check`, `ToggleRow` and every act
+            // in `parts.slint` / `devices.slint` / `composer.slint` set.
+            //
+            // **A `consequence` is what makes `tells` true here, not `enabled: false`.** Either
+            // reserves the slot — a slot with `tells: false` is 0 px high and measures nothing —
+            // and the first spelling put `enabled: false;` into this file, which
+            // `no_touch_area_or_focus_scope_is_ever_disabled` reads as §16.5's banned construction
+            // whoever wrote it. A probe is not worth an exemption in a discipline test, and a
+            // consequence is the sentence class that drove this work anyway.
+            //
+            // `visible: false` and absolutely positioned, exactly as the three probes above
+            // (§16.3) — an invisible element still lays out, which is the whole trick.
+            Rectangle {
+                x: 0;
+                y: 0;
+                visible: false;
+                width: Geometry.refusal-measure;
+
+                slot-probe-field := Field {
+                    y: 0;
+                    width: 100%;
+                    label: "probe";
+                    reason: "probe";
+                }
+
+                slot-probe-act := Pressable {
+                    y: 0;
+                    width: 100%;
+                    label: "probe";
+                    consequence: "probe";
+                    pad: Geometry.page-margin;
+                }
+
+                slot-probe-padded-field := Field {
+                    y: 0;
+                    width: 100%;
+                    label: "probe";
+                    reason: "probe";
+                    pad: Geometry.page-margin;
+                }
             }
 
             // §7. Full width, always: §9.5's decision is that the shelf's band and its 1 px top rule

@@ -1345,23 +1345,43 @@ what those two sentences actually drew was `That image's data partition is FAT32
 and §9.4's whole argument for disabling a control rather than hiding it is that the control says why.
 A reason you cannot finish reading is not doing its job.
 
-**The rule: every reason is one clause that fits the narrowest column that draws one, which is 146 px
-— `geometry::REASON_MEASURE`.** Not wrapped, not two lines, not a taller slot. §17.Q1 already made
-this trade once, for the shelf: *46 px of permanent chrome to hold a paragraph is a bad trade*, and
-§9.6's whole vertical budget is built on fixed row heights that a wrapping reason would make variable.
-The same answer applies one level down.
+**The rule: every sentence in this slot is one clause that fits the slot it is drawn in.** Not
+wrapped, not two lines, not a taller slot. §17.Q1 already made this trade once, for the shelf: *46 px
+of permanent chrome to hold a paragraph is a bad trade*, and §9.6's whole vertical budget is built on
+fixed row heights that a wrapping reason would make variable. The same answer applies one level down.
 
-Four columns draw a reason and the budget is the smallest of them, not each one's own: §9.3's
-next-step pair is **146**, §11.4's group verbs **180**, a Parts or Devices act **324**, a Settings row
-**372**. `rail::Next::reason` alone is drawn in three of those four, so a sentence written to the
-column it happens to be in today elides the first time it is reused one column over.
+Four slots draw one: §9.3's next-step pair is **146** (`geometry::REASON_MEASURE`), §11.4's group
+verbs **180** (`PARTS_VERB_W`), a Parts or Devices act **324** (`ACT_MEASURE`), a Settings row or a
+`Field` **372** (`PAGE_REASON_MEASURE`, which is `REFUSAL_MEASURE`).
+
+**A `Next` refusal is still written to 146**, because `rail::Next::reason` alone is drawn in three of
+the four and a sentence written to the column it happens to be in today elides the first time it is
+reused one column over. **That is the only sentence class with that property**, and holding the rest
+to it was the half of the rule that did not survive contact: §11.3's `consequence` is read once, at
+one control, before one press, and no arrangement of English says what a destructive act costs in
+146 px — held to that number `parts::remove_consequence` could not name what §11.4 asks of it. So the
+budget is the slot, and the sweep carries the slot with the sentence.
+
+**And the two 372s are not reached the same way, which cost a sentence.** A `Field`'s row has no
+padding of its own, so its `ReasonSlot` is the whole page body; a `Pressable` in the same column
+indents by its own `pad`, which every use site sets to `page-margin`. On the Composer's identity page
+they are four rows apart, and `composer::Lock`'s
+`Read from the dump; a device's identity is the ROM's, not ours.` draws **whole** under `Serial` and
+elides to *…not …* under `Model` — read it off `_out/gui/composer-ipod-dumped.png`. The difference is
+kept, because a reason lines up under the label it is about and the two labels are genuinely not at
+the same x; what changed is that `Field` used to reach `0px` by omission and now states it, both
+primitives report `reason-measure`, and
+`the_two_reason_slots_differ_by_exactly_the_pad_that_indents_one_of_them` builds one of each and
+reads the renderer back. Same `pad`, same slot; different `pad`, exactly `2 × page-margin` apart.
 
 **Measured, never counted.** `Add a dump…` is wider than `Synthesise…` at equal length (§17.Q12), so a
 character budget is not a width. `MainWindow.reason-probe` is a `Text` at `label-size` /
 `weight-label` with the eliding taken off, and
-`every_reason_this_window_draws_fits_the_column_it_is_drawn_in` sweeps every sentence the four
-producers — `rail.rs`, `parts.rs`, `devices.rs`, `settings_page.rs` — can word, measures each one
-through the renderer and fails on any that is wider. Fourteen sentences; the widest is 142 px.
+`every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` sweeps every sentence the four
+producers — `rail.rs`, `parts.rs`, `devices.rs`, `settings_page.rs` — can word into it, measures each
+one through the renderer and fails on any that is wider. **Thirty-nine sentences**, and it prints
+each one with the share of its own slot it spends, widest share first, so the ones an edit away from
+eliding are at the top. The fullest spends 139 of 146 px.
 
 **What this costs, and where the long form went.** Nowhere on screen. There is no `why ›` route to
 put it behind: that control is the bench's (§7.6) and its job is to open the drawer page owning a
@@ -1369,18 +1389,45 @@ refusal — and these refusals are already *on* their drawer page, so it has now
 long form lives in each producer's doc comment and in this section, which is where somebody who wants
 the argument reads it. The drawn half is the half a person standing at the control needs:
 
+**The consequences, which were the half nothing measured.** `ReasonSlot` draws
+`enabled ? consequence : reason` — one slot, two producers — and only the refusal was ever swept.
+Sixteen of thirty-eight sentences were over the moment the other one was. Every one of them was
+spending the room on a fact drawn whole a few rows above the control, which `devices::start_row` had
+already written the rule for and nobody had applied to its siblings: *putting them in this slot as
+well would spend the one line the control has on a fact the reader can already see and lose the one
+they cannot.* So they were **re-sited, not widened** — the slot costs §9.6 nothing and a taller one
+would cost it 16 px per row on every page:
+
+| was, and what it drew | is | and where the rest of it already is |
+|---|---|---|
+| `The entry goes. Its iPod A446, seed 6182160 and its drive stay in the library, and neither file is deleted.` — 545 px in 324, drew *…and its drive …* | `The entry goes; both files stay.` | `made_of`'s first two lines, `iPod  Black 5.5G, filed as A446, seed 6182160` and `Drive  my-5.5g`, at 372 px in the same open body |
+| the same, with a park — **1124 px**, about a quarter of itself | `The entry goes; its iPod stays. The park goes, unlisted.` | the Snapshots group in Parts, with the sizes |
+| `1 still name it — My 5.5G. They will say so rather than quietly losing it, and the file itself is not deleted. This iPod is a recipe: only seed 6182160 regenerates its identity.` — 849 px in 324 | `No file is deleted. Still named by My 5.5G.` | the `Seed` fact in the row's own open body — see §11.4 |
+| `1 parked machine is forgotten. The RAM and the frozen drive behind them are not deleted by this — nothing in the library records where they are.` — 772 px in **180** | `Forgets 1. Files stay, unlisted.` | the Snapshots rows above it |
+| `Changes the recipe to build from Apple's firmware instead.` — 310 px in 146 | `Rewrites the recipe.` | the button it is under, which says *build from Apple's firmware instead* |
+| `Runs this step again, from the beginning.` — 219 px in 146, drew *…again, fro…* under a live blue `Retry` | `Runs the step again.` | — |
+
 | was, and what it drew | is |
 |---|---|
 | `there is no file picker in this build yet, and nothing here accepts a dropped file` — 411 px, drew *…and not…* | `no file picker in this build` |
 | `there is one palette in this build and nothing keys on a scheme, so the control would write a preference no pixel reads` — 623 px, drew *…so t…* | `one palette in this build` |
 | `nothing on this page reaches a fetcher yet — the only download this build starts is the first run's own plan` — 558 px | `no fetcher on this page yet` |
 | `every download in this program goes through curl, and it is not on this computer` — 423 px | `no curl on this computer` |
-| `My 5.5G is running. Stop it first.` — 168 px, drew *…Stop it f…* | `My 5.5G is running` |
+| `My 5.5G is running. Stop it first.` — 168 px, drew *…Stop it f…* | it kept the imperative; see below |
 
-The last one is the shape to copy where a sentence carries the operator's own words: ` is running` is
-64 px and the rest of the column is the **name's**. A device somebody called
-`Rockbox on a 5G, second try` elides, and that is right — this window does not shorten a person's
-name for their own iPod, it just stops spending the line on its own prose first.
+**The last one was shortened to `My 5.5G is running` and has since been given back its second
+sentence**, and that is what the per-slot budget bought. 168 px was measured against 146, and 146 is
+§9.3's next-step pair — a column `devices::running_rule` is drawn in **none** of. `edit_row`,
+`remove_row`, `start_row` and `parts::inventory`'s `held` all draw it at **324**, where 168 fitted
+with 156 px to spare, and §11.4 and §7.2 of this document had specified the long form the whole time.
+One budget applied to four columns is how a document and its implementation came to disagree about a
+sentence neither of them had measured in the right place.
+
+It is still the shape to copy where a sentence carries the operator's own words:
+` is running. Stop it first.` is about 148 px and the rest of the slot is the **name's** — about 176,
+thirty characters or so. A device somebody called `Rockbox on a 5G, second try` still fits; a longer
+one elides, and that is right. This window does not shorten a person's name for their own iPod, it
+just does not spend the line on its own prose first.
 
 **And the column has to be a column.** A reason budget is arithmetic about a row that does not obey
 it unless both halves of a two-control row carry the half-share as a floor — otherwise the shrink
@@ -1389,8 +1436,8 @@ in theory elides in fact. `geometry::PARTS_VERB_W` and `geometry::RAIL_NEXT_W` a
 were measured off `_out/gui/*.png` after the sentences were already short, because a page is where
 this is visible and no assertion in the suite could see it.
 
-**Not yet applied to `composer.rs`**, which is the fifth producer of §9.4 sentences and words §11.1's
-and §11.2's locks. Read off `_out/gui/composer-ipod-dumped.png`:
+**Not yet applied to `composer.rs`**, which is the fifth producer of §9.4 sentences, words §11.1's
+and §11.2's locks, and is the page the two 372s disagree on. Read off `_out/gui/composer-ipod-dumped.png`:
 `Read from the dump; a device's identity is the ROM's, not ours.` draws as *…not …* under both locked
 pickers, and `composer::NO_CLIPBOARD` as *this build has no clipboard, so there is nowhere for the
 co…* — the same sentence, built the same way out of `rail::Next::CopyDetails`, that the Settings page
@@ -1398,11 +1445,7 @@ had. Same defect, same fix, not done here.
 
 **Still elided, and named rather than left to be discovered:** the `mono` escape hatch —
 `ipod-boot firmware get <family>` is 30 characters of monospace in a 180 px column and there is
-nothing to shorten, since it is a command that has to be typed as written. And §11.3's `consequence`,
-which shares the slot: `The entry goes. Its iPod A446, seed 6182160 and its drive stay in the library,
-and neither file is deleted.` is 880 px. That one is a real question rather than an oversight — a
-destructive act's cost is the one sentence that has to be read *before* the press — and it is left
-for the operator with the measurement attached.
+nothing to shorten, since it is a command that has to be typed as written.
 
 ### 9.5 And a fifth, because the alternative is the 560 px bug again
 
@@ -2239,10 +2282,21 @@ these belong in it, with sizes, with the device each pairs with, and with a `Dis
 
 **`used by N` is the reference-not-copy property made visible**, and it is the whole reason this
 model beats UTM's. An expanded row names the devices; `Remove` names them before it acts and offers
-`Remove anyway` in `danger` or `Cancel`. Removing a **synthesised** iPod additionally shows the seed,
-because the identity is regenerable only from it. Removing a resource never deletes the file it
-points at; removing a **disk** asks separately and explicitly about the image, defaults to no, and
-says the size.
+`Remove anyway` in `danger` or `Cancel`. Removing a resource never deletes the file it points at;
+removing a **disk** asks separately and explicitly about the image, defaults to no, and says the size.
+
+**The seed is shown by the open row, not by `Remove`'s own sentence — and that is a measurement
+rather than a preference.** This section used to say *removing a synthesised iPod additionally shows
+the seed*, and `remove_consequence` did: `This iPod is a recipe: only seed 6182160 regenerates its
+identity.` A seed is a whole `u64` and `18446744073709551615` is twenty digits, so that clause is 62
+characters at its widest — **330 px in the 324 px slot the control draws in (§9.4)**, over budget with
+nothing else in the sentence at all. There is no wording of it that fits, so the choice was never
+between two sentences. What shows the seed instead is the **`Seed` fact inside the same open body**,
+a few rows above the control, at 372 px and whole; and when the ROM was filed by the program rather
+than named by hand, the row itself is called `A446, seed 6182160` and its fact line reads
+`synthesised, seed 6182160, used by 1`, so it is drawn three more times before the row is opened.
+The sentence keeps the half that is nowhere else on the page: `No file is deleted. Still named by
+My 5.5G.` The names go last, so a long list elides where the point does not.
 
 **And nothing that the machine is using can be removed while it is running.** One line, covering both
 the resource case and the device case that had no rule at all: **while a device is the machine,
@@ -3491,9 +3545,12 @@ one display. But the number moved, so the trade is worth re-reading rather than 
 
 > **Answered for the drawer, 2026-08-23, and the answer is this one applied consistently.** Every
 > §9.4 reason on every drawer page was drawing the same way this shelf line does — elided, mid-word —
-> and the choice was the same: grow the slot, or shorten the sentence. It shortens. §9.4 now carries
-> the rule, the 146 px it is measured against, and the fourteen sentences that were re-worded to fit
-> it. **What does not transfer is the second half of this recommendation:** a bench refusal really is
+> and the choice was the same: grow the slot, or shorten the sentence. It shortens, **and it shortens
+> against the slot each sentence is drawn in rather than against the narrowest of the four** — the
+> correction of 2026-08-23, made when §11.3's consequences were measured for the first time and
+> sixteen of thirty-eight came back over. §9.4 carries the rule, the four measures, and the
+> thirty-nine sentences the sweep now holds to them. **What does not transfer is the second half of
+> this recommendation:** a bench refusal really is
 > one keypress from its paragraph, and a drawer refusal is not — `why ›` opens the page that owns a
 > refusal, and these refusals are already on their page. So the long form is not one keypress away;
 > it is in the source and in §9.4. That is the cost, and it is named rather than glossed. This
@@ -3590,7 +3647,8 @@ the shelf is still open.
 | `WORK_FOOTER_H` | 72 | §10.1's three `label` line boxes, plus 12 above and 12 below |
 | `RAIL_VERB_W` | **88** — *answered 2026-08-21* | it shipped at 64, which this question said nobody had measured. Budgeted at `10 × 14 × 0.62 = 86.8` and rounded up; **measured at 67.0** by `verb-probe` in `ui/window.slint`, which `IPOD_LAYOUT=1` prints and `tests/startup_fit.rs` asserts against the real binary. The prediction — *the longest verb is `synthesise`, it appears at first-run step 1, and if it elides it elides there* — was right about 64 and the column is now comfortable |
 | `PARTS_VERB_W` | **180** — *added 2026-08-22 at 104, raised 2026-08-23* | §11.4's group verbs, which had no constant at all. The 104 was the label budget — `11 × 14 × 0.62 = 95.5` plus `Metric.s2`, **measured at 95** for `Add a dump…` at `weight-strong` — and it holds the verb. It does not hold the half of the row the verb's **refusal** is drawn in, because 104 is not the half-share and the shrink takes the difference: with every reason already cut to 146 px, `_out/gui/parts.png` still drew **Apple firmware**'s `no file picker in this build` as *no file picker in this …* while **Bootloaders** drew it whole, and the only difference between the two rows is the width of the `mono` command under the *other* half. So it is now `(372 − 12) / 2`, and two halves and their gutter are the row exactly |
-| `RAIL_NEXT_W` | **170** — *added 2026-08-23* | §9.3's next-step pair, which had no floor at all — the same defect one surface over, and photographed before it was believed: `_out/gui/work-failed.png` drew a live **`Retry` in 98 px** with its own consequence elided to *Runs this step …*, beside a 194 px sibling, and `Copy the details` in **114** on the entry below. `(372 − 2 × 12 − 8) / 2`, so `170 + 8 + 170` is the failure block exactly. `REASON_MEASURE` — the 146 px budget every reason in the program is written to — is this less the control's own padding |
+| `RAIL_NEXT_W` | **170** — *added 2026-08-23* | §9.3's next-step pair, which had no floor at all — the same defect one surface over, and photographed before it was believed: `_out/gui/work-failed.png` drew a live **`Retry` in 98 px** with its own consequence elided to *Runs this step …*, beside a 194 px sibling, and `Copy the details` in **114** on the entry below. `(372 − 2 × 12 − 8) / 2`, so `170 + 8 + 170` is the failure block exactly. `REASON_MEASURE` — the 146 px budget a `rail::Next` sentence is written to, and the narrowest of §9.4's four slots — is this less the control's own padding |
+| `ACT_MEASURE` / `PAGE_REASON_MEASURE` | **324** and **372** — *added 2026-08-23* | the two §9.4 slots a drawer page draws side by side, and the 48 px between them was invisible because neither had a name. A `Pressable` inside an already-inset page body indents again by its own `pad`, so it gets `420 − 4 × PAGE_MARGIN`; a `Field` in the same column has no padding of its own and gets `REFUSAL_MEASURE`. `_out/gui/composer-ipod-dumped.png` is the photograph: one sentence, whole under `Serial` and elided under `Model`. Both are now measured off real controls by `MainWindow.field-reason-w` / `act-reason-w` / `padded-field-reason-w` rather than derived, and the third of those is what proves `Field` is passing its `pad` down at all |
 | `SHELF`'s decomposition | 12 + 26 + 20 + 16 + 12 = **86**, or 87 with the top rule, against a declared **88** | §7.5's own parts do not sum to §7.5's own total, and `CHROME_MIN` (154) and `CHROME_PREF` (190) are both built on the 88, so the 88 is the load-bearing half. Two pixels sit below row 3 inside the bottom padding |
 
 **A verb did elide, and this question was pointing at the wrong column when it happened.** The one

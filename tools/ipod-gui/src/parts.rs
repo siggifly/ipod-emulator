@@ -1107,7 +1107,7 @@ fn inventory(s: &Settings, seen: &mut Presence, machine: Option<&str>) -> Vec<En
     let holds_resource = |key: &str| running.is_some_and(|d| d.firmware == key);
     let held = |by: bool| -> String {
         match (by, machine) {
-            (true, Some(m)) => format!("{m} is running"),
+            (true, Some(m)) => format!("{m} is running. Stop it first."),
             _ => String::new(),
         }
     };
@@ -1160,10 +1160,6 @@ fn inventory(s: &Settings, seen: &mut Presence, machine: Option<&str>) -> Vec<En
                 };
             }
         }
-        let seed = match &it.what {
-            Resource::Firmware(nor::Source::Synthetic { seed, .. }) => Some(*seed),
-            _ => None,
-        };
         out.push(Entry {
             group,
             key: it.name.clone(),
@@ -1173,7 +1169,7 @@ fn inventory(s: &Settings, seen: &mut Presence, machine: Option<&str>) -> Vec<En
             path,
             expandable: group.expandable(),
             removable: true,
-            consequence: remove_consequence(&used_by, seed),
+            consequence: remove_consequence(&used_by),
             used_by,
             locked_by: held(holds_resource(&it.name)),
         });
@@ -1234,29 +1230,40 @@ fn inventory(s: &Settings, seen: &mut Presence, machine: Option<&str>) -> Vec<En
     out
 }
 
-/// §11.4: `Remove` **names what goes with it before it acts**.
+/// §11.4: `Remove` **names what goes with it before it acts** — in `geometry::ACT_MEASURE` 324 px,
+/// which is what decided how much of it there is.
 ///
 /// Never empty, because the control takes two presses and `primitives.slint` reserves the slot for
 /// whatever the second press will do — a blank there is a control that arms and says nothing.
-fn remove_consequence(used_by: &[String], synthesised_seed: Option<u64>) -> String {
-    let mut s = if used_by.is_empty() {
-        "Nothing else names it. The entry goes; the file itself stays where it is.".to_string()
+///
+/// ── **The seed left this sentence, and measurement is what forced it** ────────────────────────
+///
+/// §11.4 asks that removing a synthesised iPod *additionally show the seed*, and it did:
+/// `This iPod is a recipe: only seed 6182160 regenerates its identity.` The screenshots carry a
+/// seven-digit seed and every seed anybody is actually handed is a whole `u64` —
+/// `18446744073709551615` is twenty. That clause alone is 62 characters at its widest, which is
+/// **330 px in a 324 px slot**: over budget with nothing else in the sentence at all. There is no
+/// wording of it that fits, so the choice was never between two sentences.
+///
+/// **It is not lost, and it was never only here.** The `Seed` fact is inside the same `Expand`
+/// this control is in, a few rows above it, at `geometry::REFUSAL_MEASURE` 372 and whole — and
+/// that is the surface that is there **whatever the ROM is called**. When the program files a ROM
+/// itself the row is named `A446, seed 6182160` and its fact line reads
+/// `synthesised, seed 6182160, used by 1`, so the seed is drawn three more times before the row is
+/// even opened; when the operator named their own dump `From my 30 GB` it is drawn none of them.
+/// The assertion in `the_removal_consequence_names_the_dependents_before_the_press` is on the
+/// `Seed` fact for that reason, and it was written the other way round first.
+///
+/// What stays is the half that is **nowhere else on the page**: that removing the entry deletes no
+/// file, and which devices are left naming something the library no longer holds. The names go
+/// last, so what elides under a long list is the operator's own words and not this program's
+/// point — the same arrangement §9.4 settled for `My 5.5G is running`.
+fn remove_consequence(used_by: &[String]) -> String {
+    if used_by.is_empty() {
+        "The entry goes; no file is deleted.".to_string()
     } else {
-        format!(
-            "{} still name it — {}. They will say so rather than quietly losing it, and the file \
-             itself is not deleted.",
-            used_by.len(),
-            used_by.join(", ")
-        )
-    };
-    // §11.4: removing a **synthesised** iPod additionally shows the seed, because the identity is
-    // regenerable only from it.
-    if let Some(seed) = synthesised_seed {
-        s.push_str(&format!(
-            " This iPod is a recipe: only seed {seed} regenerates its identity."
-        ));
+        format!("No file is deleted. Still named by {}.", used_by.join(", "))
     }
-    s
 }
 
 // ─── What a press pays for ──────────────────────────────────────────────────────────────────────
@@ -1558,16 +1565,13 @@ fn verb_row(a: Action, rows: &[PartView], g: Group, caps: Caps, busy: bool) -> F
             // §11.3: anything that detaches a reference arms first, and the consequence is drawn
             // before the press rather than after it.
             row.presses = 2;
-            row.consequence = format!(
-                "{} parked {} forgotten. The RAM and the frozen drive behind them are not deleted \
-                 by this — nothing in the library records where they are.",
-                parked.len(),
-                if parked.len() == 1 {
-                    "machine is"
-                } else {
-                    "machines are"
-                }
-            );
+            // **Written to `geometry::PARTS_VERB_W` 180**, which is the narrowest slot any
+            // consequence in this program is drawn in — a group verb's half-share of the row. The
+            // long form ran to 772 px and drew about a fifth of itself. What it spent the room on
+            // was the sizes, which the Snapshots rows above already carry; what is left is the
+            // half that is nowhere else on the page, which is that discarding does not delete and
+            // does not leave a trail back.
+            row.consequence = format!("Forgets {}. Files stay, unlisted.", parked.len());
         }
     }
     // A build owns the drive it is writing and the bundle it is reading. A verb that would start a
@@ -2252,7 +2256,7 @@ mod tests {
         let held = p.view(&s, &mut seen, Caps::default(), false, Some("My 5.5G"));
         let rom = row_named(&held, "Black 5.5G");
         assert!(
-            rom.locked_by == "My 5.5G is running",
+            rom.locked_by == "My 5.5G is running. Stop it first.",
             "the ROM the machine boots is removable while it runs: {:?}",
             rom.locked_by
         );
@@ -2349,22 +2353,48 @@ mod tests {
         assert_eq!(row_named(&v, "my-5.5g.img").used_by, "used by 1");
     }
 
-    /// §11.4: `Remove` **names them before it acts**, and a synthesised iPod additionally shows
-    /// the seed, because its identity is regenerable only from it.
+    /// §11.4: `Remove` **names them before it acts** — and the seed it used to name with them left
+    /// the sentence, because it does not fit the slot the sentence is drawn in.
+    ///
+    /// See [`remove_consequence`] for the measurement. In one line: a whole-`u64` seed spelled out
+    /// is 20 digits, the clause carrying it is 62 characters at its widest, and that is 330 px in
+    /// a 324 px slot with nothing else in the sentence. The `Seed` fact in this row's own open
+    /// body still carries it, whole, a few rows above the control. What this asserts is that, and
+    /// the half of the sentence that is nowhere else on the page.
     #[test]
-    fn the_removal_consequence_names_the_dependents_and_the_seed_before_the_press() {
+    fn the_removal_consequence_names_the_dependents_before_the_press() {
         let v = view_of(&mut Parts::new(), &library(), Caps::default());
         let used = &row_named(&v, "Black 5.5G").remove_consequence;
         assert!(used.contains("My 5.5G"), "the consequence does not name the device: {used}");
-        assert!(used.contains("not deleted"), "it does not say the file survives: {used}");
+        assert!(used.contains("No file is deleted"), "it does not say the file survives: {used}");
         let free = &row_named(&v, "iPod_20.1.3.ipsw").remove_consequence;
-        assert!(free.contains("Nothing else names it"), "{free}");
-        let synth = &row_named(&v, "From my 30 GB").remove_consequence;
-        // Decimal, and the literal in `library()` is decimal too. It was `0x4f2a` on both sides —
-        // a seed written in the base the settings file cannot read back, asserted in the same
-        // base, so the pair agreed with each other and with nothing else. See
-        // `every_seed_the_parts_page_prints_reads_back_as_the_same_ipod`.
-        assert!(synth.contains("20266"), "a synthesised iPod's seed is not named: {synth}");
+        assert!(free.contains("no file is deleted"), "{free}");
+        // **The seed is still on the page, and this is where that is checked.** A control that
+        // stopped naming it and a page that stopped drawing it would be one deletion apart, and
+        // only the second is a lost iPod.
+        //
+        // **In the open body, not on the row** — and the difference was found by writing the
+        // assertion the other way round first. A ROM the program files itself is named
+        // `A446, seed 6182160` by `settings::suggest_nor_name`, so its row carries the seed twice
+        // before it is opened; this fixture's is called `From my 30 GB`, because the operator gets
+        // to name their own dump, and that row carries it nowhere. The `Seed` fact is the surface
+        // that is there either way, and it is inside the same `Expand` as the `Remove` control —
+        // a few rows above it, at `geometry::REFUSAL_MEASURE` 372, whole.
+        let mut p = Parts::new();
+        let s = library();
+        let id = row_named(&view_of(&mut p, &s, Caps::default()), "From my 30 GB").id;
+        p.open_row(&s, id, true);
+        let body = view_of(&mut p, &s, Caps::default());
+        let seed = body
+            .detail
+            .iter()
+            .find(|d| d.label == "Seed")
+            .expect("an open synthesised iPod draws a `Seed` fact");
+        assert_eq!(
+            seed.value, "20266",
+            "the `Seed` fact is the one surface that carries this seed whatever the operator \
+             called the ROM, and it does not"
+        );
     }
 
     // ─── One seed, one base ─────────────────────────────────────────────────────────────────────
@@ -2515,12 +2545,14 @@ mod tests {
             }
         }
         // The control on the sweep: an extractor that quietly found nothing would pass every
-        // assertion above it. Six surfaces print this seed — the filed resource's name, its
-        // provenance line, the removal consequence, the `Seed` fact in its open body, the
-        // Composer's `Make one`, and the copied command line's `--seed`.
+        // assertion above it. **Five** surfaces print this seed — the filed resource's name, its
+        // provenance line, the `Seed` fact in its open body, the Composer's `Make one`, and the
+        // copied command line's `--seed`. It was six until the removal consequence stopped
+        // printing it: twenty digits do not fit `geometry::ACT_MEASURE`, and a seed drawn half-way
+        // is worse than a seed drawn three rows up. See [`remove_consequence`].
         assert!(
-            swept.len() >= 6,
-            "the sweep read {} seeds off a page that prints six of them, seed {seed}: {swept:#?}",
+            swept.len() >= 5,
+            "the sweep read {} seeds off a page that prints five of them, seed {seed}: {swept:#?}",
             swept.len()
         );
     }

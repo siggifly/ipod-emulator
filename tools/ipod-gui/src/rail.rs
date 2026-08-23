@@ -344,7 +344,7 @@ impl Next {
     /// chrome will not hold a paragraph, so the paragraph is not what goes in it.
     ///
     /// Every string below was measured with the renderer, not counted:
-    /// `every_reason_this_window_draws_fits_the_column_it_is_drawn_in` fails on a longer one.
+    /// `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` fails on a longer one.
     ///
     /// **What the shortening dropped, and where it went.** The clauses that named the *second* half
     /// of an absence — *and nothing here accepts a dropped file*, *every download in this program
@@ -437,24 +437,36 @@ impl Next {
     }
 
     /// What pressing it will do, said **before** the press rather than after.
+    ///
+    /// **Eight sentences, all of them re-worded to the slot they are drawn in**, which is §9.3's
+    /// next-step pair at `geometry::REASON_MEASURE` 146 px — the narrowest in the program. Every
+    /// one of them elided: `_out/gui/work-failed.png` drew *Runs this step again, fro…* under a
+    /// live blue `Retry`, and nothing in the suite could see it, because
+    /// `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` swept [`Next::reason`] and
+    /// not this. One slot, two producers, one of them measured.
+    ///
+    /// **`Fix` no longer repeats its own label**, and that is the same rule `devices::start_row`
+    /// wrote down: putting a fact in this slot that the reader can already see spends the one line
+    /// the control has and loses the one they cannot. The button says
+    /// *build from Apple's firmware instead*; the sentence under it said
+    /// *Changes the recipe to build from Apple's firmware instead* — 310 px of it, in 146 — so it
+    /// says what changes and lets the button say to what.
     pub fn consequence(&self) -> String {
         match self {
-            Next::Retry => "Runs this step again, from the beginning.".into(),
-            Next::Provide => "Opens a file you already have, instead of downloading one.".into(),
-            Next::ChooseElsewhere => "Puts this program's files somewhere else.".into(),
-            Next::CopyDetails => {
-                "Puts the release, the URL, both sizes, both hashes and the platform on the \
-                 clipboard."
-                    .into()
-            }
-            Next::Reveal => "Shows the file in a file manager.".into(),
-            Next::CancelWrite => "Stops the write and deletes the partial file.".into(),
-            Next::Devices => "Opens the device this is about.".into(),
-            Next::Fix { label, presses } => {
+            Next::Retry => "Runs the step again.".into(),
+            Next::Provide => "Uses a file you have.".into(),
+            Next::ChooseElsewhere => "Picks another folder.".into(),
+            // The long form enumerated the release, the URL, both sizes, both hashes and the
+            // platform. Seven nouns is a list, and a list is what the clipboard is for.
+            Next::CopyDetails => "URL, sizes and hashes.".into(),
+            Next::Reveal => "Opens a file manager.".into(),
+            Next::CancelWrite => "Deletes the partial file.".into(),
+            Next::Devices => "Opens its device page.".into(),
+            Next::Fix { presses, .. } => {
                 if *presses == 2 {
-                    format!("Press again to {label}. It detaches what is attached now.")
+                    "Press again; the old goes.".into()
                 } else {
-                    format!("Changes the recipe to {label}.")
+                    "Rewrites the recipe.".into()
                 }
             }
         }

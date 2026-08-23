@@ -492,12 +492,9 @@ fn edit_row(s: &Settings, d: &Device, caps: Caps, machine: Option<&str>) -> FixR
     let sharing = s.devices_using_resource(&d.firmware);
     if sharing.len() > 1 {
         row.presses = 2;
-        row.consequence = format!(
-            "{} devices are made of this iPod — {} — and editing it changes it for all of them. \
-             Its drive and its name are this device's alone.",
-            sharing.len(),
-            sharing.join(", ")
-        );
+        // The names go last, so a long list elides where the point does not — §9.4's arrangement
+        // for `My 5.5G is running`, and the room after the full stop is the operator's.
+        row.consequence = format!("Changes this iPod for {}.", sharing.join(", "));
     }
     // **What a running machine is made of must not change under it.** `run_device` resolves the
     // named resource and holds it live, so restating that iPod mid-run would be an edit landing on
@@ -542,7 +539,21 @@ fn remove_row(s: &Settings, d: &Device, machine: Option<&str>) -> FixRow {
     row
 }
 
-/// What goes with the removal, named **before** the press.
+/// What goes with the removal, named **before** the press — in `geometry::ACT_MEASURE` 324 px,
+/// which is what decided how much of it there is.
+///
+/// **It named the iPod and the drive, and the page already does, three rows up.**
+/// `_out/gui/devices.png` drew *The entry goes. Its iPod A446, seed 6182160 and its drive …* — 545
+/// px in a 324 px slot, cut off before the clause that says nothing is deleted, which is the whole
+/// reason the sentence exists. The half it spent the room on is [`made_of`]'s first two lines,
+/// `iPod  Black 5.5G, filed as A446, seed 6182160` and `Drive  my-5.5g`, drawn whole at 372 px in
+/// the same open body. With a park it ran to 1124 px and drew about a quarter of itself.
+///
+/// **[`start_row`] wrote the rule this now obeys** and it was never applied to its sibling:
+/// *putting them in this slot as well would spend the one line the control has on a fact the
+/// reader can already see and lose the one they cannot.* So the names go, the sizes go, and what
+/// is left is the part that is nowhere else on the page — that the files stay, and that a park
+/// goes with no record of where it went.
 ///
 /// **Not `remove_consequence`**, which is what it wants to be called and which `parts.rs` already
 /// is. `no_dead_code_allow_sits_on_a_function_the_program_already_calls` decides a call by text
@@ -552,24 +563,14 @@ fn remove_row(s: &Settings, d: &Device, machine: Option<&str>) -> FixRow {
 /// `refused_because` one file over.
 fn removal_consequence(s: &Settings, d: &Device) -> String {
     let mut said = match (s.nor_of(d).is_some(), d.names_a_disk()) {
-        (true, true) => format!(
-            "The entry goes. Its iPod {} and its drive stay in the library, and neither file is \
-             deleted.",
-            d.firmware
-        ),
-        (true, false) => format!(
-            "The entry goes. Its iPod {} stays in the library, and no file is deleted.",
-            d.firmware
-        ),
+        (true, true) => "The entry goes; both files stay.",
+        (true, false) => "The entry goes; its iPod stays.",
         // Nothing resolves, so naming what stays would name something that is not there.
-        (false, _) => "The entry goes. Nothing is deleted; the library keeps whatever it holds."
-            .to_string(),
-    };
+        (false, _) => "The entry goes; nothing is deleted.",
+    }
+    .to_string();
     if d.parked_at.is_some() {
-        said.push_str(
-            " The park goes with it — the RAM and the frozen drive behind it are not deleted by \
-             this, and nothing in the library records where they are.",
-        );
+        said.push_str(" The park goes, unlisted.");
     }
     said
 }
@@ -648,20 +649,25 @@ fn start_row(s: &Settings, d: &Device, seen: &mut Presence, machine: Option<&str
 /// owns the sentence — `Settings::run_device` is what knows a device is live — and both callers
 /// read it from there.
 ///
-/// **It lost `Stop it first.`, and that is the reason budget, not brevity for its own sake.** A
-/// reason is one eliding line and §9.4's rule is that it be legible; the sentence measured 168 px
-/// against `geometry::REASON_MEASURE` 146 for a device called `My 5.5G`, so what a person read
-/// was *My 5.5G is running. Stop it f…* — the imperative cut off, which is the only half that was
-/// an instruction. What is left names the machine, and stopping it is what the bench's own control
-/// does.
+/// **It lost `Stop it first.` to a budget it was never under, and it has it back.** The sentence
+/// measured 168 px and was cut against `geometry::REASON_MEASURE` 146, so what a person read was
+/// *My 5.5G is running. Stop it f…* — the imperative gone, which was the only half that was an
+/// instruction. But 146 is §9.3's next-step pair, and this sentence is drawn in **none** of those:
+/// `edit_row`, `remove_row`, [`start_row`] and `parts::inventory`'s `held` all put it on a
+/// `Pressable` padded inside an already-inset page body, which is `geometry::ACT_MEASURE` **324**.
+/// 168 fitted with 156 px to spare, and it was shortened because one budget was being applied to
+/// four columns rather than to the column each sentence lands in — see §9.4. `docs/GUI.md` §11.4
+/// and §7.2 both still specified the long form, so this is the code agreeing with the document
+/// again rather than a new decision.
 ///
-/// **The name is the operator's and this program does not shorten it.** ` is running` is 64 px, so
-/// a name has about 82 px — fifteen characters or so — before the line elides. That is a budget on
-/// *this program's* words and not on theirs: a device the operator called
-/// `Rockbox on a 5G, second try` is what they called it, and truncating it here would be the window
+/// **The name is the operator's and this program does not shorten it.** ` is running. Stop it
+/// first.` is about 148 px, so a name has about 176 — thirty characters or so — before the line
+/// elides. That is a budget on *this program's* words and not on theirs: a device the operator
+/// called `Rockbox on a 5G, second try` is what they called it, and truncating it here would be
+/// the window
 /// deciding a person's own name for their own iPod is too long.
 fn running_rule(machine: &str) -> String {
-    format!("{machine} is running")
+    format!("{machine} is running. Stop it first.")
 }
 
 /// The name at a repeater index, or `None`.
@@ -1309,9 +1315,10 @@ mod tests {
     /// **§7.2, verbatim: while there is a machine, every other device's `Start` is refused, and
     /// the sentence names the machine.**
     ///
-    /// `My 5.5G is running` is the doc's own example, shortened to §9.4's reason budget by
-    /// [`running_rule`], and naming the machine is why a person with four devices can act on it. Nothing in this program produced it before: `device_rows` is
-    /// handed no machine, so a page opened beside a running ARM7 drew a live `Start` on every row.
+    /// `My 5.5G is running. Stop it first.` is the doc's own example, worded by [`running_rule`],
+    /// and naming the machine is why a person with four devices can act on it. Nothing in this
+    /// program produced it before: `device_rows` is handed no machine, so a page opened beside a
+    /// running ARM7 drew a live `Start` on every row.
     /// Proved red by asking `machine == d.name` — the rule the two acts below it ask — which
     /// leaves the two devices that are *not* the machine offering to start a second one.
     #[test]
@@ -1347,7 +1354,7 @@ mod tests {
                 !start.enabled,
                 "device {i} offers to start a second machine while one is running"
             );
-            assert_eq!(start.reason, "My 5.5G is running");
+            assert_eq!(start.reason, "My 5.5G is running. Stop it first.");
             assert!(start.machine_rule, "§7.2 calls this a machine rule");
             assert!(start.escape.is_empty(), "no command gets round a running machine");
         }
@@ -1472,8 +1479,7 @@ mod tests {
         assert_eq!(r.presses, 2, "§11.3: detaching a reference does not arm");
         assert_eq!(
             r.consequence,
-            "The entry goes. Its iPod MA146, seed 20266 and its drive stay in the library, and \
-             neither file is deleted."
+            "The entry goes; both files stay."
         );
 
         // ── (resolves, no drive) — the half-made device, which must not promise a drive stays ──
@@ -1482,7 +1488,7 @@ mod tests {
         assert_eq!(r.presses, 2);
         assert_eq!(
             r.consequence,
-            "The entry goes. Its iPod the other one stays in the library, and no file is deleted."
+            "The entry goes; its iPod stays."
         );
 
         // ── (nothing resolves) plus the park, which is appended rather than substituted ──
@@ -1491,9 +1497,7 @@ mod tests {
         assert_eq!(r.presses, 2);
         assert_eq!(
             r.consequence,
-            "The entry goes. Nothing is deleted; the library keeps whatever it holds. The park \
-             goes with it — the RAM and the frozen drive behind it are not deleted by this, and \
-             nothing in the library records where they are."
+            "The entry goes; nothing is deleted. The park goes, unlisted."
         );
 
         // Same device without the park: the first sentence is unchanged and the second is gone, so
@@ -1503,7 +1507,7 @@ mod tests {
         let r = act_of(&view_of(&mut p, &s, all_on()), RowAction::Remove).clone();
         assert_eq!(
             r.consequence,
-            "The entry goes. Nothing is deleted; the library keeps whatever it holds."
+            "The entry goes; nothing is deleted."
         );
     }
 
@@ -1579,7 +1583,7 @@ mod tests {
         for a in [RowAction::Edit, RowAction::Remove] {
             let f = act_of(&v, a);
             assert!(!f.enabled, "{a:?} is pressable on the running device");
-            assert_eq!(f.reason, "Second is running");
+            assert_eq!(f.reason, "Second is running. Stop it first.");
             // **And the refusal disarms it.** `Second` shares its iPod with `My 5.5G`, so `Edit…`
             // was two presses and carried the sentence naming both, and `Remove` is two presses
             // always — a control that cannot be pressed at all still reserving §11.3's *press
@@ -1605,7 +1609,7 @@ mod tests {
 
         assert_eq!(
             p.row_action(&mut s, RowAction::Remove, Some("Second")),
-            Err("Second is running".into())
+            Err("Second is running. Stop it first.".into())
         );
         assert_eq!(s.devices.len(), 3, "the running device was removed anyway");
 

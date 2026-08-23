@@ -310,6 +310,20 @@ export component Icon inherits Path {
 // This is the only extraction in this phase, and it exists because `Field` and `Pressable` must
 // reserve the *same* slot: §11.1's *existing and new look identical* is a height claim before it is
 // anything else, and two slots of 34 px that were written twice are two slots that drift.
+//
+// **The height was the same and the WIDTH was not, and that is the defect this component now
+// measures.** `Pressable` handed this its own `pad`; `Field` handed it nothing and took the `0px`
+// default — so on `ui/composer.slint`, where a `Field` and a picker `Row` sit in one column,
+// `Read from the dump; a device's identity is the ROM's, not ours.` drew **whole** under `Serial`
+// and elided to *…not …* under `Model`, four rows apart, from one string. Read it off
+// `_out/gui/composer-ipod-dumped.png`; nothing in the suite could see it, because §9.4's sweep
+// measured every sentence against one number and never asked which slot drew it.
+//
+// The difference is real and it is kept: `pad` exists so a reason lines up under the label it is
+// about, and a `Field`'s label is at its owner's margin while a `Row`'s is one `pad` further in.
+// What changes is that both owners now **state** it — `Field` has the same knob and passes it — and
+// that [`measure`] reports what the slot actually got, so §9.4's budget is checked against the slot
+// the sentence lands in rather than against a number somebody typed.
 export component ReasonSlot inherits Rectangle {
     // Reserved whenever the owner has something to tell you. Never derived here — the owner knows.
     in property <bool> tells;
@@ -323,6 +337,19 @@ export component ReasonSlot inherits Rectangle {
     // The owner's own horizontal padding, so a reason lines up under the label it is about.
     in property <length> pad: 0px;
 
+    // **What the sentence actually got**, after the owner's width and this pad — the number §9.4's
+    // budget has to be checked against. Read out, never in; `MainWindow`'s three slot probes expose
+    // it for `the_two_reason_slots_differ_by_exactly_the_pad_that_indents_one_of_them`, which is
+    // what makes the paragraph above a measurement rather than a claim.
+    //
+    // **Not `measure`**, which is what it was called for an hour. `RailRow.measure` is a *string* —
+    // `4.1 MB of 6.5 MB` — and `geometry::declared_lengths` collects every `property <length>` name
+    // in the markup and then treats any binding to that name as geometry, so one `<length>` called
+    // `measure` made `no_geometry_literal_survives_in_the_markup` fail on `ui/preview.slint`'s
+    // progress fixture. A name is shared across every `.slint` file whether or not the components
+    // are; the scanner is what said so.
+    out property <length> reason-measure: line.width;
+
     height: root.tells ? Geometry.field-reason : 0px;
     clip: true;
     visible: root.tells;
@@ -333,7 +360,7 @@ export component ReasonSlot inherits Rectangle {
         padding-left: root.pad;
         padding-right: root.pad;
 
-        Text {
+        line := Text {
             height: Geometry.line-label;
             text: root.text;
             font-size: Metric.label-size;
@@ -425,6 +452,11 @@ export component Pressable inherits Rectangle {
     out property <bool> armed: false;
     out property <bool> has-focus: focus.has-focus;
     out property <bool> has-hover: touch.has-hover;
+    // §9.4's budget, as this control actually drew it — `width` less two `pad`. Every use site in
+    // this markup that sets `pad: Geometry.page-margin` inside a page that already pads by one gets
+    // 324 here where a `Field` beside it gets 372; that difference is the reason this is measured
+    // and not assumed.
+    out property <length> reason-measure: slot.reason-measure;
 
     callback activated();
     // Fired when the keyboard put focus here, so a page inside a `Scroll` can bring it into view.
@@ -535,7 +567,7 @@ export component Pressable inherits Rectangle {
             }
         }
 
-        ReasonSlot {
+        slot := ReasonSlot {
             tells: root.tells;
             text: root.enabled ? root.consequence : root.reason;
             escape-hatch: root.escape-hatch;
@@ -720,10 +752,23 @@ export component Field inherits Rectangle {
     // `Show` | `Hide` | `""`. Four characters either way, so the cell does not change size when the
     // mask comes off — §11.2's *pressing `Show` changes no width and moves nothing*.
     in property <string> action;
+    // **The same knob `Pressable` has, and it is here because its absence was invisible.** This
+    // control's row has no padding of its own, so the honest value is `0px` — a `Field`'s label
+    // starts at its owner's margin and its reason lines up under it. But `0px` was arrived at by
+    // omission: `Pressable` passed its own `pad` down to `ReasonSlot` and this passed nothing, so
+    // the two primitives disagreed about a width by `2 × pad` with neither of them saying so. A
+    // default that is stated can be argued with; one that is inherited from a component two files
+    // away cannot. See `ReasonSlot`'s header for the sentence that drew two ways because of it.
+    in property <length> pad: 0px;
 
     callback edited(string);
     callback act();
     callback gained-focus();
+
+    // §9.4's budget as this control actually drew it — the twin of `Pressable.reason-measure`, and
+    // the pair is the whole of `the_two_reason_slots_differ_by_exactly_the_pad_that_indents_one_of_
+    // them`.
+    out property <length> reason-measure: slot.reason-measure;
 
     height: Geometry.row-h + Geometry.field-reason;
 
@@ -746,6 +791,8 @@ export component Field inherits Rectangle {
 
             HorizontalLayout {
                 spacing: 0px;
+                padding-left: root.pad;
+                padding-right: root.pad;
 
                 Text {
                     width: Geometry.field-label-w;
@@ -831,11 +878,12 @@ export component Field inherits Rectangle {
         }
 
         // Always reserved. `tells: true` is not a shortcut — it IS §11.1's height claim.
-        ReasonSlot {
+        slot := ReasonSlot {
             tells: true;
             text: root.reason != "" ? root.reason : root.note;
             show-hatch: false;
             armed: false;
+            pad: root.pad;
         }
     }
 }

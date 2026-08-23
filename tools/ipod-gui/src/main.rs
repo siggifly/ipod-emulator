@@ -11110,7 +11110,7 @@ pub(crate) mod tests {
             "2026-08-23. §17.Q12's third probe, and the only `in property` in this window that is \
              an instrument rather than a page. `reason-probe-text` is `visible: false` and outside \
              every layout, so nothing a person sees reads it; what writes it is \
-             `every_reason_this_window_draws_fits_the_column_it_is_drawn_in`, one string at a time, \
+             `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in`, one string at a time, \
              to ask the renderer how wide §9.4's reason draws — the one number Slint 1.17 gives \
              Rust no other way of getting. A shipped setter for it would be the window measuring a \
              string it is not drawing. Retired when: something in the running window needs a text \
@@ -11653,8 +11653,57 @@ pub(crate) mod tests {
         );
     }
 
+    /// **The four measures a §9.4 sentence is drawn at**, so a sweep can carry the slot with the
+    /// sentence instead of holding every sentence to the smallest.
+    ///
+    /// Each arm is one `ReasonSlot` width, and each is the owner's width less two of the owner's
+    /// `pad` — which is why the numbers are not all the drawer body. `geometry.rs` has the
+    /// derivations; this is the map from a producer to which one it lands in, and it is the half
+    /// that no constant could hold, because it is a fact about the markup rather than about a
+    /// number.
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+    enum Slot {
+        /// §9.3's next-step pair — `rail.slint:329` / `:374`, `pad: Metric.s3` inside
+        /// `RAIL_NEXT_W`. The narrowest, and the only one a single sentence is drawn in three of.
+        Next,
+        /// §11.4's group verbs — `parts.slint:396` / `:423`, no `pad` at all, floored at
+        /// `PARTS_VERB_W`.
+        Verb,
+        /// An act: a `Pressable` at `pad: Geometry.page-margin` inside a page body already inset by
+        /// one. Parts' `Remove` and its `Detail` acts, Devices' `Edit…` / `Remove` / `Start` and
+        /// the `New device` footer, the Composer's pickers.
+        Act,
+        /// A top-level row on a page whose body does its insetting in the control — Settings' three
+        /// rows, Parts' own rows. The same measure a `Field` gets, and `Field` gets it a different
+        /// way: see [`geometry::PAGE_REASON_MEASURE`].
+        Page,
+    }
+
+    impl Slot {
+        fn measure(self) -> f64 {
+            match self {
+                Slot::Next => geometry::REASON_MEASURE,
+                Slot::Verb => geometry::PARTS_VERB_W,
+                Slot::Act => geometry::ACT_MEASURE,
+                Slot::Page => geometry::PAGE_REASON_MEASURE,
+            }
+        }
+
+        /// What a failure says it is looking at, because `Slot::Act` alone does not tell somebody
+        /// which control to go and open.
+        fn drawn_in(self) -> &'static str {
+            match self {
+                Slot::Next => "§9.3's next-step pair",
+                Slot::Verb => "§11.4's group-verb half",
+                Slot::Act => "an act inside an expanded row",
+                Slot::Page => "a top-level row on a drawer page",
+            }
+        }
+    }
+
     /// **Every sentence these four modules put in §9.4's reason slot**, with the producer it came
-    /// out of, so a failure names the function to edit rather than the string.
+    /// out of and the slot it lands in — so a failure names the function to edit, the string, and
+    /// the width it actually had.
     ///
     /// **Swept out of the shipped producers, not typed out here.** `Parts::view`,
     /// `Devices::view` and `Prefs::view` are the three functions that word a refusal on a drawer
@@ -11665,16 +11714,16 @@ pub(crate) mod tests {
     /// `Next::Fix`'s is unreachable in this build by design (see its own note), and
     /// `Action::unwired` is asked of all six verbs whether or not a group offers them.
     ///
-    /// **What is deliberately not in it, all three named rather than silently skipped:**
+    /// **`consequence` is in it now, and it is the half that was missing.**
+    /// `primitives.slint:522` is `text: root.enabled ? root.consequence : root.reason` — one slot,
+    /// two producers — and only one of them was ever measured. So `removal_consequence` shipped at
+    /// **880 px** in a 324 px slot and `devices.png` drew *The entry goes. Its iPod A446, seed
+    /// 6182160 and its drive …*, cut off before the clause that says nothing is deleted, which is
+    /// the entire point of the sentence. A gate that sweeps `reason` and not `consequence` is a
+    /// gate reporting on half a slot; it read green the whole time that was on screen.
     ///
-    ///   * **`consequence`, which shares the same slot.** `primitives.slint:515` is
-    ///     `text: root.enabled ? root.consequence : root.reason`, so §11.3's sentences elide exactly
-    ///     the way §9.4's did — `The entry goes. Its iPod A446, seed 6182160 and its drive stay in
-    ///     the library, and neither file is deleted.` measures **880 px** against 146. It is not
-    ///     gated because the fix is not the same fix: a reason can lose its second clause and still
-    ///     be a reason, and a destructive act's cost is the one sentence that has to be read
-    ///     *before* the press. That is the operator's call, in §17's shape, and §9.4 now carries the
-    ///     measurement so it can be made.
+    /// **What is deliberately not in it, both named rather than silently skipped:**
+    ///
     ///   * **A row's `sub` line** — `Provenance::line`, `used by N`, a park's age. Same font, same
     ///     eliding, but it is a fact about a part rather than a refusal, it is `settings.rs`'s
     ///     wording and not this crate's, and it is drawn at 372 px where a reason is drawn at 146.
@@ -11692,12 +11741,14 @@ pub(crate) mod tests {
     /// as *this build has no clipboard, so there is nowhere for the co…* — which is the same
     /// sentence, built the same way out of `Next::CopyDetails`, that `settings_page.rs` had. Same
     /// defect, same fix; a different file's, and it is named here so that a green gate is not read
-    /// as a clean window.
-    fn every_reason_these_four_modules_can_word() -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = Vec::new();
-        let mut say = |from: &str, text: &str| {
+    /// as a clean window. It is also the page where the two slots disagree — a `Field` and a picker
+    /// `Row` four rows apart, one sentence, drawn whole under one and elided under the other; see
+    /// [`geometry::PAGE_REASON_MEASURE`].
+    fn every_reason_these_four_modules_can_word() -> Vec<(Slot, String, String)> {
+        let mut out: Vec<(Slot, String, String)> = Vec::new();
+        let mut say = |slot: Slot, from: &str, text: &str| {
             if !text.is_empty() {
-                out.push((from.to_string(), text.to_string()));
+                out.push((slot, from.to_string(), text.to_string()));
             }
         };
 
@@ -11721,13 +11772,21 @@ pub(crate) mod tests {
             fix(1),
             fix(2),
         ] {
-            say(&format!("rail::Next::{n:?}'s reason"), n.reason());
+            say(Slot::Next, &format!("rail::Next::{n:?}'s reason"), n.reason());
+            // **Both sentences, because the slot draws both.** `Next::consequence` is what the
+            // second press does and it is the arm that had never been measured; §11.3's two-press
+            // `Fix` is the one that has one.
+            say(
+                Slot::Next,
+                &format!("rail::Next::{n:?}'s consequence"),
+                &n.consequence(),
+            );
         }
 
         // ── parts.rs: the verb with no mechanism behind it ────────────────────────────────────
         for a in parts::Action::ALL {
             if let Some(why) = a.unwired() {
-                say(&format!("parts::Action::{a:?}::unwired"), why);
+                say(Slot::Verb, &format!("parts::Action::{a:?}::unwired"), why);
             }
         }
 
@@ -11737,7 +11796,20 @@ pub(crate) mod tests {
         // fixture makes the Settings page draw this. A sweep that quietly omits a sentence it
         // cannot reach is an instrument reporting an absence it could not have observed
         // (AGENTS.md §6), so it is listed here by name and the constant is `pub` for this.
-        say("settings_page.rs: NO_PATH", settings_page::NO_PATH);
+        say(Slot::Page, "settings_page.rs: NO_PATH", settings_page::NO_PATH);
+
+        // ── main.rs's own, for the same reason ────────────────────────────────────────────────
+        //
+        // The `New device` footer is worded in `push_static` rather than in one of the four
+        // producers, and it is unreachable in this build for the opposite cause to `NO_PATH`'s:
+        // `nav::Page::Composer.slot()` is `Some`, so the control is live and its reason is never
+        // drawn. Swept anyway — the day that page goes away is the day this is on screen, and a
+        // sentence nothing measures is a sentence that elides the first time it is seen.
+        say(
+            Slot::Act,
+            "main.rs: the `New device` footer's reason",
+            "the Composer has no page in this build yet",
+        );
 
         // ── The three drawer pages, swept out of what they would draw ─────────────────────────
         //
@@ -11753,6 +11825,19 @@ pub(crate) mod tests {
         for (i, d) in s.devices.iter_mut().enumerate() {
             d.name = char::from(b'X' + u8::try_from(i).unwrap_or(0)).to_string();
         }
+        // **A third device made of the FIRST one's iPod**, because `devices::edit_row` only words
+        // its two-press consequence when a resource is shared and `a_furnished_library` gives its
+        // two devices one iPod each. A sentence no fixture reaches is a sentence no gate measures,
+        // and this one ran to 675 px — the sweep read green over it for exactly as long as the
+        // arm was unreachable. Added here rather than in the fixture: that library is what
+        // `_out/gui/*.png` is shot from, and a third device would rewrite every page.
+        if let Some(shared) = s.devices.first().cloned() {
+            s.devices.push(Device {
+                name: "Z".into(),
+                parked_at: None,
+                ..shared
+            });
+        }
         let machine = s.devices.first().map(|d| d.name.clone());
         // **Empty as well as furnished.** Two of `verb_row`'s refusals only exist over a library
         // with nothing in the group — `Discard` with nothing parked is the one that shipped — and a
@@ -11766,8 +11851,14 @@ pub(crate) mod tests {
                     for g in &p.view(&empty, &mut seen, caps, busy, None).groups {
                         for (a, f) in [&g.a, &g.b].into_iter().flatten() {
                             say(
+                                Slot::Verb,
                                 &format!("parts.rs: an empty {}'s `{a:?}` reason", g.heading),
                                 &f.reason,
+                            );
+                            say(
+                                Slot::Verb,
+                                &format!("parts.rs: an empty {}'s `{a:?}` consequence", g.heading),
+                                &f.consequence,
                             );
                         }
                     }
@@ -11782,17 +11873,46 @@ pub(crate) mod tests {
                         for g in &v.groups {
                             for (a, f) in [&g.a, &g.b].into_iter().flatten() {
                                 say(
+                                    Slot::Verb,
                                     &format!("parts.rs: {}'s `{a:?}` reason", g.heading),
                                     &f.reason,
+                                );
+                                say(
+                                    Slot::Verb,
+                                    &format!("parts.rs: {}'s `{a:?}` consequence", g.heading),
+                                    &f.consequence,
                                 );
                             }
                         }
                         for d in &v.detail {
                             let Some((act, f)) = &d.action else { continue };
-                            say(&format!("parts.rs: the act `{act:?}`'s reason"), &f.reason);
+                            say(
+                                Slot::Act,
+                                &format!("parts.rs: the act `{act:?}`'s reason"),
+                                &f.reason,
+                            );
+                            say(
+                                Slot::Act,
+                                &format!("parts.rs: the act `{act:?}`'s consequence"),
+                                &f.consequence,
+                            );
                         }
                         for r in &v.rows {
-                            say(&format!("parts.rs: `{}`'s machine rule", r.name), &r.locked_by);
+                            // `parts.slint:238` — the `Remove` control's reason, and it is an act
+                            // rather than a row: the control sits in the detail body, padded twice.
+                            say(
+                                Slot::Act,
+                                &format!("parts.rs: `{}`'s machine rule", r.name),
+                                &r.locked_by,
+                            );
+                            // §11.4: `Remove` names what goes with it **before** it acts, and this
+                            // is the sentence that names the seed a synthesised iPod is regenerable
+                            // from. Never measured until now; see this function's header.
+                            say(
+                                Slot::Act,
+                                &format!("parts.rs: `{}`'s removal consequence", r.name),
+                                &r.remove_consequence,
+                            );
                         }
                         // §11.4's reserved row — the one `fact` this crate words itself.
                         let reserved = v
@@ -11800,7 +11920,11 @@ pub(crate) mod tests {
                             .iter()
                             .find(|r| r.name == "No iPod is plugged in")
                             .expect("§11.4 reserves the plugged-in row whether or not one is");
-                        say("parts.rs: the reserved iPod row's fact", &reserved.fact);
+                        say(
+                            Slot::Page,
+                            "parts.rs: the reserved iPod row's fact",
+                            &reserved.fact,
+                        );
                     }
 
                     let mut dp = devices::Devices::new();
@@ -11809,7 +11933,19 @@ pub(crate) mod tests {
                         let v = dp.view(&s, &mut seen, caps, running);
                         for line in &v.detail {
                             let Some((act, f)) = &line.action else { continue };
-                            say(&format!("devices.rs: `{act:?}`'s reason on {}", d.name), &f.reason);
+                            say(
+                                Slot::Act,
+                                &format!("devices.rs: `{act:?}`'s reason on {}", d.name),
+                                &f.reason,
+                            );
+                            // `Edit…`'s shared-iPod warning and `Remove`'s `removal_consequence`
+                            // land here. Both are two-press arms, both are read before the first
+                            // press, and neither was measured by anything.
+                            say(
+                                Slot::Act,
+                                &format!("devices.rs: `{act:?}`'s consequence on {}", d.name),
+                                &f.consequence,
+                            );
                         }
                         // **`Start`'s other three arms are not this module's sentences.**
                         // `start_row` answers `running_rule` for a machine and `crate::cradle_
@@ -11820,6 +11956,7 @@ pub(crate) mod tests {
                         // both; it is `main.rs`'s to settle, not this sweep's to fail on.
                         if let (Some(f), Some(_)) = (&v.start, running) {
                             say(
+                                Slot::Act,
                                 &format!("devices.rs: `Start`'s reason on {}", d.name),
                                 &f.reason,
                             );
@@ -11835,17 +11972,34 @@ pub(crate) mod tests {
             // and a read-only home is what makes one fail; `Prefs::toggled` is the shipped route.
             let prefs = settings_page::Prefs::new();
             let v = prefs.view(&s, caps);
-            say("settings_page.rs: the Theme row's reason", &v.theme_reason);
-            say("settings_page.rs: the Settings-file row's reason", &v.copy_reason);
+            say(Slot::Page, "settings_page.rs: the Theme row's reason", &v.theme_reason);
+            say(
+                Slot::Page,
+                "settings_page.rs: the Settings-file row's reason",
+                &v.copy_reason,
+            );
+            // **The failed-save sentence, and only the half this program wrote.**
+            // `settings.slint:104` binds it to the ToggleRow's `consequence`, so it is drawn in
+            // this slot — but `Prefs::toggled` only produces it when `Settings::save` fails, which
+            // needs a read-only home that this sweep has no business making. So the constant is
+            // swept by name, exactly as `NO_PATH` is, and **without** its `{e}`: an `io::Error`'s
+            // wording is the operating system's and not this window's, the same reason the devices
+            // above are renamed to one letter. The room left over is the error's.
+            say(
+                Slot::Page,
+                "settings_page.rs: SAVE_FAILED",
+                settings_page::SAVE_FAILED,
+            );
         }
 
-        // **Deduplicated by the sentence, keeping the first producer that worded it.** The sweep
-        // drives three pages over two `Caps` arms, two `busy` arms, two machine arms and every
-        // openable row, so one constant arrives dozens of times — 559 entries for the distinct
-        // sentences below it, measured. A failure list with fifty copies of one line in it is a
-        // failure list nobody reads to the end.
-        out.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-        out.dedup_by(|a, b| a.1 == b.1);
+        // **Deduplicated by the sentence AND the slot it lands in, keeping the first producer that
+        // worded it.** The sweep drives three pages over two `Caps` arms, two `busy` arms, two
+        // machine arms and every openable row, so one constant arrives dozens of times. Not by the
+        // sentence alone: `rail::Next`'s refusals are reused verbatim by `parts::verb_row` one
+        // surface over, at 180 px rather than 146, and a dedup that dropped the second copy would
+        // be a gate measuring the narrow one and reporting on both.
+        out.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.0.cmp(&b.0)).then_with(|| a.1.cmp(&b.1)));
+        out.dedup_by(|a, b| a.2 == b.2 && a.0 == b.0);
         out
     }
 
@@ -11865,17 +12019,21 @@ pub(crate) mod tests {
     /// `ReasonSlot`'s own two properties — with the eliding taken off, and `reason-width` is its
     /// `preferred-width`: the width the string wants, from the renderer, headless.
     ///
-    /// **One budget for four columns**, and `geometry::REASON_MEASURE` carries the argument: a
-    /// reason written to the column it happens to be drawn in today is a reason that elides the
-    /// first time it is reused one column over, and `Next::reason` is already drawn in three of
-    /// them.
+    /// **Each sentence against the slot it is actually drawn in**, which is the correction. The
+    /// previous rule was one budget for four columns and `geometry::REASON_MEASURE`'s doc carries
+    /// what survives of it — a `Next` refusal is drawn in three of the four and is still written to
+    /// the narrowest. What did not survive is applying 146 px to a sentence with exactly one use
+    /// site: §11.3's `consequence` is read once, at one control, before one press, and no
+    /// arrangement of English says what a destructive act costs in 146 px. Held to that number
+    /// `parts::remove_consequence` could not name the seed §11.4 requires of it. So [`Slot`] rides
+    /// along with every sentence, and a failure names the control as well as the width.
     ///
     /// **The control is the second half of the test**, per AGENTS.md §6: a probe wired to nothing
     /// answers zero for every string, and zero clears every budget. So the sentence this commit
     /// deleted is measured too, and it has to come back over budget — if it does not, the
     /// instrument is not measuring.
     #[test]
-    fn every_reason_this_window_draws_fits_the_column_it_is_drawn_in() {
+    fn every_reason_this_window_draws_fits_the_slot_it_is_drawn_in() {
         let _held = use_a_scratch_data_dir();
         let w = a_window();
         let measure = |text: &str| -> f64 {
@@ -11897,23 +12055,27 @@ pub(crate) mod tests {
             geometry::REASON_MEASURE
         );
 
-        let mut widest: (f64, String) = (0.0, String::new());
         let mut over: Vec<String> = Vec::new();
         let reasons = every_reason_these_four_modules_can_word();
-        for (from, text) in &reasons {
+        // **Every sentence, its width, and the slot that has to hold it** — sorted by how much of
+        // its own slot each one spends, so the ones one edit away from eliding are at the top.
+        // `-- --nocapture` is how the operator reads what the window now says without opening one,
+        // and it is the same habit `_out/gui/*.png` serves for the pixels.
+        let mut listed: Vec<(f64, Slot, &str, &str)> = Vec::new();
+        for (slot, from, text) in &reasons {
             let drawn = measure(text);
             assert!(
                 drawn > 0.0,
                 "`{text}` measured {drawn} px, which is not a measurement — AGENTS.md §6: run the \
                  control before believing the number"
             );
-            if drawn > widest.0 {
-                widest = (drawn, format!("{from} — {text:?}"));
-            }
-            if drawn > geometry::REASON_MEASURE {
+            listed.push((drawn, *slot, from.as_str(), text.as_str()));
+            if drawn > slot.measure() {
                 over.push(format!(
-                    "  {from}\n    {drawn:.1} px against {:.1}: {text:?}",
-                    geometry::REASON_MEASURE
+                    "  {from}\n    {drawn:.1} px in {} — {:?}, which is {:.1} px wide: {text:?}",
+                    slot.drawn_in(),
+                    slot,
+                    slot.measure()
                 ));
             }
         }
@@ -11926,31 +12088,125 @@ pub(crate) mod tests {
              collecting from a page it is not driving",
             reasons.len()
         );
+        // **And every slot has to be reached**, because a sweep that never produces a `Slot::Act`
+        // sentence would assert nothing about the 324 px column and still read green. The four
+        // arms exist because four measures are drawn; a sweep touching three of them is measuring
+        // a window that is not this one.
+        for slot in [Slot::Next, Slot::Verb, Slot::Act, Slot::Page] {
+            assert!(
+                listed.iter().any(|(_, s, _, _)| *s == slot),
+                "not one sentence was swept into {:?} — {} — so nothing here says whether that \
+                 slot holds what it draws",
+                slot,
+                slot.drawn_in()
+            );
+        }
         assert!(
             over.is_empty(),
-            "{} of {} reasons are wider than the column that draws them, so each one is cut off \
+            "{} of {} sentences are wider than the slot that draws them, so each one is cut off \
              mid-clause where a person reads it (§9.4):\n{}",
             over.len(),
             reasons.len(),
             over.join("\n")
         );
-        // **Every sentence and its width, printed.** `-- --nocapture` is how the operator reads
-        // what the window now says without opening one, and it is the same habit `_out/gui/*.png`
-        // serves for the pixels.
-        let mut listed: Vec<(f64, &str, &str)> = reasons
-            .iter()
-            .map(|(from, text)| (measure(text), from.as_str(), text.as_str()))
-            .collect();
-        listed.sort_by(|a, b| b.0.total_cmp(&a.0));
-        for (drawn, from, text) in &listed {
-            eprintln!("{drawn:6.1}  {text:?}  \u{2014} {from}");
+        listed.sort_by(|a, b| {
+            (b.0 / b.1.measure()).total_cmp(&(a.0 / a.1.measure())).then_with(|| b.0.total_cmp(&a.0))
+        });
+        for (drawn, slot, from, text) in &listed {
+            let share = drawn / slot.measure() * 100.0;
+            eprintln!("{drawn:6.1} /{:5.0}  {share:3.0}%  {text:?}  \u{2014} {from}", slot.measure());
         }
+        let (drawn, slot, from, _) = listed.first().expect("the sweep is not empty");
         eprintln!(
-            "{} sentences fit a {:.1} px column; the widest is {:.1} px — {}",
+            "{} sentences fit the slot each is drawn in; the fullest spends {drawn:.1} of {:.1} px \
+             \u{2014} {from}",
             reasons.len(),
-            geometry::REASON_MEASURE,
-            widest.0,
-            widest.1
+            slot.measure(),
+        );
+    }
+
+    /// **A `Field` and a `Pressable` in one column do not get the same reason slot, and until this
+    /// existed nothing in the program could say so.**
+    ///
+    /// `ui/composer.slint`'s identity page lays both out in one `VerticalLayout` inset by
+    /// `Geometry.page-margin`. The `Field` rows — `Serial`, `GUID` — have no padding of their own,
+    /// so their slot is the whole body. The picker `Row`s above them carry
+    /// `pad: Geometry.page-margin` like every other `Row` in this markup, so theirs is 48 px
+    /// narrower and starts 24 px further in. `composer::Lock`'s
+    /// `Read from the dump; a device's identity is the ROM's, not ours.` is bound to all four, and
+    /// `_out/gui/composer-ipod-dumped.png` draws it **whole** under `Serial` and elided to
+    /// *…not …* under `Model` — one string, one page, two answers.
+    ///
+    /// **The difference is kept, and it is now stated.** `ReasonSlot.pad` exists so a reason lines
+    /// up under the label it is about, and the two labels are genuinely not at the same x; erasing
+    /// it would put a `Field`'s sentence 24 px right of its own label to buy an equality nothing
+    /// needs. What was wrong was that `Field` reached `0px` by **omission** — `Pressable` passed
+    /// its `pad` down and `Field` passed nothing — so two primitives disagreed about a width and
+    /// neither one said it. Both now declare the same knob, and this reads back what each slot
+    /// actually handed its `Text`.
+    ///
+    /// **Measured, not derived.** `geometry::PAGE_REASON_MEASURE` and `geometry::ACT_MEASURE` are
+    /// arithmetic; a test that compared them to each other would be arithmetic agreeing with
+    /// arithmetic. `MainWindow.field-reason-w` and `MainWindow.act-reason-w` build one of each
+    /// control at the same outer measure and report what the layout gave them, so the two
+    /// constants the sweep above budgets against are checked against the renderer that draws them.
+    ///
+    /// Shown red by taking `pad: root.pad` off `Field`'s `ReasonSlot`: the padded probe comes back
+    /// 372 against the act's 324, which is the exact defect this closes, from the primitive's side.
+    ///
+    /// **What it cannot see, named rather than left to be found:** it measures the *construction*,
+    /// not each page's use of it. Deleting `pad: Geometry.page-margin` from Parts' own `Remove`
+    /// control leaves this green — the probes are the probes' — so the sweep above would keep
+    /// budgeting that sentence at 324 while the page drew it at 372. That direction is harmless
+    /// (a wider slot than budgeted), the other is not, and the thing that sees either is
+    /// `_out/gui/*.png`. `geometry::ACT_MEASURE`'s doc names all six use sites so a reader can
+    /// check them by hand; nothing here does it for them.
+    #[test]
+    fn the_two_reason_slots_differ_by_exactly_the_pad_that_indents_one_of_them() {
+        let _held = use_a_scratch_data_dir();
+        let w = a_window();
+        let field = f64::from(w.get_field_reason_w());
+        let act = f64::from(w.get_act_reason_w());
+
+        // AGENTS.md §6: a probe reading a property nothing binds answers zero, and zero would make
+        // every subtraction below it true about nothing.
+        assert!(
+            field > 0.0 && act > 0.0,
+            "a reason slot measured {field} / {act} px, which is not a measurement — the probes in \
+             `window.slint` are not laying out"
+        );
+        assert_eq!(
+            field, geometry::PAGE_REASON_MEASURE,
+            "a `Field`'s reason slot draws {field:.1} px and `geometry::PAGE_REASON_MEASURE` says \
+             {:.1} — the sweep is budgeting §9.4's sentences against a width the window does not \
+             give them",
+            geometry::PAGE_REASON_MEASURE
+        );
+        assert_eq!(
+            act, geometry::ACT_MEASURE,
+            "an act's reason slot draws {act:.1} px and `geometry::ACT_MEASURE` says {:.1} — every \
+             `consequence` in this program is written to that number",
+            geometry::ACT_MEASURE
+        );
+        // **The knob, proved connected.** Everything above would hold just as well if `Field` still
+        // reached `0px` by omission: the shipped `pad` IS `0px`, so `pad: root.pad` and the default
+        // are the same number and deleting the binding changes no pixel. This is the assertion that
+        // deleting it fails — a `Field` handed a `Row`'s pad has to get a `Row`'s slot.
+        let padded = f64::from(w.get_padded_field_reason_w());
+        assert_eq!(
+            padded, act,
+            "a `Field` and a `Pressable` at the same `pad` drew {padded:.1} px and {act:.1} px — so \
+             `Field` is not passing its `pad` to its `ReasonSlot`, the two primitives disagree \
+             about a width again, and the 48 px below is an accident rather than a decision"
+        );
+        assert_eq!(
+            field - act,
+            2.0 * geometry::PAGE_MARGIN,
+            "the two slots differ by {:.1} px rather than by the two page margins one of them \
+             indents by, so either `Field` and `Pressable` have stopped agreeing about `pad` or a \
+             page has changed how far it insets — and §9.4's budget is per-slot, so a slot that \
+             moved silently is a sentence that elides silently",
+            field - act
         );
     }
 

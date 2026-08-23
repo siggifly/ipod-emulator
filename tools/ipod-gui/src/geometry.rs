@@ -627,19 +627,58 @@ pub const BODY_ADVANCE: f64 = 0.62;
 /// act at `420 − 4 × PAGE_MARGIN = 324`, a Settings row or a Parts fact line at
 /// [`REFUSAL_MEASURE`] 372.
 ///
-/// **One number rather than four, on purpose.** A per-column budget makes a reason legible where it
-/// happens to be drawn today and illegible the first time it is reused one column over, and
-/// `Next::reason` is already drawn in three of the four. The cost is that a reason with 372 px in
-/// front of it is written to a 146 px budget; §9.4 now says that is the rule and not an accident.
+/// **`Next::reason` is drawn in three of the four, so it is written to this one**, and that much of
+/// the original rule stands: a sentence written to the column it happens to be in today elides the
+/// first time it is reused one column over.
+///
+/// **What did not stand is applying it to sentences that are drawn in exactly one slot.** §11.3's
+/// `consequence` shares the slot and is not a refusal — it is what the second press will do, read
+/// once, at one control, on one page — and no arrangement of English puts *what a destructive act
+/// costs* in 146 px. Held to this number, `parts::remove_consequence` could not name the seed
+/// §11.4 requires of it. So the budget is now **the slot the sentence is actually drawn in**
+/// ([`ACT_MEASURE`], [`PARTS_VERB_W`], [`REFUSAL_MEASURE`], or this), and the sweep carries the
+/// slot with the sentence rather than measuring everything against the smallest.
 ///
 /// **It is not a character count.** `the_group_verb_column_holds_every_verb_this_page_draws` found
 /// `Add a dump…` wider than `Synthesise…` at equal length, so this is checked with the renderer —
 /// `MainWindow.reason-width`, at `Metric.label-size` and `Metric.weight-label`, which is the face
-/// `ReasonSlot` draws in. `every_reason_this_window_draws_fits_the_column_it_is_drawn_in` is the
+/// `ReasonSlot` draws in. `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` is the
 /// gate; [`BODY_ADVANCE`] is not in it anywhere, because a budget derived from an average advance
 /// is the guess that measurement replaces.
 #[cfg(test)]
 pub const REASON_MEASURE: f64 = RAIL_NEXT_W - 2.0 * 12.0;
+
+/// **§9.4's widest slot, and the one two primitives disagreed about by 48 px without saying so.**
+///
+/// A `Field`'s row carries no padding of its own, so its `ReasonSlot` gets the whole page body:
+/// [`REFUSAL_MEASURE`] 372. A `Pressable` in the same column indents by its own `pad`, which every
+/// use site in this markup sets to [`PAGE_MARGIN`] — so it gets [`ACT_MEASURE`] 324 instead. On
+/// `ui/composer.slint` the two are four rows apart and
+/// `Read from the dump; a device's identity is the ROM's, not ours.` drew whole under `Serial` and
+/// elided to *…not …* under `Model`. One string, one page, two answers, and the difference was
+/// invisible because `Field` took `ReasonSlot`'s `0px` default by omission rather than stating it.
+///
+/// The difference is kept — a reason lines up under the label it is about, and the two labels are
+/// not at the same x — and is now **stated at both use sites and measured at both**:
+/// `MainWindow.field-reason-w` and `MainWindow.act-reason-w` build one of each and report what its
+/// slot handed its `Text`. `the_two_reason_slots_differ_by_exactly_the_pad_that_indents_one_of_them`
+/// is the gate, and it reads the renderer rather than this arithmetic.
+#[cfg(test)]
+pub const PAGE_REASON_MEASURE: f64 = REFUSAL_MEASURE;
+
+/// **The measure a §9.4 reason gets under an act** — a `Pressable` padded by [`PAGE_MARGIN`] inside
+/// a page body that is already inset by one.
+///
+/// Six controls in three files: Parts' `Remove` and its `Detail` acts (`parts.slint:65`, `:242`),
+/// Devices' `Edit…` / `Remove` / `Start` and the `New device` footer (`devices.slint:58`, `:282`,
+/// `:336`), and the Composer's picker rows (`composer.slint:71`). It is where every `consequence`
+/// in this program that is not a Rail next-step lands, which is why it is the number
+/// `removal_consequence` and `remove_consequence` are written to.
+///
+/// `420 − 4 × PAGE_MARGIN`, written as the expression so a re-decided margin moves it — the same
+/// arrangement [`REFUSAL_MEASURE`] already has.
+#[cfg(test)]
+pub const ACT_MEASURE: f64 = REFUSAL_MEASURE - 2.0 * PAGE_MARGIN;
 
 /// How many characters §7.3's cradle label may carry before it elides.
 ///

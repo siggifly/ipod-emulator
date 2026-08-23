@@ -120,9 +120,23 @@ const NO_THEME: &str = "one palette in this build";
 /// the `None` arm below has no input that produces it. It is kept because the arm is a `match` on an
 /// `Option` and an arm with no sentence is a disabled row with an empty reason — the exact shape
 /// `primitives.slint:369` forbids — the day `path` learns to answer `None`. It is also why
-/// `every_reason_this_window_draws_fits_the_column_it_is_drawn_in` names this constant instead of
+/// `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` names this constant instead of
 /// sweeping it: no fixture can make a page draw it.
 pub const NO_PATH: &str = "nowhere to keep one";
+
+/// What the toggle says when the disk refused it — **the half this program wrote**; the `io::Error`
+/// follows it.
+///
+/// A constant rather than a literal inside [`Prefs::toggled`] for the same reason [`NO_PATH`] is
+/// one: `settings.slint:104` draws it in a `ReasonSlot`, and
+/// `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` cannot sweep a sentence that only
+/// exists after `Settings::save` has failed — which needs a read-only home that the sweep has no
+/// business making. Named here, it is measured without being provoked.
+///
+/// **The `{e}` is deliberately not part of it.** An `io::Error`'s wording belongs to the operating
+/// system, so the budget this clears is this sentence's alone and the room left over is the
+/// error's — the same arrangement §9.4 has with a device's name in `devices::running_rule`.
+pub const SAVE_FAILED: &str = "this is set for now, but the settings file was not written — ";
 
 /// What the page draws — **exactly the nine `setting-*` properties `window.slint:215-223`
 /// declares**, and nothing else.
@@ -249,9 +263,7 @@ impl Prefs {
                 // page exists to cure.
                 self.save_failed = match s.save() {
                     Ok(()) => String::new(),
-                    Err(e) => {
-                        format!("this is set for now, but the settings file was not written — {e}")
-                    }
+                    Err(e) => format!("{SAVE_FAILED}{e}"),
                 };
                 Ok(Wrote::Nothing)
             }
