@@ -1804,11 +1804,22 @@ impl Settings {
     /// them.
     ///
     /// `None` for a name that resolves to nothing, or to an entry that is not a boot ROM.
+    ///
+    /// **An empty name resolves to nothing, and that is a guard rather than a formality.**
+    /// [`Settings::parse`] fills sparse `res.N.` indices with *unnamed* placeholders, so
+    /// `position(|it| it.name == "")` finds one and restates it — and the caller that hands an
+    /// empty name is [`crate::compose`]'s window saying *this iPod has not been filed yet*, which
+    /// is precisely the case where a placeholder must not be adopted. [`Settings::filed_under`]
+    /// has refused unnamed entries since it was written, for the same reason and against the same
+    /// list; this is the second lookup in this file and it needed the same rule.
     pub fn restate_firmware(
         &mut self,
         filed_as: &str,
         what: crate::nor::Source,
     ) -> Option<String> {
+        if filed_as.is_empty() {
+            return None;
+        }
         let i = self.resources.iter().position(|it| it.name == filed_as)?;
         if !matches!(self.resources[i].what, Resource::Firmware(_)) {
             return None;
@@ -3343,6 +3354,39 @@ mod device_tests {
         let d = s.devices[0].clone();
         assert!(!d.firmware.is_empty(), "a device was given an unusable name");
         assert!(s.nor_of(&d).is_some(), "the name resolves to nothing");
+    }
+
+    /// **And an unnamed leftover is never *restated* either**, which is the same rule at the second
+    /// lookup in this file.
+    ///
+    /// [`Settings::restate_firmware`]'s caller is [`crate::compose`]'s window, which hands it the
+    /// name the iPod on screen is filed under — and hands it `""` to mean *this one has not been
+    /// filed yet, it was just minted*. A bare `position(|it| it.name == filed_as)` answers that
+    /// with placeholder 0 and restates somebody's filler into the minted iPod, under a name a
+    /// device is about to be pointed at. `None` is the answer, and the caller files instead.
+    #[test]
+    fn an_unnamed_leftover_is_never_restated_either() {
+        let mut s = Settings::parse("res.3.name = mine\nres.3.kind = firmware\n");
+        assert_eq!(s.resources.len(), 4, "the sparse index did not leave fillers");
+        assert!(
+            s.resources.iter().any(|it| it.name.is_empty()),
+            "the fixture holds no unnamed entry, so what follows proves nothing"
+        );
+        let before = s.resources.clone();
+
+        let minted = crate::nor::Source::Synthetic {
+            model: "A446".into(),
+            seed: 7,
+            serial: None,
+            guid: None,
+            splash: None,
+        };
+        assert_eq!(
+            s.restate_firmware("", minted),
+            None,
+            "an empty name adopted a placeholder"
+        );
+        assert_eq!(s.resources, before, "it wrote into the list anyway");
     }
 
     /// **A reference to an entry that is gone is reported, not swallowed.** "It boots to a white

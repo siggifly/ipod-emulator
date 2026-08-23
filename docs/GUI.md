@@ -2295,10 +2295,14 @@ shape, store the new one and take the number; no such device, do nothing. `None`
 recorded it, which is what every device from an existing settings file reads as, and an unverifiable
 denominator is dropped once rather than trusted for ever.
 
-*(`compose::BootShape` and `Recipe::shape()` shipped 2026-08-21. **`Device::boot_shape` and
-`Settings::set_boot_shape` are not built** — `grep -rn boot_shape tools --include='*.rs'` reaches
-`compose.rs` and nothing else. The paragraph above is the design, not a description of code; §20
-item 6 carries what is outstanding and names the `as_device` line that has to go in first.)*
+*(**Built.** `compose::BootShape` and `Recipe::shape()` shipped 2026-08-21; `Device::boot_shape`,
+`Settings::set_boot_shape` and the `as_device` carry-forward line followed; and `Composer::commit`
+became the production writer — the last of the four, and the one whose absence made the other three
+unreachable. It calls `set_boot_shape` rather than clearing `boot_instructions` itself, so the rule
+runs in one place: `a_composed_device_records_what_it_boots_and_reopens_on_it` measures the write,
+the file and `recipe_of`'s authority branch in one pass, and
+`a_device_with_no_recorded_shape_drops_its_denominator_once` measures the once-only drop that every
+device written before this pays.)*
 
 ### 12.4 Parking, and what it costs
 
@@ -3605,15 +3609,24 @@ In order, because each depends on the one before it.
    Both variants are read through one `Recipe::volume_type()` rather than matched twice, for the
    same reason `nothing_chosen` enumerates all three in one place, and
    `every_fix_resolves_the_thing_it_is_offered_for` now sweeps five `Start`s rather than three.
-6. **`Create` clears `Device::boot_instructions` when `oses` or `loader` changed** (§12.3). One line
-   in `Create`, plus `Settings::set_boot_shape` owning the rule and `Device::boot_shape` storing what
-   was compared — it is what makes the one-bar-across-three-operating-systems claim true rather than
-   conditional. `compose::BootShape` and `Recipe::shape()` are **DONE**; the `settings.rs` half is
-   not — no `Device::boot_shape`, no `Settings::set_boot_shape`, and none of the three named tests.
-   The trap for whoever finishes it is `Settings::as_device`: without
+6. **DONE.** `Create` clears `Device::boot_instructions` when `oses` or `loader` changed (§12.3),
+   and it does it by **calling** `Settings::set_boot_shape` rather than by keeping one line of its
+   own: same shape, keep the number; different shape, store the new one and take the number. That is
+   what makes the one-bar-across-three-operating-systems claim true rather than conditional.
+   `compose::BootShape`, `Recipe::shape()`, `Device::boot_shape`, `Settings::set_boot_shape` and the
+   `as_device` carry-forward line all landed before the caller did — and **the missing caller is
+   what made the other five look built and behave as though they were not**: `Composer::commit`
+   cleared the number and recorded no shape, so `Settings::recipe_of` — which treats `boot_shape` as
+   the **authority** on what a device boots — could never take that branch, and every Edit
+   re-derived the recipe from the drive's install list instead. The trap this item named for whoever
+   finished it was `Settings::as_device`, and it was real: without
    `boot_shape: existing.and_then(|d| d.boot_shape.clone())` beside the `boot_instructions` and
    `parked_at` lines, every `run_device`/`remember_as` round trip loses the shape and the next
-   `Create` throws away a good denominator.
+   `Create` throws away a good denominator. It is there, and `commit` files **before** it calls
+   `remember_as` for the same class of reason.
+   **One cost, stated rather than discovered.** A device that recorded no shape — every device that
+   existed before this — has a number measured on something nobody wrote down, so the first save
+   through the Composer drops it once and records the shape. The save after that keeps it.
    **The `main.rs` half is done** (2026-08-21): `DeviceRow.state` read `never started`, which is a
    claim about history from a field that is a progress-bar **denominator** — a device booted a dozen
    times renders it the moment `set_boot_shape` clears the number.

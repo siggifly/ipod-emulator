@@ -408,11 +408,18 @@ pub struct Commit {
     pub device: String,
     /// The recipe to build, exactly as the verdict was computed from.
     pub recipe: Recipe,
-    /// What it will boot — GUI.md §12.3's denominator key.
+    /// What it will boot — GUI.md §12.3's denominator key. [`Composer::commit`] records it on the
+    /// device through [`Settings::set_boot_shape`], so this is a copy of a stored fact rather than
+    /// the only place it exists.
     pub shape: compose::BootShape,
-    /// Whether that differs from what the device booted when the Composer opened. When it does,
-    /// `Device::boot_instructions` has already been cleared here: a bar whose denominator was
-    /// learned on RetailOS reads 6 % at the moment a Rockbox device finishes.
+    /// Whether that differs from what the device booted when the Composer **opened**.
+    ///
+    /// **It is not the question that clears the denominator**, and it stopped being it the moment
+    /// `Settings::set_boot_shape` was given its caller. That function compares against the shape
+    /// the device *recorded*, which is the only thing a stored number can be vouched for by; a
+    /// device that recorded none loses its number once whatever this says. This is the Composer's
+    /// own question — did what this device boots move while the page was open — and it is `false`
+    /// for a new device, which has no denominator to lose.
     pub shape_changed: bool,
     /// `Some((old, new))` when this commit renamed an existing device.
     pub renamed: Option<(String, String)>,
@@ -535,8 +542,9 @@ impl Composer {
     /// **The five below are `#[cfg(test)]`, and the sixth in the run is not.** Each is a private
     /// field's accessor, and the window never asks for one: [`Root`] hands it the region, the plan
     /// and the two totals; [`Which`] hands it what the ROM resolved to, since `Which::ipod` is
-    /// `suggest_ipod_name` of it; and `filed_as` is read only by [`Composer::devices_sharing`], one
-    /// level below either. What the tests do with these is check that the row and the recipe say
+    /// `suggest_ipod_name` of it; and `filed_as` is read by [`Composer::devices_sharing`] and by
+    /// [`Composer::commit`], which hands it to `Settings::restate_firmware` — both a level below
+    /// anything the window asks for. What the tests do with these is check that the row and the recipe say
     /// the same thing rather than two things — `consistent`, which
     /// `the_verdict_the_plan_and_the_recipe_are_one_recipe` calls after every kind of edit.
     ///
@@ -1155,17 +1163,17 @@ impl Composer {
             Mode::Editing { device } => Some(device.clone()),
         };
 
+        // **`Settings::rename_device` owns the rule, and this is its production caller.** It
+        // renames in place — so the device keeps its boot denominator and its park time, which
+        // `forget` plus `remember_as` would drop — and it moves `current` with the device. Two of
+        // its three refusals are already spent above: `can_commit_in` refuses an empty name and a
+        // name a *different* device holds, in the words the button was wearing. The third is the
+        // one the hand-written rename got wrong — `false` because **the device is not there any
+        // more** — and `renamed` then says nothing happened rather than reporting a rename of a
+        // device somebody deleted while this page was open.
         let mut renamed = None;
         if let Some(old) = &previous {
-            if *old != name {
-                // Rename in place so the device keeps its boot denominator and its park time —
-                // `forget` plus `remember_as` would drop both.
-                if let Some(d) = s.devices.iter_mut().find(|d| d.name == *old) {
-                    d.name = name.clone();
-                }
-                if s.current.as_deref() == Some(old.as_str()) {
-                    s.current = Some(name.clone());
-                }
+            if *old != name && s.rename_device(old, &name) {
                 renamed = Some((old.clone(), name.clone()));
             }
         }
@@ -1183,6 +1191,46 @@ impl Composer {
                 .map(|d| d.path.clone()),
             Start::FromImage { .. } | Start::FromIpsw(_) => None,
         };
+        // **What this iPod IS, restated — not a second one filed beside it.**
+        //
+        // §11.2's level ① tunes a filed identity, and `Lock::Shared` draws the consequence two
+        // rows above the control it tunes: *N devices are made of this iPod and will change with
+        // it.* That sentence was false. `file_away` files by **value**, an edited ROM is a value
+        // nobody has filed, so a shared edit minted a second entry and repointed **this** device
+        // alone — leaving the other N-1 on the old entry, unchanged, having been told otherwise.
+        // `Settings::restate_firmware` is the verb that makes it true, and its own doc is the
+        // argument for it: *editing one changes every device made of it, which is the point of
+        // composing rather than copying.*
+        //
+        // **Before `remember_as` and not after, and that order is the whole of why one entry comes
+        // out.** `remember_as` files the live ROM itself, by value, first thing — so run it before
+        // this and the edited value is already in the list under a second name by the time
+        // anything can restate the first, and restating then leaves two entries holding one iPod.
+        // Restate first and `remember_as`'s own filing finds the value already there and mints
+        // nothing.
+        //
+        // **An empty `filed_as` is a mint**, because `Composer::make_one` clears it — a new iPod is
+        // not the old one, and that is the one case where two entries are two iPods. It is refused
+        // *there* and not tested for here: an empty name matches `parse`'s unnamed `res.N.`
+        // placeholders, so the rule is `restate_firmware`'s to own beside `filed_under`'s, and a
+        // second copy of it in this file is a second answer to *has this iPod been filed*. `None`
+        // back is that, or a name that no longer resolves; filing is the honest answer to both.
+        //
+        // **`suggest_nor_name` and not `suggest_ipod_name`, and the reorder is what made it
+        // load-bearing.** While filing ran *after* `remember_as`, the value was always already in
+        // the list and the suggested name was unreachable — so `Black 5.5G` sat here for as long
+        // as it never named anything. It names things now, and §11.2 says what the name is:
+        // `<model>, seed <n>`. `remember_as`, `seed` and the inline-recipe migration all spell it
+        // through `suggest_nor_name`; a fourth spelling here would file one iPod under two names
+        // depending on which route reached it first.
+        let filed = match s.restate_firmware(&self.filed_as, rom.clone()) {
+            Some(n) => n,
+            None => s.file_away(
+                Resource::Firmware(rom.clone()),
+                &settings::suggest_nor_name(&rom),
+                None,
+            ),
+        };
         s.remember_as(&name);
 
         // **`as_device` keeps whatever the stored device already named, and the Composer's whole job
@@ -1190,20 +1238,12 @@ impl Composer {
         // between devices quietly cutting one loose from what it was made of — and wrong the moment
         // somebody chose a different iPod or a different drive here. So both references are stated
         // rather than inherited.
-        //
-        // Filing is by value and idempotent, so this returns the name `remember_as` just used and
-        // makes no second entry; the suggested name is only ever reached on a path that cannot
-        // happen after the line above.
-        let filed = s.file_away(
-            Resource::Firmware(rom.clone()),
-            &settings::suggest_ipod_name(&rom),
-            None,
-        );
         let disk_name = match &self.recipe.start {
             Start::FromDisk { name, .. } => Some(name.clone()),
             _ => None,
         };
         let disk_path = s.disk.clone();
+        let shape = self.recipe.shape();
         let shape_changed = self.shape_changed();
         if let Some(d) = s.devices.iter_mut().find(|d| d.name == name) {
             d.firmware = filed.clone();
@@ -1216,11 +1256,25 @@ impl Composer {
             // plan, which consults no `Recipe`. It is set on a re-save as well as on a `Create`:
             // the fact is where the device came from, and a second save does not change it.
             d.composed = true;
-            if shape_changed {
-                // GUI.md §12.3: a denominator learned on one system is a lie about another.
-                d.boot_instructions = None;
-            }
         }
+        // **What it boots, recorded — GUI.md §12.3, and this is the writer that field never had.**
+        //
+        // `Settings::set_boot_shape` is the single place the rule runs: same shape, keep the
+        // number; different shape, store the new one and take the number. What stood here was the
+        // second half alone — the denominator was cleared and the shape it moved to was recorded
+        // nowhere — so `Device::boot_shape` was written by nothing in the program, and
+        // `Settings::recipe_of`, which treats it as the **authority** on what a device boots, could
+        // never take that branch. Every Edit re-derived the recipe from the drive's install list,
+        // and a device composed as Rockbox-only whose drive records no install re-opened as
+        // Apple-by-default.
+        //
+        // **It asks a different question from `shape_changed` and that is deliberate.** This
+        // compares against the shape the device *recorded*, which is the only thing a stored number
+        // can be vouched for by. A device written before the field existed has no recorded shape,
+        // so it loses its number once, here, whatever the Composer thinks moved. `set_boot_shape`'s
+        // own note is the argument; `a_device_with_no_recorded_shape_drops_its_denominator_once` is
+        // the measurement.
+        s.set_boot_shape(&name, &shape);
         self.filed_as = filed;
 
         self.mode = Mode::Editing {
@@ -3354,6 +3408,19 @@ mod tests {
         let filed = s.nor_of(d).expect("the iPod resolves");
         assert_eq!(Some(filed), c.rom(), "the device names some other iPod");
         assert_eq!(c.filed_as(), d.firmware);
+        // **And under §11.2's own spelling: `<model>, seed <n>`, not `Black 5.5G`.**
+        //
+        // `commit` files **before** `remember_as` now, which is what makes the entry's name a
+        // question at all: while it filed afterwards, the value was always already in the list and
+        // the name it suggested was swallowed whole. `remember_as`, `seed` and the inline-recipe
+        // migration all spell a boot ROM through `settings::suggest_nor_name`; a fourth spelling
+        // here would file one iPod under two names depending on which route reached it first, and
+        // the name is what `ipod_options` draws as the picker's row label.
+        assert_eq!(
+            d.firmware,
+            settings::suggest_nor_name(c.rom().expect("an iPod")),
+            "the mint filed the iPod under a name no other route spells"
+        );
 
         // And the chassis follows the model, so a white iPod does not draw black.
         let mut white = ready();
@@ -3420,9 +3487,24 @@ mod tests {
 
     /// And a re-save that changed nothing keeps it — a number thrown away for no reason costs a
     /// whole boot without a bar.
+    ///
+    /// **The fixture records a shape first, and that is the state this property is about.** A
+    /// device whose shape is recorded is what every device becomes the first time it is saved
+    /// through here; before that recording exists there is nothing the number can be vouched for
+    /// by, and `set_boot_shape` drops it once —
+    /// `a_device_with_no_recorded_shape_drops_its_denominator_once` is where that half is measured.
+    /// Written the other way round, this test asserted *keeps the number* over a device that had
+    /// none to compare against and was green only while nothing recorded shapes at all.
     #[test]
     fn saving_an_unchanged_recipe_runs_nothing() {
         let mut s = library("My 5.5G");
+        assert!(s.set_boot_shape(
+            "My 5.5G",
+            &compose::BootShape {
+                loader: Loader::Apple,
+                oses: [Os::Apple].into_iter().collect(),
+            }
+        ));
         s.devices[0].boot_instructions = Some(1_600_000_000);
         let recipe = Recipe {
             start: Start::FromIpsw("iPod_25.1.3.ipsw".into()),
@@ -3443,10 +3525,222 @@ mod tests {
         assert_eq!(c.footer_label(), "Save");
     }
 
+    /// **`Device::boot_shape` is written, survives the file, and `Settings::recipe_of` takes its
+    /// authority branch** — the three halves of GUI.md §12.3 / §20 item 6 that had no production
+    /// writer between them.
+    ///
+    /// `Settings::set_boot_shape` had callers only in test modules, so `commit` did half its job:
+    /// it cleared the denominator on a shape change and recorded nothing about the shape it moved
+    /// to. `recipe_of`'s first arm — *the recorded shape is the authority on what a device boots* —
+    /// was therefore unreachable in production, and **every** Edit re-derived the recipe from the
+    /// drive's install list instead.
+    ///
+    /// **The fixture is built so the two arms cannot agree by accident, which is the whole of what
+    /// makes the third assertion mean anything.** The drive records Apple's software and nothing
+    /// else, and the device is composed dual-boot on Rockbox's bootloader — so the fallback answers
+    /// `apple, apple` and the authority answers `rockbox, apple, rockbox`. The fallback is asserted
+    /// outright, off the same device with the shape stripped, rather than left to be assumed.
+    #[test]
+    fn a_composed_device_records_what_it_boots_and_reopens_on_it() {
+        let mut s = Settings::default();
+        // A drive in the library whose install list holds Apple's software alone. It is what
+        // `recipe_of`'s fallback reads, and it is deliberately not what this device boots.
+        let drive = s.file_disk("/drives/mine.img".into(), "mine");
+        s.disks[0].installed = vec![Os::Apple.label().to_string()];
+
+        let mut c = with_ipod();
+        c.set_start(Start::FromDisk {
+            name: drive,
+            fat_type: None,
+        });
+        c.set_os(Os::Apple, true);
+        c.set_os(Os::Rockbox, true);
+        c.set_name("Both of them");
+        let done = c.commit(&mut s).expect("an empty library");
+        assert_eq!(
+            done.shape.render(),
+            "rockbox, apple, rockbox",
+            "the fixture does not boot what this test is about"
+        );
+
+        // 1. It is recorded on the device. Without this nothing can vouch for the next
+        //    denominator, and `recipe_of` has no authority to take.
+        let d = s
+            .devices
+            .iter()
+            .find(|d| d.name == done.device)
+            .expect("the Composer filed no device");
+        assert_eq!(
+            d.boot_shape.as_deref(),
+            Some("rockbox, apple, rockbox"),
+            "the save recorded no shape"
+        );
+
+        // 2. It survives the round trip through the settings file.
+        let back = Settings::parse(&s.render());
+        let d = back
+            .devices
+            .iter()
+            .find(|d| d.name == done.device)
+            .expect("the device did not come back");
+        assert_eq!(d.boot_shape.as_deref(), Some("rockbox, apple, rockbox"));
+
+        // 3. And `recipe_of` answers with it rather than with the drive-derived guess.
+        let reopened = back.recipe_of(d);
+        assert_eq!(reopened.shape(), done.shape, "the Edit route re-derived the recipe");
+        assert_eq!(reopened.loader, Loader::Rockbox);
+        assert_eq!(reopened.oses, [Os::Apple, Os::Rockbox].into_iter().collect());
+        // The branch it overtook, spelled out on the same device: an assertion that passed because
+        // the two arms happened to agree would prove nothing about which one ran.
+        let mut shapeless = d.clone();
+        shapeless.boot_shape = None;
+        assert_eq!(
+            back.recipe_of(&shapeless).shape().render(),
+            "apple, apple",
+            "the fallback answers what the authority does, so nothing above distinguishes them"
+        );
+
+        // And the surface that consumes it opens on that recipe, as `Devices::editor` does.
+        let again = Composer::editing(&back, &done.device, reopened.clone()).expect("the device");
+        assert_eq!(again.recipe(), &reopened);
+        assert_eq!(
+            again.mode(),
+            &Mode::Editing {
+                device: done.device.clone()
+            }
+        );
+    }
+
+    /// **A device that recorded no shape loses its denominator once, and only once.**
+    ///
+    /// The number is a measurement of one cold boot and a prediction of the next only while the
+    /// device goes on booting the same thing. A device written before `Device::boot_shape` had a
+    /// writer — which, until this, was every device there has ever been — carries a number measured
+    /// on something nobody recorded, so there is nothing for it to be vouched for by.
+    /// `Settings::set_boot_shape` drops it, records the shape, and the save after that keeps it.
+    ///
+    /// **It is the half `Composer::shape_changed` cannot answer**, and asserting both here is what
+    /// stops the drop reading as a regression: the Composer's question is *did the shape move while
+    /// the page was open*, and it says `false` over exactly this device while the number goes.
+    #[test]
+    fn a_device_with_no_recorded_shape_drops_its_denominator_once() {
+        let mut s = library("My 5.5G");
+        s.devices[0].boot_instructions = Some(1_600_000_000);
+        assert_eq!(
+            s.devices[0].boot_shape, None,
+            "the fixture is not the state this is about"
+        );
+        let recipe = Recipe {
+            start: Start::FromIpsw("iPod_25.1.3.ipsw".into()),
+            loader: Loader::Apple,
+            oses: [Os::Apple].into_iter().collect(),
+        };
+        let mut c = Composer::editing(&s, "My 5.5G", recipe).expect("the device");
+        assert!(!c.shape_changed(), "nothing moved while the page was open");
+
+        let done = c.commit(&mut s).expect("save");
+        assert!(!done.shape_changed);
+        assert_eq!(s.devices[0].boot_shape.as_deref(), Some("apple, apple"));
+        assert_eq!(
+            s.devices[0].boot_instructions, None,
+            "a number measured on a system nobody recorded was kept and vouched for"
+        );
+
+        // Once. The next completed boot's measurement survives the save after it.
+        s.devices[0].boot_instructions = Some(1_600_000_000);
+        c.commit(&mut s).expect("save");
+        assert_eq!(
+            s.devices[0].boot_instructions,
+            Some(1_600_000_000),
+            "the drop repeated, so no device can ever keep a denominator"
+        );
+    }
+
+    /// **`Lock::Shared` draws *N devices are made of this iPod and will change with it*, and this
+    /// is the assertion that the sentence is true.**
+    ///
+    /// It was not. `commit` filed the edited ROM with `Settings::file_away`, which files by
+    /// **value** — an edited identity is a value nobody has filed, so a second entry appeared and
+    /// only the device on screen was repointed at it. The other N-1 went on naming the old entry,
+    /// holding the old iPod, having been told two rows above the control that they would change.
+    ///
+    /// The operator settled restate rather than fork, and `Settings::restate_firmware`'s own doc is
+    /// the argument: *editing one changes every device made of it, which is the point of composing
+    /// rather than copying, so refusing a shared edit would be the window contradicting the model.*
+    ///
+    /// **The entry count is asserted as well as the two references**, because repointing both
+    /// devices at a *copy* would satisfy every `nor_of` below while leaving the library holding two
+    /// entries for one iPod — which is the defect `restate_firmware` was written against.
+    #[test]
+    fn editing_a_shared_ipod_changes_every_device_made_of_it() {
+        let mut s = library("My 5.5G");
+        // A second device made of the same iPod. `as_device` resolves the reference by value, so
+        // this is one entry with two devices naming it rather than two entries.
+        s.remember_as("Spare");
+        let entry = s.devices[0].firmware.clone();
+        assert_eq!(s.devices[1].firmware, entry, "the fixture is not sharing anything");
+        let before = s.nor_of(&s.devices[1]).cloned().expect("the iPod resolves");
+
+        let recipe = Recipe {
+            start: Start::FromIpsw("iPod_25.1.3.ipsw".into()),
+            loader: Loader::Apple,
+            oses: [Os::Apple].into_iter().collect(),
+        };
+        let mut c = Composer::editing(&s, "My 5.5G", recipe).expect("the device");
+        // The window says so before the press, and this is the state that sentence describes.
+        assert_eq!(c.lock(Field::Colour, &s, false), Lock::Shared { devices: 2 });
+        assert_eq!(c.lock(Field::Colour, &s, false).presses(), 2);
+
+        c.set_model("A444").expect("the white 5.5G");
+        c.commit(&mut s).expect("save");
+
+        let now = c.rom().cloned().expect("an iPod");
+        assert_ne!(now, before, "the fixture edited nothing, so what follows proves nothing");
+        // The sentence's own claim first, because it is the one that was false: *every* device
+        // made of this iPod resolves to the iPod that was edited.
+        for d in &s.devices {
+            assert_eq!(
+                s.nor_of(d),
+                Some(&now),
+                "{} was left on the iPod nobody edited",
+                d.name
+            );
+        }
+        // And one iPod, not two — repointing both devices at a **copy** would satisfy the loop
+        // above while leaving the library holding two entries for one thing.
+        assert_eq!(
+            s.resources
+                .iter()
+                .filter(|i| matches!(i.what, Resource::Firmware(_)))
+                .count(),
+            1,
+            "the edit forked the iPod: the shared entry is still there beside a copy"
+        );
+        assert_eq!(
+            s.devices[0].firmware, s.devices[1].firmware,
+            "one iPod, filed under two names"
+        );
+        // And the entry is re-derived through the spelling the mint used, so an iPod that is now a
+        // white 5.5G is not still filed — and drawn in the picker — as a black one.
+        assert_eq!(s.devices[0].firmware, settings::suggest_nor_name(&now));
+    }
+
     /// A rename moves the device rather than leaving two, and it keeps what the old one knew.
+    ///
+    /// **`Settings::rename_device` is what moves it**, and *keeps what the old one knew* is the
+    /// whole of why it is that function and not `forget` plus `remember_as`. The shape is recorded
+    /// for the same reason as in the test above: the denominator this asserts survives a rename is
+    /// one the device can vouch for.
     #[test]
     fn save_renames_without_leaving_two_devices() {
         let mut s = library("My 5.5G");
+        assert!(s.set_boot_shape(
+            "My 5.5G",
+            &compose::BootShape {
+                loader: Loader::Apple,
+                oses: [Os::Apple].into_iter().collect(),
+            }
+        ));
         s.devices[0].boot_instructions = Some(1_600_000_000);
         s.devices[0].parked_at = Some(1_700_000_000);
         let recipe = Recipe {

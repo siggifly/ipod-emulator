@@ -54,26 +54,32 @@
 // rendering and was drawn as a value, indented past a blank label column at `label-size`.
 // `parts.slint` had split the two since it was written. One struct, one rendering, on both pages.
 //
-// **2. `Settings::rename_device`, `set_boot_shape` and `restate_firmware` cannot get a production
-// caller here.** All three were assigned to this page, and all three belong to `Composer::commit`:
+// **2. `Settings::rename_device`, `set_boot_shape` and `restate_firmware` could not get a
+// production caller here — and all three have one now, in `Composer::commit`, which is where this
+// note said they belonged.** It is kept because the reasoning is what put them there:
 //
 //   - a rename needs typed text, and `devices.slint`'s only route into a row is
-//     `row-action(int, int)`, which carries no string. §11.2's level ③ is where a device is named.
-//     `commit` renames by assigning `d.name` in place rather than calling `rename_device`, so its
-//     refusals — an empty name, a name a different device already holds — are not asked.
-//   - `Device::boot_shape` is written by nothing in the program. `commit` clears
-//     `boot_instructions` when the shape moved and never records the shape it moved to, which is
-//     the half `set_boot_shape` exists to do atomically. The consequence lands **on this page**:
-//     `Settings::recipe_of` treats `boot_shape` as the authority on what a device boots, so the
-//     Edit route below always takes the fallback and re-derives the recipe from the drive's
-//     install list. A device composed as Rockbox-only whose drive records no install re-opens as
-//     Apple-by-default. `the_edit_route_carries_the_recipe_the_model_resolves` measures both arms.
-//   - `commit` files an edited iPod with `file_away`, which mints a **second** resource and
-//     repoints one device. `restate_firmware` is the one that replaces the entry and repoints
-//     every device naming it. The operator settled that shared iPod edits restate rather than
-//     fork; what this page owes that decision is the sentence before the press, and `Edit…` wears
-//     it — `N devices are made of this iPod`, counted with `Settings::devices_using_resource`, two
-//     presses to arm.
+//     `row-action(int, int)`, which carries no string. §11.2's level ③ is where a device is named,
+//     so `commit` is the rename — and it calls `rename_device` rather than assigning `d.name`, so
+//     the refusals are asked, `current` moves with the device, and `Commit.renamed` reports
+//     nothing when the device went out from under the page instead of a rename that did not
+//     happen. **There is no `Rename` control anywhere in this window**: `RowAction::Rename` has a
+//     label and two *exhaustive* arms that refuse it, and the two contradict each other —
+//     `parts.rs:678` calls it *a device's control, not a part's* and `row_action` below calls it
+//     *not one of a device's controls*. Nothing builds the row on either page.
+//   - `Device::boot_shape` is written by `commit` now, through `set_boot_shape`, which owns the
+//     same-shape-keep-the-number rule whole rather than half of it. The consequence lands **on
+//     this page**: `Settings::recipe_of` treats `boot_shape` as the authority on what a device
+//     boots, so the Edit route below opens a device on what it was composed as instead of
+//     re-deriving it from the drive's install list. A device composed as Rockbox-only whose drive
+//     records no install used to re-open as Apple-by-default.
+//     `the_edit_route_carries_the_recipe_the_model_resolves` measures both arms.
+//   - `commit` **restates** an edited iPod through `restate_firmware`, which replaces the entry and
+//     repoints every device naming it, rather than minting a second resource with `file_away` and
+//     repointing one. The operator settled that shared iPod edits restate rather than fork; what
+//     this page owes that decision is the sentence before the press, and `Edit…` wears it — `N
+//     devices are made of this iPod`, counted with `Settings::devices_using_resource`, two presses
+//     to arm.
 //
 // **3. §7.2's `Start` rule has no producer anywhere, and it cannot be given one in `DeviceRow`.**
 // *"`Start` — disabled while a machine exists, with the machine-rule reason `My 5.5G is running.
@@ -1234,10 +1240,12 @@ mod tests {
     /// `Composer::new()` — the mode is then `New` and the recipe is `nothing chosen`.
     ///
     /// **And the second half is the measurement that matters more.** `Settings::recipe_of` treats
-    /// `Device::boot_shape` as the authority on what a device boots; **nothing in the program
-    /// writes that field**, so today the first arm is unreachable in production and every edit
-    /// re-derives the recipe from the drive's install list. Both arms are asserted so that the day
-    /// `Composer::commit` starts recording a shape, this says whether the Edit route honoured it.
+    /// `Device::boot_shape` as the authority on what a device boots, and `Composer::commit` records
+    /// it — so both arms are reachable in production and both are asserted here. The fixture's
+    /// device takes the fallback because `library` builds it by hand and records no shape, which is
+    /// also every device written before that writer existed;
+    /// `composer::tests::a_composed_device_records_what_it_boots_and_reopens_on_it` is the same
+    /// pair measured from the writing end.
     #[test]
     fn the_edit_route_carries_the_recipe_the_model_resolves() {
         use eapp_loader::compose::{BootShape, Loader, Os, Start};
@@ -1267,8 +1275,8 @@ mod tests {
         );
         assert_eq!(c.recipe().oses, [Os::Apple, Os::Rockbox].into_iter().collect());
 
-        // The branch no production path can reach, exercised through the model method that would
-        // reach it. `set_boot_shape` has no caller outside a test module in either crate.
+        // The other branch, armed the way `Composer::commit` arms it — through `set_boot_shape`,
+        // which is the only writer there is.
         let shape = BootShape {
             loader: Loader::Apple,
             oses: [Os::Apple].into_iter().collect(),
