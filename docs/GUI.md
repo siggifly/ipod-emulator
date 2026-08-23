@@ -3495,6 +3495,16 @@ has already been had.
   document's own principle 5. §7.4.
 - **`Copy the command line` put the identifiers §11.2 masks onto the clipboard**, and the masked
   validation sentence quoted the offending character back. §11.2, §12.9.
+- **Two of level ①'s safety affordances were computed on every frame and drawn by nothing.**
+  `Make one` over an existing iPod was **one unconfirmed press** that discarded the identity on
+  screen; and the OUI warning this section says in so many words the UI *must not flatten* was
+  flattened. Both because the window read the level's rows one field at a time and never mentioned
+  two of them — the producer was right, the markup was ready, and no instrument in the tree could
+  see the gap. Level ① is also the page nothing had ever taken a picture of. §11.2.
+- **A locked picker reserved §5's 34 px and said nothing in it.** `Read from the dump; a device's
+  identity is the ROM's, not ours.` was written into the slot a `Pressable` draws only while it is
+  *enabled*, two rows above a `Field` drawing the same sentence correctly — §9.4's own rule, broken
+  on the page it was written for, and visible the first time level ① was photographed. §11.2, §9.4.
 - **Parking had no budget, no listing and no eviction**, and the park that fails for lack of space
   fails when there is no window left to say so in. §11.4's sixth group, §12.4.
 - **`work_on_copy`'s three sentences were two rules fused**, and the prose implied the opposite of

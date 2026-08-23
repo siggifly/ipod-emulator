@@ -197,7 +197,7 @@ geometry! {
     /// `#08080a` glass; one `opacity` cannot honour both, and the sentence with a number behind it
     /// wins. So the markup puts this on the shell and declares the glass after it.
     ///
-    /// **Nothing in markup may type this number** — [`GEOMETRY_PROPS`] does not list `opacity`,
+    /// **Nothing in markup may type this number** — `GEOMETRY_PROPS` does not list `opacity`,
     /// because four cosmetic opacities in `ipod.slint` and one in `primitives.slint` are literals
     /// that belong where they are; `no_opacity_literal_outside_the_cosmetic_set` is the narrower
     /// sweep that keeps 0.45 out instead.

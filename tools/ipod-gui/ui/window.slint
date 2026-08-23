@@ -270,6 +270,9 @@ export component MainWindow inherits Window {
     in property <int> composer-open-field: -1;
     in property <[RefusalRow]> composer-refusals;
     in property <string> composer-title-auth;
+    // §11.2's OUI warning. `Which::warning`, computed on every frame since the Composer shipped and
+    // drawn by nothing until it had a property to reach.
+    in property <string> composer-warning;
     in property <FixRow> composer-copy-command;
     in property <string> composer-no-ipod;
     // Level ③'s one `Field`. Separate from `composer-fields` because all four level pages are
@@ -668,6 +671,7 @@ export component MainWindow inherits Window {
                 composer-open-field: root.composer-open-field;
                 composer-refusals: root.composer-refusals;
                 composer-title-auth: root.composer-title-auth;
+                composer-warning: root.composer-warning;
                 composer-copy-command: root.composer-copy-command;
                 composer-no-ipod: root.composer-no-ipod;
                 composer-name-field: root.composer-name-field;

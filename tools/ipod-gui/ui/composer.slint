@@ -80,6 +80,13 @@ component PickerRow inherits VerticalLayout {
         // so **before** it is pressed. That is what `note` carries, and it is why an unlocked
         // picker is the same 78 px a locked one is.
         consequence: root.p.note;
+        // **`composer::Lock::presses`, and it reached nothing until now.** A `Lock::Shared` says
+        // *N devices are made of this iPod and will change with it* in the line above and then
+        // acted on the first press, which is a warning wearing the shape of a confirmation.
+        // `Lock::locked` is false for `Shared` on purpose — the model's rule is that the named
+        // resource wins, so this is a consequence and not a wall — and a consequence is exactly
+        // what two presses are for.
+        presses: root.p.presses;
         chevron: root.p.chevron;
 
         activated => {
@@ -118,6 +125,12 @@ component PickerRow inherits VerticalLayout {
                 escape-hatch: o.escape-hatch;
                 machine-rule: o.machine-rule;
                 selected: o.chosen;
+                // §11.2's one irreversible act. `Make one` over an existing iPod is two presses and
+                // names the seed it is about to spend, because a seed is the whole of what makes an
+                // identity come back and the one on screen is not recoverable from anything else on
+                // this page. `Composer::make_one_row` answers both; this draws what it answered.
+                presses: o.presses;
+                consequence: o.consequence;
                 activated => {
                     root.pick(root.p.field, o.id);
                 }
@@ -591,6 +604,9 @@ export component WhichIpodPage inherits Rectangle {
     // -1 when no picker is open. One at a time, always.
     in property <int> open-field: -1;
     in property <string> title-auth;
+    // §11.2's OUI warning — `Identity::oui_warning`, by way of `Which::warning`. Empty unless the
+    // identity was READ out of a file and does not start with Apple's FireWire OUI.
+    in property <string> warning;
     in property <FixRow> copy-command;
     in property <string> no-ipod;
 
@@ -667,6 +683,39 @@ export component WhichIpodPage inherits Rectangle {
                     gained-focus => {
                         scroll.ensure-visible(self.absolute-position.y, self.height);
                     }
+                }
+
+                // §11.2: **three behaviours in `identity.rs` differ and the UI must not flatten
+                // them.** A typed non-Apple OUI is *refused* — `Identity::check_guid`, before it is
+                // ever an `Identity`. One READ out of a real file *warns*, because a dump is
+                // evidence and a typed field is a claim, and the strongest evidence there is that a
+                // parse went wrong is worth more beside the value than on a stderr this window
+                // cannot see. It was computed on every frame and drawn by nothing.
+                //
+                // **Under the two identity Fields and above `TitleAuth`**, because it is a fact
+                // about the GUID two rows up rather than about what may be authorised.
+                //
+                // `if`, not `visible` (§16.3): what makes this appear or vanish is choosing a
+                // different iPod, and that rewrites every row on this page anyway — so there is
+                // nothing above it holding still for 34 px of reserved nothing to protect.
+                // **A bare `Text`, and a wrapper was tried and measured wrong.** Wrapping this in
+                // a `VerticalLayout { padding-top: Metric.s2; padding-bottom: Metric.s3 }` — the
+                // pair `parts.slint:189` and `devices.slint:240` use to set a paragraph apart — put
+                // the warning's third line straight through `TitleAuth`'s sentence in
+                // `composer-ipod-dumped.png`: a `wrap: word-wrap` `Text` inside a nested layout
+                // reports one line's `preferred-height` to the layout above it, so the box was
+                // sized for one line and three were drawn. The parent measures a bare child
+                // correctly, which is why every other paragraph on these pages is one.
+                //
+                // What separates the two paragraphs is therefore `Ink.warn` against `Ink.fg-dim`,
+                // which is the difference that matters anyway: one is evidence about the value two
+                // rows up, the other is what may be authorised against it.
+                if root.warning != "": Text {
+                    text: root.warning;
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-body;
+                    color: Ink.warn;
+                    wrap: word-wrap;
                 }
 
                 // §11.2: **`TitleAuth` is said where the decision is made, not in a footnote.** A

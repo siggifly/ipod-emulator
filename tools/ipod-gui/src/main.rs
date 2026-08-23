@@ -3173,6 +3173,10 @@ fn to_pick(p: &composer::Pick) -> PickRow {
         machine_rule: p.machine_rule,
         chevron: true,
         open: p.open,
+        // `composer::Lock::presses`. Two while N devices are made of this iPod — the same rule
+        // `p.note` states in the line under the row, arriving from the same `Lock` so the sentence
+        // and the count cannot disagree.
+        presses: i32::from(p.presses),
     }
 }
 
@@ -3186,6 +3190,8 @@ fn to_choice(c: &composer::Choice) -> OptionRow {
         reason: c.reason.clone().into(),
         escape_hatch: c.escape.clone().into(),
         machine_rule: c.machine_rule,
+        presses: i32::from(c.presses),
+        consequence: c.consequence.clone().into(),
     }
 }
 
@@ -3269,10 +3275,57 @@ fn push_composer(
     plan: &Rc<VecModel<PlanRow>>,
     refusals: &Rc<VecModel<RefusalRow>>,
 ) {
-    let root = c.root(settings, building);
-    let which = c.which(settings, building, clipboard);
-    let runs = c.runs(settings, building);
-    let named = c.named(settings, building);
+    // **Every bundle is destructured by name, exhaustively, with no `..`.**
+    //
+    // This function read `which.copy_command` and six of its neighbours one field at a time and
+    // never touched `make_one` or `warning` — a two-press confirmation before an identity is
+    // destroyed, and §11.2's OUI warning, both computed on every frame and both reaching no pixel.
+    // Nothing could have told anybody: the producer compiled, the flattener compiled, the page
+    // drew, and the two fields were simply never mentioned.
+    //
+    // A `let Root { .. } = ` with every name written out closes that from both ends. A field added
+    // to any of these four structs stops this crate compiling until somebody names it here; a field
+    // named and then not used is `unused_variables`, **measured** — delete the
+    // `set_composer_warning` line below and `cargo clippy --release -p ipod-gui --all-targets --
+    // -D warnings` answers `error: unused variable: warning` at this block, twice, once per
+    // target. `settings_page::View` buys the same guarantee with a test that counts markup
+    // declarations; this is the compile-time half of it, and it costs four `let`s.
+    let composer::Root {
+        which: root_which,
+        runs: root_runs,
+        named: root_named,
+        region,
+        // `plan_steps`, because `plan` is this function's own `VecModel<PlanRow>` parameter. The
+        // rename is the destructure earning its keep on its first day: two things called `plan`
+        // was a mistake the compiler caught, and it is the same class of mistake as a field nobody
+        // mentions — except that one had nothing to catch it.
+        plan: plan_steps,
+        cost,
+        create,
+    } = c.root(settings, building);
+    let composer::Which {
+        ipod,
+        model,
+        colour,
+        serial,
+        guid,
+        title_auth,
+        warning,
+        copy_command,
+    } = c.which(settings, building, clipboard);
+    let composer::Runs {
+        disk,
+        from,
+        systems,
+        loader,
+        refusals: runs_refusals,
+        disabled_reason,
+    } = c.runs(settings, building);
+    let composer::Named {
+        name,
+        stem,
+        taken,
+    } = c.named(settings, building);
 
     window.set_composer_title(
         match c.mode() {
@@ -3281,36 +3334,41 @@ fn push_composer(
         }
         .into(),
     );
-    window.set_composer_which_value(root.which.value.clone().into());
-    window.set_composer_runs_value(root.runs.value.clone().into());
-    window.set_composer_named_value(root.named.value.clone().into());
-    window.set_composer_which_enabled(root.which.enabled);
-    window.set_composer_runs_enabled(root.runs.enabled);
-    window.set_composer_named_enabled(root.named.enabled);
-    window.set_composer_which_reason(root.which.reason.clone().into());
-    window.set_composer_runs_reason(root.runs.reason.clone().into());
-    window.set_composer_named_reason(root.named.reason.clone().into());
+    window.set_composer_which_value(root_which.value.clone().into());
+    window.set_composer_runs_value(root_runs.value.clone().into());
+    window.set_composer_named_value(root_named.value.clone().into());
+    window.set_composer_which_enabled(root_which.enabled);
+    window.set_composer_runs_enabled(root_runs.enabled);
+    window.set_composer_named_enabled(root_named.enabled);
+    window.set_composer_which_reason(root_which.reason.clone().into());
+    window.set_composer_runs_reason(root_runs.reason.clone().into());
+    window.set_composer_named_reason(root_named.reason.clone().into());
 
     // §11.3's four renderings. The **variant** decides the colour; `Verdict` gains none.
-    window.set_composer_region_text(root.region.text().into());
-    window.set_composer_region_emphatic(root.region.emphatic());
-    window.set_composer_create(to_fix(&root.create));
-    window.set_composer_copy_command(to_fix(&which.copy_command));
-    window.set_composer_title_auth(which.title_auth.clone().into());
-    window.set_composer_no_ipod(runs.disabled_reason.clone().into());
-    window.set_composer_runs_disabled(runs.disabled_reason.clone().into());
-    window.set_composer_stem(named.stem.clone().into());
-    window.set_composer_taken(named.taken.clone().into());
-    window.set_composer_name_field(to_field(&named.name));
+    window.set_composer_region_text(region.text().into());
+    window.set_composer_region_emphatic(region.emphatic());
+    window.set_composer_create(to_fix(&create));
+    window.set_composer_copy_command(to_fix(&copy_command));
+    window.set_composer_title_auth(title_auth.into());
+    // §11.2's OUI warning. `Identity::oui_warning` has answered this since the identity readers
+    // stopped printing to stderr, and `Which::warning` has carried the answer to this function on
+    // every frame — with nothing at the other end of it. The one behaviour §11.2 says out loud that
+    // the UI must not flatten was the one behaviour flattened.
+    window.set_composer_warning(warning.into());
+    window.set_composer_no_ipod(disabled_reason.clone().into());
+    window.set_composer_runs_disabled(disabled_reason.into());
+    window.set_composer_stem(stem.into());
+    window.set_composer_taken(taken.into());
+    window.set_composer_name_field(to_field(&name));
 
     // **The same function the Work page's ledger goes through** — one bill, two surfaces.
-    let (download, disk, warn) = ledger_lines(Some(root.cost), space);
+    let (download, on_disk, over) = ledger_lines(Some(cost), space);
     window.set_composer_ledger_download(download.into());
-    window.set_composer_ledger_disk(disk.into());
-    window.set_composer_ledger_warn(warn);
+    window.set_composer_ledger_disk(on_disk.into());
+    window.set_composer_ledger_warn(over);
 
     // The root's own `Fix`, which is the verdict's when it has one.
-    match &root.region {
+    match &region {
         composer::Region::No { why, fix } => {
             window.set_composer_refusal_why(why.clone().into());
             window.set_composer_refusal_open(true);
@@ -3341,28 +3399,24 @@ fn push_composer(
     window.set_composer_open_field(c.open().map_or(-1, |f| f.as_i32()));
 
     let want_picks: Vec<PickRow> = match c.level() {
-        composer::Level::WhichIpod => [&which.ipod, &which.model, &which.colour]
-            .into_iter()
-            .map(to_pick)
-            .collect(),
-        composer::Level::WhatItRuns => [&runs.disk, &runs.from, &runs.loader]
-            .into_iter()
-            .map(to_pick)
-            .collect(),
+        composer::Level::WhichIpod => [&ipod, &model, &colour].into_iter().map(to_pick).collect(),
+        composer::Level::WhatItRuns => [&disk, &from, &loader].into_iter().map(to_pick).collect(),
         _ => Vec::new(),
     };
     let want_fields: Vec<FieldRow> = match c.level() {
-        composer::Level::WhichIpod => vec![to_field(&which.serial), to_field(&which.guid)],
-        composer::Level::NameIt => vec![to_field(&named.name)],
+        composer::Level::WhichIpod => vec![to_field(&serial), to_field(&guid)],
+        composer::Level::NameIt => vec![to_field(&name)],
         _ => Vec::new(),
     };
     let want_ticks: Vec<TickRow> = match c.level() {
-        composer::Level::WhatItRuns => runs.systems.iter().map(to_tick).collect(),
+        composer::Level::WhatItRuns => systems.iter().map(to_tick).collect(),
         _ => Vec::new(),
     };
+    // **The mint's two presses ride here**, on option 0 of the iPod picker — the row
+    // `Composer::choose` answers by minting. See `Composer::ipod_options`.
     let want_opts: Vec<OptionRow> = c.options(settings).iter().map(to_choice).collect();
-    let want_plan: Vec<PlanRow> = root.plan.iter().map(to_plan).collect();
-    let want_refusals: Vec<RefusalRow> = runs.refusals.iter().map(to_refusal).collect();
+    let want_plan: Vec<PlanRow> = plan_steps.iter().map(to_plan).collect();
+    let want_refusals: Vec<RefusalRow> = runs_refusals.iter().map(to_refusal).collect();
 
     in_place(picks, &want_picks);
     in_place(fields, &want_fields);
@@ -6824,6 +6878,16 @@ pub(crate) mod tests {
     /// is that state.
     struct Furniture {
         settings: Settings,
+        /// §11.2's one recipe, when this fixture is standing on a Composer page. `None` on every
+        /// other page, which is what `wire` holds until somebody opens one.
+        composer: RefCell<Option<composer::Composer>>,
+        /// Its six retained models, for the same reason `wire` retains six (§16.9).
+        c_picks: Rc<VecModel<PickRow>>,
+        c_fields: Rc<VecModel<FieldRow>>,
+        c_ticks: Rc<VecModel<TickRow>>,
+        c_opts: Rc<VecModel<OptionRow>>,
+        c_plan: Rc<VecModel<PlanRow>>,
+        c_refusals: Rc<VecModel<RefusalRow>>,
         parts: RefCell<parts::Parts>,
         p_groups: Rc<VecModel<GroupRow>>,
         p_rows: Rc<VecModel<PartRow>>,
@@ -6844,6 +6908,13 @@ pub(crate) mod tests {
             let first = settings.devices.is_empty();
             Furniture {
                 settings,
+                composer: RefCell::new(None),
+                c_picks: Rc::new(VecModel::default()),
+                c_fields: Rc::new(VecModel::default()),
+                c_ticks: Rc::new(VecModel::default()),
+                c_opts: Rc::new(VecModel::default()),
+                c_plan: Rc::new(VecModel::default()),
+                c_refusals: Rc::new(VecModel::default()),
                 parts: RefCell::new(parts::Parts::new()),
                 p_groups: Rc::new(VecModel::default()),
                 p_rows: Rc::new(VecModel::default()),
@@ -6878,7 +6949,7 @@ pub(crate) mod tests {
         /// the drawer.
         ///
         /// **The three page pushes are gated exactly as `wire`'s three repaints are** — see
-        /// [`on_screen`]. That is not a saving here; it is the difference between a picture of the
+        /// [`on_screen`]. The Composer's is not, for the reason written beside it. That is not a saving here; it is the difference between a picture of the
         /// page the drawer is showing and a picture of a page drawn out of a library it is not.
         ///
         /// **The retained models are set on every push rather than once**, which §16.9 forbids in
@@ -6921,7 +6992,171 @@ pub(crate) mod tests {
             if on_screen(at, nav::Page::Settings) {
                 push_settings(w, &self.prefs, &self.settings, caps());
             }
+
+            // **The Composer's six models are set every push, and pushed through the shipped
+            // producer.** `wire` sets them once at startup because §16.9 is about focus surviving
+            // a frame; a shot is one frame, and two libraries cannot share one model object.
+            //
+            // **Ungated, unlike the three above**, and that is faithful rather than lazy: `wire`
+            // puts `push_composer` in the `repaint` registry, which runs on every change wherever
+            // the drawer is standing. What decides whether it draws anything is `Composer::level`,
+            // inside the function. `None` here is the state the window is in until somebody opens
+            // the page, so a fixture that never composed pushes nothing.
+            //
+            // `space: None` — the ledger's *free* half asks the filesystem, and a picture of the
+            // operator's own free space is not a picture of this page.
+            w.set_composer_picks(ModelRc::from(self.c_picks.clone()));
+            w.set_composer_fields(ModelRc::from(self.c_fields.clone()));
+            w.set_composer_ticks(ModelRc::from(self.c_ticks.clone()));
+            w.set_composer_options(ModelRc::from(self.c_opts.clone()));
+            w.set_composer_plan(ModelRc::from(self.c_plan.clone()));
+            w.set_composer_refusals(ModelRc::from(self.c_refusals.clone()));
+            if let Some(c) = self.composer.borrow().as_ref() {
+                push_composer(
+                    w,
+                    c,
+                    &self.settings,
+                    false,
+                    caps().clipboard.into(),
+                    None,
+                    &self.c_picks,
+                    &self.c_fields,
+                    &self.c_ticks,
+                    &self.c_opts,
+                    &self.c_plan,
+                    &self.c_refusals,
+                );
+            }
         }
+
+        /// Stand §11.2's Composer at level ① over the iPod filed as `ipod`.
+        ///
+        /// **Through `Composer::choose`, never by writing the field.** `Composer::rom` is private
+        /// and no `&mut` is ever handed out — `wire` cannot reach it either — so a fixture that
+        /// assigned it would be a fixture in a shape the program cannot produce, which is the same
+        /// defect as a gate that cannot fail.
+        ///
+        /// The index comes out of the picker's own option list rather than being typed: option 0
+        /// is `Make one`, and a literal `1` here would be a second copy of that fact, which is
+        /// exactly the ordinal drift `the_copy_command_control_does_not_mint_a_new_ipod` exists
+        /// for.
+        fn compose_over(&self, ipod: &str, open_the_picker: bool) {
+            let mut c = composer::Composer::new();
+            let at = c
+                .options_of(&self.settings, composer::Field::Ipod)
+                .iter()
+                .position(|o| o.label == ipod)
+                .unwrap_or_else(|| panic!("no iPod is filed as {ipod:?}"));
+            c.choose(&self.settings, composer::Field::Ipod, at)
+                .expect("a filed iPod can be chosen");
+            self.stand(c, open_the_picker);
+        }
+
+        /// The same page with **nothing chosen** — the state `+ New device` lands in, and the one
+        /// where `Make one` costs a single press because there is no identity to spend.
+        fn compose_nothing(&self, open_the_picker: bool) {
+            self.stand(composer::Composer::new(), open_the_picker);
+        }
+
+        fn stand(&self, mut c: composer::Composer, open_the_picker: bool) {
+            // `set_level` clears the open picker, so it goes first or the picker never opens.
+            c.set_level(composer::Level::WhichIpod);
+            if open_the_picker {
+                c.set_open(Some(composer::Field::Ipod));
+            }
+            *self.composer.borrow_mut() = Some(c);
+        }
+    }
+
+    /// The name a library filed its synthesised iPod under.
+    ///
+    /// **Asked of the library rather than rebuilt from a `Source`**, so a fixture and a test cannot
+    /// come to spell one name two ways — which is how a `position()` lookup finds nothing and the
+    /// test that depends on it reports an absence it could not observe.
+    fn the_synthesised_ipod(s: &Settings) -> String {
+        use eapp_loader::settings::Resource;
+        s.resources
+            .iter()
+            .find(|it| {
+                matches!(
+                    &it.what,
+                    Resource::Firmware(eapp_loader::nor::Source::Synthetic { .. })
+                )
+            })
+            .map(|it| it.name.clone())
+            .expect("this library holds a synthesised iPod")
+    }
+
+    /// A **real** NOR dump, with an identity in it and a FireWire OUI that is not Apple's.
+    ///
+    /// `nor::synthesise` writes the block `Identity::from_nor` reads, so this file parses to a
+    /// `Source::RealDevice` — which is the one source §11.2 says *warns* rather than refuses: a
+    /// dump is evidence and a typed field is a claim. `a_furnished_library`'s own `nor-a146.bin` is
+    /// a megabyte of zeros, which has no `SysCfg` at all and therefore no identity to warn about,
+    /// so the warning path had no fixture that could reach it.
+    ///
+    /// **Both values are invented and both are already this repository's own invented values** —
+    /// `001B63` is the foreign OUI and `AB1234XYZQR` the serial that
+    /// `a_typed_non_apple_oui_is_refused_and_a_read_one_warns` uses. `AGENTS.md` §2: no real
+    /// serial, GUID or name reaches a tracked file, and the way not to is to reuse the ones the
+    /// tree already invented rather than to invent a new one that has to be checked.
+    fn a_dump_that_is_not_apples(at: &std::path::Path) -> std::path::PathBuf {
+        use eapp_loader::identity::{Identity, Model, Source};
+
+        let m = Model::lookup("MA146").expect("the reference 5G");
+        let spec = eapp_loader::nor::Spec::new(
+            m,
+            Identity {
+                serial: Some("AB1234XYZQR".into()),
+                guid: 0x001B_6300_ABCD_EF01,
+                source: Source::RealDevice,
+            },
+        );
+        let p = at.join("foreign-oui.rom");
+        std::fs::write(&p, eapp_loader::nor::synthesise(&spec)).expect("a fabricated dump");
+        p
+    }
+
+    /// A library holding exactly that dump, and the name it is filed under.
+    fn a_library_with_a_foreign_dump(at: &std::path::Path) -> (Settings, String) {
+        use eapp_loader::settings::{self, Provenance, Resource};
+
+        let mut s = Settings::default();
+        let dump = eapp_loader::nor::Source::File(a_dump_that_is_not_apples(at));
+        let name = settings::suggest_nor_name(&dump);
+        s.file_away(Resource::Firmware(dump), &name, Some(Provenance::Dumped));
+        (s, name)
+    }
+
+    /// A library where **two devices are made of one iPod**, which is `composer::Lock::Shared`.
+    ///
+    /// `remember_as` files the live NOR under its suggested name and points the device at it, so
+    /// calling it twice is how a person ends up with two devices sharing one identity — and it is
+    /// the only shape that makes `Composer::devices_sharing` answer more than one.
+    fn a_library_with_a_shared_ipod(at: &std::path::Path) -> (Settings, String) {
+        use eapp_loader::settings::{self, Resource};
+
+        let mut s = Settings::default();
+        let synth = eapp_loader::nor::Source::Synthetic {
+            model: eapp_loader::nor::DEFAULT_MODEL.into(),
+            seed: 0x5e_5510,
+            serial: None,
+            guid: None,
+            splash: None,
+        };
+        let name = settings::suggest_nor_name(&synth);
+        s.file_away(Resource::Firmware(synth.clone()), &name, None);
+
+        let stem = settings::suggest_disk_stem(&synth);
+        let image = at.join(format!("{stem}.img"));
+        std::fs::write(&image, [0u8; 64]).expect("a fabricated drive");
+        s.file_disk(image.clone(), &stem);
+
+        s.nor = synth;
+        s.disk = Some(image);
+        s.remember_as("The one in the drawer");
+        s.remember_as("The one in the car");
+        (s, name)
     }
 
     /// Where in the drawer a page is drawn, as a [`nav::Stack`] standing there.
@@ -6929,12 +7164,31 @@ pub(crate) mod tests {
     /// `Stack::go` refuses to jump a level on purpose, so a page is reachable only at the depth
     /// [`nav::Page::slot`] draws it at — which is why every caller here names the page and lets
     /// this find the level rather than typing one.
+    ///
+    /// **And a page deeper than 1 is reachable only by standing on the ones above it**, which is
+    /// the navigation `wire` does, one `›` at a time: `go` clamps to `depth() + 1` and then lands
+    /// on the menu when the clamp took it off its own slot. §11.2's three levels are the whole of
+    /// the tree that is deeper than one — entered from the Devices page, through the Composer's
+    /// root — so the walk is those two and no more. A `go(ComposerIpod, 3)` from depth 0 returns a
+    /// stack standing on the **menu**, and a shot taken through it would be a picture of the menu
+    /// with a composer's name on the file.
     fn a_stack(page: nav::Page) -> nav::Stack {
         let mut at = nav::Stack::new();
         let slot = page
             .slot()
             .unwrap_or_else(|| panic!("nothing draws {page:?}, so there is no picture of it"));
+        for above in [nav::Page::Devices, nav::Page::Composer] {
+            let d = above.slot().expect("both of those are drawn");
+            if d < slot {
+                at.go(above, d);
+            }
+        }
         at.go(page, slot);
+        assert_eq!(
+            (at.page(), at.depth()),
+            (page, slot),
+            "the walk to {page:?} did not arrive; `Stack::go` landed on the menu"
+        );
         at
     }
 
@@ -7067,11 +7321,18 @@ pub(crate) mod tests {
     /// `_out/gui/*.png` is seven pictures of the program, taken without a window ever existing and
     /// without an operator's focus being stolen. That was the whole point.
     ///
-    /// **Seven, because Parts is shot twice.** `parts-empty.png` is §9.1's answer to a library with
-    /// nothing in it — six headings, six counts of `0`, six sentences saying what belongs there and
-    /// the verbs that would fill it — and `parts.png` is the same page over [`a_furnished_library`],
-    /// which is the one that proves the repeaters run. Neither is the other's placeholder; a page
-    /// that only ever draws the empty state has never been seen working.
+    /// **Nine, because two pages are shot twice.** `parts-empty.png` is §9.1's answer to a library
+    /// with nothing in it — six headings, six counts of `0`, six sentences saying what belongs there
+    /// and the verbs that would fill it — and `parts.png` is the same page over
+    /// [`a_furnished_library`], which is the one that proves the repeaters run. Neither is the
+    /// other's placeholder; a page that only ever draws the empty state has never been seen working.
+    ///
+    /// **And §11.2's level ① was shot by nothing at all until this commit**, which is the whole
+    /// reason two of its fields could be computed on every frame and drawn by none. It is shot over
+    /// a dump — §11.2's OUI warning, and `Make one` costing two presses to leave a real identity —
+    /// and over an iPod two devices are made of, where the Model and Colour pickers cost two
+    /// because pressing one changes both devices. The two states are mutually exclusive: `Lock`'s
+    /// precedence puts `Dump` above `Shared`, so no single library can show both.
     ///
     /// **What it asserts about the pixels, and why each one can go red:**
     ///
@@ -7113,9 +7374,22 @@ pub(crate) mod tests {
         full.open_the_first_device();
         let empty = Furniture::new(Settings::default());
 
+        // §11.2's level ①, twice, because the two things it has to say cannot both be true of one
+        // iPod. **A dump warns**: `Lock::Dump` locks Model / Colour / Serial / GUID and the OUI
+        // warning is `Some` only for an identity that was READ. **A shared synthesised iPod does
+        // not lock**: `Lock`'s precedence is `Building > Dump > Shared > Open`, so a dump used by
+        // two devices reports `Dump` and the shared state is never on screen. Neither picture is
+        // the other's placeholder.
+        let (dumped_lib, dumped_ipod) = a_library_with_a_foreign_dump(&temp_dir("dumped"));
+        let dumped = Furniture::new(dumped_lib);
+        dumped.compose_over(&dumped_ipod, true);
+        let (shared_lib, shared_ipod) = a_library_with_a_shared_ipod(&temp_dir("shared"));
+        let shared = Furniture::new(shared_lib);
+        shared.compose_over(&shared_ipod, false);
+
         // `None` is the bench — the drawer shut. Every other entry names a page, at the level
         // `Page::slot` says draws it, which is the only level `Stack::go` will accept.
-        let pages: [(&str, Option<nav::Page>, &Furniture); 7] = [
+        let pages: [(&str, Option<nav::Page>, &Furniture); 9] = [
             ("bench", None, &full),
             ("menu", Some(nav::Page::None), &full),
             ("devices", Some(nav::Page::Devices), &full),
@@ -7123,6 +7397,8 @@ pub(crate) mod tests {
             ("parts-empty", Some(nav::Page::Parts), &empty),
             ("work", Some(nav::Page::Work), &full),
             ("settings", Some(nav::Page::Settings), &full),
+            ("composer-ipod-dumped", Some(nav::Page::ComposerIpod), &dumped),
+            ("composer-ipod-shared", Some(nav::Page::ComposerIpod), &shared),
         ];
 
         let shots: Vec<(&str, Shot)> = pages
@@ -7170,6 +7446,346 @@ pub(crate) mod tests {
                     a.rgb != b.rgb,
                     "{a_name} and {b_name} are the same picture, pixel for pixel; the page the \
                      window was told to draw is not reaching the drawing"
+                );
+            }
+        }
+    }
+
+    // ── §11.2 level ①: what the window is holding, field by field ───────────────────────────────
+
+    /// Every field of a [`composer::Pick`], against the `PickRow` the window is holding.
+    ///
+    /// **Exhaustive, no `..`.** An eleventh field on `Pick` stops this compiling until somebody
+    /// says where it lands, which is the same guarantee `push_composer`'s own destructure gives at
+    /// the other end of the wire.
+    fn a_pick_arrived(at: &str, p: &composer::Pick, row: &PickRow) {
+        let composer::Pick {
+            field,
+            label,
+            value,
+            locked,
+            note,
+            reason,
+            escape,
+            machine_rule,
+            open,
+            presses,
+        } = p;
+        assert_eq!(row.field, field.as_i32(), "{at}: field");
+        assert_eq!(row.label.as_str(), label, "{at}: label");
+        assert_eq!(row.value.as_str(), value, "{at}: value");
+        assert_eq!(row.locked, *locked, "{at}: locked");
+        assert_eq!(row.enabled, !*locked, "{at}: enabled is the negation of locked");
+        assert_eq!(row.note.as_str(), note, "{at}: note");
+        assert_eq!(row.reason.as_str(), reason, "{at}: reason");
+        assert_eq!(row.escape_hatch.as_str(), escape, "{at}: escape");
+        assert_eq!(row.machine_rule, *machine_rule, "{at}: machine_rule");
+        assert_eq!(row.open, *open, "{at}: open");
+        assert_eq!(row.presses, i32::from(*presses), "{at}: presses");
+        assert!(row.chevron, "{at}: §11.1 — a locked picker stays a picker");
+    }
+
+    /// The same for a [`composer::FieldState`].
+    fn a_field_arrived(at: &str, f: &composer::FieldState, row: &FieldRow) {
+        let composer::FieldState {
+            field,
+            label,
+            value,
+            raw,
+            masked,
+            locked,
+            mono,
+            note,
+            reason,
+            action,
+        } = f;
+        assert_eq!(row.field, field.as_i32(), "{at}: field");
+        assert_eq!(row.label.as_str(), label, "{at}: label");
+        assert_eq!(row.value.as_str(), value, "{at}: value");
+        assert_eq!(row.raw.as_str(), raw, "{at}: raw");
+        assert_eq!(row.masked, *masked, "{at}: masked");
+        assert_eq!(row.locked, *locked, "{at}: locked");
+        assert_eq!(row.mono, *mono, "{at}: mono");
+        assert_eq!(row.note.as_str(), note, "{at}: note");
+        assert_eq!(row.reason.as_str(), reason, "{at}: reason");
+        assert_eq!(row.action.as_str(), action, "{at}: action");
+    }
+
+    /// The same for a [`composer::FixRow`].
+    fn a_fix_arrived(at: &str, f: &composer::FixRow, row: &FixRow) {
+        let composer::FixRow {
+            label,
+            enabled,
+            reason,
+            escape,
+            machine_rule,
+            presses,
+            consequence,
+        } = f;
+        assert_eq!(row.label.as_str(), label, "{at}: label");
+        assert_eq!(row.enabled, *enabled, "{at}: enabled");
+        assert_eq!(row.reason.as_str(), reason, "{at}: reason");
+        assert_eq!(row.escape_hatch.as_str(), escape, "{at}: escape");
+        assert_eq!(row.machine_rule, *machine_rule, "{at}: machine_rule");
+        assert_eq!(row.presses, i32::from(*presses), "{at}: presses");
+        assert_eq!(row.consequence.as_str(), consequence, "{at}: consequence");
+    }
+
+    /// **Every field of [`composer::Which`] reaches a property, with the value the model computed.**
+    ///
+    /// This is the gate for the defect this commit is about. `push_composer` read seven of
+    /// `Which`'s nine fields and dropped `make_one` and `warning` — a two-press confirmation before an
+    /// identity is destroyed, and §11.2's OUI warning — and **nothing in this tree could see it**:
+    /// the producer compiled, the flattener compiled, the page drew, the shot test passed, and
+    /// `every_page_this_window_shoots_is_drawn_with_what_is_on_it` never stood on this page at all.
+    ///
+    /// So it asserts through the window rather than about it: `Furniture` pushes with the shipped
+    /// `push_composer`, and every assertion below reads a **property or a model row off the
+    /// `MainWindow`** and compares it with what `Composer::which` answers. A field written into no
+    /// property has nothing to compare against and fails here.
+    ///
+    /// **Two libraries, because one cannot show both halves.** `Lock`'s precedence is
+    /// `Building > Dump > Shared > Open`, so a dump used by two devices reports `Dump` and the
+    /// shared sentence is never on screen — and `Pick::note` and `Pick::reason` are mutually
+    /// exclusive by construction, so a single fixture would compare one of them empty-to-empty.
+    /// The `must not be empty` list before each comparison is what keeps that honest: a gate that
+    /// compares `""` with `""` passes over every defect there is.
+    ///
+    /// **Proved red** by deleting `window.set_composer_warning(warning.into())` from
+    /// `push_composer` — *the OUI warning is on the page but not in the window* — and again by
+    /// dropping `presses` from `to_pick`, which fails at *`Model: presses`*.
+    #[test]
+    fn every_field_of_which_reaches_the_window() {
+        let _held = use_a_scratch_data_dir();
+        let w = a_window();
+        dress_the_bench(&w);
+
+        for (what, dumped, lib, ipod) in [
+            {
+                let (lib, ipod) = a_library_with_a_foreign_dump(&temp_dir("which-dump"));
+                ("a dump", true, lib, ipod)
+            },
+            {
+                let (lib, ipod) = a_library_with_a_shared_ipod(&temp_dir("which-shared"));
+                ("a shared iPod", false, lib, ipod)
+            },
+        ] {
+            let f = Furniture::new(lib);
+            f.compose_over(&ipod, false);
+            draw(&w, &a_stack(nav::Page::ComposerIpod), &f);
+
+            let held = f.composer.borrow();
+            let c = held.as_ref().expect("the composer this fixture stands on");
+            // **Exhaustive on purpose.** A ninth field on `Which` stops this compiling, and the
+            // only way to make it compile again is to say where it lands.
+            let composer::Which {
+                ipod: ipod_row,
+                model,
+                colour,
+                serial,
+                guid,
+                title_auth,
+                warning,
+                copy_command,
+            } = c.which(&f.settings, false, caps().clipboard.into());
+
+            // **Nothing below is a comparison of two empty strings.** Which slot carries the
+            // lock's sentence is `Lock::locked`'s question, so the two fixtures check opposite
+            // halves of the same pair.
+            let (lock_slot, lock_says) = if dumped {
+                ("reason", &model.reason)
+            } else {
+                ("note", &model.note)
+            };
+            for (name, v) in [
+                ("ipod.value", &ipod_row.value),
+                ("model.value", &model.value),
+                (lock_slot, lock_says),
+                ("colour.value", &colour.value),
+                ("serial.value", &serial.value),
+                ("serial.note", &serial.note),
+                ("guid.value", &guid.value),
+                ("guid.note", &guid.note),
+                ("title_auth", &title_auth),
+                ("copy_command.label", &copy_command.label),
+                ("copy_command.reason", &copy_command.reason),
+            ] {
+                assert!(
+                    !v.is_empty(),
+                    "over {what}, {name} is empty — the comparison below would prove nothing"
+                );
+            }
+            // §11.2's three behaviours: a READ identity warns, a generated one has Apple's OUI by
+            // construction and cannot. The converse is the half that says this is a signal.
+            assert_eq!(
+                !warning.is_empty(),
+                dumped,
+                "over {what} the OUI warning is {warning:?}"
+            );
+
+            let picks = w.get_composer_picks();
+            let fields = w.get_composer_fields();
+            assert_eq!(
+                (picks.row_count(), fields.row_count()),
+                (3, 2),
+                "over {what}, level ① is three pickers and two identity fields"
+            );
+            a_pick_arrived(&format!("{what}: iPod"), &ipod_row, &picks.row_data(0).unwrap());
+            a_pick_arrived(&format!("{what}: Model"), &model, &picks.row_data(1).unwrap());
+            a_pick_arrived(&format!("{what}: Colour"), &colour, &picks.row_data(2).unwrap());
+            a_field_arrived(&format!("{what}: Serial"), &serial, &fields.row_data(0).unwrap());
+            a_field_arrived(&format!("{what}: GUID"), &guid, &fields.row_data(1).unwrap());
+            a_fix_arrived(
+                &format!("{what}: copy"),
+                &copy_command,
+                &w.get_composer_copy_command(),
+            );
+            assert_eq!(
+                w.get_composer_title_auth().as_str(),
+                title_auth,
+                "over {what}, TitleAuth is on the page but not in the window"
+            );
+            assert_eq!(
+                w.get_composer_warning().as_str(),
+                warning,
+                "over {what}, the OUI warning is on the page but not in the window"
+            );
+        }
+    }
+
+    /// **Both two-press confirmations, end to end through the window.**
+    ///
+    /// §11.3's rule is that a press which changes something other than the thing under the finger
+    /// takes two, and says what the second will do before the first. Two controls on level ① are
+    /// that, and neither was:
+    ///
+    ///   * **`Make one`** — option 0 of the iPod picker, the row `Composer::choose` answers by
+    ///     minting. `Composer::make_one_row` has computed `presses: 2` and the sentence naming the
+    ///     seed since it was written; it reached `Which::make_one`, which `push_composer` never
+    ///     read. Replacing an iPod was **one unconfirmed press** that discarded the identity on
+    ///     screen.
+    ///   * **Model and Colour over a shared iPod** — `Lock::presses` answered `2` for
+    ///     `Lock::Shared` from behind a `#[cfg(test)]`, with its own doc saying it could not be
+    ///     drawn because `Pick` had no press count. It has one now.
+    ///
+    /// Asserted off the **models the window is holding**, not off the producer, because the
+    /// producer was already right in both cases and that is exactly why nobody noticed.
+    ///
+    /// **Proved red** by returning `1` from `Lock::presses` for `Shared` — *the Model picker over
+    /// a shared iPod acts on the first press* — and by dropping `presses` from `ipod_options`'
+    /// option 0, which fails at *`Make one` over an existing iPod acts on the first press*.
+    #[test]
+    fn the_two_press_confirmations_reach_the_rows_they_belong_to() {
+        let _held = use_a_scratch_data_dir();
+        let w = a_window();
+        dress_the_bench(&w);
+        let at = a_stack(nav::Page::ComposerIpod);
+
+        // The mint's press count, over each of the three things there can be to spend.
+        let mint = |f: &Furniture| -> OptionRow {
+            draw(&w, &at, f);
+            let opts = w.get_composer_options();
+            // `Composer::options` answers empty for a closed picker, so a zero here is the
+            // picker being shut and not a library with nothing in it — the empty-library case
+            // below still draws one row, because `Make one` is always offered.
+            assert_ne!(
+                opts.row_count(),
+                0,
+                "the iPod picker is not open, so option 0 is not on screen"
+            );
+            let row = opts.row_data(0).unwrap();
+            assert_eq!(
+                row.label.as_str(),
+                "Make one",
+                "option 0 of the iPod picker is the row `Composer::choose` mints on"
+            );
+            row
+        };
+
+        // (1) Nothing chosen: one press, and no consequence, because there is nothing to spend.
+        let empty = Furniture::new(Settings::default());
+        empty.compose_nothing(true);
+        let row = mint(&empty);
+        assert_eq!(row.presses, 1, "the first iPod asked for a confirmation");
+        assert_eq!(row.consequence.as_str(), "", "there was nothing to lose");
+
+        // (2) A synthesised iPod: two presses, and the sentence **leads with the seed**, because
+        // `ReasonSlot` elides at about fifty characters and a sentence that elides before its point
+        // did not make it.
+        let (lib, _) = a_library_with_a_shared_ipod(&temp_dir("mint-synth"));
+        let synth = the_synthesised_ipod(&lib);
+        let made = Furniture::new(lib);
+        made.compose_over(&synth, true);
+        let row = mint(&made);
+        assert_eq!(
+            row.presses, 2,
+            "`Make one` over an existing iPod acts on the first press"
+        );
+        assert!(
+            row.consequence.starts_with("seed "),
+            "the seed has to survive the elision, so it leads: {}",
+            row.consequence
+        );
+        assert!(
+            row.consequence.contains("FireWire GUID"),
+            "{}",
+            row.consequence
+        );
+
+        // (3) A dump: two presses, and it says the dump is what stops being used.
+        let (lib, dump) = a_library_with_a_foreign_dump(&temp_dir("mint-dump"));
+        let dumped = Furniture::new(lib);
+        dumped.compose_over(&dump, true);
+        let row = mint(&dumped);
+        assert_eq!(row.presses, 2, "minting over a dump acts on the first press");
+        assert!(row.consequence.starts_with("this device stops"), "{}", row.consequence);
+
+        // ── and the shared edit, which is `Lock::presses` ────────────────────────────────────────
+        //
+        // `a_library_with_a_shared_ipod` files two devices made of one iPod; `a_furnished_library`
+        // files one device made of one, and is the control that says this is keyed on sharing
+        // rather than on being a picker.
+        for (what, presses, lib) in [
+            ("two devices", 2, a_library_with_a_shared_ipod(&temp_dir("edit-shared")).0),
+            ("one device", 1, a_furnished_library(&temp_dir("edit-alone"))),
+        ] {
+            let ipod = the_synthesised_ipod(&lib);
+            let f = Furniture::new(lib);
+            f.compose_over(&ipod, false);
+            draw(&w, &at, &f);
+
+            let picks = w.get_composer_picks();
+            for (name, i) in [("Model", 1), ("Colour", 2)] {
+                let row = picks.row_data(i).unwrap();
+                assert_eq!(row.label.as_str(), name, "level ① row {i}");
+                assert_eq!(
+                    row.presses, presses,
+                    "the {name} picker over an iPod {what} are made of takes {} press(es)",
+                    row.presses
+                );
+                assert!(!row.locked, "{name}: a shared iPod is a consequence, not a wall");
+                // §11.3: the sentence is drawn BEFORE the first press, and `Pressable` reads it out
+                // of `consequence` — which is `PickRow::note` — while the row is enabled.
+                assert_eq!(
+                    row.note.contains("devices are made of this iPod"),
+                    presses == 2,
+                    "{name} over {what}: the press count and the sentence disagree — {:?}",
+                    row.note
+                );
+            }
+
+            // **A typed identity field gets the sentence and no press count**, which is
+            // `Lock::presses`'s own carve-out: a `TextInput` has no press to count, so what a
+            // shared identity owes a person there is the reason line and it has it.
+            let fields = w.get_composer_fields();
+            for (name, i) in [("Serial", 0), ("GUID", 1)] {
+                let row = fields.row_data(i).unwrap();
+                assert_eq!(row.label.as_str(), name, "level ① field {i}");
+                assert_eq!(
+                    row.note.contains("devices are made of this iPod"),
+                    presses == 2,
+                    "{name} over {what}: {:?}",
+                    row.note
                 );
             }
         }

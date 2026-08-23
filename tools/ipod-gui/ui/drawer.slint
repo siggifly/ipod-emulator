@@ -323,6 +323,7 @@ export component Drawer inherits Rectangle {
     in property <int> composer-open-field: -1;
     in property <[RefusalRow]> composer-refusals;
     in property <string> composer-title-auth;
+    in property <string> composer-warning;
     in property <FixRow> composer-copy-command;
     in property <string> composer-no-ipod;
     in property <FieldRow> composer-name-field;
@@ -616,6 +617,7 @@ export component Drawer inherits Rectangle {
                     options: root.composer-options;
                     open-field: root.composer-open-field;
                     title-auth: root.composer-title-auth;
+                    warning: root.composer-warning;
                     copy-command: root.composer-copy-command;
                     no-ipod: root.composer-no-ipod;
                     back-pressed => {

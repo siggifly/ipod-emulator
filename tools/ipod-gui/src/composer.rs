@@ -208,19 +208,20 @@ impl Lock {
     /// How many presses a control in this state takes before it acts.
     ///
     /// Two for [`Lock::Shared`], for the same reason [`compose::Fix::BuildFromIpsw`] takes two: the
-    /// press changes something other than the thing under the finger.
+    /// press changes something other than the thing under the finger. **Every device made of this
+    /// iPod changes with it**, and a rule that is stated in a reason line and enforced nowhere is
+    /// a sentence, not a confirmation.
     ///
-    /// **`#[cfg(test)]`, and what retires it is [`Pick`] growing a press count.** A `Lock` reaches
-    /// the window only as a `Pick` or a [`FieldState`], and neither carries one — `Pick` has nine
-    /// fields, `locked` and `reason` among them, and no tenth — so this rule is stated and checked
-    /// here and cannot yet be drawn.
+    /// **Its retirement condition was met by [`Pick`] growing a tenth field.** The doc this
+    /// replaces said *`#[cfg(test)]`, and what retires it is `Pick` growing a press count* — it
+    /// has one, `Pick::presses`, which `to_pick` copies into `PickRow` and `PickerRow` binds onto
+    /// the `Row`'s inherited `Pressable::presses`. So the answer computed here is now the answer
+    /// on screen, which it was not for the whole of the time this said it could not yet be drawn.
     ///
-    /// An `#[allow(dead_code)]` would be the wrong shape and not merely a second-best one:
-    /// `rail.rs` defines a `Next::presses` too, `main.rs` calls **that** one at `to_row`, and
-    /// `no_dead_code_allow_sits_on_a_function_the_program_already_calls` cannot tell the two apart
-    /// by reading text. Its `AMBIGUOUS` list is where that limit is written down, and its own rule
-    /// for the list is *never because a sweep went red*.
-    #[cfg(test)]
+    /// **[`FieldState`] deliberately does not get one, and that is not the same omission.** Serial
+    /// and GUID are typed into, and a `TextInput` has no press to count; what a shared identity
+    /// owes a person there is the sentence, which [`Lock::reason`] supplies into the `Field`'s own
+    /// reserved slot and has all along.
     pub fn presses(&self) -> u8 {
         match self {
             Lock::Shared { .. } => 2,
@@ -540,7 +541,7 @@ impl Composer {
     /// `the_verdict_the_plan_and_the_recipe_are_one_recipe` calls after every kind of edit.
     ///
     /// [`Composer::open`] sits in the middle of the run and is **not** gated: `push_composer` reads
-    /// it on every frame, through `set_composer_open_field` at `main.rs:3341`.
+    /// it on every frame, through `set_composer_open_field` at `main.rs:3399`.
     #[cfg(test)]
     pub fn region(&self) -> &Region {
         &self.region
@@ -833,23 +834,27 @@ impl Composer {
     /// Empty — and one press — while there is no iPod. Once there is, it is two presses and names
     /// the seed, because a seed is the whole of what makes an identity come back and the one that
     /// is about to be replaced is not recoverable from anything on screen.
+    ///
+    /// **The loss leads the sentence, and that is a measurement rather than a style.** `ReasonSlot`
+    /// draws one `line-label` with `overflow: elide`, and at the drawer's 420 px that is about
+    /// fifty characters — measured off `_out/gui/composer-ipod-dumped.png`, where the `sub` line
+    /// beside it cuts at *"…comes back nex…"*. The wording this replaces put `seed {n}` at
+    /// character 84 of 101, so the one word this control exists to say was the one word that never
+    /// reached the screen. A sentence that elides before its point did not make it.
     pub fn make_one_row(&self) -> FixRow {
         let (presses, consequence) = match &self.rom {
             Some(nor::Source::Synthetic { seed, .. }) => (
                 2,
-                format!(
-                    "mints a different iPod, with a different serial and a different FireWire \
-                     GUID; seed {seed:x} is not kept"
-                ),
+                format!("seed {seed:x} is not kept; a new serial and FireWire GUID"),
             ),
             Some(nor::Source::File(_)) => (
                 2,
-                "mints a synthesised iPod and this device stops using the dump".to_string(),
+                "this device stops using the dump; a synthesised iPod replaces it".to_string(),
             ),
             None => (1, String::new()),
         };
         FixRow {
-            label: "Make one".into(),
+            label: MAKE_ONE.into(),
             enabled: true,
             reason: String::new(),
             escape: String::new(),
@@ -1297,6 +1302,13 @@ impl Default for Composer {
     }
 }
 
+/// The one spelling of the mint control's name.
+///
+/// It is the `iPod` row's *value* while there is no iPod (§11.2's mock: `iPod   Make one ›`) and
+/// the *label* of option 0 of the picker that row opens, which is the control itself. Two literals
+/// for one control is how the row and the option come to disagree about what the button is called.
+const MAKE_ONE: &str = "Make one";
+
 /// The sentence GUI.md §11.1 puts on levels ② and ③ until an iPod has been chosen.
 pub const NO_IPOD: &str = "An iPod states its model, capacity, serial and GUID, and those decide \
                            which firmware can follow. Choose one first.";
@@ -1363,6 +1375,16 @@ pub struct Choice {
     pub escape: String,
     /// `true` for *this cannot work, ever*; `false` for *this is not finished, by us*.
     pub machine_rule: bool,
+    /// **An option may cost two presses**, and exactly one in this program does: `Make one`, which
+    /// mints over an identity already on screen. An option row is a `Row`, a `Row` is a
+    /// `Pressable`, and a `Pressable` has counted presses since §11.3 — so the press count belongs
+    /// on the option rather than on a control invented beside the picker to carry it.
+    ///
+    /// [`Composer::make_one_row`] is the one producer of this pair; see [`Composer::ipod_options`].
+    pub presses: u8,
+    /// What the second press will do, drawn **before** the first — §11.3's rule, and the whole of
+    /// why two presses is a confirmation rather than a nuisance.
+    pub consequence: String,
 }
 
 /// A row that opens a picker.
@@ -1377,6 +1399,10 @@ pub struct Pick {
     pub escape: String,
     pub machine_rule: bool,
     pub open: bool,
+    /// [`Lock::presses`]'s answer — **two while N devices are made of this iPod.** `note` is the
+    /// lock's own sentence and is what the `Row` draws as its `consequence`, so the count and the
+    /// sentence it confirms arrive from the same [`Lock`] and cannot come apart.
+    pub presses: u8,
 }
 
 /// A row somebody types into.
@@ -1446,17 +1472,35 @@ pub struct Refused {
 }
 
 /// Level ① — which iPod this is.
+///
+/// **Eight fields, and `push_composer` destructures every one of them by name.** It read seven of
+/// nine and dropped `make_one` and `warning` — both safety affordances, both computed on every
+/// frame, neither reaching a pixel — for as long as this struct was flattened field by field.
+/// The exhaustive `let Which { .. }` in `main.rs` is what makes that unrepeatable: a field added
+/// here stops the crate compiling until somebody names it, and a field named and then not used is
+/// an `unused_variables` warning, which is an error under the `-D warnings` this workspace builds
+/// with. `settings_page::View` reaches the same guarantee by counting markup declarations in a
+/// test; a compile error is the stronger half of that pair and costs nothing.
+///
+/// **`make_one` is gone from this struct rather than given a property**, and that is the finding
+/// rather than a shortcut. The control it described is not on this page — it is option 0 of the
+/// iPod picker, the row [`Composer::choose`] answers by minting. Giving the page a second
+/// `Make one` button to carry the count would have put two mint controls on one surface with one
+/// of them lying about what it costs. So [`Composer::make_one_row`] keeps its single-producer job
+/// and [`Composer::ipod_options`] is its caller; the press count and the seed sentence ride on the
+/// [`Choice`] a person actually presses.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Which {
     pub ipod: Pick,
-    /// The `Make one` control's own press count and consequence — see [`Composer::make_one_row`].
-    pub make_one: FixRow,
     pub model: Pick,
     pub colour: Pick,
     pub serial: FieldState,
     pub guid: FieldState,
     pub title_auth: String,
-    /// The OUI warning, when a read identity carries one. Empty otherwise.
+    /// §11.2's OUI warning: **the strongest evidence there is that a dump did not parse**, said
+    /// beside the value rather than on a stderr the window cannot see. Empty for a synthesised
+    /// identity, which carries Apple's OUI by construction, and for a typed one, which
+    /// `Identity::check_guid` refuses outright — §11.2's three behaviours, unflattened.
     pub warning: String,
     pub copy_command: FixRow,
 }
@@ -1533,16 +1577,29 @@ impl Composer {
         }
     }
 
+    /// **Option 0 is the mint, and it is [`Composer::make_one_row`]'s row.**
+    ///
+    /// [`Composer::choose`] answers index 0 by calling [`Composer::make_one`] — the one
+    /// irreversible act on this page — so the press count and the sentence naming the seed have to
+    /// be on *this* row and nowhere else. They were computed and then dropped: `Which::make_one`
+    /// carried them, `push_composer` never read it, and replacing an iPod was one unconfirmed press
+    /// that discarded the identity on screen.
+    ///
+    /// The row is built out of the same `FixRow` rather than beside it, so there is no second
+    /// spelling of `Make one` and no second answer to what it costs.
     fn ipod_options(&self, s: &Settings) -> Vec<Choice> {
+        let mint = self.make_one_row();
         let mut v = vec![Choice {
             id: 0,
-            label: "Make one".into(),
+            label: mint.label,
             sub: "generated from a seed, so the same iPod comes back next launch".into(),
-            enabled: true,
+            enabled: mint.enabled,
             chosen: matches!(self.rom, Some(nor::Source::Synthetic { .. })),
-            reason: String::new(),
-            escape: String::new(),
-            machine_rule: false,
+            reason: mint.reason,
+            escape: mint.escape,
+            machine_rule: mint.machine_rule,
+            presses: mint.presses,
+            consequence: mint.consequence,
         }];
         for (i, (name, src)) in filed_ipods(s).enumerate() {
             v.push(Choice {
@@ -1555,6 +1612,11 @@ impl Composer {
                 reason: String::new(),
                 escape: String::new(),
                 machine_rule: false,
+                // Choosing a filed iPod replaces the one on screen too — but it replaces it with
+                // something the library still holds, so nothing is destroyed and one press is the
+                // honest count. `Make one` is the only option here that ends an identity.
+                presses: 1,
+                consequence: String::new(),
             });
         }
         v
@@ -1576,6 +1638,11 @@ impl Composer {
                 reason: String::new(),
                 escape: String::new(),
                 machine_rule: false,
+                // **Not a second answer to the shared-iPod question.** A `Lock` decides whether
+                // this picker may be opened at all, and its press count rides on the `Pick` that
+                // opens it — see [`Composer::pick`]. Once it is open, choosing a row is one press.
+                presses: 1,
+                consequence: String::new(),
             });
         }
         v
@@ -1601,6 +1668,8 @@ impl Composer {
                 reason: String::new(),
                 escape: String::new(),
                 machine_rule: false,
+                presses: 1,
+                consequence: String::new(),
             });
         }
         v
@@ -1616,6 +1685,8 @@ impl Composer {
             reason: String::new(),
             escape: String::new(),
             machine_rule: false,
+            presses: 1,
+            consequence: String::new(),
         }];
         for (i, d) in s.disks.iter().enumerate() {
             v.push(Choice {
@@ -1631,6 +1702,11 @@ impl Composer {
                 reason: String::new(),
                 escape: String::new(),
                 machine_rule: false,
+                // §11.3's two-press case is `Fix::BuildFromIpsw`, which DETACHES the drive a device
+                // points at. Attaching one here points the recipe somewhere without unpointing
+                // anything, and the drive is referenced rather than copied — nothing is spent.
+                presses: 1,
+                consequence: String::new(),
             });
         }
         v
@@ -1677,6 +1753,8 @@ impl Composer {
                 // 5.5G's, ever, and that is a machine rule rather than something we have not
                 // finished.
                 machine_rule: !ok,
+                presses: 1,
+                consequence: String::new(),
             });
         }
         v
@@ -1706,6 +1784,8 @@ impl Composer {
                     reason,
                     escape,
                     machine_rule,
+                    presses: 1,
+                    consequence: String::new(),
                 }
             })
             .collect()
@@ -1724,12 +1804,11 @@ impl Composer {
             ipod: self.pick(
                 Field::Ipod,
                 match &self.rom {
-                    None => "Make one".into(),
+                    None => MAKE_ONE.into(),
                     Some(r) => settings::suggest_ipod_name(r),
                 },
                 lock(Field::Ipod),
             ),
-            make_one: self.make_one_row(),
             model: self.model_row(lock(Field::Model)),
             colour: self.colour_row(lock(Field::Colour)),
             serial: self.field(Field::Serial, &serial, lock(Field::Serial)),
@@ -1749,7 +1828,10 @@ impl Composer {
             },
             lock,
         );
-        if p.note.is_empty() {
+        // **`!p.locked` and not `note.is_empty()` alone.** A locked picker changes nothing, and
+        // `Pressable` draws `consequence` only while enabled — so a sentence written here for a
+        // locked row is a string no pixel can read, which is the defect this whole commit is about.
+        if !p.locked && p.note.is_empty() {
             p.note = "A different iPod — this changes the serial and the FireWire GUID.".into();
         }
         p
@@ -1766,7 +1848,8 @@ impl Composer {
             self.model().map(|m| m.colour().label().to_string()).unwrap_or_default(),
             lock,
         );
-        if p.note.is_empty() {
+        // Guarded on `!p.locked` for the same reason [`Composer::model_row`] is.
+        if !p.locked && p.note.is_empty() {
             p.note = "A different iPod — this changes the serial and the FireWire GUID.".into();
         }
         p
@@ -1992,17 +2075,40 @@ impl Composer {
         }
     }
 
+    /// **One `Lock`, read three times, in one place.** `locked`, `note` and `presses` are all its
+    /// answers — so a shared iPod's row cannot come to say *N devices change with it* while acting
+    /// on the first press, which is what it did while [`Lock::presses`] was `#[cfg(test)]`.
+    /// **One `Lock`, read four times, in one place.** `locked`, `note`, `reason` and `presses` are
+    /// all its answers — so a shared iPod's row cannot come to say *N devices change with it* while
+    /// acting on the first press, which is what it did while [`Lock::presses`] was `#[cfg(test)]`.
+    ///
+    /// **Which of `note` and `reason` the sentence goes in is `Lock::locked`'s own question**, and
+    /// getting it wrong was visible in `_out/gui/composer-ipod-dumped.png`. `Pressable` reads
+    /// `consequence` while enabled and `reason` while disabled, **with no fallback between them** —
+    /// `Field` has one (`primitives.slint:812`), `Pressable` does not — so a `Lock::Dump` sentence
+    /// parked in `note` left the locked Model and Colour rows reserving §5's 34 px and saying
+    /// nothing at all, two rows above a `Field` drawing that same sentence correctly. That is
+    /// `primitives.slint:369`'s own rule — *non-empty whenever `!enabled`* — broken on the page
+    /// §9.4 was written for. A refusal is a reason; a shared iPod is a consequence; `locked()` is
+    /// exactly that distinction and already knew the answer.
     fn pick(&self, field: Field, value: String, lock: Lock) -> Pick {
+        let locked = lock.locked();
+        let (note, reason) = if locked {
+            (String::new(), lock.reason())
+        } else {
+            (lock.reason(), String::new())
+        };
         Pick {
             field,
             label: field.label().into(),
             value,
-            locked: lock.locked(),
-            note: lock.reason(),
-            reason: String::new(),
+            locked,
+            note,
+            reason,
             escape: String::new(),
             machine_rule: false,
             open: self.open == Some(field),
+            presses: lock.presses(),
         }
     }
 
@@ -2622,15 +2728,40 @@ mod tests {
             assert_eq!(x.action, y.action, "one of them has no Show control");
             assert!(!x.action.is_empty());
         }
-        // And the difference is exactly the lock, with a reason attached.
+        // And the difference is exactly the lock, with a reason attached — **in the slot the row
+        // will draw it from**, which is a different slot for the two of them. `Pressable` reads
+        // `consequence` (which is `Pick::note`) while enabled and `reason` while disabled, and
+        // there is no fallback between them, so a locked row's sentence parked in `note` is a
+        // locked row saying nothing. This assertion held the sentence in `note` for both, which is
+        // what `_out/gui/composer-ipod-dumped.png` showed the moment level ① was first
+        // photographed: Model and Colour greyed, 34 px reserved under each, and nothing in it.
         assert!(!a.model.locked && !a.serial.locked, "a synthesised iPod was locked");
         assert!(b.model.locked && b.serial.locked, "a dump was left editable");
         assert!(
-            b.model.note.contains("Read from the dump"),
-            "a locked row with no reason is a wall: {}",
+            b.model.reason.contains("Read from the dump"),
+            "a locked row with no reason is a wall: reason {:?}, note {:?}",
+            b.model.reason,
+            b.model.note
+        );
+        assert!(
+            b.model.note.is_empty(),
+            "a locked row's `consequence` is drawn by nothing: {}",
             b.model.note
         );
         assert!(!a.model.note.is_empty(), "the open row's slot is not reserved");
+        assert!(
+            a.model.reason.is_empty(),
+            "an enabled row's `reason` is drawn by nothing: {}",
+            a.model.reason
+        );
+        // The heights this test is named for: both rows `tell`, so both are `ROW_H + FIELD_REASON`.
+        // Which slot fills is the difference; that one of them fills is the invariant.
+        for (which, p) in [("synthesised", &a.model), ("dumped", &b.model)] {
+            assert!(
+                !p.note.is_empty() || !p.reason.is_empty(),
+                "the {which} Model row reserves a slot with nothing to put in it"
+            );
+        }
     }
 
     /// **Only iPods this program can be.** libgpod's table is 197 rows and this machine is a
@@ -3553,3 +3684,4 @@ mod tests {
         }
     }
 }
+

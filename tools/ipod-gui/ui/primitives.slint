@@ -62,6 +62,10 @@ export struct PickRow {
     machine-rule: bool,
     chevron: bool,
     open: bool,
+    // `composer::Lock::presses` — **two while N devices are made of this iPod**, because opening
+    // that picker is agreeing to change all of them. `note` is the lock's own sentence and is what
+    // the `Row` draws as its `consequence`, so the count and the sentence come from one `Lock`.
+    presses: int,
 }
 
 // One option inside the one open picker. §11.3's *every box ticks*: a refused value stays, in place,
@@ -75,6 +79,11 @@ export struct OptionRow {
     reason: string,
     escape-hatch: string,
     machine-rule: bool,
+    // §11.3's press count, on the option rather than on the row that opens it. Exactly one option
+    // in this program is worth two: `Make one`, which mints over the identity on screen and cannot
+    // be undone — `composer::Composer::make_one_row` is where both of these come from.
+    presses: int,
+    consequence: string,
 }
 
 // §11.2's identity rows and §11.2's name. **`value` is what is drawn and is already masked;

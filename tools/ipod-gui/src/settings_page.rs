@@ -116,9 +116,12 @@ const NO_PATH: &str = "this computer has nowhere to keep a settings file, so the
 /// declares**, and nothing else.
 ///
 /// One bundle rather than nine returns, so a dropped field is a shape mismatch rather than a silent
-/// loss. That failure is not hypothetical: `push_composer` reads six of `Which`'s eight fields and
-/// drops two, which is precisely how `Which::make_one`'s two-press confirmation and its OUI warning
-/// reach no pixel.
+/// loss. That failure was not hypothetical: `push_composer` read seven of `Which`'s **nine** fields
+/// and dropped two — which is exactly how `Which::make_one`'s two-press confirmation and §11.2's
+/// OUI warning came to reach no pixel at all. *(The counts here read "six of eight" until they were
+/// re-measured; `Which` had grown `copy_command` since. A count in prose goes stale in silence,
+/// which is the same class of thing this bundle is about.)* `Which` is destructured by name in
+/// `push_composer` now, which turns that into a compile error rather than a count somebody keeps.
 ///
 /// `file_path` is also **the string a `Copy path` would put on the pasteboard**. One producer for
 /// the path means the row and the clipboard cannot come to show two different files, and it is why
@@ -416,7 +419,11 @@ mod tests {
     /// compiling, so nothing can be added without a use here. Counting the markup's declarations is
     /// the other: adding a `setting-*` property to `window.slint` turns it red. Between them a
     /// property cannot appear on one side alone — which is the defect this bundle exists to
-    /// prevent, and which `push_composer` has today, reading six of `Which`'s eight fields.
+    /// prevent, and which `push_composer` had while it read seven of `Which`'s nine fields by
+    /// name and dropped two. It destructures instead — `let composer::Which { .. }` with every
+    /// field written out and no `..` — which is the same guarantee bought with a compile error
+    /// rather than a test: measured, deleting one `set_composer_*` line makes `cargo clippy
+    /// --release -p ipod-gui --all-targets -- -D warnings` answer `error: unused variable`.
     ///
     /// `window.slint` and not `preview.slint`: `build.rs` compiles the first.
     #[test]
