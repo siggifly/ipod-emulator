@@ -292,7 +292,7 @@ fn main() -> Result<(), slint::PlatformError> {
         window_logical: geometry::PREF_HEIGHT,
         sf,
     });
-    push_fit(&window, &fitter.fit(), sf);
+    push_fit(&window, &fitter.fit(), sf, geometry::PREF_HEIGHT);
     client_height::dump_layout(
         window.window(),
         &fitter.fit(),
@@ -384,14 +384,25 @@ fn main() -> Result<(), slint::PlatformError> {
         // rather than the one-event cache lag the `window` line carries.
         let measured = moment_window_logical(&moment);
         let (fit, changed) = fitter.apply(moment);
-        if changed {
-            let mut verb_width = None;
+        // **The gate is `changed`, and §9.5 is its one exception.** A drag that does not cross the
+        // threshold moves nothing the window draws — so pushing on every event would re-set seven
+        // properties sixty times a second for nothing. Except that below the threshold one of
+        // those seven is a sentence naming the height this window is standing in, and it changes
+        // at every pixel: a pane reading *this window is 735 pixels tall* over a window that is
+        // now 500 is the instrument lying, and it is the only live measurement in this program.
+        let mut verb_width = None;
+        if changed || fit.too_short {
             if let Some(w) = weak.upgrade() {
-                push_fit(&w, &fit, sf);
+                push_fit(&w, &fit, sf, measured);
                 // §17.Q12: the text renderer's answer, read off the composed window rather than
                 // computed from a budget. It is only available while the window is alive.
                 verb_width = Some(w.get_verb_width());
             }
+        }
+        // **The dump keeps the narrow gate**, and that is not an oversight: `NEXT.md` and
+        // `KNOWN-BUGS.md` both record that an absence of blocks means the fit did not change, and a
+        // dump that started printing on every drag event while short would say something else.
+        if changed {
             client_height::dump_layout(win, &fit, measured, sf, verb_width);
         }
         // An observer, never a filter: every arm propagates.
@@ -2597,6 +2608,54 @@ fn composed_and_unbuilt(d: &Device) -> bool {
 /// §7.3's own note says the path goes on the end where there is one, so that line elides by design
 /// and the first words are what survive it.
 fn cradle_label(d: &Device, absent: &[Absent]) -> String {
+    cradle_label_at(Press::Centre, d, absent)
+}
+
+/// **Where the press a §7.3 caption is about actually is**, and it is the only half of that caption
+/// that is a fact about the *surface*.
+///
+/// §7.3's caption is one sentence in two halves — *where to press* and *what pressing costs*. The
+/// cradle is drawn around a device whose centre button is on screen and names that button. §9.5's
+/// pane **replaces the well**, so on that surface there is no centre button to name, and a Row
+/// labelled *press the centre button* would be the one thing §9.5 exists to delete: a sentence
+/// pointing at a control that is not drawn. It is the defect §9.5 records the previous revision
+/// having — *shelf row 2 still reads "The centre button makes one" — pointing at a control that is
+/// not drawn* — reintroduced two inches lower.
+///
+/// So: **one tail, two prefixes.** §9.5's *one source, so they cannot disagree* is a rule about the
+/// half that says what pressing costs, and that half is written once, below, for both surfaces.
+/// `the_two_press_surfaces_share_every_tail` is what keeps a third wording out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Press {
+    /// §7.3: the drawn centre button, with the cradle around it.
+    Centre,
+    /// §9.5: the pane's primary Row **is** the press, and there is no device on screen.
+    Here,
+}
+
+impl Press {
+    /// Both surfaces, so a sweep cannot walk one and believe it walked the set.
+    ///
+    /// `#[cfg(test)]` rather than `#[allow(dead_code)]`: the shipped binary asks each surface for
+    /// its own caption at the point it draws it and has no reason to enumerate them, while
+    /// `the_two_press_surfaces_share_every_tail` cannot do its job without the set.
+    #[cfg(test)]
+    const ALL: [Press; 2] = [Press::Centre, Press::Here];
+
+    /// The half of the caption that says where to press.
+    fn verb(self) -> &'static str {
+        match self {
+            Press::Centre => "Press the centre button",
+            Press::Here => "Press here",
+        }
+    }
+}
+
+/// [`cradle_label`], for whichever surface is drawing the press.
+///
+/// Every refusal arm is surface-independent by construction: a part that has left the library is
+/// gone wherever you are standing, and none of those sentences contains a press at all.
+fn cradle_label_at(press: Press, d: &Device, absent: &[Absent]) -> String {
     if !absent.is_empty() {
         return gone_sentence(d, absent);
     }
@@ -2611,9 +2670,30 @@ fn cradle_label(d: &Device, absent: &[Absent]) -> String {
     // no disk, and the press would then quietly resume a build the label said nothing about.
     // Pressing it does resume; this is the label saying so first.
     if !d.names_a_disk() {
-        return format!("Press the centre button to finish making {}", d.name);
+        return format!("{} to finish making {}", press.verb(), d.name);
     }
-    "Press the centre button — running is not wired".into()
+    format!("{} — running is not wired", press.verb())
+}
+
+/// §9.1's and §10.1's empty bench, captioned for whichever surface is drawing the press.
+///
+/// **One label for both empty benches**, because §9.1 gives the later-empty one the same cradle
+/// line §10.1 gives the first: the `No iPod yet. Compose one: ipod-boot setup` this replaced was
+/// the sentence that made the second bench a dead end — it named the escape hatch and dropped the
+/// route.
+///
+/// §7.3 asks for **what pressing will cost, or why it cannot be pressed** — so the refusal arm is
+/// keyed on `caps.download` and not on `first`. Without it the cradle was drawn `fg-dim` and
+/// non-interactive under a label promising a press, and its `accessible-description` is that same
+/// label: a keyboard user focusing it was told nothing at all, which is what §9.4 and §16.5 exist
+/// to prevent. The remedy itself is `Class::ToolMissing`'s command, filed on the plan; this is the
+/// cradle saying which of the two states it is in.
+fn empty_cradle_label(press: Press, caps: rail::Caps) -> String {
+    if caps.download {
+        format!("{} to make an iPod", press.verb())
+    } else {
+        "No curl, so nothing can be downloaded".into()
+    }
 }
 
 /// §9.1's empty bench, as a whole row, so the markup composes it exactly like a real device.
@@ -2643,21 +2723,29 @@ fn empty_device(first: bool, caps: rail::Caps, cost: compose::Cost) -> DeviceRow
             // needs before agreeing to anything are *you do not have to own one* and *this is what
             // you will get*. The words come from the model table, so this line and the plan's own
             // synthesise sub-line cannot drift apart.
+            //
+            // **It counts the press rather than naming the control**, and that is §9.5's own
+            // finding acted on rather than quoted. Both of these lines used to open *The centre
+            // button makes one*, and §9.5 indicts exactly that: below the threshold the well is
+            // replaced, the device is not drawn, and the shelf — which §9.5 leaves alone on
+            // purpose — went on pointing at a button that is not on screen. The route is already
+            // stated where a route belongs, on the cradle line directly under the device (§7.3),
+            // so row 2 was naming it twice on the bench and wrongly on the pane. *One press* is
+            // true on both surfaces and is the fact a person actually needs: this costs one press,
+            // not a form.
             match eapp_loader::identity::Model::lookup(compose::FIRST_RUN_MODEL) {
                 Some(m) => format!(
-                    "You do not need an iPod, or any files off one. The centre button makes one: \
+                    "You do not need an iPod, or any files off one. One press makes one: \
                      a {}, {} GB, {}.",
                     m.generation.label(),
                     m.capacity_gb,
                     m.colour().label().to_lowercase()
                 )
                 .into(),
-                None => "You do not need an iPod, or any files off one. The centre button makes \
-                         one."
-                    .into(),
+                None => "You do not need an iPod, or any files off one. One press makes one.".into(),
             }
         } else {
-            "The centre button makes one; ipod-boot setup composes one from files you have.".into()
+            "One press makes one; ipod-boot setup composes one from files you have.".into()
         },
         state: "nothing mounted".into(),
         // §7.5's rule is that row 3 never goes away, and with no device there is nothing to write
@@ -2696,24 +2784,11 @@ fn empty_device(first: bool, caps: rail::Caps, cost: compose::Cost) -> DeviceRow
         startable: caps.download,
         // Both fit [`geometry::CRADLE_LABEL_MAX_CHARS`]; the 58-character sentence this replaced
         // elided on every window this program allows, which took the escape hatch off the end of
-        // the one line that carried one.
-        //
-        // §7.3 asks for **what pressing will cost, or why it cannot be pressed** — so the refusal
-        // arm is keyed on `startable` and not on `first`. Without it the cradle was drawn `fg-dim`
-        // and non-interactive under a label promising a press, and its `accessible-description` is
-        // that same label: a keyboard user focusing it was told nothing at all, which is what §9.4
-        // and §16.5 exist to prevent. The remedy itself is `Class::ToolMissing`'s command, filed on
-        // the plan; this is the cradle saying which of the two states it is in.
-        //
-        // **One label for both empty benches**, because §9.1 gives the later-empty one the same
-        // cradle line §10.1 gives the first: `press ● to make an iPod`. The `No iPod yet. Compose
-        // one: ipod-boot setup` this replaced was the sentence that made the second bench a dead
-        // end — it named the escape hatch and dropped the route.
-        cradle_label: if caps.download {
-            "Press the centre button to make an iPod".into()
-        } else {
-            "No curl, so nothing can be downloaded".into()
-        },
+        // the one line that carried one. The wording, and why the refusal arm is keyed on
+        // `caps.download`, is [`empty_cradle_label`]'s.
+        cradle_label: empty_cradle_label(Press::Centre, caps).into(),
+        // §9.5's pane, which draws no centre button to point at. Same function, same tail.
+        press_label: empty_cradle_label(Press::Here, caps).into(),
     }
 }
 
@@ -2736,7 +2811,16 @@ fn panel_description(p: &emu::Phase) -> &'static str {
 // ── Pushing (one direction only) ─────────────────────────────────────────────────────────────────
 
 /// Tell the markup what size to draw at. **One direction only** — nothing reads these back.
-fn push_fit(window: &MainWindow, fit: &fit::Fit, sf: f64) {
+///
+/// **§9.5's two sentences go out of this function and not out of one of their own**, and the
+/// second draft of this had them separate. `too-short` is what draws the pane and the headline is
+/// what the pane says; a caller that pushed the boolean and not the sentence would draw §9.5's
+/// state with an empty line where the measurement goes, and *the pane is drawn* is exactly the
+/// thing a test standing one level up cannot tell from *the test pushed the sentence itself*. One
+/// function, so there is one thing to forget rather than two — and `window_logical` is a parameter
+/// rather than a field of [`fit::Fit`] because adding it there would make every plain resize
+/// `changed`, and `changed` is what stops a drag re-setting seven properties sixty times a second.
+fn push_fit(window: &MainWindow, fit: &fit::Fit, sf: f64, window_logical: f64) {
     window.set_hero(fit.hero_logical as f32);
     window.set_screen_w(fit.panel_w as f32);
     window.set_screen_h(fit.panel_h as f32);
@@ -2744,6 +2828,45 @@ fn push_fit(window: &MainWindow, fit: &fit::Fit, sf: f64) {
     window.set_too_short(fit.too_short);
     window.set_fidelity(fidelity(fit.k, sf).into());
     window.set_select_d(select_d(fit.hero_logical));
+    let (headline, body) = short_pane(fit, window_logical);
+    window.set_short_headline(headline.into());
+    window.set_short_body(body.into());
+}
+
+/// §9.5's two sentences, and the first of them is the only line in this program that names a
+/// number the window is standing in **right now**.
+///
+/// `fit::required_client_logical` is the same function the threshold itself is computed from, so
+/// the sentence cannot say *needs 810* while the boolean was decided against some other number.
+/// Both are rounded to whole pixels because a person reading *is 734.7 pixels tall* learns nothing
+/// the integer does not tell them, and §9.5's own drawing writes integers.
+///
+/// **It says WINDOW where §9.5's draft says display**, and that is a correction rather than a
+/// rewording. The draft reads *This display gives 735 pixels of window*, which was written when the
+/// threshold was predicted from the screen; §9.6 then moved it onto `winit::Window::inner_size()`
+/// — *the window we actually got, asked of the platform* — precisely because the two disagree. Drag
+/// the bottom edge up on a 1440 x 900 display and the display gives 835; the window is 500. A
+/// sentence naming the display would be false in the one case a person can do something about, and
+/// it is the shorter sentence, which is what keeps `810.` from widowing onto a line of its own at
+/// [`geometry::SHORT_MEASURE`].
+///
+/// **The second sentence is constant, and it is here rather than in the markup** for the reason
+/// every other sentence in this program is: one place words what the program says, and a string
+/// Rust holds is a string a test can read. It differs from §9.5's draft in one clause and the
+/// clause is load-bearing. The draft reads *it still runs, and you start it from here* — this
+/// build's `on_start_device` files a note saying running is not wired, so *it still runs* is a
+/// promise the program does not keep, and §7.3's own cradle says so two lines below. What it keeps
+/// is the half that matters: **where the press went**. Withholding the drawing moves the only
+/// start affordance in the program, and a pane that does not say so has moved it silently.
+fn short_pane(fit: &fit::Fit, window_logical: f64) -> (String, String) {
+    let needs = fit::required_client_logical(fit.hero_logical);
+    (
+        format!("This window is {window_logical:.0} pixels tall. The iPod at 1:1 needs {needs:.0}."),
+        "Drawing it here would throw away part of every frame, so it is not drawn. Nothing is \
+         wrong with your files and nothing is missing — the press that was on the centre button \
+         is the row below."
+            .into(),
+    )
 }
 
 /// §7.4's centre-button hit region, **from `wheel.rs` and nowhere else**.
@@ -3749,6 +3872,10 @@ fn device_rows(settings: &Settings) -> Vec<DeviceRow> {
                 // nothing about it is missing — it was never made.
                 startable: gone.is_empty() && !composed_and_unbuilt(d),
                 cradle_label: cradle_label(d, &gone).into(),
+                // §9.5's pane replaces the well, so the same caption has to name the Row the
+                // reader is looking at rather than a centre button that is not on screen. One
+                // tail, two prefixes — see [`Press`].
+                press_label: cradle_label_at(Press::Here, d, &gone).into(),
                 // §7.5's row-1 trailing slot: **the state, and time since.**
                 state: shelf_state(d).into(),
                 write_target: writes.line.into(),
@@ -6654,7 +6781,7 @@ pub(crate) mod tests {
             panel_h: 240.0,
             too_short: true,
         };
-        push_fit(&w, &f, 2.0);
+        push_fit(&w, &f, 2.0, geometry::PREF_HEIGHT);
         assert_eq!(w.get_screen_scale(), 2);
         assert!(w.get_too_short(), "the too-short input did not reach the window");
         assert!(
@@ -6821,8 +6948,17 @@ pub(crate) mod tests {
         // One pixel under, and it is.
         let (fit, _) = fitter.apply(fit::Moment::Resized { window_logical: need - 1.0 });
         assert!(fit.too_short, "{:.1} px is under {need:.1} and did not flip", need - 1.0);
-        push_fit(&w, &fit, sf);
+        push_fit(&w, &fit, sf, need - 1.0);
         assert!(w.get_too_short(), "the flip did not reach the window");
+        // …and so did the sentence the pane draws, which is the other half of the same push. A
+        // boolean that arrives without it draws §9.5's state with an empty line where the
+        // measurement goes.
+        assert!(
+            w.get_short_headline().contains(&format!("{:.0}", need - 1.0)),
+            "the window is {:.0} px and §9.5's sentence says {:?}",
+            need - 1.0,
+            w.get_short_headline()
+        );
 
         // **Hysteresis, and it is not decoration.** Coming back up, it stays true until the window
         // clears the threshold by the whole band — otherwise a drag that hovers on the boundary
@@ -6837,7 +6973,7 @@ pub(crate) mod tests {
         let (fit, _) =
             fitter.apply(fit::Moment::Resized { window_logical: need + geometry::HYSTERESIS + 1.0 });
         assert!(!fit.too_short, "it cleared the whole band and stayed too short");
-        push_fit(&w, &fit, sf);
+        push_fit(&w, &fit, sf, need + geometry::HYSTERESIS + 1.0);
         assert!(!w.get_too_short(), "the flip back did not reach the window");
     }
 
@@ -7657,21 +7793,20 @@ pub(crate) mod tests {
         w.set_panel_description(panel_description(&phase()).into());
         w.global::<Motion>().set_scale(motion::scale());
         w.global::<Metric>().set_mono_family(mono_family().into());
-        push_fit(
-            w,
-            &fit::Fit {
-                k: 2,
-                hero_logical: 655.751,
-                panel_w: 320.0,
-                panel_h: 240.0,
-                too_short: false,
-            },
-            2.0,
-        );
+        push_fit(w, &dressed_fit(), 2.0, geometry::PREF_HEIGHT);
         push_ledger(w, None, &temp_dir("shots"), None);
         let rows: Rc<VecModel<RailRow>> = Rc::new(VecModel::default());
         w.set_rail(ModelRc::from(rows.clone()));
         sync_rail(w, &rows, &rail::Rail::new(), caps(), work::Shape::default());
+    }
+
+    /// The fit every shot stands on: `k = 2` at scale 2, and a window tall enough for the device.
+    ///
+    /// Lifted out of [`dress_the_bench`] so that §9.5's shot can say `..dressed_fit()` and vary the
+    /// **one** term it is about. A second literal `Fit` beside the first is how a shot of the
+    /// too-short state comes to differ from the bench in a way nobody meant.
+    fn dressed_fit() -> fit::Fit {
+        fit::Fit { k: 2, hero_logical: 655.751, panel_w: 320.0, panel_h: 240.0, too_short: false }
     }
 
     /// **A Rail with two failures on it**, so §9.3's failure block is in a picture.
@@ -7730,10 +7865,15 @@ pub(crate) mod tests {
     /// **Every page this window draws, drawn, with nothing on screen.**
     ///
     /// This is the end-to-end proof of [`shoot`] and it is also the tool: run it and
-    /// `_out/gui/*.png` is seven pictures of the program, taken without a window ever existing and
-    /// without an operator's focus being stolen. That was the whole point.
+    /// `_out/gui/*.png` is a picture of every page of the program, taken without a window ever
+    /// existing and without an operator's focus being stolen. That was the whole point.
     ///
-    /// **Nine, because two pages are shot twice.** `parts-empty.png` is §9.1's answer to a library
+    /// **Twelve for ten pages, because three of them are shot twice** — `parts-empty` beside
+    /// `parts`, `work-failed` beside `work`, and `bench-too-short` beside `bench`. A page is shot
+    /// twice wherever its second state is a designed one rather than a variation: §9.5's pane is a
+    /// different bench, not a narrower one.
+    ///
+    /// `parts-empty.png` is §9.1's answer to a library
     /// with nothing in it — six headings, six counts of `0`, six sentences saying what belongs there
     /// and the verbs that would fill it — and `parts.png` is the same page over
     /// [`a_furnished_library`], which is the one that proves the repeaters run. Neither is the
@@ -7827,6 +7967,22 @@ pub(crate) mod tests {
                 (name, shoot(&w, &at, f, name))
             })
             .collect();
+
+        // **§9.5, and nothing had ever taken a picture of it, because until now there was nothing
+        // to take a picture OF.** The boolean is what draws the pane rather than the window's real
+        // height, which is what makes this shootable at all: `TestingWindow` fills a zero size from
+        // the component's preferred size, so no shot in this test is ever taken at a size that
+        // would flip the fit on its own.
+        //
+        // The height in the sentence is §9.6's own table, row one: a 1280 x 800 display gives 735
+        // logical px of window against the 809.8 the iPod at 1:1 needs — the display class §9.5 is
+        // written for, and the one a laptop this program will actually be run on has.
+        let short = fit::Fit { too_short: true, ..dressed_fit() };
+        push_fit(&w, &short, 2.0, 735.0);
+        shots.push(("bench-too-short", shoot(&w, &nav::Stack::new(), &full, "bench-too-short")));
+        // …and back to a window tall enough to draw the device, so the shot below stands where
+        // every shot above it did.
+        dress_the_bench(&w);
 
         // **§9.3, and nothing had ever taken a picture of it.** Every shot above stands on an
         // EMPTY Rail — `dress_the_bench` pushes `Rail::new()` — so `work.png` is the *nothing is
@@ -8220,6 +8376,152 @@ pub(crate) mod tests {
                 );
             }
         }
+    }
+
+    /// **§9.5's pane is drawn below the threshold and is not drawn above it.**
+    ///
+    /// This is what stands where `geometry::the_too_short_state_is_an_input_with_nothing_reading_
+    /// it` stood. That test asserted the gap — `too-short` appears in `window.slint` once, as its
+    /// own declaration, and nowhere else in the markup — and said so about itself: *a gap nothing
+    /// can fail on is a gap that gets forgotten*, and *the moment §9.5's pane reads it, this goes
+    /// red*. It is red, so it is gone, and what replaces it has to fail on the thing that matters
+    /// rather than on the spelling of a property name.
+    ///
+    /// **So it reads the accessible tree and not the markup.** A sweep for the string `too-short`
+    /// in `bench.slint` is green over a pane wired to a boolean nobody pushes, over a pane whose
+    /// `visible` is inverted, and over a pane with an empty label on its only control — all three
+    /// of which are the defect. Four claims here, and each one bites alone:
+    ///
+    ///   1. **Below the threshold the press is on screen**, by its own label, which is the model's
+    ///      sentence — so a Row that draws as a blue block with nothing written on it fails, and so
+    ///      does one wired to a property nobody fills.
+    ///   2. **And the cradle is not**, which is what says the pane *replaced* the layout rather
+    ///      than being drawn on top of it. §9.6's column is fixed rows; a device still laid out
+    ///      underneath is the 560 px bug with a paragraph over it.
+    ///   3. **Above the threshold the cradle is on screen and the pane is not**, or the pane is not
+    ///      a state — it is the window.
+    ///   4. **The sentence names the two heights**, because a pane that says *this display is too
+    ///      short* and no numbers is the previous revision's paragraph with a button under it.
+    ///
+    /// **Measured red, by breaking the drawing rather than the arithmetic.** Inverting the well's
+    /// `visible: !root.too-short` to `visible: true` fails (2) — *"the drawn iPod is still on
+    /// screen below the threshold"*. Inverting the pane's own `visible` fails (1) — *"§9.5's pane
+    /// is not on screen … the only start affordance on a 1280 x 800 display"*. Dropping
+    /// `press-label:` from the pane's use site in `bench.slint` fails (1) with the label empty.
+    /// Dropping `push_short` from the fit path leaves (4) with an empty headline.
+    ///
+    /// **Ignored in a release profile rather than failing there**, for the same reason as the two
+    /// element tests below it: `build.rs` emits Slint's debug info in debug profiles only, and
+    /// without it `ElementQuery` finds *nothing* rather than refusing.
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "needs SLINT_EMIT_DEBUG_INFO, which build.rs emits in debug profiles only"
+    )]
+    #[test]
+    fn the_short_pane_replaces_the_bench_below_the_threshold_and_not_above_it() {
+        let _held = use_a_scratch_data_dir();
+        let w = a_window();
+        dress_the_bench(&w);
+        let f = Furniture::new(Settings::default());
+        let at = nav::Stack::new();
+
+        // The bench as every other test in this file meets it: a window tall enough for the iPod.
+        draw(&w, &at, &f);
+        let tall = text_on_screen(&w);
+        let cradle = w.get_empty_device().cradle_label.to_string();
+        assert!(
+            tall.contains(&cradle),
+            "the cradle label {cradle:?} is not on a window tall enough to draw the device, so \
+             this test is measuring something other than the bench: {tall:?}"
+        );
+
+        // …and the same window told it is too short. **Only the boolean moves**, which is what
+        // makes the two halves comparable: `push_short`'s sentences are the pane's own and nothing
+        // else in the window is touched.
+        let short = fit::Fit { too_short: true, ..dressed_fit() };
+        push_fit(&w, &short, 2.0, 735.0);
+        draw(&w, &at, &f);
+        let drawn = text_on_screen(&w);
+
+        // (1) The press, by the model's own sentence for this surface.
+        let press = w.get_empty_device().press_label.to_string();
+        assert!(
+            !press.is_empty(),
+            "`empty_device` filed no §9.5 press label, so the pane's only control draws as a bar \
+             with nothing written on it"
+        );
+        assert!(
+            drawn.contains(&press),
+            "§9.5's pane is not on screen below the threshold — {press:?} is nowhere on it, and it \
+             is the only start affordance on a 1280 x 800 display. {drawn:?}"
+        );
+        // …and it is a **control**, not a line of text: §9.5 asks for a 44 px primary Row, and a
+        // paragraph saying *press here* is exactly the bench-with-no-step-one §10.4 indicts.
+        assert!(
+            labels(&elements_by_role(&w, i_slint_backend_testing::AccessibleRole::Button))
+                .contains(&press),
+            "the pane draws {press:?} as text rather than as a Row, so there is nothing to press"
+        );
+
+        // (2) The device is gone, not squeezed. `panel_description` is the drawn iPod's own
+        // accessible label and reaches a pixel nowhere else.
+        let panel = panel_description(&phase()).to_string();
+        assert!(
+            !drawn.contains(&cradle),
+            "the cradle label is still on screen below the threshold, so the pane was drawn over a \
+             layout that is still there rather than in place of it"
+        );
+        assert!(
+            !labels(&elements_by_role(&w, i_slint_backend_testing::AccessibleRole::Image))
+                .contains(&panel),
+            "the drawn iPod is still on screen below the threshold: §9.6's column is fixed rows, so \
+             what is under the pane is a 655.751 px device laid out past the bottom edge"
+        );
+
+        // **And nothing else on screen points at a control that is not drawn.** This is the other
+        // half of §9.5's finding, and it is the half a pane cannot fix by existing: the shelf is
+        // deliberately left alone below the threshold, so every sentence on it is being read
+        // against a bench with no device on it. Shelf row 2 opened *The centre button makes one*
+        // until this commit, which is the sentence §9.5 names.
+        //
+        // The pane's own paragraph is exempt by identity rather than by pattern, because it is the
+        // one line for which naming that button is the point: it says where the press went.
+        let body = w.get_short_body().to_string();
+        for line in drawn.iter().filter(|l| **l != body) {
+            assert!(
+                !line.contains("centre button"),
+                "the window points at a centre button that is not drawn: {line:?}"
+            );
+        }
+
+        // (4) The measurement, and both halves of it. §9.6's table row one.
+        let needs = fit::required_client_logical(short.hero_logical);
+        let head = w.get_short_headline().to_string();
+        for want in ["735".to_string(), format!("{needs:.0}")] {
+            assert!(head.contains(&want), "§9.5's sentence does not name {want}: {head:?}");
+        }
+        assert!(
+            drawn.contains(&head),
+            "the headline was pushed and no `Text` on the screen says it: {head:?}"
+        );
+        assert!(
+            drawn.contains(&w.get_short_body().to_string()),
+            "the paragraph was pushed and is not on the screen"
+        );
+
+        // (3) …and back, because a state that never goes away is not a state.
+        push_fit(&w, &dressed_fit(), 2.0, geometry::PREF_HEIGHT);
+        draw(&w, &at, &f);
+        let back = text_on_screen(&w);
+        assert!(
+            back.contains(&cradle),
+            "the cradle did not come back above the threshold"
+        );
+        assert!(
+            !back.contains(&press),
+            "§9.5's pane is drawn on a window tall enough for the device, so it is not a \
+             replacement — it is a second bench sitting on the first"
+        );
     }
 
     /// **A page is drawn with what is on it, and a header is not a page.**
@@ -10437,6 +10739,18 @@ pub(crate) mod tests {
             ("the first-run bench", empty_device(true, caps(), a_cost()).cradle_label.to_string()),
             ("the empty bench", empty_device(false, caps(), no_cost()).cradle_label.to_string()),
         ];
+        // **§9.5's Row inherits this budget rather than needing its own**, and the reason is one
+        // line of arithmetic rather than a second table: every caption on that surface is the same
+        // sentence with `Press::Here`'s prefix in place of `Press::Centre`'s, and `Press here` is
+        // the shorter of the two. A third surface with a longer prefix would have to bring its own
+        // measure, and this is what would say so.
+        assert!(
+            Press::Here.verb().chars().count() < Press::Centre.verb().chars().count(),
+            "§9.5's pane words the press as {:?}, which is longer than the cradle's {:?} — so the \
+             cradle's budget no longer covers it and the pane needs a measure of its own",
+            Press::Here.verb(),
+            Press::Centre.verb()
+        );
         // …and the half-made one says *finish*, not *start*, or the label promises what the press
         // does not do.
         assert!(
@@ -10462,6 +10776,92 @@ pub(crate) mod tests {
         // And a label that fits is still a sentence rather than a word.
         for (what, line) in &typed {
             assert!(line.chars().count() > 12, "{what}'s label says nothing: {line:?}");
+        }
+    }
+
+    /// **§9.5's *one source, so they cannot disagree*, mechanically.**
+    ///
+    /// The cradle and the pane are two surfaces drawing one press, and the failure this is written
+    /// against is not a typo — it is somebody wording the pane's Row a second time, six months from
+    /// now, and the two surfaces then telling a person two different things about what pressing
+    /// costs. So the check is not *the strings are equal* (they are not, and must not be) but
+    /// **every caption is its surface's prefix followed by a tail both surfaces share**.
+    ///
+    /// It walks every arm of [`cradle_label_at`] that contains a press, plus both arms of
+    /// [`empty_cradle_label`], and [`Press::ALL`] rather than a pair written here — so a third
+    /// surface lands in this sweep by existing.
+    #[test]
+    fn the_two_press_surfaces_share_every_tail() {
+        let made = Device {
+            disk: Some("mine".into()),
+            disk_path: Some(std::path::PathBuf::from("/tmp/mine.img")),
+            ..Device::default()
+        };
+        let half_made = Device { name: compose::FIRST_RUN_DEVICE.into(), ..Device::default() };
+        let mut tails: Vec<(&str, Vec<String>)> = Vec::new();
+        for (what, of) in [
+            ("the startable device", &made),
+            ("the half-made device", &half_made),
+        ] {
+            tails.push((
+                what,
+                Press::ALL.iter().map(|p| cradle_label_at(*p, of, &[])).collect(),
+            ));
+        }
+        tails.push((
+            "the empty bench",
+            Press::ALL.iter().map(|p| empty_cradle_label(*p, caps())).collect(),
+        ));
+
+        for (what, both) in &tails {
+            let stripped: Vec<&str> = both
+                .iter()
+                .zip(Press::ALL)
+                .map(|(line, p)| {
+                    line.strip_prefix(p.verb()).unwrap_or_else(|| {
+                        panic!(
+                            "{what}: {line:?} is not {:?}'s caption — the surface's prefix is not \
+                             on the front of it, so the two halves have been written together \
+                             again",
+                            p
+                        )
+                    })
+                })
+                .collect();
+            assert!(
+                stripped.windows(2).all(|w| w[0] == w[1]),
+                "{what} is worded twice: the cradle says {:?} and §9.5's pane says {:?}, and what \
+                 is left after each surface's own prefix is {stripped:?}",
+                both[0],
+                both[1]
+            );
+            assert!(
+                !stripped[0].is_empty(),
+                "{what}'s caption is the prefix and nothing else, so it says where to press and \
+                 not what pressing costs"
+            );
+        }
+
+        // **A refusal is surface-independent**, and contains no press at all: a part that has left
+        // the library is gone wherever you are standing. So both surfaces answer it identically,
+        // and neither prefixes it.
+        let composed = Device { composed: true, ..Device::default() };
+        let refusals = [
+            cradle_label_at(Press::Centre, &composed, &[]),
+            cradle_label_at(Press::Here, &composed, &[]),
+            empty_cradle_label(Press::Centre, rail::Caps { download: false, ..caps() }),
+            empty_cradle_label(Press::Here, rail::Caps { download: false, ..caps() }),
+        ];
+        assert_eq!(refusals[0], refusals[1], "a refusal was worded per surface");
+        assert_eq!(refusals[2], refusals[3], "a refusal was worded per surface");
+        for line in &refusals {
+            for p in Press::ALL {
+                assert!(
+                    !line.contains(p.verb()),
+                    "{line:?} is a refusal carrying {:?}'s press clause",
+                    p
+                );
+            }
         }
     }
 

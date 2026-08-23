@@ -333,6 +333,16 @@ geometry! {
     LINE_TITLE:       Px = 26.0;
     /// §6.2's `body` line box — *14 / 20*. The shelf's second row.
     LINE_BODY:        Px = 20.0;
+    /// §9.5's pane: the measure its two sentences are set at, and the width of its primary Row.
+    ///
+    /// **Derived, never typed.** The narrowest well this window can produce is
+    /// `MIN_WIDTH − DRAWER_W` — the declared minimum width with the drawer open, which is the one
+    /// case §9.6 says *the drawer never widens the window* about — and §7.1 gives the well
+    /// [`WELL_AIR`] a side. So this is the widest measure that cannot overflow at any size the
+    /// window allows, and `the_short_pane_fits_the_narrowest_well_this_window_has` is what holds
+    /// it to that. It does not grow with the well: a sentence set across 1140 px is a sentence
+    /// nobody can read a second line of (§6.2).
+    SHORT_MEASURE:    Px = MIN_WIDTH - DRAWER_W - 2.0 * WELL_AIR;
     /// §7.3's clamp marks: `3 × 28` at the body's mid-height, one on either side of the cradle.
     CLAMP_W:          Px = 3.0;
     CLAMP_H:          Px = 28.0;
@@ -458,15 +468,15 @@ geometry! {
     /// §9.5's replacement pane cannot be laid out; everything above it is the too-short boolean's
     /// job.
     ///
-    /// **And the pane it defers to is not built**, which is worth saying here because this is the
-    /// constant that makes the state reachable. `too-short` is computed, pushed in, and read by no
-    /// markup (`window.slint:189`, declared and unused) — so between this floor and roughly 810
-    /// logical the 655.751 px device and the caption row carrying `write_target()` are laid out
-    /// past the bottom edge and drawn there. The previous `860px` did not fix that: it only made
-    /// the state harder to reach by dragging, and it was a minimum no 1280 × 800 display can
-    /// satisfy, so it guarded nothing on the display class §9.5 is actually about. **Retirement
-    /// condition**, in the shape `research/04` uses: when §9.5's replacement pane reads
-    /// `too-short`, delete this paragraph. `docs/GUI.md` §20 item 15 is the entry for it.
+    /// **And the pane it defers to is built**, which is worth saying here because this is the
+    /// constant that makes the state reachable: `bench.slint`'s `ShortPane` replaces the well
+    /// whenever `too-short` is true, and [`SHORT_MEASURE`] plus [`SHELF`] is the column it has to
+    /// fit inside this floor. The paragraph that used to stand here recorded the opposite —
+    /// *computed, pushed in, and read by no markup* — and with it the state between this floor and
+    /// roughly 810 logical, where the 655.751 px device was laid out past the bottom edge and
+    /// drawn there. `the_short_pane_fits_the_window_minimum` is the arithmetic and
+    /// `main::the_short_pane_replaces_the_bench_below_the_threshold_and_not_above_it` is the
+    /// drawing.
     MIN_HEIGHT:       Px = 400.0;
     PREF_WIDTH:       Px = 1180.0;
     /// The k = 1, sf = 1 case of body + [`CHROME_PREF`], rounded up. Not a round number.
@@ -917,49 +927,58 @@ mod tests {
         );
     }
 
-    /// **The other half of that floor, and it does not exist yet — so the gap is asserted instead
-    /// of left to be discovered.**
+    /// **The other half of that floor, and §9.5's pane is what stands on it.**
     ///
-    /// `min-height` is 400 because §9.6 says a window minimum is a floor, and the state below the
-    /// threshold is supposed to be replaced by §9.5's pane rather than laid out badly. `too-short`
-    /// is computed with hysteresis and pushed in on every change — and **read by no markup**, so
-    /// between 400 and ~810 logical the device and the caption row carrying `write_target()` are
-    /// positioned past the bottom edge and drawn there.
+    /// The test this replaces — `the_too_short_state_is_an_input_with_nothing_reading_it` — asserted
+    /// that `too-short` appeared in `window.slint` exactly once, as its own declaration, and
+    /// nowhere else in the markup. It was the right test while the gap was open and the wrong one
+    /// the moment it closed, which is what it said about itself.
     ///
-    /// This is the self-retiring form the exemption list uses: it asserts that `too-short` still
-    /// appears exactly once in `window.slint`, as its own declaration. The moment §9.5's pane reads
-    /// it, this goes red — and whoever wrote the pane deletes this test, [`MIN_HEIGHT`]'s
-    /// paragraph and `docs/GUI.md` §20 item 15 together. A gap nothing can fail on is a gap that
-    /// gets forgotten.
+    /// What replaces it here is the arithmetic that makes the pane possible at all: at the window
+    /// minimum, with the shelf taking [`SHELF`] off the bottom, there is room for §9.5's primary
+    /// Row **and** its two sentences. That is the claim [`MIN_HEIGHT`] is making by being a floor —
+    /// *the height below which even §9.5's replacement pane cannot be laid out* — and nothing was
+    /// checking it. The drawing itself is asserted one level up, by
+    /// `main::the_short_pane_replaces_the_bench_below_the_threshold_and_not_above_it`, which reads
+    /// the accessible tree rather than this file.
+    ///
+    /// The terms are the pane's own column: [`WELL_AIR`] above and below, `Metric.s4` between each
+    /// pair — read out of `ui/tokens.slint` as text, the arrangement [`PAGE_MARGIN`] already has
+    /// with `s5` — and **one** [`LINE_BODY`] per sentence, which is a floor rather than a
+    /// measurement. Both sentences wrap, so what this asserts is that the Row and a first line of
+    /// each of them fit; `_out/gui/bench-too-short.png` is where the real renderings are read, and
+    /// at [`SHORT_MEASURE`] they are one line and three, leaving 116 px of the 312 unspent. A
+    /// budget that tried to predict a line count would be arithmetic about a text renderer this
+    /// file cannot ask.
     #[test]
-    fn the_too_short_state_is_an_input_with_nothing_reading_it() {
-        // **Comments are stripped first.** The prose above these files discusses `too-short` at
-        // length — that is the design being recorded, not the state being read, and a sweep that
-        // could not tell the two apart would fire on a paragraph explaining why nothing reads it.
-        let window = read("window.slint");
-        let uses: Vec<String> = window
-            .lines()
-            .map(|l| strip(l).trim().to_string())
-            .filter(|l| l.contains("too-short"))
-            .collect();
-        assert_eq!(
-            uses,
-            vec!["in property <bool> too-short: false;".to_string()],
-            "§9.5's pane reads `too-short` now — delete this test, MIN_HEIGHT's paragraph about it, \
-             and GUI.md §20 item 15"
+    fn the_short_pane_fits_the_window_minimum() {
+        let s4 = markup_space("s4");
+        let well = MIN_HEIGHT - SHELF;
+        let column = 2.0 * WELL_AIR + LINE_BODY + s4 + LINE_BODY + s4 + ROW_H;
+        assert!(
+            column <= well,
+            "§9.5's pane needs {column:.0} px and the window minimum leaves it {well:.0}; \
+             MIN_HEIGHT {MIN_HEIGHT:.0} is supposed to be the height below which the pane cannot \
+             be laid out, so either it is too low or the pane's column has grown"
         );
-        for (name, text) in markup() {
-            if name == "window.slint" {
-                continue;
-            }
-            for (n, line) in text.lines().enumerate() {
-                assert!(
-                    !strip(line).contains("too-short"),
-                    "ui/{name}:{}: reads the window's too-short state; the same retirement applies",
-                    n + 1
-                );
-            }
-        }
+    }
+
+    /// §9.5's measure never overflows the well, at any size this window allows.
+    ///
+    /// The binding case is the declared minimum width **with the drawer open**, which §9.6 spends a
+    /// paragraph on: the drawer never widens the window, so the well gives up `DRAWER_W` and what
+    /// is left is all the pane will ever have. [`SHORT_MEASURE`] is that number less §7.1's air, so
+    /// this is the derivation checked rather than restated — the same shape as
+    /// `the_min_width_derivation_sums_to_the_declared_minimum` one screen up.
+    #[test]
+    fn the_short_pane_fits_the_narrowest_well_this_window_has() {
+        let narrowest = MIN_WIDTH - DRAWER_W;
+        assert_eq!(
+            SHORT_MEASURE + 2.0 * WELL_AIR,
+            narrowest,
+            "the pane is set at {SHORT_MEASURE} across with {WELL_AIR} of air a side, and the \
+             narrowest well this window has is {narrowest}"
+        );
     }
 
     /// [`CHROME_MIN`] and [`CHROME_PREF`] are not typed-in totals.

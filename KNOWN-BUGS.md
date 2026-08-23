@@ -31,8 +31,10 @@ still 0 x 0, and the clamp writes `min-width x min-height` into the pending wind
 window is **created** at 880 x 400 and resized to 1180 x 846 **before it is ever mapped**. Both sizes
 then arrive as two queued `Resized` events in creation order, and this program computed `k` and the
 too-short boolean from the first one — a size no window was ever on screen at. `too-short` went true
-on every launch. Nothing reads that boolean today (GUI.md §20 item 15), so it had no drawn effect;
-it was wrong state published by the program, and §9.5's pane would have read it.
+on every launch. Nothing read that boolean at the time (GUI.md §20 item 15), so it had no drawn
+effect; it was wrong state published by the program. **§9.5's pane reads it now**, which is what
+would have turned it into a first run that replaced the bench with a message about a display that
+was tall enough — so this fix is what that pane is standing on.
 
 The trace made it look like a resize because `dump_layout` printed `window` — Slint's **cache**,
 which the winit event filter runs one event ahead of — beside a fit computed from a different source.
@@ -56,7 +58,7 @@ against the cache — so a difference on that line means a defect instead of an 
 
 **Why no test caught it, and this is the part worth keeping.** The suite was green — 482 tests — and
 `the_column_terms_sum_to_the_declared_chrome`, `the_too_short_state_is_an_input_with_nothing_reading_
-it` and the whole `fit` module all passed. Every one of them checks arithmetic about a window. None
+it` (since retired with the gap it asserted) and the whole `fit` module all passed. Every one of them checks arithmetic about a window. None
 launched one. The guard is `the_fit_is_computed_from_the_size_the_platform_reports`
 (`tools/ipod-gui/tests/startup_fit.rs`), which launches the real binary, reads `IPOD_LAYOUT=1`, and
 **resizes the window from outside the process** by an amount chosen after it is running. That last
@@ -65,9 +67,10 @@ part is not decoration: an earlier version compared the program only with itself
 believed 846 with the window 700 px tall. Five breaks were each proved to make it red, including that
 one.
 
-**Related but not the same**: GUI.md §20 item 15 records the too-short state having no §9.5 pane. It
-is reachable — on a 1280 x 800 display, which gives 735 usable logical px against the 809.8 the iPod
-at 1:1 needs, at every scale factor. That is a real open defect and this was never it.
+**Related but not the same, and now closed**: GUI.md §20 item 15 recorded the too-short state
+having no §9.5 pane. It is reachable — on a 1280 x 800 display, which gives 735 usable logical px
+against the 809.8 the iPod at 1:1 needs, at every scale factor. That was a real open defect, it was
+never this one, and `ShortPane` in `ui/bench.slint` is the answer to it.
 
 ## ~~The window offered no way to make an iPod once you had opened it and closed it~~ — FIXED 2026-08-21
 

@@ -203,6 +203,13 @@ export struct DeviceRow {
     // §7.3's label: what pressing will cost, or why it cannot be pressed. The model's sentence,
     // verbatim.
     cradle-label: string,
+    // **The same sentence, for a surface with no centre button on it.** §9.5's pane replaces the
+    // well and draws the press as a Row, so `press the centre button` would be a caption pointing
+    // at a control that is not drawn — which is the exact defect §9.5 exists to delete. `main::
+    // Press` writes one tail and two prefixes; this is the second one, per device, so it follows
+    // `selected` the way `cradle-label` does rather than being pushed once for a bench that has
+    // moved on.
+    press-label: string,
 }
 
 // One line inside an expanded row — `parts::Detail` flattened. A `Fact`, a `Paragraph`, a
@@ -405,6 +412,15 @@ export component Pressable inherits Rectangle {
     // `Field`'s `TextInput`. Without it a `Field` would have to invent a second ring, and two ring
     // constructions is how they come to be drawn in two places.
     in property <bool> focus-inside: false;
+    // **The announcement, split from the gate** — §7.4's rule, which had no way to reach a
+    // `Pressable` until §9.5's pane needed it. `bench.slint`'s cradle calls `pressed-centre` in
+    // every state, because Rust is the only thing that can say *which part is gone* and a press
+    // that teaches nothing is worse than a press that is refused; what it varies is
+    // `accessible-enabled`, so an assistive technology is told the device cannot start while the
+    // press still files the sentence saying why. §9.5's Row is that same press on a surface with no
+    // cradle, so it needs the same split. Defaults to `enabled`, which is what every other use site
+    // in this markup means by it.
+    in property <bool> announce-enabled: root.enabled;
 
     out property <bool> armed: false;
     out property <bool> has-focus: focus.has-focus;
@@ -418,6 +434,14 @@ export component Pressable inherits Rectangle {
 
     public function disarm() {
         root.armed = false;
+    }
+
+    // §9.5: the pane's primary Row is the only start affordance on a 1280 x 800 display, so the
+    // window has to be able to hand it focus the way it hands the cradle focus. `focus` is an
+    // internal element and `forward-focus` cannot reach inside a component, which is the same
+    // reason `Bench::focus-cradle` exists one level up.
+    public function take-focus() {
+        focus.focus();
     }
 
     // **The slot is reserved whenever this control has something to tell you**, and every term is
@@ -445,7 +469,7 @@ export component Pressable inherits Rectangle {
     accessible-role: AccessibleRole.button;
     accessible-label: root.label;
     accessible-description: root.enabled ? root.consequence : root.reason;
-    accessible-enabled: root.enabled && !root.inert;
+    accessible-enabled: root.announce-enabled && !root.inert;
 
     VerticalLayout {
         spacing: 0px;

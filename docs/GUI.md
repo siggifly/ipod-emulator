@@ -1419,22 +1419,23 @@ window height.
 
 The threshold is `hero_logical + 154 > client_logical`, evaluated in Rust from the **measured**
 window (§9.6, §16.1) with hysteresis, and re-evaluated on `Resized`, `Moved` and
-`ScaleFactorChanged`. When it is short, the well is replaced by:
+`ScaleFactorChanged`. When it is short, the well is replaced by — and this is **built**, as
+`ShortPane` in `ui/bench.slint`; the drawing below is what `_out/gui/bench-too-short.png` shows:
 
 ```
  ┌─────────────────────────────────────────────────────────────────────────────────────┐
  │                                                                                     │
- │        This display gives 735 pixels of window. The iPod at 1:1 needs 810.           │
+ │            This window is 735 pixels tall. The iPod at 1:1 needs 810.                │
  │                                                                                     │
- │        Drawing it here would throw away part of every frame the emulator             │
- │        produced, so it is not drawn — but it still runs, and you start it            │
- │        from here. Nothing is wrong with your files.                                  │
+ │        Drawing it here would throw away part of every frame, so it is not            │
+ │        drawn. Nothing is wrong with your files and nothing is missing —              │
+ │        the press that was on the centre button is the row below.                     │
  │                                                                                     │
- │      ▓▓▓▓▓  press ● to make an iPod · 6.5 MB to download, about 28 MB on disk  ▓▓▓▓ │  ← 44 px, the material,
+ │      ▓▓▓▓▓▓▓▓▓▓▓  Press here — running is not wired  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓   │  ← 44 px, the material,
  │                                                                                     │     the cradle's own
- │        Fullscreen shows the panel at 3× — 960 × 720, exact.  [ Fullscreen  ⌃⌘F ]     │     label and callback
- │                                                                                     │
- └─────────────────────────────────────────────────────────────────────────────────────┘
+ └─────────────────────────────────────────────────────────────────────────────────────┘     label and callback
+        └── 420 px, `Geometry.short-measure` = `min-width − DRAWER_W − 2 × WELL_AIR`:
+            the widest measure that cannot overflow the narrowest well this window has
 ```
 
 **The primary row is the whole point of this state and the previous revision did not have it.** The
@@ -1446,18 +1447,52 @@ Running with the reason *"there is no machine running, so there is nothing to sh
 route was a phantom and the offered route was dead, on the one display class this document
 explicitly designs a state for. So:
 
-- **The panel carries a real 44 px primary Row** wearing the material, whose label is exactly the
-  cradle label for the current state and whose callback is exactly the centre button's — `press ● to
-  make an iPod`, `press ● to start`, `press ● to resume`, `press ● to stop`. One source, so they
-  cannot disagree, and `Space` / `Enter` reach it because it is the pane's primary action.
+- **The panel carries a real 44 px primary Row** wearing the material — §6.5 use 3, *the one primary
+  row on the too-short bench* — whose callback is exactly the centre button's and whose label is the
+  cradle's own sentence. One source, so they cannot disagree, and `Space` / `Enter` reach it because
+  it is the pane's primary action. `Bench::focus-cradle` routes to it below the threshold, so a
+  window that opens on a 1280 × 800 display opens with the press focused rather than with focus on a
+  fixture that is not drawn.
+- **One tail, two prefixes**, which is what *one source* had to become in the building. The caption
+  is one sentence in two halves — where to press, and what pressing costs — and only the first is a
+  fact about the surface. `press ● to make an iPod` was written when `●` was to be a drawn mark
+  inside the label; the shipped cradle spells it *Press the centre button*, and that on a pane which
+  draws no centre button is this section's own indictment two inches lower. So `main::Press` is the
+  prefix — `Press the centre button` / `Press here` — and every tail under it is written once, for
+  both surfaces. `the_two_press_surfaces_share_every_tail` strips each surface's prefix and compares
+  what is left; a refusal carries no press clause at all and both surfaces answer it identically.
 - **`Fullscreen` is offered only when there is something on the glass** — Booting, Running, Stopped,
   or parked with a frame. Otherwise it is absent from this panel rather than present and dead, and
-  §12.6's rule is restated to match.
-- **The scale in the sentence is interpolated from the same function §12.6 uses**, never a constant.
-  On the operator's own machine it says 7×, not 3× (§12.6).
+  §12.6's rule is restated to match. **So it is absent from every state this build can reach**:
+  §12.2 puts this build in `Off` and nowhere else, which makes *absent* the correct rendering of
+  this rule here rather than a gap in the pane. It arrives with §12.6, and the scale in its sentence
+  is interpolated from the same function §12.6 uses, never a constant — on the operator's own
+  machine that is 7×, not 3×.
+- **The sentence says WINDOW where this section's draft said display**, and that is a correction
+  rather than a rewording. §9.6 moved the threshold onto `winit::Window::inner_size()` — *the window
+  we actually got* — precisely because the two disagree: drag the bottom edge up on a 1440 × 900
+  display and the display gives 835 while the window is 500. A sentence naming the display would be
+  false in the one case a person can do something about. It is pushed on **every** moment the pane is
+  on screen rather than only when the fit crosses the threshold, because it is the one live
+  measurement in this program and a stale one is an instrument lying.
 
 The shelf and the drawer are unaffected, so the machine can still be composed, built and run — it is
-only the drawn body that is withheld.
+only the drawn body that is withheld. **Which makes the shelf this section's second finding, and it
+was still live until the pane landed**: row 2's empty-bench copy opened *The centre button makes
+one*, and the shelf is deliberately left alone below the threshold, so that sentence was being read
+against a bench with no device on it. It counts the press instead now — *One press makes one: a
+5.5G, 30 GB, black* — which is true on both surfaces and drops a route the cradle line already
+states. The route belongs where a route belongs (§7.3); row 2 was naming it twice.
+
+**It replaces the layout rather than shrinking it**, and that is §9.6 applied rather than restated:
+every term in that column is a fixed height, nothing gives, and a squeezed bench is the 560 px bug
+again. Below the threshold the well is `visible: false` — not `if`, per §16.3, because the subtree
+holds the cradle's `FocusScope` and the drawn device's own hover and press state, and because
+`body-x` / `body-y` read `well.width` and `well.height` by name, which an `if` element cannot be
+asked for. What it buys mechanically is that Slint takes the undrawn half out of the tab order and
+out of the accessible tree — the same mechanism `drawer.slint` uses on a closed drawer — and that is
+what `main::the_short_pane_replaces_the_bench_below_the_threshold_and_not_above_it` reads: the press
+on screen and the drawn iPod not, below the threshold, and the reverse above it.
 
 ### 9.6 The vertical budget, and it is the argument for the whole layout
 
@@ -1560,6 +1595,13 @@ constant. 400 is the height below which even §9.5's replacement pane cannot be 
 above that is the too-short boolean's job, with hysteresis (drop below the threshold, restore 20 px
 above it) so the boundary does not flutter under a drag. **`preferred: 1180 × 846`.**
 
+**That sentence was arithmetic nobody had done, and it is done now.** 400 less the shelf's 88 is
+312, and §9.5's column is `2 × WELL_AIR + 2 × LINE_BODY + 2 × s4 + ROW_H` = 136 — so the floor holds
+the pane with room to spare, and `geometry::the_short_pane_fits_the_window_minimum` is what says so
+if either number moves. Across, the binding case is this section's own *the drawer never widens the
+window*: at `min-width` with the drawer open the well is 460, which is `Geometry.short-measure` 420
+plus §7.1's air, exactly.
+
 ---
 
 ## 10. First run, in full
@@ -1593,7 +1635,7 @@ is a three-platform promise and Reference says so rather than pretending).
 ```
  ├──────────────────────────────────────────────────────────────────────────────────────────────────────────┤
  │  No iPod yet                                                                            nothing mounted  │
- │  You do not need an iPod, or any files off one. The centre button makes one: a 5.5G, 30 GB, black —      │
+ │  You do not need an iPod, or any files off one. One press makes one: a 5.5G, 30 GB, black —              │
  │  6.5 MB to download, about 28 MB on disk.      MENU ›  Parts, if you have files  ·  or drop them here    │
  └──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -3876,26 +3918,36 @@ In order, because each depends on the one before it.
 14. **`README.md`, `docs/DEVELOPING.md` and `docs/GETTING-THE-FILES.md` are corrected** where they
     describe a window that does not exist: drop-anywhere, the `S` / `D` / `Esc` keys, parking on
     close, `IPOD_LAYOUT`, and the model table's **197** rows against the README's 198.
-15. **§9.5's replacement pane, and it became load-bearing when item 9 landed.** `min-height` moved
-    from a hand-written `860px` to `Geometry.min-height` = **400**, which is right — §9.6 argues a
-    window minimum is a floor and not a fit, and 860 was a minimum no 1280 × 800 display can
-    satisfy, so it guarded the drag and never the display class §9.5 is actually about. But the
-    boolean that is supposed to replace the layout below the threshold is declared at
-    `window.slint:189` and **read nowhere**: `too-short` is computed correctly, pushed in on every
-    change, and drawn by nothing. So between 400 and ~810 logical the 655.751 px device and the
-    caption row carrying `write_target()` are positioned past the bottom edge and drawn there — the
-    exact state §16.1 describes, with the warning off screen. Neither the old floor nor the new one
-    catches it; the old one only made it harder to reach by dragging. **Nothing in the tests can
-    fail on this**, because `geometry::the_minimum_height_is_a_floor_not_a_fit` asserts the floor is
-    low and nothing asserts anything catches the window when it gets there. Until the pane exists,
-    that is the state of it.
-    **Three things measured 2026-08-21, none of which is the pane.** The declaration moved to
-    `window.slint:125` and the row it names is shelf row 3 now, not a caption. The well **clips**, so
-    what a too-short window loses is the *top* of the device rather than the shelf off the bottom —
-    strictly better than the shipped failure and **not** the pane; §9.5's primary Row, which is the
-    only start affordance on a 1280 × 800 display, does not exist. The boolean **used** to flip true
-    on every launch from Slint's own startup size clamp; it does not any more, and the pane needs no
-    suppression when it is built — see the corrected note at the head of §9.5.
+15. **DONE.** §9.5's replacement pane, which became load-bearing when item 9 landed and stayed
+    open for two revisions after it. `min-height` moved from a hand-written `860px` to
+    `Geometry.min-height` = **400**, which is right — §9.6 argues a window minimum is a floor and
+    not a fit, and 860 was a minimum no 1280 × 800 display can satisfy, so it guarded the drag and
+    never the display class §9.5 is actually about. But the boolean that replaces the layout below
+    the threshold was **computed correctly, pushed in on every change, and drawn by nothing**, so
+    between 400 and ~810 logical the 655.751 px device was positioned past the bottom edge and
+    drawn there. The entry that stood here recorded that, and recorded that the previous notes
+    about it had been wrong twice.
+    **`ShortPane` is in `ui/bench.slint` now**: the measurement, the paragraph, and §9.5's 44 px
+    primary Row carrying the cradle's own callback. It **replaces** rather than shrinks — the well
+    goes `visible: false`, per §16.3 and for the two reasons §9.5 now gives — and
+    `Bench::focus-cradle` routes to the Row below the threshold so the window opens with the press
+    focused on the display class this state exists for. **`Fullscreen` is absent rather than
+    disabled**, which is §9.5's own rule read against a build §12.2 puts in `Off`.
+    **Three things the building found, none of which was the pane.** §9.5's *one source* for the
+    label could not be taken literally: the shipped cradle spells the press *Press the centre
+    button*, and a pane that draws no centre button repeating it is the phantom §9.5 exists to
+    delete. `main::Press` splits the caption into a per-surface prefix and a shared tail, and
+    `the_two_press_surfaces_share_every_tail` is what stops a third wording. **Shelf row 2 was the
+    same defect and §9.5 names it** — *The centre button makes one* — read against a bench with no
+    device on it, because the shelf is deliberately left alone below the threshold; it counts the
+    press now. And the pane's headline says **window**, not display: §9.6 moved the threshold onto
+    `winit::Window::inner_size()` precisely because the two disagree, so the draft's wording was
+    false in the one case a person can do something about.
+    The test that asserted the gap — `the_too_short_state_is_an_input_with_nothing_reading_it`,
+    which said of itself *the moment §9.5's pane reads it, this goes red* — is deleted, and
+    `main::the_short_pane_replaces_the_bench_below_the_threshold_and_not_above_it` stands where it
+    stood, reading the accessible tree rather than the markup. `_out/gui/bench-too-short.png` is the
+    picture.
 16. **Parts shows `Resource::Bootloader`.** `resource_rows` rendered four groups — iPods, Apple
     firmware, Software, Disks — and dropped the fourth kind on the floor, which is §3's own named
     complaint and §11.4's six-group requirement. **`resource_rows` and `ResourceRow` are deleted**

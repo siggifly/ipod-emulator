@@ -133,11 +133,18 @@ export component MainWindow inherits Window {
     // (§17) is the first thing that will, because a 1:1 PNG has to know what to divide by.
     in property <int> screen-scale: 1;
     // §9.5: this display cannot show the panel at 1:1. Computed in Rust with hysteresis and pushed
-    // in, because Slint has no responsive breakpoints and cannot have any. The replacement pane that
-    // reads it is §9.5's, which is not built — this is the input waiting for it, not a claim that
-    // the state is drawn. `the_too_short_state_is_an_input_with_nothing_reading_it` asserts the gap
-    // and retires itself the moment the pane lands.
+    // in, because Slint has no responsive breakpoints and cannot have any. **`bench.slint`'s
+    // `ShortPane` is what reads it**: below the threshold the well and everything in it stops being
+    // drawn and the pane stands in its place, and `main::the_short_pane_replaces_the_bench_below_
+    // the_threshold_and_not_above_it` asserts both halves off the accessible tree.
     in property <bool> too-short: false;
+    // §9.5's two sentences. **Worded in Rust, and the first one is live**: it names the height this
+    // window is standing in right now against the height the iPod needs, so it is pushed on every
+    // moment the pane is on screen rather than only when the fit crosses the threshold — see
+    // `main::push_short`. A sentence naming a height the window no longer has is the instrument
+    // lying.
+    in property <string> short-headline;
+    in property <string> short-body;
     // §17.Q12, measured: how wide the longest Rail verb actually draws at `Metric.body-size` in the
     // face this platform gave us. **Read out, never in** — it is the one number in this program that
     // only the text renderer knows, and `Geometry.rail-verb-w` is a budget until it is compared
@@ -543,6 +550,13 @@ export component MainWindow inherits Window {
                 // says what pressing will cost or why it cannot be pressed (§7.3), and neither of
                 // those is what a person wants to read during a download.
                 cradle-label: root.working-label != "" ? root.working-label : root.current.cradle-label;
+                // §9.5's pane, and the caption on it obeys the same precedence for the same
+                // reason: the Row IS the cradle on that surface, so what it says while a download
+                // is running is what the cradle would have said.
+                too-short: root.too-short;
+                short-headline: root.short-headline;
+                short-body: root.short-body;
+                press-label: root.working-label != "" ? root.working-label : root.current.press-label;
                 // §6.4, and this is **three colours and one shape, not four colours**: `accent` when
                 // startable, `fg-dim` otherwise, `danger` only when a machine has **stopped**, and a
                 // **broken ring** when the device cannot start. The first cut painted a refusal

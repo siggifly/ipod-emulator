@@ -23,19 +23,25 @@
 //
 // ── What is deliberately not here ───────────────────────────────────────────────────────────────
 //
-// **§9.5's replacement pane**, for a display too short to draw the panel at 1:1. It is a designed
-// state and it is not built; `too-short` is computed in Rust and read by nothing, and
-// `geometry::the_too_short_state_is_an_input_with_nothing_reading_it` is the test that keeps that
-// gap visible rather than forgotten. The well **clips**, which is a strictly better failure than
-// the shipped one — the shelf's write-target row stays on screen and the device loses its top —
-// but it is not the pane and must not be mistaken for it.
-//
 // **The drop band** (§11.4, shelf rows 1–2 crossfading to an identification) and **the `why ›`
 // route's destination**, which is a drawer page. Both wait on work that is not in this phase.
+//
+// ── §9.5's pane, which IS here now ──────────────────────────────────────────────────────────────
+//
+// `ShortPane` below replaces the well on a display too short to draw the panel at 1:1. It
+// **replaces** rather than shrinks: §9.6's whole vertical budget is fixed rows, nothing gives, and
+// a squeezed column is the 560 px bug again — so below the threshold the device, the cradle and
+// the cradle label are simply not drawn, and what stands in their place is three things that fit
+// inside `MIN_HEIGHT` less the shelf.
+//
+// The well still **clips**, and that is not the pane and never was: clipping buys that the shelf's
+// write-target row survives a too-short window, which is a strictly better failure than the
+// shipped one and no kind of answer to *there is no way to start an iPod on this display*.
 
 import { Ink, Metric, Motion } from "tokens.slint";
 import { Geometry } from "@geometry";
 import { IPod } from "ipod.slint";
+import { Pressable } from "primitives.slint";
 
 // §6.4: **three colours and one shape, not four colours.** A closed set, declared as one, so a
 // fourth cannot arrive by accident — and the shape (a *broken* ring) is the fourth state, because
@@ -73,6 +79,130 @@ component Dot inherits Rectangle {
         height: Geometry.focus-ring-w;
         border-radius: 1px;
         background: Ink.fg-dim;
+    }
+}
+
+// ─── §9.5's replacement pane ────────────────────────────────────────────────────────────────────
+//
+// **The display is too short to show the panel at 1:1.** A designed state, not an overflow, and
+// reachable on hardware people own: 1280 x 800 and 1366 x 768 can never satisfy it at any scale
+// factor, because the body alone needs 656 physical pixels and neither display has 810 of usable
+// window height.
+//
+// Three things, in the order the eye meets them, and every one of them fixed:
+//
+//   1. **the measurement**, which is the only sentence in this program that names a number the
+//      window is standing in right now — `main::short_pane` words it and pushes it live;
+//   2. **the paragraph**, which says the drawing is withheld rather than broken, and says where
+//      the press went;
+//   3. **the primary Row**, which is the whole point of this state and the previous revision did
+//      not have it. The well is the only thing that contains the drawn iPod and the drawn iPod's
+//      centre button is the only start affordance in the entire program — so replacing the well
+//      with a paragraph left §10.4's *bench with no step one*: the shelf still advertising a
+//      centre button that is not drawn, and the one offered control (`Fullscreen`) disabled by
+//      §12.6 in exactly the state §9.5 offered it in. This Row carries the cradle's own callback
+//      and the cradle's own sentence.
+//
+// **`Fullscreen` is deliberately absent rather than present and dead**, and that is §9.5's own
+// rule evaluated against this build rather than a gap in it: fullscreen is offered *only when the
+// glass has something on it* — Booting, Running, Stopped, or parked with a frame — and §12.2 puts
+// this build in `Off` and nowhere else. A control offered and refused in the same breath is worse
+// than one that is not there.
+//
+// **`Metric.s4` between the three, `Geometry.well-air` around them**, and the measure is
+// `Geometry.short-measure` — the widest line that cannot overflow the narrowest well this window
+// has (§9.6: the drawer never widens the window, so the well gives up 420 px and what is left is
+// all this will ever have). It does not grow with the well; a sentence set across 1140 px is a
+// sentence nobody can read a second line of.
+component ShortPane inherits Rectangle {
+    in property <string> headline;
+    in property <string> body;
+    // §7.3's caption, worded for a surface with no centre button — `main::Press`. One tail.
+    in property <string> press-label;
+    // §7.4, and it is the announcement rather than the gate: the press fires in every state,
+    // because Rust is the only thing that can say which part is gone, and an assistive technology
+    // is told which of the two states this is in.
+    in property <bool> startable: true;
+
+    callback pressed();
+
+    // §9.5: the only start affordance on a 1280 x 800 display, so the window has to be able to
+    // hand it focus the way it hands the cradle focus.
+    public function take-focus() {
+        press.take-focus();
+    }
+
+    // The well's own surface, because this IS the well while it is drawn (§7.1) — and it clips for
+    // the same reason the well does: what is under this rectangle is the shelf, and the one line
+    // standing between an afternoon and somebody's only image of an iPod they own is on it.
+    background: Ink.bg-sunken;
+    clip: true;
+    accessible-role: AccessibleRole.groupbox;
+    accessible-label: root.headline;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: Metric.s4;
+        padding-left: Geometry.well-air;
+        padding-right: Geometry.well-air;
+        padding-top: Geometry.well-air;
+        padding-bottom: Geometry.well-air;
+
+        HorizontalLayout {
+            alignment: center;
+
+            Text {
+                width: Geometry.short-measure;
+                text: root.headline;
+                font-size: Metric.body-size;
+                font-weight: Metric.weight-strong;
+                color: Ink.fg;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+
+            Text {
+                width: Geometry.short-measure;
+                text: root.body;
+                font-size: Metric.body-size;
+                font-weight: Metric.weight-body;
+                color: Ink.fg-dim;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+
+            // §6.5 use 3: *the one primary row on the too-short bench*. The material was written
+            // for three things and this is the third of them.
+            press := Pressable {
+                width: Geometry.short-measure;
+                label: root.press-label;
+                primary: true;
+                announce-enabled: root.startable;
+                pad: Metric.s3;
+                activated => {
+                    root.pressed();
+                }
+
+                Text {
+                    text: root.press-label;
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-strong;
+                    color: #ffffff;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+            }
+        }
     }
 }
 
@@ -197,6 +327,18 @@ export component Bench inherits Rectangle {
     in property <bool> cradle-broken: false;
     in property <bool> startable: true;
 
+    // ── §9.5's pane ──
+    //
+    // **Computed in Rust with hysteresis and pushed in**, because Slint has no responsive
+    // breakpoints and cannot have any (`window.slint`'s own note). True below the threshold; the
+    // well and everything in it stops being drawn and `ShortPane` stands in its place.
+    in property <bool> too-short: false;
+    in property <string> short-headline;
+    in property <string> short-body;
+    // §7.3's caption again, worded for a surface that draws no centre button. The same property
+    // the cradle label is fed from, through `main::Press` — one tail, two prefixes.
+    in property <string> press-label;
+
     // ── The shelf (§7.5) ──
     in property <string> shelf-name;
     in property <string> shelf-state;
@@ -231,8 +373,23 @@ export component Bench inherits Rectangle {
     // §7.3: **the cradle is the Button**, so it is what a window hands focus to when it opens. The
     // fixture is an internal element, so the route to it has to be a function on the component —
     // `forward-focus` cannot reach inside one.
+    //
+    // **And below §9.5's threshold the cradle is not drawn**, so the same call has to land on the
+    // pane's Row instead: that Row is the press on that surface, and a window that opened on a
+    // 1280 x 800 display with focus on an invisible fixture would have `Return` doing nothing on
+    // the one control the whole program is built around. It routes on the state rather than being
+    // two functions, so a caller cannot pick the wrong one.
+    //
+    // **It does not chase the threshold**, and that is deliberate rather than missing: nothing here
+    // moves focus when the window is dragged across it, because focus may well be on a drawer row
+    // by then and stealing it mid-drag is worse than leaving it. `Tab` reaches the pane's Row, and
+    // `visible` takes the undrawn half out of the tab order (§16.3).
     public function focus-cradle() {
-        cradle-focus.focus();
+        if (root.too-short) {
+            short.take-focus();
+        } else {
+            cradle-focus.focus();
+        }
     }
 
     // ── The device's place, and the whole of §7.2 in three lines ──
@@ -291,8 +448,18 @@ export component Bench inherits Rectangle {
         width: parent.width - root.drawer-inset;
         height: parent.height - Geometry.shelf;
         // See the header: this is not §9.5's pane, and it is not to be mistaken for one. What it
-        // buys is that the shelf's write-target row survives a window too short for the device.
+        // buys is that the shelf's write-target row survives a window too short for the device —
+        // during a drag that has not yet crossed the threshold, and above it at every size.
         clip: true;
+        // §9.5, and **`visible` rather than `if`** (§16.3), for two reasons that both bite. The
+        // subtree holds `cradle-focus` and the drawn device's own hover and press state, and `if`
+        // destroys all of it on every crossing of the threshold — the carousel defect, once per
+        // drag. And `body-x` / `body-y` above read `well.width` and `well.height`, which an `if`
+        // element cannot be asked for by name. What `visible: false` costs is nothing here: this
+        // element is absolutely positioned, so there is no layout cell to be reserved, and Slint
+        // takes an invisible subtree out of the tab order and out of the accessible tree — which is
+        // the same mechanism `drawer.slint` uses to stop a closed drawer being announced.
+        visible: !root.too-short;
 
         // The frame holds the device and its cradle together, so the one animated property on this
         // surface moves both and they cannot come apart. §8.1 item 1: **only `x` animates.**
@@ -497,6 +664,34 @@ export component Bench inherits Rectangle {
             // **No `animate x` here.** `frame.x` is already eased, so a second animation on this
             // binding would chase an already-moving target and the label would trail the device it
             // belongs to. One animated property on this surface, and this reads it.
+        }
+    }
+
+    // ── §9.5 The replacement pane ──
+    //
+    // **The well's own box, exactly** — `well.width` and `well.height` rather than the same two
+    // expressions written a second time, so the pane cannot come to stand somewhere the device was
+    // not. `visible` is the other half of the well's, and the two are the same boolean read twice
+    // rather than a state machine: exactly one of them is drawn at every size.
+    short := ShortPane {
+        x: 0;
+        y: 0;
+        width: well.width;
+        height: well.height;
+        visible: root.too-short;
+
+        headline: root.short-headline;
+        body: root.short-body;
+        // §9.2 again: while something is happening the caption carries it, and this Row is the
+        // caption on this surface — so it reads the same two properties the cradle label does,
+        // in the same order.
+        press-label: root.press-label;
+        startable: root.startable;
+
+        // **The cradle's own callback, and there is no second route.** §9.5: *one source, so they
+        // cannot disagree.* Rust resolves the device and either starts it or files the refusal.
+        pressed => {
+            root.pressed-centre();
         }
     }
 
