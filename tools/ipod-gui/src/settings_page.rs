@@ -3,7 +3,7 @@
 // **One page, three rows, and it is not a settings app.** `ui/settings.slint` draws the three and
 // this file answers every question they ask. Until it did, `window.slint`'s nine `setting-*`
 // properties were never written by anything: the page drew three rows with empty labels, two of
-// them disabled carrying an **empty** `reason` — the construction `primitives.slint:369` declares
+// them disabled carrying an **empty** `reason` — the construction `primitives.slint:454` declares
 // against (*"§9.4 — non-empty whenever `!enabled`"*) — and one live toggle that wrote nothing and
 // reflected nothing.
 //
@@ -14,8 +14,8 @@
 // it by number, so a renumbering here silently re-aims a live control — `Copy path` writing the
 // update preference, say. Measured in the file `build.rs` compiles:
 //
-//   - `Row::CheckUpdates` is **1** — `drawer.slint:544`, `root.setting-toggled(1)`.
-//   - `Row::CopyPath` is **2** — `drawer.slint:547`, `root.setting-toggled(2)`.
+//   - `Row::CheckUpdates` is **1** — `drawer.slint:565`, `root.setting-toggled(1)`.
+//   - `Row::CopyPath` is **2** — `drawer.slint:568`, `root.setting-toggled(2)`.
 //
 // `Row::Theme` is **0** and is ours: the theme row is drawn from `setting-theme-*` and fires
 // nothing yet. It is in the list because the page has three rows and a vocabulary with a hole in it
@@ -119,7 +119,8 @@ const NO_THEME: &str = "one palette in this build";
 /// a surprise: `Settings::path()` is `Some(data_dir().join(FILE))` and `data_dir` always answers, so
 /// the `None` arm below has no input that produces it. It is kept because the arm is a `match` on an
 /// `Option` and an arm with no sentence is a disabled row with an empty reason — the exact shape
-/// `primitives.slint:369` forbids — the day `path` learns to answer `None`. It is also why
+/// `primitives.slint:454` forbids (*non-empty whenever `!enabled`*) — the day `path` learns to
+/// answer `None`. It is also why
 /// `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` names this constant instead of
 /// sweeping it: no fixture can make a page draw it.
 pub const NO_PATH: &str = "nowhere to keep one";
@@ -128,7 +129,7 @@ pub const NO_PATH: &str = "nowhere to keep one";
 /// follows it.
 ///
 /// A constant rather than a literal inside [`Prefs::toggled`] for the same reason [`NO_PATH`] is
-/// one: `settings.slint:104` draws it in a `ReasonSlot`, and
+/// one: `settings.slint:104` binds it as the toggle's `consequence`, drawn in a `ReasonSlot`, and
 /// `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` cannot sweep a sentence that only
 /// exists after `Settings::save` has failed — which needs a read-only home that the sweep has no
 /// business making. Named here, it is measured without being provoked.
@@ -501,7 +502,8 @@ mod tests {
 
     // ── §9.4, the invariant the page was breaking ───────────────────────────────────────────────
 
-    /// **No disabled row carries an empty reason** — `primitives.slint:369`'s own words.
+    /// **No disabled row carries an empty reason** — `primitives.slint:454`'s own words,
+    /// *non-empty whenever `!enabled`*.
     ///
     /// This is the state the page shipped in and the worst-looking thing in the window: two rows
     /// drawn `fg-disabled` with a reason slot reserved and nothing in it, which is a control

@@ -633,6 +633,25 @@ as a flat rectangle with a period colour on it.
 1. **The selected row in a drawer list.**
 2. **The one primary row on a drawer page** — `Create`, `Resume`, a `Fix` (at 60 % opacity, because a
    fix is offered rather than urged). One per page, never two.
+
+**And never on a control that is disabled** *(added 2026-08-24)*. `Pressable` drew the material on
+`primary || selected` and never asked `enabled`, so a disabled primary kept the full-opacity accent
+under a label in `Ink.fg-disabled`: `#9aa0a8` on `#5493e9` is **1.18 : 1**, which is not a label.
+`_out/gui/composer-reading.png` is what shipped — a full-width blue `Create` with nothing legible on
+it and *A device needs a name.* underneath. Off the material the same label is 2.47 : 1, which is
+what every other disabled control in this window already draws at; `material-opacity` is deliberately
+not used instead, because at 0.45 the label measures 1.6 : 1 and §14.1 has already recorded that
+failure once, at 1.67 : 1.
+
+**Nothing checked either half of this rule and both are now checked off the pixels.**
+`Shot::material_bands` counts the bands of material down a drawer page in a shot and
+`every_page_this_window_draws_can_be_shot_with_no_window` asserts at most two — use 1 plus use 2. A
+source sweep could not: `primary: true` is a literal at four sites and a binding at two more, and how
+many of them are *drawn at once* is a fact about the model each page was pushed. `devices.png` had
+**three** — the selected shelf row, `Start` inside its open body, and the pinned `+ New device`
+footer whose own comment called itself *the page's one material row*. `Start` gave it up; the footer
+is the page's action in every state including the empty one, which is what §9.1 put it outside the
+`Scroll` for.
 3. **The one primary row on the too-short bench** (§9.5) — which is the *same* row as the cradle's
    own label and callback, wearing the material because on that display the cradle is not drawn and
    the program's single interactive element has to survive.
@@ -916,6 +935,31 @@ that Rust sets true on a change and false 140 ms later.
 
 `Colour::Unspecified` is drawn `#E4E4E2` and never black — drawing an unknown chassis black would
 invent a fact about somebody's iPod, and the model already refuses to.
+
+#### A fact is not a reason, and it wraps *(added 2026-08-24)*
+
+The five `Made of` lines — `iPod`, `Drive`, `Built from`, `Installed`, `Writes to` — are a labelled
+two-column list inside the row's `Expand`, and a **fact is not §9.4's reason**: a reason elides on
+purpose in one line of a fixed 34 px slot, and this list is inside an `Expand` that is already
+variable height and has nothing to protect. So a fact that does not fit the column takes a second
+line and the row grows.
+
+What shipped did neither. The value was a `wrap: word-wrap` `Text` with `horizontal-stretch: 1` in a
+`HorizontalLayout`, and Slint takes a wrapping `Text`'s **unwrapped** width as its preferred one — so
+the cell was sized for one line and the second was **clipped with no ellipsis at all**.
+`_out/gui/devices.png` drew `works on a copy of my-5.5g.img — nobody has` and stopped, with 20 px of
+blank underneath and nothing on screen to say a word was missing. The same sentence draws whole on
+the shelf three rows down in the same frame.
+
+**The line count is arithmetic on a measured width**, not `preferred-height`: that answered 24 px for
+a sentence that draws in two 16 px lines, so the row would still have been wrong and only *looked*
+right, because the 8 px of `spacing` beneath it happened to absorb the difference. A hidden
+non-wrapping twin gives the natural width, `Math.ceil` of it over the column gives the lines, and the
+row is that many `LINE_LABEL` tall with `clip: true` under it.
+
+`every_fact_this_page_draws_is_drawn_whole` is the gate, and it is the only probe in this window that
+answers a **height**: `MainWindow.fact-height` builds the shipped `MadeOfLine` at a drawer page's
+measure and reports what the row became. A width probe cannot see this defect at all.
 
 ### 7.3 The cradle — where every piece of UI state lives
 
@@ -1517,9 +1561,49 @@ pickers, and `composer::NO_CLIPBOARD` as *this build has no clipboard, so there 
 co…* — the same sentence, built the same way out of `rail::Next::CopyDetails`, that the Settings page
 had. Same defect, same fix, not done here.
 
-**Still elided, and named rather than left to be discovered:** the `mono` escape hatch —
-`ipod-boot firmware get <family>` is 30 characters of monospace in a 180 px column and there is
-nothing to shorten, since it is a command that has to be typed as written.
+#### The escape hatch gets the block, because a command cannot be reworded *(added 2026-08-24)*
+
+The paragraph that used to end this section said the `mono` hatch was **still elided**, *"named
+rather than left to be discovered"* — 30 characters of monospace in a 180 px column with nothing to
+shorten. Naming a defect is not fixing one, and what it shipped as is in
+`_out/gui/work-failed.png`: the verify card drew `Provide a file…` and `Copy the details` side by
+side, and under them `ipod-boot firmware get <family>` and `ipod-boot firmware cache --verify`
+rendered as the **byte-identical** `ipod-boot firmwar…`. Two different commands, one string, neither
+of them typeable — and §9.4's rule for a project state is that it *always names the escape hatch*.
+
+**Measured**, through `MainWindow.hatch-probe` — a `Text` at `Metric.mono-family` /
+`Metric.mono-size`, which is `ReasonSlot`'s own face for that line and not the label face
+`reason-probe` uses:
+
+| command | wants |
+|---|---|
+| `ipod-boot firmware cache --verify` | **259 px** |
+| `ipod-boot firmware get <family>` | 243 |
+| `IPOD_EMULATOR_DATA=<path>` | 196 |
+| `ipod-boot rockbox-install` | 196 |
+| `ipod-boot install-linux` | 181 |
+
+Every one of them is over `REASON_MEASURE` 146, and three are over `PARTS_VERB_W` 180. **The rule
+above does not reach this and cannot be made to.** *Every sentence in this slot is one clause that
+fits the slot it is drawn in* is a rule about English, and a command is not English: `ipod-boot
+firmware cache --verify` has to be typed exactly, so there is no shorter true version of it.
+
+**So the column moves instead of the sentence: a control that names an escape hatch is drawn at its
+block's full width, and a pair that contains one stacks.** `ui/rail.slint`'s `NextStep` and
+`ui/parts.slint`'s `GroupVerb` are the two extractions that make that possible — one control, two
+layouts — and both gate on `escape-hatch != ""`. Stacked, a `Next` gets `ACT_MEASURE` 324 and a
+group verb gets `PAGE_REASON_MEASURE` 372, which holds the longest command with 65 px to spare.
+
+It costs 78 px on a failure block whose two next steps both refuse, and the same on the three Parts
+groups that offer a `Fetch…`. That is the trade §17.Q1 refused for the *shelf* — 46 px of permanent
+chrome for a paragraph — taken here for the opposite reason: this is not permanent chrome and not a
+paragraph. It is the one line on the page whose entire job is to be copied into a terminal, on a
+control that has just refused, and half of it is worth nothing at all.
+
+`every_escape_hatch_this_window_names_is_drawn_wide_enough_to_read` is the gate. It sweeps all three
+producers — `rail::Next::escape_hatch`, `parts::Group::fetch_route` and `compose::{Os,Loader}` — and
+fails on any command wider than the stacked slot it lands in. Proved red by pinning `stacked` to
+`false`: seven of nine go over, the longest at 259 px in 146.
 
 ### 9.5 And a fifth, because the alternative is the 560 px bug again
 

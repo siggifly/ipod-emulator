@@ -1649,7 +1649,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>, launch: args::Mach
     };
     repaint.borrow_mut().push(repaint_parts.clone());
 
-    // One row opened or closed, **by part id and never by index** — `parts.slint:355` compares
+    // One row opened or closed, **by part id and never by index** — `parts.slint:209` compares
     // `parts-detail-of` against `r.id`, and a removal renumbers nothing because ids are never
     // reused. The read that fills the body happens inside `open_row`, on this press, which is
     // what keeps a hash of somebody's firmware off the repaint path.
@@ -1741,7 +1741,8 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>, launch: args::Mach
     }
 
     // One control inside one part. `Remove` is the only ordinal this markup writes as a literal
-    // (`parts.slint:248`); the rest arrive as `DetailRow.action`, which Rust put there.
+    // — `root.act(2, root.r.id)` at `parts.slint:285`; the rest arrive as `DetailRow.action`,
+    // which Rust put there.
     {
         let parts = parts.clone();
         let settings = settings.clone();
@@ -1968,7 +1969,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>, launch: args::Mach
             match outcome {
                 // **This is the one producer that saves for itself**, so every arm answers
                 // `Wrote::Nothing` and there is no `save` here. `settings.slint:104` binds the
-                // failure to the toggle's own consequence, so the page has to *observe* the write
+                // failure to the toggle's own `consequence`, so the page has to *observe* the write
                 // to word the sentence; a save on top of it would regenerate the operator's file a
                 // second time, comments and all, for no change.
                 Ok(_) => {
@@ -9194,17 +9195,54 @@ pub(crate) mod tests {
     /// called from somewhere else, so *nothing in here is reconnected* is false of all of it.
     ///
     /// **Lifted out of the test so it can be handed something other than this crate**, which is
-    /// the whole reason it is a function. This crate carries **no** `#![allow(dead_code)]` — the
-    /// last one was deleted from `composer.rs` rather than narrowed — so the loop below hits its
-    /// `continue` on every file and decides nothing at all. A sweep that reads nothing is green,
-    /// and this repository has been bitten by that shape often enough that a zero here must not
-    /// be mistaken for a verdict. The controls beside the call site hand it two synthetic modules
-    /// and require both answers, so the emptiness is proved to be *the tree's* and not the
-    /// instrument's.
+    /// the whole reason it is a function. The controls beside the call site hand it two synthetic
+    /// modules and require both answers, so an empty verdict is proved to be *the tree's* and not
+    /// the instrument's.
+    ///
+    /// **A blanket has two spellings and this used to see one of them.** `#![allow(dead_code)]`
+    /// written *inside* a module was the only shape it looked for, and this crate has never
+    /// contained one: grep returns three hits and all three are this file's own test data. What it
+    /// actually ships is the **outer** form on the `mod` line — `#[allow(dead_code)]` above
+    /// `mod control;` (`main.rs:76`) — which covers exactly as much and was invisible to both halves of
+    /// `no_dead_code_allow_sits_on_a_function_the_program_already_calls`: this half `continue`d
+    /// past every file, and the item half skips it because the item under the attribute is
+    /// `mod control;` rather than a `fn`. The verdict beside the call site said *"No module in this
+    /// crate carries one any more"* while `control.rs`'s whole surface sat under one. Deleting the
+    /// attribute and running `cargo check` is the control: it prints eight `never used` warnings,
+    /// so it is a module blanket in every sense but the spelling.
+    ///
+    /// So the blanketed set is built from **both**: a file holding the inner form, and a file whose
+    /// stem another file declares with an outer allow on the `mod` line.
     fn redundant_blankets(sources: &[(String, String)]) -> Vec<String> {
+        // `#[allow(dead_code)]` on the line above a `mod x;` blankets `x.rs`, wherever that
+        // declaration is written. Two lines rather than one attribute-and-item pair, because the
+        // parked modules are declared as a run and only the first carries the attribute — see
+        // `says_what_retires_it`, which walks the same run upwards for the shared condition.
+        let mut blanketed: Vec<String> = Vec::new();
+        for (_, text) in sources {
+            let lines: Vec<&str> = text.lines().collect();
+            for (n, line) in lines.iter().enumerate() {
+                if dead_code_allow(line) != Some(false) {
+                    continue;
+                }
+                // The line under the attribute, and only that one: the parked modules are
+                // declared as a run and the attribute covers the first of them.
+                let t = lines.get(n + 1).map_or("", |l| l.trim_start());
+                if let Some(stem) = ["mod ", "pub mod ", "pub(crate) mod "]
+                    .iter()
+                    .find_map(|kw| t.strip_prefix(kw))
+                    .and_then(|rest| rest.strip_suffix(';'))
+                {
+                    blanketed.push(format!("{stem}.rs"));
+                }
+            }
+        }
+
         let mut redundant: Vec<String> = Vec::new();
         for (file, text) in sources {
-            if !text.lines().any(|l| dead_code_allow(l) == Some(true)) {
+            if !text.lines().any(|l| dead_code_allow(l) == Some(true))
+                && !blanketed.contains(file)
+            {
                 continue;
             }
             let mut surface = 0usize;
@@ -9369,24 +9407,26 @@ pub(crate) mod tests {
              Delete the allow, or say what is still waiting"
         );
 
-        // ── The blanket half, and **it reads zero files today** ───────────────────────────────
+        // ── The blanket half, and **it used to read zero files** ──────────────────────────────
         //
-        // A module carrying `#![allow(dead_code)]` says *nothing in here is reconnected*; it has
-        // stopped being true when every `pub fn` the module ships is called from another module.
-        // No module in this crate carries one any more — `composer.rs`'s was the only one and it
-        // was deleted, not narrowed — so [`redundant_blankets`] `continue`s past every file and
-        // returns empty without deciding anything. **That is a green from reading nothing**, which
-        // is the exact shape §6 names and the one this file has now shipped twice.
+        // A module carrying a blanket says *nothing in here is reconnected*; that has stopped being
+        // true when every `pub fn` the module ships is called from another module.
         //
-        // So the emptiness is proved to be the tree's rather than the instrument's, here, before
-        // it is trusted. Two synthetic modules, differing in one call: with the caller present the
-        // blanket is redundant and must be named; with it removed the same blanket is legitimate
-        // and must not be. Neither control mentions a real file, so they keep their meaning
-        // whatever the crate does next — and the day a blanket comes back, the sweep that meets it
-        // is one that has been proved able to fire.
-        let blanketed = "#![allow(dead_code)]\npub fn arm(&self) -> u8 { 0 }\n";
+        // **The prose here said no module in this crate carries one, and that was false the whole
+        // time.** It was written about the inner spelling, `#![allow(dead_code)]`, which this crate
+        // has never contained — the three hits a grep returns are the three literals in this test.
+        // What ships is `#[allow(dead_code)]` above `mod control;` (`main.rs:76`), the outer form
+        // on the `mod` line, which blankets `control.rs` entire and which **neither** half of this test
+        // could see: [`redundant_blankets`] `continue`d past every file, and the item half above
+        // skips it because the item under the attribute is `mod control;` and not a `fn`. So the
+        // one module blanket in the program was covered by a sweep that read zero files and a
+        // comment that said there were none.
+        //
+        // The verdict is proved able to fire in **both** spellings before it is trusted, and the
+        // controls name no real file so they keep their meaning whatever the crate does next.
+        let inner = "#![allow(dead_code)]\npub fn arm(&self) -> u8 { 0 }\n";
         let both = [
-            ("parked.rs".to_string(), blanketed.to_string()),
+            ("parked.rs".to_string(), inner.to_string()),
             ("caller.rs".to_string(), "fn go() { thing.arm(); }\n".to_string()),
         ];
         assert_eq!(
@@ -9401,6 +9441,19 @@ pub(crate) mod tests {
             redundant_blankets(&alone).is_empty(),
             "the blanket verdict fires on a module nothing outside calls, so it reports a legitimate \
              blanket as redundant"
+        );
+        // **And the spelling this crate actually uses**, declared from a third file the way
+        // `main.rs` declares `control` — the attribute on its own line, the `mod` on the next.
+        let outer = [
+            ("parked.rs".to_string(), "pub fn arm(&self) -> u8 { 0 }\n".to_string()),
+            ("caller.rs".to_string(), "fn go() { thing.arm(); }\n".to_string()),
+            ("root.rs".to_string(), "#[allow(dead_code)]\nmod parked;\nmod caller;\n".to_string()),
+        ];
+        assert_eq!(
+            redundant_blankets(&outer),
+            vec!["parked.rs (1 `pub fn`, all called from elsewhere)".to_string()],
+            "the blanket verdict cannot see `#[allow(dead_code)] mod x;`, which is the only \
+             spelling this crate has ever shipped — so it reads zero files and reports nothing"
         );
 
         let redundant = redundant_blankets(&sources);
@@ -9476,10 +9529,18 @@ pub(crate) mod tests {
             out
         }
 
-        /// `Some((file, line))` for a span spelled exactly `something.rs:123`.
+        /// `Some((file, line))` for a span spelled exactly `something.rs:123` or
+        /// `something.slint:123`, with an optional `ui/` in front of the second.
+        ///
+        /// **The markup half was the whole population and it was outside this.** `strip_suffix(".rs")`
+        /// made the sweep's reach three citations; the crate writes 74 into `*.slint`, which is the
+        /// file kind with no compiler to keep a line number honest and therefore the one this sweep
+        /// is most for. `ui/window.slint:<line>` is the shape most of them are written in, so the
+        /// prefix is stripped rather than made a reason to skip.
         fn citation(span: &str) -> Option<(&str, usize)> {
-            let (file, num) = span.rsplit_once(':')?;
-            let stem = file.strip_suffix(".rs")?;
+            let (path, num) = span.rsplit_once(':')?;
+            let file = path.strip_prefix("ui/").unwrap_or(path);
+            let stem = file.strip_suffix(".rs").or_else(|| file.strip_suffix(".slint"))?;
             if stem.is_empty() || !stem.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
                 return None;
             }
@@ -9635,15 +9696,37 @@ pub(crate) mod tests {
             "a citation into a file this crate does not have is being decided rather than skipped"
         );
 
+        // **And the markup, which is three quarters of the population and was outside it.** A
+        // citation into a `.slint` file is the same claim in the file kind that has no compiler,
+        // so it is the one most likely to be stale and was the one nothing read.
+        let ui = ("rail.slint".to_string(), "// one\n// two\n".to_string());
+        let (found, checked) = stale_citations(&[
+            ui.clone(),
+            ("cite.rs".to_string(), "// `two` is at `ui/rail.slint:2`.\n".to_string()),
+        ]);
+        assert!(
+            found.is_empty() && checked == 1,
+            "{found:?}: a citation into markup, written with the `ui/` prefix this crate uses, is \
+             not being read"
+        );
+        let (found, _) = stale_citations(&[
+            ui,
+            ("cite.rs".to_string(), "// `two` is at `rail.slint:1`.\n".to_string()),
+        ]);
+        assert_eq!(found.len(), 1, "a markup citation naming the wrong line is not reported");
+
         // ── And the tree ──────────────────────────────────────────────────────────────────────
         //
         // Whole files, not `rust_sources`'s shipped halves: a doc comment in a test module names a
         // line as readily as one above `fn main`, and two of the four this crate had were in one.
-        let (stale, checked) = stale_citations(&rust_sources_whole());
+        let mut tree = rust_sources_whole();
+        tree.extend(markup_sources());
+        let (stale, checked) = stale_citations(&tree);
         assert!(
-            checked >= 2,
-            "only {checked} citations into this crate were read; below two, an empty verdict is \
-             the sweep reading nothing rather than the comments being true"
+            checked >= 40,
+            "only {checked} citations into this crate were read; the crate writes more than that \
+             into its markup alone, so an empty verdict here is the sweep reading a fraction of \
+             the population rather than the comments being true"
         );
         assert!(
             stale.is_empty(),
@@ -9981,6 +10064,29 @@ pub(crate) mod tests {
             .collect();
         out.sort();
         assert!(out.len() > 5, "the source sweep found {} files", out.len());
+        out
+    }
+
+    /// Every `.slint` file in this crate, name and text, whole.
+    ///
+    /// The markup's counterpart to [`rust_sources_whole`], and there is no cut to make: a `.slint`
+    /// file has no test module. It exists because the citation sweep's population was `.rs` alone
+    /// while three quarters of this crate's `file:line` citations point into markup — see
+    /// [`stale_citations`].
+    pub(crate) fn markup_sources() -> Vec<(String, String)> {
+        let dir = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/ui"));
+        let mut out: Vec<(String, String)> = std::fs::read_dir(&dir)
+            .expect("the ui directory")
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "slint"))
+            .map(|p| {
+                let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                (name, std::fs::read_to_string(&p).expect("a markup file"))
+            })
+            .collect();
+        out.sort();
+        assert!(out.len() > 10, "the markup sweep found {} files", out.len());
         out
     }
 
@@ -10577,6 +10683,98 @@ pub(crate) mod tests {
                 }
             }
             seen.len()
+        }
+
+        /// **How many bands of §6.5's material this page draws down its drawer**, and how tall
+        /// each one is.
+        ///
+        /// §6.5 allows three uses and two of them can be on one drawer page at once: the selected
+        /// row, and the one primary row. *One per page, never two* is the rule for the second, and
+        /// nothing in this program checked it — `grep 'primary: true'` finds four sites and no test
+        /// names the word. `_out/gui/devices.png` had **three** blues down one 420 px column: the
+        /// selected shelf row, `Start` inside its open body, and the pinned `+ New device` footer,
+        /// whose own comment calls itself *the page's one material row*.
+        ///
+        /// **It reads the pixels, because the two questions a source sweep could ask are both the
+        /// wrong one.** `primary: true` is a literal at four sites and a binding at two more, and
+        /// how many of them are *drawn at once* is a fact about the model each page was pushed —
+        /// which is exactly what a shot already holds.
+        ///
+        /// The method: a row of the drawer is *lit* where it holds an unbroken run of the
+        /// material's own gradient at least [`geometry::RAIL_NEXT_W`] wide, which is the narrowest
+        /// control in this program that can wear one — so a glyph in `Ink.accent`, a 1 px rule and
+        /// the focus ring are all too thin to be counted. A run of lit rows half a `ROW_H` tall or
+        /// more is a band, and a band is worth as many materials as the widest row in it has runs:
+        /// §9.3's next-step pair is two 170 px controls side by side, and two of those wearing the
+        /// material is the violation as surely as two stacked.
+        ///
+        /// Only the drawer's columns are read. §6.5 use 3 is the too-short pane's row in the
+        /// *well*, which is a different surface with a rule of its own.
+        fn material_bands(&self) -> Vec<usize> {
+            // The gradient runs `material-top` #5a9aef to `material-bottom` #4a86de, over a 1 px
+            // `material-rule` #2969d6. The box holds all three and nothing else this window paints
+            // in a long run: `bg-raised` is #f7f7ff and `bg-sunken` #c6cfd6.
+            let is_material = |p: &[u8]| {
+                (35..=100).contains(&p[0]) && (95..=165).contains(&p[1]) && (200..=250).contains(&p[2])
+            };
+            let x0 = (geometry::PREF_WIDTH - geometry::DRAWER_W) as u32;
+            let floor = geometry::RAIL_NEXT_W as u32;
+            // **The gap tolerance is the control's own LABEL**, and without it the pinned
+            // `+ New device` footer counted as nothing: `New device` is drawn in `#ffffff` across
+            // the middle of a 372 px material, which splits the run into two 131 px halves and both
+            // are under the floor. So a span survives a gap of up to `Metric.s7`, and has to be at
+            // least half material over its whole extent — which a row of accent-coloured glyphs
+            // never is.
+            let gap = 48u32;
+            // How many separate material controls this row of pixels crosses.
+            let runs_in = |y: u32| {
+                let lit = |x: u32| {
+                    let i = ((y * self.w + x) * 3) as usize;
+                    is_material(&self.rgb[i..i + 3])
+                };
+                let (mut runs, mut start, mut last, mut ink) = (0usize, None::<u32>, 0u32, 0u32);
+                let close = |start: Option<u32>, last: u32, ink: u32| {
+                    let Some(s) = start else { return 0 };
+                    let extent = last + 1 - s;
+                    usize::from(extent >= floor && ink * 2 >= extent)
+                };
+                for x in x0..self.w {
+                    if lit(x) {
+                        if start.is_none() {
+                            start = Some(x);
+                            ink = 0;
+                        }
+                        last = x;
+                        ink += 1;
+                        continue;
+                    }
+                    if start.is_some() && x - last > gap {
+                        runs += close(start, last, ink);
+                        start = None;
+                    }
+                }
+                runs += close(start, last, ink);
+                runs
+            };
+            let mut bands: Vec<usize> = Vec::new();
+            let (mut tall, mut widest) = (0u32, 0usize);
+            for y in 0..self.h {
+                let runs = runs_in(y);
+                if runs > 0 {
+                    tall += 1;
+                    widest = widest.max(runs);
+                    continue;
+                }
+                if tall >= (geometry::ROW_H / 2.0) as u32 {
+                    bands.push(widest);
+                }
+                tall = 0;
+                widest = 0;
+            }
+            if tall >= (geometry::ROW_H / 2.0) as u32 {
+                bands.push(widest);
+            }
+            bands
         }
     }
 
@@ -11604,6 +11802,51 @@ pub(crate) mod tests {
             );
         }
 
+        // ── §6.5, off the pixels ──────────────────────────────────────────────────────────────
+        //
+        // *The selected row in a drawer list* and *the one primary row on a drawer page — one per
+        // page, never two*. Two uses, so two bands, and `devices.png` drew three. See
+        // [`Shot::material_bands`] for why this is a pixel question and not a source one.
+        let bands: Vec<(&str, Vec<usize>)> =
+            shots.iter().map(|(n, s)| (*n, s.material_bands())).collect();
+        // The control, first: a detector that matches nothing reports every page clean, and every
+        // page clean is what this assertion wants to hear.
+        assert!(
+            bands.iter().any(|(_, b)| !b.is_empty()),
+            "not one of {} pages draws a band of §6.5's material, and `devices.png` alone has two \
+             — the detector is matching nothing and the verdict below is about the number zero",
+            bands.len()
+        );
+        let over: Vec<String> = bands
+            .iter()
+            .filter(|(_, b)| b.iter().sum::<usize>() > 2)
+            .map(|(n, b)| format!("  {n}: {} materials, in bands of {b:?}", b.iter().sum::<usize>()))
+            .collect();
+        assert!(
+            over.is_empty(),
+            "§6.5 allows the selected row and ONE primary row, and these pages wear more:\n{}",
+            over.join("\n")
+        );
+        // **And the disabled primary, which is the other half of the same defect.** A `Pressable`
+        // that is `primary` and NOT `enabled` used to keep the full-opacity accent under a label
+        // drawn in `Ink.fg-disabled` — `#9aa0a8` on `#5493e9` is **1.18 : 1**, which is not a
+        // label. `composer-reading` is the page that shipped it: its `Create` is the page's one
+        // primary and it is disabled, so the material it must not be wearing is the whole of what
+        // this page's band count says.
+        let (_, create) = bands
+            .iter()
+            .find(|(n, _)| *n == "composer-reading")
+            .expect("the Composer's reading state is shot");
+        assert!(
+            create.is_empty(),
+            "`composer-reading`'s one primary is disabled — `A device needs a name.` is drawn under \
+             it — and it is still wearing §6.5's material in {create:?}, so its label is grey on \
+             the accent (§14.1)"
+        );
+        for (name, b) in &bands {
+            eprintln!("{name:22} {} material(s) in bands of {b:?}", b.iter().sum::<usize>());
+        }
+
         // `assert!` and not `assert_ne!`: the latter prints both operands, and both operands are
         // three megabytes of decimal channel values. The failure has to be readable.
         for (i, (a_name, a)) in shots.iter().enumerate() {
@@ -12117,7 +12360,7 @@ pub(crate) mod tests {
     ///
     ///   * **Parts** — six group headings, in `Group::ALL`'s order, each carrying its own
     ///     `Resource::verb`; and one drawn row per row in the pushed model, on top of those six. The
-    ///     first half is `parts.slint:318`'s `for g in root.groups` having something to walk; the
+    ///     first half is `parts.slint:355`'s `for g in root.groups` having something to walk; the
     ///     second is every part reaching a pixel rather than the model being written and drawn once.
     ///   * **Devices** — one row per device in the library, named by it; and a label on the pinned
     ///     `+ New device` control, which is the finding the first shot handed over: with nothing
@@ -12131,7 +12374,8 @@ pub(crate) mod tests {
     ///
     /// **Measured red by reverting [`draw`] to `push_nav(w, at)` alone**, which is the shape it
     /// shipped in. In that state it fails at the first page with *"Parts drew 0 group headings; the
-    /// page is six sections and `parts.slint:318` walks a model nobody filled"* — and, with Parts
+    /// page is six sections and `parts.slint:355`'s `for g in root.groups` walks a model nobody
+    /// filled"* — and, with Parts
     /// skipped, at *"the Devices page drew 0 rows for a library of 2 devices"* and at *"the Settings
     /// page's theme value is empty, so `push_settings` did not run"*.
     ///
@@ -12174,8 +12418,8 @@ pub(crate) mod tests {
              still look full"
         );
 
-        // The page's own order, flattened out of the two models exactly as `parts.slint:318`
-        // composes it: each group's heading, then the parts filed in that group.
+        // The page's own order, flattened out of the two models exactly as `parts.slint:355`'s
+        // `for g in root.groups` composes it: each group's heading, then the parts filed in that group.
         let want: Vec<String> = f
             .p_groups
             .iter()
@@ -12209,12 +12453,13 @@ pub(crate) mod tests {
         assert!(
             drawn.len() > first,
             "Parts drew {} rows and its first section is {first} of them, so either `push_parts` \
-             walked no library or `parts.slint:318` drew none of what it was handed. {drawn:?}",
+             walked no library or `parts.slint:318`'s `for g in root.groups` drew none of what it \
+             was handed. {drawn:?}",
             drawn.len()
         );
         assert_eq!(drawn, want[..drawn.len()], "Parts is not drawing the top of its own page");
 
-        // The sections themselves, by their own role. `parts.slint:320` puts `AccessibleRole.list`
+        // The sections themselves, by their own role. `parts.slint:357` puts `AccessibleRole.list`
         // on the group wrapper with `heading + ", " + verb` as its label — the one place this page
         // says out loud what a section is *for* — so the ones on screen are the first few of six.
         let sections = labels(&elements_by_role(&w, AccessibleRole::List));
@@ -13300,7 +13545,7 @@ pub(crate) mod tests {
         );
         let row = w.get_rail().row_data(before).expect("the note the press filed");
         assert_eq!(row.kind, RailKind::Note, "a refusal that mutates nothing is filed as a failure");
-        // `Rail::note` puts its text in `what`, and `ui/rail.slint:173` draws `e.what` — so this is
+        // `Rail::note` puts its text in `what`, and `ui/rail.slint:233` draws `e.what` — so this is
         // the string that reaches a pixel, not a field beside it.
         assert_eq!(
             row.what.as_str(),
@@ -14661,7 +14906,7 @@ pub(crate) mod tests {
     /// forwarded down through `drawer.slint` into a page, bound to a `Text` — and never written.
     /// It draws. It draws the type's default: an empty string, a `false`, an empty model. So
     /// `ui/settings.slint` shipped three rows with **empty labels**, two of them disabled carrying
-    /// an **empty** `reason` — the construction `primitives.slint:369` declares against — and
+    /// an **empty** `reason` — the construction `primitives.slint:455` declares against — and
     /// `ui/parts.slint` shipped a header over blank space. Eighteen properties and six callbacks
     /// were in that state when this was written; a control that fires nothing is §19.1's first
     /// fatal finding, and a control that draws nothing is the same fault one layer quieter.
@@ -14697,7 +14942,28 @@ pub(crate) mod tests {
         // One entry. Each names the property and the observation that would retire it, in the same
         // shape `research/04` uses for a bypass and `every_dead_code_allow_says_what_would_retire_it`
         // enforces for an allow: without one, an exemption is indistinguishable from an oversight.
-        const NO_SETTER: [(&str, &str); 1] = [(
+        const NO_SETTER: [(&str, &str); 3] = [
+            (
+                "fact-probe",
+                "2026-08-24. §7.2's fact column, and the one probe in this window that answers a \
+                 HEIGHT rather than a width — `fact-probe-row` is the shipped `MadeOfLine`, built \
+                 at a drawer page's measure, `visible: false` and outside every layout. Written \
+                 only by `every_fact_this_page_draws_is_drawn_whole`, which is what stops the \
+                 `Writes to` sentence being clipped with no ellipsis again. A shipped setter would \
+                 be the window drawing a fact it is not on a page for. Retired when: the running \
+                 window needs a row height of its own — a page that reflows, or `IPOD_LAYOUT=1` \
+                 printing it.",
+            ),
+            (
+                "hatch-probe",
+                "2026-08-24. §9.4's mono escape hatch, measured the way `reason-probe` measures the \
+                 sentence above it — same argument, different face: `Metric.mono-family` at \
+                 `Metric.mono-size`, which is what `ReasonSlot` draws a command in. Written only by \
+                 `every_escape_hatch_this_window_names_is_drawn_wide_enough_to_read`. Retired when: \
+                 something in the running window needs it — a hatch that reflows, or `IPOD_LAYOUT=1` \
+                 printing it beside `verb`.",
+            ),
+            (
             "reason-probe",
             "2026-08-23. §17.Q12's third probe, and the only `in property` in this window that is \
              an instrument rather than a page. `reason-probe-text` is `visible: false` and outside \
@@ -14817,6 +15083,227 @@ pub(crate) mod tests {
              nobody — so the control does nothing and says nothing, which is §19.1's first fatal \
              finding"
         );
+
+        // ── And whether anything ever PRESSES it ──────────────────────────────────────────────
+        //
+        // **Registration is not exercise, and for ten of these it was the entire gate.** The half
+        // above proves the text `on_<name>(` appears in shipped code; it cannot tell a handler that
+        // runs from one that returns immediately. Measured against `invoke_`: ten of the window's
+        // 35 callbacks — §11.2's `Create`, §9.3's next step, §11.4's row action, the Rail's
+        // `Cancel` and `Dismiss`, the drawer toggle, the Readout's acts and three Composer
+        // pressess — had **no** caller anywhere in this crate, so appending
+        // `if std::hint::black_box(true) { return; }` to any of their bodies changed nothing any
+        // test could see. That is a control that fires nothing wearing a green suite.
+        //
+        // So each one has to be pressed by something here. The whole crate counts, tests included:
+        // a press is a press whether a person or a test made it, and what this is looking for is a
+        // handler nothing has ever run.
+        let whole: String = rust_sources_whole()
+            .iter()
+            .flat_map(|(_, t)| t.lines().filter(|l| !l.trim_start().starts_with("//")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The five §16.8 / §7.4 input callbacks are pressed by a **dispatched event** rather than
+        // by `invoke_`, which is the stronger route and the only one that proves the window's own
+        // key and pointer handling. Each names the test that dispatches it.
+        const NOT_INVOKED: [(&str, &str); 4] = [
+            (
+                "machine-key",
+                "the_keys_that_are_the_machines_reach_it_and_the_arrows_keep_their_other_job",
+            ),
+            ("wheel-moved", "a_drag_on_the_drawn_ring_turns_the_machines_wheel"),
+            ("centre-down", "a_press_on_the_drawn_centre_button_reaches_the_machine"),
+            ("centre-up", "a_press_on_the_drawn_centre_button_reaches_the_machine"),
+        ];
+        let mut unpressed: Vec<String> = callbacks
+            .iter()
+            .filter(|c| !whole.contains(&format!("invoke_{}(", snake(c))))
+            .cloned()
+            .collect();
+        unpressed.sort();
+        let mut by_event: Vec<String> =
+            NOT_INVOKED.iter().map(|(n, _)| (*n).to_string()).collect();
+        by_event.sort();
+        for (name, by) in NOT_INVOKED {
+            assert!(
+                whole.contains(by),
+                "`{name}` is exempted from `invoke_` because `{by}` dispatches a real event to it, \
+                 and there is no test by that name in this crate"
+            );
+        }
+        assert_eq!(
+            unpressed, by_event,
+            "the set of callbacks nothing in this crate presses is not the list of the ones a \
+             dispatched event presses instead. A name on the left and not the right is a handler \
+             no test has ever run — gut its body and the suite stays green. A name on the right \
+             and not the left has gained an `invoke_`: delete the exemption"
+        );
+    }
+
+    /// **Every callback this window declares is pressed by something in this crate.**
+    ///
+    /// The other half of `every_window_property_is_pushed_and_every_callback_registered`, and the
+    /// half that did not exist. That sweep proves the text `on_<name>(` appears; this presses the
+    /// ten that nothing had ever pressed, through the registered closure, on a wired window, and
+    /// reads back what each one did. Ten handlers could have been `{ }` and the suite would not
+    /// have moved.
+    ///
+    /// **Every press below asserts an effect, and the `Cancel` is not an exception.** `rail-cancel`
+    /// on an entry that is not holding a write is `Rail::cancel` declining, and what
+    /// [`cancel_write`] does about that is file a note saying so — *"not silence"*, in its own
+    /// words. So the press that appears to do nothing is the one whose effect is a sentence.
+    #[test]
+    fn every_control_this_window_declares_is_pressed_by_something_here() {
+        let dir = temp_dir("pressed-by-something");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d);
+        let settings = Rc::new(RefCell::new(s));
+        let w = a_window();
+        let _wiring = wire(&w, settings.clone(), args::Machine::default());
+
+        // ── The drawer toggle (§16.11) ────────────────────────────────────────────────────────
+        w.invoke_open_page(DrawerPage::Parts, 1);
+        assert!(w.get_drawer_open(), "the page did not open the drawer");
+        w.invoke_drawer_toggled();
+        assert!(!w.get_drawer_open(), "`drawer-toggled` did not close the drawer");
+        w.invoke_drawer_toggled();
+        assert!(w.get_drawer_open(), "`drawer-toggled` did not put it back");
+        assert_eq!(w.get_drawer_page(), DrawerPage::Parts, "the toggle lost the page");
+
+        // ── §11.4's row action, on a part that is really in the library ───────────────────────
+        let rows = w.get_parts_rows();
+        let part = (0..rows.row_count())
+            .filter_map(|i| rows.row_data(i))
+            .find(|r| r.expandable)
+            .expect("the fixture filed a part this page can act on");
+        let before = w.get_rail().row_count();
+        // `CopyPath` is `RowAction::ALL`'s second entry and this build has no clipboard, so what it
+        // does is file the refusal — an effect, and the one a person would see.
+        w.invoke_parts_row_action(parts::RowAction::CopyPath.as_i32(), part.id);
+        assert!(
+            w.get_rail().row_count() > before,
+            "`parts-row-action` ran and the Rail says nothing happened"
+        );
+
+        // ── §12.8's Readout acts ──────────────────────────────────────────────────────────────
+        let before = w.get_rail().row_count();
+        w.invoke_readout_act(0);
+        let filed = w.get_rail().row_data(before).expect("`readout-act` filed nothing");
+        assert!(
+            filed.what.as_str().contains("no machine"),
+            "`readout-act` on a bench with no machine did not say so: {}",
+            filed.what
+        );
+
+        // ── §9.3's three Rail presses ─────────────────────────────────────────────────────────
+        //
+        // The entry is the one `Route::Unwired` files: a composed device whose drive was never
+        // built refuses to start and says why, which is a real entry with a real id.
+        w.invoke_start_device(0);
+        let entry = {
+            let r = w.get_rail();
+            r.row_data(r.row_count() - 1).expect("the refusal the press filed")
+        };
+        let before = w.get_rail().row_count();
+        w.invoke_rail_cancel(entry.id);
+        let said = {
+            let r = w.get_rail();
+            r.row_data(r.row_count() - 1).expect("`rail-cancel` filed nothing")
+        };
+        assert!(
+            w.get_rail().row_count() == before + 1
+                && said.what.as_str().contains("nothing was cancelled"),
+            "`rail-cancel` on an entry holding no write neither cancelled nor said it did not"
+        );
+        // A next step on an entry that is a note rather than a failure has none to take, and the
+        // press is still the press: what it must not do is throw the Rail away.
+        let before = w.get_rail().row_count();
+        w.invoke_rail_next(entry.id, 0);
+        assert_eq!(
+            w.get_rail().row_count(),
+            before,
+            "`rail-next` on an entry with no next step changed the Rail"
+        );
+        w.invoke_rail_dismiss(entry.id);
+        assert_eq!(
+            w.get_rail().row_count(),
+            before - 1,
+            "`rail-dismiss` did not take the entry off the Rail"
+        );
+
+        // ── §11.2's Composer, all five ────────────────────────────────────────────────────────
+        // `device-new` is what constructs the `Composer` — `open-page` alone moves the stack and
+        // leaves `composer` `None`, and every callback below returns at once on that.
+        w.invoke_device_new();
+        assert_eq!(w.get_drawer_page(), DrawerPage::Composer, "`+ New device` opened nothing");
+        w.invoke_composer_open(composer::Field::Ipod.as_i32());
+        assert_eq!(
+            w.get_drawer_page(),
+            DrawerPage::ComposerIpod,
+            "`composer-open` did not push level \u{2461}"
+        );
+        w.invoke_composer_expand(composer::Field::Ipod.as_i32(), true);
+        assert_eq!(
+            w.get_composer_open_field(),
+            composer::Field::Ipod.as_i32(),
+            "`composer-expand` opened no picker"
+        );
+        w.invoke_composer_expand(composer::Field::Ipod.as_i32(), false);
+        assert_eq!(w.get_composer_open_field(), -1, "`composer-expand` did not close it");
+
+        // Level \u{2462}'s software ticks, and the plan is where a tick shows up. The iPod is picked
+        // first, because a recipe with no firmware plans nothing to tick against.
+        // `Make one` is the press that gives the recipe an iPod; level \u{2462} is disabled without one,
+        // so a tick before this would be a press on a locked row.
+        w.invoke_composer_act(composer::Field::Ipod.as_i32());
+        let before = w.get_composer_runs_value().to_string();
+        let mut moved = String::new();
+        for os in 0..compose::Os::ALL.len() {
+            w.invoke_composer_tick(os as i32, true);
+            let now = w.get_composer_runs_value().to_string();
+            if now != before {
+                moved = now;
+                break;
+            }
+        }
+        assert!(
+            !moved.is_empty(),
+            "`composer-tick` ticked every box and level \u{2461}'s software line never moved off \
+             {before:?}"
+        );
+
+        // \u{a7}11.3's one-press `Fix`, and **the one press here whose assertion is weaker than the
+        // rest, said rather than glossed.** A `Fix` is offered only out of `Region::No`, and every
+        // route to one on this page runs through a `VolumeRead` that lands on a worker thread:
+        // `composer-region-text` sits at *reading iPod 1\u{2026}* for the whole of a headless test, so
+        // no press sequence available here reaches a refusal that carries one \u{2014} I searched both
+        // disk picks against every tick of every OS. What this proves is that the closure is
+        // reached and declines. That `Composer::apply_fix` does the right thing when one IS on
+        // offer is `a_fix_that_names_a_value_the_picker_refuses_cannot_be_applied`, in
+        // `composer.rs`, against the model directly.
+        w.invoke_composer_pick(composer::Field::Disk.as_i32(), 1);
+        assert!(
+            !w.get_composer_has_fix(),
+            "the page is offering a fix after all, so this press can assert what it applied \u{2014} \\
+             tighten it"
+        );
+        let steady = w.get_composer_runs_value().to_string();
+        w.invoke_composer_fix_pressed();
+        assert_eq!(
+            w.get_composer_runs_value().to_string(),
+            steady,
+            "`composer-fix-pressed` applied something with no fix on offer"
+        );
+
+        // \u{a7}11.2's `Create`. It files a note either way \u{2014} the device, or why not \u{2014} and that note
+        // is the effect a person sees.
+        let before = w.get_rail().row_count();
+        w.invoke_composer_commit();
+        assert!(
+            w.get_rail().row_count() > before,
+            "`composer-commit` neither filed a device nor said why it would not"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
 
@@ -14881,12 +15368,13 @@ pub(crate) mod tests {
 
     /// **§7.2's `Start` is reachable at last, and it is this page's own answer.**
     ///
-    /// The button lives *inside* the row's `Expand` (`devices.slint:266`) and `devices-detail-of`
+    /// The button lives *inside* the row's `Expand`, whose `open: root.detail-of == i`
+    /// (`devices.slint:276`) and `devices-detail-of`
     /// defaulted to `-1` with no setter, so `Expand.open` was false for every row for ever: the
     /// five `Made of` lines were undrawn and so was the one control §7.2 puts on this page.
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
-    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:486` and
+    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:806` and
     /// `:515` read for the drawn iPod, and `machine-rule` was a literal `true`.
     #[test]
     fn the_devices_page_opens_a_row_and_reaches_its_start() {
@@ -14969,7 +15457,7 @@ pub(crate) mod tests {
     /// **§11.6's three rows say what they are and why two of them are disabled.**
     ///
     /// Nine `setting-*` properties had no setter, so the page drew three rows with **empty labels**,
-    /// two of them disabled carrying an **empty** `reason` — the construction `primitives.slint:369`
+    /// two of them disabled carrying an **empty** `reason` — the construction `primitives.slint:455`
     /// declares against — and one live toggle that wrote nothing and reflected nothing.
     #[test]
     fn the_settings_page_states_every_refusal_and_the_toggle_sticks() {
@@ -14987,7 +15475,8 @@ pub(crate) mod tests {
         assert!(!w.get_setting_copy_enabled());
         assert!(!w.get_setting_copy_reason().is_empty(), "`Copy path` is disabled and says nothing");
 
-        // The one live control. `drawer.slint:544` fires this ordinal; `Row::CheckUpdates` is 1.
+        // The one live control. `drawer.slint:565` fires this ordinal as
+        // `root.setting-toggled(1)`; `Row::CheckUpdates` is 1.
         let before = settings.borrow().check_updates_on_start;
         assert_eq!(w.get_setting_check_updates(), before, "the box does not reflect the library");
         w.invoke_setting_toggled(1);
@@ -15246,10 +15735,12 @@ pub(crate) mod tests {
     /// number.
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
     enum Slot {
-        /// §9.3's next-step pair — `rail.slint:329` / `:374`, `pad: Metric.s3` inside
+        /// §9.3's next-step pair — two `Pressable`s at `rail.slint:121` / `:374`, `pad: Metric.s3`
+        /// inside
         /// `RAIL_NEXT_W`. The narrowest, and the only one a single sentence is drawn in three of.
         Next,
-        /// §11.4's group verbs — `parts.slint:396` / `:423`, no `pad` at all, floored at
+        /// §11.4's group verbs — two `Pressable`s at `parts.slint:36` / `:423`, no `pad` at all,
+        /// floored at
         /// `PARTS_VERB_W`.
         Verb,
         /// An act: a `Pressable` at `pad: Geometry.page-margin` inside a page body already inset by
@@ -15272,6 +15763,28 @@ pub(crate) mod tests {
             }
         }
 
+        /// **The same slot, for the `mono` line UNDER the sentence** — which is a different number
+        /// for the two columns that draw a pair.
+        ///
+        /// §9.4's escape hatch is a command that cannot be shortened, and neither
+        /// `Slot::Next` (146) nor `Slot::Verb` (180) can hold the 259 px of
+        /// `ipod-boot firmware cache --verify`. So a control that names one is drawn at its
+        /// block's full width and the pair stacks — `ui/rail.slint`'s `NextStep` and
+        /// `ui/parts.slint`'s `GroupVerb`, both gated on `escape-hatch != ""`.
+        ///
+        /// Stacked, a `Next` is a `Pressable` at `pad: Metric.s3` inside a failure block that is
+        /// `REFUSAL_MEASURE` less two of the same, so its slot is `372 − 4 × 12` — the same 324 an
+        /// act gets by a different route. A `Verb` has no `pad` of its own and takes the group's
+        /// body whole, which is `PAGE_REASON_MEASURE`. The other two slots are already wide enough
+        /// and their controls do not pair, so nothing about them changes.
+        fn hatch_measure(self) -> f64 {
+            match self {
+                Slot::Next => geometry::ACT_MEASURE,
+                Slot::Verb => geometry::PAGE_REASON_MEASURE,
+                other => other.measure(),
+            }
+        }
+
         /// What a failure says it is looking at, because `Slot::Act` alone does not tell somebody
         /// which control to go and open.
         fn drawn_in(self) -> &'static str {
@@ -15281,6 +15794,261 @@ pub(crate) mod tests {
                 Slot::Act => "an act inside an expanded row",
                 Slot::Page => "a top-level row on a drawer page",
             }
+        }
+    }
+
+    /// **Every fact §7.2 draws in the two-column column is drawn WHOLE, on as many lines as it
+    /// takes.**
+    ///
+    /// The other half of §9.4's discipline, and the half nothing measured: a reason **elides**, on
+    /// purpose, in one line of a fixed slot — and a *fact* does not, because a fact is not a
+    /// control's apology and the row it lives in is inside an `Expand` that is already variable
+    /// height. What shipped was neither. `devices::device_fact`'s value was a `wrap: word-wrap`
+    /// `Text` with `horizontal-stretch: 1` in a `HorizontalLayout`, and Slint takes a wrapping
+    /// `Text`'s *unwrapped* width as its preferred one — so the cell was sized for one line and the
+    /// second was **clipped, with no ellipsis at all**. `_out/gui/devices.png` drew
+    /// `works on a copy of my-5.5g.img — nobody has` and stopped, with 20 px of blank underneath
+    /// and nothing on screen to say a word was missing. The same sentence draws whole on the shelf
+    /// three rows down in the same frame.
+    ///
+    /// **A width probe cannot see this and that is why there is a height one.** Every other probe
+    /// in this window answers *how wide does this string want to be*; `MainWindow.fact-height`
+    /// builds the shipped `MadeOfLine` at a drawer page's width and answers *how tall did the row
+    /// it lands in actually become*. The verdict is the two together: a value that wants `n` lines
+    /// of the fact column has to be drawn in a row at least `n` lines tall.
+    #[test]
+    fn every_fact_this_page_draws_is_drawn_whole() {
+        let _held = use_a_scratch_data_dir();
+        let w = a_window();
+        // §7.2's fact column: a drawer page's body, less the label column and the gap.
+        let column = geometry::PAGE_REASON_MEASURE - geometry::FIELD_LABEL_W - 8.0;
+        let wants = |text: &str| -> f64 {
+            w.set_reason_probe(text.into());
+            f64::from(w.get_reason_width())
+        };
+        let drawn = |text: &str| -> f64 {
+            w.set_fact_probe(text.into());
+            f64::from(w.get_fact_height())
+        };
+
+        // **Two controls, and the second is the one this test exists for.** A one-line fact has to
+        // measure one line — otherwise every row is tall enough for everything and the verdict is
+        // vacuous — and the sentence that shipped clipped has to want more than one column.
+        let one = drawn("my-5.5g");
+        assert!(
+            (one - geometry::LINE_LABEL).abs() < 1.0,
+            "a one-word fact draws a {one:.1} px row against a {:.1} px line, so the probe is not \
+             measuring the row this page draws",
+            geometry::LINE_LABEL
+        );
+        let long = "works on a copy of my-5.5g.img — nobody has said, so a copy it is";
+        assert!(
+            wants(long) > column,
+            "the sentence this test was written about wants {:.1} px and the fact column is \
+             {column:.1} — it fits on one line now, so nothing below is being tested",
+            wants(long)
+        );
+
+        // ── Every fact the page can word, out of the shipped producer ─────────────────────────
+        let at = temp_dir("fact-heights");
+        let s = a_furnished_library(&at);
+        let mut seen = eapp_loader::settings::Presence::default();
+        let mut dp = devices::Devices::new();
+        let mut facts: Vec<(String, String)> = Vec::new();
+        for (i, d) in s.devices.iter().enumerate() {
+            dp.open_row(&s, i32::try_from(i).expect("nine devices"), true);
+            let v = dp.view(&s, &mut seen, caps(), None);
+            for line in &v.detail {
+                // The labelled two-column branch, which is the one with a column to overrun.
+                if line.action.is_none() && !line.mono && !line.label.is_empty() {
+                    facts.push((format!("{}'s `{}`", d.name, line.label), line.value.clone()));
+                }
+            }
+        }
+        assert!(
+            facts.len() >= 5,
+            "only {} labelled facts were swept and §7.2 words five per device — the sweep is \
+             driving a page it is not opening",
+            facts.len()
+        );
+
+        let mut clipped: Vec<String> = Vec::new();
+        for (from, value) in &facts {
+            let lines = (wants(value) / column).ceil().max(1.0);
+            let height = drawn(value);
+            if height + 0.5 < lines * geometry::LINE_LABEL {
+                clipped.push(format!(
+                    "  {from}\n    wants {:.0} line(s) of the {column:.0} px column and is drawn in \
+                     a {height:.0} px row: {value:?}",
+                    lines
+                ));
+            }
+        }
+        assert!(
+            clipped.is_empty(),
+            "{} of {} facts are drawn in a row too short for them, and this column has no ellipsis \
+             — what runs over is cut off with nothing on screen to say so (§7.2):\n{}",
+            clipped.len(),
+            facts.len(),
+            clipped.join("\n")
+        );
+        std::fs::remove_dir_all(&at).ok();
+    }
+
+    /// **Every command §9.4's escape hatch names, measured in the face it is drawn in, against the
+    /// slot that draws it.**
+    ///
+    /// The reason slot has two lines and until now one of them was swept. The other is the `mono`
+    /// escape hatch — §9.4's rule for a project state is *say what does work, and **always name the
+    /// escape hatch*** — and it had no floor anywhere: `geometry::PARTS_VERB_W`'s own doc names the
+    /// hatch as the reason that constant exists and then measures the sibling's *reason*, never the
+    /// hatch. `_out/gui/work-failed.png` is what that shipped as. The verify card draws
+    /// `Provide a file…` and `Copy the details` side by side, and under them
+    /// `ipod-boot firmware get <family>` and `ipod-boot firmware cache --verify` render as the
+    /// **byte-identical** `ipod-boot firmwar…`. Two different commands, one string, neither
+    /// typeable. §9.4's own last paragraph wrote it down — *"still elided, and named rather than
+    /// left to be discovered"* — and naming a defect is not fixing it.
+    ///
+    /// **And a reword cannot fix it, which is what makes this a layout rule rather than a budget.**
+    /// 33 characters of `ipod-boot firmware cache --verify` is 257 px of monospace and there is
+    /// nothing to shorten: it is a command that has to be typed as written. So the answer was the
+    /// column, not the sentence — §9.3's next-step pair and §11.4's group verbs **stack** when
+    /// either half names a hatch, and each control gets the block's full width. See `ui/rail.slint`
+    /// and `ui/parts.slint`.
+    ///
+    /// Measured through `MainWindow.hatch-probe`, which is a `Text` at `Metric.mono-family` /
+    /// `Metric.mono-size` — `ReasonSlot`'s own two properties for that line, and not the label face
+    /// `reason-probe` uses. A character count is not a width (§17.Q12) and a monospace character
+    /// count is not the label's.
+    #[test]
+    fn every_escape_hatch_this_window_names_is_drawn_wide_enough_to_read() {
+        let _held = use_a_scratch_data_dir();
+        let w = a_window();
+        w.global::<Metric>().set_mono_family(mono_family().into());
+        let measure = |text: &str| -> f64 {
+            w.set_hatch_probe(text.into());
+            f64::from(w.get_hatch_width())
+        };
+
+        // The control, before any verdict: the string this test exists about, against the column it
+        // used to be drawn in. A probe wired to nothing answers zero and zero clears every budget.
+        let was = measure("ipod-boot firmware cache --verify");
+        assert!(
+            was > geometry::REASON_MEASURE,
+            "the probe measured the longest command this program names at {was:.1} px against \
+             §9.3's {:.1} px half — a column it visibly did not fit, so the probe is not measuring \
+             and every assertion below it is about the number zero",
+            geometry::REASON_MEASURE
+        );
+
+        // ── The three producers, and there are three ──────────────────────────────────────────
+        //
+        // `rail::Next` words every hatch the Rail, Parts, Devices and Settings draw — reused rather
+        // than reworded, which is the whole point of `Next` owning them. `parts::Group` adds the
+        // one that is about a GROUP rather than about a capability. `compose` adds the Composer's,
+        // which are about a system or a bootloader this build does not install.
+        let mut hatches: Vec<(Slot, String, String)> = Vec::new();
+        let mut say = |slot: Slot, from: &str, text: String| {
+            if !text.is_empty() {
+                hatches.push((slot, from.to_string(), text));
+            }
+        };
+        let fix = |presses: u8| rail::Next::Fix {
+            label: compose::Fix::BuildFromIpsw.label(),
+            presses,
+        };
+        for n in [
+            rail::Next::Retry,
+            rail::Next::Provide,
+            rail::Next::ChooseElsewhere,
+            rail::Next::CopyDetails,
+            rail::Next::Reveal,
+            rail::Next::CancelWrite,
+            rail::Next::Devices,
+            fix(1),
+            fix(2),
+        ] {
+            // **The slot is the NARROWEST one this sentence is drawn in**, which for a `Next` is
+            // §9.3's own pair — the same rule `geometry::REASON_MEASURE` records for the reason on
+            // the line above it, and for the same reason: one `Next` is drawn in three columns and
+            // a hatch written to the widest elides the first time it is reused in the narrowest.
+            say(
+                Slot::Next,
+                &format!("rail::Next::{n:?}'s escape hatch"),
+                n.escape_hatch(caps()),
+            );
+        }
+        for g in parts::Group::ALL {
+            say(
+                Slot::Verb,
+                &format!("parts::Group::{g:?}::fetch_route"),
+                g.fetch_route().unwrap_or_default().to_string(),
+            );
+        }
+        for o in compose::Os::ALL {
+            say(
+                Slot::Page,
+                &format!("compose::Os::{o:?}'s escape hatch"),
+                o.escape_hatch().to_string(),
+            );
+        }
+        for l in compose::Loader::ALL {
+            say(
+                Slot::Page,
+                &format!("compose::Loader::{l:?}'s escape hatch"),
+                l.escape_hatch().to_string(),
+            );
+        }
+
+        assert!(
+            hatches.len() > 5,
+            "only {} escape hatches were swept, and §9.4 names more than that — the sweep is \
+             reading a producer that has stopped answering",
+            hatches.len()
+        );
+        // Every slot that draws one has to be reached, or the narrowest column asserts nothing.
+        for slot in [Slot::Next, Slot::Verb, Slot::Page] {
+            assert!(
+                hatches.iter().any(|(s, _, _)| *s == slot),
+                "not one hatch was swept into {:?} — {} — so nothing here says whether that slot \
+                 holds the command it draws",
+                slot,
+                slot.drawn_in()
+            );
+        }
+
+        let mut over: Vec<String> = Vec::new();
+        let mut listed: Vec<(f64, Slot, String, String)> = Vec::new();
+        for (slot, from, text) in &hatches {
+            let drawn = measure(text);
+            assert!(drawn > 0.0, "`{text}` measured {drawn} px, which is not a measurement");
+            listed.push((drawn, *slot, from.clone(), text.clone()));
+            if drawn > slot.hatch_measure() {
+                over.push(format!(
+                    "  {from}\n    {drawn:.1} px in {} — {:?}, whose hatch line is {:.1} px wide: \
+                     {text:?}",
+                    slot.drawn_in(),
+                    slot,
+                    slot.hatch_measure()
+                ));
+            }
+        }
+        assert!(
+            over.is_empty(),
+            "{} of {} escape hatches are wider than the slot that draws them, so each one is a \
+             command a person cannot read and cannot type (§9.4). A hatch cannot be reworded — \
+             widen the column:\n{}",
+            over.len(),
+            hatches.len(),
+            over.join("\n")
+        );
+        listed.sort_by(|a, b| (b.0 / b.1.hatch_measure()).total_cmp(&(a.0 / a.1.hatch_measure())));
+        for (drawn, slot, from, text) in &listed {
+            let share = drawn / slot.hatch_measure() * 100.0;
+            eprintln!(
+                "{drawn:6.1} /{:5.0}  {share:3.0}%  {text:?}  \u{2014} {from}",
+                slot.hatch_measure()
+            );
         }
     }
 
@@ -15298,7 +16066,7 @@ pub(crate) mod tests {
     /// `Action::unwired` is asked of all six verbs whether or not a group offers them.
     ///
     /// **`consequence` is in it now, and it is the half that was missing.**
-    /// `primitives.slint:522` is `text: root.enabled ? root.consequence : root.reason` — one slot,
+    /// `primitives.slint:631` is `text: root.enabled ? root.consequence : root.reason` — one slot,
     /// two producers — and only one of them was ever measured. So `removal_consequence` shipped at
     /// **880 px** in a 324 px slot and `devices.png` drew *The entry goes. Its iPod A446, seed
     /// 6182160 and its drive …*, cut off before the clause that says nothing is deleted, which is
@@ -15481,7 +16249,7 @@ pub(crate) mod tests {
                             );
                         }
                         for r in &v.rows {
-                            // `parts.slint:238` — the `Remove` control's reason, and it is an act
+                            // `parts.slint:274` — the `Remove` control's reason, and it is an act
                             // rather than a row: the control sits in the detail body, padded twice.
                             say(
                                 Slot::Act,

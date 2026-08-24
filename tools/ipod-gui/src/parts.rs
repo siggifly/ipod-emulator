@@ -18,15 +18,15 @@
 // `ui/parts.slint` and `ui/devices.slint`, and nothing imports `ui/preview.slint`, which is a
 // slint-viewer root and pins nothing at all:
 //
-//   - `Kind::Mounted` is **0** — `parts.slint:166`, `inert: root.r.kind == 0 && !root.r.expandable`.
+//   - `Kind::Mounted` is **0** — `parts.slint:203`, `inert: root.r.kind == 0 && !root.r.expandable`.
 //     §11.4's reserved plugged-in-iPod row is drawn as a line rather than a control, and that
 //     comparison is the only place the markup decides anything from a `kind`.
-//   - `RowAction::Remove` is **2** — `parts.slint:248`, `root.act(2, root.r.id)`. `Remove` is the
+//   - `RowAction::Remove` is **2** — `parts.slint:285`, `root.act(2, root.r.id)`. `Remove` is the
 //     row's own control rather than a `Detail`, so it is the one row action the markup fires by
 //     number instead of forwarding `DetailRow.action`.
 //
 // **That is all of it.** Every `Group` and every `Action` travels as `GroupRow.group` /
-// `GroupRow.a-action` and comes back through `group-action(int, int)` untouched — `parts.slint:270`
+// `GroupRow.a-action` and comes back through `group-action(int, int)` untouched — `parts.slint:320`
 // says so out loud: *in `parts::Group::ALL`'s order — which is written into the Rust type rather
 // than into this markup.* `ui/devices.slint` pins nothing whatever: every ordinal it fires is
 // `root.d.action`, which Rust put there. The rest of the order below is ours, and it is chosen to
@@ -48,7 +48,8 @@ use crate::rail::{Caps, Next};
 
 /// The six sections of the Parts page, in the order they are drawn.
 ///
-/// Not pinned by any markup — `parts.slint:270` defers to this type by name. Six, always, and an
+/// Not pinned by any markup — `parts.slint:309` takes six `groups` and defers the order to
+/// `parts::Group::ALL` by name. Six, always, and an
 /// empty one keeps its heading and its verbs (§9.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
@@ -118,7 +119,8 @@ impl Action {
 
 /// What a part *is*, which decides how its row is drawn.
 ///
-/// **`Mounted` is 0 and the markup depends on it** — `parts.slint:166`. The rest is ours: a `kind`
+/// **`Mounted` is 0 and the markup depends on it** — `parts.slint:203` draws the reserved row
+/// inert on `root.r.kind == 0`. The rest is ours: a `kind`
 /// other than 0 reaches the markup only as a value it stores and hands back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
@@ -150,7 +152,7 @@ impl Kind {
     /// reported as a retirement condition already met by somebody else's function.
     ///
     /// `Kind` is the one member of this file's vocabulary that travels **one way**. The markup
-    /// reads it — `parts.slint:166`'s `r.kind == 0` — and no callback in `ui/` carries one back, so
+    /// reads it — `parts.slint:203`'s `r.kind == 0` — and no callback in `ui/` carries one back, so
     /// nothing in the shipped program has a `Kind` ordinal to decode. It is kept rather than
     /// deleted because the round trip is what makes a renumbering a no-op instead of a wrong
     /// branch, and `every_kind_survives_the_boundary` is the test that holds it.
@@ -170,7 +172,8 @@ impl Kind {
 /// declaring a second one — the two pages draw the same `DetailRow` through the same flattener, so
 /// a second copy of this list would be two vocabularies for one `int`.
 ///
-/// **`Remove` is 2 and the markup depends on it** — `parts.slint:248`. Everything else travels as
+/// **`Remove` is 2 and the markup depends on it** — `parts.slint:285` fires
+/// `root.act(2, root.r.id)`. Everything else travels as
 /// `DetailRow.action`, which Rust wrote, so the rest of the order is ours: the three a part can
 /// take, then the three a device can, then the two that need something drawn.
 ///
@@ -243,11 +246,12 @@ impl RowAction {
 /// **The eight properties an act needs are one field**, so they cannot disagree — `has-action`,
 /// `action`, `act-label`, `enabled`, `reason`, `escape-hatch`, `presses` and `consequence` are
 /// derived from this one `Option` and from the `FixRow` inside it. A row that is disabled therefore
-/// cannot lose its reason on the way across, which `primitives.slint:368` states as the invariant.
+/// cannot lose its reason on the way across, which `primitives.slint:454` states as the
+/// invariant: *non-empty whenever `!enabled`*.
 ///
 /// **`machine_rule` is the line's, and the `FixRow`'s copy of it is deliberately not read.**
 /// `DetailRow` has exactly one `machine-rule` and the markup binds it twice — to the `Pressable`
-/// when there is an act (`parts.slint:63`, `devices.slint:56`) and to the paragraph when there is
+/// when there is an act (`parts.slint:64`, `devices.slint:56`) and to the paragraph when there is
 /// not. One property, so one producer: this field. Reading the `FixRow`'s as well would be two
 /// spellings of one fact arriving at the same pixel.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -355,7 +359,7 @@ struct Rom {
 
 /// The one open row, and what opening it cost.
 ///
-/// **A part ID, never an index.** `parts.slint:355` compares `parts-detail-of` against `r.id`, and
+/// **A part ID, never an index.** `parts.slint:209` compares `parts-detail-of` against `r.id`, and
 /// `parts-expand(id, on)` and `parts-row-action(a, id)` both carry the id — so a removal that
 /// renumbered the rows would leave an Expand open under somebody else's part.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -402,7 +406,8 @@ pub struct PartView {
     pub expandable: bool,
     pub selected: bool,
     pub removable: bool,
-    /// What goes with it, named **before** the press (`parts.slint:248`).
+    /// What goes with it, named **before** the press — `parts.slint:279` binds
+    /// `consequence: root.r.remove-consequence`.
     pub remove_consequence: String,
     /// §11.4's one machine rule. `""` when nothing is holding it.
     pub locked_by: String,
@@ -1529,7 +1534,7 @@ fn preview_of(src: &nor::Source) -> Preview {
 fn act(a: RowAction, mut fix: FixRow) -> Detail {
     // **One property, one producer, and the value is MOVED rather than copied.** `DetailRow` has
     // exactly one `machine-rule`; the markup binds it to the `Pressable` when there is an act
-    // (`parts.slint:63`) and to the paragraph when there is not, and `main.rs`'s `to_detail` reads
+    // (`parts.slint:64`) and to the paragraph when there is not, and `main.rs`'s `to_detail` reads
     // it off the `Detail`. Leaving the `FixRow`'s copy set as well would be two fields holding one
     // fact on their way to one pixel, which is how they come to disagree.
     let machine_rule = std::mem::take(&mut fix.machine_rule);
@@ -2044,7 +2049,8 @@ mod tests {
             .iter()
             .find(|r| r.kind == Kind::Mounted)
             .expect("the reserved row is drawn out of every library");
-        // `parts.slint:166` draws it inert on exactly this pair.
+        // `parts.slint:203` draws it inert on exactly this pair, as
+        // `inert: root.r.kind == 0 && !root.r.expandable`.
         assert_eq!(reserved.kind.as_i32(), 0);
         assert!(!reserved.expandable, "the reserved row would be drawn as a control");
         assert!(!reserved.removable);
@@ -2057,7 +2063,7 @@ mod tests {
     /// Every control this producer can emit, in every combination of build and phase it can be
     /// drawn in, and one rule over all of them.
     ///
-    /// `primitives.slint:368` declares a non-empty `reason` as the invariant on a disabled
+    /// `primitives.slint:455` declares a non-empty `reason` as the invariant on a disabled
     /// control, and the shipped Settings page draws three rows two of which are disabled with an
     /// **empty** reason. The sweep runs over both `Caps` arms because a rule checked in one is a
     /// rule checked where nothing is refused.
@@ -2109,7 +2115,7 @@ mod tests {
                         );
                     }
                     for r in v.rows.iter().filter(|r| r.removable) {
-                        // `parts.slint:238` binds `enabled` to `locked-by == ""` and `reason` to
+                        // `parts.slint:275` binds `enabled` to `locked-by == ""` and `reason` to
                         // `locked-by`, so the invariant is the same one asked of one field.
                         checked += 1;
                         assert!(

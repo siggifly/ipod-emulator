@@ -685,9 +685,10 @@ pub const PAGE_REASON_MEASURE: f64 = REFUSAL_MEASURE;
 /// **The measure a §9.4 reason gets under an act** — a `Pressable` padded by [`PAGE_MARGIN`] inside
 /// a page body that is already inset by one.
 ///
-/// Six controls in three files: Parts' `Remove` and its `Detail` acts (`parts.slint:65`, `:242`),
-/// Devices' `Edit…` / `Remove` / `Start` and the `New device` footer (`devices.slint:58`, `:282`,
-/// `:336`), and the Composer's picker rows (`composer.slint:71`). It is where every `consequence`
+/// Six controls in three files carry `pad: Geometry.page-margin` — Parts' `Remove` and its
+/// `Detail` acts (`parts.slint:67`, `:243`), Devices' `Edit…` / `Remove` / `Start` and the
+/// `New device` footer (`devices.slint:59`, `:284`, `:338`), and the Composer's picker rows
+/// (`composer.slint:205`). It is where every `consequence`
 /// in this program that is not a Rail next-step lands, which is why it is the number
 /// `removal_consequence` and `remove_consequence` are written to.
 ///
@@ -700,7 +701,7 @@ pub const ACT_MEASURE: f64 = REFUSAL_MEASURE - 2.0 * PAGE_MARGIN;
 ///
 /// **Written as the expression rather than as 48**, so a re-measured [`BODY_ADVANCE`] or a
 /// re-measured body moves every sentence that has to fit rather than leaving a stale number here.
-/// The label is `width: frame.width` (`ui/bench.slint:481`), and the frame is the body plus one
+/// The label is `width: frame.width` (`ui/bench.slint:735`), and the frame is the body plus one
 /// [`CRADLE_BAND`] on each side:
 ///
 /// ```text
@@ -3155,10 +3156,26 @@ mod tests {
     /// sentences were reworded there is not one non-ASCII character left in any string literal it
     /// ships, outside the three the window's font is trusted for.
     ///
-    /// The cut is `#[cfg(test)]` at the start of a line, not `mod tests {`: that crate names its
-    /// test modules `naming_tests`, `syscfg_tests`, `figure_tests` and a dozen other things, and
-    /// `lib.rs` has no module called `tests` at all — so the window's own rule would have swept
-    /// 9 300 lines of `lib.rs` including its tests, and `settings.rs` planted middle dot with them.
+    /// The cut is `#[cfg(test)]`, not `mod tests {`: that crate names its test modules
+    /// `naming_tests`, `syscfg_tests`, `figure_tests` and a dozen other things, and `lib.rs` has no
+    /// module called `tests` at all — so the window's own rule would have swept 9 300 lines of
+    /// `lib.rs` including its tests, and `settings.rs` planted middle dot with them.
+    ///
+    /// **It STRIPS each test-gated item and no longer TRUNCATES at the first one, and that was
+    /// worth 436 shipped lines.** `take_while` stopped the file dead at the first column-0
+    /// `#[cfg(test)]`, on the assumption that it introduces the test module and that the test
+    /// module is last. In three files it introduces something else and shipped code follows it:
+    /// `install.rs:463` is `#[cfg(test)] pub fn loader_menu_for_tests` with the real `mod tests` at
+    /// :606 — **143 lines lost**; `inspect.rs:960` is `mod naming_tests` with more of the file below
+    /// it and `mod tests` at :1248 — **287 lost**; `settings.rs:2597` is a `#[cfg(test)] fn
+    /// env_lock()` helper six lines above its own `mod tests` — **6 lost**. That is the same defect
+    /// [`crate::tests::rust_sources`] grew a landing-check for after three `composer.rs` sweeps
+    /// were found reading 42 lines of 3,381, arriving here through a cut nobody copied it to.
+    ///
+    /// So each `#[cfg(test)]` at column 0 is skipped to its item's closing `}` at column 0 —
+    /// `rustfmt` puts every top-level item's brace there — and everything else is kept. The two
+    /// controls below are on the surviving text, and [`the_model_sweep_reads_past_a_test_helper`]
+    /// is the one that proves the strip against a planted shipped line under a test-only `fn`.
     fn model_sources() -> Vec<(String, String)> {
         let dir =
             std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../eapp-loader/src"));
@@ -3170,16 +3187,12 @@ mod tests {
             .map(|p| {
                 let name = p.file_name().unwrap().to_string_lossy().into_owned();
                 let text = std::fs::read_to_string(&p).expect("a source file");
-                let kept: Vec<&str> = text
-                    .lines()
-                    .take_while(|l| !l.starts_with("#[cfg(test)]"))
-                    .collect();
-                (name, kept.join("\n"))
+                (name, strip_test_items(&text))
             })
             .collect();
         out.sort();
-        // The control on the cut: it must not have taken the shipped half with it. `lib.rs` is the
-        // machine and `nor.rs` is where a sentence this sweep exists for is worded.
+        // The control on the strip: it must not have taken the shipped half with it. `lib.rs` is
+        // the machine and `nor.rs` is where a sentence this sweep exists for is worded.
         assert!(
             out.iter()
                 .any(|(n, t)| n == "lib.rs" && t.contains("pub fn step")),
@@ -3190,7 +3203,111 @@ mod tests {
                 .any(|(n, t)| n == "nor.rs" && t.contains("pub fn synthesise")),
             "the test cut removed the ROM synthesiser"
         );
+        // And the control the truncating version could never have passed: `install.rs`'s
+        // `loader_menu` is shipped code 5 lines under a `#[cfg(test)] pub fn`, and the sweep read
+        // neither it nor the 143 lines after it.
+        assert!(
+            out.iter().any(|(n, t)| n == "install.rs" && t.contains("fn loader_menu(")),
+            "the strip is still truncating at the first `#[cfg(test)]`, so every line below the \
+             first test-only helper in a file is unswept"
+        );
         out
+    }
+
+    /// One `.rs` file's text with every column-0 `#[cfg(test)]` item removed.
+    ///
+    /// The item is whatever the attribute sits on — a `mod`, a `fn`, a `use` — and it ends at the
+    /// first `}` at column 0 after it, which is where `rustfmt` puts a top-level item's closing
+    /// brace. A one-line item with no brace at all (`#[cfg(test)] use super::*;`) ends at its own
+    /// line, so the scan gives up at the next column-0 item start rather than eating the file.
+    ///
+    /// Lines are **blanked rather than deleted**, so a report's `:N` is still the file's own line
+    /// number. That is not cosmetic here: [`no_ui_string_carries_a_glyph_outside_the_closed_set`]
+    /// prints `{name}:{n}` and a number counted past a deletion points at the wrong line.
+    fn strip_test_items(text: &str) -> String {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut out: Vec<&str> = Vec::with_capacity(lines.len());
+        let mut n = 0usize;
+        while n < lines.len() {
+            if !lines[n].starts_with("#[cfg(test)]") {
+                out.push(lines[n]);
+                n += 1;
+                continue;
+            }
+            out.push("");
+            n += 1;
+            // The item's own head — which may run over several lines before its `{` — and then its
+            // body up to the column-0 `}`. `braced` stays false for an item that never opens one.
+            let mut braced = false;
+            while n < lines.len() {
+                let line = lines[n];
+                if braced && line.starts_with('}') {
+                    out.push("");
+                    n += 1;
+                    break;
+                }
+                if line.contains('{') {
+                    braced = true;
+                }
+                out.push("");
+                n += 1;
+                // `#[cfg(test)] use super::*;` and friends: an item that ended without a body.
+                if !braced && line.trim_end().ends_with(';') {
+                    break;
+                }
+            }
+        }
+        out.join("\n")
+    }
+
+    /// **The model sweep reads the shipped lines that sit UNDER a test-only item.**
+    ///
+    /// The control for [`strip_test_items`], and it is the planted form of the defect the shipping
+    /// cut had: a `#[cfg(test)]` helper with real code below it. `take_while` stopped at the
+    /// attribute and everything after was invisible — 443 shipped lines of `eapp-loader`, in the
+    /// three files where that attribute is not the test module's.
+    ///
+    /// Both directions, because a strip that ate the whole file would pass the first half alone.
+    #[test]
+    fn the_model_sweep_reads_the_shipped_lines_under_a_test_only_item() {
+        let planted = "pub fn shipped_above() -> &'static str {\n    \"above\"\n}\n\
+                       \n\
+                       #[cfg(test)]\n\
+                       pub fn only_for_tests() -> &'static str {\n    \"test only\"\n}\n\
+                       \n\
+                       pub fn shipped_below() -> &'static str {\n    \"Apple \u{b7} Rockbox\"\n}\n\
+                       \n\
+                       #[cfg(test)]\n\
+                       mod naming_tests {\n    const IN_A_MODULE: &str = \"module only\";\n}\n";
+        let kept = strip_test_items(planted);
+        assert!(
+            kept.contains("Apple \u{b7} Rockbox"),
+            "the strip loses shipped code below a test-only `fn`, which is exactly the 443 lines \
+             the truncating cut lost:\n{kept}"
+        );
+        assert!(kept.contains("\"above\""), "the strip lost the shipped code above the attribute");
+        assert!(
+            !kept.contains("test only") && !kept.contains("module only"),
+            "the strip is keeping test-only code, so the sweep decides §6.7 about strings the \
+             window never draws:\n{kept}"
+        );
+        // The line numbers a report prints have to stay the file's own, so the strip blanks rather
+        // than deletes. Asked of the planted glyph itself, which is what a report would name.
+        let at = |t: &str| t.lines().position(|l| l.contains("Apple \u{b7} Rockbox"));
+        assert_eq!(
+            at(&kept),
+            at(planted),
+            "the strip deletes lines rather than blanking them, so every `:N` this sweep prints \
+             is off by the size of the test items above it"
+        );
+        // And the old cut, run here so the difference is a measurement rather than a claim.
+        let truncated: Vec<&str> =
+            planted.lines().take_while(|l| !l.starts_with("#[cfg(test)]")).collect();
+        assert!(
+            !truncated.join("\n").contains("Apple \u{b7} Rockbox"),
+            "the truncating cut would have caught this, so the planted violation is not the shape \
+             this test is about"
+        );
     }
 
     /// **T-19. No UI string carries a glyph outside that set — in the markup, in this crate's Rust,
@@ -3210,6 +3327,7 @@ mod tests {
     #[test]
     fn no_ui_string_carries_a_glyph_outside_the_closed_set() {
         let (mut markup_files, mut window_files, mut model_files) = (0usize, 0usize, 0usize);
+        let mut model_lines = 0usize;
         // `rust_sources` cuts each file at its own test module, so this sweeps what the program
         // ships rather than what its tests write down. It lives beside the sweeps that first needed
         // it (`main.rs`), and there is one of it rather than two.
@@ -3230,7 +3348,10 @@ mod tests {
             match name.split('/').next() {
                 Some("ui") => markup_files += 1,
                 Some("src") => window_files += 1,
-                _ => model_files += 1,
+                _ => {
+                    model_files += 1;
+                    model_lines += text.lines().filter(|l| !l.trim().is_empty()).count();
+                }
             }
             // **A string that goes to a terminal is not UI text.** §6.7's rule is about a glyph
             // rendered by *this program's* font, in a `Text` whose family it chose and cannot
@@ -3281,6 +3402,20 @@ mod tests {
         );
         assert!(window_files > 5, "the window half read {window_files} files");
         assert!(model_files > 15, "the model half read {model_files} files");
+        // **A file count is not a reading, and that is how 443 lines stayed invisible.** Every one
+        // of the three files the old cut truncated was still *counted* — it was read down to its
+        // first `#[cfg(test)]` and no further — so `model_files > 15` was true of a sweep seeing
+        // two thirds of `inspect.rs`. The floor below is on shipped LINES, measured at 21 129 with
+        // the strip in place against 20 686 with the truncation, and it is set under the smaller of
+        // the two: a strip that regressed to truncating drops 443 and this stays green, so the
+        // number has to sit where only a much larger loss trips it. What actually guards the strip
+        // is `install.rs`'s `loader_menu` in [`model_sources`] and
+        // `the_model_sweep_reads_the_shipped_lines_under_a_test_only_item` below.
+        assert!(
+            model_lines > 20_800,
+            "the model half read {model_lines} shipped lines and the model is larger than that — \
+             the test-item strip has eaten a file"
+        );
     }
 
     /// Every string literal on one line, comments excluded.

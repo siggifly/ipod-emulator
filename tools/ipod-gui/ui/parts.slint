@@ -30,6 +30,7 @@ import {
     DetailRow,
     DrawerHeader,
     Expand,
+    FixRow,
     GroupRow,
     PartRow,
     Pressable,
@@ -131,6 +132,42 @@ component DetailView inherits VerticalLayout {
         font-weight: Metric.weight-body;
         color: root.d.machine-rule ? Ink.fg : Ink.fg-dim;
         wrap: word-wrap;
+    }
+}
+
+// ─── One of a group's own verbs (§11.4, §9.4) ───────────────────────────────────────────────────
+//
+// **Extracted so the pair can stack.** A group's two verbs are drawn side by side at
+// `Geometry.parts-verb-w` unless one of them names §9.4's `mono` escape hatch, in which case each
+// takes the group's whole width — see the note at the use site. Two layouts want the same control,
+// and two copies of a control is how they come to draw two different things.
+component GroupVerb inherits Pressable {
+    in property <FixRow> v;
+
+    callback pressed();
+    callback reveal(length, length);
+
+    label: root.v.label;
+    enabled: root.v.enabled;
+    reason: root.v.reason;
+    escape-hatch: root.v.escape-hatch;
+    machine-rule: root.v.machine-rule;
+    presses: root.v.presses;
+    consequence: root.v.consequence;
+    activated => {
+        root.pressed();
+    }
+    gained-focus => {
+        root.reveal(self.absolute-position.y, self.height);
+    }
+
+    Text {
+        text: root.v.label;
+        font-size: Metric.body-size;
+        font-weight: Metric.weight-strong;
+        color: root.v.enabled ? Ink.accent : Ink.fg-disabled;
+        overflow: elide;
+        vertical-alignment: center;
     }
 }
 
@@ -374,76 +411,86 @@ export component PartsPage inherits Rectangle {
                         }
                     }
 
-                    // The group's own verbs. `Add a dump…` / `Synthesise…`, `Fetch…` / `Provide…`,
-                    // `Build…`, `Discard` — every one of them drawn, and the ones this build has no
-                    // mechanism for drawn disabled with `rail::Next`'s own reason and escape hatch,
-                    // **reused rather than reworded**, so the Rail and Parts cannot word one refusal
-                    // two ways.
+                    // The group's own verbs. `Add a dump\u{2026}` / `Synthesise\u{2026}`, `Fetch\u{2026}` /
+                    // `Provide\u{2026}`, `Build\u{2026}`, `Discard` \u{2014} every one of them drawn, and the ones this
+                    // build has no mechanism for drawn disabled with `rail::Next`'s own reason and
+                    // escape hatch, **reused rather than reworded**, so the Rail and Parts cannot
+                    // word one refusal two ways.
                     //
                     // **Both halves carry `Geometry.parts-verb-w`, and without it a verb elides to
-                    // `F…`.** Two `horizontal-stretch: 1` controls with no floor between them are
-                    // shrunk **by stretch** when the row is too narrow — the same number of pixels
+                    // `F\u{2026}`.** Two `horizontal-stretch: 1` controls with no floor between them are
+                    // shrunk **by stretch** when the row is too narrow \u{2014} the same number of pixels
                     // off each (`i-slint-core-1.17.1/layout.rs:190-251`). A disabled half prefers
-                    // the width of its REASON rather than of its label — 411 px measured for
-                    // `Provide…` — against 52 for a live neighbour, so 463 shed into a 360 px row
+                    // the width of its REASON rather than of its label \u{2014} 411 px measured for
+                    // `Provide\u{2026}` \u{2014} against 52 for a live neighbour, so 463 shed into a 360 px row
                     // took 51.5 off each and the one that had 52 hit its ellipsis floor. The
                     // constant's own doc has every number.
-                    HorizontalLayout {
+                    //
+                    // **And a floor is not enough for the line UNDER the reason.** \u{a7}9.4's `mono`
+                    // escape hatch is a command that has to be typed as written, so it cannot be
+                    // shortened at all: `ipod-boot firmware get <family>` measures **243 px** and
+                    // this half is 180. `_out/gui/parts.png` drew it as `ipod-boot firmware ge\u{2026}`,
+                    // cut mid-token, and `work-failed.png` drew two *different* commands as one
+                    // byte-identical `ipod-boot firmwar\u{2026}`. So when either half names a hatch the
+                    // row is not a row: each verb takes the group's full 372 px, where every
+                    // command this program names fits with 113 px to spare. It costs 78 px on the
+                    // three groups that offer a `Fetch\u{2026}`, and buys back the only line on the page
+                    // whose whole job is to be copied.
+                    property <bool> stacked: (g.has-a && g.a.escape-hatch != "")
+                        || (g.has-b && g.b.escape-hatch != "");
+
+                    if !stacked: HorizontalLayout {
                         padding-left: Geometry.page-margin;
                         padding-right: Geometry.page-margin;
                         spacing: Metric.s3;
 
-                        if g.has-a: Pressable {
+                        if g.has-a: GroupVerb {
                             horizontal-stretch: 1;
                             min-width: Geometry.parts-verb-w;
-                            label: g.a.label;
-                            enabled: g.a.enabled;
-                            reason: g.a.reason;
-                            escape-hatch: g.a.escape-hatch;
-                            machine-rule: g.a.machine-rule;
-                            presses: g.a.presses;
-                            consequence: g.a.consequence;
-                            activated => {
+                            v: g.a;
+                            pressed => {
                                 root.group-action(g.group, g.a-action);
                             }
-                            gained-focus => {
-                                scroll.ensure-visible(self.absolute-position.y, self.height);
-                            }
-
-                            Text {
-                                text: g.a.label;
-                                font-size: Metric.body-size;
-                                font-weight: Metric.weight-strong;
-                                color: g.a.enabled ? Ink.accent : Ink.fg-disabled;
-                                overflow: elide;
-                                vertical-alignment: center;
+                            reveal(top, h) => {
+                                scroll.ensure-visible(top, h);
                             }
                         }
 
-                        if g.has-b: Pressable {
+                        if g.has-b: GroupVerb {
                             horizontal-stretch: 1;
                             min-width: Geometry.parts-verb-w;
-                            label: g.b.label;
-                            enabled: g.b.enabled;
-                            reason: g.b.reason;
-                            escape-hatch: g.b.escape-hatch;
-                            machine-rule: g.b.machine-rule;
-                            presses: g.b.presses;
-                            consequence: g.b.consequence;
-                            activated => {
+                            v: g.b;
+                            pressed => {
                                 root.group-action(g.group, g.b-action);
                             }
-                            gained-focus => {
-                                scroll.ensure-visible(self.absolute-position.y, self.height);
+                            reveal(top, h) => {
+                                scroll.ensure-visible(top, h);
                             }
+                        }
+                    }
 
-                            Text {
-                                text: g.b.label;
-                                font-size: Metric.body-size;
-                                font-weight: Metric.weight-strong;
-                                color: g.b.enabled ? Ink.accent : Ink.fg-disabled;
-                                overflow: elide;
-                                vertical-alignment: center;
+                    if stacked: VerticalLayout {
+                        padding-left: Geometry.page-margin;
+                        padding-right: Geometry.page-margin;
+                        spacing: Metric.s3;
+
+                        if g.has-a: GroupVerb {
+                            v: g.a;
+                            pressed => {
+                                root.group-action(g.group, g.a-action);
+                            }
+                            reveal(top, h) => {
+                                scroll.ensure-visible(top, h);
+                            }
+                        }
+
+                        if g.has-b: GroupVerb {
+                            v: g.b;
+                            pressed => {
+                                root.group-action(g.group, g.b-action);
+                            }
+                            reveal(top, h) => {
+                                scroll.ensure-visible(top, h);
                             }
                         }
                     }

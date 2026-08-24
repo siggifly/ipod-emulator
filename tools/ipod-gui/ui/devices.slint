@@ -39,7 +39,7 @@ import {
 // `nor::Source::describe`, which interpolates `id.serial` into its sentence; the iPod line is
 // `settings::suggest_ipod_name` plus the resource name, and that rule lives in Rust because this is
 // where a leak would be invisible.
-component MadeOfLine inherits VerticalLayout {
+export component MadeOfLine inherits VerticalLayout {
     in property <DetailRow> d;
     in property <int> index;
 
@@ -89,11 +89,48 @@ component MadeOfLine inherits VerticalLayout {
     }
 
     // A labelled fact — `devices::device_fact`, and every one of the five has a label.
-    if !root.d.has-action && !root.d.mono && root.d.label != "": HorizontalLayout {
-        spacing: Metric.s2;
+    //
+    // **Not a `HorizontalLayout`, and the reason is a line this page was dropping on the floor.**
+    // The value was a `wrap: word-wrap` `Text` with `horizontal-stretch: 1` in a layout row, and a
+    // wrapping `Text` reports the *unwrapped* width as its preferred one — so the row was sized for
+    // a single line and the second was **clipped, with no ellipsis**. Read it off
+    // `_out/gui/devices.png`: `Writes to` drew `works on a copy of my-5.5g.img \u{2014} nobody has` and
+    // stopped, with 20 px of blank under it and nothing on screen saying anything was missing. The
+    // same sentence draws whole on the shelf three rows down in the same frame, which is what made
+    // it a defect rather than a budget.
+    //
+    // So the value gets an explicit `width` and the row's height is the value's own
+    // `preferred-height`, which Slint computes at that width. That is the arrangement this file
+    // already uses for its empty-page line and its machine rule; a layout cell is what could not
+    // measure it.
+    if !root.d.has-action && !root.d.mono && root.d.label != "": fact := Rectangle {
+        // **The line count is arithmetic on a measured width, not `preferred-height`.** Slint's
+        // vertical `layout_info` for a wrapping `Text` answered 24 px for a sentence that draws in
+        // two 16 px lines — it under-reports, which is the same shape as the defect above it and
+        // would have left the second line overflowing a row that merely *looked* right because the
+        // 8 px of `spacing` under it happened to absorb the difference. So the natural width is
+        // measured off a hidden non-wrapping twin and divided by the column, which is what
+        // `every_fact_this_page_draws_is_drawn_whole` computes on the other side of the same sum.
+        property <length> column: fact.width - Geometry.field-label-w - Metric.s2;
+        property <int> lines: max(1, Math.ceil(natural.preferred-width / fact.column * 1.0));
+
+        height: fact.lines * Geometry.line-label;
+        clip: true;
+
+        // Outside every layout and never drawn: this is the same trick `window.slint`'s six probes
+        // use, and it is the only way to ask this toolkit how wide a string wants to be.
+        natural := Text {
+            visible: false;
+            text: root.d.value;
+            font-size: Metric.label-size;
+            font-weight: Metric.weight-label;
+        }
 
         Text {
+            x: 0;
+            y: 0;
             width: Geometry.field-label-w;
+            height: Geometry.line-label;
             text: root.d.label;
             font-size: Metric.label-size;
             font-weight: Metric.weight-label;
@@ -103,8 +140,10 @@ component MadeOfLine inherits VerticalLayout {
         }
 
         Text {
-            horizontal-stretch: 1;
-            min-width: 0px;
+            x: Geometry.field-label-w + Metric.s2;
+            y: 0;
+            width: fact.column;
+            height: parent.height;
             text: root.d.value;
             font-size: Metric.label-size;
             font-weight: Metric.weight-label;
@@ -143,12 +182,14 @@ export component DevicesPage inherits Rectangle {
     // §7.2's `Start`, for the **one open device**, from `devices::start_row`.
     //
     // **Not `d.startable` and `d.cradle-label`.** Those two are the bench's cradle as well —
-    // `window.slint:486` and `:515` read them for the drawn iPod — so §7.2's refusal, *a machine
+    // `window.slint:806` reads `root.current.cradle-label` and `:789` `root.current.startable`,
+    // for the drawn iPod — so §7.2's refusal, *a machine
     // exists, stop it first*, would be printed under the machine telling the operator to stop it.
     // One field, two surfaces, and only one of them is asking this page's question.
     //
-    // One row is enough for a page of nine devices because a closed `Expand` is `visible: false`
-    // (`primitives.slint:844`), so the control exists on screen for the open row and no other.
+    // One row is enough for a page of nine devices because a closed `Expand` has
+    // `visible: root.shown > 0px` (`primitives.slint:1065`), so the control exists on screen for
+    // the open row and no other.
     //
     // **`start-row`, not `start`** — the same trap `start-device` was named around, four lines
     // down: `start` is `LayoutAlignment`'s own value, so a property of that name makes
@@ -280,7 +321,17 @@ export component DevicesPage inherits Rectangle {
                                 machine-rule: root.start-row.machine-rule;
                                 presses: root.start-row.presses;
                                 consequence: root.start-row.consequence;
-                                primary: root.start-row.enabled && i == root.selected;
+                                // **No `primary`, and it used to have one.** §6.5 use 2 is *the
+                                // one primary row on a drawer page \u{2014} one per page, never two*,
+                                // and this page drew two: this control and the pinned
+                                // `+ New device` footer, whose own note four elements below calls
+                                // itself *the page's one material row*. `_out/gui/devices.png` has
+                                // both in one frame, plus the selected shelf row on use 1, which
+                                // is three blues down one 420 px column. The footer keeps it: it
+                                // is the page's action in every state including the empty one,
+                                // which is what §9.1 put it outside the `Scroll` for. This is an
+                                // act inside an open row, and it reads as one \u{2014} `Ink.accent`,
+                                // the way `Edit\u{2026}` two rows above it does.
                                 pad: Geometry.page-margin;
                                 activated => {
                                     root.select(i);
@@ -294,9 +345,10 @@ export component DevicesPage inherits Rectangle {
                                     text: root.start-row.label;
                                     font-size: Metric.body-size;
                                     font-weight: Metric.weight-strong;
-                                    color: !root.start-row.enabled
-                                        ? Ink.fg-disabled
-                                        : (i == root.selected ? #ffffff : Ink.fg);
+                                    // `Ink.accent`, not `#ffffff` \u{2014} white was for the material
+                                    // this control no longer wears, and it would have drawn white
+                                    // on `bg-raised` the moment the row was selected.
+                                    color: root.start-row.enabled ? Ink.accent : Ink.fg-disabled;
                                     overflow: elide;
                                     vertical-alignment: center;
                                 }

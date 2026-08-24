@@ -26,6 +26,9 @@ import { Ink, Metric, Motion } from "tokens.slint";
 import { Geometry } from "@geometry";
 import { Bench } from "bench.slint";
 import { Drawer, DrawerHandle, DrawerPage } from "drawer.slint";
+// One component, for one probe: §7.2's fact row, so `fact-height` measures the row this window
+// actually draws rather than a second copy of it written here.
+import { MadeOfLine } from "devices.slint";
 import { RailRow } from "rail.slint";
 // The boundary structs and `DeviceRow` live in `primitives.slint` — the leaf every page already
 // imports. They cannot live here: this file imports `drawer.slint`, which imports every page, so a
@@ -221,6 +224,19 @@ export component MainWindow inherits Window {
     // is that a character count is not a width.
     in property <string> reason-probe;
     out property <length> reason-width: reason-probe-text.preferred-width;
+    // **The sixth probe, and it is the reason slot's OTHER line.** §9.4's project state carries a
+    // command in `mono` under its sentence, and §17.Q12's finding applies to it twice over: a
+    // command cannot be reworded and a monospace face is not the label face, so the number this
+    // answers is the only one that says whether a hatch fits. `work-failed.png` is what it was
+    // added for — `ipod-boot firmware get <family>` and `ipod-boot firmware cache --verify` drawn
+    // side by side and BOTH reading `ipod-boot firmwar…`, byte for byte the same string, two
+    // different commands.
+    in property <string> hatch-probe;
+    out property <length> hatch-width: hatch-probe-text.preferred-width;
+    // §7.2's fact column, and the one probe in this window that answers a height. See
+    // `fact-probe-row`.
+    in property <string> fact-probe;
+    out property <length> fact-height: fact-probe-row.height;
     // **The fourth and fifth probes, and they measure the SLOT rather than the sentence.** Every
     // budget above is a width a string wants; these two are the width it is given. A `Field` and a
     // `Pressable` are instantiated at the same outer measure, the `Pressable` padded the way every
@@ -661,6 +677,15 @@ export component MainWindow inherits Window {
                 font-weight: Metric.weight-label;
             }
 
+            hatch-probe-text := Text {
+                x: 0;
+                y: 0;
+                visible: false;
+                text: root.hatch-probe;
+                font-family: Metric.mono-family;
+                font-size: Metric.mono-size;
+            }
+
             // **The fourth and fifth probes, and they are whole controls rather than a `Text`.** A
             // slot's measure is its owner's width less two of its owner's `pad`, and neither term
             // is knowable from outside the component — so the only honest way to ask is to build
@@ -705,6 +730,31 @@ export component MainWindow inherits Window {
                     label: "probe";
                     reason: "probe";
                     pad: Geometry.page-margin;
+                }
+
+                // **The seventh probe, and it measures a HEIGHT.** Every one above asks how wide a
+                // string wants to be; this one asks whether the row it lands in grew to hold it.
+                // §7.2's `Writes to` fact is one sentence in a two-column row, and the row used to
+                // be a layout cell one `line-label` tall with a `wrap: word-wrap` `Text` in it — so
+                // the second line was **clipped, with no ellipsis**, and `_out/gui/devices.png`
+                // stopped at *works on a copy of my-5.5g.img — nobody has* with 20 px of blank
+                // under it. A width probe cannot see that; only the drawn row's own height can.
+                //
+                // It is the shipped `MadeOfLine`, at the width a drawer page gives it, so a fact
+                // row that stops growing again is a number this window can be asked for.
+                fact-probe-box := VerticalLayout {
+                    y: 0;
+                    width: Geometry.refusal-measure;
+                    alignment: start;
+
+                    fact-probe-row := MadeOfLine {
+                    d: {
+                        label: "Writes to",
+                        value: root.fact-probe,
+                        has-action: false,
+                        mono: false,
+                    };
+                    }
                 }
             }
 

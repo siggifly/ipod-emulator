@@ -554,7 +554,7 @@ impl Composer {
     /// `the_verdict_the_plan_and_the_recipe_are_one_recipe` calls after every kind of edit.
     ///
     /// [`Composer::open`] sits in the middle of the run and is **not** gated: `push_composer` reads
-    /// it on every frame, through `set_composer_open_field` at `main.rs:5098`.
+    /// it on every frame, through `set_composer_open_field` at `main.rs:5099`.
     #[cfg(test)]
     pub fn region(&self) -> &Region {
         &self.region
@@ -2218,10 +2218,10 @@ impl Composer {
     /// **Which of `note` and `reason` the sentence goes in is `Lock::locked`'s own question**, and
     /// getting it wrong was visible in `_out/gui/composer-ipod-dumped.png`. `Pressable` reads
     /// `consequence` while enabled and `reason` while disabled, **with no fallback between them** —
-    /// `Field` has one (`primitives.slint:812`), `Pressable` does not — so a `Lock::Dump` sentence
+    /// `Field` has one (`primitives.slint:46`), `Pressable` does not — so a `Lock::Dump` sentence
     /// parked in `note` left the locked Model and Colour rows reserving §5's 34 px and saying
     /// nothing at all, two rows above a `Field` drawing that same sentence correctly. That is
-    /// `primitives.slint:369`'s own rule — *non-empty whenever `!enabled`* — broken on the page
+    /// `primitives.slint:454`'s own rule — *non-empty whenever `!enabled`* — broken on the page
     /// §9.4 was written for. A refusal is a reason; a shared iPod is a consequence; `locked()` is
     /// exactly that distinction and already knew the answer.
     fn pick(&self, field: Field, value: String, lock: Lock) -> Pick {

@@ -554,10 +554,26 @@ export component Pressable inherits Rectangle {
         Rectangle {
             height: Geometry.row-h + (root.sub == "" ? 0px : Geometry.line-label);
 
+            // **`&& root.enabled`, and it was missing for the whole of this window's life.** §6.5's
+            // material is the accent, and a disabled control draws its label in `Ink.fg-disabled`
+            // — so a disabled primary was `#9aa0a8` on `#5493e9`, which is **1.18 : 1**. Read it
+            // off `_out/gui/composer-reading.png`: the Composer's `Create` is a full-width blue
+            // button with a label you cannot see, three rows under the reason saying why it is
+            // off. Every other disabled control in this markup drops the material entirely,
+            // because every other one reaches it through `selected` and nothing is selected and
+            // disabled at once; §14.1 exists to guard exactly this and had already recorded it
+            // biting once, at 1.67 : 1, on grey.
+            //
+            // Dropping the material rather than dimming it — `material-opacity` is right here and
+            // is deliberately not used: at 0.45 the same label measures 1.6 : 1, which is the
+            // recorded failure again. Off the material the label is `#9aa0a8` on `#f7f7ff`, which
+            // is **2.47 : 1** and the number every other disabled control in this window already
+            // draws at. `no_page_this_window_draws_wears_the_material_where_6_5_forbids_it` is
+            // what keeps it there, off the pixels rather than off this line.
             Material {
                 width: 100%;
                 height: 100%;
-                visible: root.primary || root.selected;
+                visible: (root.primary || root.selected) && root.enabled;
                 opacity: root.material-opacity * (touch.pressed ? 0.86 : 1.0);
                 animate opacity {
                     duration: Motion.tight;

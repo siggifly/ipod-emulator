@@ -700,7 +700,8 @@ export component WhichIpodPage inherits Rectangle {
                 // nothing above it holding still for 34 px of reserved nothing to protect.
                 // **A bare `Text`, and a wrapper was tried and measured wrong.** Wrapping this in
                 // a `VerticalLayout { padding-top: Metric.s2; padding-bottom: Metric.s3 }` — the
-                // pair `parts.slint:189` and `devices.slint:240` use to set a paragraph apart — put
+                // pair `parts.slint:226` and `devices.slint:285` use to set a paragraph apart,
+                // `padding-top: Metric.s2` — put
                 // the warning's third line straight through `TitleAuth`'s sentence in
                 // `composer-ipod-dumped.png`: a `wrap: word-wrap` `Text` inside a nested layout
                 // reports one line's `preferred-height` to the layout above it, so the box was

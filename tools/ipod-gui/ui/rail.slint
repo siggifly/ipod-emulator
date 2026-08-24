@@ -89,6 +89,64 @@ export struct RailRow {
     next-b-consequence: string,
 }
 
+// ─── One of a failed entry's next steps (§9.3, §9.4) ────────────────────────────────────────────
+//
+// **Extracted so the pair can stack.** The two halves are drawn side by side at
+// `Geometry.rail-next-w` unless one of them names §9.4's `mono` escape hatch, in which case each
+// takes the block's full width — see the note at the use site. It takes the whole `RailRow` and a
+// side rather than eleven bindings, so the two layouts that instantiate it cannot come to disagree
+// about what a next step is.
+component NextStep inherits Pressable {
+    in property <RailRow> e;
+    // 0 or 1. `RailRow` carries its two next steps as flat `next-a-*` / `next-b-*` fields, so the
+    // side is a number rather than a struct.
+    in property <int> which;
+    in property <bool> first-failure;
+
+    callback pressed(int);
+    callback reveal(length, length);
+
+    label: root.which == 0 ? root.e.next-a-label : root.e.next-b-label;
+    enabled: root.which == 0 ? root.e.next-a-enabled : root.e.next-b-enabled;
+    reason: root.which == 0 ? root.e.next-a-reason : root.e.next-b-reason;
+    escape-hatch: root.which == 0 ? root.e.next-a-escape : root.e.next-b-escape;
+    presses: root.which == 0 ? root.e.next-a-presses : root.e.next-b-presses;
+    consequence: root.which == 0 ? root.e.next-a-consequence : root.e.next-b-consequence;
+    // A next step is never a machine rule: it is disabled only where this build has no mechanism
+    // behind it, which is a project state (§9.4).
+    machine-rule: false;
+    // §6.5: ONE material per page. The Rail is a stream and failures accumulate, so only the first
+    // failure's primary step wears it — and only the FIRST of the two, which is `which == 0`.
+    primary: root.which == 0 && root.first-failure;
+    pad: Metric.s3;
+    // §11.3: `armed` is component-local state on a control inside a **repeater**, and repeater
+    // instances are reused when the model row under them changes (§16.9 — the model is retained and
+    // `set_row_data` mutates it in place). Without this, a control armed on one entry stays armed
+    // after that entry has become a different one, and the second press detaches a resource nobody
+    // looked at. `disarm()` is public for exactly this and had no caller anywhere.
+    property <int> for-entry: root.e.id;
+    changed for-entry => {
+        self.disarm();
+    }
+    activated => {
+        root.pressed(root.which);
+    }
+    gained-focus => {
+        root.reveal(self.absolute-position.y, self.height);
+    }
+
+    Text {
+        text: root.label;
+        font-size: Metric.body-size;
+        font-weight: Metric.weight-strong;
+        color: !root.enabled
+            ? Ink.fg-disabled
+            : (root.primary ? #ffffff : Ink.fg);
+        overflow: elide;
+        vertical-alignment: center;
+    }
+}
+
 // ─── One entry ──────────────────────────────────────────────────────────────────────────────────
 
 export component RailEntryView inherits VerticalLayout {
@@ -323,83 +381,75 @@ export component RailEntryView inherits VerticalLayout {
             // below. The floor is the half-share, so `170 + Metric.s2 + 170` is the row exactly and
             // neither half can be squeezed by its sibling. §11.4's group verbs carry the same fix
             // for the same reason; the constant's own doc has every number.
-            if root.e.next-a-label != "": HorizontalLayout {
+            //
+            // **And the floor does nothing for the line under the reason, which is why the pair
+            // stacks.** §9.4's `mono` escape hatch is a command that has to be typed exactly, so
+            // it cannot be shortened: `ipod-boot firmware cache --verify` measures **259 px** and
+            // this half's slot is 146. What `work-failed.png` shipped is the proof that a floor is
+            // not a fix — the verify card's two halves drew `ipod-boot firmware get <family>` and
+            // `ipod-boot firmware cache --verify` as the **byte-identical** `ipod-boot firmwar…`,
+            // two different commands rendered as one unreadable one. So when either half names a
+            // hatch, each control takes the block's full width and the two stand one above the
+            // other. `every_escape_hatch_this_window_names_is_drawn_wide_enough_to_read` is what
+            // holds it there.
+            property <bool> stacked: root.e.next-a-escape != "" || root.e.next-b-escape != "";
+
+            if root.e.next-a-label != "" && !stacked: HorizontalLayout {
                 spacing: Metric.s2;
 
-                a := Pressable {
+                NextStep {
                     horizontal-stretch: 1;
                     min-width: Geometry.rail-next-w;
-                    label: root.e.next-a-label;
-                    enabled: root.e.next-a-enabled;
-                    reason: root.e.next-a-reason;
-                    escape-hatch: root.e.next-a-escape;
-                    presses: root.e.next-a-presses;
-                    consequence: root.e.next-a-consequence;
-                    // A next step is never a machine rule: it is disabled only where this build has
-                    // no mechanism behind it, which is a project state (§9.4).
-                    machine-rule: false;
-                    // §6.5: ONE material per page. The Rail is a stream and failures accumulate, so
-                    // only the first failure's primary step wears it.
-                    primary: root.first-failure;
-                    pad: Metric.s3;
-                    // §11.3: `armed` is component-local state on a control inside a **repeater**,
-                    // and repeater instances are reused when the model row under them changes (§16.9
-                    // — the model is retained and `set_row_data` mutates it in place). Without this,
-                    // a control armed on one entry stays armed after that entry has become a
-                    // different one, and the second press detaches a resource nobody looked at.
-                    // `disarm()` is public for exactly this and had no caller anywhere.
-                    property <int> for-entry: root.e.id;
-                    changed for-entry => {
-                        self.disarm();
+                    e: root.e;
+                    which: 0;
+                    first-failure: root.first-failure;
+                    pressed(n) => {
+                        root.next-step(root.e.id, n);
                     }
-                    activated => {
-                        root.next-step(root.e.id, 0);
-                    }
-                    gained-focus => {
-                        root.reveal(self.absolute-position.y, self.height);
-                    }
-
-                    Text {
-                        text: root.e.next-a-label;
-                        font-size: Metric.body-size;
-                        font-weight: Metric.weight-strong;
-                        color: !root.e.next-a-enabled
-                            ? Ink.fg-disabled
-                            : (root.first-failure ? #ffffff : Ink.fg);
-                        overflow: elide;
-                        vertical-alignment: center;
+                    reveal(top, h) => {
+                        root.reveal(top, h);
                     }
                 }
 
-                if root.e.next-b-label != "": Pressable {
+                if root.e.next-b-label != "": NextStep {
                     horizontal-stretch: 1;
                     min-width: Geometry.rail-next-w;
-                    label: root.e.next-b-label;
-                    enabled: root.e.next-b-enabled;
-                    reason: root.e.next-b-reason;
-                    escape-hatch: root.e.next-b-escape;
-                    presses: root.e.next-b-presses;
-                    consequence: root.e.next-b-consequence;
-                    machine-rule: false;
-                    pad: Metric.s3;
-                    property <int> for-entry: root.e.id;
-                    changed for-entry => {
-                        self.disarm();
+                    e: root.e;
+                    which: 1;
+                    first-failure: root.first-failure;
+                    pressed(n) => {
+                        root.next-step(root.e.id, n);
                     }
-                    activated => {
-                        root.next-step(root.e.id, 1);
+                    reveal(top, h) => {
+                        root.reveal(top, h);
                     }
-                    gained-focus => {
-                        root.reveal(self.absolute-position.y, self.height);
-                    }
+                }
+            }
 
-                    Text {
-                        text: root.e.next-b-label;
-                        font-size: Metric.body-size;
-                        font-weight: Metric.weight-strong;
-                        color: root.e.next-b-enabled ? Ink.fg : Ink.fg-disabled;
-                        overflow: elide;
-                        vertical-alignment: center;
+            if root.e.next-a-label != "" && stacked: VerticalLayout {
+                spacing: Metric.s2;
+
+                NextStep {
+                    e: root.e;
+                    which: 0;
+                    first-failure: root.first-failure;
+                    pressed(n) => {
+                        root.next-step(root.e.id, n);
+                    }
+                    reveal(top, h) => {
+                        root.reveal(top, h);
+                    }
+                }
+
+                if root.e.next-b-label != "": NextStep {
+                    e: root.e;
+                    which: 1;
+                    first-failure: root.first-failure;
+                    pressed(n) => {
+                        root.next-step(root.e.id, n);
+                    }
+                    reveal(top, h) => {
+                        root.reveal(top, h);
                     }
                 }
             }
