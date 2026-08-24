@@ -3297,7 +3297,7 @@ fn pump_machine(
     let life = l.life();
     // ── §12.3's denominator, learned from a boot that was OBSERVED to end ───────────────────────
     //
-    // **Nothing in this program had ever written `Device::boot_instructions`**, so `expected_boot`
+    // **Nothing in this program had ever written `Device::cold_boot_instructions`**, so `expected_boot`
     // answered `None` on every device that has ever existed and `Progress::Fraction` was a variant
     // the shipped window could not construct: every boot drew the counted form and the honesty
     // §12.3 is about was the honesty of having nothing to be dishonest with. This is the writer.
@@ -6844,7 +6844,7 @@ pub(crate) mod tests {
 
     /// **`never started` was a claim about history from a field that is a denominator.**
     ///
-    /// `boot_instructions` is what §12.3's progress bar divides by, and `Settings::set_boot_shape`
+    /// `cold_boot_instructions` is what §12.3's progress bar divides by, and `Settings::set_boot_shape`
     /// clears it whenever the recipe changes — so a device booted a dozen times has none the moment
     /// its bootloader is swapped. Whether it has ever run is a fact the model does not carry, and no
     /// row may render one either way. It reached the shelf's row-1 slot for a while, which is worse
@@ -6855,14 +6855,14 @@ pub(crate) mod tests {
         s.remember_as("mine");
         // A device that HAS booted, whose denominator was then dropped — which is exactly what
         // §12.3's rule does to a device whose bootloader changed.
-        s.devices[0].boot_instructions = None;
+        s.devices[0].cold_boot_instructions = None;
         let without = device_rows(&s, None)[0].state.to_string();
         assert!(
             !without.contains("never"),
             "the row claims history the model does not carry: {without:?}"
         );
 
-        s.devices[0].boot_instructions = Some(3_000_000);
+        s.devices[0].cold_boot_instructions = Some(3_000_000);
         assert_eq!(
             device_rows(&s, None)[0].state.to_string(),
             without,
@@ -7329,12 +7329,14 @@ pub(crate) mod tests {
     /// **What it asserts is what only a real boot reaches**, and each number is `research/`'s
     /// rather than a threshold picked to make the test pass:
     ///
-    /// - **`Out::booted_at` is `Some`**, which is `emu::boot_end`'s *observed* arm and means
-    ///   RetailOS itself wrote `0x8001052a` to the click wheel to ask for frames. Nothing but
-    ///   Apple's firmware sends that opcode — research/10 Addendum 21 §6 is where it was read off
-    ///   the image — and the fallback arm, `executed >= snap_at`, is a constant that any machine
-    ///   reaches by running long enough. The two are one line apart in the run loop and this test
-    ///   is one of the two things in the program that can tell them apart.
+    /// - **`Out::booted_at` is `Some`**, which is `emu::boot_end`'s *observed* arm and means the
+    ///   machine went quiet with its drive answered (`emu::Quiet`), rather than the fallback arm
+    ///   `executed >= snap_at`, which is a constant that any machine reaches by running long
+    ///   enough. The two are one line apart in the run loop and this test is one of the two things
+    ///   in the program that can tell them apart. **And the number it publishes is checked against
+    ///   the boot it claims to have measured**, which is the assertion the 2026-08-24 finding
+    ///   bought: the signal it replaced published 0.26 % of the boot as the whole of it, and
+    ///   nothing in the window could have said so.
     /// - **ATA commands in the hundreds.** research/04 row 9's A/B is **102** commands for a retail
     ///   cold boot against **24** for the same boot with the IDE interrupt latch ablated, and the
     ///   24 is Apple's bootloader painting its own screen and never handing RetailOS the disk. So
@@ -7355,8 +7357,9 @@ pub(crate) mod tests {
     ///   - replace `l.link.push(ev)` in `machine_key_act` with a discard and the wheel gesture at
     ///     the end reaches nothing — *0 arrivals at Apple's frame decoder 0x00281350* — while the
     ///     boot itself is untouched, which is the two halves of this test coming apart cleanly;
-    ///   - break `emu::boot_end`'s observed arm and `emu.rs`'s
-    ///     `the_first_ask_for_frames_is_not_the_end_of_a_cold_boot` goes red beside it;
+    ///   - set `emu::QUIET_HALTED_PERCENT` to 100 and the boot never settles: the phase falls to
+    ///     `snap_at`, `booted_at` is `None`, and the `expect` on the observed arm is what fires;
+    ///     `emu.rs`'s `the_first_ask_for_frames_is_not_the_end_of_a_cold_boot` goes red beside it;
     ///   - and one that did **not** go red, which is why it is written down: setting
     ///     `bcm.registry = false` in `emu::build`, whose comment promised *"the panel would be a
     ///     black rectangle"*, produced an indistinguishable boot. That comment now says what was
@@ -7452,12 +7455,33 @@ pub(crate) mod tests {
         let mut first_ata = None;
         let mut first_pixel = None;
         let mut stopped = None;
+        let mut timeline: Vec<(u64, u64, u64, u32, u64)> = Vec::new();
+        // Every `0x052a` the firmware sends, as (instructions, payload). The whole point of the
+        // 2026-08-24 finding is that one command has two senders 366x apart, so a census that
+        // cannot say WHEN each arrived is the instrument that hid it.
+        let mut sets: Vec<(u64, u8)> = Vec::new();
+        let mut next_mark = 0u64;
         loop {
             (wiring.machine_tick)();
             let (phase, booted_at, executed, ata, lit, frames) = {
                 let held = wiring.live.borrow();
                 let l = held.as_ref().expect("the machine");
                 let out = l.link.out.lock().unwrap();
+                if out.stats.wheel_sets > sets.len() as u64 {
+                    if let Some(last) = out.stats.last_wheel_set {
+                        sets.push(last);
+                    }
+                }
+                if out.stats.executed + out.stats.idle_steps >= next_mark {
+                    next_mark = out.stats.executed + out.stats.idle_steps + 2_000_000;
+                    timeline.push((
+                        out.stats.executed,
+                        out.stats.idle_steps,
+                        out.stats.ata_commands,
+                        out.fb_nonzero,
+                        out.stats.bcm_frames,
+                    ));
+                }
                 (
                     out.phase.clone(),
                     out.booted_at,
@@ -7563,7 +7587,13 @@ pub(crate) mod tests {
         println!("    lit pixels           {lit} of {}  (research/10 Add. 10 §8: 75 267)", emu::FB_W * emu::FB_H);
         println!("    first lit pixel at   {first_pixel:?}");
         println!("    surface              {surface:#010x}");
-        println!("    asked for frames     {}", s.asked_for_frames);
+        // **The whole boot's `0x052a` census**, and the reason the count is printed rather than the
+        // bool: this is where "does RetailOS send one of its own later" is answered for the run
+        // that matters. One command, at 2.2 M, is the boot ROM's and nothing else's.
+        println!(
+            "    `0x052a` commands    {} (last {:?}), asked_for_frames = {}",
+            s.wheel_sets, s.last_wheel_set, s.asked_for_frames
+        );
         println!("    reporting            {}", s.reporting);
         println!("    co-proc frames       {}", s.bcm_frames);
         println!("    co-proc commands     {}", s.bcm_commands);
@@ -7580,6 +7610,25 @@ pub(crate) mod tests {
             "\n  what the window CLAIMED about the boot: ended at {:?}",
             phase_ended
         );
+
+        println!("\n  every `0x052a` this boot sent, in order:");
+        for (n, payload) in &sets {
+            println!("    @{n:<13} payload {payload}");
+        }
+
+        println!("\n  the timeline, every 2 M steps (instructions + halted cycles):");
+        println!("    {:>13} {:>13} {:>6} {:>6} {:>3} {:>7}", "instr", "idle steps", "ata", "lit", "fr", "halted");
+        let mut prev: Option<(u64, u64)> = None;
+        for &(n, idle, ata, lit, fr) in &timeline {
+            let halted = match prev {
+                Some((pn, pi)) if (n + idle) > (pn + pi) => {
+                    (idle - pi) as f64 / ((n + idle) - (pn + pi)) as f64
+                }
+                _ => f64::NAN,
+            };
+            prev = Some((n, idle));
+            println!("    {n:>13} {idle:>13} {ata:>6} {lit:>6} {fr:>3} {:>6.1}%", halted * 100.0);
+        }
 
         // The picture, out of that same `Out` — the machine's own frame, not a fixture.
         std::fs::create_dir_all(shots_dir()).ok();
@@ -7634,28 +7683,56 @@ pub(crate) mod tests {
             s.frames_suppressed
         );
 
-        // ── The finding, printed where the numbers that make it are ────────────────────────────
+        // ── What the window SAID about the boot, and this is the only place it can be checked ───
         //
-        // **`emu::boot_end`'s observed arm is not an observation of a boot, and this is where that
-        // was found.** It is printed rather than asserted, deliberately: the claim this test exists
-        // to make — that the window's start path boots Apple's software — is *true*, and hanging a
-        // red assertion about a different defect off it would make the boot proof unrunnable to
-        // report a phase bug. The defect has its own entry in `KNOWN-BUGS.md` and its own test in
-        // `emu.rs`, `the_first_ask_for_frames_is_not_the_end_of_a_cold_boot`, which carries these
-        // numbers as its fixture.
+        // **This block was a `println!` and a `KNOWN-BUGS.md` reference until 2026-08-25**, because
+        // the defect it reported was real and unfixed: the window left `Booting` at 2 250 000
+        // instructions with **0 ATA commands and 0 lit pixels**, on the boot ROM's `0x8001052a`
+        // rather than on anything RetailOS did. It is assertions now, and they are the same three
+        // numbers — the phase change is measured against the drive and the panel, which is what
+        // *booted* means from outside the machine, and against nothing the phase itself supplies.
+        //
+        // The floors are the two this test already argues for above and neither is a round number:
+        // 102 ATA commands is research/04 row 9's discriminator between a boot and a bootloader,
+        // and 2 916 lit pixels is exactly Apple's bootloader's own screen, measured twice.
         let (ended_at, ended_claim, ended_ata, ended_lit) =
             phase_ended.expect("the machine left `Booting`");
-        if ended_ata < 102 || ended_lit <= 2916 {
-            println!("\n  KNOWN BUG — what the window claimed about this boot:");
-            println!("    left `Booting` at    {ended_at} instructions");
-            println!("    published            booted_at = {ended_claim:?}");
-            println!("    with                 {ended_ata} ata commands, {ended_lit} lit pixels");
-            println!(
-                "    and went on to       {} instructions, {} ata commands, {lit} lit pixels",
-                s.executed, s.ata_commands
-            );
-            println!("    See KNOWN-BUGS.md — the drive had not answered and the panel was black.");
-        }
+        println!("\n  what the window SAID about this boot:");
+        println!("    left `Booting` at    {ended_at} instructions");
+        println!("    published            booted_at = {ended_claim:?}");
+        println!("    with                 {ended_ata} ata commands, {ended_lit} lit pixels");
+        println!(
+            "    and went on to       {} instructions, {} ata commands, {lit} lit pixels",
+            s.executed, s.ata_commands
+        );
+        assert!(
+            ended_ata >= 102,
+            "the window declared the boot over at {ended_at} instructions with {ended_ata} ATA \
+             commands. A retail cold boot reaches 102 before it has RetailOS on the disk at all"
+        );
+        assert!(
+            ended_lit > 2916,
+            "the window declared the boot over at {ended_at} instructions with {ended_lit} lit \
+             pixels. 2 916 is Apple's bootloader's own screen and nothing after it"
+        );
+        // And the number it teaches the library. §12.3 divides the *next* boot's bar by this, so a
+        // fraction of the boot published as the whole of it is a bar that reads full at that
+        // fraction: at the 2 250 000 this used to publish, 0.26 %.
+        let learned = ended_claim.expect("the boot ended on the observed arm, not on `snap_at`");
+        // 0.8 and not 0.9: `s.executed` includes whatever the wheel section below added after the
+        // machine had already settled, which is a few hundred thousand instructions in a fast run
+        // and could be twenty million in a slow one. Measured here the share is **94.4 %**
+        // (823 593 896 of 872 147 527); the reading this replaced was **0.26 %**, and the
+        // `snap_at` fallback would be 183 %. Any floor between the first two says the same thing.
+        let share = learned as f64 / s.executed as f64;
+        assert!(
+            share > 0.8,
+            "the boot cost was published as {learned} of {} instructions actually executed — \
+             {:.2} % — so the next launch draws a bar that is full {:.2} % of the way in",
+            s.executed,
+            share * 100.0,
+            share * 100.0
+        );
     }
 
     // ── §7.4: the drawn controls reach the machine ──────────────────────────────────────────────

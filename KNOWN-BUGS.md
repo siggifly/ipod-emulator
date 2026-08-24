@@ -14,44 +14,59 @@ belongs here.
 
 ---
 
-## The window declares the cold boot over 2 250 000 instructions in, before the drive has answered — 2026-08-24
+## ~~The window declares the cold boot over 2 250 000 instructions in, before the drive has answered~~ — FIXED 2026-08-25
 
 Found by booting Apple's software from the bench for the first time. The window's start path **does**
-boot RetailOS — 769 ATA commands, the co-processor drawing, and **75 267 non-black pixels**, which is
-`research/10` Addendum 10 §8's own fingerprint for this exact machine, to the pixel. What is wrong is
-what the window *says about* that boot.
+boot RetailOS — 768 ATA commands, the co-processor drawing, and **75 267 non-black pixels**, which is
+`research/10` Addendum 10 §8's own fingerprint for this exact machine, to the pixel. What was wrong is
+what the window *said about* that boot.
 
 ```
-the window leaves `Booting`     2 250 000 instr     0 ata     0 lit pixels   0 co-proc frames
+                                 before            after
+the window leaves `Booting`     2 250 000     823 624 842 instr
+  with                        0 ata, 0 lit    765 ata, 75 267 lit
+  and publishes                 2 250 000     823 593 896 instr — 94.4 % of the boot, not 0.26 %
 the first pixel lights         42 999 970 instr     0 ata
 the drive first answers        57 499 970 instr
-the machine goes quiet        871 653 185 instr   768 ata   75 267 lit       2 co-proc frames
+the machine stops working     872 043 218 instr   768 ata   75 267 lit   2 co-proc frames
 ```
 
-At the instant the bench stops saying *booting* and starts saying *running*, the drive has answered
-**nothing** and the panel is **black**. The first lit pixel is nineteen times further on; the first
-ATA command is twenty-five times further on.
+At the instant the bench stopped saying *booting* and started saying *running*, the drive had
+answered **nothing** and the panel was **black**. The first lit pixel was nineteen times further on;
+the first ATA command twenty-five times.
 
-**The cause is the signal, and it was chosen from a measurement taken on a different machine.**
-`emu::boot_end`'s observed arm ends the boot phase on the first `0x8001052a` — RetailOS asking the
+**The cause was the signal, and it was chosen from a measurement taken on a different machine.**
+`emu::boot_end`'s observed arm ended the boot phase on the first `0x8001052a` — RetailOS asking the
 click wheel for autonomous frames — reasoning that *"a machine asking for input is a machine that has
-finished starting"*. Cold-booting from Apple's own NOR, that command arrives from the boot path long
-before RetailOS is loaded. `eapp-loader`'s snapshot code has said so all along, in as many words:
-*"the firmware turns it on once with opcode `0x052a` **early in the boot**"*. The two readings of one
-command are 869 million instructions apart.
+finished starting"*. Cold-booting from Apple's own NOR, that command arrives from the **boot ROM**
+long before RetailOS is loaded: `--storeaddr=0x7000c120` puts it at `@2 211 983` from
+`pc = 0x4000e654`, 55 M instructions before the drive answers at all. `eapp-loader`'s snapshot code
+had said so in as many words — *"the firmware turns it on once with opcode `0x052a` **early in the
+boot**"*.
 
-**It is not cosmetic, and it is the second time this bar has been wrong in the same direction.**
-`main::Learned::boot` writes `Out::booted_at` to `Device::boot_instructions`, which is the progress
-bar's denominator, so the *next* launch of that device draws a bar that is full at 0.12 % of the boot
-and pinned there for the remaining 878 million instructions. That is exactly the substitution
-`Device::boot_instructions` was introduced to end when it replaced `snap_at` — see *The boot progress
-bar is an estimate presented as a measurement*, below, which fixed the operator's original complaint
-by swapping a constant for this. The constant was **1.9x** out. This is **387x** out.
+**And watching for a later one would not have helped**, which is the half a control caught.
+RetailOS does send its own; the window's boot sends **five** `0x052a` commands in total, and
+RetailOS's earliest is at `@111 545 868` — still only 12.8 % of the boot — while its other three
+arrive *after* the machine has already stopped working. No arrival of this command is the end of a
+cold boot.
 
-**Not fixed here, deliberately.** Replacing the signal needs a measurement nobody has taken: which
-sender issues that first `0x052a`, whether RetailOS issues one of its own later, and at what count.
-Guessing a new signal would trade a wrong observation for an unmeasured one, which is how this
-happened the first time.
+**Fixed by measuring what a booted machine does that a booting one does not: it halts.**
+`emu::Quiet` ends the boot phase on an 8 M-step trailing window that is 95 % halted with at least
+one ATA command issued. Over the whole 872 M cold boot the halted fraction never exceeds **61.7 %**;
+from 823.6 M it holds **99.7 %** for ever. It needs no detection of which operating system is on the
+drive — Rockbox's 400 M-step budget executes 77 264 434 instructions, 80.7 % halted, on a boot of
+about 100 M. `research/10` Addendum 32 is the measurement, the candidate window widths, and the
+control that made an `--enterlog` zero worth reading.
+
+**The denominators already learned are dropped, once.** `main::Learned::boot` wrote `Out::booted_at`
+to the device library, so every settings file written before today carries
+`device.N.boot_instructions = 2250000` and nothing would ever have cleared it —
+`Settings::set_boot_shape` runs only when a recipe is committed, and a device nobody edits is never
+committed. The key is now `device.N.cold_boot_instructions`: a key's name is a promise about what its
+value measures, the value's meaning changed, and `settings.txt`'s own header states the mechanism —
+*"keys this version does not know are ignored"*. The stale line is read by nobody and is gone at the
+next save. Those devices draw no fraction until their next real boot, which is what a device that has
+never booted draws.
 
 **How to see it**, in one command — it needs `resources/`, so it is `#[ignore]`d:
 
@@ -60,9 +75,31 @@ cargo test --release -p ipod-gui --bin ipod-emulator \
     the_bench_boots_apples_software -- --ignored --nocapture
 ```
 
-It prints a `KNOWN BUG` block with the three rows above, and writes the panel it booted to
-`_out/gui/retail-boot-panel.png`. `emu.rs`'s `the_first_ask_for_frames_is_not_the_end_of_a_cold_boot`
-carries the same numbers as a fixture and runs with no `resources/` at all.
+It prints the whole boot as a timeline of halted fractions, every `0x052a` the boot sent with the
+instruction count of each, and what the window said about it — and it now **asserts** the three
+numbers this entry is about instead of printing them under a `KNOWN BUG` heading.
+
+## `ipod-boot retail` and `ipod-gui` do not boot the same machine — 2026-08-25
+
+Same NOR dump, same `PRISTINE` drive, both pinned on the command line:
+
+| | ATA commands | co-proc | what is on the panel | instructions |
+|---|---|---|---|---|
+| `ipod-boot retail` | **70** | 4 kicked / 2 updates | the Apple logo | 1.2 G, still going |
+| …`--clickwheel` | 70 | 4 / 2 | the same | 1.2 G |
+| …`--clickwheel --bcm-registry` | 70 | 4 / 2 | the same | 1.2 G |
+| `ipod-gui`'s start path | **768** | 4 / 2 | the language picker, 75 267 lit | 872 M, then quiet |
+
+The trace front end stops at Apple's bootloader's own screen and stays there; the window boots
+through to RetailOS's first interactive screen. The two build the machine in different places —
+`trace.rs`'s flag parsing and `emu::build` — and the click wheel is not the difference and the
+co-processor's GENCMD registry is not the difference; both were tried.
+
+**Why it matters more than it looks.** `ipod-boot` is what `research/` was measured with, so any
+figure in that directory quoted from a run past ~70 ATA commands describes the machine that stops at
+the logo. It also cost this file a wrong sentence: `--enterlog` reporting zero arrivals at all five
+of RetailOS's `0x052a` senders over 1.2 G was written up as *RetailOS never sends the command*, when
+what it measures is a machine that never reaches the code. Found while fixing the entry above.
 
 ## ~~The window opens at its minimum height, not its preferred one~~ — FIXED 2026-08-21
 
@@ -621,12 +658,21 @@ boot that dies before the UI does not claim to be booting for ever. The bar itse
 instructions, because nothing better is available *during* a boot, but it says **"roughly N %"** and
 no longer offers a seconds-remaining figure it cannot honour.
 
-**And the replacement signal is wrong too, measured 2026-08-24** — see *The window declares the cold
-boot over 2 250 000 instructions in*, at the top of this file. *"RetailOS writing `0x8001052a`"* is
-the sentence that turned out not to be true of a cold boot from Apple's own NOR: the boot path writes
-it first, 869 million instructions before RetailOS reaches its menu. The operator's original
-complaint — the bar filling after the language screen was up — is still fixed; the bar now finishes
-long **before** it, which is the same defect with its sign flipped.
+**And the replacement signal was wrong too, measured 2026-08-24, fixed 2026-08-25** — see *The
+window declares the cold boot over 2 250 000 instructions in*, at the top of this file.
+*"RetailOS writing `0x8001052a`"* is the sentence that turned out not to be true of a cold boot from
+Apple's own NOR: the boot **ROM** writes it first, at `@2 211 983` from `pc = 0x4000e654`, 821
+million instructions before RetailOS reaches its menu. The operator's original complaint — the bar
+filling after the language screen was up — was still fixed; the bar then finished long **before** it,
+which is the same defect with its sign flipped.
+
+**Three signals, and only the third is an observation of a boot.** `snap_at` was a constant. The
+first `0x8001052a` was a real event belonging to a different machine's startup. What ends the boot
+phase now is *the machine going quiet with its drive answered* — `emu::Quiet` — because a booted
+machine halts and a booting one does not, whatever is on the drive. The paragraph above that names
+`Stats::reporting` as *"a real signal"* is the reasoning that produced the second wrong answer, and
+it is left standing: it is a good example of a plausible sentence about a register that nobody had
+watched fire.
 
 ## `MENU`+`SELECT` and `PLAY` are delivered and ignored
 

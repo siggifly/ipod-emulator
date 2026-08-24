@@ -3205,11 +3205,31 @@ fn report_break_watch(m: &mut eapp_loader::Machine) {
     // Armed and never reached is a RESULT, and it used to print nothing at all — indistinguishable
     // from having forgotten the flag, which is the difference between "the task never ran" and
     // "you did not ask". Say it.
-    if !m.enter_pcs.is_empty() && m.enter_log.is_empty() {
-        println!("\n--- arrivals at watched addresses: 0 ---");
+    //
+    // **And say it per address, not only when the whole log is empty**, which is the half this
+    // instrument was missing until 2026-08-25 and which cost a measurement its control. Arm six
+    // addresses, have one of them reached 944 984 times, and the other five vanished from the
+    // report entirely: the `if` below used to be `m.enter_log.is_empty()`, so a run with any
+    // arrival at all printed a caller census in which a never-reached address is simply an absent
+    // row — the exact shape of AGENTS.md §6's *an instrument reporting an absence it could not
+    // observe*. It was found by arming the five senders of `0x052a` alongside a control that had
+    // to fire, which is the only reason the zero beside it was believable.
+    //
+    // The tally is summed from `enter_callers`, which is uncapped, so a saturated 65 536-entry log
+    // cannot turn a reached address into an unreached one.
+    if !m.enter_pcs.is_empty() {
+        use std::collections::BTreeMap;
+        let mut hits: BTreeMap<u32, u64> = BTreeMap::new();
+        for ((pc, _), n) in &m.enter_callers {
+            *hits.entry(*pc).or_insert(0) += n;
+        }
+        println!("\n--- addresses armed with --enterlog: {} ---", m.enter_pcs.len());
         for pc in &m.enter_pcs {
             let name = m.symbolise(*pc).unwrap_or_else(|| "unnamed".into());
-            println!("  {pc:#010x}  {name}  NEVER REACHED");
+            match hits.get(pc) {
+                Some(n) => println!("  {pc:#010x}  {name}  x{n}"),
+                None => println!("  {pc:#010x}  {name}  NEVER REACHED"),
+            }
         }
     }
     if !m.enter_log.is_empty() {

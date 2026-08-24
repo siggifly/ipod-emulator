@@ -137,12 +137,12 @@ pub fn instructions(n: u64) -> String {
 pub enum Progress {
     /// No completed cold boot on this device, so there is a number and no fraction.
     Counted { instructions: u64 },
-    /// `Device::boot_instructions` from this device's own last completed cold boot.
+    /// `Device::cold_boot_instructions` from this device's own last completed cold boot.
     Fraction { done: u64, of: NonZeroU64 },
 }
 
 impl Progress {
-    /// **The only way to make one.** `denominator` is `Device::boot_instructions`.
+    /// **The only way to make one.** `denominator` is `Device::cold_boot_instructions`.
     ///
     /// `Some(0)` demotes exactly like `None`: a device whose recorded boot took zero instructions
     /// recorded nothing, and `Settings::expected_boot` already filters that value out for the same
@@ -264,10 +264,10 @@ impl Pace {
 /// - `Stopped` cannot exist without a [`Reason`], and a `Reason` is never empty.
 ///
 /// **`Phase::Booting { target }` is deliberately not read for the denominator.** Its `target` is
-/// `cfg.snap_at`, the instruction count the *snapshot* will be taken at — `emu.rs:1604` is where it
+/// `cfg.snap_at`, the instruction count the *snapshot* will be taken at — `emu.rs:1750` is where it
 /// becomes the phase, and the run loop compares the phase against that same value again to decide
 /// the boot has ended. §12.3 is explicit that the progress denominator is a different number,
-/// `Device::boot_instructions`, *"this device's own last completed cold boot"*. Two numbers for two
+/// `Device::cold_boot_instructions`, *"this device's own last completed cold boot"*. Two numbers for two
 /// questions, and one is a plausible-looking substitute for the other, which is what would make
 /// reading the wrong one a defect nobody sees.
 #[derive(Clone, PartialEq, Debug)]

@@ -1957,7 +1957,7 @@ In order, narrated in the Work Rail, as a `Recipe` with ticked `Step`s:
 5. The device is named `My 5.5G`. `Settings::save()` again — and after every completed step, which is
    what makes §10.3's resume real rather than aspirational.
 6. It starts. The cradle label reads `booting · 412 M instructions · press ● to stop` with **no
-   percentage**, because `Device::boot_instructions` is `None` and inventing a fraction would be lying
+   percentage**, because `Device::cold_boot_instructions` is `None` and inventing a fraction would be lying
    about a number the program does not have. About 75 seconds later RetailOS draws its language
    picker inside the glass, at exactly `k`.
 7. `record_boot()` writes the denominator. Every subsequent boot of this device shows a real
@@ -2332,7 +2332,7 @@ in the `building` state with its progress on the cradle label. You can leave and
 else. A five-minute, five-ways-to-fail operation must not own a screen — that is the structural
 answer to *"a wizard that re-opens itself"*.
 
-**And `Create` clears `Device::boot_instructions` whenever `oses` or `loader` changed** — §12.3.
+**And `Create` clears `Device::cold_boot_instructions` whenever `oses` or `loader` changed** — §12.3.
 `Recipe::shape()` is what it compares: `compose::BootShape`, the bootloader and the systems and
 deliberately not the drive.
 
@@ -2662,7 +2662,7 @@ from `Fraction { of: NonZeroU64 }`, so §12.3's *"no fraction and no bar"* is a 
 rule somebody has to remember. `Glass` is the third column, `Life::shelf` the fourth, and
 `machine::cradle` is §7.3. **One trap the building found**: the `target` in the `Booting { target }`
 row above is `Config::snap_at`, the instruction count the *snapshot* is taken at — not §12.3's
-denominator, which is `Device::boot_instructions`. Two numbers, two questions, and each is a
+denominator, which is `Device::cold_boot_instructions`. Two numbers, two questions, and each is a
 plausible-looking substitute for the other — a bar drawn over the wrong one is still a bar, moving
 at a plausible rate, and nothing would report it.
 `the_boot_bar_divides_by_the_last_cold_boot_and_not_by_the_snapshot_instant` is the test, and it
@@ -2692,7 +2692,7 @@ by hand.
 
 ### 12.3 Progress, honestly — and what happens when the recipe changes
 
-The denominator is `Device::boot_instructions` — **this device's own last completed cold boot**,
+The denominator is `Device::cold_boot_instructions` — **this device's own last completed cold boot**,
 which is why one bar is honest across Rockbox (~100 M), RetailOS (~1.6 G) and iPodLinux (~21.5 G)
 without detecting which is on the drive. Before a device has ever booted there is **no fraction and
 no bar**: the cradle label carries an instruction count that moves. A 4 px indeterminate rule that
@@ -2702,9 +2702,9 @@ does not animate would be acceptable; a spinner would not (§8.3).
 so it can.** A device that learned ~1.6 G on RetailOS and then has Rockbox installed reaches its menu
 at ~100 M against a 1.6 G denominator, so the cradle reads `booting · 6 %` at the moment the machine
 is finished. Boot the other way and the bar passes 100 % and keeps going. Both are the specific
-defect `boot_instructions` replaced `snap_at` to fix, reintroduced through the edit path.
+defect `cold_boot_instructions` replaced `snap_at` to fix, reintroduced through the edit path.
 
-So: **`Create` clears `Device::boot_instructions` whenever the recipe's `oses` or `loader` changed**,
+So: **`Create` clears `Device::cold_boot_instructions` whenever the recipe's `oses` or `loader` changed**,
 and the first boot after an edit has no fraction, exactly like a device that has never booted. One
 line in `Create` — plus a model method that owns the rule, because a device is edited from more than
 one entrance and a rule with nothing computing it is the shape §16.9 exists to delete.
@@ -2728,7 +2728,7 @@ denominator is dropped once rather than trusted for ever.
 *(**Built.** `compose::BootShape` and `Recipe::shape()` shipped 2026-08-21; `Device::boot_shape`,
 `Settings::set_boot_shape` and the `as_device` carry-forward line followed; and `Composer::commit`
 became the production writer — the last of the four, and the one whose absence made the other three
-unreachable. It calls `set_boot_shape` rather than clearing `boot_instructions` itself, so the rule
+unreachable. It calls `set_boot_shape` rather than clearing `cold_boot_instructions` itself, so the rule
 runs in one place: `a_composed_device_records_what_it_boots_and_reopens_on_it` measures the write,
 the file and `recipe_of`'s authority branch in one pass, and
 `a_device_with_no_recorded_shape_drops_its_denominator_once` measures the once-only drop that every
@@ -2741,15 +2741,28 @@ Fraction` was a variant the shipped program could not construct: every boot drew
 and this section's honesty was the honesty of having nothing to be dishonest with.*
 
 *The trap in wiring it is that **the boot phase ends two ways one line apart in the run loop** —
-RetailOS asking for wheel frames, which is an observation, and `executed >= snap_at`, which is the
-fallback for the case that signal never comes. A writer that watched for the phase change and took
+the machine going quiet, which is an observation, and `executed >= snap_at`, which is the
+fallback for the case that never happens. A writer that watched for the phase change and took
 `Stats::executed` records `snap_at` — the 1.6 G constant this whole section exists to stop being the
-denominator — on every machine that never reached the wheel, and files it as "this device's own last
+denominator — on every machine that never settled, and files it as "this device's own last
 completed cold boot". `emu::boot_end` is the one function that tells the two apart; it answers
 `Some(None)` for the fallback and `Some(Some(n))` for the observation, `Out::booted_at` carries only
 the second, and `a_boot_that_ended_on_the_fallback_teaches_the_denominator_nothing` carries the
 substitution as its own control. A restored machine never enters `Booting` at all, so a resume
 cannot teach the denominator what a cold boot costs.*
+
+*(**The observation was `0x8001052a` — RetailOS asking the click wheel for frames — until
+2026-08-25, and it was wrong by 387x.** That command's first arrival is the **boot ROM's**, at
+`@2 211 983` of an 872 M cold boot, with the drive not yet answered and the panel black; the
+denominator it taught draws a bar full at 0.12 %. It is now `emu::Quiet`: an 8 M-step trailing
+window of the machine's own steps that is 95 % **halted**, with at least one ATA command issued —
+because a booted machine halts and a booting one does not, whatever is on the drive, which is the
+same property this section needs to be honest across Rockbox, RetailOS and iPodLinux without
+detecting which is on it. Over the whole cold boot the halted fraction never exceeds 61.7 %; from
+823.6 M it holds 99.7 %. `research/10` Addendum 32 is the measurement, and `KNOWN-BUGS.md` carries
+what the old signal cost. **The settings key moved with the meaning** —
+`device.N.cold_boot_instructions` — so every denominator learned by the old signal is read by
+nobody and gone at the next save.)*
 
 *And the difference is **drawn** rather than only modelled: a 4 px determinate rule in the cradle's
 own band, under the body, when there is a fraction — and nothing at all when there is not, which is
@@ -4132,7 +4145,7 @@ has already been had.
   defined behaviour at all. §11.4.
 - **A running machine's device and its resources could be removed**, and a booting machine could not
   be stopped. §11.4, §7.3, §12.5.
-- **A recipe edit left a stale boot denominator**, reintroducing the exact defect `boot_instructions`
+- **A recipe edit left a stale boot denominator**, reintroducing the exact defect `cold_boot_instructions`
   replaced `snap_at` to fix. §12.3.
 - **§12.6's fullscreen table was computed in logical pixels** and printed 3× where the answer is 7×.
 - **A four-second self-dismissing message on shelf row 2** is a toast, banned by name in this
@@ -4249,7 +4262,7 @@ In order, because each depends on the one before it.
    Both variants are read through one `Recipe::volume_type()` rather than matched twice, for the
    same reason `nothing_chosen` enumerates all three in one place, and
    `every_fix_resolves_the_thing_it_is_offered_for` now sweeps five `Start`s rather than three.
-6. **DONE.** `Create` clears `Device::boot_instructions` when `oses` or `loader` changed (§12.3),
+6. **DONE.** `Create` clears `Device::cold_boot_instructions` when `oses` or `loader` changed (§12.3),
    and it does it by **calling** `Settings::set_boot_shape` rather than by keeping one line of its
    own: same shape, keep the number; different shape, store the new one and take the number. That is
    what makes the one-bar-across-three-operating-systems claim true rather than conditional.
@@ -4260,7 +4273,7 @@ In order, because each depends on the one before it.
    the **authority** on what a device boots — could never take that branch, and every Edit
    re-derived the recipe from the drive's install list instead. The trap this item named for whoever
    finished it was `Settings::as_device`, and it was real: without
-   `boot_shape: existing.and_then(|d| d.boot_shape.clone())` beside the `boot_instructions` and
+   `boot_shape: existing.and_then(|d| d.boot_shape.clone())` beside the `cold_boot_instructions` and
    `parked_at` lines, every `run_device`/`remember_as` round trip loses the shape and the next
    `Create` throws away a good denominator. It is there, and `commit` files **before** it calls
    `remember_as` for the same class of reason.

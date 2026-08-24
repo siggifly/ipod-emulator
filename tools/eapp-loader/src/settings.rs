@@ -471,8 +471,25 @@ pub struct Device {
     ///
     /// `None` until it has booted once, and the bar says "booting" without a fraction rather than
     /// inventing one.
-    pub boot_instructions: Option<u64>,
-    /// **What [`Device::boot_instructions`] was measured on** — `crate::compose::BootShape::render`,
+    ///
+    /// # It was `boot_instructions`, and the rename is what retires the numbers that were wrong
+    ///
+    /// The number means *instructions from reset to the moment the machine went quiet with its
+    /// drive answered* — `emu::Quiet`. Until 2026-08-25 the same key held a different measurement:
+    /// instructions from reset to the first `0x8001052a` on the click-wheel bus, which turned out
+    /// to be the **boot ROM's** command and not RetailOS's, and which files a RetailOS cold boot at
+    /// **2 250 000** instructions of 871 685 000. Every settings file written before that date
+    /// carries one, and a device that is never edited never goes near
+    /// [`Settings::set_boot_shape`] — so nothing would ever have dropped it and the bar would read
+    /// full at 0.12 % of the boot for the life of the device.
+    ///
+    /// A key's name is a promise about what its value measures, so the value's meaning changing is
+    /// the key changing. This file's own header states the mechanism — *"keys this version does not
+    /// know are ignored"* — and the save path writes the file out from the model, so the stale line
+    /// is read by nobody and gone at the next save. The device draws no fraction until its next
+    /// real boot, which is exactly this field's documented `None`.
+    pub cold_boot_instructions: Option<u64>,
+    /// **What [`Device::cold_boot_instructions`] was measured on** — `crate::compose::BootShape::render`,
     /// e.g. `rockbox, apple, rockbox`.
     ///
     /// The denominator above is honest only while the device goes on booting the same thing.
@@ -815,8 +832,8 @@ impl Settings {
                         "drive" if !v.is_empty() => s.devices[i].disk = Some(v.to_string()),
                         "chassis" => s.devices[i].chassis = crate::identity::Colour::parse(v),
                         "work_on_copy" => s.devices[i].work_on_copy = Some(v == "true"),
-                        "boot_instructions" => {
-                            s.devices[i].boot_instructions = v.parse::<u64>().ok()
+                        "cold_boot_instructions" => {
+                            s.devices[i].cold_boot_instructions = v.parse::<u64>().ok()
                         }
                         // **Read as text and not through `BootShape::parse`.** A hand-edited or
                         // future token this build does not know must survive the round trip rather
@@ -1435,8 +1452,8 @@ impl Settings {
             if let Some(w) = d.work_on_copy {
                 out.push_str(&format!("device.{i}.work_on_copy = {w}\n"));
             }
-            if let Some(b) = d.boot_instructions {
-                out.push_str(&format!("device.{i}.boot_instructions = {b}\n"));
+            if let Some(b) = d.cold_boot_instructions {
+                out.push_str(&format!("device.{i}.cold_boot_instructions = {b}\n"));
             }
             // Written **after** the number it qualifies, so a person reading the file meets the
             // denominator and then what it was measured on. Order is not load-bearing on read —
@@ -1494,7 +1511,7 @@ impl Settings {
             disk_path: self.disk.clone(),
             chassis: self.chassis,
             work_on_copy: self.work_on_copy,
-            boot_instructions: existing.and_then(|d| d.boot_instructions),
+            cold_boot_instructions: existing.and_then(|d| d.cold_boot_instructions),
             // **The named trap of §20 item 6, closed.** Without this line every `run_device` /
             // `remember_as` round trip loses the shape, `set_boot_shape` then sees `None` beside a
             // good number, reads it as a mismatch, and the next `Create` throws away a denominator
@@ -1815,7 +1832,7 @@ impl Settings {
             return;
         };
         if let Some(d) = self.devices.iter_mut().find(|d| d.name == c) {
-            d.boot_instructions = Some(instructions);
+            d.cold_boot_instructions = Some(instructions);
         }
     }
 
@@ -1849,7 +1866,7 @@ impl Settings {
 
     /// Record what a device boots, and **drop the denominator exactly when the shape moved**.
     ///
-    /// §12.3 / §20 item 6. [`Device::boot_instructions`] is a measurement of one cold boot and is a
+    /// §12.3 / §20 item 6. [`Device::cold_boot_instructions`] is a measurement of one cold boot and is a
     /// prediction of the next one only while the device goes on booting the same thing — so this is
     /// the one function that owns the comparison, and it is called from wherever a recipe is
     /// committed rather than reimplemented there.
@@ -1867,7 +1884,7 @@ impl Settings {
             return false;
         };
         if d.boot_shape.as_deref() != Some(rendered.as_str()) {
-            d.boot_instructions = None;
+            d.cold_boot_instructions = None;
         }
         d.boot_shape = Some(rendered);
         true
@@ -2136,7 +2153,7 @@ impl Settings {
         self.current
             .as_deref()
             .and_then(|c| self.devices.iter().find(|d| d.name == c))
-            .and_then(|d| d.boot_instructions)
+            .and_then(|d| d.cold_boot_instructions)
             .filter(|n| *n > 0)
     }
 
@@ -4385,7 +4402,7 @@ mod device_tests {
             &[crate::compose::Os::Apple, crate::compose::Os::Rockbox],
         );
         assert!(s.set_boot_shape("My 5.5G", &sh));
-        s.devices[0].boot_instructions = Some(1_600_000_000);
+        s.devices[0].cold_boot_instructions = Some(1_600_000_000);
 
         let text = s.render();
         assert!(
@@ -4394,7 +4411,7 @@ mod device_tests {
         );
         let back = Settings::parse(&text);
         assert_eq!(back.devices[0].boot_shape.as_deref(), Some("rockbox, apple, rockbox"));
-        assert_eq!(back.devices[0].boot_instructions, Some(1_600_000_000));
+        assert_eq!(back.devices[0].cold_boot_instructions, Some(1_600_000_000));
         // The file is the only spelling: what came back parses to the shape that went in.
         assert_eq!(
             back.devices[0]
@@ -4427,6 +4444,53 @@ mod device_tests {
         assert_eq!(s.devices[0].boot_shape.as_deref(), Some("apple, apple"));
     }
 
+    /// **A denominator measured by an instrument that has been withdrawn is dropped, once — and
+    /// the key's name is the whole mechanism.**
+    ///
+    /// Until 2026-08-25 `device.N.boot_instructions` held instructions-to-the-first-`0x8001052a`,
+    /// which turned out to be the boot ROM's command and files a RetailOS cold boot at 2 250 000 of
+    /// 872 000 000. `device.N.cold_boot_instructions` holds instructions-to-quiet. Same shape of
+    /// number, different measurement, so the name had to move with it — and nothing else in the
+    /// program would ever have reached those devices, because [`Settings::set_boot_shape`] runs
+    /// only when a recipe is committed and a device nobody edits is never committed.
+    ///
+    /// **This is the file header's own rule exercised**: *"keys this version does not know are
+    /// ignored"*, and the save path renders from the model, so a stale line is read by nobody and
+    /// gone at the next save. The control is the second half: the current key on the identical file
+    /// is read, so what is being measured is the rename and not the parser refusing everything.
+    #[test]
+    fn a_denominator_measured_by_the_old_signal_is_dropped_and_does_not_survive_a_save() {
+        let old = "\
+current = My 5.5G
+
+device.0.name = My 5.5G
+device.0.firmware = a rom
+device.0.boot_instructions = 2250000
+device.0.parked_at = 1787607434
+";
+        let s = Settings::parse(old);
+        assert_eq!(s.devices.len(), 1, "the device itself has to survive:\n{old}");
+        assert_eq!(
+            s.devices[0].cold_boot_instructions, None,
+            "a boot cost measured to the boot ROM's `0x8001052a` was carried forward as though it \
+             measured a boot"
+        );
+        // The rest of the device is untouched — this drops one number, it is not a file reset.
+        assert_eq!(s.devices[0].parked_at, Some(1787607434));
+        assert!(
+            !s.render().contains("boot_instructions"),
+            "the stale line came back out of the model it was never read into:\n{}",
+            s.render()
+        );
+
+        // **The control.** The same file with the current key round-trips, so the assertion above
+        // is about the name and not about a parser that has stopped reading numbers.
+        let now = old.replace("device.0.boot_instructions", "device.0.cold_boot_instructions");
+        let s = Settings::parse(&now);
+        assert_eq!(s.devices[0].cold_boot_instructions, Some(2_250_000));
+        assert!(s.render().contains("device.0.cold_boot_instructions = 2250000"));
+    }
+
     /// **A denominator is honest only about the thing it was measured on.**
     ///
     /// Three cases in order, and the middle one is the half that is easy to lose: the first shape a
@@ -4441,17 +4505,17 @@ mod device_tests {
             &[crate::compose::Os::Apple, crate::compose::Os::Rockbox],
         );
 
-        s.devices[0].boot_instructions = Some(1_600_000_000);
+        s.devices[0].cold_boot_instructions = Some(1_600_000_000);
         assert!(s.set_boot_shape("My 5.5G", &apple));
         assert_eq!(
-            s.devices[0].boot_instructions, None,
+            s.devices[0].cold_boot_instructions, None,
             "a number measured on a shape nobody recorded cannot be vouched for"
         );
 
-        s.devices[0].boot_instructions = Some(1_600_000_000);
+        s.devices[0].cold_boot_instructions = Some(1_600_000_000);
         assert!(s.set_boot_shape("My 5.5G", &rockbox));
         assert_eq!(
-            s.devices[0].boot_instructions, None,
+            s.devices[0].cold_boot_instructions, None,
             "RetailOS's 1.6 G is not Rockbox's 100 M, and a bar built on it reads 6 % when the \
              machine is finished"
         );
@@ -4468,9 +4532,9 @@ mod device_tests {
             &[crate::compose::Os::Apple, crate::compose::Os::Rockbox],
         );
         assert!(s.set_boot_shape("My 5.5G", &rockbox));
-        s.devices[0].boot_instructions = Some(101_000_000);
+        s.devices[0].cold_boot_instructions = Some(101_000_000);
         assert!(s.set_boot_shape("My 5.5G", &rockbox));
-        assert_eq!(s.devices[0].boot_instructions, Some(101_000_000));
+        assert_eq!(s.devices[0].cold_boot_instructions, Some(101_000_000));
     }
 
     // ── §11.2's Edit mode: a device, as a recipe ────────────────────────────────────────────────

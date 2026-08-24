@@ -3789,14 +3789,14 @@ mod tests {
     #[test]
     fn create_never_overwrites_a_device_somebody_made_by_hand() {
         let mut s = library("My 5.5G");
-        s.devices[0].boot_instructions = Some(1_600_000_000);
+        s.devices[0].cold_boot_instructions = Some(1_600_000_000);
         let mut c = ready();
 
         let e = c.commit(&mut s).unwrap_err();
         assert!(e.contains("already a device called My 5.5G"), "{e}");
         assert_eq!(s.devices.len(), 1);
         assert_eq!(
-            s.devices[0].boot_instructions,
+            s.devices[0].cold_boot_instructions,
             Some(1_600_000_000),
             "the hand-made device was written over"
         );
@@ -3878,7 +3878,7 @@ mod tests {
     #[test]
     fn create_clears_the_boot_denominator_when_the_boot_shape_changed() {
         let mut s = library("My 5.5G");
-        s.devices[0].boot_instructions = Some(1_600_000_000);
+        s.devices[0].cold_boot_instructions = Some(1_600_000_000);
         let recipe = Recipe {
             start: Start::FromIpsw("iPod_25.1.3.ipsw".into()),
             loader: Loader::Apple,
@@ -3892,7 +3892,7 @@ mod tests {
         let done = c.commit(&mut s).expect("save");
         assert!(done.shape_changed);
         assert_eq!(
-            s.devices[0].boot_instructions, None,
+            s.devices[0].cold_boot_instructions, None,
             "the bar kept a denominator from another system"
         );
     }
@@ -3917,7 +3917,7 @@ mod tests {
                 oses: [Os::Apple].into_iter().collect(),
             }
         ));
-        s.devices[0].boot_instructions = Some(1_600_000_000);
+        s.devices[0].cold_boot_instructions = Some(1_600_000_000);
         let recipe = Recipe {
             start: Start::FromIpsw("iPod_25.1.3.ipsw".into()),
             loader: Loader::Apple,
@@ -3930,7 +3930,7 @@ mod tests {
         assert!(!done.shape_changed);
         assert_eq!(s.devices.len(), 1, "a save made a second device");
         assert_eq!(
-            s.devices[0].boot_instructions,
+            s.devices[0].cold_boot_instructions,
             Some(1_600_000_000),
             "an unchanged save threw the denominator away"
         );
@@ -4037,7 +4037,7 @@ mod tests {
     #[test]
     fn a_device_with_no_recorded_shape_drops_its_denominator_once() {
         let mut s = library("My 5.5G");
-        s.devices[0].boot_instructions = Some(1_600_000_000);
+        s.devices[0].cold_boot_instructions = Some(1_600_000_000);
         assert_eq!(
             s.devices[0].boot_shape, None,
             "the fixture is not the state this is about"
@@ -4054,15 +4054,15 @@ mod tests {
         assert!(!done.shape_changed);
         assert_eq!(s.devices[0].boot_shape.as_deref(), Some("apple, apple"));
         assert_eq!(
-            s.devices[0].boot_instructions, None,
+            s.devices[0].cold_boot_instructions, None,
             "a number measured on a system nobody recorded was kept and vouched for"
         );
 
         // Once. The next completed boot's measurement survives the save after it.
-        s.devices[0].boot_instructions = Some(1_600_000_000);
+        s.devices[0].cold_boot_instructions = Some(1_600_000_000);
         c.commit(&mut s).expect("save");
         assert_eq!(
-            s.devices[0].boot_instructions,
+            s.devices[0].cold_boot_instructions,
             Some(1_600_000_000),
             "the drop repeated, so no device can ever keep a denominator"
         );
@@ -4153,7 +4153,7 @@ mod tests {
                 oses: [Os::Apple].into_iter().collect(),
             }
         ));
-        s.devices[0].boot_instructions = Some(1_600_000_000);
+        s.devices[0].cold_boot_instructions = Some(1_600_000_000);
         s.devices[0].parked_at = Some(1_700_000_000);
         let recipe = Recipe {
             start: Start::FromIpsw("iPod_25.1.3.ipsw".into()),
@@ -4167,7 +4167,7 @@ mod tests {
         assert_eq!(done.renamed, Some(("My 5.5G".into(), "The good one".into())));
         assert_eq!(s.devices.len(), 1, "a rename left two devices");
         assert_eq!(s.devices[0].name, "The good one");
-        assert_eq!(s.devices[0].boot_instructions, Some(1_600_000_000), "the denominator went");
+        assert_eq!(s.devices[0].cold_boot_instructions, Some(1_600_000_000), "the denominator went");
         assert_eq!(s.devices[0].parked_at, Some(1_700_000_000), "the park time went");
         assert_eq!(s.current.as_deref(), Some("The good one"));
 

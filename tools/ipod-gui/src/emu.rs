@@ -50,12 +50,28 @@ pub const FB_BACK: u32 = 0x0010_6000;
 /// The instruction count `--snap-at` defaulted to, and what `Config::snap_at` still means when
 /// nothing writes a snapshot: **the fallback that ends `Phase::Booting`.**
 ///
-/// The boot phase normally ends when RetailOS asks for wheel frames, which is an observation. This
-/// is the answer for the case the signal never comes — see the `asked_for_frames` test in
-/// `session`. It matters that it is not zero: `Booting { target: 0 }` ends the boot phase on the
-/// first slice, so a window built on `Config::default()` would say *running* over a machine that
-/// had executed 250 000 instructions, which is the shape of instrument this project keeps deleting.
+/// The boot phase normally ends when the machine goes quiet, which is an observation — see
+/// [`Quiet`]. This is the answer for the case that never happens: firmware that spins for ever, a
+/// drive that never answers, an operating system with no idle loop. It matters that it is not
+/// zero: `Booting { target: 0 }` ends the boot phase on the first slice, so a window built on
+/// `Config::default()` would say *running* over a machine that had executed 250 000 instructions,
+/// which is the shape of instrument this project keeps deleting.
 pub const SNAP_AT: u64 = 1_600_000_000;
+
+/// **How much of a window the core has to spend halted before the machine counts as quiet**, in
+/// hundredths, and how wide that window is in [`Machine::steps`] — instructions executed plus
+/// cycles spent halted.
+///
+/// Both are readings off one boot rather than tunings, and the run that produced them is
+/// `the_bench_boots_apples_software_and_this_needs_resources` on Apple's own NOR and a real 5.5G's
+/// drive. Over an 8 M-step trailing window, the **highest** halted fraction anywhere in RetailOS's
+/// 871 M-instruction cold boot is **61.7 %** (at 164.7 M, waiting on the drive); the first window
+/// that crosses 95 % is at **823.6 M**, and from there the machine holds **99.7 %** for the rest of
+/// its life. Thirty-three points of clear air, so every threshold from 70 to 95 answers the same,
+/// and the width is what buys it: at 2 M the boot's own worst window is 91.7 % and there is no gap
+/// left to read.
+pub const QUIET_WINDOW_STEPS: u64 = 8_000_000;
+pub const QUIET_HALTED_PERCENT: u64 = 95;
 
 /// Apple's ISR frame decoder. Entering it is the evidence that a frame this GUI caused was read
 /// and parsed by RetailOS rather than merely posted into a register; see research/10 Addendum 21 §6.
@@ -443,14 +459,14 @@ pub struct Out {
     /// **What this cold boot cost, and only when it was OBSERVED to end.** GUI.md §12.3's
     /// denominator, published from the one place that can tell the two endings apart.
     ///
-    /// The boot phase ends two ways and they are not the same fact: RetailOS asking for wheel
-    /// frames is an **observation**, and `executed >= snap_at` is a **fallback** for the case that
-    /// signal never comes. Both set [`Phase::Running`] one line apart, so a reader watching for the
+    /// The boot phase ends two ways and they are not the same fact: the machine going quiet is an
+    /// **observation** ([`Quiet`]), and `executed >= snap_at` is a **fallback** for the case that
+    /// never happens. Both set [`Phase::Running`] one line apart, so a reader watching for the
     /// phase change and taking `Stats::executed` at that moment records `snap_at` — a constant —
-    /// on every machine the signal never reached, and files it as *this device's own last completed
-    /// cold boot*. That is exactly the substitution `Device::boot_instructions` replaced `snap_at`
-    /// to fix, re-entered through the back door. [`boot_end`] is the one function that decides, and
-    /// this field is `Some` only for its observed arm.
+    /// on every machine that never settled, and files it as *this device's own last completed
+    /// cold boot*. That is exactly the substitution `Device::cold_boot_instructions` replaced
+    /// `snap_at` to fix, re-entered through the back door. [`boot_end`] is the one function that
+    /// decides, and this field is `Some` only for its observed arm.
     ///
     /// `None` also for a **restored** machine, which never enters `Booting` at all: a resume is not
     /// a cold boot and must not teach the denominator what one costs.
@@ -467,17 +483,122 @@ pub struct Out {
 /// - `Some(None)` — the boot phase ends, and **nothing was measured**. `snap_at` is the fallback,
 ///   *"a point chosen because it is a good place to resume from, not because it is where the boot
 ///   ends"*, so the instruction count at this instant is a constant wearing a measurement's name.
-/// - `Some(Some(n))` — RetailOS asked for wheel frames at `n` instructions. A machine asking for
-///   input is a machine that has finished starting, and `n` is what §12.3 divides by next time.
+/// - `Some(Some(n))` — the machine went quiet at `n` instructions with its drive answered. It has
+///   finished starting, and `n` is what §12.3 divides by next time.
+///
+/// **`settled` is `Quiet::read`'s answer and this function does not recompute it**, deliberately:
+/// the observation needs a trailing window and therefore state, and a pure decision that owns no
+/// state cannot be tricked into disagreeing with the loop that feeds it.
 ///
 /// The two arms are one line apart in the loop and produce the same phase, which is what makes the
 /// wrong one so easy to read: `a_boot_that_ended_on_the_fallback_teaches_the_denominator_nothing`
 /// carries the substitution as its own control.
-pub fn boot_end(asked_for_frames: bool, executed: u64, snap_at: u64) -> Option<Option<u64>> {
-    if asked_for_frames {
-        return Some(Some(executed));
+pub fn boot_end(settled: Option<u64>, executed: u64, snap_at: u64) -> Option<Option<u64>> {
+    if let Some(n) = settled {
+        return Some(Some(n));
     }
     (executed >= snap_at).then_some(None)
+}
+
+/// **Has the machine stopped starting?** A trailing window of its own steps, and how much of that
+/// window the core spent halted.
+///
+/// # Why this and not the thing it replaced
+///
+/// The observed arm used to be *"RetailOS wrote `0x8001052a` to ask the click wheel for frames"*,
+/// reasoned about rather than measured: *a machine asking for input is a machine that has finished
+/// starting*. Booted from Apple's own NOR it declared the cold boot over at **2 250 000**
+/// instructions of **872 043 218** — 0.26 % — with the drive not yet answered and the panel black,
+/// and taught `Device::cold_boot_instructions` a denominator that draws a bar full at 0.12 %.
+///
+/// **Because the first one is not RetailOS's command, and RetailOS's own is not the end of a boot
+/// either.** Two measurements, and the second is the one that matters:
+///
+/// - **Whose it is.** `ipod-boot retail --storeaddr=0x7000c120 --storelog-dump=`, on the same NOR
+///   dump and the same reference drive: the first `0x8001052a` is written by **`pc = 0x4000e654`**
+///   at **@2 211 983** — the boot ROM's own opto bring-up, running out of IRAM **55 M instructions
+///   before the drive answers at all**. `eapp-loader`'s snapshot note had said as much all along:
+///   *"the firmware turns it on once with opcode `0x052a` early in the boot"*.
+/// - **Whether RetailOS sends one later.** It does — and the window's own boot is the only run that
+///   can say so, because `ipod-boot retail` diverges from it (see below). Over the bench boot's
+///   872 M instructions there are **five**, all payload 1: `@2 205 089` (the ROM's),
+///   `@111 545 868`, two within one sample at `@823 611 625`, and `@823 719 014`. RetailOS's
+///   earliest is **50x further on than the ROM's and still only 12.8 % of the boot**; the other
+///   three arrive *after* the machine has already settled. So no arrival of this command is the end
+///   of a cold boot, and the fix is not "watch a later one".
+///
+/// research/10 Addendum 32 is the write-up and the retraction.
+///
+/// # What replaces it, and why it is not another guess
+///
+/// **A booted machine halts and a booting one does not.** It is the one thing every operating
+/// system this program runs has in common — it needs no detection of which one is on the drive,
+/// which is the same property `Device::cold_boot_instructions` exists for. RetailOS reaches its
+/// language picker and sleeps; Rockbox reaches its menu and sleeps (a 400 M-step budget of
+/// `ipod-boot rockbox` executes **77 264 434** instructions — 80.7 % of the whole run halted, boot
+/// included); iPodLinux takes 21.5 G and then sleeps.
+///
+/// The numbers that make it a reading rather than a threshold somebody liked are on
+/// [`QUIET_WINDOW_STEPS`]. `idle_steps` costs an addition in the halt arm of `Machine::run` and
+/// nothing per instruction, which is what makes it affordable in a window nobody is measuring —
+/// `--stop-when-idle`'s novelty bitset is 512 KB and a probe per instruction, and `emu::build` arms
+/// it for `--headless` alone.
+///
+/// # The drive has to have answered
+///
+/// Halted is not booted on its own: a machine waiting for an interrupt that is never coming is
+/// halted too, and it would teach the denominator whatever count it hung at. So [`Self::read`] also
+/// requires at least one ATA command, which is the number the bug report led with — *the window
+/// leaves `Booting` … 0 ata* — and the failure mode of requiring it is the safe one: a boot that
+/// never touches its drive ends on the `snap_at` fallback and teaches nothing, rather than teaching
+/// something wrong.
+///
+/// # `ipod-boot retail` is not this boot, and that is not fixed here
+///
+/// Pinned to the same NOR dump and the same `PRISTINE` drive, `ipod-boot retail` reaches **70 ATA
+/// commands** and stops at Apple's own logo — after 1.2 G instructions, with `--clickwheel` and
+/// with `--bcm-registry`, both tried. The window reaches **768** and the language picker in 872 M.
+/// So the trace front end's `--enterlog` reporting **0 arrivals** at all five of RetailOS's
+/// documented `0x052a` senders is a fact about a machine that never got that far, not about
+/// RetailOS — and reading it as one is exactly the mistake this whole entry is about. `KNOWN-BUGS.md`
+/// carries the divergence.
+#[derive(Default)]
+pub struct Quiet {
+    /// `(executed, idle_steps)` at the start of the open window, and `None` before the first read.
+    mark: Option<(u64, u64)>,
+    /// The answer, once given. A boot ends once.
+    settled: Option<u64>,
+}
+
+impl Quiet {
+    /// Feed the machine's own counters. Answers `Some(n)` from the first full window that was
+    /// [`QUIET_HALTED_PERCENT`] halted, where `n` is the instruction count at the **start** of that
+    /// window — the last moment the machine was doing work, which is what the boot cost.
+    ///
+    /// The window tumbles rather than slides: it is re-armed at every evaluation, so the cost is
+    /// two subtractions per slice and the answer can be at most one window late. Eight million
+    /// steps is nine thousandths of the boot it is measuring.
+    pub fn read(&mut self, executed: u64, idle_steps: u64, ata_commands: u64) -> Option<u64> {
+        if self.settled.is_some() {
+            return self.settled;
+        }
+        let steps = executed + idle_steps;
+        let Some((was_executed, was_idle)) = self.mark else {
+            self.mark = Some((executed, idle_steps));
+            return None;
+        };
+        let window = steps - (was_executed + was_idle);
+        if window < QUIET_WINDOW_STEPS {
+            return None;
+        }
+        let halted = idle_steps - was_idle;
+        if ata_commands > 0 && halted * 100 >= window * QUIET_HALTED_PERCENT {
+            self.settled = Some(was_executed);
+        } else {
+            self.mark = Some((executed, idle_steps));
+        }
+        self.settled
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -516,6 +637,16 @@ pub struct Stats {
     /// is the number, beside the wall clock it would be divided by; the **ratio** is not, because
     /// §12.8 could not state a divisor its own worked example agreed with. See `readout.rs`.
     pub sim_usec_here: u64,
+    /// **Loop iterations the core spent HALTED**, straight off `Machine::idle_steps`.
+    ///
+    /// The counter a booting machine barely moves and a booted one moves almost exclusively: a core
+    /// that has finished starting sits in `CPU_CTRL`'s sleep bit waiting for an interrupt, and one
+    /// that is still starting is executing. It costs an addition in the halt arm of `Machine::run`
+    /// and nothing at all anywhere else — no bitset, no per-instruction probe — which is what makes
+    /// it affordable in a window that is not being measured. `eapp-loader`'s own note on
+    /// `last_novel_sleeps` is where this was first written down: *"a machine that is genuinely
+    /// waiting asks the core to sleep, so a window with zero sleeps in it is a busy machine"*.
+    pub idle_steps: u64,
     pub hold: bool,
     pub touched: bool,
     pub position: u8,
@@ -525,9 +656,21 @@ pub struct Stats {
     /// frames also need the receiver armed; both conditions live in `eapp-loader`.
     pub reporting: bool,
     /// Whether the firmware has *sent* `0x052a` at all — a different question from whether the
-    /// stream is on, and the one that means "this machine has finished starting and wants input".
-    /// After a restore it starts false, because the click wheel is not part of a snapshot.
+    /// stream is on. After a restore it starts false, because the click wheel is not part of a
+    /// snapshot.
+    ///
+    /// **It used to mean "this machine has finished starting and wants input", and it does not.**
+    /// The command is the boot ROM's, sent 2.2 M instructions into a cold boot; see [`Quiet`].
+    /// It is a readout gauge and nothing decides anything on it.
     pub asked_for_frames: bool,
+    /// **The census behind that bool** — how many `0x052a` commands the firmware has sent, and the
+    /// instruction count and payload of the last one.
+    ///
+    /// A count where there was a flag, because the flag is what hid the defect: `set_commands > 0`
+    /// reads the same at one command and at thirty, so nothing in the window could say that a
+    /// whole 871 M cold boot contains exactly **one** of them and that it arrives at 2.2 M.
+    pub wheel_sets: u64,
+    pub last_wheel_set: Option<(u64, u8)>,
     pub frames_posted: u64,
     pub frames_dropped: u64,
     pub frames_suppressed: u64,
@@ -1407,6 +1550,7 @@ fn collect(m: &Machine, started: Instant, base: (u64, u32)) -> Stats {
         wall_secs: started.elapsed().as_secs_f64(),
         executed_here: m.executed as u64 - base.0,
         sim_usec_here: m.mem.usec.wrapping_sub(base.1) as u64,
+        idle_steps: m.idle_steps,
         ..Stats::default()
     };
     if let Some(w) = w {
@@ -1416,6 +1560,8 @@ fn collect(m: &Machine, started: Instant, base: (u64, u32)) -> Stats {
         s.buttons = w.buttons;
         s.reporting = w.reporting;
         s.asked_for_frames = w.set_commands > 0;
+        s.wheel_sets = w.set_commands;
+        s.last_wheel_set = w.last_set;
         s.frames_posted = w.frames_posted;
         s.frames_dropped = w.frames_dropped;
         s.frames_suppressed = w.frames_suppressed;
@@ -1641,6 +1787,10 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
     let mut watched: Vec<Option<u32>> = vec![None; cfg.watch.len()];
     let mut last_executed = 0u64;
     let mut last_moved = std::time::Instant::now();
+    // The trailing window that ends the boot phase. Per session, because a boot ends once and a
+    // power cycle is a new one — `run`'s outer loop builds a fresh `Machine` and gets a fresh one
+    // of these with it.
+    let mut quiet = Quiet::default();
 
     loop {
         if link.quit.load(Ordering::Relaxed) {
@@ -1943,7 +2093,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         }
         out.backlight = m.mem.backlight.level;
         out.backlight_steps = (m.mem.backlight.steps_up, m.mem.backlight.steps_down);
-        // **The boot is over when RetailOS starts listening, not at an instruction count.**
+        // **The boot is over when the machine stops working, not at an instruction count.**
         //
         // This used to flip only at `snap_at`, which is 1.6 G instructions — a point chosen because
         // it is a good place to *resume from*, not because it is where the boot ends. RetailOS
@@ -1952,15 +2102,12 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         // nobody could observe. Reported from use, which is the only way this kind of thing is ever
         // found: *"the language screen was long there before it finished."*
         //
-        // RetailOS writing `0x8001052a` to say it wants wheel frames. A machine asking for input is
-        // a machine that has finished starting, and it is an observation rather than an assumption.
+        // It was then flipped on RetailOS asking the click wheel for frames, and that reading was
+        // **wrong by 387x**: the command it watched is the boot ROM's, written 2.2 M instructions
+        // in, and RetailOS never sends one at all. See [`Quiet`], which carries the measurement
+        // that replaced it and the one that falsified it.
         //
-        // The *sending* of the command, not the resulting flag: autonomous reporting is on at
-        // reset (the part streams unless told not to, which is how Rockbox gets input without ever
-        // sending this), so the flag is true from the first instruction and would end the boot
-        // phase immediately.
-        //
-        // `snap_at` stays as a fallback for the case the signal never comes: a boot that fails
+        // `snap_at` stays as a fallback for the case the machine never settles: a boot that fails
         // before the UI should not leave the window claiming to be booting for ever, and the old
         // behaviour is the honest thing to fall back *to*.
         //
@@ -1973,7 +2120,8 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                 target: cfg.snap_at,
             })
         {
-            if let Some(measured) = boot_end(stats.asked_for_frames, executed, cfg.snap_at) {
+            let settled = quiet.read(executed, stats.idle_steps, stats.ata_commands);
+            if let Some(measured) = boot_end(settled, executed, cfg.snap_at) {
                 out.phase = Phase::Running;
                 out.booted_at = measured;
             }
@@ -3127,7 +3275,7 @@ mod tests {
     /// The two endings sit one line apart in the run loop and produce the same phase. A reader that
     /// watched for the phase change and took `Stats::executed` would file `snap_at` — a constant
     /// tuned to RetailOS's 1.6 G — as *this device's own last completed cold boot*, on every
-    /// machine that never reached the wheel. That is the exact defect `Device::boot_instructions`
+    /// machine that never settled. That is the exact defect `Device::cold_boot_instructions`
     /// replaced `snap_at` to fix, re-entered from the other end.
     ///
     /// The control is the substitution written out: `Some(Some(executed))` for both arms is what a
@@ -3136,115 +3284,216 @@ mod tests {
     fn a_boot_that_ended_on_the_fallback_teaches_the_denominator_nothing() {
         const SNAP: u64 = SNAP_AT;
 
-        // Still booting: the signal has not come and the fallback is not due.
-        assert_eq!(boot_end(false, 1_000, SNAP), None);
-        assert_eq!(boot_end(false, SNAP - 1, SNAP), None);
+        // Still booting: the machine has not settled and the fallback is not due.
+        assert_eq!(boot_end(None, 1_000, SNAP), None);
+        assert_eq!(boot_end(None, SNAP - 1, SNAP), None);
 
         // The fallback. The boot phase ends — a window that says *booting* for ever over a machine
         // that failed before the UI is the twenty-one-minute hostage §7.3 added a stop control for
         // — and **nothing is learned**.
         assert_eq!(
-            boot_end(false, SNAP, SNAP),
+            boot_end(None, SNAP, SNAP),
             Some(None),
             "the fallback ended the boot and this reported a measurement"
         );
-        assert_eq!(boot_end(false, SNAP * 3, SNAP), Some(None));
+        assert_eq!(boot_end(None, SNAP * 3, SNAP), Some(None));
 
-        // The observation. RetailOS asked for wheel frames, which is a machine that has finished
-        // starting, and the instruction count at that moment is what the next boot divides by.
-        assert_eq!(boot_end(true, 900_000_000, SNAP), Some(Some(900_000_000)));
+        // The observation. The machine went quiet with its drive answered, and the count at the
+        // moment it stopped working is what the next boot divides by.
+        assert_eq!(
+            boot_end(Some(871_685_000), 871_712_000, SNAP),
+            Some(Some(871_685_000)),
+            "the observed arm published the count it noticed at, not the one it settled at"
+        );
         // …at any count, including one before the fallback would ever have been due, which is the
         // case Rockbox is: it reaches its menu at about 100 M.
-        assert_eq!(boot_end(true, 100_000_000, SNAP), Some(Some(100_000_000)));
+        assert_eq!(
+            boot_end(Some(100_000_000), 108_000_000, SNAP),
+            Some(Some(100_000_000))
+        );
 
         // **The control.** A reader keyed on the phase change alone cannot tell the two apart: it
         // computes the same non-`None` answer for both, and the number it takes on the fallback arm
         // is `snap_at` itself.
-        let phase_watcher = |asked: bool, executed: u64| {
-            (asked || executed >= SNAP).then_some(executed)
-        };
-        assert_eq!(phase_watcher(false, SNAP), Some(SNAP));
+        let phase_watcher =
+            |settled: Option<u64>, executed: u64| (settled.is_some() || executed >= SNAP).then_some(executed);
+        assert_eq!(phase_watcher(None, SNAP), Some(SNAP));
         assert_eq!(
-            boot_end(false, SNAP, SNAP).flatten(),
+            boot_end(None, SNAP, SNAP).flatten(),
             None,
             "and this is the whole difference between the two readings"
         );
-        assert_eq!(
-            phase_watcher(true, 900_000_000),
-            boot_end(true, 900_000_000, SNAP).flatten(),
-            "on the observed arm the two agree, which is why the other arm is the only test"
+        assert!(
+            phase_watcher(Some(871_685_000), 871_712_000)
+                != boot_end(Some(871_685_000), 871_712_000, SNAP).flatten(),
+            "the phase-watcher reads the count at the moment of NOTICING; the observation is the \
+             count at the moment the machine stopped working, and one window separates them"
         );
     }
 
-    /// **The FIRST ask for wheel frames is not the end of a cold boot, and this is the measurement
-    /// that says so.**
+    /// **The end of a cold boot is the machine going quiet, and this is the run that measured it —
+    /// beside the reading it replaced, which was wrong by 387x.**
     ///
-    /// [`boot_end`]'s observed arm is documented as *"RetailOS asking for wheel frames … a machine
-    /// asking for input is a machine that has finished starting"*. Driven against Apple's own NOR
-    /// dump and a real 5.5G's drive through the window's own start path — `ipod-gui`'s
+    /// # What was believed
+    ///
+    /// [`boot_end`]'s observed arm was *"RetailOS asking for wheel frames … a machine asking for
+    /// input is a machine that has finished starting"*. Driven against Apple's own NOR dump and a
+    /// real 5.5G's drive through the window's own start path — `ipod-gui`'s
     /// `the_bench_boots_apples_software_and_this_needs_resources`, which is `#[ignore]`d because it
-    /// needs `resources/` — that turns out to be false, and not marginally:
+    /// needs `resources/` — that is false, and not marginally:
     ///
     /// ```text
-    /// the window leaves `Booting`     2 250 000 instr     0 ata    0 lit    0 co-proc frames
-    /// the first pixel lights         42 999 970 instr     0 ata
-    /// the drive first answers        57 499 970 instr
-    /// the machine goes quiet        871 653 185 instr   768 ata   75 267 lit   2 co-proc frames
+    /// the window USED to leave `Booting`    2 250 000 instr    0 ata      0 lit   0 co-proc frames
+    /// the first pixel lights               42 999 970 instr    0 ata
+    /// the drive first answers              57 499 970 instr
+    /// the machine goes quiet              823 593 896 instr  765 ata  75 267 lit   2 co-proc frames
+    /// the last work finishes              872 147 527 instr  768 ata
     /// ```
     ///
-    /// At the instant the window declares the boot over the drive has answered **nothing** and the
-    /// panel is **black** — the first of each is nineteen and twenty-five times further on.
-    /// `eapp-loader`'s own snapshot comment has said which command that is all along — *"the
-    /// firmware turns it on once with opcode `0x052a` **early in the boot**"* — and `emu.rs` reads
-    /// the same command as the end of one. The two readings are 869 million instructions apart.
+    /// At the instant the window declared the boot over the drive had answered **nothing** and the
+    /// panel was **black** — the first of each is nineteen and twenty-five times further on.
     ///
-    /// The rest of that run is the boot proof itself and it is exact: **75 267 non-black pixels**
-    /// and **4 co-processor commands / 2 frame updates**, which is research/10 Addendum 10 §8's own
-    /// fingerprint for this machine, to the pixel.
+    /// The last two rows carry a few hundred thousand instructions of run-to-run jitter, because
+    /// they are read off `Out` on a tick and the ticks do not land in the same places twice. The
+    /// first three do not: they are the machine's own arithmetic and reproduce exactly.
     ///
-    /// **What it costs is `Device::boot_instructions`.** `main::Learned::boot` writes `booted_at`
-    /// to the library as this device's cold-boot cost, so the *next* launch draws §12.3's bar
-    /// against a denominator of 2 250 000 — full at 0.12 % of the boot, and pinned there for the
-    /// remaining 878 million instructions. That is the substitution `boot_instructions` replaced
-    /// `snap_at` to fix, arrived at from the other end.
+    /// # Which sender it actually was, measured rather than reasoned
     ///
-    /// **This test does not bless the number and it is not a fix.** It pins the shape of the
-    /// falsification so it cannot be lost: given the measured arrival, `boot_end` answers with a
-    /// count that is 0.26 % of the boot it claims to have measured. Replacing the signal is a
-    /// research question — *which sender sends that first `0x052a`, and does RetailOS send one of
-    /// its own later* — and guessing a new one would be trading a wrong observation for an
-    /// unmeasured one. `KNOWN-BUGS.md` carries it.
+    /// `ipod-boot retail --storeaddr=0x7000c120 --storelog-dump=`, pinned to the same NOR dump and
+    /// the same `PRISTINE` drive, over a 1.2 G budget. Every write to the click wheel's TX register
+    /// in the whole run, and there are four:
+    ///
+    /// ```text
+    /// 0x4000e654 -> [0x7000c120] = 0x8001052a   @2211983
+    /// 0x4000e654 -> [0x7000c120] = 0x8000023a   @2833953
+    /// 0x4000e654 -> [0x7000c120] = 0x8000023a   @18107448
+    /// 0x4000e654 -> [0x7000c120] = 0x8000023a   @57422301
+    /// ```
+    ///
+    /// One `0x052a`, at **@2 211 983**, from **`0x4000e654`** — the boot ROM's own opto bring-up
+    /// running out of IRAM, 55 M instructions before the drive answers and 41 M before the first
+    /// pixel. `--enterlog` on all five of RetailOS's documented senders — `0x00283e20`,
+    /// `0x00283e10`, `0x000b2ce0`, `0x000bbdb0`, `0x000b4638` — records **0 arrivals** in that run,
+    /// against **944 984** at a control address armed in the same report, which is what makes the
+    /// zero a reading.
+    ///
+    /// # And a later one exists after all, which is the half a control caught
+    ///
+    /// That `0 arrivals` was first written up here as *RetailOS never sends the command on a cold
+    /// boot*, and it is not true: it is true of the machine `ipod-boot retail` builds, which stops
+    /// at Apple's logo with 70 ATA commands and never reaches the code. The window's own boot is
+    /// the run that can answer, and the bench prints its whole census — **five** `0x052a`
+    /// commands, all payload 1:
+    ///
+    /// ```text
+    /// @2 205 089     the boot ROM's, `pc = 0x4000e654`
+    /// @111 545 868   RetailOS's first — 50x further on, and still 12.8 % of the boot
+    /// @823 611 625   two within one sample, at the instant the machine settles
+    /// @823 719 014   after it has settled
+    /// ```
+    ///
+    /// So the answer to *does RetailOS send one of its own later* is **yes**, and it makes no
+    /// difference: its earliest is a ninth of the way through a boot, and its other three arrive
+    /// after the machine has already stopped working. No arrival of this command is the end of a
+    /// cold boot. research/10 Addendum 32 is the write-up and the retraction.
+    ///
+    /// # What replaces it
+    ///
+    /// [`Quiet`]: a trailing window of the machine's own steps that is [`QUIET_HALTED_PERCENT`]
+    /// halted, with the drive answered. Over the 8 M-step window the whole 872 M boot never exceeds
+    /// **61.7 %**, and the machine holds **99.7 %** from 823.6 M onward.
+    ///
+    /// # How to make it go red, both measured
+    ///
+    /// - **The observation**: set [`QUIET_HALTED_PERCENT`] to `100` — a bar no window with a single
+    ///   executed instruction in it can clear — and nothing ever settles: *the machine went quiet
+    ///   and this never noticed*. (`101` does not compile, because `slack` below derives itself
+    ///   from the same constant and the subtraction underflows. That is the constant's range
+    ///   asserted at build time, and it is worth more than the ablation would have been.)
+    /// - **The drive half**: delete `ata_commands > 0 &&` from [`Quiet::read`] and the hung machine
+    ///   at the end is called booted at 6 000 instructions.
     #[test]
     fn the_first_ask_for_frames_is_not_the_end_of_a_cold_boot() {
-        /// Measured through the window's start path on Apple's ROM and the reference drive.
-        const ASKED_AT: u64 = 2_250_000;
+        /// The boot ROM's `0x8001052a`, which the window used to read as the end of the boot.
+        /// `@2 211 983` at the bus; 2 250 000 is where the window's own sampling notices it.
+        const OLD_SIGNAL_AT: u64 = 2_250_000;
         /// The same machine, when it stopped executing new work.
-        const QUIET_AT: u64 = 871_653_185;
+        const QUIET_AT: u64 = 872_147_527;
 
-        // What the window publishes as *this device's own last completed cold boot*.
-        assert_eq!(boot_end(true, ASKED_AT, SNAP_AT), Some(Some(ASKED_AT)));
-
-        // And what it is worth as a denominator. `Progress::read` divides by it, so a bar drawn
-        // against this reads full while the machine still has 99.7 % of its boot to do.
-        let fraction = ASKED_AT as f64 / QUIET_AT as f64;
+        // **What the old signal was worth as a denominator**, kept as arithmetic rather than as
+        // prose. `Progress::read` divides by it, so a bar drawn against this reads full while the
+        // machine still has 99.7 % of its boot to do.
+        let fraction = OLD_SIGNAL_AT as f64 / QUIET_AT as f64;
         assert!(
             fraction < 0.01,
-            "the measurement this test was written to pin has moved: the first ask is now {:.1} % \
-             of the boot rather than 0.26 %. Re-run \
+            "the measurement this test was written to pin has moved: the boot ROM's command is now \
+             {:.1} % of the boot rather than 0.26 %. Re-run \
              `the_bench_boots_apples_software_and_this_needs_resources` and re-state it",
             fraction * 100.0
         );
-
-        // **The control, and it is the whole reason this is a test rather than a comment.** The
-        // fallback arm — a constant nobody claims is a measurement — lands within 1.9x of where the
-        // machine actually finished, and the arm that calls itself an observation is 387x out. The
-        // signal is worse than the thing it was introduced to replace.
-        assert_eq!(boot_end(false, SNAP_AT, SNAP_AT), Some(None));
+        // And the control that made the point: the fallback — a constant nobody claims is a
+        // measurement — lands within 1.9x of where the machine actually finished, and the arm that
+        // called itself an observation was 387x out. The signal was worse than the thing it was
+        // introduced to replace.
         assert!(
-            SNAP_AT.abs_diff(QUIET_AT) < QUIET_AT.abs_diff(ASKED_AT),
-            "the fallback is now further from the truth than the observation, which would make \
+            SNAP_AT.abs_diff(QUIET_AT) < QUIET_AT.abs_diff(OLD_SIGNAL_AT),
+            "the fallback is now further from the truth than the old observation, which would make \
              this test's own point backwards"
         );
+
+        // ── And what the machine that replaced it answers, driven on the measured shape ─────────
+        //
+        // A boot: 75 instructions per simulated microsecond with the core barely halting, the
+        // drive answering from 57.5 M. Fed a step at a time, `Quiet` must stay silent through all
+        // of it — including the worst window the real boot has, which is 61.7 % halted.
+        let mut q = Quiet::default();
+        let mut executed = 0u64;
+        let mut idle = 0u64;
+        for slice in 0..600u64 {
+            executed += 2_000_000;
+            // 61.7 % halted for one 8 M-step stretch in the middle, as measured at 164.7 M.
+            idle += if (80..84).contains(&slice) { 3_220_000 } else { 40_000 };
+            let ata = u64::from(executed > 57_500_000) * 700;
+            assert_eq!(
+                q.read(executed, idle, ata),
+                None,
+                "the boot settled at {executed}, and the real boot's own worst window is 61.7 % \
+                 halted with nothing finished"
+            );
+        }
+        // Then it stops working: 99.7 % of every window halted. The count it publishes is where
+        // the machine last did work, not where the window noticed — and the window that straddles
+        // the transition is mixed, so it re-arms once and the answer lands one window later. That
+        // costs nothing readable, and the bound is derived rather than picked: the most a window
+        // this program will accept as quiet can have executed is the fraction of it that was not
+        // halted.
+        let stopped_at = executed;
+        let mut answer = None;
+        for _ in 0..16 {
+            executed += 6_000;
+            idle += 2_000_000;
+            answer = answer.or(q.read(executed, idle, 768));
+        }
+        let settled = answer.expect("the machine went quiet and this never noticed");
+        let slack = QUIET_WINDOW_STEPS * (100 - QUIET_HALTED_PERCENT) / 100;
+        assert!(
+            settled >= stopped_at && settled - stopped_at <= slack,
+            "the boot cost was published as {settled}; the machine stopped working at \
+             {stopped_at}, and one quiet window can account for at most {slack} instructions"
+        );
+        // **The drive is half the condition.** The identical trace with a drive that never answered
+        // is a machine halted on an interrupt that is not coming, and it must teach nothing.
+        let mut hung = Quiet::default();
+        let (mut n, mut i) = (0u64, 0u64);
+        for _ in 0..64 {
+            n += 6_000;
+            i += 2_000_000;
+            assert_eq!(
+                hung.read(n, i, 0),
+                None,
+                "a machine halted with a drive that never answered was called booted"
+            );
+        }
     }
 
     /// **A park and a restore are a round trip, and §12.4's frame comes back with them.**
