@@ -17,6 +17,8 @@ import {
     DrawerHeader,
     FieldRow,
     FixRow,
+    Gauge,
+    GaugeRow,
     GroupRow,
     OptionRow,
     PartRow,
@@ -34,6 +36,7 @@ import { ComposerRoot, NameItPage, WhatItRunsPage, WhichIpodPage } from "compose
 import { DevicesPage } from "devices.slint";
 import { PartsPage } from "parts.slint";
 import { SettingsPage } from "settings.slint";
+import { ReadoutPage } from "readout.slint";
 
 // The generated Rust is `pub enum DrawerPage { None, Devices, Parts, Games, Work, Readout,
 // Settings, Reference, Composer, ComposerIpod, ComposerRuns, ComposerName }` with `None` as
@@ -173,10 +176,10 @@ export component MenuPage inherits Rectangle {
                     index: 4;
                     count: 7;
                     label: "Readout";
-                    enabled: false;
-                    machine-rule: false;
-                    reason: "Nothing draws the counters a running machine publishes.";
-                    escape-hatch: "ipod-boot retail";
+                    chevron: true;
+                    activated => {
+                        root.go(DrawerPage.readout, 1);
+                    }
                     gained-focus => {
                         scroll.ensure-visible(self.absolute-position.y, self.height);
                     }
@@ -274,6 +277,20 @@ export component Drawer inherits Rectangle {
     in property <int> parts-detail-of: -1;
     in property <image> parts-preview;
     in property <bool> parts-has-preview: false;
+
+    // ── §12.8's Readout ──
+    in property <[string]> readout-headings;
+    in property <[GaugeRow]> readout-rows;
+    in property <string> readout-provenance;
+    in property <string> readout-empty-line;
+    in property <bool> readout-has-machine;
+    in property <bool> readout-shot-enabled;
+    in property <string> readout-shot-reason;
+    in property <bool> readout-copy-enabled;
+    in property <string> readout-copy-reason;
+    // The row ordinal, so one callback covers the two pinned actions and Rust decides what each
+    // one does — the same shape `setting-toggled` already has one page over.
+    callback readout-act(int);
 
     // ── §11.6's Settings page ──
     in property <string> setting-theme-value;
@@ -549,6 +566,33 @@ export component Drawer inherits Rectangle {
                     }
                     copy-path => {
                         root.setting-toggled(2);
+                    }
+                }
+
+                // §12.8's Readout, at the same depth as the other four. It was a `MenuPage` row
+                // that was disabled and said *Nothing draws the counters a running machine
+                // publishes.* — a sentence that named its own retirement condition, and this is it.
+                ReadoutPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(2) && root.page == DrawerPage.readout;
+                    headings: root.readout-headings;
+                    rows: root.readout-rows;
+                    provenance: root.readout-provenance;
+                    empty-line: root.readout-empty-line;
+                    has-machine: root.readout-has-machine;
+                    shot-enabled: root.readout-shot-enabled;
+                    shot-reason: root.readout-shot-reason;
+                    copy-enabled: root.readout-copy-enabled;
+                    copy-reason: root.readout-copy-reason;
+                    back-pressed => {
+                        root.back();
+                    }
+                    shoot-panel => {
+                        root.readout-act(0);
+                    }
+                    copy-readout => {
+                        root.readout-act(1);
                     }
                 }
             }

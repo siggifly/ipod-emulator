@@ -61,7 +61,10 @@ impl Page {
             // The depth-1 slot's four children. `ui/drawer.slint` draws each of them at
             // `on-screen(2)`, which is that slot — the strip carries a blank at each end, so the
             // markup's `n` is one more than the depth.
-            Page::Devices | Page::Parts | Page::Work | Page::Settings => Some(1),
+            // **Five now, and the Readout is the fifth.** Its `MenuPage` row was disabled with
+            // *Nothing draws the counters a running machine publishes* — a sentence naming its own
+            // retirement condition, met by §12.8's page.
+            Page::Devices | Page::Parts | Page::Work | Page::Settings | Page::Readout => Some(1),
             // §11.2's root, one level deeper than the Devices page it is entered from.
             Page::Composer => Some(2),
             // …and its three levels, one deeper again. Each `›` slides one level and comes straight
@@ -69,7 +72,7 @@ impl Page {
             Page::ComposerIpod | Page::ComposerRuns | Page::ComposerName => Some(3),
             // Not built. Each of these has a `MenuPage` row that is disabled and names its escape
             // hatch, which is where a person is told about them.
-            Page::Games | Page::Readout | Page::Reference => None,
+            Page::Games | Page::Reference => None,
         }
     }
 }
@@ -533,12 +536,13 @@ mod tests {
     /// limits have no page yet."* Every other unbuilt page in this program is unreachable and says
     /// why; that was the one hole in the policy.
     ///
-    /// **Devices, Parts and Settings came off this list**, and that is three deliberate lines
-    /// rather than a slip: `ui/drawer.slint`'s depth-1 slot draws each of them now. The list
-    /// shrinks as pages land, one row at a time, exactly as `Page::slot`'s own doc says.
+    /// **Devices, Parts, Settings and the Readout came off this list**, and that is four
+    /// deliberate lines rather than a slip: `ui/drawer.slint`'s depth-1 slot draws each of them
+    /// now. The list shrinks as pages land, one row at a time, exactly as `Page::slot`'s own doc
+    /// says — and Games and Reference are what is left.
     #[test]
     fn a_page_nothing_draws_lands_on_the_menu() {
-        for p in [Page::Games, Page::Readout, Page::Reference] {
+        for p in [Page::Games, Page::Reference] {
             assert_eq!(p.slot(), None, "{p:?} claims a depth slot; which child draws it?");
             for depth in 0..=4 {
                 let mut s = Stack::new();

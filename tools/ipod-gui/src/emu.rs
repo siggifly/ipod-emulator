@@ -24,7 +24,7 @@
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -162,7 +162,7 @@ pub struct Config {
     pub boot: BootTarget,
     /// `--press=BUTTON@SECONDS`, repeatable — press a button through the window's own input path,
     /// at a moment measured from when the window opened.
-    #[allow(dead_code)]  // retired when: `args::FLAGS` accepts `--press=` again — it refuses it as `Gone::Machine`, and nothing else in this program schedules a press
+    #[allow(dead_code)]  // retired when: `args::FLAGS` accepts `--press=` again — it refuses it as `Gone::Window` (it drove the window that was replaced), and nothing else in this program schedules a press
     ///
     /// It exists to make the window's input testable from a command line: a screenshot of Apple's
     /// diagnostics with its menu open is otherwise something only a person with a mouse can take,
@@ -221,7 +221,7 @@ pub struct Config {
     /// that deliberately to a *cold* machine is the only way to ask whether it is what matters,
     /// short of putting the chip in the snapshot and changing every restored run to find out.
     pub ablate_pmu: bool,
-    #[allow(dead_code)]  // retired when: `args::FLAGS` accepts `--control=` again and `control::serve` has a caller; §12.8's Readout is the surface that wants it
+    #[allow(dead_code)]  // retired when: `args::FLAGS` accepts `--control=` again — it refuses it as `Gone::Instrument`, and §12.9 keeps the socket out on purpose: a socket that appears without being asked for is an interface nobody audited
     /// Where to open the control socket, if anywhere.
     ///
     /// Absent by default. A socket that appears without being asked for is an interface nobody
@@ -278,7 +278,7 @@ pub struct Config {
 
 /// The scripted measurements this front end can make with no window and no hand.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[allow(dead_code)]  // retired when: `args::FLAGS` accepts `--probe=` again — `Menu` and `ComboControl` are two arms of a measurement the command line no longer offers, and a probe with half its arms is not a controlled one
+#[allow(dead_code)]  // retired when: `args::FLAGS` accepts `--probe=` again — it refuses it as `Gone::Instrument`, and `Menu` and `ComboControl` are two arms of one measurement, so a probe with half its arms is not a controlled one
 pub enum Probe {
     /// Press Select at the anchor — from the first-run Language list that is the main menu — and
     /// then sample the panel six times over the next 800 M instructions while nothing touches it.
@@ -357,7 +357,7 @@ impl BootTarget {
     }
 
     /// `os`, a NOR tag, or a path — the one spelling the command line and the settings file share.
-    #[allow(dead_code)]  // retired when: something reads a boot target back — `args::FLAGS` refuses `--boot=`, and no settings key holds one
+    #[allow(dead_code)]  // retired when: something reads a boot target back — `args::FLAGS` refuses `--boot=` as `Gone::Device` (§12.5 puts it on the device's drawer page), and no settings key holds one
     pub fn parse(s: &str) -> BootTarget {
         match s.trim() {
             "" | "os" => BootTarget::Os,
@@ -440,7 +440,44 @@ pub struct Out {
     pub fb_other_nonzero: u32,
     pub fb_other_moved: bool,
     pub fb_shown_moved: bool,
+    /// **What this cold boot cost, and only when it was OBSERVED to end.** GUI.md §12.3's
+    /// denominator, published from the one place that can tell the two endings apart.
+    ///
+    /// The boot phase ends two ways and they are not the same fact: RetailOS asking for wheel
+    /// frames is an **observation**, and `executed >= snap_at` is a **fallback** for the case that
+    /// signal never comes. Both set [`Phase::Running`] one line apart, so a reader watching for the
+    /// phase change and taking `Stats::executed` at that moment records `snap_at` — a constant —
+    /// on every machine the signal never reached, and files it as *this device's own last completed
+    /// cold boot*. That is exactly the substitution `Device::boot_instructions` replaced `snap_at`
+    /// to fix, re-entered through the back door. [`boot_end`] is the one function that decides, and
+    /// this field is `Some` only for its observed arm.
+    ///
+    /// `None` also for a **restored** machine, which never enters `Booting` at all: a resume is not
+    /// a cold boot and must not teach the denominator what one costs.
+    pub booted_at: Option<u64>,
     pub stats: Stats,
+}
+
+/// **Has the cold boot ended, and was its end observed?** GUI.md §12.2 and §12.3, in one place.
+///
+/// Three answers, and the middle one is the whole reason this is a function rather than a
+/// condition in the run loop:
+///
+/// - `None` — still booting.
+/// - `Some(None)` — the boot phase ends, and **nothing was measured**. `snap_at` is the fallback,
+///   *"a point chosen because it is a good place to resume from, not because it is where the boot
+///   ends"*, so the instruction count at this instant is a constant wearing a measurement's name.
+/// - `Some(Some(n))` — RetailOS asked for wheel frames at `n` instructions. A machine asking for
+///   input is a machine that has finished starting, and `n` is what §12.3 divides by next time.
+///
+/// The two arms are one line apart in the loop and produce the same phase, which is what makes the
+/// wrong one so easy to read: `a_boot_that_ended_on_the_fallback_teaches_the_denominator_nothing`
+/// carries the substitution as its own control.
+pub fn boot_end(asked_for_frames: bool, executed: u64, snap_at: u64) -> Option<Option<u64>> {
+    if asked_for_frames {
+        return Some(Some(executed));
+    }
+    (executed >= snap_at).then_some(None)
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -472,8 +509,12 @@ pub struct Stats {
     /// Simulated microseconds elapsed in this process. **Computed and not yet shown** — and it
     /// became worth showing the day the clock stopped inventing time: against `wall_secs` it is the
     /// honest "how fast is this iPod running compared to a real one", now that idle costs what
-    /// running costs. The readout has the instruction ratio and not this one.
-    #[allow(dead_code)]  // retired when: the Readout draws the wall-clock ratio beside the instruction one
+    /// running costs.
+    ///
+    /// **§12.8 decided this one the other way and it is drawn**: it *"earns a row — it is the
+    /// honest simulated-versus-wall ratio now that idle costs what running costs"*. What is drawn
+    /// is the number, beside the wall clock it would be divided by; the **ratio** is not, because
+    /// §12.8 could not state a divisor its own worked example agreed with. See `readout.rs`.
     pub sim_usec_here: u64,
     pub hold: bool,
     pub touched: bool,
@@ -495,11 +536,12 @@ pub struct Stats {
     pub irqs: u64,
     /// Steps refused because the drain queue was already full — always shown, never silent.
     pub input_dropped: u64,
-    /// Depth of the input drain queue. Computed and not shown; `input_dropped` above is the one
-    /// that matters, because a refused step is a lie about what the user did and a deep queue is
-    /// only ever the reason for one.
-    #[allow(dead_code)]  // retired when: the Readout draws queue depth; `input_dropped` is the one that matters
-    pub queued: usize,
+    // **`queued` was here and is deleted.** It was the depth of the input drain queue, computed
+    // every slice and read by nothing, under an allow whose condition was *the Readout draws queue
+    // depth*. §12.8 built the Readout and decided the opposite: *"`input_dropped` is the number
+    // that matters, because a refused step is a lie about what you did and a deep queue is only
+    // ever the reason for one."* A field whose stated retirement condition has been met with a
+    // *no* is dead rather than deferred, so it goes rather than getting a new allow.
     /// Arrivals at each of [`WATCHED`], in that order.
     pub enters: [u64; WATCHED.len()],
     /// Co-processor activity **since the machine started running in this process**. Both counters
@@ -542,6 +584,24 @@ pub struct Link {
     /// Set while the restore point is being written, so the window can say what it is waiting for
     /// rather than appearing to hang for the second or two a 1.6 GB write takes.
     pub saving: AtomicBool,
+    /// **The Unix second at which a COMPLETE restore point was written**, or 0 for never.
+    ///
+    /// A pair, not a file: `write_restore_point` sets this only after the snapshot and the half
+    /// that pairs it with the drive are both on disk, so a park whose companion could not be
+    /// written — the case that deletes the snapshot again — leaves it at 0 and `Device::parked_at`
+    /// is never claimed for a restore point that is not there.
+    ///
+    /// `AtomicU64` rather than a field of [`Out`]: the window reads it **after** the machine thread
+    /// has finished, which is exactly when nothing is publishing an `Out` any more.
+    pub parked: AtomicU64,
+    /// **What a restore point for this machine would cost, in bytes**, or 0 before one is built.
+    ///
+    /// GUI.md §12.4 wants free space checked *before* `save_on_quit` is set, and the only honest
+    /// denominator for that check is this machine's own memory. Published once per session by
+    /// [`snapshot_bytes`], which sums the regions the snapshot format actually writes rather than
+    /// quoting §12.4's "~1.6 GB" — a figure that is about the frozen **drive** and not about the
+    /// RAM half at all.
+    pub snapshot_bytes: AtomicU64,
     /// Addresses the control socket has asked about, and what they held when the run loop next
     /// looked.
     ///
@@ -585,12 +645,15 @@ impl Link {
                 fb_other_nonzero: 0,
                 fb_other_moved: false,
                 fb_shown_moved: false,
+                booted_at: None,
                 stats: Stats::default(),
             }),
             quit: AtomicBool::new(false),
             resnap: AtomicBool::new(false),
             save_on_quit: AtomicBool::new(false),
             saving: AtomicBool::new(false),
+            parked: AtomicU64::new(0),
+            snapshot_bytes: AtomicU64::new(0),
         })
     }
 
@@ -672,6 +735,19 @@ impl Config {
     /// cache happens to hold.
     pub fn stamp(&self) -> Option<PathBuf> {
         self.snapshot.as_ref().map(|s| s.with_extension("drive"))
+    }
+
+    /// §12.4's parked frame, beside the snapshot under the same stem — **the same rule as
+    /// [`Config::stamp`], written once.**
+    ///
+    /// The writer (`write_parked_frame`) and the reader (`machine::parked_frame`) both ask this,
+    /// so a park that wrote `x.parked.png` and a bench that looked for `x.png` is not a state this
+    /// program can reach. It was two `with_extension` calls in two files for exactly as long as
+    /// this method did not exist.
+    pub fn parked_frame(&self) -> Option<PathBuf> {
+        self.snapshot
+            .as_ref()
+            .map(|s| s.with_extension("parked.png"))
     }
 
     /// The drive as it stands, in the two numbers that change when anything writes to it.
@@ -1264,10 +1340,10 @@ fn schedule_at(script: &[WheelStep], ev: eapp_loader::WheelEvent, earliest: u64)
     }
 }
 
-fn drain(m: &mut Machine, inbox: &Mutex<Inbox>, next_at: &mut u64, gap: u64) -> usize {
+fn drain(m: &mut Machine, inbox: &Mutex<Inbox>, next_at: &mut u64, gap: u64) {
     let now = m.executed as u64;
     let Some(w) = m.mem.clickwheel.as_mut() else {
-        return 0;
+        return;
     };
     let mut inbox = inbox.lock().unwrap();
     while let Some(&ev) = inbox.events.front() {
@@ -1287,7 +1363,6 @@ fn drain(m: &mut Machine, inbox: &Mutex<Inbox>, next_at: &mut u64, gap: u64) -> 
         w.script.push(WheelStep::instr(at, ev));
         *next_at = at.max(*next_at) + gap;
     }
-    inbox.events.len()
 }
 
 fn collect(m: &Machine, started: Instant, base: (u64, u32)) -> Stats {
@@ -1477,6 +1552,10 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         b.registry = true;
     }
 
+    // What a park would cost, published before anything can ask for one — see `Link::snapshot_bytes`.
+    link.snapshot_bytes
+        .store(snapshot_bytes(&m), Ordering::Relaxed);
+
     {
         let mut out = link.out.lock().unwrap();
         out.phase = if restored {
@@ -1486,6 +1565,11 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                 target: cfg.snap_at,
             }
         };
+        // Per session, not per process. A machine reached by a power cycle cold-boots again, and
+        // what the *previous* session's boot cost is not a measurement of this one — the window
+        // records the number once per boot and this is what stops the second one arriving with the
+        // first one's answer already in it.
+        out.booted_at = None;
     }
 
     let started = Instant::now();
@@ -1529,7 +1613,11 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
             let running = matches!(link.out.lock().unwrap().phase, Phase::Running);
             if running && link.save_on_quit.load(Ordering::Relaxed) {
                 link.saving.store(true, Ordering::Relaxed);
-                write_restore_point(cfg, &m);
+                // The frame the machine stops on is the one it last published, which is what
+                // `fb_seq` moving off zero means — see `write_parked_frame`, and `Link::parked`
+                // for why the answer is an atomic rather than another field of `Out`.
+                let at = write_restore_point(cfg, &m, (fb_seq > 0).then_some(&fb[..]));
+                link.parked.store(at.unwrap_or(0), Ordering::Relaxed);
                 link.saving.store(false, Ordering::Relaxed);
             }
             break;
@@ -1544,7 +1632,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                 Cmd::PowerOn => {}
             }
         }
-        let queued = drain(&mut m, &link.inbox, &mut next_at, cfg.click_gap);
+        drain(&mut m, &link.inbox, &mut next_at, cfg.click_gap);
 
         // A cold boot enters at 0, where the CPU fetches out of reset, with `r0`-`r3` zeroed and
         // `lr` at the sentinel — exactly `trace.rs`'s `call_with(entry, &[0,0,0,0], …)`. A restored
@@ -1725,7 +1813,8 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         if reached_snap_at || asked {
             want_snapshot = false;
             if cfg.work_on_copy || asked {
-                write_restore_point(cfg, &m);
+                let at = write_restore_point(cfg, &m, (fb_seq > 0).then_some(&fb[..]));
+                link.parked.store(at.unwrap_or(0), Ordering::Relaxed);
             }
             link.out.lock().unwrap().phase = Phase::Running;
         }
@@ -1788,7 +1877,6 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         let dropped = out.stats.input_dropped;
         out.stats = Stats {
             input_dropped: dropped,
-            queued,
             ..stats
         };
         if refresh {
@@ -1836,13 +1924,20 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         // `snap_at` stays as a fallback for the case the signal never comes: a boot that fails
         // before the UI should not leave the window claiming to be booting for ever, and the old
         // behaviour is the honest thing to fall back *to*.
+        //
+        // **And the two endings are told apart rather than merged**, which is `boot_end`'s whole
+        // job: the observed one is what §12.3 divides by next time, the fallback measured nothing,
+        // and reading `executed` at this instant without asking which happened files `snap_at` as
+        // a measurement. See `Out::booted_at`.
         if out.phase
             == (Phase::Booting {
                 target: cfg.snap_at,
             })
-            && (stats.asked_for_frames || executed >= cfg.snap_at)
         {
-            out.phase = Phase::Running;
+            if let Some(measured) = boot_end(stats.asked_for_frames, executed, cfg.snap_at) {
+                out.phase = Phase::Running;
+                out.booted_at = measured;
+            }
         }
         if stop != Stop::BudgetExhausted && stop != Stop::Idle {
             out.phase = Phase::Stopped(format!("{stop:?} at {executed} instructions"));
@@ -1866,15 +1961,24 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
 /// Safe to run while the machine holds the drive open: `Ata` seeks and `write_all`s each sector
 /// straight through, keeping no dirty buffer of its own, so what is on disk now is exactly what
 /// this RAM believes.
-fn write_restore_point(cfg: &Config, m: &Machine) {
-    let Some(path) = &cfg.snapshot else { return };
+///
+/// **`frame` is the third thing on disk and it is not part of the pair** — GUI.md §12.4 and §17 Q7,
+/// answered *"do it"*: `<snapshot>.parked.png`, 320 × 240, so a parked device's glass shows the
+/// frame it stopped on instead of reading as off. It is written last and its failure is not the
+/// pair's failure: a restore point whose picture could not be written still restores, and §12.4's
+/// own fallback for a missing PNG — *"the glass is dark"* — is the honest one. `None` means the
+/// machine never published a frame, which is a different thing from a black one.
+///
+/// Returns the Unix second the **complete** pair reached the disk, or `None` — see `Link::parked`.
+fn write_restore_point(cfg: &Config, m: &Machine, frame: Option<&[u8]>) -> Option<u64> {
+    let path = cfg.snapshot.as_ref()?;
     let img = m.snapshot();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     if let Err(e) = std::fs::write(path, &img) {
         eprintln!("snapshot {}: {e}", path.display());
-        return;
+        return None;
     }
     eprintln!("snapshot -> {} ({} bytes)", path.display(), img.len());
     match cfg.pair_with_drive() {
@@ -1884,9 +1988,70 @@ fn write_restore_point(cfg: &Config, m: &Machine) {
         Err(e) => {
             eprintln!("{e} — this snapshot will not be restored");
             let _ = std::fs::remove_file(path);
+            return None;
         }
     }
+    write_parked_frame(cfg, frame);
+    Some(eapp_loader::settings::now_unix())
 }
+
+/// §12.4's parked frame: `<snapshot>.parked.png`, at exactly 320 × 240.
+///
+/// **`png::encode` gets its first production caller here**, which is what retires that module's
+/// dead-code allow — the condition §17 Q7 named. Beside the snapshot and under the same stem, the
+/// rule `Config::stamp` already follows for the drive's fingerprint and for the same reason: a
+/// hand-given `--snapshot=` brings its own companions rather than pairing with whatever the cache
+/// happens to hold.
+fn write_parked_frame(cfg: &Config, frame: Option<&[u8]>) {
+    let Some(path) = cfg.parked_frame() else { return };
+    let Some(rgb) = frame else {
+        // Nothing was ever read out of the co-processor, so there is no frame this machine stopped
+        // on. A stale PNG from an earlier park would be a picture of a different session, so it
+        // goes with the snapshot it no longer belongs to.
+        let _ = std::fs::remove_file(&path);
+        return;
+    };
+    if rgb.len() != FB_W * FB_H * 3 {
+        eprintln!(
+            "parked frame: {} bytes is not {}x{} RGB, so no picture was written",
+            rgb.len(),
+            FB_W,
+            FB_H
+        );
+        return;
+    }
+    match std::fs::write(&path, crate::png::encode(rgb, FB_W, FB_H)) {
+        Ok(()) => eprintln!("parked frame -> {}", path.display()),
+        Err(e) => eprintln!("parked frame {}: {e}", path.display()),
+    }
+}
+
+/// **What a restore point for this machine would cost**, summed off the format that writes it.
+///
+/// `Machine::snapshot` walks `mem.regions` and then the co-processor's sparse map as
+/// address/value pairs, and those two are the whole of the size — everything else it writes is
+/// scalars. So this is the same walk without the allocation, which is what makes it answerable
+/// *before* a park rather than by doing one.
+///
+/// **[`SNAPSHOT_SLACK`] is measured, not guessed** — see
+/// `a_park_and_a_restore_are_a_round_trip_and_the_frame_comes_back`, which builds a real machine,
+/// takes a real snapshot and asserts this over-estimates it and by how little. An estimate that
+/// came out *under* would be a free-space check that passed and a write that filled the volume.
+fn snapshot_bytes(m: &Machine) -> u64 {
+    let regions: u64 = m
+        .mem
+        .regions
+        .iter()
+        .map(|r| (r.data.len() + r.name.len() + 12) as u64)
+        .sum();
+    let bcm = m.mem.bcm.as_ref().map_or(0, |b| b.mem.len() as u64 * 8);
+    regions + bcm + SNAPSHOT_SLACK
+}
+
+/// Everything `Machine::snapshot` writes that is not a region or a co-processor pair: the register
+/// file, the clock, the alias table, the MMAP window registers, the read overrides, the drive's
+/// saved state, the click wheel and the backlight.
+const SNAPSHOT_SLACK: u64 = 256 * 1024;
 
 /// The machine stopped on its own. Keep the reason on screen and wait for a power command.
 fn wait_after_stop(link: &Arc<Link>) -> Outcome {
@@ -2912,6 +3077,191 @@ mod tests {
             std::fs::read(&work).unwrap(),
             b"PRISTINE",
             "self-clone must not empty the drive"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A boot that ended on the fallback teaches §12.3's denominator nothing** — and the
+    /// substitution is this test's own control.
+    ///
+    /// The two endings sit one line apart in the run loop and produce the same phase. A reader that
+    /// watched for the phase change and took `Stats::executed` would file `snap_at` — a constant
+    /// tuned to RetailOS's 1.6 G — as *this device's own last completed cold boot*, on every
+    /// machine that never reached the wheel. That is the exact defect `Device::boot_instructions`
+    /// replaced `snap_at` to fix, re-entered from the other end.
+    ///
+    /// The control is the substitution written out: `Some(Some(executed))` for both arms is what a
+    /// phase-watcher computes, and the assertion below is what tells it apart from the truth.
+    #[test]
+    fn a_boot_that_ended_on_the_fallback_teaches_the_denominator_nothing() {
+        const SNAP: u64 = SNAP_AT;
+
+        // Still booting: the signal has not come and the fallback is not due.
+        assert_eq!(boot_end(false, 1_000, SNAP), None);
+        assert_eq!(boot_end(false, SNAP - 1, SNAP), None);
+
+        // The fallback. The boot phase ends — a window that says *booting* for ever over a machine
+        // that failed before the UI is the twenty-one-minute hostage §7.3 added a stop control for
+        // — and **nothing is learned**.
+        assert_eq!(
+            boot_end(false, SNAP, SNAP),
+            Some(None),
+            "the fallback ended the boot and this reported a measurement"
+        );
+        assert_eq!(boot_end(false, SNAP * 3, SNAP), Some(None));
+
+        // The observation. RetailOS asked for wheel frames, which is a machine that has finished
+        // starting, and the instruction count at that moment is what the next boot divides by.
+        assert_eq!(boot_end(true, 900_000_000, SNAP), Some(Some(900_000_000)));
+        // …at any count, including one before the fallback would ever have been due, which is the
+        // case Rockbox is: it reaches its menu at about 100 M.
+        assert_eq!(boot_end(true, 100_000_000, SNAP), Some(Some(100_000_000)));
+
+        // **The control.** A reader keyed on the phase change alone cannot tell the two apart: it
+        // computes the same non-`None` answer for both, and the number it takes on the fallback arm
+        // is `snap_at` itself.
+        let phase_watcher = |asked: bool, executed: u64| {
+            (asked || executed >= SNAP).then_some(executed)
+        };
+        assert_eq!(phase_watcher(false, SNAP), Some(SNAP));
+        assert_eq!(
+            boot_end(false, SNAP, SNAP).flatten(),
+            None,
+            "and this is the whole difference between the two readings"
+        );
+        assert_eq!(
+            phase_watcher(true, 900_000_000),
+            boot_end(true, 900_000_000, SNAP).flatten(),
+            "on the observed arm the two agree, which is why the other arm is the only test"
+        );
+    }
+
+    /// **A park and a restore are a round trip, and §12.4's frame comes back with them.**
+    ///
+    /// It builds a real machine off a synthesised ROM and a scratch drive, parks it through the
+    /// shipped writer, and then asks the questions the *next launch* asks: is the pair whole, may
+    /// this restore, and is there a picture of the frame it stopped on.
+    ///
+    /// **How to make it go red**, in one line each:
+    ///
+    /// - Drop the frame write — delete the `write_parked_frame(cfg, frame)` call in
+    ///   `write_restore_point` — and the three assertions about the PNG fail: `Config::parked_frame`
+    ///   is not on disk, `machine::parked_frame` answers `None`, and the glass §12.4 promises has
+    ///   nothing on it. Nothing else in the suite notices, which is the point of asserting it here.
+    /// - Return `Some(now)` before `pair_with_drive` and `may_restore` goes false on the next
+    ///   launch while `Device::parked_at` says the machine was parked four minutes ago.
+    /// - Take [`SNAPSHOT_SLACK`] out of `snapshot_bytes` and the estimate goes **under** the real
+    ///   snapshot, which is a free-space check that passes and a write that fills the volume.
+    #[test]
+    fn a_park_and_a_restore_are_a_round_trip_and_the_frame_comes_back() {
+        let dir = std::env::temp_dir().join(format!("ipod-park-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let disk = dir.join("d.img");
+        std::fs::write(&disk, b"not really a drive").unwrap();
+
+        // **A boot image rather than a drive with an OS on it**, and the difference is what makes
+        // this test runnable at all: a synthesised ROM does a high-level boot, which reads the
+        // `!ATA` firmware directory out of the drive — several megabytes of RetailOS that no test
+        // fixture can carry. `BootTarget::Image` enters a raw ARM image at `0x10000000` instead,
+        // which is `rb-main.raw`'s route (§12.5), and sixteen words of `b .` is a program by every
+        // test `build` applies to one. What is under test is the **park**, and a parked machine is
+        // a `Machine` with regions in it whatever it was executing.
+        let boot = dir.join("tiny.raw");
+        std::fs::write(&boot, [0xfeu8, 0xff, 0xff, 0xea].repeat(16)).unwrap();
+
+        let cfg = Config {
+            nor: eapp_loader::nor::Source::Synthetic {
+                model: eapp_loader::nor::DEFAULT_MODEL.into(),
+                seed: 1,
+                serial: None,
+                guid: None,
+                splash: None,
+            },
+            disk: disk.clone(),
+            // Direct mode, which is the window's default: the working drive IS the user's image
+            // and the pair's other half is the stamp beside the snapshot.
+            workdisk: disk.clone(),
+            frozen: dir.join("m.frozen"),
+            snapshot: Some(dir.join("m.snap")),
+            snap_at: SNAP_AT,
+            clock: eapp_loader::CLOCK,
+            boot: BootTarget::Image(boot),
+            ..Default::default()
+        };
+        let m = build(&cfg, true).expect("a machine off a synthesised ROM and a raw boot image");
+
+        // Before: nothing on disk, so nothing to resume. This is what every device in a fresh
+        // library answers, and it is the control for every assertion below it.
+        assert!(!cfg.may_restore(true), "there is no snapshot yet");
+        assert_eq!(crate::machine::Restore::of(&cfg), crate::machine::Restore::Never);
+
+        // §12.4's frame: a diagnostic picture rather than a pretty one, so a channel swap or a
+        // stride error shows up in the comparison rather than passing as "some bytes came back".
+        let mut frame = vec![0u8; FB_W * FB_H * 3];
+        for y in 0..FB_H {
+            for x in 0..FB_W {
+                let p = (y * FB_W + x) * 3;
+                frame[p] = (x % 256) as u8;
+                frame[p + 1] = (y % 256) as u8;
+                frame[p + 2] = if x < y { 0xff } else { 0x11 };
+            }
+        }
+
+        let estimate = snapshot_bytes(&m);
+        let at = write_restore_point(&cfg, &m, Some(&frame)).expect("the park writes a pair");
+        assert!(at > 1_700_000_000, "the park time is not a Unix second: {at}");
+
+        // ── The next launch's questions ─────────────────────────────────────────────────────────
+        let snap = cfg.snapshot.clone().unwrap();
+        let actual = std::fs::metadata(&snap).expect("the snapshot").len();
+        assert!(
+            estimate >= actual,
+            "`snapshot_bytes` predicted {estimate} and the snapshot is {actual}: a free-space \
+             check against an under-estimate passes and then fills the volume"
+        );
+        assert!(
+            estimate <= actual + SNAPSHOT_SLACK * 4,
+            "the estimate is {estimate} against {actual}, which is loose enough to refuse a park \
+             that would have fitted"
+        );
+        assert!(
+            cfg.stamp().is_some_and(|p| p.exists()),
+            "the half that pairs the RAM with the drive is not on disk"
+        );
+        assert!(cfg.may_restore(true), "the pair is whole and this refuses to restore it");
+        assert_eq!(crate::machine::Restore::of(&cfg), crate::machine::Restore::Whole);
+
+        // ── §12.4 and §17 Q7: the frame it stopped on ───────────────────────────────────────────
+        let png = cfg.parked_frame().expect("a snapshot has a parked frame path");
+        assert_eq!(png, dir.join("m.parked.png"), "beside the snapshot, under its own stem");
+        assert!(png.exists(), "the park wrote no picture, so a parked glass is dark");
+        let mut seen = eapp_loader::settings::Presence::new();
+        assert_eq!(
+            crate::machine::parked_frame(&cfg, &mut seen),
+            Some(png.clone()),
+            "the writer and the reader disagree about where the frame is"
+        );
+        // It is a PNG a decoder reads — asserted against the shipped header rather than against
+        // `png::encode` calling itself correct.
+        let bytes = std::fs::read(&png).unwrap();
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "that is not a PNG");
+        assert!(
+            bytes.len() > FB_W * FB_H * 3,
+            "a stored-deflate PNG of a full frame cannot be {} bytes",
+            bytes.len()
+        );
+
+        // ── And a machine that had never drawn leaves no picture at all ─────────────────────────
+        //
+        // A black PNG and no PNG are different claims: §12.4's fallback for the second is *the
+        // glass is dark*, and writing a black frame instead would be the bench asserting that this
+        // is what the machine had on screen.
+        assert!(write_restore_point(&cfg, &m, None).is_some(), "the pair is still written");
+        assert!(
+            !png.exists(),
+            "a park with no frame left the PREVIOUS park's picture beside a new snapshot"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

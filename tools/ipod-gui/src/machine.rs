@@ -256,7 +256,7 @@ impl Pace {
 /// - `Stopped` cannot exist without a [`Reason`], and a `Reason` is never empty.
 ///
 /// **`Phase::Booting { target }` is deliberately not read for the denominator.** Its `target` is
-/// `cfg.snap_at`, the instruction count the *snapshot* will be taken at — `emu.rs:1486` is where it
+/// `cfg.snap_at`, the instruction count the *snapshot* will be taken at — `emu.rs:1565` is where it
 /// becomes the phase, and the run loop compares the phase against that same value again to decide
 /// the boot has ended. §12.3 is explicit that the progress denominator is a different number,
 /// `Device::boot_instructions`, *"this device's own last completed cold boot"*. Two numbers for two
@@ -305,7 +305,6 @@ impl Life {
     /// `Some(secs)` only past the threshold, and only while `Running` — a machine that is off has
     /// not moved either, and reporting that as a stall would be the instrument shouting about the
     /// one state where nothing moving is correct.
-    #[allow(dead_code)]  // retired when: §12.8's Readout is drawn — that is where §12.2 puts the stalled Gauge and the one line beside it, and there is no other surface in this window that reports a machine's own counters
     pub fn stalled(&self) -> Option<f32> {
         match self {
             Life::Running { stalled_secs, .. } if *stalled_secs > STALL_SECS => Some(*stalled_secs),
@@ -346,7 +345,6 @@ impl Life {
 /// so the Readout and the cradle cannot end up with two thresholds, which is how one session sat
 /// dead at 2 791 999 952 instructions and was noticed only because two `state` replies happened to
 /// be compared by hand.
-#[allow(dead_code)]  // retired when: `Life::stalled` has a caller — this is the threshold that method compares against and it has no second reader by design
 pub const STALL_SECS: f32 = 2.0;
 
 /// §12.8's Gauge freshness, as a fact about the model rather than a discipline the drawing keeps.
@@ -355,7 +353,6 @@ pub const STALL_SECS: f32 = 2.0;
 /// ended there* against `Stale`'s *we stopped looking*. §12.8 is explicit that those are different,
 /// and a two-state `bool fresh` is what makes them the same.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[allow(dead_code)]  // retired when: §12.8's Readout is drawn — every Gauge on it renders one of these four, and nothing else in this window has a sample age to describe
 pub enum Freshness {
     /// Sampled within [`SAMPLE_FRESH_MS`].
     Live,
@@ -368,12 +365,10 @@ pub enum Freshness {
 }
 
 /// §12.8: *"live — sampled within 500 ms"*.
-#[allow(dead_code)]  // retired when: `Freshness::of` has a caller — this is the boundary it compares against and it has no second reader by design
 pub const SAMPLE_FRESH_MS: u64 = 500;
 
 impl Freshness {
     /// `sampled_ms_ago` is `None` when nothing has ever sampled this machine.
-    #[allow(dead_code)]  // retired when: §12.8's Readout is drawn and something in the window records when it last sampled a Gauge — `sampled_ms_ago` is a fact nothing in this program measures yet
     pub fn of(life: &Life, sampled_ms_ago: Option<u64>) -> Freshness {
         let Some(ms) = sampled_ms_ago else {
             return Freshness::Unmeasured;
@@ -429,16 +424,88 @@ impl Glass {
 
 /// §12.4's parked frame, if park wrote one and it is still there.
 ///
-/// `<device>.parked.png` **beside the snapshot**, under the same stem — the rule `Config::stamp`
-/// already follows for the frozen drive's other half, and for the same reason: a hand-given
-/// snapshot brings its own companions rather than pairing with whatever the cache happens to hold.
+/// **The path is `Config::parked_frame`'s and is not spelled again here.** It used to be, and the
+/// writer did not exist to disagree with it; `emu::write_parked_frame` is the writer now, and one
+/// stem in two files is the shape this repository keeps deleting.
 ///
 /// `seen` is the caller's stat cache, so a bench drawing this every frame reads the filesystem once
 /// per pass rather than once per repaint.
-#[allow(dead_code)]  // retired when: §12.4's park runs — `main::machine_config` sets `snapshot: None`, so nothing writes a `<device>.parked.png`, and nothing in this program can decode one (`png.rs` only encodes)
 pub fn parked_frame(cfg: &Config, seen: &mut Presence) -> Option<PathBuf> {
-    let png = cfg.snapshot.as_ref()?.with_extension("parked.png");
+    let png = cfg.parked_frame()?;
     seen.exists(&png).then_some(png)
+}
+
+// ── §12.4: what a park costs, and whether there is room for it ───────────────────────────────────
+
+/// **Free space against the restore point's own size, asked before `save_on_quit` is set.**
+///
+/// §12.4 is exact about the order — *"free space is checked against the snapshot size before
+/// `save_on_quit` is set, and if it is short the window closes without parking"* — and about why
+/// it has to be that way round: a park that fails for want of space fails at window close, where
+/// there is no window left to show §9.3's `space` class in.
+///
+/// **`free` is an `Option` and that is the honest half.** [`free_bytes`] answers only where this
+/// program can ask, and a platform it cannot ask on gets `None` — which parks, because refusing a
+/// park on a measurement nobody took would lose a restore point over an unanswered question.
+/// `Unmeasured` and `zero` are different facts here for exactly the reason §12.8 gives.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Park {
+    /// `Link::snapshot_bytes` — this machine's own memory, summed off the format that writes it.
+    /// Zero before a machine has been built, which cannot be short of anything.
+    pub needed: u64,
+    /// What the volume the snapshot goes to reports, or `None` where nothing can ask.
+    pub free: Option<u64>,
+}
+
+impl Park {
+    /// `dir` is where the snapshot will land. It is stat'd, so it has to exist — the window creates
+    /// it when it builds the `Config`, which is the same instant it decides the path.
+    pub fn of(needed: u64, dir: &Path) -> Park {
+        Park { needed, free: free_bytes(dir) }
+    }
+
+    /// Whether parking would run the volume out. **Unmeasured is not short.**
+    pub fn short(&self) -> bool {
+        matches!(self.free, Some(f) if f < self.needed)
+    }
+
+    /// §12.4's own sentence, for the Rail: *"1.6 GB needed, 0.9 GB free."*
+    ///
+    /// `eapp_loader::si` and not [`instructions`]: this row **is** about bytes, which is the one
+    /// case that function's own doc carves out.
+    pub fn sentence(&self) -> String {
+        format!(
+            "{} needed, {} free",
+            eapp_loader::si(self.needed),
+            self.free.map_or_else(|| "an unmeasured amount".into(), eapp_loader::si)
+        )
+    }
+}
+
+/// Bytes available to an unprivileged writer on the volume `dir` is on.
+///
+/// **`statvfs`, and `f_bavail` rather than `f_bfree`** — the second counts blocks the filesystem
+/// has reserved for root, which a window writing a restore point cannot have. Over-reporting free
+/// space is the one direction this must not fail in.
+///
+/// Unix only. Windows has `GetDiskFreeSpaceExW` and `windows-sys` is already in this crate's tree,
+/// but the feature that carries it is not enabled and nobody here can run the result — and an
+/// untested `unsafe` call into a platform nobody can run is worse than a gap somebody can read
+/// about, which is the same rule `windows_subsystem` is annotated with in `main.rs`.
+#[cfg(unix)]
+fn free_bytes(dir: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `c` is a NUL-terminated path this call only reads, and `s` is a `statvfs` this
+    // thread owns and the call only writes. Nothing is retained past the call.
+    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    let ok = unsafe { libc::statvfs(c.as_ptr(), &mut s) } == 0;
+    ok.then(|| s.f_bavail as u64 * s.f_frsize as u64)
+}
+
+#[cfg(not(unix))]
+fn free_bytes(_dir: &Path) -> Option<u64> {
+    None
 }
 
 // ── §12.4: parking, and what a snapshot is worth ─────────────────────────────────────────────────
@@ -843,6 +910,7 @@ mod tests {
             fb_other_nonzero: 0,
             fb_other_moved: false,
             fb_shown_moved: false,
+            booted_at: None,
             stats: s,
         }
     }
@@ -1428,5 +1496,58 @@ mod tests {
         let booting = Life::read(&out(Phase::Booting { target: 0 }, stats(1, 1.0)), &target, None);
         assert!(permits(&booting, &Cmd::PowerOff));
         assert!(!permits(&Life::Off, &Cmd::PowerOff), "an off machine can be powered off");
+    }
+
+    /// **A park with no room does not happen, and an unmeasured free space is not "no room."**
+    ///
+    /// §12.4 checks before `save_on_quit` is set because a park that fails for want of space fails
+    /// at window close, where there is nothing left to report it in. The half worth a test is the
+    /// *other* direction: `free_bytes` answers `None` where this program cannot ask, and treating
+    /// that as short would lose a restore point over a question nobody put. §12.8's rule about the
+    /// model long before it is a rule about a Gauge — a zero and an unmeasured are different facts.
+    #[test]
+    fn a_park_refuses_only_on_a_free_space_it_actually_measured() {
+        let dir = scratch("park-room");
+
+        // The real reading, on a directory that exists. Asserted as a range rather than a number
+        // because it is a fact about the volume this test ran on: any answer at all is what is
+        // under test, and a `Some(0)` on a temp directory would mean `f_bavail` was read as
+        // `f_bfree`'s root reserve or as blocks rather than bytes.
+        let real = Park::of(0, &dir);
+        assert!(
+            real.free.is_some_and(|f| f > 1 << 20),
+            "statvfs reported {:?} free on a writable scratch directory",
+            real.free
+        );
+        assert!(!real.short(), "nothing needed cannot be short of anything");
+
+        // A path nothing answers for. **Not short**: it is unmeasured.
+        let nowhere = Park::of(u64::MAX, &dir.join("no-such-directory"));
+        assert_eq!(nowhere.free, None);
+        assert!(
+            !nowhere.short(),
+            "a park was refused on a free space nobody measured, which loses a restore point over \
+             an unanswered question"
+        );
+        assert!(
+            nowhere.sentence().contains("unmeasured"),
+            "the sentence claims a figure it does not have: {}",
+            nowhere.sentence()
+        );
+
+        // And the case the check exists for: more wanted than there is.
+        let short = Park { needed: u64::MAX, free: Some(900_000_000) };
+        assert!(short.short());
+        assert!(
+            short.sentence().contains("needed") && short.sentence().contains("free"),
+            "§12.4's sentence is two figures and a person has to be able to check the arithmetic: {}",
+            short.sentence()
+        );
+        // Exactly enough is enough. `<` and not `<=`, because refusing a park that fits is the
+        // same lost restore point by a different route.
+        assert!(!Park { needed: 100, free: Some(100) }.short());
+        assert!(Park { needed: 101, free: Some(100) }.short());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -220,6 +220,25 @@ export struct DeviceRow {
     // `selected` the way `cradle-label` does rather than being pushed once for a bench that has
     // moved on.
     press-label: string,
+    // ── §12.3's boot progress, in the two shapes it can honestly take ────────────────────────────
+    //
+    // **Two fields and not one `float` with a sentinel**, because the two questions §12.3 asks are
+    // *how far* and *is there a denominator at all*, and every encoding of the second inside the
+    // first is a lie somewhere: `0` reads as no progress on a device that has never booted, and a
+    // negative number is a fraction nobody can draw. `machine::Progress` is the enum they come out
+    // of and `main::boot_rule` is the one place that flattens it, so a `boot-fraction` without a
+    // `boot-measured` beside it is not a state Rust can produce.
+    //
+    // **`boot-measured` false means NO RULE IS DRAWN**, which is §12.3 as written: *"before a
+    // device has ever booted there is no fraction and no bar: the cradle label carries an
+    // instruction count that moves."* The caption is where the difference is said — `booting —
+    // 62 %` against `booting — 412 M instr` — and the rule is where it is seen.
+    boot-measured: bool,
+    // 0..1, and **not clamped on the way in**. §12.3 names both ways a stored denominator goes
+    // wrong when the recipe changes under it, and says the remedy is upstream in
+    // `Settings::set_boot_shape`; the drawing clamps its own width because a rule cannot be longer
+    // than its track, and the caption carries the true reading.
+    boot-fraction: float,
     // §7.3's ring, decided by `machine::cradle` alongside the label above — one call, so the colour
     // and the sentence cannot describe two different states of one iPod.
     //
@@ -732,6 +751,87 @@ export component Row inherits Pressable {
             width: Metric.s3;
             height: Metric.s3;
             visible: root.chevron;
+        }
+    }
+}
+
+// One measured number, flattened for the markup — `readout::Gauge`. Every string on it is
+// `readout.rs`'s, which is what stops the page wording a fact about a machine.
+//
+// **`fresh` is an `int` and not an enum**, unlike `CradleRing` one struct up, and the difference is
+// which side decides: a ring has three values *the markup draws differently*, and this has four
+// values only one of which the markup treats specially. `readout::Freshness` is the closed set and
+// `main::gauge_rows` is the one place it crosses; a second enum here would be a second list to keep
+// in step for a distinction the drawing barely makes.
+export struct GaugeRow {
+    group: int,
+    label: string,
+    value: string,
+    // 0 live, 1 stale, 2 final, 3 unmeasured — `machine::Freshness` in declaration order.
+    fresh: int,
+    warn: bool,
+}
+
+// ─── Gauge (§5, §12.8) ──────────────────────────────────────────────────────────────────────────
+//
+// §5's sixth primitive: **one measured number** — label leading, value trailing in tabular mono,
+// with a three-state freshness. Used by the Readout and by nothing else, which is §5's own column.
+//
+// **Not a `Row`, and the difference is the value's font and the fact that it is inert.** A Row's
+// value is `body` and its column reserves a 16 px chevron gutter for a control this page has none
+// of; a Readout value is a *number* that a person reads down a column, which is what `mono` is for
+// (§6.2 gives paths, hashes, serials and addresses to it, and a nine-digit instruction count is the
+// same kind of thing). Reusing `Row` would have meant a page of controls that do nothing, which
+// §14.1 and §19.1 call fatal in one line.
+//
+// **The freshness is a colour and never a word on the row.** §12.8 puts the word on the group
+// *heading* — ` — stale`, ` — final` — so a page of forty rows does not repeat one fact forty
+// times. What the row carries is `fg` when the value is worth reading now and `fg-disabled` when it
+// is not, which is the same pairing every disabled thing in this window uses.
+export component Gauge inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <int> fresh;
+    in property <bool> warn: false;
+
+    height: Geometry.row-h;
+    // §16.7: a Gauge is `Text` per §5's own table. It is not a list item and it is not a control,
+    // so it announces itself as one string — *label, value* — rather than as a row a reader would
+    // then try to activate.
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.label + ", " + root.value;
+
+    HorizontalLayout {
+        padding-left: Geometry.page-margin;
+        padding-right: Geometry.page-margin;
+        spacing: 0px;
+
+        Text {
+            width: Geometry.row-value-x;
+            text: root.label;
+            font-size: Metric.body-size;
+            font-weight: Metric.weight-body;
+            // A stale or unmeasured *label* stays `fg-dim`: the label is what the row is about and
+            // that has not gone out of date. Only the number has.
+            color: Ink.fg-dim;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+
+        Text {
+            width: Geometry.row-value-w;
+            text: root.value;
+            // §6.2's `mono`, so a column of counts lines up digit under digit. `Metric.mono-family`
+            // is measured at startup rather than named here — see `main::mono_family`.
+            font-family: Metric.mono-family;
+            font-size: Metric.mono-size;
+            font-weight: Metric.weight-body;
+            // `warn` outranks freshness: a refused step is worth saying even on a machine that
+            // stopped four minutes ago, which is exactly when somebody is reading this page.
+            color: root.warn ? Ink.warn : (root.fresh == 0 || root.fresh == 2 ? Ink.fg : Ink.fg-disabled);
+            horizontal-alignment: right;
+            overflow: elide;
+            vertical-alignment: center;
         }
     }
 }

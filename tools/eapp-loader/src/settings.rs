@@ -1208,6 +1208,28 @@ pub fn drives_dir() -> PathBuf {
     data_dir().join("drives")
 }
 
+/// Where a device's restore point lives — GUI.md §12.4's park, and everything that pairs with it.
+///
+/// A directory rather than a path per device, and a **sibling of [`drives_dir`]** rather than a
+/// subdirectory of it, because a restore point is not a drive: §11.4 lists the two in separate
+/// groups and `Discard the snapshot` removes one without touching the other.
+///
+/// Under [`data_dir`] like everything else here, so `IPOD_EMULATOR_DATA` moves it and a test never
+/// writes a snapshot into somebody's real library.
+pub fn snapshots_dir() -> PathBuf {
+    data_dir().join("snapshots")
+}
+
+/// The restore point for the device called `name` — **the one place that decides where it lives.**
+///
+/// The window builds an `emu::Config` from this, and §11.4's Snapshots group offers to delete it
+/// from the same answer, so the file a park writes and the file a discard removes cannot be two
+/// different files. `emu::Config::stamp` and `emu::Config::parked_frame` derive the other two from
+/// it under the same stem.
+pub fn restore_point(name: &str) -> PathBuf {
+    snapshots_dir().join(format!("{}.snap", file_stem_of(name)))
+}
+
 /// A path in `dir` named `<stem>.<ext>` that **nothing already occupies**, suffixing ` (2)`,
 /// ` (3)` … the way [`Settings::unique_name`] does for names in a list.
 ///

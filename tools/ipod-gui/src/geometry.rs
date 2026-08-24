@@ -102,6 +102,22 @@ geometry! {
     CRADLE_BAND:      Px = CRADLE_OVERHANG + FOCUS_GAP;
     GAP_1:            Px = 6.0;
     GAP_1_MIN:        Px = 2.0;
+    /// §12.3's boot rule — *"a 4 px indeterminate rule that does not animate would be
+    /// acceptable"*, and this is the determinate one it is the ceiling for.
+    ///
+    /// **It costs nothing in the vertical budget and that is why it is where it is.** The band
+    /// between the body's bottom edge and the cradle's bottom ring line is
+    /// `CRADLE_BAND − FOCUS_GAP − FOCUS_RING_W` = 16 − 6 − 2 = **8 px** of clear fixture that
+    /// already exists at every size, so the rule sits inside it with [`BOOT_RULE_GAP`] above and
+    /// 2 px of clearance below the ring. Nothing in `CHROME_MIN` or `CHROME_PREF` moves, which is
+    /// what stops a progress indication costing a display class (§9.6).
+    ///
+    /// **On the cradle, not on the device** — principle 3. It is UI state, and UI state is drawn
+    /// on the fixture; a 4 px bar across the bottom of the iPod's own case would be the one thing
+    /// §6.5 and §7.3 exist to prevent.
+    BOOT_RULE_H:      Px = 4.0;
+    /// Between the body's bottom edge and the boot rule. 8 px of band, 2 above and 2 below.
+    BOOT_RULE_GAP:    Px = 2.0;
     CRADLE_LABEL:     Px = 24.0;
     GAP_2:            Px = 16.0;
     GAP_2_MIN:        Px = 8.0;
@@ -877,6 +893,8 @@ mod tests {
         "ipod.slint",
         // §11.4's six groups.
         "parts.slint",
+        // §12.8's seven groups of Gauges, its fixed header and its two pinned actions.
+        "readout.slint",
         // §11.6's one page and three rows.
         "settings.slint",
         // A second top-level `Window`, for `slint-viewer` only. **`build.rs` must keep exactly one
@@ -2714,11 +2732,12 @@ mod tests {
         let rows = text.matches("count: 7;").count();
         assert_eq!(rows, 7, "`MenuPage` no longer declares seven rows of seven: {rows}");
         let disabled = text.matches("enabled: false;").count();
-        // **Three, not six.** Devices, Parts and Settings became live when `ui/drawer.slint` gained
-        // a child for each of them; `Page::slot` answers `None` for exactly Games, Readout and
-        // Reference now, and those three are what is left. The count is read out of the markup and
-        // the arithmetic below is derived from it, so the next page to land moves both.
-        assert_eq!(disabled, 3, "`MenuPage` no longer has three disabled rows: {disabled}");
+        // **Two, and it was three, and before that six.** Devices, Parts, Settings and now the
+        // Readout became live as `ui/drawer.slint` gained a child for each; `Page::slot` answers
+        // `None` for exactly Games and Reference. The count is read out of the markup and the
+        // arithmetic below is derived from it, so the next page to land moves both — and the page
+        // still needs more room than it has, which is the claim this test is actually about.
+        assert_eq!(disabled, 2, "`MenuPage` no longer has two disabled rows: {disabled}");
 
         let needed = DRAWER_HEADER_H
             + disabled as f64 * (ROW_H + FIELD_REASON)

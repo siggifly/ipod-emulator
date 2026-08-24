@@ -587,6 +587,20 @@ impl Parts {
                 }
                 let mut moved = false;
                 for name in &parked {
+                    // **The files go with the timestamp, and that is new because the files are
+                    // new.** `discard_park`'s own doc says *"deletes no files — the caller does
+                    // that, after saying what it is about to delete and how big it is"*, and until
+                    // §12.4's park ran there was nothing for a caller to delete: the window
+                    // configured no snapshot. Clearing the timestamp alone would now be a control
+                    // that looks like it did something while `Config::may_restore` — which asks the
+                    // two files and not the library — went on resuming the machine the person had
+                    // just discarded.
+                    //
+                    // The consequence sentence under this control names the count and the total
+                    // before the press, and the control takes two of them.
+                    for f in crate::restore_point_files(name) {
+                        let _ = std::fs::remove_file(f);
+                    }
                     moved |= s.discard_park(name);
                 }
                 Ok(if moved { Wrote::Library } else { Wrote::Nothing })
@@ -675,7 +689,16 @@ impl Parts {
                     return Err(locked);
                 }
                 let moved = match group {
-                    Group::Snapshots => s.discard_park(&key),
+                    // Same act as the group verb's, for the same reason — see it. This row is not
+                    // `removable` today, so nothing in the window reaches here; the two are written
+                    // the same way anyway, because the day it becomes removable is not the day
+                    // somebody remembers that a discard has files behind it.
+                    Group::Snapshots => {
+                        for f in crate::restore_point_files(&key) {
+                            let _ = std::fs::remove_file(f);
+                        }
+                        s.discard_park(&key)
+                    }
                     Group::Disks => s.remove_disk(&key),
                     _ => s.remove_resource(&key),
                 };
@@ -1078,10 +1101,16 @@ struct Entry {
     ///
     /// **Disks and snapshots ship `false`.** Not a stub and not an oversight: a drive's body wants
     /// the partition table, the FAT type and an in-window FAT32 tree, and a snapshot's wants the
-    /// instruction count it was taken at and `Config::pair_is_whole`'s answer — and `Settings`
-    /// records **no path to a snapshot at all**, so half of that cannot be produced from this
-    /// crate's model however long the body were made. Drawing an Expand that opened onto three
-    /// lines of apology is worse than a row that says it does not open.
+    /// instruction count it was taken at and `Config::pair_is_whole`'s answer.
+    ///
+    /// **One half of that reason has expired and is corrected rather than left standing.** It read
+    /// *"`Settings` records **no path to a snapshot at all**"*, which was true until §12.4's park
+    /// ran: `Settings::restore_point` is that path now, `Config::stamp` and `Config::parked_frame`
+    /// derive the two files beside it, and the row above carries the total size because of it.
+    /// What is still unavailable is the **instruction count** the restore point was taken at —
+    /// nothing writes it anywhere, and `pair_is_whole` answers a boolean rather than a story — so
+    /// a body would still open onto one fact and two apologies, which is worse than a row that
+    /// says it does not open.
     expandable: bool,
     removable: bool,
     /// Every device and every drive that names it, by name.
@@ -1205,21 +1234,38 @@ fn inventory(s: &Settings, seen: &mut Presence, machine: Option<&str>) -> Vec<En
         });
     }
 
-    // §11.4's sixth group. 1.6 GB per park was invisible: close the window four times across four
-    // devices and 6.4 GB exists that nobody asked for and nobody could total.
+    // §11.4's sixth group. A park per device was invisible: close the window four times across
+    // four devices and there is a restore point per device that nobody asked for and nobody could
+    // total. **Measured at 149 MB for a 5.5G**, which is the RAM this machine has — §12.4's own
+    // "~1.6 GB" is the frozen *drive* in copy mode and not this.
     let now = settings::now_unix();
     for d in &s.devices {
         let Some(secs) = settings::parked_for(d, now) else {
             continue;
         };
+        // **The size is asked of the files, not of a constant.** §11.4's rule for a removal is that
+        // it says how big the thing is before you press; a figure quoted from the design would go
+        // stale the first time the snapshot format changed, and a park that half-wrote would report
+        // the size it *should* have been.
+        let files = crate::restore_point_files(&d.name);
+        let bytes: u64 = files
+            .iter()
+            .filter_map(|p| seen.exists(p).then(|| std::fs::metadata(p).ok()).flatten())
+            .map(|m| m.len())
+            .sum();
         out.push(Entry {
             group: Group::Snapshots,
             key: d.name.clone(),
             name: d.name.clone(),
             kind: Kind::Snapshot,
             // `ago` is the window's one spelling of *time since*, and the shelf already draws it.
-            fact: format!("parked {}", crate::ago(secs)),
-            path: None,
+            // The size joins it because this row is the only place the cost of a park is visible,
+            // and a park time with no size is what made four of them invisible.
+            fact: match bytes {
+                0 => format!("parked {}", crate::ago(secs)),
+                n => format!("parked {}, {}", crate::ago(secs), eapp_loader::si(n)),
+            },
+            path: files.first().cloned(),
             expandable: Group::Snapshots.expandable(),
             removable: false,
             used_by: Vec::new(),
@@ -1567,11 +1613,19 @@ fn verb_row(a: Action, rows: &[PartView], g: Group, caps: Caps, busy: bool) -> F
             row.presses = 2;
             // **Written to `geometry::PARTS_VERB_W` 180**, which is the narrowest slot any
             // consequence in this program is drawn in — a group verb's half-share of the row. The
-            // long form ran to 772 px and drew about a fifth of itself. What it spent the room on
-            // was the sizes, which the Snapshots rows above already carry; what is left is the
-            // half that is nowhere else on the page, which is that discarding does not delete and
-            // does not leave a trail back.
-            row.consequence = format!("Forgets {}. Files stay, unlisted.", parked.len());
+            // long form ran to 772 px and drew about a fifth of itself.
+            //
+            // **It said `Files stay, unlisted.` and that is now false**, which is the half of this
+            // pass §11.4 could not have known about: nothing wrote a snapshot when that sentence
+            // was measured, so *discard* really did only forget a timestamp. §12.4's park writes a
+            // pair and a picture per device, and a discard that left them would leave
+            // `Config::may_restore` — which asks the files, not the library — resuming a machine
+            // that had just been discarded. So the verb deletes, and the count is what a person
+            // needs before pressing. The per-row `fact` above carries each one's size.
+            row.consequence = match parked.len() {
+                1 => "Deletes 1 restore point.".into(),
+                n => format!("Deletes {n} restore points."),
+            };
         }
     }
     // A build owns the drive it is writing and the bundle it is reading. A verb that would start a

@@ -408,7 +408,7 @@ first — and note that this revision adds three (**Cradle**, **Gauge**, **Scrol
 | **Row** | one thing, on a line, 44 px, label leading / value at 232 px / chevron trailing | `ListItem` inside a `List` | every drawer page |
 | **Expand** | in-place detail for a Row; pushes the rows below it down | `accessible-expandable` + `-expanded` + `accessible-action-expand` | a refusal's paragraph, what is inside a ROM |
 | **Field** | a labelled input, which may be **locked** and states why | `TextInput` / `Combobox` | identity, names, paths |
-| **Gauge** | one measured number: label leading, value trailing in tabular mono, with a **three-state freshness** — live / stale / not measured | `Text` | the Readout, and nothing else |
+| **Gauge** | one measured number: label leading, value trailing in tabular mono, with a **three-state freshness** — live / stale / not measured. *(Built 2026-08-24. Four states, not three: `final` is *the machine ended here* against `stale`'s *we stopped looking*, and a two-state boolean is what makes them one)* | `Text` | the Readout, and nothing else |
 | **Rail** | a stream of plan, progress and results | `Region` + `accessible-live-region: polite` | the drawer's Work page |
 | **Scroll** | the **body** of a drawer page, between its fixed header and any pinned footer row. Never the bench, never the shelf, never the well | `Flickable`, `accessible-*` on its children | Readout, Parts, Composer, Games |
 | **Screen** | the framebuffer, 320 × 240, exact integer physical scale, nearest neighbour. **Obeys different laws** | `Image` | the bench's glass, fullscreen, a ROM's boot-screen preview |
@@ -2559,9 +2559,12 @@ what is on the panel; `machine::centre` and `machine::permits` are what the cent
 whether a power command is physical. The press builds an `emu::Config` from the device
 `Settings::run_device` resolved and spawns `emu::run` on its own thread. Three of the table's four
 rows are reachable from the window today — `Off`, `Booting` and `Stopped`; `Running` needs a drive
-with an OS on it, which is a fixture no test suite can carry. **Two things in the table are still
-not drawn**: §12.4's `parking` caption has no producer because nothing configures a snapshot, and
-the `stalled` line below the table is §12.8's Readout, which does not exist.)*
+with an OS on it, which is a fixture no test suite can carry. **Two things in the table were still
+not drawn**, and both are now: §12.4's `parking` caption has a producer — `Esc` from `Running` sets
+`Link::save_on_quit` and the cradle reads `Link::saving` — and the `stalled` line below the table is
+a Gauge on §12.8's Readout, which is built. **The glass gained a fifth state with the park**:
+`panel-lit` is `Glass != Dark` rather than `phase != Off`, because a device that is off with a
+restore point beside it has §12.4's frame on it and an unlit panel draws it at `opacity: 0`.)*
 
 `Stopped` is the opposite and for the opposite reason: **the last frame is evidence** and is kept.
 Row 2 carries the reason in `fg`, row 3's trailing slot offers `Cold boot` and `Copy the reason`, and
@@ -2617,6 +2620,30 @@ the file and `recipe_of`'s authority branch in one pass, and
 `a_device_with_no_recorded_shape_drops_its_denominator_once` measures the once-only drop that every
 device written before this pays.)*
 
+*(**And the denominator itself had no writer at all until 2026-08-24, which made every word above
+about a number nothing produced.** `Settings::record_boot` existed and nothing in the window called
+it, so `expected_boot` answered `None` for every device that has ever existed and `Progress::
+Fraction` was a variant the shipped program could not construct: every boot drew the counted form,
+and this section's honesty was the honesty of having nothing to be dishonest with.*
+
+*The trap in wiring it is that **the boot phase ends two ways one line apart in the run loop** —
+RetailOS asking for wheel frames, which is an observation, and `executed >= snap_at`, which is the
+fallback for the case that signal never comes. A writer that watched for the phase change and took
+`Stats::executed` records `snap_at` — the 1.6 G constant this whole section exists to stop being the
+denominator — on every machine that never reached the wheel, and files it as "this device's own last
+completed cold boot". `emu::boot_end` is the one function that tells the two apart; it answers
+`Some(None)` for the fallback and `Some(Some(n))` for the observation, `Out::booted_at` carries only
+the second, and `a_boot_that_ended_on_the_fallback_teaches_the_denominator_nothing` carries the
+substitution as its own control. A restored machine never enters `Booting` at all, so a resume
+cannot teach the denominator what a cold boot costs.*
+
+*And the difference is **drawn** rather than only modelled: a 4 px determinate rule in the cradle's
+own band, under the body, when there is a fraction — and nothing at all when there is not, which is
+this section's "no fraction and no bar" as a picture. It costs zero vertical budget: the band
+between the body's bottom edge and the cradle's bottom ring line is `CRADLE_BAND − FOCUS_GAP −
+FOCUS_RING_W` = 8 px of fixture that already exists at every size. `_out/gui/bench-booting.png` is
+the photograph, measured at 62.0 % of a 387 px track.)*
+
 ### 12.4 Parking, and what it costs
 
 `Esc` from `Running`, the drawer, or closing the window sets `Link::save_on_quit`. It is a **~1.6 GB
@@ -2664,6 +2691,32 @@ by `Discard the snapshot` when the pair is broken. Never a modifier you have to 
 **`Device::parked_at` is a stored field, not an inference** (§3.3). The shelf renders `parked ·
 4 min ago` and the model carried nothing to render it from — the same shape as the `fetched and
 verified` string literals §3.2 was written to delete.
+
+*(**Built and wired, 2026-08-24 — and the ~1.6 GB in this section is wrong about the RAM half.**
+`machine_config` gives every device its own restore point at `Settings::restore_point(name)`; `Esc`
+from `Running` and the window close both set `Link::save_on_quit` after `machine::Park` has checked
+free space against `Link::snapshot_bytes` — this machine's own memory, summed off the format that
+writes it rather than quoted from here. **The pair measures 156 657 372 bytes, about 149 MB**, on a
+5.5G through `Machine::snapshot`; the 1.6 GB figure is the frozen **drive** in copy mode, which is a
+reflink on APFS and 12 KB of real space. `a_park_and_a_restore_are_a_round_trip_and_the_frame_comes_
+back` builds a real machine, parks it, and asks the questions the next launch asks.*
+
+*§17 Q7's frame is written — `<snapshot>.parked.png`, and `png::encode` has its first production
+caller, which is what retires that module's dead-code allow. It is **read** by
+`slint::Image::load_from_path`: this document's own note said nothing in the program could decode a
+PNG, and that was true of `png.rs` and false of the crate — `slint/std` turns on
+`i-slint-core/image-decoders`, which is `image 0.25` with `png`, already compiled. `_out/gui/bench-
+parked.png` is a device with no machine at all, showing the frame it was put down on, under
+`Press the centre button — resume, about 3 s`.*
+
+*Two things this section asked for are still not there. The **numerator** is still absent, so the
+cradle reads `parking` and stops. And **`Cmd::Resume` is still not written**: what the press does is
+build the machine thread, which is where the restore happens — so a device that has never been
+started resumes in about 3 s, and a machine that has been built and powered off inside the same
+session still has no route back to its snapshot. The one thing that has changed is that **`Discard
+the snapshot` now deletes files**, because there are now files: it cleared a timestamp and left the
+pair on disk, which would have left `Config::may_restore` — which asks the files, not the library —
+resuming a machine somebody had just discarded.)*
 
 ### 12.5 Power and boot targets
 
@@ -2848,6 +2901,30 @@ even attribute an arrival to a core; §3.3 has the field it would need.
 
 `Copy this readout` puts the whole thing on the clipboard as text, which is what a bug report
 actually needs.
+
+*(**Built and wired, 2026-08-24**, and §17 Q10 is answered in the strongest form: **no**. It is not
+that `Stats::enters` lacks a second dimension — it is that the only code that records an arrival at
+all is inside `Machine::run`, the **CPU's** loop. `Machine::run_cop` is a reduced loop whose own doc
+says *"the instruments do not see the COP: a `--calls` ring, a `--profile` or a `--storelog`
+describes the CPU alone"*, and it carries no arrival capture. Every arrival ever counted is a CPU
+arrival by construction, so a second column could hold only an invented zero. **The one column
+stands and the caption claims nothing about two cores.***
+
+*`readout.rs` is the model and `ui/readout.slint` draws it; `Gauge` is §5's sixth primitive, built.
+Four decisions of this section are acted on rather than deferred: `Stats::queued` is **deleted**
+rather than allowed, because a stated retirement condition met with a *no* is a dead field;
+`sim_usec_here` earns its row and its allow comes off; the **ratio** row is still absent for want of
+a stated divisor; and the group heading carries `— stale` / `— final` in the em dash, because `·` is
+not in `geometry::GLYPHS` and §6.7's answer for a symbol is a drawn `Path` that Rust cannot make —
+the marker for a counter that restarts after a restore is `*`, with `PROVENANCE` carrying the
+legend.*
+
+*One thing this sketch asks for that reading the picture deleted: **`instructions` / `this session ·`
+and `simulated` / `simulated ·` are the same number on a cold boot**, because a restore is the only
+thing that can make either pair differ. Drawn unconditionally they print one number twice, four
+pixels apart, in the group that claims the most — which `_out/gui/readout.png` showed and no
+assertion could, each producer being right on its own. The `·` rows are drawn only on a restored
+machine, and the `PROVENANCE` paragraph is the legend for their absence.)*
 
 **`Stats::sim_usec_here` and `Stats::queued` are `#[allow(dead_code)]` today, and this design
 decides.** `sim_usec_here` earns a row — it is the honest simulated-versus-wall ratio now that idle
@@ -3706,10 +3783,15 @@ comment and cite where the numbers did come from.
 
 **Q7 — the parked frame.** §12.4 writes a 320 × 240 PNG beside the snapshot so a parked device's
 glass shows the frame it stopped on. It costs one write per park and retires `png.rs`'s dead-code
-allow — and §11.4's Snapshots group now makes both it and the 1.6 GB behind it visible and
+allow — and §11.4's Snapshots group now makes both it and the 149 MB behind it visible and
 deletable.
 **Recommendation: do it.** A shelf of parked machines that look parked rather than off is worth one
 PNG, and it is drawn at exactly `k` so it costs nothing in fidelity.
+
+> **Done, 2026-08-24.** One write per park, 230 723 bytes, and `png.rs`'s allow is off the module —
+> what is left on it is `encode_ppm`, with its own condition beside it. The decoder is Slint's own,
+> which this document did not know it had. `_out/gui/bench-parked.png` is the picture. **And the
+> figure behind it was wrong here**: the pair is about **149 MB**, not 1.6 GB — see §12.4.
 
 **Q8 — `Settings::mode` (User / Debug).** The model carries it, nothing reaches it, and this design
 has no use for it: the Readout is a drawer page anyone can open, and there is no second presentation.
@@ -3733,6 +3815,15 @@ instruction.
 **Recommendation: answer it before §12.8 is built.** If yes, `enters_by_core: [[u64; WATCHED.len()];
 2]` joins §20's list beside §3.1 and §3.2. If no, the one column is the honest drawing and the
 caption stops claiming to show what two cores are doing.
+
+> **Answered, 2026-08-24: no** — and by reading the run loop rather than the struct. The arrival
+> capture (`enter_bloom` / `enter_pcs` / `enter_log.push`) lives inside `Machine::run`, which is the
+> CPU's loop; `Machine::run_cop` is a **reduced** loop and its own doc states the consequence in as
+> many words: *"the instruments do not see the COP."* So `enters` has no per-core dimension because
+> nothing could fill one — a second column is not a missing field, it is a measurement that is not
+> taken. `enters_by_core` would need the capture added to `run_cop` first, which is a change to what
+> the coprocessor costs per instruction and therefore to every number in `research/`. The one column
+> is drawn and the caption claims nothing.
 
 **Q11 — should a plain window resize re-decide `k`?** Today it does not (§6.6): `k` is fixed when the
 window is shown and re-decided only on `ScaleFactorChanged` and `Moved`. A window dragged large

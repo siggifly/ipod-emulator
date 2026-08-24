@@ -37,6 +37,7 @@ import {
     Field,
     FieldRow,
     FixRow,
+    GaugeRow,
     GroupRow,
     OptionRow,
     PartRow,
@@ -297,6 +298,22 @@ export component MainWindow inherits Window {
     in property <bool> setting-copy-enabled: false;
     in property <string> setting-copy-reason;
 
+    // ── §12.8's Readout ──
+    //
+    // Threaded straight through to the page, exactly like the Settings block above it. The seven
+    // headings arrive already carrying their freshness (`MACHINE — stale`), because
+    // `readout::Group::line` is the one place that word is written and the clipboard copy reads the
+    // same function.
+    in property <[string]> readout-headings;
+    in property <[GaugeRow]> readout-rows;
+    in property <string> readout-provenance;
+    in property <string> readout-empty-line;
+    in property <bool> readout-has-machine: false;
+    in property <bool> readout-shot-enabled: false;
+    in property <string> readout-shot-reason;
+    in property <bool> readout-copy-enabled: false;
+    in property <string> readout-copy-reason;
+
     // ── §11.2's Composer ──
     //
     // **`composer-generation` exists for exactly one job.** Every two-press control in
@@ -380,6 +397,10 @@ export component MainWindow inherits Window {
     // The row index. `Settings::save()` runs immediately: a preference that does not survive the
     // launch it was set in is not a preference.
     callback setting-toggled(int);
+
+    // §12.8's two pinned actions, by row ordinal — the same shape as `setting-toggled`, so one
+    // handler covers both and Rust decides what each one does.
+    callback readout-act(int);
 
     callback composer-open(int);
     callback composer-expand(int, bool);
@@ -681,6 +702,12 @@ export component MainWindow inherits Window {
                 // a drive for, and §7.3 calls that one unfinished rather than broken.
                 cradle-broken: root.has-devices && root.current.cradle-broken;
                 startable: root.current.startable;
+                // §12.3, straight off the row. **`has-devices` is not in it and must not be**: the
+                // empty bench's `DeviceRow` is `main::empty_device`'s, which is `..Default::
+                // default()` — `boot-measured` is already false there, so an extra guard here
+                // would be a second answer to a question the model has one answer for.
+                boot-measured: root.current.boot-measured;
+                boot-fraction: root.current.boot-fraction;
 
                 shelf-name: root.current.name;
                 shelf-state: root.current.state;
@@ -780,6 +807,19 @@ export component MainWindow inherits Window {
                 setting-file-path: root.setting-file-path;
                 setting-copy-enabled: root.setting-copy-enabled;
                 setting-copy-reason: root.setting-copy-reason;
+
+                readout-headings: root.readout-headings;
+                readout-rows: root.readout-rows;
+                readout-provenance: root.readout-provenance;
+                readout-empty-line: root.readout-empty-line;
+                readout-has-machine: root.readout-has-machine;
+                readout-shot-enabled: root.readout-shot-enabled;
+                readout-shot-reason: root.readout-shot-reason;
+                readout-copy-enabled: root.readout-copy-enabled;
+                readout-copy-reason: root.readout-copy-reason;
+                readout-act(i) => {
+                    root.readout-act(i);
+                }
 
                 composer-title: root.composer-title;
                 composer-which-value: root.composer-which-value;

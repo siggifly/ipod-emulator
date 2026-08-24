@@ -89,6 +89,20 @@ i-slint-backend-winit = { version = "1.17", default-features = false, features =
 # `copypasta` and `winit`, with a different `NSScreen` API. The pointer winit hands over is an
 # opaque ObjC object either way, so reinterpreting it as the 0.3 type is sound; resolving the `use`
 # against the 0.2 crate would not compile.
+# ── Free space, for docs/GUI.md §12.4's park (`machine::free_bytes`) ─────────────────────────────
+#
+# **Already in the tree at this version**, exactly like `objc2` above: `cargo tree -p ipod-gui
+# --prefix none | grep '^libc '` printed `libc v0.2.189` before this line existed, through winit.
+# Declaring it adds no compilation; it only makes it importable, which a transitive dependency is
+# not. `cargo tree -p ipod-gui --prefix none | sed 's/ (\*)//' | sort -u | wc -l` is the same before
+# and after.
+#
+# There is no free-space API in `std`, and §12.4 requires the check to run BEFORE `save_on_quit` is
+# set — a park that fails for lack of space fails at window close, where there is no window left to
+# report it in. `statvfs` is the whole of what is used.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 #
 # `NSWorkspace` joins `NSScreen` for docs/GUI.md §8.4: `accessibilityDisplayShouldReduceMotion` is

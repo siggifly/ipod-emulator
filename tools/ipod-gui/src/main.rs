@@ -38,6 +38,11 @@
 // which is the thing `MACHINE_TAKES_INPUT` is false for. Their own tests still run, so this is
 // unreferenced code and not unverified code.
 //
+// **`png` came off that list with §12.4.** `png::encode` writes the frame a parked device's glass
+// shows and the Readout's `Screenshot the panel` row, so the module is reached from the shipped
+// binary; what is still unreferenced is `encode_ppm`, which carries its own condition beside
+// itself. That is the shape a retiring blanket is supposed to leave behind.
+//
 // **The allow is a debt and it has a retirement condition**, in the shape research/04 uses for
 // bypasses: each comes off when its own surface lands, and at that point anything *still*
 // unreferenced is genuinely dead and gets deleted rather than allowed. Scoped per module
@@ -53,13 +58,19 @@
 // `wheel` as well is the part worth naming — Running and input are two surfaces, and one condition
 // for both would have retired with the wrong half.
 //
+// **And each of those conditions named `Gone::Machine`, which no longer exists.** That class said
+// *this build starts no machine yet*; five of its flags came back with `emu::run`'s first caller
+// and the rest are re-sorted onto `Gone::Device` and `Gone::Instrument` — so the four surviving
+// conditions here name the class that is actually refusing them. A retirement condition citing a
+// reason that has expired is the same defect as a comment citing a line that has moved, and this
+// file has a sweep for the second.
+//
 // **`update` used to be a fifth and is not any more.** `--check-update` calls it, so the module
 // is reachable in the shipped binary and its allow came off; the one item still waiting for §17's
 // Reference page carries its own condition, beside itself, where it can be read.
 #[allow(dead_code)]
 mod control;
 mod emu;
-#[allow(dead_code)]
 mod png;
 #[allow(dead_code)]
 mod wheel;
@@ -84,6 +95,16 @@ mod wheel;
 // `parked_frame` is §12.4's park, which nothing writes. A blanket would have said the same thing
 // about all ten and about the next one to arrive.
 mod machine;
+
+// **And §12.8's Readout, which is `machine`'s other half.** `machine.rs` is what a machine IS;
+// this is every counter it publishes, as Gauges. It arrives wired — there was never a moment when
+// it existed and nothing called it, which is the shape the blanket above was written about.
+//
+// It is what retires the five conditions `machine.rs` and `emu.rs` were carrying for *"§12.8's
+// Readout is drawn"*: `Freshness`, `Freshness::of`, `SAMPLE_FRESH_MS`, `Life::stalled` and
+// `STALL_SECS`. `Stats::queued` carried one too and did **not** come back: §12.8 decides that field
+// does not earn a row, so it is deleted rather than allowed.
+mod readout;
 
 // These eleven are wired.
 //
@@ -272,10 +293,14 @@ fn main() -> Result<(), slint::PlatformError> {
     // is reached only by a launch that asked for the window. Nothing in `args` can open one: the
     // window arm is matched off here, before `run` is called with anything.
     let cli = args::parse(&std::env::args().skip(1).collect::<Vec<_>>());
-    if cli != args::Cli::Window {
+    // **`Window` carries §12's four flags now**, so this is a `let else` rather than an equality:
+    // `--cold`, `--clock=`, `--second-core` and `--charger` open the window as usual and configure
+    // the machine it starts, and they reach `machine_config` by being handed to `wire`. A launch
+    // flag read out of a global would be the one thing no test could see.
+    let args::Cli::Window(launch) = cli else {
         let code = args::run(&cli, &mut std::io::stdout(), &mut std::io::stderr());
         std::process::exit(code);
-    }
+    };
 
     opaque_window()?;
 
@@ -302,7 +327,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // `slint::Timer` stops the moment it is dropped (`i-slint-core-1.17.1/timers.rs:44`), so
     // `wire(&window, …);` on its own would compile, run, register everything — and leave the first
     // run with nothing moving it, with no error anywhere. `_wiring` is what stops that.
-    let _wiring = wire(&window, settings.clone());
+    let _wiring = wire(&window, settings.clone(), launch);
 
     // ── The fit: what size the iPod is drawn at, and whether it can be drawn at all ──
     //
@@ -456,7 +481,7 @@ fn main() -> Result<(), slint::PlatformError> {
 ///
 /// The fit and the winit event filter stay in `main`: both need a window on a display, and the
 /// filter must be registered **exactly once** in the whole program.
-fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
+fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>, launch: args::Machine) -> Wiring {
     // §10.4: **every download in this program goes through `curl`.** `caps()` measures it once per
     // launch, by running the tool rather than by walking `PATH` — a `PATH` walk is a second
     // implementation of what the OS is about to do, and it is wrong on Windows where the extension
@@ -487,7 +512,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
     let devices: Rc<VecModel<DeviceRow>> = Rc::new(VecModel::default());
     window.set_devices(ModelRc::from(devices.clone()));
     window.set_screen_source(dark_screen());
-    window.set_panel_description(panel_description(&machine::Life::Off).into());
+    window.set_panel_description(panel_description(&machine::Glass::Dark).into());
     // §12.2's `Off`: nothing is executing and the glass is dark. Pushed rather than left to the
     // markup's default so that the one place these four are decided is `pump_machine`, and this is
     // the same call with the same argument for the state a window opens in.
@@ -711,6 +736,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
                 caps,
                 cost,
                 &live,
+                launch,
             );
         })
     };
@@ -729,10 +755,33 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
         let m_timer = machine_timer.clone();
         let live = live.clone();
         let devices = devices.clone();
+        // §12.3's denominator and §12.4's park time are the two things a running machine teaches
+        // the library, and this is the tick that sees both — see `pump_machine`.
+        let settings = settings.clone();
         let weak = window.as_weak();
         Rc::new(move || {
             let Some(w) = weak.upgrade() else { return };
-            if !pump_machine(&w, &live, &devices) {
+            let learned = pump_machine(&w, &live, &devices, &settings.borrow());
+            // ── The two things a running machine teaches the library ────────────────────────────
+            //
+            // Written here rather than inside the tick, so the function that draws sixty times a
+            // second never holds the library — see [`Learned`]. Both are latched at source, so
+            // this branch is taken once per machine and not once per frame.
+            if learned.boot.is_some() || learned.parked.is_some() {
+                let mut s = settings.borrow_mut();
+                if let Some(n) = learned.boot {
+                    s.record_boot(n);
+                }
+                if let Some((name, at)) = &learned.parked {
+                    // *When*, never *whether* (§3.3): whether there is anything to resume is a
+                    // question about the two files on disk, and `machine::Restore` is what asks it.
+                    s.record_park(name, *at);
+                }
+                if let Err(e) = s.save() {
+                    eprintln!("what the machine reported could not be written ({e})");
+                }
+            }
+            if !learned.watching {
                 // **Nothing is running, so stop looking.** The same rule the build tick keeps, and
                 // for the same reason: a 60 Hz wakeup for the life of a window with no machine in
                 // it is a cost nobody agreed to.
@@ -934,7 +983,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
                     // §12.2's handoff. Everything but the boot was done and the boot was Phase 7;
                     // this is Phase 7, so the plan hands the finished iPod to the machine rather
                     // than naming a terminal command that would do it for us.
-                    hand_off(&live, &settings, &rail, &name);
+                    hand_off(&live, &settings, &rail, &name, launch);
                     ticking_machine();
                 }
                 Route::Existing(Ok(name)) => {
@@ -943,7 +992,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
                     // escape hatch; the escape hatch is still there and is no longer the only
                     // route. `run_device` has already made this the live device, so the config is
                     // built from the fields it resolved rather than from a second lookup.
-                    let started = start_machine(&live, &settings.borrow(), index as usize);
+                    let started = start_machine(&live, &settings.borrow(), index as usize, launch);
                     match started {
                         Ok(()) => ticking_machine(),
                         Err(f) => {
@@ -1763,6 +1812,48 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
     };
     repaint.borrow_mut().push(repaint_settings.clone());
 
+    // ── §12.8's Readout ─────────────────────────────────────────────────────────────────────────
+    //
+    // **Two retained models, and the page is re-pushed from two places.** The registry below covers
+    // every press and every library change; §12.8's own cost discipline covers the rest — *"the
+    // Readout polls at 8 Hz, not per frame"* — and that is `pump_once`'s tick, which runs at 10 Hz
+    // and already runs `repaint()`. So the numbers move while the page is open without a third
+    // timer, and nothing walks a machine's counters while the page is shut.
+    let readout_rows: Rc<VecModel<GaugeRow>> = Rc::new(VecModel::default());
+    let readout_headings: Rc<VecModel<slint::SharedString>> = Rc::new(VecModel::default());
+    window.set_readout_rows(ModelRc::from(readout_rows.clone()));
+    window.set_readout_headings(ModelRc::from(readout_headings.clone()));
+    let repaint_readout: Repaint = {
+        let rows = readout_rows.clone();
+        let headings = readout_headings.clone();
+        let stack = stack.clone();
+        let live = live.clone();
+        let weak = window.as_weak();
+        Rc::new(move || {
+            let Some(w) = weak.upgrade() else { return };
+            if !on_screen(&stack.borrow(), nav::Page::Readout) {
+                return;
+            }
+            push_readout(&w, &rows, &headings, live.borrow().as_ref());
+        })
+    };
+    repaint.borrow_mut().push(repaint_readout.clone());
+
+    // §12.8's two pinned actions, by row ordinal.
+    {
+        let live = live.clone();
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let work = work.clone();
+        let weak = window.as_weak();
+        window.on_readout_act(move |which| {
+            let Some(w) = weak.upgrade() else { return };
+            let note = readout_act(&live, which);
+            rail.borrow_mut().note(&note);
+            sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+        });
+    }
+
     {
         let prefs = prefs.clone();
         let settings = settings.clone();
@@ -1810,6 +1901,13 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
         let settings = settings.clone();
         let repaint_all = repaint_all.clone();
         let live = live.clone();
+        // §12.4's park files §9.3's `space` refusal when there is no room, and keeps the 60 Hz
+        // timer running while the write happens — so `Esc` needs the Rail and the machine timer
+        // that every other route to a machine already has.
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let work = work.clone();
+        let ticking_machine = ticking_machine.clone();
         let weak = window.as_weak();
         window.on_escape_pressed(move || {
             // §12.2's four phases, `Off` included — read from the machine rather than assumed.
@@ -1820,19 +1918,70 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
             // screen — §20 item 12's `RefMut` living to the end of a `match` is exactly this shape.
             let what = { stack.borrow_mut().escape(is_booting(&p), is_running(&p)) };
             match what {
-                // §12.4's park and §12.5's power-off, and **neither is wired**. `Stack::escape`
-                // asks for them the moment a machine is booting or running, and this build has one
-                // — so these two arms are now reachable and do nothing, which is worse than they
-                // were when they were unreachable and did nothing.
+                // ── §12.4's park, and it is a route now rather than a retirement condition ──
                 //
-                // **Retirement condition**, in the shape `research/04` uses: `Park` comes off when
-                // `Config::snapshot` is set and `Link::save_on_quit` has a free-space check in
-                // front of it (§12.4 requires both — a park that fails for lack of space fails at
-                // window close, where there is no window left to show §9.3's `space` class in);
-                // `PowerOff` comes off with the drawer's device page, which is where §12.5 puts
-                // the power controls. Named here rather than left blank, because an empty arm on a
-                // reachable route is the phantom §19.1 calls fatal.
-                nav::Escape::Park | nav::Escape::PowerOff => {}
+                // Both arms were empty and reachable, which is worse than unreachable and empty.
+                // The condition written here was *`Config::snapshot` is set and `Link::save_on_quit`
+                // has a free-space check in front of it*, and both halves are met:
+                // `machine_config` gives every device its own restore point and `Live::ask_to_park`
+                // asks `machine::Park` before it sets the flag.
+                //
+                // **Short of room, the machine still stops — it just does not park.** §12.4's own
+                // rule, and this is the route that *can* say so: there is a window here, so §9.3's
+                // `space` class lands on the Rail with the two figures in it. The window-close
+                // route has no such surface, which is the difference §12.4 is written about.
+                nav::Escape::Park => {
+                    let room = {
+                        let held = live.borrow();
+                        held.as_ref().map(Live::ask_to_park)
+                    };
+                    if let Some(room) = room {
+                        if room.short() {
+                            rail.borrow_mut().failed(
+                                "parking",
+                                "the machine",
+                                rail::Failure::saying(
+                                    // Pre-flight, not mid-write: §12.4's whole point is that the
+                                    // check happens before a byte is written, so the class that
+                                    // says *nothing was written* is the true one.
+                                    rail::Class::SpacePreflight,
+                                    "writing the restore point",
+                                    format!(
+                                        "there is not room for it — {}. The machine stopped \
+                                         without parking, so the next start is a cold boot.",
+                                        room.sentence()
+                                    ),
+                                ),
+                            );
+                            // **Pushed here rather than left to `repaint_all` below**, which walks
+                            // the page registry and does not touch the Rail: every other handler
+                            // that files a failure calls this on the spot, and one that did not
+                            // would file a refusal nothing on screen carried until the next tick.
+                            if let Some(w) = weak.upgrade() {
+                                sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+                            }
+                        }
+                        // The park runs on the emulator thread; the cradle says `parking` while it
+                        // does and `pump_machine` is what notices it finish. So the timer has to be
+                        // running even though nothing on the panel is moving any more.
+                        ticking_machine();
+                    }
+                }
+                // §12.5, and §12.4's reason for not parking here: *parking a boot is a 1.6 GB write
+                // of a state nobody wants*. `machine::permits` is asked because every refusal in it
+                // is a physical statement — you cannot power off a machine that is off — and this
+                // arm is only ever reached from `Booting`, which is alive.
+                nav::Escape::PowerOff => {
+                    let held = live.borrow();
+                    if let Some(l) = held.as_ref() {
+                        let life = l.life();
+                        if machine::permits(&life, &emu::Cmd::PowerOff) {
+                            l.link.command(emu::Cmd::PowerOff);
+                        }
+                    }
+                    drop(held);
+                    ticking_machine();
+                }
                 // **The Stack holds an id; the page holds the row.** `escape` clears the id, and
                 // until now nothing cleared the cursor underneath it — so `Esc` on an open Expand
                 // closed the Stack's idea of it and the next repaint drew the row open again, from
@@ -1989,6 +2138,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
         let settings = settings.clone();
         let work = work.clone();
         let rail = rail.clone();
+        let live = live.clone();
         window.window().on_close_requested(move || {
             // **Asked to stop BEFORE the save, and it does not join.** `JoinHandle::join` has no
             // timeout, so a window that waited for a worker stuck on a hung network mount would
@@ -2003,6 +2153,36 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>) -> Wiring {
                 let mut s = settings.borrow_mut();
                 let mut r = rail.borrow_mut();
                 work.borrow_mut().stop(&mut s, &mut r);
+            }
+            // ── §12.4's third route: closing the window parks ────────────────────────────────
+            //
+            // **This one does join**, which is the opposite of `Esc`'s rule and is right for the
+            // opposite reason: there is no window left to say `parking` in, so there is nothing to
+            // keep responsive — and the park has to finish before the settings are written below
+            // or `Device::parked_at` names a restore point that is not there yet. The `Arc<Link>`
+            // is cloned out before the `Live` is dropped, because dropping it is what joins.
+            //
+            // **A park that has no room is silent here and that is the honest limit.** §12.4 wants
+            // the report on the next launch's Work page; nothing in this program carries a note
+            // across a launch, so what a person sees instead is the consequence — the next start
+            // says `cold boot, about 75 s` rather than `resume, about 3 s`, because
+            // `machine::Restore` asks the two files rather than a promise.
+            //
+            // **Retirement condition**: this gains the sentence the moment something survives a
+            // launch to carry it — a `Rail` note read back at startup, which nothing writes.
+            let parked = {
+                let taken = live.borrow_mut().take();
+                taken.map(|l| {
+                    let (link, name) = (l.link.clone(), l.device.name.clone());
+                    l.ask_to_park();
+                    drop(l);
+                    (name, link.parked.load(std::sync::atomic::Ordering::Relaxed))
+                })
+            };
+            if let Some((name, at)) = parked {
+                if at > 0 {
+                    settings.borrow_mut().record_park(&name, at);
+                }
             }
             if let Err(e) = settings.borrow().save() {
                 eprintln!(
@@ -2156,6 +2336,9 @@ fn pump_once(
     // refresh on this tick has to know which row is a machine's, or it would overwrite §12.2's
     // caption with the device's own the moment a download finished.
     live: &Rc<RefCell<Option<Live>>>,
+    // …and §12's four flags, because §12.2's handoff below starts a machine and every route that
+    // starts one has to build the same config. See `args::Machine`.
+    launch: args::Machine,
 ) {
     // Scoped exactly like the press, and for the same reason: nothing below re-enters a borrow.
     let tick = {
@@ -2226,7 +2409,7 @@ fn pump_once(
     // §12.2's handoff. Every step but the boot is done, and the boot is what this tick hands over:
     // the plan made an iPod and the machine starts it, which is what the plan was for.
     if let Some(name) = tick.ready {
-        hand_off(live, settings, rail, &name);
+        hand_off(live, settings, rail, &name, launch);
         sync_rail(window, rows, &rail.borrow(), caps, work.borrow().shape());
     }
 
@@ -2347,6 +2530,21 @@ struct Live {
     life: RefCell<machine::Life>,
     /// `Out.fb_seq` at the last texture upload, so an unchanged frame skips the conversion (§12.1).
     seq: Cell<u64>,
+    /// `Out.booted_at` as of the last sample — §12.3's denominator, if this boot's end was seen.
+    booted: Cell<Option<u64>>,
+    /// §12.3's denominator has been learned from **this** boot and written to the library.
+    ///
+    /// A latch, because `Out.booted_at` goes on being `Some` for the whole session after the boot
+    /// ends: without it the window would rewrite one number and save the settings file sixty times
+    /// a second for as long as the machine ran.
+    learned: Cell<bool>,
+    /// §12.4: this machine has been asked to write its restore point and stop.
+    ///
+    /// The park is the emulator thread's — it happens in the quit branch of the run loop — so the
+    /// UI thread sets the two flags, keeps ticking, and reads `Link::saving` for the caption.
+    /// **Nothing here joins**: a UI thread that waited for a 64 MB write would be the window
+    /// appearing to hang, which is the exact thing §12.4 puts a sentence on the cradle to avoid.
+    parking: Cell<bool>,
 }
 
 impl Live {
@@ -2375,6 +2573,10 @@ impl Live {
             Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
         };
         *self.life.borrow_mut() = machine::Life::read(&out, &self.cfg.boot, self.denominator);
+        // §12.3's denominator, carried out under the same lock rather than fetched by a second
+        // one — this function's own doc says it is the only place that locks `Out`, and a reader
+        // that took the mutex again to ask one more question would make that false.
+        self.booted.set(out.booted_at);
         if out.fb_seq == self.seq.get() {
             return None;
         }
@@ -2393,6 +2595,44 @@ impl Live {
             // parks, the caption is already telling the truth about it.
             parking: self.link.saving.load(std::sync::atomic::Ordering::Relaxed),
         }
+    }
+
+    /// §12.4's free-space check, **against this machine's own memory**.
+    ///
+    /// `Link::snapshot_bytes` is what the run loop measured off the snapshot format at build time,
+    /// not §12.4's quoted "~1.6 GB" — that figure is about the frozen *drive*, and a check that
+    /// used it in direct mode would refuse to park a 66 MB restore point on a volume with a
+    /// gigabyte free.
+    fn room_to_park(&self) -> machine::Park {
+        let needed = self.link.snapshot_bytes.load(std::sync::atomic::Ordering::Relaxed);
+        let dir = self
+            .cfg
+            .snapshot
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .unwrap_or_else(|| std::path::Path::new("."));
+        machine::Park::of(needed, dir)
+    }
+
+    /// **Ask this machine to park, and stop it either way.** §12.4, and the order is its.
+    ///
+    /// The check runs *before* `save_on_quit` is set, because a park that fails for want of space
+    /// fails at the write, where there is nothing left to report it to. Short of room, the machine
+    /// stops without parking and the caller has the [`machine::Park`] to say so with — which is the
+    /// half §12.4 says the window close cannot have and this route can.
+    ///
+    /// **Nothing here joins.** `quit` is read at the top of every slice, the park happens on the
+    /// emulator thread, and `Link::saving` is what the cradle reads while it does. The `Live` is
+    /// dropped by `pump_machine` when the thread has actually finished.
+    fn ask_to_park(&self) -> machine::Park {
+        use std::sync::atomic::Ordering::Relaxed;
+        let room = self.room_to_park();
+        if !room.short() {
+            self.link.save_on_quit.store(true, Relaxed);
+            self.parking.set(true);
+        }
+        self.link.quit.store(true, Relaxed);
+        room
     }
 }
 
@@ -2423,15 +2663,33 @@ impl Drop for Live {
 /// fields, `Settings::missing` has already stat'd both, and the refusal for either being absent is
 /// filed on the Rail with the model's own words rather than invented here.
 ///
-/// **Everything it does not set is a decision.** `snapshot` is `None`, so this build never writes a
-/// 1.6 GB restore point and never resumes one — which makes §7.3's parked rows unreachable rather
-/// than wrong, `machine::Restore` answer `Never`, and the cradle promise `cold boot, about 75 s`,
-/// which is what pressing costs. §12.4's park is the next pass and it needs a numerator and a
-/// denominator nothing publishes yet. `work_on_copy` is the device's own setting and defaults to
-/// off, which is what the hardware does: the iPod writes to its drive.
-fn machine_config(s: &Settings) -> Option<emu::Config> {
+/// **`snapshot` is set, and that one line is the whole of §12.4 becoming reachable.** It was
+/// `None`, which made §7.3's parked rows unreachable, `machine::Restore` answer `Never` for every
+/// device and the cradle promise `cold boot, about 75 s` whatever was on disk. It is
+/// `Settings::restore_point(name)` now — one file per device, under its own name, in one place the
+/// model owns, so a park and §11.4's `Discard the snapshot` cannot be about two different files.
+///
+/// **The directory is created here, not at the park.** `machine::Park` stats it for free space
+/// before `save_on_quit` is set, and `statvfs` on a path that does not exist answers `None` — an
+/// unmeasured free space, which parks rather than refusing. Creating it at the instant the path is
+/// decided is what makes the check a measurement rather than a shrug.
+///
+/// **Everything else it does not set is still a decision.** `work_on_copy` is the device's own
+/// setting and defaults to off, which is what the hardware does: the iPod writes to its drive.
+fn machine_config(s: &Settings, name: &str) -> Option<emu::Config> {
     let disk = s.disk.clone()?;
+    let snapshot = eapp_loader::settings::restore_point(name);
+    if let Some(dir) = snapshot.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
     Some(emu::Config {
+        // The other half of the pair in copy mode, under the snapshot's own stem — the rule
+        // `Config::stamp` and `Config::parked_frame` already follow. It was `PathBuf::new()` from
+        // `Config::default()`, which `pair_is_whole` reads as *does not exist*: a copy-mode device
+        // would have written a snapshot, failed to freeze a drive beside it, and deleted the
+        // snapshot again on every park. Direct mode never touches it.
+        frozen: snapshot.with_extension("frozen"),
+        snapshot: Some(snapshot),
         nor: s.nor.clone(),
         // **`workdisk` IS the drive unless the device asked for a copy**, and `clone_disk` returns
         // early when the two are the same path. That is the default because it is what the hardware
@@ -2449,8 +2707,12 @@ fn machine_config(s: &Settings) -> Option<emu::Config> {
         clock: eapp_loader::CLOCK,
         // The gap between two appended wheel steps. `emu.rs`'s own default, named there.
         click_gap: 300_000,
-        // Nothing writes a snapshot here, so this is only what it also is: the fallback that ends
-        // `Phase::Booting` if RetailOS never asks for wheel frames. See `emu::SNAP_AT`.
+        // **Two things, and only one of them is this window's.** It is the instruction count a
+        // copy-mode machine writes its restore point at — and it is the **fallback that ends
+        // `Phase::Booting`** when RetailOS never asks for wheel frames. §12.4's park is at the
+        // quit, not here, so in the default direct mode this number is only ever the second of
+        // those. See `emu::SNAP_AT` and `emu::boot_end`, which is where the two endings are told
+        // apart rather than read as one.
         snap_at: emu::SNAP_AT,
         boot: emu::BootTarget::Os,
         ..emu::Config::default()
@@ -2467,6 +2729,10 @@ fn start_machine(
     live: &Rc<RefCell<Option<Live>>>,
     settings: &Settings,
     index: usize,
+    // §12's four command-line flags, from `args::parse` by way of `wire`. `Machine::default()` is
+    // a plain launch, and every one of them is a property of THIS launch rather than of the device
+    // — which is the test `args::Machine`'s own doc applies to decide what may be a flag at all.
+    launch: args::Machine,
 ) -> Result<(), rail::Failure> {
     *live.borrow_mut() = None;
 
@@ -2480,7 +2746,7 @@ fn start_machine(
             ),
         ));
     };
-    let Some(cfg) = machine_config(settings) else {
+    let Some(mut cfg) = machine_config(settings, &d.name) else {
         // `run_device` resolved a drive into `Settings::disk` a moment ago, so this is a window
         // defect rather than a library one — and it is said rather than unwrapped, because a panic
         // here takes the window down over a press.
@@ -2490,6 +2756,12 @@ fn start_machine(
             format!("{} resolved and then named no drive", d.name),
         ));
     };
+    // **The command line, over the library, and in that order.** `machine_config` builds the
+    // machine the *device* describes; these four say what this *launch* is doing to it. Written
+    // second so a `--clock=5` beats `eapp_loader::CLOCK` rather than the other way round, and
+    // narrow by construction: `Machine::apply` writes four fields and nothing else can reach the
+    // config from a command line at all.
+    launch.apply(&mut cfg);
 
     let link = emu::Link::new();
     let thread = {
@@ -2527,6 +2799,9 @@ fn start_machine(
             progress: machine::Progress::read(0, settings.expected_boot()),
         }),
         seq: Cell::new(0),
+        booted: Cell::new(None),
+        learned: Cell::new(false),
+        parking: Cell::new(false),
     });
     Ok(())
 }
@@ -2568,6 +2843,7 @@ fn hand_off(
     settings: &Rc<RefCell<Settings>>,
     rail: &Rc<RefCell<rail::Rail>>,
     name: &str,
+    launch: args::Machine,
 ) {
     let resolved = {
         let mut s = settings.borrow_mut();
@@ -2582,7 +2858,7 @@ fn hand_off(
         ));
         return;
     };
-    let outcome = start_machine(live, &settings.borrow(), index);
+    let outcome = start_machine(live, &settings.borrow(), index, launch);
     if let Err(f) = outcome {
         rail.borrow_mut().failed("start", name, f);
     }
@@ -2595,27 +2871,101 @@ fn hand_off(
 /// materially less — no library walk, no `stat`, no save — because everything it draws comes out of
 /// one `try_lock` of `Out` and the device it was handed at the press.
 ///
-/// **`false` means there is nothing left to watch**, which is what stops the timer: no machine.
-/// A machine that has *stopped* is still watched, because `Live::drop` is what ends it and nothing
-/// has dropped it — the last frame is on the glass and the cradle is carrying the reason.
-fn pump_machine(window: &MainWindow, live: &Rc<RefCell<Option<Live>>>, devices: &Rc<VecModel<DeviceRow>>) -> bool {
+/// **`watching: false` means there is nothing left to watch**, which is what stops the timer: no
+/// machine. A machine that has *stopped* is still watched, because `Live::drop` is what ends it and
+/// nothing has dropped it — the last frame is on the glass and the cradle is carrying the reason.
+///
+/// **It does not write to the library, and [`Learned`] is why it does not have to.** A running
+/// machine teaches the library two things — §12.3's denominator and §12.4's park time — and both
+/// arrive here because this is the tick that watches `Out`. Handing them back rather than saving
+/// them is what keeps *no library walk, no `stat`, no save* true of a function that runs sixty
+/// times a second, and it keeps every shot of this window in `every_page_this_window_draws…` from
+/// needing a settings file to be taken.
+fn pump_machine(
+    window: &MainWindow,
+    live: &Rc<RefCell<Option<Live>>>,
+    devices: &Rc<VecModel<DeviceRow>>,
+    // **The library, for §7.3's caption and for nothing else.** `cradle_of` asks it where a
+    // device's restore point is when there is no machine; on this path there is one, and the
+    // `Some` arm reads the machine's own `Config`. It is here because one function words that
+    // caption for both cases and a second entrance to it is how one iPod comes to be described two
+    // ways — which is the defect `blocked_label` was keyed on `Blocked` to close.
+    settings: &Settings,
+) -> Learned {
+    // **The park's own ending, and it is checked before anything is drawn.** A machine asked to
+    // park keeps ticking so the cradle can say `parking`; when the thread has actually finished,
+    // the restore point is on disk and the `Live` goes. `is_finished` rather than `join`, because
+    // joining here is the UI thread waiting on a 66 MB write.
+    let done = {
+        let held = live.borrow();
+        held.as_ref()
+            .filter(|l| l.parking.get())
+            .filter(|l| l.thread.as_ref().is_none_or(std::thread::JoinHandle::is_finished))
+            .map(|l| {
+                (
+                    l.device.name.clone(),
+                    l.link.parked.load(std::sync::atomic::Ordering::Relaxed),
+                )
+            })
+    };
+    if let Some((name, at)) = done {
+        // The `Live` goes here rather than in the caller: dropping it joins a thread that has
+        // already exited, and leaving it standing would keep the drive open and the timer running
+        // over a machine that no longer exists.
+        *live.borrow_mut() = None;
+        // Zero is a park that did not complete — see `Link::parked`, which is set only after both
+        // halves of the pair are on disk. `Device::parked_at` must not name a restore point that
+        // is not there, so nothing is learned and the next start says `cold boot`.
+        return Learned { parked: (at > 0).then_some((name, at)), ..Learned::default() };
+    }
+
     let held = live.borrow();
     let Some(l) = held.as_ref() else {
-        return false;
+        return Learned::default();
     };
+    let mut learned = Learned { watching: true, ..Learned::default() };
     // **One read of `Out`, and everything below is what it said.** `sample` updates the cached
     // phase and hands back a texture only when `fb_seq` moved (§12.1) — so the phase this tick
     // draws and the frame it draws are the same instant, which is not true of two reads.
     let frame = l.sample();
     let life = l.life();
-    if let Some(img) = glass(frame, &life) {
+    // ── §12.3's denominator, learned from a boot that was OBSERVED to end ───────────────────────
+    //
+    // **Nothing in this program had ever written `Device::boot_instructions`**, so `expected_boot`
+    // answered `None` on every device that has ever existed and `Progress::Fraction` was a variant
+    // the shipped window could not construct: every boot drew the counted form and the honesty
+    // §12.3 is about was the honesty of having nothing to be dishonest with. This is the writer.
+    //
+    // `Out::booted_at` is `Some` only for `emu::boot_end`'s observed arm, which is what stops this
+    // recording `snap_at` — a constant — as *this device's own last completed cold boot* on every
+    // machine RetailOS never reached the wheel on. The latch is `Live::learned`: `booted_at` stays
+    // `Some` for the rest of the session, and without it this would save the settings file sixty
+    // times a second.
+    if !l.learned.get() {
+        if let Some(n) = l.booted.get() {
+            l.learned.set(true);
+            learned.boot = Some(n);
+        }
+    }
+    // §12.4's parked frame, asked for **only when nothing is executing**, which is the one state
+    // `Glass::of` consults it in. Asking on every tick would be a `stat` sixty times a second for a
+    // file that cannot be relevant while a machine is drawing over it.
+    let parked = matches!(life, machine::Life::Off)
+        .then(|| machine::parked_frame(&l.cfg, &mut Presence::new()))
+        .flatten();
+    let on_glass = machine::Glass::of(&life, parked.as_deref());
+    if let Some(img) = glass(frame, &on_glass) {
         window.set_screen_source(img);
     }
     window.set_running(is_running(&life));
-    // §12.2's glass column, which is three of the four phases and not just `Running` — see
-    // `panel-lit` in `ui/window.slint`.
-    window.set_panel_lit(!matches!(life, machine::Life::Off));
-    window.set_panel_description(panel_description(&life).into());
+    // §12.2's glass column — **and it is a question about the glass, not about the phase.** It read
+    // `!matches!(life, Off)`, which is the same answer for three of the four phases and the wrong
+    // one for the fourth: a machine that has been powered off with a restore point beside it has
+    // §12.4's frame on the panel, and an unlit panel draws it at `opacity: 0`. §12.6 lists the same
+    // set — *Booting, Running, Stopped with its last frame, or parked with a `.parked.png`* — which
+    // is exactly `Glass` minus `Dark`.
+    window.set_panel_lit(!matches!(on_glass, machine::Glass::Dark));
+    window.set_panel_description(panel_description(&on_glass).into());
     // §7.4's sentence, and **which** sentence depends on a state the markup cannot see: there is a
     // machine here, so *there is no machine* would be false. `machine::no_machine` words the case
     // where there is not.
@@ -2627,26 +2977,56 @@ fn pump_machine(window: &MainWindow, live: &Rc<RefCell<Option<Live>>>, devices: 
     // (§16.9): the caption carries a speed that changes every tick, and handing the model a fresh
     // row per tick tears down the repeater instance the cradle's focus ring is on.
     if let Some(mut row) = devices.row_data(l.index) {
-        let cradle = cradle_of(Press::Centre, &l.device, &l.absent, Some(l));
+        let cradle = cradle_of(Press::Centre, settings, &l.device, &l.absent, Some(l));
         let state: slint::SharedString = shelf_state(&l.device, &life).into();
         let label: slint::SharedString = cradle.label.into();
-        let press: slint::SharedString = cradle_of(Press::Here, &l.device, &l.absent, Some(l)).label.into();
+        let press: slint::SharedString =
+            cradle_of(Press::Here, settings, &l.device, &l.absent, Some(l)).label.into();
         let ring = ring(cradle.ring);
+        // §12.3's rule. It moves on almost every tick while a machine is booting, which is exactly
+        // what it is for — and is why it is in the same in-place update as the caption rather than
+        // a second `set_row_data` of its own.
+        let (measured, fraction) = boot_rule(&life);
         if row.cradle_label != label
             || row.press_label != press
             || row.state != state
             || row.cradle_ring != ring
             || row.cradle_broken != cradle.broken
+            || row.boot_measured != measured
+            || row.boot_fraction != fraction
         {
             row.cradle_label = label;
             row.press_label = press;
             row.state = state;
             row.cradle_ring = ring;
             row.cradle_broken = cradle.broken;
+            row.boot_measured = measured;
+            row.boot_fraction = fraction;
             devices.set_row_data(l.index, row);
         }
     }
-    true
+    learned
+}
+
+/// **What one tick of the machine found out that only the library can keep.**
+///
+/// Three fields and each is a different kind of fact. `watching` is about this tick — is there
+/// still a machine to look at, which is what decides whether the 60 Hz timer runs. The other two
+/// are once per machine, latched inside [`Live`] so a tick that repeats them is not a tick that
+/// rewrites the settings file: §12.3's cold-boot cost, and §12.4's park time.
+///
+/// It exists so [`pump_machine`] can stay a function that draws. The alternative was handing it the
+/// library, and a drawing function that holds a `RefCell<Settings>` sixty times a second is one
+/// borrow away from §20 item 12 — which is the defect that shipped once already, inside
+/// `on_start_device`, and was found by a panic on the path that worked.
+#[derive(Default)]
+struct Learned {
+    /// There is a machine, so keep ticking.
+    watching: bool,
+    /// §12.3's denominator: what this device's cold boot cost, when its end was observed.
+    boot: Option<u64>,
+    /// §12.4: the device that has just been parked, and when. The `Live` is already gone.
+    parked: Option<(String, u64)>,
 }
 
 /// §12.2's four phases, as the window sees them. **`Off` is genuinely one of them.**
@@ -2693,12 +3073,8 @@ fn framebuffer(fb: &[u8]) -> slint::Image {
 ///
 /// `None` means *leave the panel alone* — either the machine has published no new frame, or the
 /// glass is showing the frame it stopped on and that frame is already up there.
-fn glass(frame: Option<slint::Image>, life: &machine::Life) -> Option<slint::Image> {
-    // §12.4's parked frame is **not** asked for: `parked_frame` reads `<device>.parked.png` beside
-    // the snapshot, this build configures no snapshot and parks nothing, and nothing in this
-    // program can decode a PNG — `png.rs` only writes them. So the `Parked` row of `Glass` is
-    // unreachable here rather than mis-drawn, and it is `None` that says so.
-    match machine::Glass::of(life, None) {
+fn glass(frame: Option<slint::Image>, g: &machine::Glass) -> Option<slint::Image> {
+    match g {
         // Nothing is executing, so there is nothing to keep. **`panel-lit` is what makes it dark**
         // — the drawn `Image` ramps to `opacity: 0` over §8.1 item 6's 220 ms park, which is the
         // wake reversed — and the machine has published a black frame of its own besides
@@ -2712,7 +3088,19 @@ fn glass(frame: Option<slint::Image>, life: &machine::Life) -> Option<slint::Ima
         // **The last frame is evidence and is kept.** Nothing is pushed, so what is on the glass
         // is the frame the machine stopped on.
         machine::Glass::Held => None,
-        machine::Glass::Parked(_) => None,
+        // ── §12.4 and §17 Q7: *"a parked device's glass shows the frame it stopped on"* ─────────
+        //
+        // **The decoder is Slint's own**, which is the whole reason this is one line. The previous
+        // pass recorded that *"nothing in this program can decode a PNG — `png.rs` only encodes"*,
+        // and that was true of `png.rs` and false of the crate: `slint/std` turns on
+        // `i-slint-core/image-decoders`, which is `image 0.25` with `png` — already compiled, and
+        // `cargo tree -p ipod-gui | grep '^png '` prints `png v0.18.1`. A hand-rolled decoder for
+        // our own stored-deflate stream would have been forty lines of a second implementation of
+        // a format this window already links a reader for.
+        //
+        // `.ok()` is §12.4's own fallback — *"if the PNG is absent the glass is dark"* — extended
+        // to the file being there and unreadable, which is the same fact about what can be shown.
+        machine::Glass::Parked(p) => slint::Image::load_from_path(p).ok(),
     }
 }
 
@@ -3248,8 +3636,8 @@ fn composed_and_unbuilt(d: &Device) -> bool {
 /// rows that arrived with the machine. The refusal arm is deliberately **not** held to the budget —
 /// `gone_sentence` carries a path, and §7.3's own note says the path goes on the end where there is
 /// one, so that line elides by design and the first words are what survive it.
-fn cradle_label(d: &Device, absent: &[Absent]) -> String {
-    cradle_label_at(Press::Centre, d, absent)
+fn cradle_label(s: &Settings, d: &Device, absent: &[Absent]) -> String {
+    cradle_label_at(Press::Centre, s, d, absent)
 }
 
 /// §7.3's table for one row, evaluated — **[`machine::cradle`], with the stand this window can
@@ -3257,19 +3645,31 @@ fn cradle_label(d: &Device, absent: &[Absent]) -> String {
 ///
 /// `live` is `Some` for the one row §7.2 allows a machine on and `None` for every other, which is
 /// the whole of the difference between the machine's half of the table and the device's.
-fn cradle_of(press: Press, d: &Device, absent: &[Absent], live: Option<&Live>) -> machine::Cradle {
+fn cradle_of(
+    press: Press,
+    s: &Settings,
+    d: &Device,
+    absent: &[Absent],
+    live: Option<&Live>,
+) -> machine::Cradle {
     match live {
         Some(l) => {
             let life = l.life();
             machine::cradle(press, &l.stand(&life))
         }
+        // **`cfg` is `Some` now, and that is §7.3's parked rows becoming reachable.** It was
+        // `None`, which made `Stand::restore()` answer `Restore::Never` for every device with no
+        // machine — and *every* device with no machine is exactly the population §7.3's parked rows
+        // are about, because the whole job of that line is to say what pressing will cost **before**
+        // you press. `bench-parked.png` is where it showed: a device with the frame it was put down
+        // on still on its glass, under a caption promising a 75-second cold boot.
         None => machine::cradle(
             press,
             &machine::Stand {
                 device: Some(d),
                 absent,
                 life: &machine::Life::Off,
-                cfg: None,
+                cfg: Some(&resting_config(s, d)),
                 parking: false,
             },
         ),
@@ -3348,8 +3748,8 @@ impl Press {
 ///
 /// Every refusal arm is surface-independent by construction: a part that has left the library is
 /// gone wherever you are standing, and none of those sentences contains a press at all.
-fn cradle_label_at(press: Press, d: &Device, absent: &[Absent]) -> String {
-    cradle_of(press, d, absent, None).label
+fn cradle_label_at(press: Press, s: &Settings, d: &Device, absent: &[Absent]) -> String {
+    cradle_of(press, s, d, absent, None).label
 }
 
 /// §9.1's and §10.1's empty bench, captioned for whichever surface is drawing the press.
@@ -3474,6 +3874,12 @@ fn empty_device(first: bool, caps: rail::Caps, cost: compose::Cost) -> DeviceRow
         cradle_broken: false,
         // §9.5's pane, which draws no centre button to point at. Same function, same tail.
         press_label: empty_cradle_label(Press::Here, caps).into(),
+        // §12.3, and it is `boot_rule(&Life::Off)` written out: an empty bench is not booting, so
+        // there is no rule and the fraction is never read. Typed rather than called because there
+        // is no `Life` here at all — the whole state of this row is that there is no device for
+        // one to be about.
+        boot_measured: false,
+        boot_fraction: 0.0,
     }
 }
 
@@ -3482,18 +3888,27 @@ fn empty_device(first: bool, caps: rail::Caps, cost: compose::Cost) -> DeviceRow
 /// It describes the **machine**, never the program — the drawn device is `AccessibleRole::Image` and
 /// the cradle is the Button. With no machine the panel is dark, which is the state a 5G with a flat
 /// battery is in, and saying so is more use than "iPod screen".
-fn panel_description(l: &machine::Life) -> &'static str {
-    match l {
-        machine::Life::Off => "The panel is dark. No machine is running.",
-        machine::Life::Booting { .. } => "The panel is showing the boot sequence.",
-        machine::Life::Running { .. } => "The panel is showing what the machine is drawing.",
+///
+/// **It is keyed on [`machine::Glass`] and not on [`machine::Life`], and that is not a
+/// refactor.** This describes *what is on the panel*, which is exactly what `Glass` decides — and
+/// keyed on the phase it could not describe §12.4's parked device at all: a machine that is `Off`
+/// is `Off` whether or not the glass is carrying the frame it was parked on, so the one state
+/// where the two answers differ is the one this pass made reachable.
+fn panel_description(g: &machine::Glass) -> &'static str {
+    match g {
+        machine::Glass::Dark => "The panel is dark. No machine is running.",
+        machine::Glass::Boot => "The panel is showing the boot sequence.",
+        machine::Glass::Live => "The panel is showing what the machine is drawing.",
         // A machine that stopped and will not resume. The sentence saying **why** is the model's and
         // belongs on the cradle label and in the Rail, not in a description of a picture.
         //
         // **And the panel is not dark**: §12.2 keeps the last frame, *"because the last frame is
         // evidence"*. This used to say `The panel is dark.` because nothing could reach `Stopped`
         // to contradict it — a sentence that was never wrong and was never right either.
-        machine::Life::Stopped { .. } => "The panel is showing the frame the machine stopped on.",
+        machine::Glass::Held => "The panel is showing the frame the machine stopped on.",
+        // §12.4. Not *the frame the machine stopped on*: a parked device did not stop, it was put
+        // down, and the difference is whether pressing costs three seconds or seventy-five.
+        machine::Glass::Parked(_) => "The panel is showing the frame this device was parked on.",
     }
 }
 
@@ -4567,7 +4982,9 @@ fn device_rows(settings: &Settings, live: Option<&Live>) -> Vec<DeviceRow> {
             // while a machine runs would otherwise hand the caption to nobody.
             let mine = live.filter(|l| l.index == i);
             let life = mine.map_or(machine::Life::Off, Live::life);
-            let cradle = cradle_of(Press::Centre, d, &gone, mine);
+            let cradle = cradle_of(Press::Centre, settings, d, &gone, mine);
+            // §12.3's two properties, decided together — see [`boot_rule`].
+            let rule = boot_rule(&life);
             DeviceRow {
                 name: d.name.clone().into(),
                 summary: summary(settings, d, &mut seen).into(),
@@ -4582,17 +4999,48 @@ fn device_rows(settings: &Settings, live: Option<&Live>) -> Vec<DeviceRow> {
                 // §9.5's pane replaces the well, so the same caption has to name the Row the
                 // reader is looking at rather than a centre button that is not on screen. One
                 // tail, two prefixes — see [`Press`].
-                press_label: cradle_of(Press::Here, d, &gone, mine).label.into(),
+                press_label: cradle_of(Press::Here, settings, d, &gone, mine).label.into(),
                 // §7.5's row-1 trailing slot: **the state, and time since.**
                 state: shelf_state(d, &life).into(),
                 write_target: writes.line.into(),
                 write_target_is_warning: writes.warn,
                 chassis: chassis_colour(chassis),
                 dark_chassis: is_dark(chassis),
+                boot_measured: rule.0,
+                boot_fraction: rule.1,
             }
         })
         .collect();
     rows
+}
+
+/// §12.3, flattened for the drawing: **is there a denominator, and what is the fraction.**
+///
+/// The one place `machine::Progress` becomes two markup properties, so a `boot-fraction` that is
+/// drawn without a `boot-measured` beside it is unwritable rather than merely discouraged — the
+/// same argument `Progress` itself makes about a bare `percent: f32`.
+///
+/// `false, 0.0` for every phase but `Booting`, and for a `Booting` with no completed cold boot
+/// behind it. §12.3: *"before a device has ever booted there is no fraction and no bar"* — and
+/// nothing is drawn, so the zero is never seen and cannot be read as *no progress*.
+///
+/// **The clamp is here rather than in the markup**, and that is where the boundary put it:
+/// `clamp(root.boot-fraction, 0, 1)` in `bench.slint` is two numbers in the markup, and
+/// `no_geometry_literal_survives_in_the_markup` refuses them. It is the right refusal — the
+/// drawing should be handed a fraction, not asked to make one. `Progress::percent` stays unclamped
+/// on purpose (§12.3 wants a reading over 100 % visible in the caption, because it means the
+/// recipe moved under a stored denominator); this is the *rule's* width, and a rule cannot be
+/// longer than its track.
+fn boot_rule(life: &machine::Life) -> (bool, f32) {
+    let machine::Life::Booting { progress, .. } = life else {
+        return (false, 0.0);
+    };
+    match progress {
+        machine::Progress::Counted { .. } => (false, 0.0),
+        machine::Progress::Fraction { done, of } => {
+            (true, (*done as f32 / of.get() as f32).clamp(0.0, 1.0))
+        }
+    }
 }
 
 /// §7.3's ring, across the boundary. Three values on each side and no fourth on either, which is
@@ -4628,6 +5076,28 @@ fn refresh_devices(
     // row carries the device's. `None` is the honest `Off`: no machine exists.
     live: Option<&Live>,
 ) {
+    // ── §12.4: a bench with no machine on it still has a panel, and it may not be dark ──────────
+    //
+    // **Only when there is no machine**, because `pump_machine` owns the glass whenever there is
+    // one and two writers of one property is how a running iPod comes to be drawn over by a
+    // photograph of itself. What this adds is the state that had no writer at all: a device that
+    // was parked, standing in the well before anything is pressed, showing the frame it was put
+    // down on rather than reading as off. §12.6 offers fullscreen in exactly this state, and until
+    // now the window could not reach it.
+    if live.is_none() {
+        let on_glass = resting_glass(settings, window.get_selected());
+        let want = glass(None, &on_glass).unwrap_or_else(dark_screen);
+        // Compared before it is pushed, not because a texture is expensive to make — `dark_screen`
+        // is built once per thread and a parked frame comes out of Slint's own path-keyed image
+        // cache — but because setting a property marks it dirty, and this function runs on every
+        // repaint of every page.
+        if window.get_screen_source() != want {
+            window.set_screen_source(want);
+        }
+        window.set_panel_lit(!matches!(on_glass, machine::Glass::Dark));
+        window.set_panel_description(panel_description(&on_glass).into());
+    }
+
     let want = device_rows(settings, live);
     for (i, row) in want.iter().enumerate() {
         match model.row_data(i) {
@@ -4925,9 +5395,21 @@ fn rgb(c: Colour) -> (u8, u8, u8) {
 
 /// An iPod at rest: the screen is off, not blank-white. 320×240 because that is the panel, and the
 /// window scales it by whole numbers only (§2.8).
+///
+/// **Built once per thread and cloned after that**, which buys two things. It is 230 400 bytes,
+/// and `refresh_devices` decides what is on the glass on every pass now that a device can be
+/// parked (§12.4) — a fresh allocation per pass would be a quarter of a megabyte per repaint to
+/// draw the same black rectangle. And a `slint::Image` compares by what is inside it, so one
+/// buffer makes `screen-source == dark_screen()` a *true* answer to *is the panel already dark*;
+/// two identical buffers would compare equal too, but only after comparing 230 400 bytes.
 fn dark_screen() -> slint::Image {
-    let buf = SharedPixelBuffer::new(emu::FB_W as u32, emu::FB_H as u32);
-    slint::Image::from_rgb8(buf)
+    thread_local! {
+        static DARK: slint::Image = {
+            let buf = SharedPixelBuffer::new(emu::FB_W as u32, emu::FB_H as u32);
+            slint::Image::from_rgb8(buf)
+        };
+    }
+    DARK.with(slint::Image::clone)
 }
 
 // ── The three drawer pages, across the boundary ─────────────────────────────────────────────────
@@ -4937,6 +5419,89 @@ fn dark_screen() -> slint::Image {
 // closure registered inside [`wire`] is reachable from nothing, and the whole of what these do —
 // the walk of the library, the flattening, the retained-model update — would then be testable only
 // through a press.
+
+/// **Where one device's restore point is, and everything written beside it** — §12.4.
+///
+/// The `emu::Config` is built for one field and nothing else on it is read. Every other path in
+/// §12.4's set is *derived* from `Config::snapshot` — the drive stamp by `Config::stamp`, the
+/// picture by `Config::parked_frame` — so going through it is what stops a second spelling of
+/// either extension existing in this file. It is not a machine; it is the question *where would
+/// this device's restore point be*, and `Settings::restore_point` is the model's answer.
+fn restore_point_of(name: &str) -> emu::Config {
+    let snapshot = eapp_loader::settings::restore_point(name);
+    emu::Config {
+        // Copy mode's other half, under the same stem. Derived here rather than at each use site
+        // so `machine_config` and the resting bench cannot disagree about where it is.
+        frozen: snapshot.with_extension("frozen"),
+        snapshot: Some(snapshot),
+        ..emu::Config::default()
+    }
+}
+
+/// **The `Config` §7.3's parked rows are asked of, for a device with no machine on the bench.**
+///
+/// [`restore_point_of`] plus the drive, and the drive is not decoration: a restore point is RAM
+/// **and the drive it was taken against**, so `Config::pair_is_whole` compares the stamp beside the
+/// snapshot against `workdisk`. A config that named the snapshot and not the drive would answer
+/// *the pair is broken* about every device in the library — which is `no resume, about 75 s` drawn
+/// over a perfectly good restore point, and the reader has no way to tell that from the real thing.
+///
+/// **This is what `Stand::cfg` was `None` for**, and `bench-parked.png` is where that showed:
+/// §7.3's parked rows are the ones that answer *before* you press, so they are by definition asked
+/// of a bench with no machine — and with no `Config` every one of them answered `Restore::Never`
+/// and promised a cold boot over a device whose frame was on the glass.
+fn resting_config(s: &Settings, d: &Device) -> emu::Config {
+    let disk = s.disk_of(d).and_then(Result::ok).unwrap_or_default();
+    let copy = d.work_on_copy.unwrap_or(false);
+    emu::Config {
+        workdisk: if copy {
+            eapp_loader::settings::drives_dir().join("work.img")
+        } else {
+            disk.clone()
+        },
+        disk,
+        work_on_copy: copy,
+        ..restore_point_of(&d.name)
+    }
+}
+
+/// Every file §12.4 writes for one device — **for the one row that offers to delete them.**
+///
+/// §11.4's rule for a removal is that it says what it is about to delete and how big it is, and
+/// until this pass a snapshot was a `parked_at` timestamp with no file behind it: `discard_park`'s
+/// own doc says *"deletes no files — the caller does that"*, and there was nothing for a caller to
+/// delete. There is now, and a `Discard` that cleared the timestamp and left the pair on disk
+/// would be a control that looks like it did something while the next start still resumed.
+fn restore_point_files(name: &str) -> Vec<std::path::PathBuf> {
+    let cfg = restore_point_of(name);
+    [cfg.snapshot.clone(), cfg.stamp(), cfg.parked_frame()]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// §12.4: what is on the glass of a bench **with no machine on it**.
+///
+/// Two of `Glass`'s five are reachable from here and the other three are a machine's, which is the
+/// point: `Life::Off` is what a bench with no `Live` is in, and `Glass::of` consults the parked
+/// frame in exactly that state. So this is the same decision the running bench makes, asked of a
+/// device instead of a machine.
+///
+/// **`parked_at` is asked before the filesystem is.** It is the model's own answer to *has this
+/// device ever been put down*, it costs nothing, and it keeps this function from stat'ing a
+/// snapshots directory on every repaint for every device that has never been parked.
+///
+/// The `Config` is built for one field. `Config::parked_frame` is the single place the
+/// `<snapshot>.parked.png` rule lives, and reaching around it to spell the extension here is how
+/// the writer and the reader come to disagree about a filename.
+fn resting_glass(s: &Settings, selected: i32) -> machine::Glass {
+    let parked = usize::try_from(selected)
+        .ok()
+        .and_then(|i| s.devices.get(i))
+        .filter(|d| d.parked_at.is_some())
+        .and_then(|d| machine::parked_frame(&restore_point_of(&d.name), &mut Presence::new()));
+    machine::Glass::of(&machine::Life::Off, parked.as_deref())
+}
 
 /// Which device the emulator has a machine for, by name.
 ///
@@ -5068,6 +5633,174 @@ fn library_moved(
         Err(why) => drop(rail.borrow_mut().note(&why)),
     }
     sync_rail(window, rows, &rail.borrow(), caps, work.borrow().shape());
+}
+
+/// §12.8's two pinned actions, performed — and the sentence that says what happened, per principle 7.
+///
+/// **`Screenshot the panel` is `png::encode` of `Out.fb`, at exactly 320 × 240**, which is §12.7's
+/// first key: *"the panel alone, no scaling, no body — this is what `research/` and a bug report
+/// want."* It reports the path and the size afterwards, because a file written somewhere nobody
+/// named is a file nobody finds.
+///
+/// **`Copy this readout` refuses**, and it is the same refusal every copy control in this window
+/// carries: `caps().clipboard` is `false` because nothing in this dependency graph reaches a
+/// pasteboard, and the route is a `.slint` `TextInput` rather than a crate. The text is built
+/// anyway — `readout::as_text` is what would go on the clipboard — so the day the route exists this
+/// is one line rather than a page.
+fn readout_act(live: &Rc<RefCell<Option<Live>>>, which: i32) -> String {
+    let held = live.borrow();
+    let Some(l) = held.as_ref() else {
+        return "There is no machine, so there is nothing to report.".into();
+    };
+    match which {
+        0 => {
+            let dir = eapp_loader::settings::data_dir().join("shots");
+            let stem = eapp_loader::settings::file_stem_of(&l.device.name);
+            let at = dir.join(format!("{stem}-{}-panel.png", eapp_loader::settings::now_unix()));
+            let Ok(out) = l.link.out.lock() else {
+                return "The machine's own thread has panicked, so its last frame cannot be read."
+                    .into();
+            };
+            if out.fb.len() != emu::FB_W * emu::FB_H * 3 {
+                return "The machine has published no frame yet, so there is nothing to write."
+                    .into();
+            }
+            let png = png::encode(&out.fb, emu::FB_W, emu::FB_H);
+            drop(out);
+            let _ = std::fs::create_dir_all(&dir);
+            match std::fs::write(&at, &png) {
+                Ok(()) => format!(
+                    "{} — {}x{}, {}",
+                    at.display(),
+                    emu::FB_W,
+                    emu::FB_H,
+                    eapp_loader::si(png.len() as u64)
+                ),
+                Err(e) => format!("{}: {e}", at.display()),
+            }
+        }
+        1 => {
+            let life = l.life();
+            let Ok(out) = l.link.out.lock() else {
+                return "The machine's own thread has panicked, so its counters cannot be read."
+                    .into();
+            };
+            let fresh = machine::Freshness::of(&life, Some(0));
+            let text = readout::as_text(&readout::read(&out, &life, Some(0)), fresh);
+            drop(out);
+            format!(
+                "This build has no clipboard, so the {} lines of the readout were not copied.",
+                text.lines().count()
+            )
+        }
+        _ => format!("row {which} is not one of the Readout's two actions"),
+    }
+}
+
+/// §12.8's Readout — the seven headings, every Gauge, and the two pinned actions.
+///
+/// **It is a function of what the machine last published and of nothing else.** `Live::life` is the
+/// cached copy of `Out` that `Live::sample` took, and `readout::read` is where every number is
+/// decided; this walks the answer into two models and pushes nine properties. It words nothing —
+/// the empty line and the two refusals are the only sentences here, and each is about *this build*
+/// rather than about a machine.
+///
+/// **`sampled_ms_ago` is `Some(0)` while a machine is held**, because the tick that drew this page
+/// is the tick that sampled `Out` — `pump_machine` and the repaint run off the same pass. `None`
+/// with no machine is the honest reading: nothing has ever been sampled, which is what makes every
+/// Gauge `Unmeasured` and draws `—` rather than a page of zeroes.
+fn push_readout(
+    window: &MainWindow,
+    rows: &Rc<VecModel<GaugeRow>>,
+    headings: &Rc<VecModel<slint::SharedString>>,
+    live: Option<&Live>,
+) {
+    let (gauges, provenance, fresh) = match live {
+        Some(l) => {
+            let life = l.life();
+            let out = l.link.out.lock();
+            let (g, p, f) = match out {
+                Ok(o) => (
+                    readout::read(&o, &life, Some(0)),
+                    readout::provenance(&o.stats),
+                    machine::Freshness::of(&life, Some(0)),
+                ),
+                // **A poisoned or contended lock is a page that says so rather than a page of
+                // stale numbers.** `Live::sample` reads the same mutex sixty times a second and
+                // this runs at a repaint; `try_lock` would be the cheaper call and the wrong one,
+                // because a Readout that silently drew the last pass's figures is the instrument
+                // §12.8 is written against. Blocking here costs the emulator thread one slice at
+                // most — the lock is held for a memcpy — and it is taken once per repaint of one
+                // page rather than once per frame.
+                Err(_) => (Vec::new(), String::new(), machine::Freshness::Unmeasured),
+            };
+            (g, p, f)
+        }
+        None => (Vec::new(), String::new(), machine::Freshness::Unmeasured),
+    };
+
+    headings.set_vec(
+        readout::Group::ALL
+            .iter()
+            .map(|g| slint::SharedString::from(g.line(fresh)))
+            .collect::<Vec<_>>(),
+    );
+    rows.set_vec(
+        gauges
+            .iter()
+            .map(|g| GaugeRow {
+                group: g.group.as_i32(),
+                label: g.label.clone().into(),
+                value: g.value.clone().into(),
+                fresh: freshness(g.fresh),
+                warn: g.warn,
+            })
+            .collect::<Vec<_>>(),
+    );
+    window.set_readout_provenance(provenance.into());
+    window.set_readout_has_machine(live.is_some());
+    // §9.1: a page with nothing to report says what would be here. The seven headings stay under
+    // it, because §12.8's rule is *all present always* and a page whose shape changed with the
+    // machine would be one a reader had to re-learn every time they opened it.
+    window.set_readout_empty_line(
+        "No machine is running, so every counter here is unmeasured. Press the centre button on \
+         the bench and this page fills in."
+            .into(),
+    );
+    // **Both actions are drawn and both refuse**, which is §14.1 rather than hide-don't-disable.
+    // The panel shot is `png::encode` — which now has a production caller in §12.4's park — with no
+    // route from this page to the framebuffer that is not `Live`, so it is live exactly when there
+    // is a machine.
+    window.set_readout_shot_enabled(live.is_some());
+    window.set_readout_shot_reason(
+        "There is no machine, so there is no frame to write."
+            .into(),
+    );
+    // The same measured capability every other copy control on every other page reads, so this one
+    // cannot claim a clipboard the rest of the window says it has not got.
+    window.set_readout_copy_enabled(caps().clipboard && live.is_some());
+    window.set_readout_copy_reason(
+        if live.is_none() {
+            "There is no machine, so there is nothing to copy."
+        } else {
+            "Nothing in this build reaches a pasteboard."
+        }
+        .into(),
+    );
+}
+
+/// `machine::Freshness` across the boundary. Four values on each side and no fifth on either.
+///
+/// An `int` rather than a generated enum, and the reason is on `GaugeRow` in `primitives.slint`:
+/// the markup treats exactly one of the four differently, so a second enum would be a list to keep
+/// in step for a distinction the drawing barely makes.
+fn freshness(f: machine::Freshness) -> i32 {
+    match f {
+        machine::Freshness::Live => 0,
+        machine::Freshness::Stale => 1,
+        machine::Freshness::Final => 2,
+        machine::Freshness::Unmeasured => 3,
+    }
 }
 
 /// §11.6's Settings page — the nine `setting-*` properties, from the one bundle that holds nine.
@@ -6003,7 +6736,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let wiring = wire(&w, settings.clone());
+        let wiring = wire(&w, settings.clone(), args::Machine::default());
         assert!(!w.get_devices().row_count() == 0 || w.get_devices().row_count() == 1);
 
         // The real, registered handler. Before the fix this line panicked with
@@ -6086,7 +6819,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let wiring = wire(&w, settings.clone());
+        let wiring = wire(&w, settings.clone(), args::Machine::default());
         assert_eq!(w.get_devices().row_count(), 1, "the fixture is not on the bench");
         // Before: §12.2's `Off` in the honest sense, and the cradle says what pressing will cost.
         assert!(!w.get_running());
@@ -6161,7 +6894,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let wiring = wire(&w, settings.clone());
+        let wiring = wire(&w, settings.clone(), args::Machine::default());
 
         w.invoke_start_device(0);
 
@@ -6206,7 +6939,317 @@ pub(crate) mod tests {
             denominator: None,
             life: RefCell::new(machine::Life::Off),
             seq: Cell::new(0),
+            booted: Cell::new(None),
+            learned: Cell::new(false),
+            parking: Cell::new(false),
         }
+    }
+
+    /// **§12.3: the bar is drawn only where there is something to divide by, and the difference is
+    /// on screen rather than only in the model.**
+    ///
+    /// `machine::Progress` has split `Counted` from `Fraction` since it was written, and nothing
+    /// drew the difference: the bench had one caption and no rule, so the two variants reached the
+    /// glass as two strings and a reader could not see that one of them was a measurement. This is
+    /// the assertion that they are two drawings.
+    ///
+    /// **It goes red three ways**, each a different half of §12.3:
+    ///
+    /// - Make `boot_rule` answer `(true, 0.0)` for `Counted` and a device that has never booted
+    ///   gets a rule at zero — *"no progress"* drawn over a machine that is booting perfectly well,
+    ///   which is the one reading §12.3 says is worse than none.
+    /// - Drop the clamp and the 200 % case draws a rule wider than its track.
+    /// - Bind `boot-measured` to `root.has-devices` in `window.slint` and the empty bench grows a
+    ///   bar.
+    #[test]
+    fn the_boot_rule_is_drawn_only_when_this_device_has_ever_booted() {
+        let dir = temp_dir("boot-rule");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d.clone());
+        let w = a_window();
+        let devices: Rc<VecModel<DeviceRow>> = Rc::new(VecModel::default());
+        w.set_devices(ModelRc::from(devices.clone()));
+        for row in device_rows(&s, None) {
+            devices.push(row);
+        }
+        let live = Rc::new(RefCell::new(Some(a_machine_with_no_thread(&d))));
+        let booting = |at: u64| {
+            let held = live.borrow();
+            let mut out = held.as_ref().unwrap().link.out.lock().unwrap();
+            out.phase = emu::Phase::Booting { target: emu::SNAP_AT };
+            out.stats.executed = at;
+        };
+
+        // (1) **No denominator.** This device has never completed a cold boot, so there is nothing
+        // to divide by: no rule, and the caption carries a count that moves.
+        booting(412_000_000);
+        pump_machine(&w, &live, &devices, &s);
+        let row = devices.row_data(0).expect("the row");
+        assert!(
+            !row.boot_measured,
+            "§12.3: before a device has ever booted there is no fraction and no bar"
+        );
+        assert!(
+            row.cradle_label.contains("412 M instr") && !row.cradle_label.contains('%'),
+            "the caption invented a per cent: {:?}",
+            row.cradle_label
+        );
+
+        // (2) **A denominator this device learned from its own last cold boot.** Now there is a
+        // rule, and the caption is a per cent.
+        live.borrow_mut().as_mut().unwrap().denominator = Some(1_600_000_000);
+        booting(800_000_000);
+        pump_machine(&w, &live, &devices, &s);
+        let row = devices.row_data(0).expect("the row");
+        assert!(row.boot_measured, "a device with a completed cold boot behind it has no rule");
+        assert!(
+            (row.boot_fraction - 0.5).abs() < 0.001,
+            "800 M of 1.6 G is not {}",
+            row.boot_fraction
+        );
+        assert!(
+            row.cradle_label.contains("50 %"),
+            "§7.3's booting row carries the fraction when there is one: {:?}",
+            row.cradle_label
+        );
+
+        // (3) **Past 100 %**, which §12.3 says is a real state — a device that learned ~1.6 G on
+        // RetailOS and then had Rockbox installed reads the other way, and one of the two overruns.
+        // The *number* is not clamped, because that is the half a person can still see; the
+        // **rule** is, because a rule cannot be longer than its track.
+        booting(3_200_000_000);
+        pump_machine(&w, &live, &devices, &s);
+        let row = devices.row_data(0).expect("the row");
+        assert!(row.boot_measured);
+        assert_eq!(row.boot_fraction, 1.0, "the rule is drawn longer than the track it is in");
+        assert!(
+            row.cradle_label.contains("200 %"),
+            "the caption clamped the reading that says the recipe moved under the denominator: {:?}",
+            row.cradle_label
+        );
+
+        // (4) **And no other phase has one.** `Running`, `Stopped` and `Off` are not progress.
+        for phase in [
+            emu::Phase::Running,
+            emu::Phase::Stopped("Lost(0xe19b0000) at 128000 instructions".into()),
+            emu::Phase::Off,
+        ] {
+            {
+                let held = live.borrow();
+                held.as_ref().unwrap().link.out.lock().unwrap().phase = phase.clone();
+            }
+            pump_machine(&w, &live, &devices, &s);
+            let row = devices.row_data(0).expect("the row");
+            assert!(!row.boot_measured, "{phase:?} is drawing a boot rule");
+        }
+
+        // …and an empty bench, which has no device for a rule to be about.
+        assert!(!empty_device(true, caps(), compose::Cost::default()).boot_measured);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A machine flag typed on the command line reaches the machine the press starts.**
+    ///
+    /// `args::parse` producing the right `Machine` is one assertion and `Machine::apply` writing
+    /// the right field is another — both live in `args.rs`. What neither can see is the **wire**:
+    /// `main` → `wire` → `start_machine` → `machine_config` → `apply`. A flag parsed correctly and
+    /// then dropped on the way to the thread is a flag that looks like it works, which is the
+    /// defect this whole file's command line exists to delete.
+    ///
+    /// **Red in one line**: delete `launch.apply(&mut cfg);` from `start_machine` and the config
+    /// the thread was handed is the library's alone.
+    #[test]
+    fn a_launch_flag_reaches_the_config_the_press_hands_the_machine() {
+        let dir = temp_dir("launch-flags");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d);
+        let settings = Rc::new(RefCell::new(s));
+
+        let w = a_window();
+        let wiring = wire(
+            &w,
+            settings.clone(),
+            args::Machine { cold: true, clock: Some(5), second_core: true, charger: true },
+        );
+        w.invoke_start_device(0);
+
+        let live = wiring.live.borrow();
+        let cfg = &live.as_ref().expect("the press started no machine").cfg;
+        assert!(cfg.cold, "--cold did not reach the machine");
+        assert_eq!(cfg.clock, 5, "--clock= did not reach the machine");
+        assert!(cfg.second_core, "--second-core did not reach the machine");
+        assert!(cfg.charger, "--charger did not reach the machine");
+        // …and the library's own answers are still under them. `apply` writes four fields; the
+        // fifth is the one that says a flag reached past its boundary.
+        assert!(
+            cfg.snapshot.as_ref().is_some_and(|p| p.ends_with("ipod-1.snap")),
+            "§12.4's restore point is the library's and a flag moved it: {:?}",
+            cfg.snapshot
+        );
+        drop(live);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **`--headless=N` with nothing to run says so and exits 2**, rather than starting a machine
+    /// out of an empty library.
+    ///
+    /// The rest of that path is a real cold boot of a real drive image, which is not a fixture a
+    /// test suite carries — `emu::run` is reached and the fingerprint is `report_headless`'s. What
+    /// is asserted here is the half a person hits first and the half CI would hit: the refusal
+    /// names what is missing rather than reporting a fingerprint of nothing.
+    #[test]
+    fn headless_with_no_device_refuses_rather_than_running_nothing() {
+        let _held = use_a_scratch_data_dir();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = args::run(
+            &args::Cli::Headless { machine: args::Machine::default(), budget: 1_000 },
+            &mut out,
+            &mut err,
+        );
+        assert_eq!(code, 2);
+        assert!(out.is_empty(), "{:?} reached stdout", String::from_utf8_lossy(&out));
+        let said = String::from_utf8_lossy(&err);
+        assert!(said.contains("no device has been used yet"), "{said}");
+    }
+
+    /// **§12.4: `Esc` from a running machine parks it, and a park with no room does not happen.**
+    ///
+    /// The two things this asserts are the two §12.4 puts in order: the check runs *before*
+    /// `save_on_quit` is set, and the machine stops either way. `Link::snapshot_bytes` is what the
+    /// check is against — this machine's own memory, published by the run loop — so a test can set
+    /// it to `u64::MAX` and get the refusal without filling a volume.
+    ///
+    /// **Red in one line**: restore `nav::Escape::Park => {}` and neither flag is ever set, which
+    /// is what this arm did when it was reachable and empty.
+    #[test]
+    fn escape_from_a_running_machine_parks_it_and_a_park_with_no_room_does_not() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let _held = use_a_scratch_data_dir();
+        let dir = temp_dir("esc-park");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d.clone());
+        let settings = Rc::new(RefCell::new(s));
+
+        let w = a_window();
+        let wiring = wire(&w, settings.clone(), args::Machine::default());
+
+        // A machine with no thread, published as `Running` — which is the one phase §12.4 parks
+        // from, and the one a fixture drive with no OS on it can never reach for real.
+        let put = |bytes: u64| {
+            let l = a_machine_with_no_thread(&d);
+            l.link.out.lock().unwrap().phase = emu::Phase::Running;
+            l.link.snapshot_bytes.store(bytes, Relaxed);
+            *wiring.live.borrow_mut() = Some(l);
+            // **Sampled before the press**, because `Stack::escape` asks the window which phase it
+            // is in and the window reads `Live::life` — the cached copy of what the machine
+            // published, not `Out` itself. A phase written into the mutex and never sampled is a
+            // phase the window has not been told about, which is `Live::sample`'s whole contract.
+            (wiring.machine_tick)();
+        };
+
+        // (1) **No room.** The refusal is §9.3's `space` class with both figures in it, the machine
+        // stops, and nothing is asked to write 16 exabytes.
+        put(u64::MAX);
+        w.invoke_escape_pressed();
+        {
+            let live = wiring.live.borrow();
+            let l = live.as_ref().expect("the machine is still held while it stops");
+            assert!(!l.link.save_on_quit.load(Relaxed), "a park was asked for with no room for it");
+            assert!(l.link.quit.load(Relaxed), "the machine was not stopped either");
+            assert!(!l.parking.get(), "the cradle will say `parking` over a park that is not happening");
+        }
+        let refusal = w.get_rail().row_data(0).expect("the refusal");
+        assert_eq!(refusal.kind, RailKind::Failed);
+        assert!(
+            refusal.happened.contains("needed") && refusal.happened.contains("free"),
+            "§12.4's sentence is two figures a person can check: {:?}",
+            refusal.happened
+        );
+
+        // (2) **Room.** `save_on_quit` is set, the machine is asked to stop, and the `Live` stays
+        // until the thread has actually finished — the cradle says `parking` in between.
+        put(1);
+        w.invoke_escape_pressed();
+        {
+            let live = wiring.live.borrow();
+            let l = live.as_ref().expect("the machine is held while the restore point is written");
+            assert!(l.link.save_on_quit.load(Relaxed), "§12.4's flag was never set");
+            assert!(l.link.quit.load(Relaxed));
+            assert!(l.parking.get());
+            // §7.3's parking row, which outranks every other caption because it is what the person
+            // is waiting on.
+            l.link.saving.store(true, Relaxed);
+            let life = l.life();
+            assert_eq!(machine::cradle(Press::Centre, &l.stand(&life)).label, "parking");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **§12.4 and §17 Q7: a parked device's glass shows the frame it stopped on.**
+    ///
+    /// The whole round trip on the *reading* side, through the shipped decoder: `png::encode`
+    /// writes the file, `machine::parked_frame` finds it, `main::glass` loads it, and the pixels
+    /// that come back are the pixels that went in. `png.rs`'s own doc claims *"a byte-exact,
+    /// spec-conformant PNG that any decoder reads"*, and nothing had ever read one.
+    ///
+    /// **Red two ways**: write the file under any other name and `parked_frame` answers `None`;
+    /// break `png::encode`'s Adler sum or its CRC and `load_from_path` refuses the file, which is
+    /// the assertion that the claim above is true rather than self-reported.
+    #[test]
+    fn a_parked_device_puts_the_frame_it_was_parked_on_back_on_the_glass() {
+        let _held = use_a_scratch_data_dir();
+        let dir = temp_dir("parked-glass");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d.clone());
+
+        // Before: no park time, so nothing is looked for and the panel is dark.
+        assert_eq!(resting_glass(&s, 0), machine::Glass::Dark);
+
+        // A park time and a frame beside the snapshot, which is what a park leaves behind.
+        s.devices[0].parked_at = Some(eapp_loader::settings::now_unix());
+        // …the time alone is not enough: §12.4's fallback for a missing picture is a dark glass,
+        // and this is the state a device parked by a build before the PNG existed is in.
+        assert_eq!(resting_glass(&s, 0), machine::Glass::Dark);
+
+        let snap = eapp_loader::settings::restore_point(&d.name);
+        std::fs::create_dir_all(snap.parent().unwrap()).unwrap();
+        let mut frame = vec![0u8; emu::FB_W * emu::FB_H * 3];
+        for (i, px) in frame.chunks_exact_mut(3).enumerate() {
+            px[0] = (i % 251) as u8;
+            px[1] = (i / 320 % 241) as u8;
+            px[2] = 0x40;
+        }
+        let png = snap.with_extension("parked.png");
+        std::fs::write(&png, png::encode(&frame, emu::FB_W, emu::FB_H)).unwrap();
+
+        let on_glass = resting_glass(&s, 0);
+        assert_eq!(on_glass, machine::Glass::Parked(png.clone()));
+        assert_eq!(
+            panel_description(&on_glass),
+            "The panel is showing the frame this device was parked on.",
+            "a parked device is described as stopped, which is a different promise"
+        );
+
+        // **The decoder is the one the window ships**, and the pixels are the ones the park wrote.
+        let img = glass(None, &on_glass).expect("the parked frame did not decode");
+        assert_eq!(
+            (img.size().width, img.size().height),
+            (emu::FB_W as u32, emu::FB_H as u32),
+            "§12.4 draws the parked frame at exactly the panel's own size"
+        );
+        let back = img.to_rgb8().expect("an 8-bit RGB image");
+        assert_eq!(
+            back.as_bytes().len(),
+            frame.len(),
+            "the round trip changed the number of channels"
+        );
+        assert_eq!(
+            back.as_bytes(),
+            &frame[..],
+            "the frame that came back is not the frame that went in"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// §12.2's four rows, drawn — **and `phase` is not a constant any more.**
@@ -6234,7 +7277,10 @@ pub(crate) mod tests {
             out.phase = emu::Phase::Booting { target: emu::SNAP_AT };
             out.stats.executed = 412_000_000;
         }
-        assert!(pump_machine(&w, &live, &devices), "the tick stopped over a machine that exists");
+        assert!(
+            pump_machine(&w, &live, &devices, &s).watching,
+            "the tick stopped over a machine that exists"
+        );
         let row = devices.row_data(0).expect("the row");
         assert!(
             row.cradle_label.contains("to stop") && row.cradle_label.contains("412 M instr"),
@@ -6257,7 +7303,7 @@ pub(crate) mod tests {
             out.stats.executed_here = 14_200_000;
             out.stats.wall_secs = 1.0;
         }
-        pump_machine(&w, &live, &devices);
+        pump_machine(&w, &live, &devices, &s);
         let row = devices.row_data(0).expect("the row");
         // **The cradle says the word and the shelf says the speed, and neither says both.** The
         // first picture of a running bench had `running — 14 M instr/s` on both, fifty pixels
@@ -6276,7 +7322,7 @@ pub(crate) mod tests {
             let mut out = held.as_ref().unwrap().link.out.lock().unwrap();
             out.phase = emu::Phase::Stopped("Lost(0xe19b0000) at 128000 instructions".into());
         }
-        pump_machine(&w, &live, &devices);
+        pump_machine(&w, &live, &devices, &s);
         let row = devices.row_data(0).expect("the row");
         assert_eq!(row.cradle_ring, CradleRing::Danger);
         assert!(row.cradle_label.contains("Lost(0xe19b0000)"), "{:?}", row.cradle_label);
@@ -6289,7 +7335,7 @@ pub(crate) mod tests {
             let mut out = held.as_ref().unwrap().link.out.lock().unwrap();
             out.phase = emu::Phase::Off;
         }
-        pump_machine(&w, &live, &devices);
+        pump_machine(&w, &live, &devices, &s);
         let row = devices.row_data(0).expect("the row");
         assert!(row.cradle_label.contains("cold boot"), "{:?}", row.cradle_label);
         assert_eq!(row.cradle_ring, CradleRing::Accent);
@@ -6301,7 +7347,10 @@ pub(crate) mod tests {
 
         // And with no machine at all the tick says so, which is what stops the 60 Hz timer.
         *live.borrow_mut() = None;
-        assert!(!pump_machine(&w, &live, &devices), "the tick goes on looking at nothing");
+        assert!(
+            !pump_machine(&w, &live, &devices, &s).watching,
+            "the tick goes on looking at nothing"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -6320,7 +7369,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        wire(&w, settings.clone());
+        wire(&w, settings.clone(), args::Machine::default());
         assert_eq!(w.get_rail().row_count(), 0, "nothing has happened yet");
 
         w.invoke_explain(0);
@@ -6457,7 +7506,7 @@ pub(crate) mod tests {
     fn one_tick_on_an_idle_queue_changes_nothing_and_stops_looking() {
         let (settings, _held) = a_fresh_installation();
         let w = a_window();
-        let wiring = wire(&w, settings.clone());
+        let wiring = wire(&w, settings.clone(), args::Machine::default());
 
         let rail = Rc::new(RefCell::new(rail::Rail::new()));
         let rows: Rc<VecModel<RailRow>> = Rc::new(VecModel::default());
@@ -6493,6 +7542,7 @@ pub(crate) mod tests {
             caps(),
             a_cost(),
             &Rc::new(RefCell::new(None)),
+            args::Machine::default(),
         );
         assert_eq!(
             repaints.get(),
@@ -6524,7 +7574,7 @@ pub(crate) mod tests {
     fn a_drive_being_read_keeps_the_window_looking() {
         let (settings, _held) = a_fresh_installation();
         let w = a_window();
-        let wiring = wire(&w, settings.clone());
+        let wiring = wire(&w, settings.clone(), args::Machine::default());
 
         let rail = Rc::new(RefCell::new(rail::Rail::new()));
         let rows: Rc<VecModel<RailRow>> = Rc::new(VecModel::default());
@@ -6557,6 +7607,7 @@ pub(crate) mod tests {
                 caps(),
                 a_cost(),
                 &Rc::new(RefCell::new(None)),
+                args::Machine::default(),
             );
         };
 
@@ -6603,7 +7654,7 @@ pub(crate) mod tests {
     fn a_tick_re_pushes_a_page_that_a_change_elsewhere_made_stale() {
         let (settings, _held) = a_fresh_installation();
         let w = a_window();
-        let wiring = wire(&w, settings.clone());
+        let wiring = wire(&w, settings.clone(), args::Machine::default());
 
         w.invoke_device_new();
         w.invoke_composer_type(composer::Field::Name.as_i32(), "Zeppelin".into());
@@ -7389,7 +8440,7 @@ pub(crate) mod tests {
     fn the_registered_new_device_handler_opens_the_composer_and_mints_nothing() {
         let settings = Rc::new(RefCell::new(Settings::default()));
         let w = a_window();
-        wire(&w, settings.clone());
+        wire(&w, settings.clone(), args::Machine::default());
         let before = settings.borrow().resources.len();
 
         w.invoke_device_new();
@@ -7510,7 +8561,7 @@ pub(crate) mod tests {
         let settings = a_library_holding_one_drive(&dir, "a 5.5G's drive", [0x83, 0, 0, 0]);
 
         let w = a_window();
-        let wiring = wire(&w, settings.clone());
+        let wiring = wire(&w, settings.clone(), args::Machine::default());
         w.invoke_device_new();
         // Level ② is disabled without an iPod, so this is the press that unlocks the disk picker
         // rather than a decoration: `Make one`.
@@ -7572,7 +8623,7 @@ pub(crate) mod tests {
         let settings = a_library_holding_one_drive(&dir, "off a real 5.5G", [0x00, 0x0c, 0, 0]);
 
         let w = a_window();
-        let wiring = wire(&w, settings.clone());
+        let wiring = wire(&w, settings.clone(), args::Machine::default());
         w.invoke_device_new();
         w.invoke_composer_act(composer::Field::Ipod.as_i32());
         w.invoke_composer_pick(composer::Field::Disk.as_i32(), 1);
@@ -7607,7 +8658,7 @@ pub(crate) mod tests {
     fn a_press_that_writes_no_library_does_not_rewrite_the_settings_file() {
         let settings = Rc::new(RefCell::new(Settings::default()));
         let w = a_window();
-        wire(&w, settings.clone());
+        wire(&w, settings.clone(), args::Machine::default());
         w.invoke_device_new();
 
         let path = eapp_loader::settings::Settings::path().expect("a settings path");
@@ -7804,7 +8855,7 @@ pub(crate) mod tests {
         w.set_devices(ModelRc::from(Rc::new(VecModel::from(device_rows(&Settings::default(), None)))));
         w.set_empty_device(empty_device(false, caps(), no_cost()));
         w.set_screen_source(dark_screen());
-        w.set_panel_description(panel_description(&machine::Life::Off).into());
+        w.set_panel_description(panel_description(&machine::Glass::Dark).into());
         w.global::<Motion>().set_scale(motion::scale());
         w.global::<Metric>().set_mono_family(mono_family().into());
 
@@ -8412,6 +9463,9 @@ pub(crate) mod tests {
         /// §12's machine, the same holder `wire` keeps — so a fixture can stand on a bench with a
         /// machine on it and the shot goes through the shipped producers rather than round them.
         live: Rc<RefCell<Option<Live>>>,
+        /// §12.8's two retained models, for the same reason every other page here has its own.
+        r_rows: Rc<VecModel<GaugeRow>>,
+        r_headings: Rc<VecModel<slint::SharedString>>,
     }
 
     impl Furniture {
@@ -8426,6 +9480,8 @@ pub(crate) mod tests {
                 c_opts: Rc::new(VecModel::default()),
                 c_plan: Rc::new(VecModel::default()),
                 c_refusals: Rc::new(VecModel::default()),
+                r_rows: Rc::new(VecModel::default()),
+                r_headings: Rc::new(VecModel::default()),
                 parts: RefCell::new(parts::Parts::new()),
                 p_groups: Rc::new(VecModel::default()),
                 p_rows: Rc::new(VecModel::default()),
@@ -8474,6 +9530,8 @@ pub(crate) mod tests {
             w.set_parts_detail(ModelRc::from(self.p_detail.clone()));
             w.set_devices_detail(ModelRc::from(self.d_detail.clone()));
             w.set_devices(ModelRc::from(self.shelf.clone()));
+            w.set_readout_rows(ModelRc::from(self.r_rows.clone()));
+            w.set_readout_headings(ModelRc::from(self.r_headings.clone()));
 
             // The shelf, the cradle, the ghost, and the Devices page's own empty line and its
             // pinned `+ New device` row — which is the control that shipped in the old shot as a
@@ -8488,7 +9546,7 @@ pub(crate) mod tests {
             // §12.1, §12.2: whatever the machine is publishing reaches the glass, the `running`
             // boolean and the panel's own description — through `pump_machine`, which is the
             // function the 60 Hz timer runs and not a second writer beside it.
-            pump_machine(w, &self.live, &self.shelf);
+            pump_machine(w, &self.live, &self.shelf, &self.settings);
 
             if on_screen(at, nav::Page::Parts) {
                 push_parts(
@@ -8512,6 +9570,11 @@ pub(crate) mod tests {
                     &self.d_detail,
                     self.live.borrow().as_ref(),
                 );
+            }
+            // §12.8, and it reads the machine this fixture is holding — which is what makes the
+            // shot a picture of a page with numbers on it rather than of seven empty headings.
+            if on_screen(at, nav::Page::Readout) {
+                push_readout(w, &self.r_rows, &self.r_headings, self.live.borrow().as_ref());
             }
             if on_screen(at, nav::Page::Settings) {
                 push_settings(w, &self.prefs, &self.settings, caps());
@@ -8840,7 +9903,7 @@ pub(crate) mod tests {
     /// standing — unlike [`Furniture`], which is exactly the half that does.
     fn dress_the_bench(w: &MainWindow) {
         w.set_screen_source(dark_screen());
-        w.set_panel_description(panel_description(&machine::Life::Off).into());
+        w.set_panel_description(panel_description(&machine::Glass::Dark).into());
         // §12.2's `Off`, the state every shot but `bench-running` stands in — and the state the
         // window has to be put back into after that one, because a texture stays where it was put.
         w.set_running(false);
@@ -9101,8 +10164,77 @@ pub(crate) mod tests {
         let first = running.settings.devices.first().expect("the fixture's iPod").clone();
         *running.live.borrow_mut() = Some(a_running_machine(&first));
         shots.push(("bench-running", shoot(&w, &nav::Stack::new(), &running, "bench-running")));
+
+        // **§12.8's Readout, on the machine that is on the bench above it.** Seven groups, every
+        // Gauge, and the two pinned actions — the page whose `MenuPage` row said *Nothing draws the
+        // counters a running machine publishes* until this pass. Taken with `running` still held,
+        // so what is on it is a machine's numbers rather than seven headings over `—`.
+        shots.push((
+            "readout",
+            shoot(&w, &a_stack(nav::Page::Readout), &running, "readout"),
+        ));
+
+        // **§12.2's `Booting`, with §12.3's rule under the device.** This is the state the boot bar
+        // is *for*, and it is the one that had no picture: `bench-running` is past it and every
+        // other shot is `Off`. The denominator is a completed cold boot this device has behind it,
+        // which is what `Progress::Fraction` needs and what nothing in this program wrote until
+        // `emu::boot_end` started publishing one.
+        {
+            let l = running.live.borrow();
+            let mut out = l.as_ref().expect("the machine").link.out.lock().unwrap();
+            out.phase = emu::Phase::Booting { target: emu::SNAP_AT };
+            out.stats.executed = 992_000_000;
+        }
+        running.live.borrow_mut().as_mut().expect("the machine").denominator = Some(1_600_000_000);
+        shots.push(("bench-booting", shoot(&w, &nav::Stack::new(), &running, "bench-booting")));
+
+        // **§12.2's `Stopped`, which is a failed run** — the `danger` ring, the reason that is never
+        // empty, and the last frame kept on the glass *because the last frame is evidence*.
+        {
+            let l = running.live.borrow();
+            let mut out = l.as_ref().expect("the machine").link.out.lock().unwrap();
+            out.phase = emu::Phase::Stopped("Lost(0xe19b0000) at 128000 instructions".into());
+        }
+        shots.push(("bench-stopped", shoot(&w, &nav::Stack::new(), &running, "bench-stopped")));
+
         // The window keeps the last texture it was given, so every shot after this one would be of
         // a dark bench with a running iPod's screen on it. Back to `Off`.
+        dress_the_bench(&w);
+
+        // **§12.4, and §17 Q7 answered in a picture.** A device that was parked, standing in the
+        // well with **no machine at all**, showing the frame it was put down on rather than reading
+        // as off. Everything here is the shipped route: `png::encode` wrote the file, `machine::
+        // parked_frame` found it beside the snapshot, and `main::glass` decoded it — the same three
+        // functions a real park and a real relaunch use.
+        let mut parked = Furniture::new(a_furnished_library(&temp_dir("parked")));
+        {
+            let d = parked.settings.devices[0].clone();
+            let cfg = resting_config(&parked.settings, &d);
+            let snap = cfg.snapshot.clone().expect("a restore point path");
+            std::fs::create_dir_all(snap.parent().expect("a snapshots directory")).unwrap();
+            // **A whole pair, not just a picture.** `may_restore` asks the two files and the drive
+            // they were taken against, and §7.3's parked row promises three seconds only when it
+            // answers yes — so a fixture with the frame and no snapshot photographs a device whose
+            // picture survived its restore point, which is a real state and not this one.
+            std::fs::write(&snap, b"not a snapshot, but it is there").unwrap();
+            cfg.pair_with_drive().expect("stamping the drive the snapshot pairs with");
+            let mut frame = vec![0u8; emu::FB_W * emu::FB_H * 3];
+            for (i, px) in frame.chunks_exact_mut(3).enumerate() {
+                let (x, y) = (i % emu::FB_W, i / emu::FB_W);
+                // A different picture from the running one on purpose: the pixel comparison at the
+                // end of this test is what would catch a parked bench drawing the live texture.
+                px[0] = if (x / 16 + y / 16) % 2 == 0 { 0x20 } else { 0xd0 };
+                px[1] = (y * 255 / (emu::FB_H - 1)) as u8;
+                px[2] = 0x80;
+            }
+            std::fs::write(
+                cfg.parked_frame().expect("a parked frame path"),
+                png::encode(&frame, emu::FB_W, emu::FB_H),
+            )
+            .unwrap();
+        }
+        parked.settings.devices[0].parked_at = Some(eapp_loader::settings::now_unix() - 240);
+        shots.push(("bench-parked", shoot(&w, &nav::Stack::new(), &parked, "bench-parked")));
         dress_the_bench(&w);
 
         // **§9.5, and nothing had ever taken a picture of it, because until now there was nothing
@@ -9602,7 +10734,7 @@ pub(crate) mod tests {
 
         // (2) The device is gone, not squeezed. `panel_description` is the drawn iPod's own
         // accessible label and reaches a pixel nowhere else.
-        let panel = panel_description(&machine::Life::Off).to_string();
+        let panel = panel_description(&machine::Glass::Dark).to_string();
         assert!(
             !drawn.contains(&cradle),
             "the cradle label is still on screen below the threshold, so the pane was drawn over a \
@@ -10172,7 +11304,7 @@ pub(crate) mod tests {
     fn the_plan_is_on_screen_before_anything_is_downloaded() {
         let (settings, _held) = a_fresh_installation();
         let w = a_window();
-        let _wiring = wire(&w, settings.clone());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default());
 
         let rail = w.get_rail();
         let planned: Vec<RailRow> = (0..rail.row_count())
@@ -10248,7 +11380,7 @@ pub(crate) mod tests {
     fn the_wizard_does_not_come_back() {
         let (settings, _held) = a_fresh_installation();
         let first = a_window();
-        let _w1 = wire(&first, settings.clone());
+        let _w1 = wire(&first, settings.clone(), args::Machine::default());
         assert!(first.get_drawer_open(), "the first launch did not show the welcome");
         assert!(settings.borrow().welcomed, "the welcome was shown and the flag was not set");
 
@@ -10261,7 +11393,7 @@ pub(crate) mod tests {
 
         // A second launch, on that same emptied library.
         let second = a_window();
-        let _w2 = wire(&second, settings.clone());
+        let _w2 = wire(&second, settings.clone(), args::Machine::default());
         assert!(
             !second.get_drawer_open(),
             "the drawer opened again on an empty library, which is the wizard coming back"
@@ -10327,7 +11459,7 @@ pub(crate) mod tests {
         std::fs::write(&drives, b"not a directory").expect("the blocking file");
 
         let w = a_window();
-        let _wiring = wire(&w, settings.clone());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default());
         assert_eq!(first_run_offer(&settings.borrow()), Offer::Again);
         assert!(
             press_is_first_run(&settings.borrow(), 0),
@@ -10480,7 +11612,7 @@ pub(crate) mod tests {
     fn the_first_run_screen_carries_one_bill_and_one_step_cost() {
         let (settings, _held) = a_fresh_installation();
         let w = a_window();
-        let _wiring = wire(&w, settings.clone());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default());
 
         let mut drawn: Vec<String> = vec![
             w.get_ledger_download().to_string(),
@@ -10669,7 +11801,7 @@ pub(crate) mod tests {
         // …and the behaviour of the line itself, which is what the sweep is about.
         let (settings, _held) = a_fresh_installation();
         let w = a_window();
-        let _wiring = wire(&w, settings.clone());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default());
         let cache = eapp_loader::firmware::cache_dir();
         assert_eq!(w.get_ledger_note(), "Nothing has been downloaded yet.");
         std::fs::create_dir_all(&cache).expect("a cache");
@@ -10838,7 +11970,7 @@ pub(crate) mod tests {
 
         let settings = Rc::new(RefCell::new(s));
         let w = a_window();
-        let _wiring = wire(&w, settings.clone());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default());
         // Counted rather than assumed to be zero: `wire` files §10.1's plan, and one more entry on
         // top of it on a machine with no `curl`. What this test is about is the row the press adds.
         let before = w.get_rail().row_count();
@@ -11129,7 +12261,7 @@ pub(crate) mod tests {
     fn the_registered_copy_handler_refuses_an_identifier_and_says_so() {
         let settings = Rc::new(RefCell::new(Settings::default()));
         let w = a_window();
-        wire(&w, settings);
+        wire(&w, settings, args::Machine::default());
 
         // **The last row, not row 0.** `wire` files the first run's plan before any press, so the
         // Rail already holds five `Planned` steps — reading index 0 reads the plan and reports a
@@ -11209,7 +12341,7 @@ pub(crate) mod tests {
         }
         std::fs::write(&drives, b"not a directory").expect("the blocking file");
         let w = a_window();
-        let wiring = wire(&w, settings.clone());
+        let wiring = wire(&w, settings.clone(), args::Machine::default());
         assert_eq!(w.get_devices().row_count(), 0, "the fixture is not an empty library");
 
         // The real, registered handler. A panic here is the shipped defect in a new place.
@@ -11279,7 +12411,7 @@ pub(crate) mod tests {
     fn a_real_first_run_from_the_registered_centre_button() {
         let (settings, _held) = a_fresh_installation_in("e2e-first-run");
         let w = a_window();
-        let wiring = wire(&w, settings.clone());
+        let wiring = wire(&w, settings.clone(), args::Machine::default());
         let began = std::time::Instant::now();
 
         println!("\ndata directory  {}", eapp_loader::settings::data_dir().display());
@@ -11455,7 +12587,7 @@ pub(crate) mod tests {
     fn a_retry_after_a_failed_build_does_not_download_again() {
         let (settings, _held) = a_fresh_installation_in("e2e-resume");
         let w = a_window();
-        let wiring = wire(&w, settings.clone());
+        let wiring = wire(&w, settings.clone(), args::Machine::default());
         let drives = eapp_loader::settings::drives_dir();
         let cache = eapp_loader::firmware::cache_dir();
 
@@ -11546,7 +12678,7 @@ pub(crate) mod tests {
     fn a_first_run_pressed_three_times_mints_one_ipod() {
         let (settings, _held) = a_fresh_installation_in("e2e-three-presses");
         let w = a_window();
-        let wiring = wire(&w, settings.clone());
+        let wiring = wire(&w, settings.clone(), args::Machine::default());
 
         println!("\ndata directory  {}", eapp_loader::settings::data_dir().display());
         println!("ledger          {}", w.get_ledger_disk());
@@ -11875,11 +13007,11 @@ pub(crate) mod tests {
         let half_made = Device { name: compose::FIRST_RUN_DEVICE.into(), ..Device::default() };
         let composed = Device { composed: true, ..Device::default() };
         let typed = [
-            ("the startable device", cradle_label(&made, &[])),
+            ("the startable device", cradle_label(&Settings::default(), &made, &[])),
             // §10.3's half-made one. `FIRST_RUN_DEVICE` is the name a first run gives, so this is
             // the longest label this program composes without a person having renamed anything.
-            ("the half-made device", cradle_label(&half_made, &[])),
-            ("the composed device", cradle_label(&composed, &[])),
+            ("the half-made device", cradle_label(&Settings::default(), &half_made, &[])),
+            ("the composed device", cradle_label(&Settings::default(), &composed, &[])),
             ("the first-run bench", empty_device(true, caps(), a_cost()).cradle_label.to_string()),
             ("the empty bench", empty_device(false, caps(), no_cost()).cradle_label.to_string()),
         ];
@@ -11949,7 +13081,7 @@ pub(crate) mod tests {
         ] {
             tails.push((
                 what,
-                Press::ALL.iter().map(|p| cradle_label_at(*p, of, &[])).collect(),
+                Press::ALL.iter().map(|p| cradle_label_at(*p, &Settings::default(), of, &[])).collect(),
             ));
         }
         tails.push((
@@ -11991,8 +13123,8 @@ pub(crate) mod tests {
         // and neither prefixes it.
         let composed = Device { composed: true, ..Device::default() };
         let refusals = [
-            cradle_label_at(Press::Centre, &composed, &[]),
-            cradle_label_at(Press::Here, &composed, &[]),
+            cradle_label_at(Press::Centre, &Settings::default(), &composed, &[]),
+            cradle_label_at(Press::Here, &Settings::default(), &composed, &[]),
             empty_cradle_label(Press::Centre, rail::Caps { download: false, ..caps() }),
             empty_cradle_label(Press::Here, rail::Caps { download: false, ..caps() }),
         ];
@@ -12397,7 +13529,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let _wiring = wire(&w, settings.clone());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default());
         // Nothing is pushed while the page is off screen — the registry's guard, and the reason a
         // 10 Hz build tick does not walk the library six times a second for a page nobody can see.
         assert_eq!(w.get_parts_groups().row_count(), 0, "the page was pushed before it was opened");
@@ -12454,7 +13586,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let _wiring = wire(&w, settings.clone());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default());
         w.invoke_open_page(DrawerPage::Devices, 1);
         assert_eq!(w.get_devices_detail_of(), -1, "a device is open before anything was pressed");
 
@@ -12497,7 +13629,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let _wiring = wire(&w, settings.clone());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default());
         w.invoke_open_page(DrawerPage::Devices, 1);
         w.invoke_device_expand(0, true);
 
@@ -12533,7 +13665,7 @@ pub(crate) mod tests {
     fn the_settings_page_states_every_refusal_and_the_toggle_sticks() {
         let (settings, _held) = a_fresh_installation();
         let w = a_window();
-        let _wiring = wire(&w, settings.clone());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default());
         w.invoke_open_page(DrawerPage::Settings, 1);
 
         assert!(!w.get_setting_theme_value().is_empty(), "the Theme row has no value");
@@ -12585,7 +13717,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let _wiring = wire(&w, settings.clone());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default());
         w.invoke_open_page(DrawerPage::Parts, 1);
         let quiet = w.get_rail().row_count();
 
@@ -12624,7 +13756,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let _wiring = wire(&w, settings.clone());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default());
 
         // From Parts.
         w.invoke_open_page(DrawerPage::Parts, 1);

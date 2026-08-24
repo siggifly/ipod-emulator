@@ -650,7 +650,7 @@ fn start_row(s: &Settings, d: &Device, seen: &mut Presence, machine: Option<&str
                 // written yet is a project state and carries a command instead (§9.4).
                 row.machine_rule = b.machine_rule();
             }
-            None => row.reason = crate::cradle_label(d, &gone),
+            None => row.reason = crate::cradle_label(s, d, &gone),
         }
     }
     row
@@ -1414,7 +1414,7 @@ mod tests {
         let mut fresh = Presence::new();
         assert_eq!(
             start.reason,
-            crate::cradle_label(&s.devices[0], &s.missing_with(&s.devices[0], &mut fresh))
+            crate::cradle_label(&s, &s.devices[0], &s.missing_with(&s.devices[0], &mut fresh))
         );
 
         // §9.4's other kind, on the same control.

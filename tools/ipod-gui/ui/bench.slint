@@ -329,6 +329,10 @@ export component Bench inherits Rectangle {
     // cannot hold the device having gaps in it is the drawing saying the thing.
     in property <bool> cradle-broken: false;
     in property <bool> startable: true;
+    // §12.3's boot progress. See `DeviceRow` in `primitives.slint` for why this is two properties
+    // and not one, and `main::boot_rule` for the one place they are decided together.
+    in property <bool> boot-measured: false;
+    in property <float> boot-fraction: 0;
 
     // ── §9.5's pane ──
     //
@@ -570,6 +574,53 @@ export component Bench inherits Rectangle {
                 background: root.ring-ink;
                 border-radius: 1px;
                 animate background { duration: Motion.tight; easing: ease-out-quad; }
+            }
+
+            // ── §12.3's boot rule ────────────────────────────────────────────────────────────
+            //
+            // **Drawn only when there is a denominator**, which is the whole of §12.3: *"before a
+            // device has ever booted there is no fraction and no bar."* `boot-measured` is false
+            // for a device whose last cold boot was never observed, and then this element is not
+            // there at all — the caption carries `booting — 412 M instr`, a number that moves,
+            // which is what that paragraph asks for instead.
+            //
+            // **In the cradle's own band, under the body**, so it costs nothing in §9.6's column
+            // and sits on the fixture rather than on the object (principle 3).
+            //
+            // **No `animate`.** The fraction is republished up to sixty times a second by the
+            // machine tick, so an animation would be easing toward a target that has already
+            // moved — the same argument the cradle label two elements down makes about its own
+            // `x`, and §8.2's rule with teeth.
+            //
+            // It carries no accessible role deliberately: this is the *picture* of a number the
+            // cradle label is already saying in words, and a second announcement of one fact is
+            // §16.7's noise rather than its access.
+            Rectangle {
+                x: Geometry.cradle-band;
+                y: Geometry.cradle-band + root.hero + Geometry.boot-rule-gap;
+                width: root.body-w;
+                height: Geometry.boot-rule-h;
+                visible: root.boot-measured;
+                background: Ink.line;
+                border-radius: self.height / 2;
+
+                Rectangle {
+                    x: 0;
+                    y: 0;
+                    // **Already 0..1 when it arrives, and the clamp is `main::boot_rule`'s.**
+                    // `machine::Progress::percent` is deliberately unclamped — a reading over
+                    // 100 % means the recipe changed under a stored denominator and §12.3 wants
+                    // that visible in the caption — but a rule cannot be longer than its track, so
+                    // the drawing gets a clamped fraction and the words keep the true one. Written
+                    // as `clamp(root.boot-fraction, 0, 1)` here first, which
+                    // `no_geometry_literal_survives_in_the_markup` refused: a bound in an
+                    // expression is still a number in the markup, and the sweep was right that it
+                    // belongs on the other side of the boundary.
+                    width: parent.width * root.boot-fraction;
+                    height: parent.height;
+                    background: Ink.accent;
+                    border-radius: parent.border-radius;
+                }
             }
 
             // §7.3: **the cradle is the `Button`.** The pointer route to starting is the drawn

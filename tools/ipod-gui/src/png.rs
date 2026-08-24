@@ -88,6 +88,7 @@ pub fn encode(rgb: &[u8], w: usize, h: usize) -> Vec<u8> {
 }
 
 /// The same pixels as a binary PPM — byte-for-byte what `--bcm-dump` writes.
+#[allow(dead_code)]  // retired when: something in this window writes a PPM — `--bcm-dump` is `trace`'s and §12.9 keeps it there, so what wants this is a comparison run from a terminal rather than a surface
 pub fn encode_ppm(rgb: &[u8], w: usize, h: usize) -> Vec<u8> {
     let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
     out.extend_from_slice(rgb);
