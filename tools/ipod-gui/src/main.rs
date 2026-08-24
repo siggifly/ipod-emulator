@@ -30,13 +30,11 @@
 // `unsafe` call into a platform nobody can run is worse than a gap somebody can read about.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-// **These three modules are not dead. They are not yet reconnected.**
+// **This module is not dead. It is not yet reconnected.**
 //
-// The view layer that called them went with `main.rs` when the old window was deleted, and each
-// comes back as its surface is rebuilt: `control` with the readout Rail (§12.8), `png` with the
-// screenshot key (§17), `wheel` with **input** — the pointer stream that reaches `emu::Link::push`,
-// which is the thing `MACHINE_TAKES_INPUT` is false for. Their own tests still run, so this is
-// unreferenced code and not unverified code.
+// The view layer that called it went with `main.rs` when the old window was deleted, and it comes
+// back as its surface is rebuilt: `control` with the readout Rail (§12.8). Its own tests still run,
+// so this is unreferenced code and not unverified code.
 //
 // **`png` came off that list with §12.4.** `png::encode` writes the frame a parked device's glass
 // shows and the Readout's `Screenshot the panel` row, so the module is reached from the shipped
@@ -54,9 +52,15 @@
 // `Out` sixty times a second. What that blanket hid was five items and one dead field — `flash`,
 // which held a path `nor::Source::File` already carries and which nothing has ever read, so it was
 // deleted rather than allowed. The rest are the **command line's**: `args::FLAGS` refuses every
-// flag that reaches them, and each now says so on its own line. Writing *"when Running lands"* over
-// `wheel` as well is the part worth naming — Running and input are two surfaces, and one condition
-// for both would have retired with the wrong half.
+// flag that reaches them, and each now says so on its own line.
+//
+// **And `wheel`'s has come due too, which is why writing *"when Running lands"* over it would have
+// been wrong.** Running and input were two surfaces and this is the second one: `wheel::Finger`
+// turns the drawn wheel's pointer stream and §16.8's keys into `eapp_loader::WheelEvent`s, `wire`
+// pushes them onto `emu::Link`, and `select_d` was already reading the same `WheelRing` the hit
+// test uses. One condition for both surfaces would have retired with the wrong half — the module
+// would have come off its blanket a commit before anything called it. What is still waiting in
+// there carries its own condition beside itself, which is the shape a retiring blanket leaves.
 //
 // **And each of those conditions named `Gone::Machine`, which no longer exists.** That class said
 // *this build starts no machine yet*; five of its flags came back with `emu::run`'s first caller
@@ -72,7 +76,6 @@
 mod control;
 mod emu;
 mod png;
-#[allow(dead_code)]
 mod wheel;
 
 // **And a fifth, which was never connected rather than disconnected — and now is.** `machine` is
@@ -518,12 +521,17 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>, launch: args::Mach
     // the same call with the same argument for the state a window opens in.
     window.set_running(false);
     window.set_panel_lit(false);
-    let (wheel, hold) = refusals(&machine::Life::Off);
-    window.set_wheel_refusal(wheel.into());
-    window.set_hold_refusal(hold.into());
-    // §7.4, and see `machine-takes-input` in `ui/window.slint`: a literal about this build, like
-    // `Caps`'s four. Pushed once, because nothing in a running window changes what code exists.
-    window.set_machine_takes_input(MACHINE_TAKES_INPUT);
+    // §7.4's hold sentence. **A constant, pushed once**: there is exactly one state in which a drawn
+    // control refuses, and `machine::no_machine` is what words it. The pair that used to be
+    // recomputed every tick had a second arm saying the window could not reach the machine *yet*,
+    // and reaching it is what this pass built. `machine::NO_MACHINE` itself is not pushed anywhere:
+    // its drawn half is `held-sentence`, which the handlers write when a control is refused, and it
+    // has no ARIA of its own to be a second property for.
+    window.set_hold_refusal(machine::NO_MACHINE_HOLD.into());
+    window.set_held_sentence(slint::SharedString::new());
+    // §12.2's `Off`: nothing takes input, no button is down, the hold switch is where a dead iPod's
+    // is. `pump_machine` is the one other caller and it pushes the same six from a machine.
+    machine_controls(window, &machine::Life::Off, None);
 
     // ── §8.4's reduced motion, and §16.6's one font family ──
     //
@@ -821,6 +829,94 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>, launch: args::Mach
             timer.start(slint::TimerMode::Repeated, work::TICK, move || tick());
         })
     };
+
+    // ── §7.4: the drawn controls, joined to the machine ─────────────────────────────────────────
+    //
+    // Seven callbacks, one rule, and the rule is in [`to_the_machine`]. Every one of them fires on
+    // every press: nothing in the markup asks whether there is a machine any more, because that is
+    // a question about a phase the drawing cannot see, and the day the bench could actually run
+    // something a markup gate would have been a control drawn live over a handler that does not
+    // exist. §14.1 and §19.1's first fatal finding, avoided by putting the gate where the machine
+    // is.
+    {
+        let live = live.clone();
+        let weak = window.as_weak();
+        window.on_wheel_down(move |dx, dy| {
+            let Some(w) = weak.upgrade() else { return };
+            to_the_machine(&w, &live, machine::NO_MACHINE, |l| {
+                l.finger.borrow_mut().pressed(&unit_ring(), dx, dy)
+            });
+        });
+    }
+    {
+        let live = live.clone();
+        window.on_wheel_moved(move |dx, dy| {
+            // **A drag over a bench with no machine says nothing new.** The press already put the
+            // sentence on the cradle and it is held until the pointer lifts; re-pushing the same
+            // string sixty times a second is a repaint per mouse move for a line that has not
+            // changed. `Finger::moved` answers nothing while no pointer is down, so the machine
+            // half is a no-op too — but the refusal half has to be skipped here rather than there,
+            // because `wheel.rs` has no idea a cradle exists.
+            if machine::no_machine(&life(&live)).is_some() {
+                return;
+            }
+            let held = live.borrow();
+            let Some(l) = held.as_ref() else { return };
+            for ev in l.finger.borrow_mut().moved(dx, dy) {
+                l.link.push(ev);
+            }
+        });
+    }
+    {
+        let live = live.clone();
+        let weak = window.as_weak();
+        window.on_wheel_up(move || {
+            let Some(w) = weak.upgrade() else { return };
+            off_the_machine(&w, &live, |l| l.finger.borrow_mut().released());
+        });
+    }
+    {
+        let live = live.clone();
+        let weak = window.as_weak();
+        window.on_hold_pressed(move || {
+            let Some(w) = weak.upgrade() else { return };
+            // §7.4: a position, not a press. It goes to wherever it is not — read off `Stats::hold`,
+            // which is the machine's own field, so the switch and the drawing cannot disagree about
+            // which way it is thrown.
+            to_the_machine(&w, &live, machine::NO_MACHINE_HOLD, |l| {
+                vec![eapp_loader::WheelEvent::Hold(!l.hold.get())]
+            });
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_hold_released(move || {
+            let Some(w) = weak.upgrade() else { return };
+            // Nothing goes to the machine — the switch moved on the way down — but the refusal has
+            // to stop being held, which is the half §7.4 specifies and the half a `toggled`
+            // callback could not have carried.
+            w.set_held_sentence(slint::SharedString::new());
+        });
+    }
+    {
+        let live = live.clone();
+        window.on_centre_down(move || centre_to_the_machine(&live, true));
+    }
+    {
+        let live = live.clone();
+        window.on_centre_up(move || centre_to_the_machine(&live, false));
+    }
+    {
+        let live = live.clone();
+        let weak = window.as_weak();
+        // Owned by the closure, because it is a fact about this window's keyboard and not about any
+        // machine: a key held across a power-off is still held.
+        let down_keys: RefCell<Vec<char>> = RefCell::new(Vec::new());
+        window.on_machine_key(move |text, down| {
+            let Some(w) = weak.upgrade() else { return false };
+            machine_key(&w, &live, &down_keys, &text, down)
+        });
+    }
 
     // ── The centre button, and §20 item 12's whole point ──
     {
@@ -2267,17 +2363,66 @@ impl Drop for Wiring {
 /// two rates is how a panel comes to run at the speed of a progress bar.
 const MACHINE_TICK: std::time::Duration = std::time::Duration::from_millis(16);
 
-/// **Whether the drawn wheel, buttons and hold switch reach the machine.** §7.4.
+/// **The wheel this window hits against**, in units of its own outer radius.
 ///
-/// A literal about this build, in the same shape `rail::Caps` holds §9.3's four: the route does not
-/// exist. `ui/window.slint` binds none of `Bench`'s four input callbacks, and the handlers would
-/// need `emu::Link::push` and `wheel::WheelRing` joined to the pointer stream — the input pass, not
-/// this one. §14.1: a control whose route does not exist is drawn refused, with its reason, never
-/// live and never quietly dropped.
+/// The markup normalises before it raises (`ipod.slint`'s `wheel-down`), so the pointer arrives
+/// here as a fraction of the radius and nothing in Rust has to know how big the drawing is — the
+/// same handler is right at hero, at a thumbnail and in §12.6's fullscreen. `wheel.rs` holds
+/// `inner` and `select` as ratios of `outer` for exactly this reason, and [`select_d`] is the one
+/// place a *pixel* size is derived from them, because the markup needs a rectangle to put under
+/// the centre button.
 ///
-/// **Retired when** `main.rs` registers `on_wheel_down`, `on_wheel_moved`, `on_wheel_up` and
-/// `on_hold_toggled`, and each reaches `emu::Link::push`.
-const MACHINE_TAKES_INPUT: bool = false;
+/// Not a `const`: `WheelRing::new` computes two ratios and is not a `const fn`, and making it one
+/// to save a multiplication that happens once per pointer event is the wrong trade.
+fn unit_ring() -> wheel::WheelRing {
+    wheel::WheelRing::new(0.0, 0.0, 1.0)
+}
+
+/// **§16.8's four machine rows, and nothing else on that table.**
+///
+/// The two arrow rows are not one row with four keys in it. `↑` `↓` are *the wheel, always*; `←`
+/// `→` are *the wheel while there is a machine; previous / next device when there is not*. The
+/// difference is the `shared` term, and it is what lets `window.slint` fall through to §7.2's
+/// device shortcut for exactly two of the four arrows rather than for all of them or for none.
+///
+/// **Lower case only, deliberately.** `event.text` for the unshifted M key is `m`, which is the key
+/// §16.8's table means; `⇧M` is a different keystroke and this table does not claim it. §16.8's own
+/// `S` · `⇧S` row is the proof that the shift matters in this program, so answering both from one
+/// arm would be inventing a rule.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Keyed {
+    /// One detent: `+1` clockwise, `-1` anticlockwise. `shared` marks §16.8's `← →` row, which has
+    /// a second job on a bench with no machine and must therefore never be *refused* — it is handed
+    /// back to the markup instead.
+    Step { by: i8, shared: bool },
+    /// One of the four printed labels, held down and released with the key.
+    Press(wheel::Button),
+    /// The hold switch. §7.4 makes it a concept rather than a button, and this is its key.
+    Hold,
+}
+
+fn keyed(text: &str) -> Option<Keyed> {
+    use slint::platform::Key;
+    let mut chars = text.chars();
+    let c = chars.next()?;
+    // A key event carrying more than one character is an input method's composition, never one of
+    // these — and matching on its first character would press MENU on the way to typing `Mý`.
+    if chars.next().is_some() {
+        return None;
+    }
+    Some(match c {
+        c if c == char::from(Key::UpArrow) => Keyed::Step { by: -1, shared: false },
+        c if c == char::from(Key::DownArrow) => Keyed::Step { by: 1, shared: false },
+        c if c == char::from(Key::LeftArrow) => Keyed::Step { by: -1, shared: true },
+        c if c == char::from(Key::RightArrow) => Keyed::Step { by: 1, shared: true },
+        'm' => Keyed::Press(wheel::Button::Menu),
+        'p' => Keyed::Press(wheel::Button::Play),
+        'n' => Keyed::Press(wheel::Button::Next),
+        'b' => Keyed::Press(wheel::Button::Prev),
+        'h' => Keyed::Hold,
+        _ => return None,
+    })
+}
 
 /// One page's whole re-push, in one call.
 ///
@@ -2545,6 +2690,29 @@ struct Live {
     /// **Nothing here joins**: a UI thread that waited for a 64 MB write would be the window
     /// appearing to hang, which is the exact thing §12.4 puts a sentence on the cradle to avoid.
     parking: Cell<bool>,
+    /// §7.4's one finger on the drawn wheel.
+    ///
+    /// **It belongs to the machine and not to the window**, which is what this field's position
+    /// says: a drag is a contact with a `Touch` at one end and a `Release` at the other, and if the
+    /// machine underneath it is dropped mid-drag there is nothing left for the release to reach.
+    /// A new `Live` therefore starts with no finger on the wheel, by construction, rather than by
+    /// somebody remembering to reset one.
+    finger: RefCell<wheel::Finger>,
+    /// `Stats::hold` and `Stats::buttons` as of the last sample — **the machine's own answer** about
+    /// its own controls, which is what §7.4 draws and what the hold switch's next toggle is computed
+    /// from.
+    ///
+    /// Cached here rather than read at each use for the reason [`Live::sample`] gives: `Out` holds a
+    /// 230 400-byte framebuffer, and a drawn button that took the lock would put the interpreter and
+    /// the UI thread in each other's way once per button per repaint.
+    ///
+    /// **The lag is real and is not hidden.** A toggle computed from `hold` is computed from what
+    /// the machine last said, so switching twice inside one 16 ms tick moves the switch once —
+    /// which is the same ~1.6 s of visible latency §7.4 puts on a button's release, and for the
+    /// same reason: the machine runs at about a quarter of the part, and pretending otherwise makes
+    /// the drawing lie.
+    hold: Cell<bool>,
+    buttons: Cell<u8>,
 }
 
 impl Live {
@@ -2577,6 +2745,13 @@ impl Live {
         // one — this function's own doc says it is the only place that locks `Out`, and a reader
         // that took the mutex again to ask one more question would make that false.
         self.booted.set(out.booted_at);
+        // §7.4's two reads of the machine's own controls, carried out for the same reason. They are
+        // above the `fb_seq` gate deliberately: a button goes down and comes up without the
+        // framebuffer moving at all — on a stalled machine it never moves — and a depressed button
+        // that only redrew when the panel did would be a control whose state was reported by the
+        // co-processor.
+        self.hold.set(out.stats.hold);
+        self.buttons.set(out.stats.buttons);
         if out.fb_seq == self.seq.get() {
             return None;
         }
@@ -2802,30 +2977,178 @@ fn start_machine(
         booted: Cell::new(None),
         learned: Cell::new(false),
         parking: Cell::new(false),
+        // Nothing is touching a machine that has just been built, which is the whole point of the
+        // finger living here — see the field.
+        finger: RefCell::new(wheel::Finger::default()),
+        hold: Cell::new(false),
+        buttons: Cell::new(0),
     });
     Ok(())
 }
 
-/// §7.4's two sentences, for the state the bench is actually in.
+/// **Hand what a drawn control did to the machine, or say why there is nothing to hand it to.**
+/// §7.4, and it is the only place that decides.
 ///
-/// **Two states, not one, and the markup could only see one of them.** `ui/ipod.slint` typed both
-/// as literals ending *and there is no machine*, which was true of every build before Phase 7 and
-/// is false the moment one is running: the drawn controls do not reach the machine because
-/// `emu::Link::push` is not wired to them, which is a different fact and wants different words.
-/// §14.1 — say what cannot be done and why, and stop there.
+/// One function because there are three controls and one rule. The pointer stream, §16.8's keys and
+/// the hold switch all arrive unconditionally — `ipod.slint` gates none of them any more, because a
+/// markup gate is the drawing answering a question about a phase it cannot see — and this is where
+/// the answer is: a machine that is `alive` takes the events, and anything else takes §7.4's
+/// sentence on the cradle label, held for as long as the press is.
 ///
-/// `machine::no_machine` is the first half, so §7.4's own wording lives in one place.
-fn refusals(life: &machine::Life) -> (&'static str, &'static str) {
-    match machine::no_machine(life) {
-        Some(no) => (no, "the hold switch belongs to the machine, and there is no machine"),
-        // Both are exempt from `geometry::CRADLE_LABEL_MAX_CHARS` for the reason §7.3's table gives
-        // the row above: there is no press in either to shorten, and the first clause is the whole
-        // meaning and survives the elision.
-        None => (
-            "the wheel and the buttons are the machine's, and the window cannot reach it yet",
-            "the hold switch is the machine's, and the window cannot reach it yet",
-        ),
+/// **`Life::alive` and not `live.is_some()`.** A `Live` outlives its machine: a stopped one keeps
+/// its `Link`, its last frame and the reason it died, and pushing a `Touch` onto a run loop that
+/// has ended would be an event queued for nobody. §12.5 says power off is real — *the machine is
+/// dropped and re-entered at the reset vector* — so `Stopped` and `Off` are both *no machine* here,
+/// which is the same answer `machine::no_machine` gives the sentence.
+fn to_the_machine<F>(window: &MainWindow, live: &Rc<RefCell<Option<Live>>>, refusal: &str, what: F)
+where
+    F: FnOnce(&Live) -> Vec<eapp_loader::WheelEvent>,
+{
+    if machine::no_machine(&life(live)).is_some() {
+        window.set_held_sentence(refusal.into());
+        return;
     }
+    let held = live.borrow();
+    let Some(l) = held.as_ref() else { return };
+    for ev in what(l) {
+        l.link.push(ev);
+    }
+}
+
+/// The other edge: a control came up. **The sentence goes whether or not there was a machine**,
+/// because the one thing a held refusal must not do is stay held after the finger left.
+fn off_the_machine<F>(window: &MainWindow, live: &Rc<RefCell<Option<Live>>>, what: F)
+where
+    F: FnOnce(&Live) -> Vec<eapp_loader::WheelEvent>,
+{
+    window.set_held_sentence(slint::SharedString::new());
+    if machine::no_machine(&life(live)).is_some() {
+        return;
+    }
+    let held = live.borrow();
+    if let Some(l) = held.as_ref() {
+        for ev in what(l) {
+            l.link.push(ev);
+        }
+    }
+}
+
+/// **The drawn centre button, when it is the machine's Select.** §7.4 and §7.3.
+///
+/// `machine::centre` is asked and it is the *only* thing asked — the same call `on_start_device`
+/// makes for the same press. Its four answers are four different controls sharing one disc: over a
+/// running machine this is Select, over a booting one it is `Cmd::PowerOff` (§7.3's *press ● to
+/// stop*), over a stopped or absent one it is a cold boot, and over a device with a part missing it
+/// is a refusal with a reason. Only the first is a *button on the iPod*, and only the first belongs
+/// here; the other three are presses on the program and go through `on_start_device`, which is what
+/// `clicked` still raises.
+///
+/// **Down and up rather than a click**, because §7.4 wants the duration: MENU held is the main menu
+/// on a real 5G and Select held is a different thing from Select tapped, and the emulator's own
+/// `MIN_BUTTON_HOLD` only bounds the release from below. It takes no window: there is nothing to
+/// say when this does nothing, because the press it did nothing for is one the other route is
+/// already answering.
+fn centre_to_the_machine(live: &Rc<RefCell<Option<Live>>>, down: bool) {
+    let held = live.borrow();
+    let Some(l) = held.as_ref() else { return };
+    let life = l.life();
+    if machine::centre(&l.stand(&life)) != machine::Act::ToMachine {
+        return;
+    }
+    l.link.push(eapp_loader::WheelEvent::Button(wheel::Button::Select.mask(), down));
+}
+
+/// §16.8's machine rows, answered. **`true` means the key was this program's**, which is what
+/// `window.slint` turns into `accept` versus `reject`.
+///
+/// The one `false` that is not *this key is not on the table* is §16.8's `← →` row with no machine:
+/// it has a second job — previous / next device — and handing it back is how the markup gets to do
+/// that. Every other row refuses with its sentence rather than falling through, because falling
+/// through would make `M` mean nothing at all on an empty bench, silently, which is §14.1's whole
+/// subject.
+fn machine_key(
+    window: &MainWindow,
+    live: &Rc<RefCell<Option<Live>>>,
+    // **Which of these keys this scope took on the way down**, so a release it never saw the press
+    // for is not answered. §16.8's one exception is focus — a focused `TextInput` consumes a
+    // character key's press before it can bubble here — and focus covers exactly half the
+    // keystroke: `i-slint-core-1.17.1/items/text.rs:1106-1115`'s `KeyReleased` arm answers
+    // `EventIgnored` unless the field's own `key-released` accepts, and by default it rejects. So
+    // the release arrives at the root scope for a press that never did.
+    //
+    // The effect is small and it is not nothing: typing `m` into the Composer's Name field over a
+    // running machine would queue `Button(MENU, false)` for it — a clear of a bit that is already
+    // clear, right up until MENU is genuinely held by something else. A `Vec` and not a mask
+    // because there are nine keys on this table and a bit index per key is a second table.
+    down_keys: &RefCell<Vec<char>>,
+    text: &str,
+    down: bool,
+) -> bool {
+    let Some(k) = keyed(text) else { return false };
+    // `keyed` answered, so there is exactly one character.
+    let c = text.chars().next().expect("keyed answers only for a one-character key");
+    if !down {
+        let mut held = down_keys.borrow_mut();
+        let Some(i) = held.iter().position(|&x| x == c) else { return false };
+        held.remove(i);
+    }
+    let mine = machine_key_act(window, live, k, down);
+    if down && mine {
+        let mut held = down_keys.borrow_mut();
+        // Auto-repeat sends presses without releases between them, and it is the platform's rate
+        // rather than one this program invents — so a repeat must not push a second entry that
+        // the one release could never take back out.
+        if !held.contains(&c) {
+            held.push(c);
+        }
+    }
+    mine
+}
+
+/// What one of §16.8's machine keys does, once it is known to be one. See [`machine_key`], which is
+/// the half that decides whether this window saw the press.
+fn machine_key_act(
+    window: &MainWindow,
+    live: &Rc<RefCell<Option<Live>>>,
+    k: Keyed,
+    down: bool,
+) -> bool {
+    if machine::no_machine(&life(live)).is_some() {
+        if matches!(k, Keyed::Step { shared: true, .. }) {
+            return false;
+        }
+        let sentence = match k {
+            Keyed::Hold => machine::NO_MACHINE_HOLD,
+            _ => machine::NO_MACHINE,
+        };
+        window.set_held_sentence(if down { sentence } else { "" }.into());
+        return true;
+    }
+    // **Pushed here rather than through [`to_the_machine`], and the reason is one word.** That
+    // function's whole job is to choose between the machine and a refusal; the refusal has already
+    // been chosen against, one branch up. Routing through it anyway would mean handing it a
+    // sentence that cannot be shown — a `""` argument standing in for a decision already made,
+    // which is the shape of a route that exists and cannot be taken.
+    let held = live.borrow();
+    let Some(l) = held.as_ref() else { return true };
+    let events = match (k, down) {
+        (Keyed::Step { by, .. }, true) => l.finger.borrow_mut().keyed(by),
+        (Keyed::Step { .. }, false) => {
+            window.set_held_sentence(slint::SharedString::new());
+            l.finger.borrow_mut().key_released()
+        }
+        // A button's down and up are the key's own, so `M` held is MENU held — which on a 5G is how
+        // you get back to the main menu, and is the thing a synthesised tap could never say. The
+        // release is pushed out to `MIN_BUTTON_HOLD` by the emulator, not by anything here.
+        (Keyed::Press(b), _) => vec![eapp_loader::WheelEvent::Button(b.mask(), down)],
+        (Keyed::Hold, true) => vec![eapp_loader::WheelEvent::Hold(!l.hold.get())],
+        // §7.4 makes the hold switch a position rather than a press: there is no *up* to send.
+        (Keyed::Hold, false) => Vec::new(),
+    };
+    for ev in events {
+        l.link.push(ev);
+    }
+    true
 }
 
 /// §12.2's handoff: **the plan finished making an iPod, so the machine takes it.**
@@ -2862,6 +3185,35 @@ fn hand_off(
     if let Err(f) = outcome {
         rail.borrow_mut().failed("start", name, f);
     }
+}
+
+/// **§7.4's gate and the machine's own controls, pushed together.**
+///
+/// Three facts and one call: whether the drawn wheel, buttons and hold switch reach anything; where
+/// the hold switch is; and which buttons are down. They go out together because they are one
+/// statement about one machine — a `machine-takes-input` pushed on a tick that did not also push
+/// `held-select` is a window announcing a live control and drawing it at rest.
+///
+/// **`Stats` is where the last two come from and that is the point.** A drawn button depresses when
+/// your finger does and stays depressed until the machine has seen the release, which at
+/// `MIN_BUTTON_HOLD` is about 1.6 s of wall time — so what is on screen is the emulator's own
+/// answer about its own hardware rather than an animation this window plays over it. With no
+/// machine `Stats::buttons` is 0 and every one of them is false, which is the state a dead iPod's
+/// controls are in.
+/// **`None` is a bench with no machine on it**, and it is the argument this takes rather than a
+/// second function beside it: the state a window opens in, the state it returns to when a device is
+/// parked, and the state every shot but four is taken in are all the same state, and one of them
+/// having been written out by hand is how the three would come apart.
+fn machine_controls(window: &MainWindow, life: &machine::Life, l: Option<&Live>) {
+    window.set_machine_takes_input(life.alive());
+    let (hold, down) = l.map_or((false, 0), |l| (l.hold.get(), l.buttons.get()));
+    window.set_machine_hold(hold);
+    let held = |b: wheel::Button| down & b.mask() != 0;
+    window.set_held_menu(held(wheel::Button::Menu));
+    window.set_held_next(held(wheel::Button::Next));
+    window.set_held_prev(held(wheel::Button::Prev));
+    window.set_held_play(held(wheel::Button::Play));
+    window.set_held_select(held(wheel::Button::Select));
 }
 
 /// **One tick of the machine, and it is the one the machine timer runs.**
@@ -2913,6 +3265,12 @@ fn pump_machine(
         // already exited, and leaving it standing would keep the drive open and the timer running
         // over a machine that no longer exists.
         *live.borrow_mut() = None;
+        // **And the drawn controls stop being the machine's on the same tick the machine goes.**
+        // This branch returns before anything below draws, so without this line the last thing
+        // pushed would be the *running* machine's answer and it would stand for the life of the
+        // window: a wheel drawn live, and an assistive technology told a hold switch works, over a
+        // bench with nothing on it. §14.1's defect, arrived at by a `return`.
+        machine_controls(window, &machine::Life::Off, None);
         // Zero is a park that did not complete — see `Link::parked`, which is set only after both
         // halves of the pair are on disk. `Device::parked_at` must not name a restore point that
         // is not there, so nothing is learned and the next start says `cold boot`.
@@ -2921,6 +3279,13 @@ fn pump_machine(
 
     let held = live.borrow();
     let Some(l) = held.as_ref() else {
+        // **The other way out with no machine, and it has to say so too.** This branch is reached
+        // when a tick runs over an empty holder — a machine dropped by a new press that then
+        // failed, or the last tick of a timer being stopped. Returning quietly leaves §7.4's gate
+        // reading whatever the machine that has gone last said, which is a wheel drawn live over a
+        // bench with nothing on it. The park branch above returns before this one and therefore
+        // needs its own call; two exits, two statements, and neither of them silent.
+        machine_controls(window, &machine::Life::Off, None);
         return Learned::default();
     };
     let mut learned = Learned { watching: true, ..Learned::default() };
@@ -2966,12 +3331,10 @@ fn pump_machine(
     // is exactly `Glass` minus `Dark`.
     window.set_panel_lit(!matches!(on_glass, machine::Glass::Dark));
     window.set_panel_description(panel_description(&on_glass).into());
-    // §7.4's sentence, and **which** sentence depends on a state the markup cannot see: there is a
-    // machine here, so *there is no machine* would be false. `machine::no_machine` words the case
-    // where there is not.
-    let (wheel, hold) = refusals(&life);
-    window.set_wheel_refusal(wheel.into());
-    window.set_hold_refusal(hold.into());
+    // §7.4: whether the drawn controls are the machine's, and what the machine says they are
+    // doing. One call, because a gate pushed without the state under it is a wheel drawn live over
+    // a button nobody is holding.
+    machine_controls(window, &life, Some(l));
 
     // §7.3 and §7.5, for the one row §7.2 allows a machine on. **In place and only when it moved**
     // (§16.9): the caption carries a speed that changes every tick, and handing the model a fresh
@@ -6921,6 +7284,540 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    // ── §7.4: the drawn controls reach the machine ──────────────────────────────────────────────
+
+    /// **A bench with a running machine on it, wired the way the program wires one.**
+    ///
+    /// `wire` and not a `Furniture`: this is about the handlers, and a fixture that pushed the same
+    /// properties without registering them would pass every assertion below by doing nothing.
+    /// `show` and `set_size` are what give the drawn controls a geometry — hit testing is an
+    /// intersection of absolute rects, and with no size every rect is zero and every press lands on
+    /// nothing.
+    fn a_wired_bench_with_a_machine(tag: &str) -> (MainWindow, Wiring, std::path::PathBuf) {
+        let dir = temp_dir(tag);
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d.clone());
+        let w = a_window();
+        let wiring = wire(&w, Rc::new(RefCell::new(s)), args::Machine::default());
+        w.show().expect("the headless backend shows a window");
+        w.window().set_size(slint::LogicalSize::new(
+            geometry::PREF_WIDTH as f32,
+            geometry::PREF_HEIGHT as f32,
+        ));
+        // A machine with no thread behind it, published as `Running` — the phase §7.4 gives every
+        // drawn control to. Nothing here races a boot: `a_running_machine` is deterministic and
+        // `Live::drop` has no thread to join.
+        *wiring.live.borrow_mut() = Some(a_running_machine(&d));
+        (wiring.machine_tick)();
+        (w, wiring, dir)
+    }
+
+    /// **Where the drawn wheel's centre is on the shown window**, in logical pixels.
+    ///
+    /// Derived from `geometry`'s own constants — the ones `build.rs` renders into the markup — and
+    /// from `bench.slint`'s column, rather than measured: `ElementHandle` needs Slint debug info
+    /// that `build.rs` emits in debug profiles only, and **every cargo invocation in both CI
+    /// workflows is `--release`**, so a test that found the button by role would be a test CI never
+    /// runs.
+    ///
+    /// **What keeps the arithmetic honest is that it is asked to hit two targets 92 px apart** — the
+    /// centre button and the MENU label — and a slip lands on neither, or on the wrong one. Both
+    /// assertions are in `a_press_on_the_drawn_centre_button_reaches_the_machine`.
+    fn drawn_wheel_centre() -> (f32, f32) {
+        let hero = dressed_fit().hero_logical;
+        // `bench.slint`'s `body-y`, bottom up: the shelf, `GAP_2`, the cradle label, `GAP_1`,
+        // `CRADLE_BAND`. The drawer is closed, so `drawer-inset` is 0 and the well is the client.
+        let well_h = geometry::PREF_HEIGHT - geometry::SHELF;
+        let body_y = well_h
+            - geometry::GAP_2
+            - geometry::CRADLE_LABEL
+            - geometry::GAP_1
+            - geometry::CRADLE_BAND
+            - hero;
+        (
+            // `body-x` centres the body in the well, so this is the window's own midline.
+            (geometry::PREF_WIDTH / 2.0) as f32,
+            (body_y + (geometry::WHEEL_TOP + geometry::WHEEL_D / 2.0) * hero) as f32,
+        )
+    }
+
+    /// A point on the drawn ring's midline at `pos`, in window coordinates — where the label is.
+    fn on_the_drawn_ring(pos: u8) -> slint::LogicalPosition {
+        let hero = dressed_fit().hero_logical as f32;
+        let ring = wheel::WheelRing::new(0.0, 0.0, geometry::WHEEL_D as f32 * hero / 2.0);
+        let (cx, cy) = drawn_wheel_centre();
+        let (x, y) = ring.point_at(pos);
+        slint::LogicalPosition::new(cx + x, cy + y)
+    }
+
+    fn press_at(w: &MainWindow, at: slint::LogicalPosition) {
+        use slint::platform::{PointerEventButton, WindowEvent};
+        w.window().dispatch_event(WindowEvent::PointerMoved { position: at });
+        w.window()
+            .dispatch_event(WindowEvent::PointerPressed { position: at, button: PointerEventButton::Left });
+    }
+
+    fn drag_to(w: &MainWindow, at: slint::LogicalPosition) {
+        w.window().dispatch_event(slint::platform::WindowEvent::PointerMoved { position: at });
+    }
+
+    fn lift_at(w: &MainWindow, at: slint::LogicalPosition) {
+        use slint::platform::{PointerEventButton, WindowEvent};
+        w.window()
+            .dispatch_event(WindowEvent::PointerReleased { position: at, button: PointerEventButton::Left });
+    }
+
+    /// Everything queued for the machine, drained — so each assertion is about what THIS press did.
+    fn drain_queue(wiring: &Wiring) -> Vec<eapp_loader::WheelEvent> {
+        let held = wiring.live.borrow();
+        let l = held.as_ref().expect("the machine");
+        let drained = l.link.inbox.lock().unwrap().events.drain(..).collect();
+        drained
+    }
+
+    fn tap_key(w: &MainWindow, text: &str) {
+        use slint::platform::WindowEvent;
+        w.window().dispatch_event(WindowEvent::KeyPressed { text: text.into() });
+        w.window().dispatch_event(WindowEvent::KeyReleased { text: text.into() });
+    }
+
+    /// **The whole route, from a pixel on the drawn iPod to `emu::Link`'s queue.** §7.4.
+    ///
+    /// This is the claim Phase 7 could not make: *`MACHINE_TAKES_INPUT` is a literal `false`, so the
+    /// drawn wheel, buttons and hold switch still refuse.* What runs here is every link of it — the
+    /// `TouchArea` in `ipod.slint`, `bench.slint`'s forward, `window.slint`'s binding, `wire`'s
+    /// registered handler, `machine::centre`'s answer and `wheel::Finger` — driven by a real
+    /// pointer event dispatched at the button's own coordinates, on a window that has been shown
+    /// and sized.
+    ///
+    /// **Each half was measured red by cutting the route rather than by breaking a spelling:**
+    ///
+    ///   - delete `centre-down => { root.centre-down(); }` from `window.slint`'s `Bench` and the
+    ///     press queues nothing — *the press on the drawn centre button queued []*;
+    ///   - make `centre_to_the_machine` return early instead of pushing and the same assertion
+    ///     dies, which is the Rust half of the same cut;
+    ///   - answer `Act::Start` for `Life::Running` in `machine::centre` and the press starts a
+    ///     second machine instead of pressing Select, which is §7.3's booting row inverted.
+    ///
+    /// **And a press on the case is the control**, because a test that pressed *anywhere* and found
+    /// events would pass over a window that sent Select for every click on the bench.
+    #[test]
+    fn a_press_on_the_drawn_centre_button_reaches_the_machine() {
+        let (w, wiring, dir) = a_wired_bench_with_a_machine("centre-press");
+        let (cx, cy) = drawn_wheel_centre();
+        let centre = slint::LogicalPosition::new(cx, cy);
+
+        press_at(&w, centre);
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![eapp_loader::WheelEvent::Button(eapp_loader::WHEEL_SELECT, true)],
+            "the press on the drawn centre button did not reach the machine"
+        );
+        lift_at(&w, centre);
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![eapp_loader::WheelEvent::Button(eapp_loader::WHEEL_SELECT, false)],
+            "the button went down on the machine and never came up — a stuck finger, which is the \
+             one thing §7.4 says a release must never become"
+        );
+
+        // The second target, 92 px out: MENU is a *ring* press, so it touches the wheel as well.
+        // If `drawn_wheel_centre` were wrong by more than the moulding, one of these two lands
+        // somewhere neither of them names.
+        let menu = on_the_drawn_ring(0);
+        press_at(&w, menu);
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![
+                eapp_loader::WheelEvent::Touch,
+                eapp_loader::WheelEvent::Button(eapp_loader::WHEEL_MENU, true),
+            ],
+            "a press on the drawn MENU label is not a touch and a button"
+        );
+        lift_at(&w, menu);
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![
+                eapp_loader::WheelEvent::Button(eapp_loader::WHEEL_MENU, false),
+                eapp_loader::WheelEvent::Release,
+            ]
+        );
+
+        // The control. The top-left corner of the well is the bench and not the device.
+        press_at(&w, slint::LogicalPosition::new(24.0, 24.0));
+        lift_at(&w, slint::LogicalPosition::new(24.0, 24.0));
+        assert!(
+            drain_queue(&wiring).is_empty(),
+            "a press on the empty well reached the machine, so the assertions above are about a \
+             window that sends Select for every click on it"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A drag on the drawn ring turns the machine's wheel**, one `Step` per detent.
+    ///
+    /// The route the centre button's test does not cover: `moved` fires only while the pointer is
+    /// down, so this is also the assertion that the press before it took the grab. Red by deleting
+    /// `wheel-moved(dx, dy) => { root.wheel-moved(dx, dy); }` from either `bench.slint` or
+    /// `window.slint` — *a quarter turn of the drawn wheel sent 0 steps*.
+    ///
+    /// **A quarter turn is 24 clicks and the arithmetic is not this test's**, which is the point of
+    /// the normalisation: the markup divides by the wheel's own radius, so what `wheel::Finger`
+    /// sees is a unit vector and the answer is the same at every size. A handler that had been
+    /// handed pixels would put this drag 120 units from the centre and answer the same — the
+    /// failure this cannot see is one `wheel.rs`'s own tests can.
+    #[test]
+    fn a_drag_on_the_drawn_ring_turns_the_machines_wheel() {
+        let (w, wiring, dir) = a_wired_bench_with_a_machine("ring-drag");
+
+        // Twelve o'clock is MENU, so start a quarter round from it — bare ring, no button.
+        press_at(&w, on_the_drawn_ring(12));
+        assert_eq!(drain_queue(&wiring), vec![eapp_loader::WheelEvent::Touch]);
+        drag_to(&w, on_the_drawn_ring(36));
+        let turned = drain_queue(&wiring);
+        assert_eq!(
+            turned,
+            vec![eapp_loader::WheelEvent::Step(1); 24],
+            "a quarter turn of the drawn wheel sent {} steps",
+            turned.len()
+        );
+        lift_at(&w, on_the_drawn_ring(36));
+        assert_eq!(drain_queue(&wiring), vec![eapp_loader::WheelEvent::Release]);
+
+        // …and the other way, which is what would catch a `shortest_delta` that had lost its sign
+        // somewhere between the markup and the ring.
+        press_at(&w, on_the_drawn_ring(36));
+        drain_queue(&wiring);
+        drag_to(&w, on_the_drawn_ring(12));
+        assert_eq!(drain_queue(&wiring), vec![eapp_loader::WheelEvent::Step(-1); 24]);
+        lift_at(&w, on_the_drawn_ring(12));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The hold switch is the machine's, and it says so when there is no machine.** §7.4.
+    ///
+    /// Both halves, because the interesting one is the refusal: a switch that quietly did nothing
+    /// would pass any assertion about the machine's queue. The sentence is `machine::NO_MACHINE_
+    /// HOLD` — the design's own wording — and it is **held while the pointer is down**, which is
+    /// the half a `toggled` callback could not carry and the half `hold-released` exists for.
+    ///
+    /// Red by deleting `hold-pressed => { root.hold-pressed(); }` from `window.slint`, which takes
+    /// both halves at once: nothing is queued and nothing is said.
+    #[test]
+    fn the_hold_switch_is_the_machines_and_refuses_with_its_reason_when_there_is_none() {
+        let (w, wiring, dir) = a_wired_bench_with_a_machine("hold-switch");
+
+        w.invoke_hold_pressed();
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![eapp_loader::WheelEvent::Hold(true)],
+            "the drawn hold switch did not reach the machine"
+        );
+        assert!(w.get_held_sentence().is_empty(), "a switch that worked also filed a refusal");
+        w.invoke_hold_released();
+
+        // It goes to where it is *not*, read off `Stats::hold` — so with the machine reporting the
+        // switch on, the next press throws it off rather than sending `Hold(true)` twice.
+        wiring.live.borrow().as_ref().expect("the machine").hold.set(true);
+        w.invoke_hold_pressed();
+        assert_eq!(drain_queue(&wiring), vec![eapp_loader::WheelEvent::Hold(false)]);
+        w.invoke_hold_released();
+
+        // …and with no machine it is §7.4's sentence, held while the pointer is down.
+        *wiring.live.borrow_mut() = None;
+        w.invoke_hold_pressed();
+        assert_eq!(
+            w.get_held_sentence().to_string(),
+            machine::NO_MACHINE_HOLD,
+            "the hold switch was pressed on an empty bench and said nothing"
+        );
+        w.invoke_hold_released();
+        assert!(
+            w.get_held_sentence().is_empty(),
+            "the refusal outlived the press, which makes it a notice on the cradle rather than a \
+             sentence held while the pointer is down"
+        );
+
+        // The wheel's own refusal is the other sentence, and the two are not one string.
+        w.invoke_wheel_down(0.0, -0.8);
+        assert_eq!(w.get_held_sentence().to_string(), machine::NO_MACHINE);
+        w.invoke_wheel_up();
+        assert!(w.get_held_sentence().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **§16.8's four machine rows, through the window's own `FocusScope`.** `↑` `↓` `←` `→`,
+    /// `M P N B` and `H`.
+    ///
+    /// Dispatched as real key events rather than by invoking the callback, so what is proved
+    /// includes the binding in `window.slint` and the fact that the root scope sees the key at all —
+    /// the window opens with focus on the cradle, whose own handler rejects everything but `Space`
+    /// and `Return`, and a scope that swallowed the rest would make this table unreachable.
+    ///
+    /// **`←` `→` are the row with two jobs and the one worth testing hardest**: the wheel while
+    /// there is a machine, previous / next device when there is not. Red by returning `true` for
+    /// `Keyed::Step { shared: true, .. }` with no machine — the shelf shortcut stops working and
+    /// §7.2's only keyboard route to another device goes with it.
+    #[test]
+    fn the_keys_that_are_the_machines_reach_it_and_the_arrows_keep_their_other_job() {
+        use slint::platform::Key;
+        let (w, wiring, dir) = a_wired_bench_with_a_machine("machine-keys");
+
+        // `↓` is one detent clockwise, and the first one touches the wheel.
+        tap_key(&w, &String::from(char::from(Key::DownArrow)));
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![
+                eapp_loader::WheelEvent::Touch,
+                eapp_loader::WheelEvent::Step(1),
+                eapp_loader::WheelEvent::Release,
+            ],
+            "§16.8's `↓` did not reach the machine's wheel"
+        );
+        tap_key(&w, &String::from(char::from(Key::UpArrow)));
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![
+                eapp_loader::WheelEvent::Touch,
+                eapp_loader::WheelEvent::Step(-1),
+                eapp_loader::WheelEvent::Release,
+            ]
+        );
+        // `←` `→` are the wheel too, while there is one.
+        tap_key(&w, &String::from(char::from(Key::RightArrow)));
+        assert_eq!(drain_queue(&wiring).len(), 3, "§16.8 gives `→` to the wheel over a machine");
+
+        // The four labels, down and up with the key — `M` held is the main menu on a real 5G, and
+        // a synthesised tap could not say so.
+        for (key, mask) in [
+            ("m", eapp_loader::WHEEL_MENU),
+            ("p", eapp_loader::WHEEL_PLAY),
+            ("n", eapp_loader::WHEEL_RIGHT),
+            ("b", eapp_loader::WHEEL_LEFT),
+        ] {
+            tap_key(&w, key);
+            assert_eq!(
+                drain_queue(&wiring),
+                vec![
+                    eapp_loader::WheelEvent::Button(mask, true),
+                    eapp_loader::WheelEvent::Button(mask, false),
+                ],
+                "§16.8's `{}` is not {mask:#04x}",
+                key.to_uppercase()
+            );
+        }
+        tap_key(&w, "h");
+        assert_eq!(drain_queue(&wiring), vec![eapp_loader::WheelEvent::Hold(true)]);
+
+        // A key this table does not claim reaches nothing, which is the control: a handler that
+        // answered every key would satisfy every assertion above.
+        tap_key(&w, "z");
+        assert!(drain_queue(&wiring).is_empty(), "`Z` reached the machine");
+
+        // ── §16.8's exception, and the half of it focus does not cover ──
+        //
+        // A focused `TextInput` consumes a character key's PRESS and Slint's own implementation
+        // ignores its RELEASE (`i-slint-core-1.17.1/items/text.rs:1106-1115`), so the release
+        // reaches the root scope for a press that never did. Measured in the compiler's source
+        // rather than assumed, and this is the behavioural half: a release with no press of its own
+        // sends nothing and is not accepted, which is what stops a letter typed into the Composer's
+        // Name field putting MENU *up* on a machine that is running.
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: "m".into() });
+        assert!(
+            drain_queue(&wiring).is_empty(),
+            "a key release this window never saw the press for reached the machine — the one thing              §16.8's `TextInput` exception cannot suppress on its own"
+        );
+        // …and the control, one line down: a release that DOES follow a press is still honoured.
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "m".into() });
+        drain_queue(&wiring);
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyReleased { text: "m".into() });
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![eapp_loader::WheelEvent::Button(eapp_loader::WHEEL_MENU, false)],
+            "the guard swallowed a release that belonged to a press this window took"
+        );
+
+        // ── The `← →` row's other job ──
+        //
+        // With no machine they must NOT be refused: §7.2's shelf shortcut is what they do instead,
+        // and `machine-key` answering `true` there would take it away silently.
+        {
+            let mut s = Settings::default();
+            let dir2 = temp_dir("machine-keys-2");
+            for i in 0..2 {
+                let one = dir2.join(format!("d{i}"));
+                std::fs::create_dir_all(&one).unwrap();
+                let (_, d) = a_composed_device(&one);
+                s.devices.push(Device { name: format!("iPod {i}"), ..d });
+            }
+            let w2 = a_window();
+            let _wiring2 = wire(&w2, Rc::new(RefCell::new(s)), args::Machine::default());
+            w2.show().expect("the headless backend shows a window");
+            assert_eq!(w2.get_selected(), 0);
+            tap_key(&w2, &String::from(char::from(Key::RightArrow)));
+            assert_eq!(
+                w2.get_selected(),
+                1,
+                "§16.8's `→` on a bench with no machine is previous / next device, and it did \
+                 nothing — so the machine's half claimed a key it cannot use"
+            );
+            assert!(
+                w2.get_held_sentence().is_empty(),
+                "`→` on an empty bench filed §7.4's refusal instead of moving the shelf"
+            );
+            // …and `↑` `↓` are the wheel *always*, so on the same bench they refuse rather than
+            // moving anything.
+            tap_key(&w2, &String::from(char::from(Key::DownArrow)));
+            assert_eq!(w2.get_selected(), 1, "`↓` moved the shelf; §16.8 gives it to the wheel");
+            std::fs::remove_dir_all(&dir2).ok();
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **`machine-takes-input` is the phase, and it is no longer a literal.** §7.4.
+    ///
+    /// The property it replaces was `const MACHINE_TAKES_INPUT: bool = false` — one answer for
+    /// every state this window can be in. This is the assertion that it now has four, and that the
+    /// two §12.2 calls *no machine* are the two that refuse: `Off`, and `Stopped`, which keeps its
+    /// last frame because the frame is evidence and not because anything is behind it.
+    ///
+    /// It also holds the thing a per-phase gate makes easy to get wrong: the tick that **drops** a
+    /// `Live` returns before it draws, so without a push on that path the last word on the subject
+    /// would be the running machine's, for the life of the window.
+    #[test]
+    fn whether_the_drawn_controls_take_input_is_the_machines_phase() {
+        let (w, wiring, dir) = a_wired_bench_with_a_machine("takes-input");
+        assert!(w.get_machine_takes_input(), "a running machine's controls are refused");
+
+        for (phase, takes) in [
+            (emu::Phase::Booting { target: emu::SNAP_AT }, true),
+            (emu::Phase::Running, true),
+            (emu::Phase::Off, false),
+            (emu::Phase::Stopped("Lost(0xe19b0000)".into()), false),
+        ] {
+            {
+                let held = wiring.live.borrow();
+                let mut out = held.as_ref().expect("the machine").link.out.lock().unwrap();
+                out.phase = phase.clone();
+                out.fb_seq += 1;
+            }
+            (wiring.machine_tick)();
+            assert_eq!(
+                w.get_machine_takes_input(),
+                takes,
+                "§7.4 and §12.2 disagree about {phase:?}"
+            );
+        }
+
+        // ── And a bench the machine has left ──
+        //
+        // **Put back to `Running` first, deliberately.** The loop above ends on `Stopped`, which is
+        // already `false` — so a drop that pushed nothing at all would satisfy the assertion below
+        // by inheritance, which is the shape §6 of `AGENTS.md` is about. This is the control that
+        // makes the `false` after it a measurement.
+        {
+            let held = wiring.live.borrow();
+            let mut out = held.as_ref().expect("the machine").link.out.lock().unwrap();
+            out.phase = emu::Phase::Running;
+            out.fb_seq += 1;
+        }
+        (wiring.machine_tick)();
+        assert!(w.get_machine_takes_input(), "the control did not take");
+        *wiring.live.borrow_mut() = None;
+        (wiring.machine_tick)();
+        assert!(
+            !w.get_machine_takes_input(),
+            "the machine went and the drawn controls are still its — the tick that finds an empty              holder returns before it draws, so this is the one path a per-phase gate forgets"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **What the machine says its own controls are doing reaches the drawing.** §7.4, §8.1 item 7.
+    ///
+    /// `Stats::buttons` is a mask and the markup has no bitwise operators, so the decode is Rust's
+    /// and this is what checks it bit by bit — a swapped pair here draws a press on the wrong
+    /// button, which no assertion about the queue could see. Red by transposing `Button::Next` and
+    /// `Button::Prev` in `machine_controls`.
+    #[test]
+    fn the_machines_own_buttons_and_hold_switch_are_what_the_drawing_shows() {
+        let (w, wiring, dir) = a_wired_bench_with_a_machine("drawn-controls");
+        let held = |w: &MainWindow| {
+            [
+                w.get_held_menu(),
+                w.get_held_next(),
+                w.get_held_prev(),
+                w.get_held_play(),
+                w.get_held_select(),
+            ]
+        };
+        assert_eq!(held(&w), [false; 5], "a machine nobody touched is drawing five held buttons");
+
+        for (i, b) in wheel::Button::ALL.iter().enumerate() {
+            {
+                let l = wiring.live.borrow();
+                let mut out = l.as_ref().expect("the machine").link.out.lock().unwrap();
+                out.stats.buttons = b.mask();
+                out.stats.hold = i % 2 == 0;
+            }
+            (wiring.machine_tick)();
+            let mut want = [false; 5];
+            // `Button::ALL` is drawn order: Menu, Next, Prev, Play, Select — the same order the
+            // array above reads, which is what makes this a decode test rather than a tautology.
+            want[i] = true;
+            assert_eq!(held(&w), want, "{b:?} is drawn as some other button");
+            assert_eq!(w.get_machine_hold(), i % 2 == 0, "the hold switch is drawn the wrong way");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **Every drawn control's callback is bound all the way down.** §7.4.
+    ///
+    /// `every_window_property_is_pushed_and_every_callback_registered` holds the Rust end — a
+    /// callback declared on `MainWindow` and registered by nobody. This holds the other three
+    /// links, which that sweep cannot see: `ipod.slint` raising it from a `TouchArea`, `bench.slint`
+    /// forwarding it, and `window.slint` binding it on the `Bench`. A cut anywhere in that chain
+    /// leaves a control that is drawn, pressed, and reaches nothing — which is the phantom route
+    /// §19.1 indicts, and it compiles.
+    ///
+    /// The behavioural tests above cover the centre button and the ring end to end; this covers the
+    /// four that a pointer event cannot reach from a fixed coordinate, and it covers all seven in a
+    /// form that names which link broke.
+    #[test]
+    fn every_drawn_control_is_joined_from_the_ipod_to_the_window() {
+        let read = |name: &str| {
+            std::fs::read_to_string(format!("{}/ui/{name}", env!("CARGO_MANIFEST_DIR")))
+                .unwrap_or_else(|e| panic!("ui/{name}: {e}"))
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let (ipod, bench, window) = (read("ipod.slint"), read("bench.slint"), read("window.slint"));
+        for c in ["wheel-down", "wheel-moved", "wheel-up", "centre-down", "centre-up",
+                  "hold-pressed", "hold-released"] {
+            assert!(
+                ipod.contains(&format!("root.{c}(")),
+                "ui/ipod.slint declares `{c}` and no control raises it — the drawn control at the \
+                 top of the chain is not wired to it"
+            );
+            assert!(
+                bench.contains(&format!("root.{c}(")),
+                "ui/bench.slint does not forward `{c}`, so `IPod` raises it into nothing"
+            );
+            assert!(
+                window.contains(&format!("root.{c}(")),
+                "ui/window.slint does not bind `{c}` on its `Bench`, so the callback stops one \
+                 component short of the handler `main.rs` registered for it"
+            );
+        }
+        // The control: a name no chain carries must fail all three, or the matcher answers `true`
+        // for anything and every assertion above is decoration.
+        for f in [&ipod, &bench, &window] {
+            assert!(!f.contains("root.wheel-sideways("));
+        }
+    }
+
     /// **A `Link` nobody runs, so each of §12.2's four phases can be put on the bench by hand.**
     ///
     /// The thread is `None`, which is what makes this safe: `Live::drop` has nothing to join, and
@@ -6942,6 +7839,9 @@ pub(crate) mod tests {
             booted: Cell::new(None),
             learned: Cell::new(false),
             parking: Cell::new(false),
+            finger: RefCell::new(wheel::Finger::default()),
+            hold: Cell::new(false),
+            buttons: Cell::new(0),
         }
     }
 
@@ -9908,10 +10808,9 @@ pub(crate) mod tests {
         // window has to be put back into after that one, because a texture stays where it was put.
         w.set_running(false);
         w.set_panel_lit(false);
-        w.set_machine_takes_input(MACHINE_TAKES_INPUT);
-        let (wheel, hold) = refusals(&machine::Life::Off);
-        w.set_wheel_refusal(wheel.into());
-        w.set_hold_refusal(hold.into());
+        machine_controls(w, &machine::Life::Off, None);
+        w.set_hold_refusal(machine::NO_MACHINE_HOLD.into());
+        w.set_held_sentence(slint::SharedString::new());
         w.global::<Motion>().set_scale(motion::scale());
         w.global::<Metric>().set_mono_family(mono_family().into());
         push_fit(w, &dressed_fit(), 2.0, geometry::PREF_HEIGHT);
@@ -10165,6 +11064,34 @@ pub(crate) mod tests {
         *running.live.borrow_mut() = Some(a_running_machine(&first));
         shots.push(("bench-running", shoot(&w, &nav::Stack::new(), &running, "bench-running")));
 
+        // **§7.4, and it is the picture nothing in this program could take until the wheel was
+        // wired.** The same machine, *touched*: the hold switch thrown, MENU held down, and a
+        // finger on the ring. Every one of those is a read of `Stats` carried out by
+        // `machine_controls` — the shipped function the 60 Hz tick calls — so what is on the glass
+        // is the emulator's own answer about its own hardware rather than a hover state this window
+        // played over the drawing.
+        //
+        // It is what makes §8.1 item 7's 1.6 s visible in a still: a real press depresses its
+        // button for as long as the machine takes to see the release, and a picture of that is a
+        // picture of a fact about this emulator.
+        {
+            let l = running.live.borrow();
+            let mut out = l.as_ref().expect("the machine").link.out.lock().unwrap();
+            out.stats.buttons = eapp_loader::WHEEL_MENU;
+            out.stats.hold = true;
+            out.stats.touched = true;
+        }
+        shots.push(("bench-touched", shoot(&w, &nav::Stack::new(), &running, "bench-touched")));
+        // …and back to a machine nobody is holding, so `readout` and the two shots after it stand
+        // where `bench-running` did. A texture stays where it was put and so does a pushed boolean.
+        {
+            let l = running.live.borrow();
+            let mut out = l.as_ref().expect("the machine").link.out.lock().unwrap();
+            out.stats.buttons = 0;
+            out.stats.hold = false;
+            out.stats.touched = false;
+        }
+
         // **§12.8's Readout, on the machine that is on the bench above it.** Seven groups, every
         // Gauge, and the two pinned actions — the page whose `MenuPage` row said *Nothing draws the
         // counters a running machine publishes* until this pass. Taken with `running` still held,
@@ -10236,6 +11163,16 @@ pub(crate) mod tests {
         parked.settings.devices[0].parked_at = Some(eapp_loader::settings::now_unix() - 240);
         shots.push(("bench-parked", shoot(&w, &nav::Stack::new(), &parked, "bench-parked")));
         dress_the_bench(&w);
+
+        // **§7.4's refusal, which is the state a new person meets first**: an iPod on the bench,
+        // nothing running, and a finger on the wheel. The sentence is `machine::NO_MACHINE` — the
+        // one the registered handler pushes through this same setter, which is why standing the
+        // window in the state is not the same as inventing one — and §7.4 predicts what this shot
+        // is here to show: it is 71 characters against `geometry::CRADLE_LABEL_MAX_CHARS`'s 48, so
+        // the cradle elides it and what survives is the first clause, which is the meaning.
+        w.set_held_sentence(machine::NO_MACHINE.into());
+        shots.push(("bench-refused", shoot(&w, &nav::Stack::new(), &full, "bench-refused")));
+        w.set_held_sentence(slint::SharedString::new());
 
         // **§9.5, and nothing had ever taken a picture of it, because until now there was nothing
         // to take a picture OF.** The boolean is what draws the pane rather than the window's real

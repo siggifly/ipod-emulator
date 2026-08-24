@@ -304,10 +304,16 @@ export component Bench inherits Rectangle {
     in property <length> select-d: Geometry.centre-d * root.hero;
 
     // ── The machine (§7.4, §12.2) ──
+    //
+    // Forwarded, all of them. `has-machine` is `machine::Life::alive()` and gates the hold switch's
+    // ARIA rather than the pointer stream (§7.3's announcement-not-the-gate); `hold` and the five
+    // `held-*` are reads of `Stats`, so what is drawn depressed is what the machine says is down.
     in property <bool> has-machine: false;
-    // §7.4's two sentences, forwarded to the drawn device. See `ipod.slint`, where they used to be
-    // typed as literals.
-    in property <string> wheel-refusal;
+    // §7.4's hold sentence, forwarded to the drawn device — the hold switch's ARIA description, and
+    // the only thing left that reads one of these. Its twin, `wheel-refusal`, is deleted: the ring
+    // has no ARIA (§16.7 concedes a 96-detent wheel has no announced equivalent) and the cradle
+    // carries the drawn half, so the property had a producer and no reader — which is exactly the
+    // shape this file deletes rather than keeps.
     in property <string> hold-refusal;
     in property <bool> hold: false;
     in property <bool> held-menu: false;
@@ -370,10 +376,15 @@ export component Bench inherits Rectangle {
     in property <float> progress: -1;
 
     callback pressed-centre();
-    callback wheel-down(length, length);
-    callback wheel-moved(length, length);
+    // §7.4's pointer stream, straight through. In units of the wheel's outer radius — see
+    // `IPod::wheel-down`, which is where the normalisation and the reason for it live.
+    callback wheel-down(float, float);
+    callback wheel-moved(float, float);
     callback wheel-up();
-    callback hold-toggled();
+    callback centre-down();
+    callback centre-up();
+    callback hold-pressed();
+    callback hold-released();
     callback open-drawer();
     callback why();
 
@@ -433,7 +444,13 @@ export component Bench inherits Rectangle {
     // that is a self-dismissing timed message replacing content, which is a toast, which principle
     // 5 bans by name — and it would have let a refusal like *the disk is not where it was* be
     // silently overwritten because somebody brushed the wheel.
-    property <string> held-sentence;
+    //
+    // **Pushed, where it used to be assigned here from `IPod`'s `inert` callback.** Two things made
+    // that untenable at once: the sentence has to say which of §7.4's two states the bench is in,
+    // which is a fact only `machine::Life` holds; and §16.8 gives the same controls keys, which
+    // arrive at the window's root `FocusScope` and never come near this component. One writer, in
+    // Rust, so a refused key and a refused press cannot end up saying different things.
+    in property <string> held-sentence;
 
     // The bench reports no intrinsic height of its own. Without this the well's content would be
     // deciding the height the well is measured against — the same loop as a device that resizes
@@ -653,7 +670,14 @@ export component Bench inherits Rectangle {
                 }
                 accessible-role: AccessibleRole.button;
                 accessible-label: root.device-name;
-                accessible-description: root.cradle-label;
+                // **The same expression the label below draws, and it was `cradle-label` alone.**
+                // §7.4's refusal is drawn on that row and is the only thing a drawn control says
+                // when it is pressed with no machine behind it — so an assistive technology heard
+                // *press ● to cold boot* while the screen read *the wheel and the buttons belong to
+                // the machine…*. §16.7's rule is that an ARIA claim must be true as built, and two
+                // strings for one row is that rule broken by the one sentence §16.7 already
+                // concedes the ring has no announced equivalent for.
+                accessible-description: root.held-sentence != "" ? root.held-sentence : root.cradle-label;
                 // The announcement, not the gate: an assistive technology is told this device cannot
                 // be started, and pressing it still produces the sentence saying why.
                 accessible-enabled: root.startable;
@@ -675,7 +699,6 @@ export component Bench inherits Rectangle {
                 select-d: root.select-d;
                 pressable: true;
                 has-machine: root.has-machine;
-                wheel-refusal: root.wheel-refusal;
                 hold-refusal: root.hold-refusal;
                 hold: root.hold;
                 held-menu: root.held-menu;
@@ -695,9 +718,10 @@ export component Bench inherits Rectangle {
                 wheel-down(dx, dy) => { root.wheel-down(dx, dy); }
                 wheel-moved(dx, dy) => { root.wheel-moved(dx, dy); }
                 wheel-up => { root.wheel-up(); }
-                hold-toggled => { root.hold-toggled(); }
-                inert(sentence) => { root.held-sentence = sentence; }
-                inert-released => { root.held-sentence = ""; }
+                centre-down => { root.centre-down(); }
+                centre-up => { root.centre-up(); }
+                hold-pressed => { root.hold-pressed(); }
+                hold-released => { root.hold-released(); }
             }
         }
 

@@ -48,6 +48,15 @@
 // sentence on the **cradle label** — held while the pointer is down, released on pointer-up. Not a
 // timed message on the shelf: that is a toast, and principle 5 bans it by name.
 //
+// **Which of those two a press is, is decided in Rust and not here.** This file used to carry the
+// gate: `if (root.has-machine) { ...the machine... } else { root.inert(a sentence) }`, on both the
+// ring and the hold switch. That is the markup answering a question about a state it cannot see —
+// the same defect as the two refusal sentences that used to be literals in it, one line down — and
+// it went wrong in the same direction, because *whether the wheel reaches the machine* and *what to
+// say when it does not* are one decision and it belongs where the machine is. Every control here
+// now raises its callback unconditionally and `machine::Life` decides; `has-machine` survives as
+// what §7.3 calls the announcement rather than the gate, on the hold switch's ARIA.
+//
 // **The hit test is `wheel.rs`'s and is never re-derived here.** This file reports the pointer's
 // offset from the wheel's centre and nothing else; `WheelRing::hit` decides what it means. The one
 // number that has to be a *size* here — the centre button's target — is **pushed in** as
@@ -101,10 +110,15 @@ export component IPod inherits Rectangle {
 
     // ── §7.4: is there a machine? ──
     //
-    // The one flag that decides whether the wheel, the four labels and the hold switch mean
-    // anything. It is **not** the same question as `pressable`: the centre button is live either
-    // way — with a machine it is Select, without one it is power-on, which is what a button press
-    // on a dead iPod does.
+    // **The announcement, and no longer the gate** — §7.3's own distinction, applied to the one
+    // control on this drawing that has ARIA. It says whether the hold switch reaches anything, so
+    // an assistive technology is told, and it carries the reason beside it; what it does **not** do
+    // any more is decide whether a pointer event is sent, because that is a question about the
+    // machine's phase and this file cannot see one.
+    //
+    // It is **not** the same question as `pressable`: the centre button is live either way — with a
+    // machine it is Select, without one it is power-on, which is what a button press on a dead iPod
+    // does.
     in property <bool> has-machine: false;
 
     // §7.4: a first-class concept and not a button. Its own command (`holdsw on|off`), its own
@@ -144,17 +158,29 @@ export component IPod inherits Rectangle {
     callback clicked();
     callback pressed-device();
 
-    // The wheel's pointer stream, in the wheel's own coordinates: the offset from its centre, x
-    // right and y **down**, which is what `wheel::position_at_angle` takes.
-    callback wheel-down(length, length);
-    callback wheel-moved(length, length);
+    // ── §7.4's pointer stream, and every one of these goes to the machine ──
+    //
+    // **In units of the wheel's OUTER RADIUS**, x right and y **down**, from its centre. Normalised
+    // here rather than handed over in pixels because the ratios `wheel.rs` hits against — `inner`
+    // 0.52, `select` 0.465 — are ratios of that radius, so a caller given the unit offsets needs no
+    // idea how big this drawing is, and the same handler is right at hero, at a thumbnail and in
+    // §12.6's fullscreen. `hero` is never read back out of the markup (`window.slint`); this keeps
+    // that true of the wheel as well.
+    callback wheel-down(float, float);
+    callback wheel-moved(float, float);
     callback wheel-up();
-    // §7.4: an inert control was pressed. The sentence goes on the cradle label and is held while
-    // the pointer is down.
-    callback inert(string);
-    callback inert-released();
-    // The hold switch, when there is a machine to own it.
-    callback hold-toggled();
+    // The centre button. **Down and up rather than `clicked`**, because §7.4 wants the release
+    // held: MENU held for a second is the main menu on a real 5G, and a `clicked` that reported
+    // only the end of the press cannot say how long it was. `pressed-device` below is the *other*
+    // half — the press that starts a machine — and which one this press is belongs to
+    // `machine::centre`, in Rust, not to a boolean here.
+    callback centre-down();
+    callback centre-up();
+    // §7.4's hold switch: its own concept, its own command, its own key. `pressed` and not
+    // `toggled` — what the switch does when there is no machine is a sentence rather than a move,
+    // and this file is not the thing that knows which.
+    callback hold-pressed();
+    callback hold-released();
 
     property <length> h: body-height;
     property <color> marks: dark-chassis ? #76767a : #a9a9a6;
@@ -164,15 +190,19 @@ export component IPod inherits Rectangle {
     // bench draws it and only it.
     animate marks { duration: Motion.tight; easing: ease-out-quad; }
 
-    // §7.4's two sentences. They are the cradle's for the duration of the press, and they are
-    // **pushed** rather than typed here.
+    // §7.4's hold sentence, **pushed** rather than typed here — the hold switch's ARIA description
+    // and nothing else.
     //
-    // They were literals, and one of them was `machine::NO_MACHINE` written a second time — one
-    // sentence in two files, which is the divergence every other caption in this program is
-    // arranged to prevent. It stopped being merely untidy the day the bench could hold a machine:
-    // *there is no machine* is false over a running iPod, and this file cannot tell the two states
-    // apart. Rust can, so Rust says which sentence it is.
-    in property <string> wheel-refusal;
+    // It was a literal, and its twin was `machine::NO_MACHINE` written a second time — one sentence
+    // in two files, which is the divergence every other caption in this program is arranged to
+    // prevent. It stopped being merely untidy the day the bench could hold a machine: *there is no
+    // machine* is false over a running iPod, and this file cannot tell the two states apart. Rust
+    // can, so Rust says which sentence it is.
+    //
+    // **And the twin is gone rather than pushed.** The drawn half of §7.4's refusal is the cradle
+    // label, which `bench.slint` owns; the ring has no ARIA of its own (§16.7: a 96-detent wheel has
+    // no announced equivalent, and `↑` `↓` are the accessible route). So `wheel-refusal` had a
+    // producer and no reader.
     in property <string> hold-refusal;
 
     width: Geometry.body-aspect * h;
@@ -278,13 +308,8 @@ export component IPod inherits Rectangle {
             // the handler.
             hold-touch := TouchArea {
                 pointer-event(ev) => {
-                    if (ev.kind == PointerEventKind.down) {
-                        if (root.has-machine) { root.hold-toggled(); }
-                        else { root.inert(root.hold-refusal); }
-                    }
-                    if (ev.kind == PointerEventKind.up && !root.has-machine) {
-                        root.inert-released();
-                    }
+                    if (ev.kind == PointerEventKind.down) { root.hold-pressed(); }
+                    if (ev.kind == PointerEventKind.up) { root.hold-released(); }
                 }
             }
 
@@ -315,24 +340,29 @@ export component IPod inherits Rectangle {
             ring-touch := TouchArea {
                 width: 100%;
                 height: 100%;
+                // **No `has-machine` here, and that is the change §7.4 asked for.** The gate used to
+                // be this expression, so with no machine the pointer stream was replaced by a
+                // sentence *in the markup* — which meant this file decided both whether the wheel
+                // worked and what to say when it did not, from a boolean it could not check. Rust
+                // owns both now: the stream goes out on every press and `machine::Life` decides
+                // whether it reaches `emu::Link::push` or the cradle label. §16.5's rule about a
+                // `TouchArea` never being disabled, one level up — the gate is not here either.
                 pointer-event(ev) => {
+                    if (!root.pressable) {
+                        if (ev.kind == PointerEventKind.down) { root.clicked(); }
+                        return;
+                    }
                     if (ev.kind == PointerEventKind.down) {
-                        if (!root.pressable) { root.clicked(); return; }
-                        if (root.has-machine) {
-                            root.wheel-down(self.mouse-x - self.width / 2, self.mouse-y - self.height / 2);
-                        } else {
-                            root.inert(root.wheel-refusal);
-                        }
+                        root.wheel-down((self.mouse-x - self.width / 2) / (self.width / 2),
+                                        (self.mouse-y - self.height / 2) / (self.height / 2));
                     }
-                    if (ev.kind == PointerEventKind.up && root.pressable) {
-                        if (root.has-machine) { root.wheel-up(); }
-                        else { root.inert-released(); }
-                    }
+                    if (ev.kind == PointerEventKind.up) { root.wheel-up(); }
                 }
                 // Fires only while the pointer is down, which is exactly the drag a rotation is.
                 moved => {
-                    if (root.pressable && root.has-machine) {
-                        root.wheel-moved(self.mouse-x - self.width / 2, self.mouse-y - self.height / 2);
+                    if (root.pressable) {
+                        root.wheel-moved((self.mouse-x - self.width / 2) / (self.width / 2),
+                                         (self.mouse-y - self.height / 2) / (self.height / 2));
                     }
                 }
             }
@@ -416,6 +446,18 @@ export component IPod inherits Rectangle {
                 width: root.select-d;
                 height: root.select-d;
                 mouse-cursor: root.pressable ? MouseCursor.pointer : MouseCursor.default;
+                // **Two routes out of one control, and they are not two answers to one question.**
+                // `machine::centre` decides what this press means — Select over a running machine,
+                // `PowerOff` over a booting one, a power-on or a refusal otherwise — and it is
+                // asked once, in Rust, by both of these. `pointer-event` carries the half that
+                // needs a duration; `clicked` carries the half that must not fire when the pointer
+                // wanders off the button before it lifts, which is the whole difference between
+                // the two and the reason a machine's Select cannot be `clicked`.
+                pointer-event(ev) => {
+                    if (!root.pressable) { return; }
+                    if (ev.kind == PointerEventKind.down) { root.centre-down(); }
+                    if (ev.kind == PointerEventKind.up) { root.centre-up(); }
+                }
                 clicked => {
                     if (!root.pressable) { root.clicked(); return; }
                     root.pressed-device();

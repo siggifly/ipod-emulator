@@ -80,6 +80,7 @@ impl Button {
 
     /// A button by name, using the same spellings the command line's `--wheel` scripts accept —
     /// `eapp_loader::wheel_button` is the one place those live, so the two cannot drift.
+    #[allow(dead_code)]  // retired when: something in the window names a button in text — §16.8's keys map letters to variants directly and the drawn labels raise a pointer stream, so nothing in this program spells a button out loud yet
     pub fn parse(name: &str) -> Option<Button> {
         let mask = eapp_loader::wheel_button(name.trim())?;
         Button::ALL.into_iter().find(|b| b.mask() == mask)
@@ -98,6 +99,7 @@ impl Button {
     /// What the bezel says, in words. Only Menu is *printed* as text on the real device; the other
     /// three are transport glyphs, drawn as geometry by `main::transport` rather than as
     /// codepoints, so these names exist for logs and tests rather than for the screen.
+    #[allow(dead_code)]  // retired when: a refusal or a log names the control that was pressed — §7.4's held sentence is about the machine rather than about which button reached for it, so today nothing asks
     pub fn label(self) -> &'static str {
         match self {
             Button::Menu => "MENU",
@@ -185,6 +187,7 @@ impl WheelRing {
 
     /// The point on the ring's midline at a given position — where a label is drawn, and where the
     /// touch indicator goes.
+    #[allow(dead_code)]  // retired when: something in the window draws AT a wheel position — §7.4 puts the backlog on the cradle label and says explicitly it is *never on the wheel itself*, so the indicator this was written for is a thing the design declined
     pub fn point_at(&self, pos: u8) -> (f32, f32) {
         let mid = (self.inner + self.outer) * 0.5;
         let theta = pos as f32 / CLICKS as f32 * TAU;
@@ -206,6 +209,132 @@ pub fn quadrant(pos: u8) -> Option<Button> {
         }
     }
     None
+}
+
+/// **The window's one finger on the drawn wheel**, and the events it produces.
+///
+/// Everything above this is arithmetic on a ring; this is the small piece of state that turns
+/// *where the pointer is* into *what the wheel did*, and it lives here for the same reason the
+/// arithmetic does — none of it needs a window to be true, and `main.rs` has no business holding a
+/// position between two pointer events.
+///
+/// **One finger, and that is the hardware rather than a simplification.** A 5G's wheel is one
+/// capacitive surface: two touches on it are not two positions, and the streaming frame has one
+/// `position` byte and one touched bit to say so. So a key step arriving while a pointer is down is
+/// **refused** rather than queued — the pointer owns the wheel until it lifts, and the alternative
+/// is two writers of one `at` disagreeing about where the finger is.
+///
+/// **`Touch` is emitted once and `Release` once**, whichever control started the contact. A drag
+/// that begins on the MENU label is a button press *and* a touch at that position, which is what
+/// [`WheelRing::hit`] answers and what the real membrane does; the dead band either side of each
+/// label is what stops every drag being one.
+#[derive(Default)]
+pub struct Finger {
+    touch: Touch,
+}
+
+/// What is on the wheel right now.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+enum Touch {
+    /// Nothing.
+    #[default]
+    Off,
+    /// A pointer, at this ring position, holding this button mask — `0` for bare ring.
+    Pointer { at: u8, button: u8 },
+    /// A key. It has a direction and **no position**: §16.8's `↑` `↓` ask for one detent, not for
+    /// somewhere to be.
+    Key,
+}
+
+impl Finger {
+    /// A pointer went down at `(x, y)`, in the wheel's own coordinates — x right, **y down**, from
+    /// its centre.
+    ///
+    /// Answers nothing for a press the wheel does not own: the centre button is a control of its
+    /// own with its own route, and the moulding between it and the ring is *"a press on neither —
+    /// which is the honest answer, since on the hardware it is the moulding"*.
+    pub fn pressed(&mut self, ring: &WheelRing, x: f32, y: f32) -> Vec<eapp_loader::WheelEvent> {
+        let (at, button) = match ring.hit(x, y) {
+            Hit::Ring(p) => (p, 0),
+            Hit::RingButton(b, p) => (p, b.mask()),
+            Hit::Select | Hit::None => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        if self.touch == Touch::Off {
+            out.push(eapp_loader::WheelEvent::Touch);
+        }
+        self.touch = Touch::Pointer { at, button };
+        if button != 0 {
+            out.push(eapp_loader::WheelEvent::Button(button, true));
+        }
+        out
+    }
+
+    /// The pointer moved to `(x, y)` — one `Step` per detent crossed, the short way round.
+    ///
+    /// **Only the angle is read, and the radius is deliberately ignored.** A drag that wanders
+    /// outside the ring's outer edge while turning is one a person means; a finger that has to stay
+    /// inside a 58 px annulus to keep scrolling is a wheel that stops working when you press
+    /// slightly too hard. Where the finger went **on** is decided by [`WheelRing::hit`], which does
+    /// read the radius; where it has got to since is an angle.
+    pub fn moved(&mut self, x: f32, y: f32) -> Vec<eapp_loader::WheelEvent> {
+        let Touch::Pointer { at, button } = self.touch else {
+            return Vec::new();
+        };
+        let to = position_at_angle(x, y);
+        let d = shortest_delta(at, to);
+        if d == 0 {
+            return Vec::new();
+        }
+        self.touch = Touch::Pointer { at: to, button };
+        vec![eapp_loader::WheelEvent::Step(d.signum() as i8); d.unsigned_abs() as usize]
+    }
+
+    /// The pointer lifted. Whatever it was holding comes up, then the finger leaves.
+    ///
+    /// The order is the hardware's: a button that came up *after* the touch ended would post a
+    /// frame with the button still set and no finger on the wheel, which is a state the part cannot
+    /// be in.
+    pub fn released(&mut self) -> Vec<eapp_loader::WheelEvent> {
+        let Touch::Pointer { button, .. } = self.touch else {
+            return Vec::new();
+        };
+        self.touch = Touch::Off;
+        let mut out = Vec::new();
+        if button != 0 {
+            out.push(eapp_loader::WheelEvent::Button(button, false));
+        }
+        out.push(eapp_loader::WheelEvent::Release);
+        out
+    }
+
+    /// §16.8's `↑` `↓` (and `←` `→` over a machine): **one detent, by key**.
+    ///
+    /// The first one touches the wheel and the key's release lifts it, so holding the key down is
+    /// one contact with a stream of clicks in it — which is what a scroll is. Auto-repeat is the
+    /// repeat rate, and it is the platform's rather than one this program invents.
+    pub fn keyed(&mut self, by: i8) -> Vec<eapp_loader::WheelEvent> {
+        if by == 0 || matches!(self.touch, Touch::Pointer { .. }) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if self.touch == Touch::Off {
+            out.push(eapp_loader::WheelEvent::Touch);
+            self.touch = Touch::Key;
+        }
+        out.push(eapp_loader::WheelEvent::Step(by.signum()));
+        out
+    }
+
+    /// The key came up. Nothing happens if the contact was a pointer's — see the type's note on
+    /// there being one finger.
+    pub fn key_released(&mut self) -> Vec<eapp_loader::WheelEvent> {
+        if self.touch != Touch::Key {
+            return Vec::new();
+        }
+        self.touch = Touch::Off;
+        vec![eapp_loader::WheelEvent::Release]
+    }
 }
 
 #[cfg(test)]
@@ -355,5 +484,130 @@ mod tests {
             let (x, y) = w.point_at(p);
             assert_eq!(position_at_angle(x, y), p, "round trip failed at {p}");
         }
+    }
+    // ── The finger ──────────────────────────────────────────────────────────────────────────────
+
+    use eapp_loader::WheelEvent::{Button as Btn, Release, Step, Touch};
+
+    /// The unit ring the window uses: the pointer arrives in units of the wheel's outer radius, so
+    /// the whole of `main.rs` needs no idea how big the drawing is.
+    fn unit() -> WheelRing {
+        WheelRing::new(0.0, 0.0, 1.0)
+    }
+
+    /// A point on the ring's midline at `pos`, in unit-radius coordinates.
+    fn on_ring(pos: u8) -> (f32, f32) {
+        let (x, y) = unit().point_at(pos);
+        (x, y)
+    }
+
+    #[test]
+    fn a_press_on_bare_ring_touches_the_wheel_and_presses_nothing() {
+        let mut f = Finger::default();
+        let (x, y) = on_ring(12);
+        assert_eq!(f.pressed(&unit(), x, y), vec![Touch]);
+        assert_eq!(f.released(), vec![Release]);
+    }
+
+    /// §7.4: the four labels are the machine's buttons, and a press on one is a touch **and** a
+    /// button — which is what `hit` answers and what the membrane does.
+    #[test]
+    fn a_press_on_a_printed_label_is_a_touch_and_that_button() {
+        let mut f = Finger::default();
+        let (x, y) = on_ring(0);
+        assert_eq!(f.pressed(&unit(), x, y), vec![Touch, Btn(WHEEL_MENU, true)]);
+        // The release comes up before the finger leaves: a frame with a button set and no finger on
+        // the wheel is a state the part cannot be in.
+        assert_eq!(f.released(), vec![Btn(WHEEL_MENU, false), Release]);
+    }
+
+    /// The one that would catch a `hit` answering `Select` for the moulding, or a `main.rs` that
+    /// sent `Touch` for a press on the case.
+    #[test]
+    fn a_press_the_ring_does_not_own_produces_nothing_and_leaves_no_finger_behind() {
+        let mut f = Finger::default();
+        // The centre button — its own control, with its own route.
+        assert!(f.pressed(&unit(), 0.0, 0.0).is_empty());
+        // The moulding between the button and the ring: `select` is 0.465 and `inner` is 0.52.
+        assert!(f.pressed(&unit(), 0.0, -0.49).is_empty());
+        // Off the wheel entirely.
+        assert!(f.pressed(&unit(), 0.0, -2.0).is_empty());
+        assert!(f.released().is_empty(), "a press that did nothing left a finger on the wheel");
+    }
+
+    #[test]
+    fn a_drag_is_one_step_per_detent_the_short_way_round() {
+        let mut f = Finger::default();
+        let (x, y) = on_ring(12);
+        f.pressed(&unit(), x, y);
+        let (x, y) = on_ring(15);
+        assert_eq!(f.moved(x, y), vec![Step(1); 3]);
+        // …and it is now AT 15, so the next move is relative to there rather than to where the
+        // press was. A `moved` that forgot to advance `at` would send three more.
+        let (x, y) = on_ring(16);
+        assert_eq!(f.moved(x, y), vec![Step(1)]);
+        // Across twelve o'clock the short way is one click, not ninety-five.
+        let (x, y) = on_ring(95);
+        f.moved(x, y);
+        let (x, y) = on_ring(0);
+        assert_eq!(f.moved(x, y), vec![Step(1)]);
+    }
+
+    /// The radius is deliberately not read after the press — see [`Finger::moved`].
+    #[test]
+    fn a_drag_that_wanders_off_the_ring_keeps_turning() {
+        let mut f = Finger::default();
+        let (x, y) = on_ring(0);
+        f.pressed(&unit(), x, y);
+        // Three o'clock, four radii out. The angle is 24 clicks round; the radius is nonsense.
+        assert_eq!(f.moved(4.0, 0.0), vec![Step(1); 24]);
+    }
+
+    #[test]
+    fn nothing_moves_the_wheel_while_no_pointer_is_down() {
+        let mut f = Finger::default();
+        assert!(f.moved(1.0, 0.0).is_empty(), "a hover turned the wheel");
+        assert!(f.released().is_empty(), "a release with no press said something");
+    }
+
+    /// §16.8's `↑` `↓`: one contact, a stream of clicks in it, and the key's release lifts it.
+    #[test]
+    fn a_held_key_is_one_touch_with_a_stream_of_clicks_in_it() {
+        let mut f = Finger::default();
+        assert_eq!(f.keyed(1), vec![Touch, Step(1)]);
+        assert_eq!(f.keyed(1), vec![Step(1)], "auto-repeat touched the wheel a second time");
+        assert_eq!(f.keyed(-1), vec![Step(-1)]);
+        assert_eq!(f.key_released(), vec![Release]);
+        assert!(f.key_released().is_empty(), "the key came up twice and the wheel noticed twice");
+    }
+
+    /// One finger. The pointer owns the wheel until it lifts, because two writers of one `at` is
+    /// two answers to where the finger is.
+    #[test]
+    fn a_key_is_refused_while_a_pointer_is_down_and_does_not_lift_it() {
+        let mut f = Finger::default();
+        let (x, y) = on_ring(12);
+        assert_eq!(f.pressed(&unit(), x, y), vec![Touch]);
+        assert!(f.keyed(1).is_empty(), "a key stepped the wheel out from under a drag");
+        assert!(f.key_released().is_empty(), "a key release ended the pointer's touch");
+        // …and the drag is still live: it still knows it is at 12.
+        let (x, y) = on_ring(13);
+        assert_eq!(f.moved(x, y), vec![Step(1)]);
+        assert_eq!(f.released(), vec![Release]);
+    }
+
+    /// The other order: a key is holding the wheel and a pointer comes down on it. The contact is
+    /// already made, so `Touch` is not sent twice — and the pointer takes it over.
+    #[test]
+    fn a_pointer_takes_over_a_wheel_a_key_was_already_holding() {
+        let mut f = Finger::default();
+        assert_eq!(f.keyed(1), vec![Touch, Step(1)]);
+        let (x, y) = on_ring(0);
+        assert_eq!(
+            f.pressed(&unit(), x, y),
+            vec![Btn(WHEEL_MENU, true)],
+            "the wheel was touched a second time without ever being released"
+        );
+        assert_eq!(f.released(), vec![Btn(WHEEL_MENU, false), Release]);
     }
 }

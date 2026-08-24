@@ -1092,6 +1092,36 @@ time and pretending otherwise makes the drawing lie:
   **cradle label** — `running · wheel 41 queued` — and never on the wheel itself, and
   `input_dropped > 0` turns that clause `warn`, because a refused step is a lie about what you did.
 
+#### Built 2026-08-24, and three corrections the building produced
+
+**The gate is not in the markup, and that is the change worth naming.** The first version of this
+put `if (root.has-machine) { …the machine… } else { …the sentence… }` on the ring and on the hold
+switch, in `ipod.slint`. That is the drawing deciding two things it cannot see: *whether the wheel
+reaches anything* and *what to say when it does not*. It is the same defect as the two refusal
+sentences that used to be literals in that file, one paragraph up — and it broke in the same
+direction the moment there was a machine to be wrong about. **Every drawn control now raises its
+callback on every press**, and `machine::Life` decides where it goes. `has-machine` survives as what
+§7.3 calls *the announcement rather than the gate*: it is the hold switch's `accessible-enabled` and
+nothing else.
+
+**The refusal is held while a KEY is down as well as a pointer**, which this section did not say
+because §16.8's rows were not built when it was written. `M` on a bench with no machine is not
+*nothing happens*; it is §7.4's sentence on the cradle label, arriving and leaving with the key.
+§14.1 is the reason and it does not distinguish between a finger and a keystroke. The one row that
+is **not** refused is `← →`, because §16.8 gives it a second job — see there.
+
+**Measured: at `hero` the elision drops the noun.** `machine::NO_MACHINE` is 71 characters and this
+section's own note predicts `the wheel and the buttons belong to the machine, and t…` at
+`CRADLE_LABEL_MAX_CHARS` = 48. That is the *narrowest* window; at hero the label is wider and
+`_out/gui/bench-refused.png` reads
+
+> the wheel and the buttons belong to the machine, and there is no…
+
+— which stops one word short of the word the sentence is about. The first clause survives, which is
+the trade this section already accepted, so nothing is changed here; it is recorded because the
+predicted elision and the drawn one are not the same string and only one of them had ever been
+looked at.
+
 ### 7.5 The shelf — 88 px, three rows, flush to the bottom, full width
 
 `bg-band` gradient over a 1 px `line` top rule. Padding 24 left and right, 12 top and bottom. The
@@ -3498,6 +3528,41 @@ Ctrl+, elsewhere; write the table with one column and use `Platform.os` only for
 | **`⌃⌘F` / `F11`** | fullscreen — **the one row that is not one column**; see below |
 | `S` · `⇧S` | the panel · the window |
 | `D` | the Readout page |
+
+**The four machine rows were built 2026-08-24, and the table understated two of them.**
+
+- **`M` `P` `N` `B` and `H` are not silent on an empty bench.** The table says *only while there is a
+  machine*, which is true of what they send and says nothing about what happens instead — and *what
+  happens instead* is the whole of §14.1. They put §7.4's sentence on the cradle label, held while
+  the key is down, exactly as a press on the drawn control does. `↑` `↓` are the same.
+- **`← →` are the one row that must not refuse**, because they have a second job: with no machine
+  they are previous / next device, and a machine's half that claimed the key would delete §7.2's
+  only keyboard route to another device, silently. So the machine answers *not mine* for those two
+  keys alone and the bench's own shortcut gets them — which is the shape the row was already written
+  in, made mechanical.
+- **A modifier ends the claim.** `event.text` for `⌘M` is still `m`, so without a guard a ⌘-chord
+  this program does not define would press MENU on the emulated iPod. Only unmodified keys reach the
+  machine's table; `Tab` and `Esc` never arrive as text and `⌘,` / `⌘\` are `KeyBinding`s, which run
+  ahead of `key-pressed` entirely.
+- **Lower case only.** `m` is the key the table means; `⇧M` is a different keystroke and the table
+  does not claim it. The `S` · `⇧S` row is the proof that the shift matters in this program, so
+  answering both from one arm would be inventing a rule.
+
+**And a key that reaches the machine comes up as well.** A press with no release is a stuck finger,
+and the wheel's `Touch` needs a `Release` for the same reason — so the root `FocusScope` handles
+`key-released` too, which it did not before. Holding `↓` is therefore **one** contact with a stream
+of clicks in it, at the platform's own auto-repeat rate rather than one this program invents.
+
+**Which surfaced a hole in the exception above, and it is measured rather than reasoned.**
+`TextInput` consumes a character key's **press** — which is what makes the exception focus rather
+than a mode — and **ignores its release**: `i-slint-core-1.17.1/items/text.rs:1106-1115`'s
+`KeyReleased` arm answers `EventIgnored` unless the field's own `key-released` callback accepts, and
+by default it rejects. So the release bubbles to the root scope for a press that never got there,
+and typing `m` into the Composer's Name field over a running machine would have put MENU **up** on
+it. Harmless today — it clears a bit that is already clear — and not harmless the day MENU is held
+by something else. **A release is therefore honoured only for a press this scope took**, which is
+the half focus cannot cover, and it is the one place in §16.8 where the window keeps state about a
+key at all.
 
 **`Esc` had three incompatible definitions and now has one.** §4 listed it as a way *into* the
 drawer, §16.8 defined it as a pure exit, and §12.6 said it was the way out of fullscreen — so on a

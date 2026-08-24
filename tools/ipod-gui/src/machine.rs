@@ -82,6 +82,14 @@ pub const NOTHING_MOUNTED: &str = "nothing is mounted";
 pub const NO_MACHINE: &str =
     "the wheel and the buttons belong to the machine, and there is no machine";
 
+/// §7.4's other refusal, for the one drawn control that is not a button.
+///
+/// The design's own wording, and it was a literal inside `main::refusals` — the only sentence in
+/// §7.4 that lived outside this module, which is exactly the arrangement `NO_MACHINE` was moved
+/// here to end. Same exemption from `geometry::CRADLE_LABEL_MAX_CHARS`, for the same reason: there
+/// is no press in it to shorten and the first clause survives the elision.
+pub const NO_MACHINE_HOLD: &str = "the hold switch belongs to the machine, and there is no machine";
+
 /// **A count of instructions, for a person.** `412 M instr`, `21.5 G instr`, `900 instr`.
 ///
 /// Not `eapp_loader::si`, which is the same arithmetic against a different noun: it renders `412 MB`

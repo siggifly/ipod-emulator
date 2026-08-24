@@ -122,27 +122,48 @@ export component MainWindow inherits Window {
     // sequence and threw away the evidence a stopped machine leaves behind. `machine::Glass` is
     // where the decision is made and this is it, pushed.
     in property <bool> panel-lit: false;
-    // **§7.4, and it is a literal about this build rather than a fact about the machine.**
+    // **§7.4, and it is a fact about the machine now rather than a literal about this build.**
     //
-    // `IPod` gives every drawn control to the machine when this is true — the wheel's pointer
-    // stream, the buttons, the hold switch — and `window.slint` binds **none** of the four
-    // callbacks they raise, deliberately: *wiring a handler to a stream that cannot arrive is the
-    // phantom route §19.1 indicts*, and the stream needs `emu::Link::push`, which is the input pass
-    // and not this one. So it stayed `root.running`, and the day the bench could actually run
-    // something that binding turned the wheel live over a handler that does not exist: a control
-    // that is drawn enabled, fires, and does nothing, with nothing said. §14.1 and §19.1's first
-    // fatal finding, in one expression.
+    // It was `false`, in the shape `rail::Caps` holds §9.3's four, under a retirement condition
+    // reading *when `main.rs` registers `on_wheel_down` / `on_wheel_moved` / `on_wheel_up` /
+    // `on_hold_toggled` and they reach `emu::Link::push`*. It does, they do, and this is
+    // `machine::Life::alive()` pushed sixty times a second — so the answer changes with the phase,
+    // which is what §7.4 asks and what a constant could never say.
     //
-    // It is therefore `false`, in the same shape `rail::Caps` holds §9.3's four literals about this
-    // build — and the refusal beside it is pushed rather than typed, so what a person reads over a
-    // *running* machine is not *there is no machine*. Retired when `main.rs` registers
-    // `on_wheel_down` / `on_wheel_moved` / `on_wheel_up` / `on_hold_toggled` and they reach
-    // `emu::Link::push`.
+    // **What it gates is the announcement and not the stream.** Every drawn control raises its
+    // callback on every press; `machine_key` and `to_the_machine` in `main.rs` decide whether that
+    // reaches `emu::Link::push` or `held-sentence`. So a false here is *an assistive technology is
+    // told this switch is inert*, never *the event was dropped* — §14.1, and §7.3's own note that
+    // gating the keyboard half and not the pointer half made `Return` a dead key on exactly the
+    // control that most needed to say something.
     in property <bool> machine-takes-input: false;
-    // §7.4's two sentences, pushed. See `ipod.slint`, where they used to be literals — one of them
-    // a second copy of `machine::NO_MACHINE`.
-    in property <string> wheel-refusal;
+    // §7.4's hold sentence, pushed. See `ipod.slint`, where it used to be a literal.
+    //
+    // **A constant now, and pushed once rather than per tick.** It used to be a pair with two states
+    // each, the second saying the window could not reach the machine *yet*; that sentence was true
+    // of every build before this one and is false of this one, so it is deleted rather than
+    // reworded. What is left is the state §7.4 describes, and `machine::no_machine` words it —
+    // and only the hold switch's half survives as a property at all, because it is the one drawn
+    // control with an ARIA description to put it in.
     in property <string> hold-refusal;
+    // §7.4's refusal while it is being held, on its way to the cradle label. Rust decides which of
+    // the two sentences it is — and whether there is one at all — because that is a question about
+    // the machine's phase, and because §16.8's keys reach the same controls without ever touching
+    // `bench.slint`. See `Bench::held-sentence`.
+    in property <string> held-sentence;
+    // ── §7.4, §8.1 item 7: what the MACHINE says its own controls are doing ──
+    //
+    // Reads of `Stats`, not local animations: `machine-hold` is the hold switch's own field and the
+    // five below are `Stats::buttons` decoded one per bit, because Slint has no bitwise operators
+    // and a mask here would have to be re-encoded as arithmetic. A press depresses its button for
+    // the ~1.6 s of wall time the emulator holds the release, and that is a true and interesting
+    // fact about this emulator rather than a lag to hide.
+    in property <bool> machine-hold: false;
+    in property <bool> held-menu: false;
+    in property <bool> held-next: false;
+    in property <bool> held-prev: false;
+    in property <bool> held-play: false;
+    in property <bool> held-select: false;
 
     // ── What Rust measures and pushes in (§6.6, §16.1) ──
     //
@@ -368,6 +389,33 @@ export component MainWindow inherits Window {
     in property <string> composer-runs-disabled;
 
     callback start-device(int);
+    // ── §7.4, and every one of these is the machine's ───────────────────────────────────────────
+    //
+    // The pointer's offset from the wheel's centre, in units of the wheel's outer radius; the
+    // centre button's own down and up, which `machine::centre` reads as Select only while a machine
+    // is running; and the hold switch, which is a concept rather than a button and has its own
+    // command, its own field and its own key.
+    //
+    // **None of them is gated in markup.** Each fires on every press and Rust decides where it goes
+    // — see `machine-takes-input` above, and `to_the_machine` in `main.rs`, which is the one place
+    // the decision is made for the pointer, the keys and the centre button together.
+    callback wheel-down(float, float);
+    callback wheel-moved(float, float);
+    callback wheel-up();
+    callback centre-down();
+    callback centre-up();
+    callback hold-pressed();
+    callback hold-released();
+    // **§16.8's four machine rows, as one question asked of Rust.** `↑` `↓` are the wheel always,
+    // `←` `→` are the wheel while there is a machine and the shelf when there is not, `M P N B` are
+    // the four labels and `H` is the hold switch. The whole table lives in `main::keyed` rather
+    // than being written out as eight comparisons here, because it is the same table the drawn
+    // controls obey and a second copy of it in markup is a second copy to drift.
+    //
+    // **The answer is what decides `accept` versus `reject`**, which is the one thing the markup
+    // has to know: `false` for `←` `→` on an empty bench is what lets them fall through to §7.2's
+    // device shortcut below, and `false` for every other key is what lets it bubble.
+    callback machine-key(string, bool) -> bool;
     // §7.6's `why ›`: put this device's refusal on the Rail, then open the page that owns it.
     callback explain(int);
     callback escape-pressed();
@@ -491,18 +539,46 @@ export component MainWindow inherits Window {
                 root.escape-pressed();
                 return accept;
             }
+            // ── §16.8's four machine rows, asked before anything else claims the key ──
+            //
+            // **The modifier guard is not decoration.** `event.text` for `⌘M` is still `m`, and
+            // without this a ⌘-chord this program does not define would press MENU on the emulated
+            // iPod. `Tab` and `Esc` never reach here as text and `⌘,` / `⌘\` are `KeyBinding`s,
+            // which run ahead of `key-pressed` entirely.
+            //
+            // **This is also where §16.8's one exception lives, and it costs nothing to keep.** A
+            // focused `TextInput` consumes character keys before they ever bubble to this scope, so
+            // typing `My 5.5G` into the Composer's Name field cannot fire MENU — the suppression is
+            // focus rather than a mode, and it applies to the machine's keys for free.
+            if (!event.modifiers.control && !event.modifiers.alt && !event.modifiers.meta
+                && root.machine-key(event.text, true)) {
+                return accept;
+            }
             // **Only while the drawer is closed.** These pick which device the bench draws, and
             // every `FocusScope` below returns `reject` for an arrow — so with the drawer open they
             // bubbled all the way up here from a focused drawer row and silently swapped the device
             // behind the drawer, including the one `start-device(root.selected)` would start. §7.2
             // puts device selection on the Devices drawer page; this is the bench's own shortcut and
             // it belongs to the bench.
+            //
+            // **Reached only when `machine-key` said no**, which is §16.8's `← →` row: the wheel
+            // while there is a machine, previous / next device when there is not. One key, two
+            // jobs, and the machine has first claim on it.
             if (!root.drawer-open && event.text == Key.LeftArrow) {
                 root.move(-1);
                 return accept;
             }
             if (!root.drawer-open && event.text == Key.RightArrow) {
                 root.move(1);
+                return accept;
+            }
+            return reject;
+        }
+        // **A key that reaches the machine has to come up as well.** A button's release and the
+        // wheel's `Release` are both real events on the part — a press with no release is a stuck
+        // finger — and §7.4's refusal is *held while the key is down*, which needs the same edge.
+        key-released(event) => {
+            if (root.machine-key(event.text, false)) {
                 return accept;
             }
             return reject;
@@ -657,12 +733,21 @@ export component MainWindow inherits Window {
                 // §9.2's one line on the bench, and §12.3's honesty about it.
                 progress: root.progress;
 
-                // §7.4: every drawn control on the device is gated on this and says so when
-                // pressed, rather than being drawn disabled or silently doing nothing. **It is not
-                // `root.running`** — see `machine-takes-input`, which is what it is now and why.
+                // §7.4: whether the drawn controls are the machine's. **It is not `root.running`**
+                // — `Booting` is a machine too, and a wheel that only worked once the boot had
+                // finished would be inert for the seventy-five seconds a person is most likely to
+                // press something — and it is not a literal about this build any more either. See
+                // `machine-takes-input`, which is `Life::alive()` pushed on every tick, and note
+                // that what it gates here is the announcement rather than the stream.
                 has-machine: root.machine-takes-input;
-                wheel-refusal: root.wheel-refusal;
                 hold-refusal: root.hold-refusal;
+                held-sentence: root.held-sentence;
+                hold: root.machine-hold;
+                held-menu: root.held-menu;
+                held-next: root.held-next;
+                held-prev: root.held-prev;
+                held-play: root.held-play;
+                held-select: root.held-select;
 
                 device-name: root.current.name;
                 // §9.2: while something is happening, the cradle carries it. The row's own label
@@ -738,12 +823,18 @@ export component MainWindow inherits Window {
                 why => {
                     root.explain(root.selected);
                 }
-                // `wheel-down` / `wheel-moved` / `wheel-up` / `hold-toggled` are declared by `Bench`
-                // and deliberately left unbound: `IPod` raises none of them while
-                // `machine-takes-input` is false, and wiring a handler to a stream that cannot
-                // arrive is the phantom route §19.1 indicts. **The gate that keeps them unraised
-                // used to be `running`**, which was a compile-time `false`; now that a machine can
-                // exist it is a literal of its own, for the reason written on it.
+                // §7.4. These were declared by `Bench` and deliberately left unbound while there
+                // was no `emu::Link::push` to bind them to — *wiring a handler to a stream that
+                // cannot arrive is the phantom route §19.1 indicts*. There is one now, so the
+                // stream is joined end to end: `ipod.slint` raises, `bench.slint` forwards, this
+                // binds, and `main.rs` registers.
+                wheel-down(dx, dy) => { root.wheel-down(dx, dy); }
+                wheel-moved(dx, dy) => { root.wheel-moved(dx, dy); }
+                wheel-up => { root.wheel-up(); }
+                centre-down => { root.centre-down(); }
+                centre-up => { root.centre-up(); }
+                hold-pressed => { root.hold-pressed(); }
+                hold-released => { root.hold-released(); }
             }
 
             // §7.5, and it rides the well rather than the window edge — which is what makes it read

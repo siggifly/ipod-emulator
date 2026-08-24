@@ -595,13 +595,29 @@ fn the_wheel_hit_test_is_wheel_rs_and_is_not_re_derived_in_the_markup() {
         "the centre button's target is no longer pushed in; the only other way to size it is to \
          write `WheelRing`'s ratio in the markup"
     );
-    for want in ["callback wheel-down(length, length);", "callback wheel-up();"] {
+    // **`float` and not `length`, and the change is the same rule one step further.** The ring
+    // reports its offset in units of its own outer radius, so what crosses the boundary is an
+    // angle and a fraction — and `wheel::WheelRing::new(0.0, 0.0, 1.0)` is what `main.rs` hits it
+    // against. A pixel offset would have made the handler need the drawing's size, which is the
+    // second place a ratio would have had to live.
+    for want in ["callback wheel-down(float, float);", "callback wheel-up();"] {
         assert!(
             code(&ipod()).iter().any(|l| l == want),
             "ui/ipod.slint no longer declares `{want}`, so the ring has no way to report a \
              position to the one thing that knows what one means"
         );
     }
+    // …and the normalisation divides by the element's own size rather than by a number: a literal
+    // radius here would be the drawing deciding how big the wheel is, one binding away from
+    // deciding what a press on it means.
+    assert!(
+        code(&ipod())
+            .iter()
+            .filter(|l| l.contains("root.wheel-down(") || l.contains("root.wheel-moved("))
+            .count()
+            >= 2,
+        "the ring no longer raises its pointer stream at all"
+    );
 }
 
 /// **No string the bench draws carries a glyph the font is not proven to have** — §6.7, §16.6.
@@ -873,7 +889,22 @@ fn the_keyboard_and_the_pointer_agree_about_what_pressing_means() {
         .iter()
         .position(|l| l.starts_with("centre-touch := TouchArea"))
         .expect("ui/ipod.slint declares the centre button's target");
-    let touch: String = ip[centre..centre + 16].join("\n");
+    // **To the element's own closing brace, rather than a fixed number of lines.** It was 16, which
+    // was one line more than the element had — so the day the centre button grew a `pointer-event`
+    // for §7.4's Select, this went red about a route that was still there, four lines below where
+    // it stopped looking. A window sized by counting is a window that has to be re-counted.
+    let touch: String = {
+        let mut depth = 0i32;
+        let mut end = centre;
+        for (i, l) in ip[centre..].iter().enumerate() {
+            depth += l.matches('{').count() as i32 - l.matches('}').count() as i32;
+            if depth == 0 && i > 0 {
+                end = centre + i;
+                break;
+            }
+        }
+        ip[centre..=end].join("\n")
+    };
     assert!(
         touch.contains("root.pressed-device();"),
         "the drawn centre button no longer reports a press:\n{touch}"
