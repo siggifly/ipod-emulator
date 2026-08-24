@@ -531,9 +531,32 @@ pub struct Stats {
     pub frames_posted: u64,
     pub frames_dropped: u64,
     pub frames_suppressed: u64,
+    /// **The CLICK WHEEL's DATA register**, read as words, and how many of those found a frame
+    /// waiting. `--selftest` prints them as *"DATA reads N (M with a frame waiting)"*, which is
+    /// what they are.
+    ///
+    /// **They are not the drive, and §12.8's BUS group drew the first of them under the label
+    /// `ata commands`.** One field, filled from `m.mem.clickwheel`, rendered as the count of
+    /// commands issued to a disk — so every Readout ever taken reported the wheel's serial traffic
+    /// as storage traffic, and a machine whose drive had never answered at all would have shown a
+    /// healthy four-figure number there. [`Stats::ata_commands`] is the drive's own census, and
+    /// this pair keeps the name of the register it comes off.
     pub data_reads: u64,
     pub data_reads_ready: u64,
+    /// IRQ 40 assertions — the click wheel's line, and the third of that group.
     pub irqs: u64,
+    /// **Commands issued to the drive, as a census.**
+    ///
+    /// `Ata::commands` is a `Capped<_>` holding 256 rows, and a retail cold boot issues about seven
+    /// hundred — so `commands.sample().len()` is a cap wearing a census's clothes, which is
+    /// research/12's whole subject. `seen()` is the number, and it is the number `report_headless`
+    /// already prints beside `retail-boot.sh`'s.
+    ///
+    /// **It is what tells a boot from a bootloader.** research/04 row 9's A/B is 102 ATA commands
+    /// with the IDE interrupt latch modelled against **24** without it — and the 24 is Apple's
+    /// bootloader painting its own screen and never handing RetailOS the disk. A window that could
+    /// not publish this number could not tell those two apart from the outside.
+    pub ata_commands: u64,
     /// Steps refused because the drain queue was already full — always shown, never silent.
     pub input_dropped: u64,
     // **`queued` was here and is deleted.** It was the depth of the input drain queue, computed
@@ -1106,9 +1129,20 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         )
     });
 
-    // The co-processor, with the GENCMD registry published. Without `registry` RetailOS never gets
-    // an answer to its service lookup and never draws — the panel would be a black rectangle and
-    // the GUI would be showing a true picture of a machine configured not to work.
+    // The co-processor, with the GENCMD registry published.
+    //
+    // **What this line used to claim, and what a measurement of it says.** The claim was: *"without
+    // `registry` RetailOS never gets an answer to its service lookup and never draws — the panel
+    // would be a black rectangle."* Ablated on 2026-08-24 as a red proof for
+    // `the_bench_boots_apples_software_and_this_needs_resources` — one flag, same ROM, same drive,
+    // same start path — the boot is **indistinguishable**: 75 267 non-black pixels, 4
+    // co-processor commands, 2 frame updates, RetailOS's language picker on the glass. So the
+    // black-rectangle half is not true of *this* boot, and it is left here as what was believed
+    // rather than deleted.
+    //
+    // The line stays on, because what the flag does is separately measured and is not nothing:
+    // research/04 records `--bcm-registry` turning 4 DMA transfers into 104. That is a different
+    // claim from *the panel goes black*, and the two had been written down as one.
     let mut bcm = Bcm::new(0x3000_0000);
     bcm.registry = true;
     // The boot screen. A real NOR carries a `logo` image and Apple's bootloader blits it; a
@@ -1218,7 +1252,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
 /// whole cause of the stale-pair failure documented on `Config::frozen`. Reusing a drive is only
 /// ever correct when the RAM that goes with it is reused too, and that decision belongs to the
 /// caller, which knows whether it is restoring.
-fn clone_disk(from: &Path, to: &Path) -> Result<(), String> {
+pub fn clone_disk(from: &Path, to: &Path) -> Result<(), String> {
     if from == to {
         return Ok(());
     }
@@ -1388,6 +1422,11 @@ fn collect(m: &Machine, started: Instant, base: (u64, u32)) -> Stats {
         s.data_reads = w.data_reads;
         s.data_reads_ready = w.data_reads_ready;
         s.irqs = w.irqs;
+    }
+    // The drive's own census, and `seen()` rather than `sample().len()` for the reason the field
+    // carries: the log holds 256 rows and a retail cold boot issues about seven hundred.
+    if let Some((_, d)) = &m.mem.ata {
+        s.ata_commands = d.commands.seen();
     }
     for (i, (pc, _)) in WATCHED.iter().enumerate() {
         s.enters[i] = m.enter_log.iter().filter(|e| e.0 == *pc).count() as u64;
@@ -3134,6 +3173,77 @@ mod tests {
             phase_watcher(true, 900_000_000),
             boot_end(true, 900_000_000, SNAP).flatten(),
             "on the observed arm the two agree, which is why the other arm is the only test"
+        );
+    }
+
+    /// **The FIRST ask for wheel frames is not the end of a cold boot, and this is the measurement
+    /// that says so.**
+    ///
+    /// [`boot_end`]'s observed arm is documented as *"RetailOS asking for wheel frames … a machine
+    /// asking for input is a machine that has finished starting"*. Driven against Apple's own NOR
+    /// dump and a real 5.5G's drive through the window's own start path — `ipod-gui`'s
+    /// `the_bench_boots_apples_software_and_this_needs_resources`, which is `#[ignore]`d because it
+    /// needs `resources/` — that turns out to be false, and not marginally:
+    ///
+    /// ```text
+    /// the window leaves `Booting`     2 250 000 instr     0 ata    0 lit    0 co-proc frames
+    /// the first pixel lights         42 999 970 instr     0 ata
+    /// the drive first answers        57 499 970 instr
+    /// the machine goes quiet        871 653 185 instr   768 ata   75 267 lit   2 co-proc frames
+    /// ```
+    ///
+    /// At the instant the window declares the boot over the drive has answered **nothing** and the
+    /// panel is **black** — the first of each is nineteen and twenty-five times further on.
+    /// `eapp-loader`'s own snapshot comment has said which command that is all along — *"the
+    /// firmware turns it on once with opcode `0x052a` **early in the boot**"* — and `emu.rs` reads
+    /// the same command as the end of one. The two readings are 869 million instructions apart.
+    ///
+    /// The rest of that run is the boot proof itself and it is exact: **75 267 non-black pixels**
+    /// and **4 co-processor commands / 2 frame updates**, which is research/10 Addendum 10 §8's own
+    /// fingerprint for this machine, to the pixel.
+    ///
+    /// **What it costs is `Device::boot_instructions`.** `main::Learned::boot` writes `booted_at`
+    /// to the library as this device's cold-boot cost, so the *next* launch draws §12.3's bar
+    /// against a denominator of 2 250 000 — full at 0.12 % of the boot, and pinned there for the
+    /// remaining 878 million instructions. That is the substitution `boot_instructions` replaced
+    /// `snap_at` to fix, arrived at from the other end.
+    ///
+    /// **This test does not bless the number and it is not a fix.** It pins the shape of the
+    /// falsification so it cannot be lost: given the measured arrival, `boot_end` answers with a
+    /// count that is 0.26 % of the boot it claims to have measured. Replacing the signal is a
+    /// research question — *which sender sends that first `0x052a`, and does RetailOS send one of
+    /// its own later* — and guessing a new one would be trading a wrong observation for an
+    /// unmeasured one. `KNOWN-BUGS.md` carries it.
+    #[test]
+    fn the_first_ask_for_frames_is_not_the_end_of_a_cold_boot() {
+        /// Measured through the window's start path on Apple's ROM and the reference drive.
+        const ASKED_AT: u64 = 2_250_000;
+        /// The same machine, when it stopped executing new work.
+        const QUIET_AT: u64 = 871_653_185;
+
+        // What the window publishes as *this device's own last completed cold boot*.
+        assert_eq!(boot_end(true, ASKED_AT, SNAP_AT), Some(Some(ASKED_AT)));
+
+        // And what it is worth as a denominator. `Progress::read` divides by it, so a bar drawn
+        // against this reads full while the machine still has 99.7 % of its boot to do.
+        let fraction = ASKED_AT as f64 / QUIET_AT as f64;
+        assert!(
+            fraction < 0.01,
+            "the measurement this test was written to pin has moved: the first ask is now {:.1} % \
+             of the boot rather than 0.26 %. Re-run \
+             `the_bench_boots_apples_software_and_this_needs_resources` and re-state it",
+            fraction * 100.0
+        );
+
+        // **The control, and it is the whole reason this is a test rather than a comment.** The
+        // fallback arm — a constant nobody claims is a measurement — lands within 1.9x of where the
+        // machine actually finished, and the arm that calls itself an observation is 387x out. The
+        // signal is worse than the thing it was introduced to replace.
+        assert_eq!(boot_end(false, SNAP_AT, SNAP_AT), Some(None));
+        assert!(
+            SNAP_AT.abs_diff(QUIET_AT) < QUIET_AT.abs_diff(ASKED_AT),
+            "the fallback is now further from the truth than the observation, which would make \
+             this test's own point backwards"
         );
     }
 

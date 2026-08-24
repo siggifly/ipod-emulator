@@ -14,6 +14,56 @@ belongs here.
 
 ---
 
+## The window declares the cold boot over 2 250 000 instructions in, before the drive has answered — 2026-08-24
+
+Found by booting Apple's software from the bench for the first time. The window's start path **does**
+boot RetailOS — 769 ATA commands, the co-processor drawing, and **75 267 non-black pixels**, which is
+`research/10` Addendum 10 §8's own fingerprint for this exact machine, to the pixel. What is wrong is
+what the window *says about* that boot.
+
+```
+the window leaves `Booting`     2 250 000 instr     0 ata     0 lit pixels   0 co-proc frames
+the first pixel lights         42 999 970 instr     0 ata
+the drive first answers        57 499 970 instr
+the machine goes quiet        871 653 185 instr   768 ata   75 267 lit       2 co-proc frames
+```
+
+At the instant the bench stops saying *booting* and starts saying *running*, the drive has answered
+**nothing** and the panel is **black**. The first lit pixel is nineteen times further on; the first
+ATA command is twenty-five times further on.
+
+**The cause is the signal, and it was chosen from a measurement taken on a different machine.**
+`emu::boot_end`'s observed arm ends the boot phase on the first `0x8001052a` — RetailOS asking the
+click wheel for autonomous frames — reasoning that *"a machine asking for input is a machine that has
+finished starting"*. Cold-booting from Apple's own NOR, that command arrives from the boot path long
+before RetailOS is loaded. `eapp-loader`'s snapshot code has said so all along, in as many words:
+*"the firmware turns it on once with opcode `0x052a` **early in the boot**"*. The two readings of one
+command are 869 million instructions apart.
+
+**It is not cosmetic, and it is the second time this bar has been wrong in the same direction.**
+`main::Learned::boot` writes `Out::booted_at` to `Device::boot_instructions`, which is the progress
+bar's denominator, so the *next* launch of that device draws a bar that is full at 0.12 % of the boot
+and pinned there for the remaining 878 million instructions. That is exactly the substitution
+`Device::boot_instructions` was introduced to end when it replaced `snap_at` — see *The boot progress
+bar is an estimate presented as a measurement*, below, which fixed the operator's original complaint
+by swapping a constant for this. The constant was **1.9x** out. This is **387x** out.
+
+**Not fixed here, deliberately.** Replacing the signal needs a measurement nobody has taken: which
+sender issues that first `0x052a`, whether RetailOS issues one of its own later, and at what count.
+Guessing a new signal would trade a wrong observation for an unmeasured one, which is how this
+happened the first time.
+
+**How to see it**, in one command — it needs `resources/`, so it is `#[ignore]`d:
+
+```sh
+cargo test --release -p ipod-gui --bin ipod-emulator \
+    the_bench_boots_apples_software -- --ignored --nocapture
+```
+
+It prints a `KNOWN BUG` block with the three rows above, and writes the panel it booted to
+`_out/gui/retail-boot-panel.png`. `emu.rs`'s `the_first_ask_for_frames_is_not_the_end_of_a_cold_boot`
+carries the same numbers as a fixture and runs with no `resources/` at all.
+
 ## ~~The window opens at its minimum height, not its preferred one~~ — FIXED 2026-08-21
 
 **The window never did that, and the report this replaces was written off a trace that printed two
@@ -570,6 +620,13 @@ frames, which is a machine that has finished starting — with `snap_at` kept on
 boot that dies before the UI does not claim to be booting for ever. The bar itself still counts
 instructions, because nothing better is available *during* a boot, but it says **"roughly N %"** and
 no longer offers a seconds-remaining figure it cannot honour.
+
+**And the replacement signal is wrong too, measured 2026-08-24** — see *The window declares the cold
+boot over 2 250 000 instructions in*, at the top of this file. *"RetailOS writing `0x8001052a`"* is
+the sentence that turned out not to be true of a cold boot from Apple's own NOR: the boot path writes
+it first, 869 million instructions before RetailOS reaches its menu. The operator's original
+complaint — the bar filling after the language screen was up — is still fixed; the bar now finishes
+long **before** it, which is the same defect with its sign flipped.
 
 ## `MENU`+`SELECT` and `PLAY` are delivered and ignored
 

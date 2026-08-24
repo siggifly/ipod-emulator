@@ -2940,6 +2940,19 @@ describes the CPU alone"*, and it carries no arrival capture. Every arrival ever
 arrival by construction, so a second column could hold only an invented zero. **The one column
 stands and the caption claims nothing about two cores.***
 
+*(**The BUS group's first row was the click wheel's, corrected 2026-08-24.** `ata commands` and
+`ready` were `Stats::data_reads` and `Stats::data_reads_ready` — word reads of the **click wheel's**
+DATA register, which `--selftest` prints as *"DATA reads N (M with a frame waiting)"* — so the row
+that claimed to count commands issued to the drive counted serial traffic off the wheel, and a
+machine whose drive had never answered would have shown a healthy four-figure number there. The tell
+is in the sketch above: two rows claiming different things and carrying **611** twice. `Stats` now
+carries `ata_commands`, which is `Ata::commands.seen()` — a census, not `sample().len()`, which is a
+cap of 256 against a retail cold boot's ~706 — and the wheel keeps its own three rows under the name
+of the register they come off. What it buys: research/04 row 9's A/B is **102** ATA commands for a
+retail cold boot against **24** for the same boot with the IDE interrupt latch ablated, where 24 is
+Apple's bootloader painting its own screen and never handing RetailOS the disk. The difference
+between a boot and a bootloader is exactly that number, and until now it was not on the page.)*
+
 *`readout.rs` is the model and `ui/readout.slint` draws it; `Gauge` is §5's sixth primitive, built.
 Four decisions of this section are acted on rather than deferred: `Stats::queued` is **deleted**
 rather than allowed, because a stated retirement condition met with a *no* is a dead field;

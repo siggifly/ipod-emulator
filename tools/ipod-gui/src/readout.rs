@@ -310,9 +310,19 @@ fn input_group(g: &mut Vec<Gauge>, s: &Stats, fresh: Freshness) {
 
 fn bus_group(g: &mut Vec<Gauge>, s: &Stats, fresh: Freshness) {
     let b = Group::Bus;
-    g.push(Gauge::new(b, "ata commands", grouped(s.data_reads), fresh));
-    g.push(Gauge::new(b, "ready", grouped(s.data_reads_ready), fresh));
-    g.push(Gauge::new(b, "irqs", grouped(s.irqs), fresh));
+    // **§12.8's own sketch draws `ata commands` and `ready` as the same number, and that is the
+    // tell.** Both rows were `Stats::data_reads` and `Stats::data_reads_ready` — the CLICK WHEEL's
+    // DATA register, which `--selftest` prints as *"DATA reads N (M with a frame waiting)"* — so
+    // the row that claimed to count commands issued to the drive was counting serial reads off the
+    // wheel, and a machine whose drive never answered would still have shown a four-figure number
+    // here. research/04 row 9's A/B is 102 ATA commands against 24 for the same boot with the IDE
+    // interrupt latch ablated, and 24 is Apple's bootloader painting its own screen and never
+    // handing RetailOS the disk: the difference between a boot and a bootloader is exactly this
+    // number, and it was not on the page.
+    g.push(Gauge::new(b, "ata commands", grouped(s.ata_commands), fresh));
+    g.push(Gauge::new(b, "wheel data reads", grouped(s.data_reads), fresh));
+    g.push(Gauge::new(b, "of those ready", grouped(s.data_reads_ready), fresh));
+    g.push(Gauge::new(b, "wheel irqs", grouped(s.irqs), fresh));
     // Both counters live on `Bcm` and `Machine::restore` builds a fresh one, so after a restore
     // they start at zero even though the surface they filled is right there on the panel.
     g.push(Gauge::new(b, &format!("co-proc frames {RESTARTS}"), grouped(s.bcm_frames), fresh));
@@ -654,6 +664,49 @@ mod tests {
         let stalled = g.iter().find(|x| x.label == "stalled").unwrap();
         assert_eq!(stalled.value, UNMEASURED);
         assert!(!stalled.warn);
+    }
+
+    /// **The BUS group's `ata commands` row counts the DRIVE, and it used to count the wheel.**
+    ///
+    /// It was `Stats::data_reads` — the CLICK WHEEL's DATA register, which `--selftest` prints as
+    /// *"DATA reads N (M with a frame waiting)"* — drawn under a label about storage, with
+    /// `data_reads_ready` beside it as `ready`. §12.8's own sketch shows the two as **611 and 611**,
+    /// which is the shape of the defect visible in the design: two rows claiming different things
+    /// and carrying one number. A machine whose drive had never answered a single command would
+    /// have shown a healthy four-figure count there, and research/04 row 9's whole A/B — 102 ATA
+    /// commands for a boot against 24 for a bootloader that never gets the disk — was unreadable
+    /// from this window.
+    ///
+    /// The fixture is a machine on which the two are not the same number, which is what any real
+    /// one is: 706 commands to the drive by idle, against a wheel nobody has touched.
+    #[test]
+    fn the_ata_row_counts_the_drive_rather_than_the_click_wheel() {
+        let (o, l) = running(Stats {
+            ata_commands: 706,
+            data_reads: 43,
+            data_reads_ready: 41,
+            irqs: 183_452,
+            ..Stats::default()
+        });
+        let g = read(&o, &l, Some(10));
+        let row = |label: &str| {
+            g.iter()
+                .find(|x| x.label == label)
+                .unwrap_or_else(|| panic!("no `{label}` row on the page"))
+        };
+        assert_eq!(
+            row("ata commands").value,
+            grouped(706),
+            "the row that names the drive is not the drive's census"
+        );
+        assert_eq!(row("wheel data reads").value, grouped(43));
+        assert_eq!(row("of those ready").value, grouped(41));
+        assert_eq!(row("wheel irqs").value, grouped(183_452));
+        assert!(
+            !g.iter().any(|x| x.label == "ready"),
+            "`ready` on its own says nothing about what is ready, and it sat under a label about \
+             the drive while carrying the wheel's number"
+        );
     }
 
     /// **`Copy this readout` is the page, and it carries the freshness with it.**
