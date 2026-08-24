@@ -3514,9 +3514,20 @@ Three design consequences, and the third one was missed:
 
 **Windows note**: winit's file drag-and-drop uses apartment-threaded COM and "will interfere with
 other crates that use multi-threaded COM API on the same thread". Any file-picker crate added later
-must agree with that apartment model. **There is no file picker in the dependency graph today** —
-`cargo tree -p ipod-gui | grep -iE "rfd|native-dialog|ashpd"` is empty — and adding `rfd` pulls GTK
-or xdg-desktop-portal on Linux. That is a real dependency decision (§17.Q3), not a checkbox.
+must agree with that apartment model. `rfd`'s Windows backend initialises apartment-threaded COM per
+call, which agrees.
+
+> **Built, 2026-08-25.** `src/drops.rs`. The hook is three arms on the one
+> `on_winit_window_event` registration and nothing more — everything past the decode lives in
+> `wire`, behind `Wiring::files`, so the coalescing window, the band, the identification, the filing
+> and §11.4's compose are all drivable on a window with no winit window under it.
+> `the_winit_hook_handles_all_three_of_winits_file_events` reads the three arms out of `main.rs` the
+> way T-7 counts the registrations, and it is the half that keeps `HoveredFileCancelled` honest:
+> take that one out and the program still compiles, still files a drop, and leaves the band standing
+> over the shelf after a drag that left the window. `_out/gui/bench-dropping.png` is the picture.
+>
+> **And there is a file picker in the dependency graph now** — see §17.Q3, where the sentence about
+> GTK turned out to be out of date.
 
 ### 16.5 The disabled construction, specified once
 
@@ -3930,6 +3941,42 @@ xdg-desktop-portal on Linux.
 **Recommendation: add `rfd`.** Drag-and-drop is the better route and it is window-wide, but "the only
 way to give this program a file is to drag it" is not a program, and a Linux portal dependency is a
 smaller cost than that.
+
+> **Done, 2026-08-25, and the premise about GTK was out of date.** rfd 0.17's own manifest reads
+> `default = ["xdg-portal", "wayland"]`; **GTK3 is opt-in**, not a thing to be avoided by choosing a
+> feature. Both alternatives were measured rather than assumed —
+> `cargo tree -p ipod-gui --target <t> --prefix none -e normal,build | sed 's/ (\*)//' | sort -u |
+> wc -l`, before and after:
+>
+> | target | before | with the portal | with `gtk3` |
+> |---|---|---|---|
+> | `aarch64-apple-darwin` | 352 | **353** (+1: `rfd`) | — |
+> | `x86_64-pc-windows-msvc` | 347 | **348** (+1: `rfd`) | — |
+> | `x86_64-unknown-linux-gnu` | 430 | **432** (+2: `rfd`, `pollster`) | **449** (+19) |
+>
+> Everything else rfd wants is already compiled here: the `objc2` / `block2` / `dispatch2` set on
+> macOS, `windows-sys` on Windows, the three `wayland-*` crates on Linux through winit. The `gtk3`
+> arm is the 18 crates behind `gtk-sys` — `atk-sys`, `cairo-sys-rs`, `gdk-sys`, `gdk-pixbuf-sys`,
+> `gio-sys`, `glib-sys`, `gobject-sys`, `pango-sys` and the whole `system-deps` / `toml`
+> build-script stack. The manifest names `xdg-portal` and `wayland` explicitly so the arithmetic is
+> written down rather than inherited.
+>
+> **What did not get built is `Choose a folder…`, and that is the finding.** `rfd::FileDialog::
+> pick_folder` exists and would have been one line; the answer would have had nowhere to go.
+> `Choose a folder…` means *put this program's files somewhere else*, which is
+> `settings::data_dir()` reading `IPOD_EMULATOR_DATA` **at launch** — and the settings file lives
+> inside that directory, so there is not even a key to write the choice into. Wiring the picker to
+> it would have been a dialog that opened, took a choice, and did nothing with it: §19.1's first
+> fatal finding, arrived at by adding a dependency. So `rail::Next` grows an `unwired()` — the same
+> distinction `parts::Action::unwired` already draws for `Fetch…` — the control stays disabled, and
+> its reason changed from *no folder picker yet* to **`nothing moves the library`**, which is what
+> is actually missing. The escape hatch it already carried, `IPOD_EMULATOR_DATA=<path>`, is the
+> real remedy and always was.
+>
+> **`Next::Reveal` went the other way and is live**, on `open -R` / `explorer /select,` /
+> `xdg-open`. Its refusal is now a **machine rule** rather than a project state — *no file manager
+> installed*, drawn only on a computer that has none, which is a headless Linux box without
+> `xdg-open`.
 
 **Q4 — the menu bar on Windows and Linux.** macOS is free (§16.8). On Linux, Slint renders it and it
 costs outer height. **The physical-hero correction bought the fractional-scale displays enough slack

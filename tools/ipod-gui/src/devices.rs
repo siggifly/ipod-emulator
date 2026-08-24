@@ -91,8 +91,8 @@
 // beside a running ARM7 draws a live `Start` on every other device in the library.
 //
 // The obvious repair is to teach `device_rows` the machine, and it is wrong: **those two fields
-// are the bench's cradle as well.** `window.slint:806` reads `root.current.cradle-label` and
-// `window.slint:839` reads `root.current.startable`, so the sentence that refuses this page's
+// are the bench's cradle as well.** `window.slint:825` reads `root.current.cradle-label` and
+// `window.slint:858` reads `root.current.startable`, so the sentence that refuses this page's
 // `Start` would be printed under the drawn iPod — the machine's own cradle telling the operator
 // that the machine is running and to stop it first. One field, two surfaces, and only one of them
 // is asking §7.2's question.

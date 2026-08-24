@@ -62,6 +62,49 @@ accessibility = ["slint/accessibility"]
 
 [dependencies]
 eapp-loader = { path = "../eapp-loader" }
+
+# ── The file picker (docs/GUI.md §17 Q3, §11.4) ──────────────────────────────────────────────────
+#
+# The one crate in this graph that opens a window this program did not draw. Until it was added,
+# `main::caps().file_picker` was a `false` literal and every `Provide…`, `Add a dump…` and
+# `Choose a folder…` in the program was greyed out saying so — which was true, and which made the
+# command line the only way to give this program a file. §17 Q3's own words: *"drag-and-drop is the
+# better route and it is window-wide, but 'the only way to give this program a file is to drag it'
+# is not a program."*
+#
+# **Measured, not assumed** — `cargo tree -p ipod-gui --target <t> --prefix none -e normal,build |
+# sed 's/ (\*)//' | sort -u | wc -l`, before and after, on rfd 0.17.2:
+#
+#     aarch64-apple-darwin      352 → 353   +1  (rfd)
+#     x86_64-pc-windows-msvc    347 → 348   +1  (rfd)
+#     x86_64-unknown-linux-gnu  430 → 432   +2  (rfd, pollster)
+#
+# Everything else rfd asks for is already compiled here — `block2`, `dispatch2`, `objc2 0.6`,
+# `objc2-app-kit 0.3`, `objc2-foundation`, `objc2-core-foundation`, `raw-window-handle 0.6` and
+# `log` on macOS, `windows-sys` on Windows, and the three `wayland-*` crates on Linux through winit.
+#
+# **§17 Q3's premise about Linux is out of date, and the measurement is what shows it.** It says
+# rfd *"pulls GTK or xdg-desktop-portal"* and recommends the portal; in rfd 0.17 the portal is the
+# DEFAULT (`default = ["xdg-portal", "wayland"]`) and GTK3 is opt-in. The alternative was measured
+# too: `features = ["gtk3"]` is **449 on Linux, +19**, dragging in atk-sys, cairo-sys-rs, gdk-sys,
+# gdk-pixbuf-sys, gio-sys, glib-sys, gobject-sys, gtk-sys, pango-sys and the whole system-deps /
+# toml build-script stack behind them. So both features are named here rather than inherited — the
+# `wayland` one is what lets the portal parent its dialog to our window, and it measured free
+# because winit already carries those three crates.
+#
+# **No `common-controls-v6`**, which is not in rfd's default set either. It is a `windows-sys`
+# feature rather than a crate, so it costs nothing to compile; it is off because the Vista-era
+# dialog is what upstream ships by default and there is no measurement here saying the other one is
+# better.
+#
+# §16.4's Windows note is the one thing to re-read before touching this: winit's file drag-and-drop
+# uses apartment-threaded COM, and a picker that used multi-threaded COM on the same thread would
+# interfere with it. rfd's Windows backend initialises apartment-threaded COM per call, which
+# agrees.
+rfd = { version = "0.17", default-features = false, features = [
+    "xdg-portal",
+    "wayland",
+] }
 arm7tdmi = { path = "../arm7tdmi" }
 slint = { version = "1.17", default-features = false, features = [
     "std",

@@ -255,6 +255,25 @@ export component MainWindow inherits Window {
     out property <length> padded-field-reason-w: slot-probe-padded-field.reason-measure;
     // §7.5's row-2 trailing slot: the one number a bug report can quote.
     in property <string> fidelity;
+
+    // ── §11.4's drop band ──
+    //
+    // **Three properties, and rows 1 and 2 read them instead of the device while one is true.**
+    // *Dropping is the best acquisition route and the whole window is the target*, because winit's
+    // file events carry no cursor position (§16.4) — so there is no drop zone to draw and nowhere
+    // to draw a highlight that would mean anything. What the window does instead is say what it
+    // thinks it has been handed, in the two rows that were already saying what it has.
+    //
+    // **Nothing moves and no pixels are spent**: the same two `Text` elements, at the same
+    // measures, in the same row heights. Row 3 is untouched — see `push_drop_band`.
+    //
+    // **Every string is Rust's**, `drop-let-go` included, which is why a constant gets a property:
+    // the one sentence this band never varies is still a sentence this window says, and the sweep
+    // that measures what a slot can hold reads `drops::LET_GO` rather than a literal nobody swept.
+    in property <bool> dropping: false;
+    in property <string> drop-count;
+    in property <string> drop-what;
+    in property <string> drop-let-go;
     // §7.3: the drawn device is the picture, and this is what an assistive technology is told is on
     // its panel. The machine's, not the program's.
     in property <string> panel-description;
@@ -844,13 +863,25 @@ export component MainWindow inherits Window {
                 boot-measured: root.current.boot-measured;
                 boot-fraction: root.current.boot-fraction;
 
-                shelf-name: root.current.name;
-                shelf-state: root.current.state;
-                shelf-facts: root.current.summary;
+                // §11.4: while a drag is over the window, rows 1 and 2 say what the program thinks
+                // it has been handed. Three properties, three slots, one boolean — and row 3, the
+                // one line standing between an afternoon and somebody's only image of an iPod they
+                // own, is deliberately not in this list.
+                shelf-name: root.dropping ? root.drop-count : root.current.name;
+                shelf-state: root.dropping ? root.drop-let-go : root.current.state;
+                shelf-facts: root.dropping ? root.drop-what : root.current.summary;
                 // §7.5's row 2 has three tenants and one line. `Rail::line()` decides between the
                 // last two — a failure outranks work in progress — and Rust pushes the answer.
-                shelf-rail-line: root.rail-line;
-                shelf-refusal: root.has-devices && !root.current.startable;
+                //
+                // **A fourth tenant would have won the row and it is refused here**, which is the
+                // one thing the band could not have been given as three properties alone: row 2
+                // reads `shelf-rail-line` in preference to `shelf-facts`, so a drag over a window
+                // with a download in progress would have drawn `4.1 MB of 6.5 MB` where the
+                // identifications go, and the band would have looked broken rather than absent.
+                shelf-rail-line: root.dropping ? "" : root.rail-line;
+                // …and the same for the refusal, which is not a third string but a `why ›` control
+                // and an `fg` colour: both belong to the device the band is standing in front of.
+                shelf-refusal: !root.dropping && root.has-devices && !root.current.startable;
                 shelf-fidelity: root.fidelity;
                 shelf-write-target: root.current.write-target;
                 shelf-write-warn: root.current.write-target-is-warning;

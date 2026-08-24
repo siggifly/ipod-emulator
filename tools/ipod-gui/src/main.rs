@@ -146,6 +146,12 @@ mod devices;
 mod parts;
 mod settings_page;
 
+// The two routes a file takes into this program from outside — docs/GUI.md §11.4 and §16.4, and
+// §17 Q3 answered. It owns `rfd` and the coalescing window winit's event stream does not provide,
+// and it is what `caps()`'s `file_picker`, `drop_target` and `reveal` are now read from rather
+// than typed as literals.
+mod drops;
+
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -330,7 +336,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // `slint::Timer` stops the moment it is dropped (`i-slint-core-1.17.1/timers.rs:44`), so
     // `wire(&window, …);` on its own would compile, run, register everything — and leave the first
     // run with nothing moving it, with no error anywhere. `_wiring` is what stops that.
-    let _wiring = wire(&window, settings.clone(), launch);
+    let _wiring = wire(&window, settings.clone(), launch, Rc::new(drops::Shell::Native));
 
     // ── The fit: what size the iPod is drawn at, and whether it can be drawn at all ──
     //
@@ -375,8 +381,36 @@ fn main() -> Result<(), slint::PlatformError> {
     // `there_is_exactly_one_winit_event_filter_registration` is the mechanical form of that.
     let weak = window.as_weak();
     let mut shown = false;
+    // §11.4 and §16.4's drag and drop. It rides this registration because there is only ever one
+    // (see above), and because Slint has no other door: `DropArea`'s `DataTransfer` carries an
+    // image, plain text and an internal `Rc<dyn Any>`, and no file path of any kind.
+    let files = _wiring.files.clone();
     window.window().on_winit_window_event(move |win, event| {
         use i_slint_backend_winit::winit::event::WindowEvent;
+
+        // ── The three file events, decoded and handed straight over ───────────────────────────
+        //
+        // **Everything past this `match` is in `wire`**, which is what makes the whole route —
+        // identification, the 150 ms window, the band, the filing and the compose — reachable from
+        // a test on a window with no winit window under it at all. What is left here is the decode,
+        // and there is nothing in it to get wrong.
+        //
+        // Each one propagates, like every other arm in this filter: it is an observer.
+        match event {
+            WindowEvent::HoveredFile(p) => {
+                files(drops::Event::Hovered(p.clone()));
+                return i_slint_backend_winit::EventResult::Propagate;
+            }
+            WindowEvent::HoveredFileCancelled => {
+                files(drops::Event::Cancelled);
+                return i_slint_backend_winit::EventResult::Propagate;
+            }
+            WindowEvent::DroppedFile(p) => {
+                files(drops::Event::Dropped(p.clone()));
+                return i_slint_backend_winit::EventResult::Propagate;
+            }
+            _ => {}
+        }
 
         // **The scale factor comes from the EVENT; the size comes from the PLATFORM.** They are not
         // the same rule, and the difference between them is the whole of `tests/startup_fit.rs`.
@@ -484,7 +518,17 @@ fn main() -> Result<(), slint::PlatformError> {
 ///
 /// The fit and the winit event filter stay in `main`: both need a window on a display, and the
 /// filter must be registered **exactly once** in the whole program.
-fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>, launch: args::Machine) -> Wiring {
+///
+/// **`shell` is the one argument that exists for the suite**, and it is here rather than reached for
+/// inside a callback because the alternative is a test that opens `NSOpenPanel`. `main` passes
+/// `drops::Shell::Native` and it is the only thing a release build can construct — the other
+/// variant is `#[cfg(test)]` — so this is a seam in the wiring, not a switch in the program.
+fn wire(
+    window: &MainWindow,
+    settings: Rc<RefCell<Settings>>,
+    launch: args::Machine,
+    shell: Rc<drops::Shell>,
+) -> Wiring {
     // §10.4: **every download in this program goes through `curl`.** `caps()` measures it once per
     // launch, by running the tool rather than by walking `PATH` — a `PATH` walk is a second
     // implementation of what the OS is about to do, and it is wrong on Windows where the extension
@@ -1691,6 +1735,7 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>, launch: args::Mach
         let redraw = redraw.clone();
         let repaint_all = repaint_all.clone();
         let live = live.clone();
+        let shell = shell.clone();
         let weak = window.as_weak();
         window.on_parts_group_action(move |g, a| {
             let Some(w) = weak.upgrade() else { return };
@@ -1715,6 +1760,53 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>, launch: args::Mach
                 stack.borrow_mut().push(nav::Page::Composer);
                 redraw();
                 push_nav(&w, &stack.borrow());
+                return;
+            }
+            // **The two verbs that need a file from outside, routed the same way and for the same
+            // reason.** `Add a dump…` and `Provide…` are `Next::Provide` on `Action::needs`, which
+            // is now live because there is a picker; opening a modal dialog is not something
+            // `parts.rs` can do, being toolkit-free, so this is the arm — exactly as the Composer's
+            // two are above it.
+            //
+            // **The group is the operator's own statement and it wins.** Pressing `Provide…` under
+            // Bootloaders says *this is a bootloader*; `drops::provide` files it there and reports
+            // what the bytes say when the two disagree, rather than overruling somebody about their
+            // own file. §11.4's *identification is by content* governs the DROP, where nobody said
+            // anything.
+            if matches!(action, parts::Action::AddDump | parts::Action::Provide)
+                && group.offers(action)
+            {
+                // A cancelled dialog is `None`, and a cancel is not a refusal: nothing is filed,
+                // nothing is saved, and nothing is said. Saying *nothing was chosen* would put a
+                // line on the Rail every time somebody changed their mind.
+                let Some(chosen) = shell.pick(drops::Ask::Part(group)) else {
+                    return;
+                };
+                let outcome = {
+                    let mut s = settings.borrow_mut();
+                    drops::provide(&mut s, group, &chosen)
+                };
+                let outcome = match outcome {
+                    Ok((wrote, said)) => {
+                        rail.borrow_mut().note(&said);
+                        Ok(wrote)
+                    }
+                    Err(why) => Err(why),
+                };
+                library_moved(
+                    &w,
+                    outcome,
+                    &settings,
+                    &rail,
+                    &rows,
+                    &devices,
+                    &work,
+                    &showing_welcome,
+                    caps,
+                    cost,
+                    live.borrow().as_ref(),
+                );
+                repaint_all();
                 return;
             }
             // Every borrow is scoped to this block and released before anything matches on what
@@ -1753,13 +1845,14 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>, launch: args::Mach
         let showing_welcome = showing_welcome.clone();
         let repaint_all = repaint_all.clone();
         let live = live.clone();
+        let shell = shell.clone();
         let weak = window.as_weak();
         window.on_parts_row_action(move |a, id| {
             let Some(w) = weak.upgrade() else { return };
             let Some(action) = parts::RowAction::from_i32(a) else { return };
             let outcome = {
                 let mut s = settings.borrow_mut();
-                parts.borrow_mut().row_action(&mut s, action, id, running_machine(live.borrow().as_ref()).as_deref())
+                parts.borrow_mut().row_action(&mut s, &shell, action, id, running_machine(live.borrow().as_ref()).as_deref())
             };
             library_moved(
                 &w,
@@ -2160,10 +2253,12 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>, launch: args::Mach
         let composer = composer.clone();
         let redraw = redraw.clone();
         let live = live.clone();
+        let shell = shell.clone();
         let weak = window.as_weak();
         window.on_rail_next(move |id, which| {
             let Some(w) = weak.upgrade() else { return };
-            let retried = take_next_step(&rail, &stack, &composer, id as u64, which, caps);
+            let took =
+                take_next_step(&rail, &stack, &composer, &settings, &shell, id as u64, which, caps);
             // **`Fix` is the one next step that navigates**, and a Composer page pushed without its
             // contents pushed too is the blank panel `Stack::go` spends two guards preventing. This
             // is the same `redraw` all ten Composer callbacks end in; it returns at once when
@@ -2174,7 +2269,17 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>, launch: args::Mach
             // runs anything is how §10.3's bug came back the first time — `Rail::retry` alone puts
             // the entry back to `Planned` and starts nothing, so the plan would sit there looking
             // ready for ever.
-            if retried && work.borrow().owns(id as u64) {
+            // §11.4's `Provide a file…`, and it is `library_moved`'s two lines rather than a call
+            // to it: that function takes an outcome and a refusal, and what happened here is
+            // neither — the sentence is already on the Rail and the file is already filed.
+            if took == Took::Library {
+                save(&settings.borrow(), &mut rail.borrow_mut());
+                let held = live.borrow();
+                refresh_devices(
+                    &w, &devices, &settings.borrow(), &showing_welcome, caps, cost, held.as_ref(),
+                );
+            }
+            if took == Took::Retried && work.borrow().owns(id as u64) {
                 let press = {
                     let mut s = settings.borrow_mut();
                     let mut r = rail.borrow_mut();
@@ -2225,6 +2330,102 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>, launch: args::Mach
             }
         });
     }
+    // ── §11.4's drop, and §16.4's coalescing window ──────────────────────────────────────────────
+    //
+    // **The event decoding is `main`'s and everything after it is here**, which is the same split
+    // `machine_tick` and `tick` are handed back under: the testing backend has no winit window, so
+    // a route that began at a `WindowEvent` would be reachable from nothing that can be driven
+    // without a display — and this route ends in the operator's settings file.
+    //
+    // **The timer is the half winit does not provide.** §16.4 measured that the event stream has
+    // `DroppedFile`, `HoveredFile` and `HoveredFileCancelled` and **nothing that says a drop is
+    // over**, so eight files and eight drops are the same eight events. `drops::WINDOW` is the
+    // program's own boundary and something has to come back and close it; a `slint::Timer` is that
+    // something, single-shot, restarted per drop, and held for the life of the window because a
+    // timer stops the moment it is dropped.
+    let landing = Rc::new(RefCell::new(drops::Landing::new()));
+    let settle = Rc::new(slint::Timer::default());
+    let files: Rc<dyn Fn(drops::Event)> = {
+        let landing = landing.clone();
+        let settle = settle.clone();
+        let settings = settings.clone();
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let devices = devices.clone();
+        let work = work.clone();
+        let showing_welcome = showing_welcome.clone();
+        let live = live.clone();
+        let weak = window.as_weak();
+
+        // What a settled batch does, written once: the two ways a batch closes — a later drop
+        // arriving, and the timer running out — are the same act and must not be two of them.
+        let filed: Rc<dyn Fn(Vec<std::path::PathBuf>)> = {
+            let settings = settings.clone();
+            let rail = rail.clone();
+            let rows = rows.clone();
+            let devices = devices.clone();
+            let work = work.clone();
+            let showing_welcome = showing_welcome.clone();
+            let live = live.clone();
+            let weak = window.as_weak();
+            Rc::new(move |batch: Vec<std::path::PathBuf>| {
+                let Some(w) = weak.upgrade() else { return };
+                if batch.is_empty() {
+                    return;
+                }
+                // Scoped, so the borrow is released before `library_moved` takes its own — §20
+                // item 12, the `RefMut` that lived to the end of a `match`.
+                let landed = {
+                    let mut s = settings.borrow_mut();
+                    drops::land(&mut s, &batch)
+                };
+                rail.borrow_mut().note(&landed.note);
+                library_moved(
+                    &w,
+                    Ok(landed.wrote),
+                    &settings,
+                    &rail,
+                    &rows,
+                    &devices,
+                    &work,
+                    &showing_welcome,
+                    caps,
+                    cost,
+                    live.borrow().as_ref(),
+                );
+            })
+        };
+
+        Rc::new(move |e: drops::Event| {
+            let Some(w) = weak.upgrade() else { return };
+            match e {
+                drops::Event::Hovered(p) => landing.borrow_mut().hovering(p),
+                drops::Event::Cancelled => landing.borrow_mut().hover_cancelled(),
+                drops::Event::Dropped(p) => {
+                    // A drop that falls outside the open window closes it, and that batch is filed
+                    // here rather than waiting for a timer that is about to be restarted under it.
+                    let closed = landing.borrow_mut().dropped(p, std::time::Instant::now());
+                    if let Some(batch) = closed {
+                        filed(batch);
+                    }
+                    let landing = landing.clone();
+                    let filed = filed.clone();
+                    // One line, because `the_work_timer_is_started_in_exactly_one_place_and_is_held`
+                    // reads the receiver off the line `TimerMode::` is on; split across lines it
+                    // recorded the owner as `slint::TimerMode::SingleShot,` and could not tell
+                    // this timer from the other two.
+                    settle.start(slint::TimerMode::SingleShot, drops::WINDOW, move || {
+                        if let Some(batch) = landing.borrow_mut().settled(std::time::Instant::now())
+                        {
+                            filed(batch);
+                        }
+                    });
+                }
+            }
+            push_drop_band(&w, landing.borrow().band().as_ref());
+        })
+    };
+
     // ── §20 item 13's last save point ──
     //
     // The one that matters happens where the change happens, above, because the window is still on
@@ -2294,10 +2495,34 @@ fn wire(window: &MainWindow, settings: Rc<RefCell<Settings>>, launch: args::Mach
     Wiring {
         _tick: timer,
         _machine_timer: machine_timer,
+        _settle: settle,
         live,
         machine_tick,
         work,
         tick,
+        files,
+    }
+}
+
+/// §11.4's band, pushed over the shelf's rows 1 and 2 while a drag is over the window.
+///
+/// **Rows 1 and 2 only.** Row 3 is `write_target()` — the one line standing between an afternoon
+/// and somebody's only image of an iPod they own — and §11.4's own picture leaves it reading
+/// `works on a copy of my-5.5g.img` under the band. A drag is not a reason to stop saying what the
+/// next press writes to.
+///
+/// `None` clears it, and clearing is what a drop does as well as what a cancelled hover does:
+/// winit sends no `HoveredFileCancelled` after a drop (§16.4), so a band left standing on a drop
+/// would sit over the shelf until the next drag.
+fn push_drop_band(w: &MainWindow, band: Option<&drops::Band>) {
+    w.set_dropping(band.is_some());
+    if let Some(b) = band {
+        w.set_drop_count(b.count.as_str().into());
+        w.set_drop_what(b.what().into());
+        // The one sentence that does not vary, pushed rather than written into the markup — every
+        // string this window says is this file's, which is the rule `empty_device` follows for the
+        // eight fields of a row.
+        w.set_drop_let_go(drops::LET_GO.into());
     }
 }
 
@@ -2316,6 +2541,11 @@ struct Wiring {
     /// it is dropped. Stopping the *machine* is the `Drop` impl below, and it is a separate act —
     /// the timer is this struct's alone, and the machine is shared with every registered callback.
     _machine_timer: Rc<slint::Timer>,
+    /// §16.4's coalescing window, and it is the third timer for the first reason: dropped, it never
+    /// fires, and a drop of eight files would sit in `drops::Landing` for ever with nothing coming
+    /// back to close it. Single-shot and restarted per `DroppedFile`, so it costs nothing while
+    /// nobody is dragging.
+    _settle: Rc<slint::Timer>,
     /// §12's machine, so that dropping this stops it — see the `Drop` impl below.
     live: Rc<RefCell<Option<Live>>>,
     /// **One tick of the machine, and it is the one the timer runs.**
@@ -2337,6 +2567,18 @@ struct Wiring {
     /// call this.
     #[allow(dead_code)]  // retired when: `main` needs to tick by hand — it does not, the timer does it
     tick: Rc<dyn Fn()>,
+    /// **One of winit's three file events, handled** — §11.4 and §16.4.
+    ///
+    /// Handed back rather than registered on the window, because there is nowhere on a
+    /// `slint::Window` to register it: §16.4 measured that Slint's own `DropArea` cannot carry a
+    /// file path at all (`DataTransfer` holds an image, plain text and an internal `Rc<dyn Any>`),
+    /// so the only route is winit's raw events — and `main`'s single `on_winit_window_event`
+    /// registration is the one place they arrive. `there_is_exactly_one_winit_event_filter_
+    /// registration` is why there can be no second one.
+    ///
+    /// It is the same arrangement `tick` is under and for the same reason: everything past the
+    /// decode is drivable with no display, and everything before it is three lines of `match`.
+    files: Rc<dyn Fn(drops::Event)>,
 }
 
 impl Drop for Wiring {
@@ -3472,24 +3714,32 @@ fn glass(frame: Option<slint::Image>, g: &machine::Glass) -> Option<slint::Image
 
 /// §9.3's next steps are only offered as live controls where the mechanism exists.
 ///
-/// **Four are literals about this build, two are asked of `Page::slot`, and one is measured about
-/// the machine.** The four: `cargo tree -p ipod-gui | grep -iE "rfd|native-dialog|ashpd"` is empty,
-/// §16.4's winit drop hook is not written, nothing here reaches a pasteboard, and nothing opens a
-/// file manager. A control whose route does not exist is drawn disabled with its reason (§14.1),
-/// never live and never quietly dropped.
+/// **Nothing in here is a literal any more, and until this pass five of the seven were.** The doc
+/// this replaces read *"`cargo tree -p ipod-gui | grep -iE "rfd|native-dialog|ashpd"` is empty,
+/// §16.4's winit drop hook is not written, … and nothing opens a file manager"*, and all three
+/// clauses were true when they were written. Every one of them is now false, which is exactly the
+/// shape §16.9 indicts: a claim in prose beside a claim in a boolean, and the prose is the half
+/// nothing can check. So each cap asks the thing that would know.
 ///
-/// The two derived ones are `devices_page` and `composer`, and **both pages now exist** — the
-/// drawer draws Devices at level 1 and the Composer at level 2, with its three sub-levels under it.
-/// They are read from [`nav::Page::slot`] rather than typed, for the reason written on the line
-/// itself. This doc claimed the opposite of both for as long as it took the pages to land, which is
-/// §16.9's stale claim in prose rather than in a boolean.
-///
-/// The last, `download`, is `eapp_loader::tooling::can_download()` — it runs `curl --version`,
-/// because a `PATH` walk is a second implementation of what the OS is about to do and is wrong on
-/// Windows, where the extension list is a policy rather than a suffix.
+/// - `file_picker` is [`drops::PICKER`] and `drop_target` is [`drops::DROPS`], both **facts about
+///   the build**, and both declared in the module that holds their mechanism — `rfd`'s only call
+///   site and the only feeder of `drops::Landing`. Deleting either mechanism breaks that module's
+///   compilation or leaves it full of dead code, which this tree treats as an error; a `false`
+///   typed here had no such tie and outlived its own truth for as long as it took to notice.
+/// - `reveal` is [`drops::can_reveal`], a **fact about the computer** — `/usr/bin/open` on macOS,
+///   `explorer` on Windows, and `xdg-open` measured by running it on Linux, where it is genuinely
+///   optional. That makes `Next::Reveal`'s refusal a machine rule rather than a project state, and
+///   its sentence moved with it.
+/// - `devices_page` and `composer` are asked of [`nav::Page::slot`], a **fact about the markup**.
+///   Both pages ship — the drawer draws Devices at level 1 and the Composer at level 2, with its
+///   three sub-levels under it.
+/// - `download` is `eapp_loader::tooling::can_download()` — it runs `curl --version`, because a
+///   `PATH` walk is a second implementation of what the OS is about to do and is wrong on Windows,
+///   where the extension list is a policy rather than a suffix.
 ///
 /// **It is called once per launch**, in [`wire`], and the answer is carried on `Caps` from there.
-/// Asking again per control would spawn a process inside a binding.
+/// Asking again per control would spawn a process inside a binding — which `can_reveal` makes
+/// literal on Linux, where it is a `Command`.
 ///
 /// **One of the four is a decision rather than an absence, and it is `clipboard`.** *Nothing here
 /// reaches a pasteboard* is a fact about this crate's own code and stays true; *nothing could* is
@@ -3520,12 +3770,20 @@ fn glass(frame: Option<slint::Image>, g: &machine::Glass) -> Option<slint::Image
 /// behaviour to design and test, and the finding is worth having on its own.
 fn caps() -> rail::Caps {
     rail::Caps {
-        file_picker: false,
-        drop_target: false,
+        // **Declared beside their mechanisms, in `drops`, and read here.** Same rule as the two
+        // below: ask the thing that would know. `PICKER` sits three lines from the only
+        // `rfd::FileDialog` in the program and `DROPS` sits beside the `Landing` the winit hook
+        // feeds, so neither can go on claiming a route that has been deleted.
+        file_picker: drops::PICKER,
+        drop_target: drops::DROPS,
         // Not *no clipboard exists* — see this function's doc. No route from here to the one that
-        // does, and the route is a `.slint` `TextInput`, not a crate.
+        // does, and the route is a `.slint` `TextInput`, not a crate. **The last literal in this
+        // function**, and it is the one whose retirement condition is written out below.
         clipboard: false,
-        reveal: false,
+        // **Measured, like `download`, and for the same reason**: whether this computer has a file
+        // manager is not a fact about this build. macOS and Windows always do; Linux may not, and
+        // `Next::Reveal` draws a machine rule there rather than an apology.
+        reveal: drops::can_reveal(),
         // **Derived, not typed.** `Page::slot()` returns `Some` on the day `ui/drawer.slint` gains
         // a child that draws the page and `None` until then — which is exactly the question this
         // cap asks. Written as a literal it is a second answer to it, and the two go out of step in
@@ -3682,32 +3940,41 @@ fn welcome(s: &mut Settings) -> bool {
 /// The markup already refuses a disabled `Pressable`; this checks again, because a view is not an
 /// authority on what the program can do and the two must not be able to disagree.
 ///
-/// Returns whether the step was a **retry**, because a retry only puts the entry back to `Planned`
-/// — something still has to run it, and that is the caller's press.
+/// Returns what the press did, because two of the arms leave work for the caller and they are not
+/// the same work: a **retry** only puts the entry back to `Planned` — something still has to run
+/// it, and that is the caller's press — and a **file arriving** moves the library, which has to be
+/// saved and has to reach the bench, or the shelf goes on drawing a part as missing after somebody
+/// has just handed it over.
+#[allow(clippy::too_many_arguments)] // one argument per mechanism a next step can need; a struct holding them would be the same fields under a new name
 fn take_next_step(
     rail: &Rc<RefCell<rail::Rail>>,
     stack: &Rc<RefCell<nav::Stack>>,
     composer: &Rc<RefCell<Option<composer::Composer>>>,
+    settings: &Rc<RefCell<Settings>>,
+    shell: &drops::Shell,
     id: u64,
     which: i32,
     caps: rail::Caps,
-) -> bool {
+) -> Took {
     let step = {
         let r = rail.borrow();
-        let Some(e) = r.find(id) else { return false };
-        let Some(f) = e.failure.as_ref() else { return false };
+        let Some(e) = r.find(id) else { return Took::Nothing };
+        let Some(f) = e.failure.as_ref() else { return Took::Nothing };
         let mut steps = f.class.next(e.retries, caps);
         if which < 0 || which as usize >= steps.len() {
-            return false;
+            return Took::Nothing;
         }
         steps.remove(which as usize)
     };
     if !step.available(caps) {
-        return false;
+        return Took::Nothing;
     }
+    let mut took = Took::Nothing;
     match step {
         rail::Next::Retry => {
-            return rail.borrow_mut().retry(id);
+            if rail.borrow_mut().retry(id) {
+                took = Took::Retried;
+            }
         }
         rail::Next::Devices => stack.borrow_mut().go(nav::Page::Devices, 1),
         // **§12.7, and it was the second live-but-inert control in this file.** `CancelWrite` is
@@ -3775,15 +4042,82 @@ fn take_next_step(
             s.go(nav::Page::Devices, 1);
             s.push(nav::Page::Composer);
         }
-        // Every remaining arm needs a mechanism `caps` says this build does not have, so the guard
-        // above has already returned. They are enumerated rather than defaulted so the day one
-        // arrives the compiler points here.
-        rail::Next::Provide
-        | rail::Next::ChooseElsewhere
-        | rail::Next::CopyDetails
-        | rail::Next::Reveal => {}
+        // ── §9.3's `Provide a file…`, and it is the third live-but-inert control closed ─────────
+        //
+        // The two before it were `Fix` and `CancelWrite`, and this one shipped in the other shape:
+        // gated on a capability that was `false`, so the control was grey and the arm was empty,
+        // and nothing said which of the two was the reason. Both halves are closed here — `drops`
+        // has the picker, so `caps.file_picker` is true and the guard above lets the press
+        // through.
+        //
+        // **Filed by contents, and no device is composed.** This press is a person answering *the
+        // thing you could not find is here*; `drops::file_one` files it into the group its bytes
+        // put it in and stops there. `drops::land`'s compose belongs to a drop, where somebody
+        // handed over a whole set at once.
+        rail::Next::Provide => {
+            if let Some(p) = shell.pick(drops::Ask::Any) {
+                let filed = {
+                    let mut s = settings.borrow_mut();
+                    drops::file_one(&mut s, &p)
+                };
+                let mut r = rail.borrow_mut();
+                match filed {
+                    Ok((parts::Wrote::Library, said)) => {
+                        r.note(&said);
+                        // **The caller saves and refreshes, and that is why this function stopped
+                        // answering a bare `bool`.** A file arriving is a library move: without it
+                        // the settings file does not mention the part somebody has just handed
+                        // over, and the shelf goes on drawing it as missing.
+                        took = Took::Library;
+                    }
+                    Ok((parts::Wrote::Nothing, said)) | Err(said) => {
+                        r.note(&said);
+                    }
+                }
+            }
+        }
+        // ── §9.4's escape hatch, performed rather than printed ───────────────────────────────────
+        //
+        // `Reveal` is offered on `Class::Permission` alone, and what a person does after being
+        // shown a folder they cannot write in is put this program's files somewhere else. The
+        // folder is `settings::data_dir()` — the one `IPOD_EMULATOR_DATA` names, which is exactly
+        // what this step's escape hatch says — so this shows them the folder the sentence is about
+        // rather than a file inside it.
+        rail::Next::Reveal => {
+            let at = eapp_loader::settings::data_dir();
+            match shell.reveal(&at) {
+                // **A line on the Rail, where the Parts row's own `Reveal` is silent**, and the
+                // difference is which surface asked. A row press is a person looking at a path and
+                // pressing the control beside it; a Rail press is a step taken under a failure, and
+                // the Rail's whole job is to record what was attempted.
+                Ok(_) => drop(rail.borrow_mut().note(&format!("asked the file manager for {}", at.display()))),
+                Err(why) => drop(rail.borrow_mut().note(&why)),
+            }
+        }
+        // Every remaining arm needs a mechanism this build does not have — a pasteboard, and
+        // anywhere for a chosen folder to go — so the guard above has already returned. They are
+        // enumerated rather than defaulted so the day one arrives the compiler points here.
+        rail::Next::ChooseElsewhere | rail::Next::CopyDetails => {}
     }
-    false
+    took
+}
+
+/// What pressing a next step left for the caller.
+///
+/// **Three answers rather than a `bool`, because two arms leave work and it is different work.**
+/// The `bool` this replaces meant *was it a retry*, and it was enough for as long as `Provide` was
+/// an empty arm behind a `false` capability. It is not enough now: a press that files a part has to
+/// save and has to refresh the bench, and a press that retries has to be run — and doing the first
+/// pair on a retry would rewrite the settings file for nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Took {
+    /// A refusal, an unknown ordinal, or an arm that finished on its own — `Fix`, `Reveal`,
+    /// `CancelWrite`, `Devices`.
+    Nothing,
+    /// The entry is back to `Planned` and something still has to run it.
+    Retried,
+    /// The library moved.
+    Library,
 }
 
 /// §12.7: stop a write and delete the partial file — **one function, and both routes to it.**
@@ -4152,9 +4486,13 @@ fn empty_cradle_label(press: Press, caps: rail::Caps) -> String {
 /// same neutral case and must not be ghosted.
 ///
 /// **Row 3's trailing slot is not drawn here and needs no rule.** `bench.slint` wraps it in
-/// `if !root.drawer-open`, and §10.1 has the drawer open — which is fortunate, because
-/// §10.1's `MENU › Parts, if you have files · or drop them here` names a mechanism §16.4 defers,
-/// and `caps().drop_target` is false. A phantom route in the one place §19.1 calls it fatal.
+/// `if !root.drawer-open`, and §10.1 has the drawer open. That used to be fortunate rather than
+/// deliberate: §10.1's `MENU › Parts, if you have files · or drop them here` named a mechanism
+/// §16.4 deferred, `caps().drop_target` was `false`, and the one place §19.1 calls a phantom route
+/// fatal was the welcome screen. **Both halves are real now** — `drops::Landing` takes the drop and
+/// `Provide…` opens a picker — so the sentence is true wherever it is drawn, and this paragraph
+/// records that it was not, because a phantom that quietly became a route reads exactly like one
+/// nobody checked.
 fn empty_device(first: bool, caps: rail::Caps, cost: compose::Cost) -> DeviceRow {
     let si = eapp_loader::si;
     DeviceRow {
@@ -7100,7 +7438,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let wiring = wire(&w, settings.clone(), args::Machine::default());
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         assert!(!w.get_devices().row_count() == 0 || w.get_devices().row_count() == 1);
 
         // The real, registered handler. Before the fix this line panicked with
@@ -7183,7 +7521,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let wiring = wire(&w, settings.clone(), args::Machine::default());
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         assert_eq!(w.get_devices().row_count(), 1, "the fixture is not on the bench");
         // Before: §12.2's `Off` in the honest sense, and the cradle says what pressing will cost.
         assert!(!w.get_running());
@@ -7258,7 +7596,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let wiring = wire(&w, settings.clone(), args::Machine::default());
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
 
         w.invoke_start_device(0);
 
@@ -7418,7 +7756,7 @@ pub(crate) mod tests {
         // `--cold`: ignore any restore point. There is none — `a_window` has redirected the data
         // directory — but a cold boot is what is being proved, and saying so is cheaper than
         // relying on a directory being empty.
-        let wiring = wire(&w, Rc::new(RefCell::new(s)), args::Machine { cold: true, ..args::Machine::default() });
+        let wiring = wire(&w, Rc::new(RefCell::new(s)), args::Machine { cold: true, ..args::Machine::default() }, Rc::new(drops::Shell::Native));
         assert_eq!(w.get_devices().row_count(), 1, "the fixture is not on the bench");
 
         // Shown and sized, because §16.8's keys are dispatched at the window and a window with no
@@ -7749,7 +8087,7 @@ pub(crate) mod tests {
         let (mut s, d) = a_composed_device(&dir);
         s.devices.push(d.clone());
         let w = a_window();
-        let wiring = wire(&w, Rc::new(RefCell::new(s)), args::Machine::default());
+        let wiring = wire(&w, Rc::new(RefCell::new(s)), args::Machine::default(), Rc::new(drops::Shell::Native));
         w.show().expect("the headless backend shows a window");
         w.window().set_size(slint::LogicalSize::new(
             geometry::PREF_WIDTH as f32,
@@ -8103,7 +8441,7 @@ pub(crate) mod tests {
                 s.devices.push(Device { name: format!("iPod {i}"), ..d });
             }
             let w2 = a_window();
-            let _wiring2 = wire(&w2, Rc::new(RefCell::new(s)), args::Machine::default());
+            let _wiring2 = wire(&w2, Rc::new(RefCell::new(s)), args::Machine::default(), Rc::new(drops::Shell::Native));
             w2.show().expect("the headless backend shows a window");
             assert_eq!(w2.get_selected(), 0);
             tap_key(&w2, &String::from(char::from(Key::RightArrow)));
@@ -8421,6 +8759,7 @@ pub(crate) mod tests {
             &w,
             settings.clone(),
             args::Machine { cold: true, clock: Some(5), second_core: true, charger: true },
+            Rc::new(drops::Shell::Native),
         );
         w.invoke_start_device(0);
 
@@ -8483,7 +8822,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let wiring = wire(&w, settings.clone(), args::Machine::default());
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
 
         // A machine with no thread, published as `Running` — which is the one phase §12.4 parks
         // from, and the one a fixture drive with no OS on it can never reach for real.
@@ -8720,7 +9059,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        wire(&w, settings.clone(), args::Machine::default());
+        wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         assert_eq!(w.get_rail().row_count(), 0, "nothing has happened yet");
 
         w.invoke_explain(0);
@@ -8769,12 +9108,18 @@ pub(crate) mod tests {
     /// call site silently replaces the first — the same class as
     /// `there_is_exactly_one_winit_event_filter_registration`, and there is no error there either.
     ///
-    /// **There are two timers now and the count is two, which is not the same as the rule being
-    /// relaxed.** §12 needs a 60 Hz tick and a download needs a 10 Hz one; one constant for two
-    /// rates is how a panel comes to run at the speed of a progress bar. What the rule actually is
-    /// — *each timer is started in exactly one place* — is what this asserts: the two starts are
-    /// counted per timer by the name of the `Rc` each one is on, so a third start on either is red
-    /// however many timers exist.
+    /// **There are three timers now and the count is three, which is not the same as the rule
+    /// being relaxed.** §12 needs a 60 Hz tick, a download needs a 10 Hz one, and §16.4's drop
+    /// needs a single shot 150 ms after a file lands — because winit has no event that says a drop
+    /// is over, so something has to come back and close the window the program drew itself. One
+    /// constant for three rates is how a panel comes to run at the speed of a progress bar. What
+    /// the rule actually is — *each timer is started in exactly one place* — is what this asserts:
+    /// the starts are counted per timer by the name of the `Rc` each one is on, so a second start
+    /// on any of them is red however many timers exist.
+    ///
+    /// **The receiver is read off the line `TimerMode::` is on**, which is a real constraint on how
+    /// a start may be written and not an artefact: `settle.start(` split across lines recorded the
+    /// owner as `slint::TimerMode::SingleShot,` and made the three indistinguishable.
     #[test]
     fn the_work_timer_is_started_in_exactly_one_place_and_is_held() {
         let mut starts: Vec<(String, String)> = Vec::new();
@@ -8798,7 +9143,7 @@ pub(crate) mod tests {
         }
         // The control: a sweep that read no starts, or that could not tell the two apart, both
         // look exactly like a sweep that found no second start on one timer.
-        assert_eq!(starts.len(), 2, "the timer sweep read {starts:?}, which is not this window");
+        assert_eq!(starts.len(), 3, "the timer sweep read {starts:?}, which is not this window");
         let mut owners: Vec<&String> = starts.iter().map(|(on, _)| on).collect();
         owners.sort();
         owners.dedup();
@@ -8857,7 +9202,7 @@ pub(crate) mod tests {
     fn one_tick_on_an_idle_queue_changes_nothing_and_stops_looking() {
         let (settings, _held) = a_fresh_installation();
         let w = a_window();
-        let wiring = wire(&w, settings.clone(), args::Machine::default());
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
 
         let rail = Rc::new(RefCell::new(rail::Rail::new()));
         let rows: Rc<VecModel<RailRow>> = Rc::new(VecModel::default());
@@ -8925,7 +9270,7 @@ pub(crate) mod tests {
     fn a_drive_being_read_keeps_the_window_looking() {
         let (settings, _held) = a_fresh_installation();
         let w = a_window();
-        let wiring = wire(&w, settings.clone(), args::Machine::default());
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
 
         let rail = Rc::new(RefCell::new(rail::Rail::new()));
         let rows: Rc<VecModel<RailRow>> = Rc::new(VecModel::default());
@@ -9005,7 +9350,7 @@ pub(crate) mod tests {
     fn a_tick_re_pushes_a_page_that_a_change_elsewhere_made_stale() {
         let (settings, _held) = a_fresh_installation();
         let w = a_window();
-        let wiring = wire(&w, settings.clone(), args::Machine::default());
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
 
         w.invoke_device_new();
         w.invoke_composer_type(composer::Field::Name.as_i32(), "Zeppelin".into());
@@ -9063,6 +9408,122 @@ pub(crate) mod tests {
             "the winit event filter is registered at {sites:?}; a second registration silently \
              destroys the first"
         );
+    }
+
+    /// **T-7b. The one winit registration handles all three of winit's file events.**
+    ///
+    /// §16.4: winit delivers `DroppedFile(PathBuf)`, `HoveredFile(PathBuf)` and
+    /// `HoveredFileCancelled`, and Slint offers no other door — `DropArea`'s `DataTransfer` carries
+    /// an image, plain text and an internal `Rc<dyn Any>`, and no file path of any kind. So there
+    /// is exactly one place a dropped file can enter this program, T-7 is what keeps it one, and
+    /// this is what keeps it complete.
+    ///
+    /// **It is the other half of `drops::DROPS`.** That constant is what `caps().drop_target` is
+    /// read from, and a constant is a claim; deleting the arms below would leave every method on
+    /// `drops::Landing` dead — which this tree treats as an error — but **`HoveredFileCancelled`
+    /// alone is not load-bearing that way.** Take it out and the program still compiles, still
+    /// files a drop, and leaves §11.4's band standing over the shelf after a drag that left the
+    /// window without dropping anything. That is the one of the three whose absence is silent, and
+    /// it is the reason this test names all three rather than counting them.
+    ///
+    /// Source-read rather than driven, exactly like T-7: there is no winit window under the testing
+    /// backend, so nothing in the suite can deliver a `WindowEvent` at all.
+    #[test]
+    fn the_winit_hook_handles_all_three_of_winits_file_events() {
+        let mut seen: Vec<&str> = Vec::new();
+        for (name, text) in rust_sources() {
+            if name != "main.rs" {
+                continue;
+            }
+            for line in text.lines() {
+                let t = line.trim_start();
+                if t.starts_with("//") || t.starts_with("///") {
+                    continue;
+                }
+                for event in ["HoveredFile(", "HoveredFileCancelled", "DroppedFile("] {
+                    if t.contains(&format!("WindowEvent::{event}")) && !seen.contains(&event) {
+                        seen.push(event);
+                    }
+                }
+            }
+        }
+        seen.sort_unstable();
+        assert_eq!(
+            seen,
+            ["DroppedFile(", "HoveredFile(", "HoveredFileCancelled"],
+            "the winit hook does not handle all three of winit's file events, so either a drop \
+             cannot arrive or a hover cannot be taken back — and `drops::DROPS` says both work"
+        );
+    }
+
+    /// **A dropped file reaches the library, through the route `main`'s winit hook calls.**
+    ///
+    /// `Wiring::files` is the closure that hook hands each decoded event to, so everything this
+    /// drives is the shipped path: the 150 ms window, the band, the identification, the filing and
+    /// §11.4's compose. What is not driven is the `WindowEvent` decode itself — three lines, no
+    /// logic, and untouchable without a winit window (T-7b reads them instead).
+    ///
+    /// **It drives the timer's half by hand.** Under `i-slint-backend-testing`'s no-event-loop
+    /// init a `slint::Timer` never fires, so the 150 ms settle would never come back and the batch
+    /// would sit in `drops::Landing` for ever — which is the same reason `Wiring::tick` exists. A
+    /// second drop past the window is what closes the first, and that is a shipped route too:
+    /// `Landing::dropped` returns the closed batch.
+    #[test]
+    fn a_dropped_file_reaches_the_library_through_the_wiring() {
+        let _held = use_a_scratch_data_dir();
+        let dir = temp_dir("dropped");
+        std::fs::create_dir_all(&dir).expect("the scratch directory");
+        let rom = dir.join("internal_rom_000000-0FFFFF.bin");
+        let mut nor = vec![0u8; eapp_loader::inspect::NOR_LEN as usize];
+        // A plausible reset vector, so `flash` gets past word 0 — the band's verdict is `drops`'
+        // own test's business; what this one needs is a file `classify` calls a ROM.
+        nor[..4].copy_from_slice(&0xea00_1ffeu32.to_le_bytes());
+        std::fs::write(&rom, &nor).expect("the fixture ROM");
+        let ipsw = dir.join("iPod_25.1.3.ipsw");
+        let mut zip = vec![0u8; 4096];
+        zip[..4].copy_from_slice(b"PK\x03\x04");
+        std::fs::write(&ipsw, &zip).expect("the fixture bundle");
+
+        let settings = Rc::new(RefCell::new(Settings::default()));
+        let w = a_window();
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
+
+        // A drag over the window: the band says what it thinks it has, and the shelf's rows 1 and 2
+        // are drawing it rather than the device.
+        (wiring.files)(drops::Event::Hovered(rom.clone()));
+        (wiring.files)(drops::Event::Hovered(ipsw.clone()));
+        assert!(w.get_dropping(), "a drag is over the window and the band is not drawn");
+        assert_eq!(w.get_drop_count(), "Two files");
+        assert!(
+            w.get_drop_what().contains("boot ROM"),
+            "the band says {:?}, which does not identify the ROM",
+            w.get_drop_what()
+        );
+        assert_eq!(w.get_drop_let_go(), drops::LET_GO, "row 1's trailing slot is the markup's");
+        assert!(settings.borrow().resources.is_empty(), "a HOVER filed something");
+
+        // …and letting go. Both files are one drop, so nothing is filed until the window closes —
+        // here by a third file arriving a second later, which is `Landing::dropped`'s own route.
+        (wiring.files)(drops::Event::Dropped(rom.clone()));
+        (wiring.files)(drops::Event::Dropped(ipsw.clone()));
+        assert!(!w.get_dropping(), "the band is still drawn after the drop");
+        assert!(
+            settings.borrow().resources.is_empty(),
+            "the drop was filed before its 150 ms window ran out, so eight files would be eight \
+             drops"
+        );
+
+        std::thread::sleep(drops::WINDOW);
+        (wiring.files)(drops::Event::Dropped(dir.join("nothing-here")));
+
+        let s = settings.borrow();
+        assert_eq!(s.resources.len(), 2, "the drop did not reach the library: {:?}", s.resources);
+        assert_eq!(
+            s.devices.len(),
+            1,
+            "a ROM and an .ipsw dropped together did not produce one device (§11.4 rule 3)"
+        );
+        assert_eq!(s.nor, eapp_loader::nor::Source::File(rom), "the device is made of the wrong ROM");
     }
 
     /// Every `set_*` model handoff in this crate, and whether it builds the model on the spot.
@@ -9873,7 +10334,7 @@ pub(crate) mod tests {
     fn the_registered_new_device_handler_opens_the_composer_and_mints_nothing() {
         let settings = Rc::new(RefCell::new(Settings::default()));
         let w = a_window();
-        wire(&w, settings.clone(), args::Machine::default());
+        wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         let before = settings.borrow().resources.len();
 
         w.invoke_device_new();
@@ -9994,7 +10455,7 @@ pub(crate) mod tests {
         let settings = a_library_holding_one_drive(&dir, "a 5.5G's drive", [0x83, 0, 0, 0]);
 
         let w = a_window();
-        let wiring = wire(&w, settings.clone(), args::Machine::default());
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         w.invoke_device_new();
         // Level ② is disabled without an iPod, so this is the press that unlocks the disk picker
         // rather than a decoration: `Make one`.
@@ -10056,7 +10517,7 @@ pub(crate) mod tests {
         let settings = a_library_holding_one_drive(&dir, "off a real 5.5G", [0x00, 0x0c, 0, 0]);
 
         let w = a_window();
-        let wiring = wire(&w, settings.clone(), args::Machine::default());
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         w.invoke_device_new();
         w.invoke_composer_act(composer::Field::Ipod.as_i32());
         w.invoke_composer_pick(composer::Field::Disk.as_i32(), 1);
@@ -10091,7 +10552,7 @@ pub(crate) mod tests {
     fn a_press_that_writes_no_library_does_not_rewrite_the_settings_file() {
         let settings = Rc::new(RefCell::new(Settings::default()));
         let w = a_window();
-        wire(&w, settings.clone(), args::Machine::default());
+        wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         w.invoke_device_new();
 
         let path = eapp_loader::settings::Settings::path().expect("a settings path");
@@ -11822,6 +12283,41 @@ pub(crate) mod tests {
         shots.push(("bench-refused", shoot(&w, &nav::Stack::new(), &full, "bench-refused")));
         w.set_held_sentence(slint::SharedString::new());
 
+        // **§11.4's drop band, which nothing could photograph until there was a drop.** Eight files
+        // over the window: rows 1 and 2 say what the program thinks it has been handed, row 3 goes
+        // on saying what the next press writes to, and the drawn iPod does not move — *nothing
+        // moves, and no pixels are spent*.
+        //
+        // The band is `drops::band`'s, off real files on disk, so what is drawn is the identifier
+        // §11.4 rule 4 argues for: the first is 1 MiB and **not** a ROM, and the shot is where a
+        // person can see that it does not say `boot ROM · 5.5G` about it. `push_drop_band` is the
+        // shipped setter, the same one `Wiring::files` calls on every `HoveredFile`.
+        {
+            let dir = temp_dir("dropping");
+            std::fs::create_dir_all(&dir).expect("the scratch directory");
+            let mut over: Vec<std::path::PathBuf> = Vec::new();
+            let photo = dir.join("holiday.jpg");
+            let mut jpeg = vec![0u8; eapp_loader::inspect::NOR_LEN as usize];
+            jpeg[..4].copy_from_slice(&[0xff, 0xd8, 0xff, 0xe0]);
+            std::fs::write(&photo, &jpeg).expect("the 1 MiB photograph");
+            over.push(photo);
+            let ipsw = dir.join("iPod_25.1.3.ipsw");
+            let mut zip = vec![0u8; 4096];
+            zip[..4].copy_from_slice(b"PK\x03\x04");
+            std::fs::write(&ipsw, &zip).expect("the fixture bundle");
+            over.push(ipsw);
+            for i in 0..6 {
+                let at = dir.join(format!("other-{i}.bin"));
+                std::fs::write(&at, [0u8; 32]).expect("the rest of the drop");
+                over.push(at);
+            }
+            let band = drops::band(&over);
+            assert_eq!(band.count, "Eight files", "the fixture is not eight files");
+            push_drop_band(&w, Some(&band));
+        }
+        shots.push(("bench-dropping", shoot(&w, &nav::Stack::new(), &full, "bench-dropping")));
+        push_drop_band(&w, None);
+
         // **§9.5, and nothing had ever taken a picture of it, because until now there was nothing
         // to take a picture OF.** The boolean is what draws the pane rather than the window's real
         // height, which is what makes this shootable at all: `TestingWindow` fills a zero size from
@@ -12936,7 +13432,7 @@ pub(crate) mod tests {
     fn the_plan_is_on_screen_before_anything_is_downloaded() {
         let (settings, _held) = a_fresh_installation();
         let w = a_window();
-        let _wiring = wire(&w, settings.clone(), args::Machine::default());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
 
         let rail = w.get_rail();
         let planned: Vec<RailRow> = (0..rail.row_count())
@@ -13012,7 +13508,7 @@ pub(crate) mod tests {
     fn the_wizard_does_not_come_back() {
         let (settings, _held) = a_fresh_installation();
         let first = a_window();
-        let _w1 = wire(&first, settings.clone(), args::Machine::default());
+        let _w1 = wire(&first, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         assert!(first.get_drawer_open(), "the first launch did not show the welcome");
         assert!(settings.borrow().welcomed, "the welcome was shown and the flag was not set");
 
@@ -13025,7 +13521,7 @@ pub(crate) mod tests {
 
         // A second launch, on that same emptied library.
         let second = a_window();
-        let _w2 = wire(&second, settings.clone(), args::Machine::default());
+        let _w2 = wire(&second, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         assert!(
             !second.get_drawer_open(),
             "the drawer opened again on an empty library, which is the wizard coming back"
@@ -13091,7 +13587,7 @@ pub(crate) mod tests {
         std::fs::write(&drives, b"not a directory").expect("the blocking file");
 
         let w = a_window();
-        let _wiring = wire(&w, settings.clone(), args::Machine::default());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         assert_eq!(first_run_offer(&settings.borrow()), Offer::Again);
         assert!(
             press_is_first_run(&settings.borrow(), 0),
@@ -13244,7 +13740,7 @@ pub(crate) mod tests {
     fn the_first_run_screen_carries_one_bill_and_one_step_cost() {
         let (settings, _held) = a_fresh_installation();
         let w = a_window();
-        let _wiring = wire(&w, settings.clone(), args::Machine::default());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
 
         let mut drawn: Vec<String> = vec![
             w.get_ledger_download().to_string(),
@@ -13433,7 +13929,7 @@ pub(crate) mod tests {
         // …and the behaviour of the line itself, which is what the sweep is about.
         let (settings, _held) = a_fresh_installation();
         let w = a_window();
-        let _wiring = wire(&w, settings.clone(), args::Machine::default());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         let cache = eapp_loader::firmware::cache_dir();
         assert_eq!(w.get_ledger_note(), "Nothing has been downloaded yet.");
         std::fs::create_dir_all(&cache).expect("a cache");
@@ -13602,7 +14098,7 @@ pub(crate) mod tests {
 
         let settings = Rc::new(RefCell::new(s));
         let w = a_window();
-        let _wiring = wire(&w, settings.clone(), args::Machine::default());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         // Counted rather than assumed to be zero: `wire` files §10.1's plan, and one more entry on
         // top of it on a machine with no `curl`. What this test is about is the row the press adds.
         let before = w.get_rail().row_count();
@@ -13893,7 +14389,7 @@ pub(crate) mod tests {
     fn the_registered_copy_handler_refuses_an_identifier_and_says_so() {
         let settings = Rc::new(RefCell::new(Settings::default()));
         let w = a_window();
-        wire(&w, settings, args::Machine::default());
+        wire(&w, settings, args::Machine::default(), Rc::new(drops::Shell::Native));
 
         // **The last row, not row 0.** `wire` files the first run's plan before any press, so the
         // Rail already holds five `Planned` steps — reading index 0 reads the plan and reports a
@@ -13973,7 +14469,7 @@ pub(crate) mod tests {
         }
         std::fs::write(&drives, b"not a directory").expect("the blocking file");
         let w = a_window();
-        let wiring = wire(&w, settings.clone(), args::Machine::default());
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         assert_eq!(w.get_devices().row_count(), 0, "the fixture is not an empty library");
 
         // The real, registered handler. A panic here is the shipped defect in a new place.
@@ -14043,7 +14539,7 @@ pub(crate) mod tests {
     fn a_real_first_run_from_the_registered_centre_button() {
         let (settings, _held) = a_fresh_installation_in("e2e-first-run");
         let w = a_window();
-        let wiring = wire(&w, settings.clone(), args::Machine::default());
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         let began = std::time::Instant::now();
 
         println!("\ndata directory  {}", eapp_loader::settings::data_dir().display());
@@ -14219,7 +14715,7 @@ pub(crate) mod tests {
     fn a_retry_after_a_failed_build_does_not_download_again() {
         let (settings, _held) = a_fresh_installation_in("e2e-resume");
         let w = a_window();
-        let wiring = wire(&w, settings.clone(), args::Machine::default());
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         let drives = eapp_loader::settings::drives_dir();
         let cache = eapp_loader::firmware::cache_dir();
 
@@ -14310,7 +14806,7 @@ pub(crate) mod tests {
     fn a_first_run_pressed_three_times_mints_one_ipod() {
         let (settings, _held) = a_fresh_installation_in("e2e-three-presses");
         let w = a_window();
-        let wiring = wire(&w, settings.clone(), args::Machine::default());
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
 
         println!("\ndata directory  {}", eapp_loader::settings::data_dir().display());
         println!("ledger          {}", w.get_ledger_disk());
@@ -14432,6 +14928,22 @@ pub(crate) mod tests {
         use eapp_loader::compose::Fix;
         use rail::{Class, Tool};
 
+        // `Provide a file…` files what the picker answered and then saves, so the settings file
+        // this writes has to be this test's own and not the operator's.
+        let _held = use_a_scratch_data_dir();
+        let dir = temp_dir("wired");
+        std::fs::create_dir_all(&dir).expect("the scratch directory");
+        let an_ipsw = dir.join("iPod_25.1.3.ipsw");
+        let mut zip = vec![0u8; 4096];
+        zip[..4].copy_from_slice(b"PK\x03\x04");
+        std::fs::write(&an_ipsw, &zip).expect("the fixture bundle");
+        assert_eq!(
+            eapp_loader::inspect::classify(&an_ipsw),
+            eapp_loader::inspect::Kind::Ipsw,
+            "the fixture the picker answers with is not a file this program files, so the \
+             assertion that it reached the library would be about the wrong thing"
+        );
+
         // The ten, by value. `Class::ALL` is the names; an eleventh variant makes the length
         // assertion below fail until somebody sweeps it too.
         let classes = [
@@ -14480,6 +14992,13 @@ pub(crate) mod tests {
                     let stack = Rc::new(RefCell::new(nav::Stack::new()));
                     let composer: Rc<RefCell<Option<composer::Composer>>> =
                         Rc::new(RefCell::new(None));
+                    // **The two steps that reach outside the process, driven through the seam.**
+                    // `Provide` opens a modal dialog and `Reveal` opens a Finder window; pressed
+                    // against `Shell::Native` this test would hang on the first and put a window on
+                    // the operator's screen on the second, once per class per retry count. One
+                    // answer queued, because one press takes one.
+                    let shell = drops::Shell::answering([an_ipsw.clone()]);
+                    let settings = Rc::new(RefCell::new(Settings::default()));
                     let id = rail.borrow_mut().failed(
                         "fetch",
                         "Apple's firmware",
@@ -14497,7 +15016,16 @@ pub(crate) mod tests {
                         stack.borrow().depth(),
                     );
 
-                    take_next_step(&rail, &stack, &composer, id, which as i32, caps());
+                    let took = take_next_step(
+                        &rail,
+                        &stack,
+                        &composer,
+                        &settings,
+                        &shell,
+                        id,
+                        which as i32,
+                        caps(),
+                    );
 
                     let after = (
                         rail.borrow().entries().to_vec(),
@@ -14523,6 +15051,42 @@ pub(crate) mod tests {
                             "{:?} sent the drawer to the Composer with no recipe in hand",
                             c
                         );
+                    }
+                    // **What the two outward-facing steps actually did**, because *the Rail
+                    // changed* is satisfied by a note saying nothing happened. `Provide` has to
+                    // have put the chosen file in the library; `Reveal` has to have asked for a
+                    // path rather than only written a line about one.
+                    // **What the press left for the caller**, which is the whole of what
+                    // `on_rail_next` acts on: a `Library` saves the settings file and refreshes the
+                    // bench, a `Retried` runs the step, and anything else does neither. Those two
+                    // lines live in a registered closure and are reachable from nothing, so the
+                    // contract is asserted here, at the seam they read.
+                    assert_eq!(
+                        took,
+                        match step {
+                            rail::Next::Provide => Took::Library,
+                            rail::Next::Retry => Took::Retried,
+                            _ => Took::Nothing,
+                        },
+                        "{:?} pressed `{}` and reported the wrong work back to its caller",
+                        c,
+                        step.label()
+                    );
+                    match step {
+                        rail::Next::Provide => assert_eq!(
+                            settings.borrow().resources.len(),
+                            1,
+                            "{:?} pressed `Provide a file…`, the picker answered, and nothing \
+                             reached the library",
+                            c
+                        ),
+                        rail::Next::Reveal => assert_eq!(
+                            shell.revealed(),
+                            vec![eapp_loader::settings::data_dir()],
+                            "{:?} pressed `Reveal` and nothing was shown",
+                            c
+                        ),
+                        _ => {}
                     }
                 }
             }
@@ -15236,7 +15800,7 @@ pub(crate) mod tests {
         s.devices.push(d);
         let settings = Rc::new(RefCell::new(s));
         let w = a_window();
-        let _wiring = wire(&w, settings.clone(), args::Machine::default());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
 
         // ── The drawer toggle (§16.11) ────────────────────────────────────────────────────────
         w.invoke_open_page(DrawerPage::Parts, 1);
@@ -15403,7 +15967,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let _wiring = wire(&w, settings.clone(), args::Machine::default());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         // Nothing is pushed while the page is off screen — the registry's guard, and the reason a
         // 10 Hz build tick does not walk the library six times a second for a page nobody can see.
         assert_eq!(w.get_parts_groups().row_count(), 0, "the page was pushed before it was opened");
@@ -15451,8 +16015,8 @@ pub(crate) mod tests {
     /// five `Made of` lines were undrawn and so was the one control §7.2 puts on this page.
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
-    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:806` and
-    /// `:515` read for the drawn iPod, and `machine-rule` was a literal `true`.
+    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:825` and
+    /// `:858` read for the drawn iPod, and `machine-rule` was a literal `true`.
     #[test]
     fn the_devices_page_opens_a_row_and_reaches_its_start() {
         let dir = temp_dir("devices-wired");
@@ -15461,7 +16025,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let _wiring = wire(&w, settings.clone(), args::Machine::default());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         w.invoke_open_page(DrawerPage::Devices, 1);
         assert_eq!(w.get_devices_detail_of(), -1, "a device is open before anything was pressed");
 
@@ -15504,7 +16068,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let _wiring = wire(&w, settings.clone(), args::Machine::default());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         w.invoke_open_page(DrawerPage::Devices, 1);
         w.invoke_device_expand(0, true);
 
@@ -15540,7 +16104,7 @@ pub(crate) mod tests {
     fn the_settings_page_states_every_refusal_and_the_toggle_sticks() {
         let (settings, _held) = a_fresh_installation();
         let w = a_window();
-        let _wiring = wire(&w, settings.clone(), args::Machine::default());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         w.invoke_open_page(DrawerPage::Settings, 1);
 
         assert!(!w.get_setting_theme_value().is_empty(), "the Theme row has no value");
@@ -15593,7 +16157,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let _wiring = wire(&w, settings.clone(), args::Machine::default());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         w.invoke_open_page(DrawerPage::Parts, 1);
         let quiet = w.get_rail().row_count();
 
@@ -15632,7 +16196,7 @@ pub(crate) mod tests {
         let settings = Rc::new(RefCell::new(s));
 
         let w = a_window();
-        let _wiring = wire(&w, settings.clone(), args::Machine::default());
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
 
         // From Parts.
         w.invoke_open_page(DrawerPage::Parts, 1);

@@ -274,6 +274,10 @@ pub enum Next {
     },
 }
 
+/// Why [`Next::ChooseElsewhere`] is drawn disabled, **once**, so [`Next::unwired`] and
+/// [`Next::reason`] cannot word one absence two ways.
+const NO_LIBRARY_MOVE: &str = "nothing moves the library";
+
 impl Next {
     /// **Short enough for half a failure block**, which is a measurement and not a preference.
     /// Six of the ten failure classes offer two next steps and `geometry::RAIL_NEXT_W` makes each
@@ -298,16 +302,48 @@ impl Next {
         }
     }
 
+    /// **A control this build draws disabled because it has no ROUTE**, rather than because a
+    /// capability is missing. `None` for every step that is a capability question.
+    ///
+    /// [`parts::Action::unwired`] is the same distinction one surface over, and it was made there
+    /// first, for `Fetch…`: *a capability question is the wrong question when the mechanism behind
+    /// the control does not exist, and asking it draws a live control over a hole.* `Fetch…` asked
+    /// `Next::Retry` — *is curl on this computer* — so on every computer that has curl it was blue,
+    /// and every press failed.
+    ///
+    /// **[`Next::ChooseElsewhere`] is this file's instance of it, and it became one the day a
+    /// folder picker arrived.** The control was gated on `caps.file_picker`, so the moment `rfd`
+    /// landed it would have gone live — a dialog would have opened, the operator would have chosen
+    /// a folder, and nothing whatever would have happened with the answer. What
+    /// `Choose a folder…` means is *put this program's files somewhere else*, and where they go is
+    /// `settings::data_dir()` reading `IPOD_EMULATOR_DATA` **at launch**, from an environment this
+    /// program does not set. The settings file itself lives inside that directory, so there is not
+    /// even a key to write the choice into. That is a route to build, not a picker to wire, and
+    /// [`Next::escape_hatch`] already names the real remedy.
+    pub fn unwired(&self) -> Option<&'static str> {
+        match self {
+            Next::ChooseElsewhere => Some(NO_LIBRARY_MOVE),
+            _ => None,
+        }
+    }
+
     /// Whether this build can actually do the thing the control claims.
     ///
     /// **Advertising a mechanism that does not exist is the first of §19.1's fatal findings in
     /// miniature**, so every route out of here is a real one or the control is disabled and says
-    /// which. Two of them are false in this phase and both are named in [`Caps`].
+    /// which. One of them has no route at all and answers [`Next::unwired`]; the rest are
+    /// capability questions, and which capabilities are false is `main::caps()`'s answer.
     pub fn available(&self, caps: Caps) -> bool {
+        if self.unwired().is_some() {
+            return false;
+        }
         match self {
             // A file arrives either through a picker or by being dropped on the window; either one
-            // is enough, and in this phase there is neither.
+            // is enough, and this build has both — `drops::PICKER` and `drops::DROPS`, read by
+            // `main::caps()` beside the mechanism rather than typed as literals.
             Next::Provide => caps.file_picker || caps.drop_target,
+            // Refused above, by `unwired`. Kept in the match so the day a route exists the arm is
+            // here rather than having to be re-derived.
             Next::ChooseElsewhere => caps.file_picker,
             Next::CopyDetails => caps.clipboard,
             Next::Reveal => caps.reveal,
@@ -355,10 +391,24 @@ impl Next {
     /// half is the half a person standing at the control needs.
     pub fn reason(&self) -> &'static str {
         match self {
+            // **Unreachable in the shipping build and kept for the same reason `Fix`'s is.** It is
+            // drawn only when `file_picker` and `drop_target` are BOTH false, and both are read
+            // from `drops` — so the one thing that shows this sentence is the picker going away,
+            // which is exactly what it says. The all-off fixture is what keeps it swept.
             Next::Provide => "no file picker in this build",
-            Next::ChooseElsewhere => "no folder picker yet",
+            // **The same string [`Next::unwired`] hands back**, written once so the two cannot
+            // word one absence two ways. It used to read *no folder picker yet*, and that is the
+            // sentence this pass made false: there is a folder picker, and what there is not is
+            // anywhere for its answer to go.
+            Next::ChooseElsewhere => NO_LIBRARY_MOVE,
             Next::CopyDetails => "this build has no clipboard",
-            Next::Reveal => "no file manager here",
+            // **A machine rule now, not a project state**, and the wording moved with it. This
+            // build has a reveal — `drops::reveal` runs `open -R` on macOS, `explorer /select,` on
+            // Windows and `xdg-open` on the containing folder on Linux — so the only thing that
+            // draws this is a computer with none of them, which is a headless Linux box without
+            // `xdg-open`. *No file manager here* said *we have not built this*, and that is the
+            // half that stopped being true.
+            Next::Reveal => "no file manager installed",
             Next::Devices => "no Devices page yet",
             // **A machine rule, not a project state**, and the only one in this function. The other
             // five say *we have not finished this*; this one says *your computer cannot do it*, and
@@ -476,30 +526,43 @@ impl Next {
 /// What this build can actually do, decided in `main.rs` and passed in.
 ///
 /// **Seven booleans, not the three the design first named**, and every one past the third is the
-/// same rule applied again: `Reveal` needs a file manager this build has no way to open, `Devices`
-/// needs a drawer page, `Retry` needs a downloader, and `Fix` needs a surface that holds a recipe.
-/// A control whose mechanism does not exist is disabled and says so; it is never drawn live and
-/// never quietly dropped.
+/// same rule applied again: `Devices` needs a drawer page, `Retry` needs a downloader, `Fix` needs
+/// a surface that holds a recipe, and the first three need a way for a file to arrive at all. A
+/// control whose mechanism does not exist is disabled and says so; it is never drawn live and never
+/// quietly dropped.
 ///
-/// **Two of the seven have since been earned, and this paragraph is not the place their answer
-/// lives.** The Devices page and the Composer both ship now, so `devices_page` and `composer` are
-/// `true` in the running program. Neither is typed as `true`: `main::caps()` derives both from
-/// `Page::slot()`, so the flag and the markup cannot disagree, and a sentence here saying *not
-/// written* would be the §16.9 defect all over again.
+/// **Not one of the seven is a literal any more, and that is the whole of what this type is for.**
+/// Five of them were `false` in `main::caps()` when this was written and the paragraph here listed
+/// which — a second copy of an answer, in prose, one edit from being wrong. Every one is now asked
+/// of the thing that would know:
 ///
-/// **Four of the seven are literals, two are derived, and one is measured.** `download` is the odd
-/// one: every download in this program goes through `curl`, and whether `curl` is on this computer
-/// is a fact about the computer rather than about the build — so `main::caps()` asks
-/// `eapp_loader::tooling::can_download()` once per launch.
+/// | cap | asked of | kind of question |
+/// |---|---|---|
+/// | `file_picker` | `drops::PICKER` | about the **build** — `rfd` is a dependency of the module the constant is in |
+/// | `drop_target` | `drops::DROPS` | about the **build** — `drops::Landing` is fed by `main.rs`'s winit hook, and deleting the hook makes every method on it dead code |
+/// | `reveal` | `drops::can_reveal()` | about the **computer** — `open` / `explorer` / `xdg-open`, probed once per launch |
+/// | `clipboard` | still `false` | about the **build**, and the route is a `.slint` `TextInput` rather than a crate — see `main::caps` |
+/// | `devices_page` | `nav::Page::Devices.slot()` | about the **markup** |
+/// | `composer` | `nav::Page::Composer.slot()` | about the **markup** |
+/// | `download` | `eapp_loader::tooling::can_download()` | about the **computer** — every download in this program goes through `curl` |
+///
+/// The two kinds are not interchangeable: a fact about the build is a **project state** and says
+/// *we have not finished this*; a fact about the computer is a **machine rule** and says *your
+/// computer cannot do this*. §9.4 draws that line and [`Next::reason`] words both sides of it.
 ///
 /// **There is deliberately no `build` cap.** It would be a lie the moment this phase landed: this
 /// build *can* build a drive, and a boolean claiming otherwise would disable the one control §10
 /// exists to make pressable.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Caps {
+    /// §17 Q3's dialog. `drops::PICKER`, which sits beside the one `rfd` call in the program.
     pub file_picker: bool,
+    /// §16.4's winit hook. `drops::DROPS`, which sits beside `drops::Landing`.
     pub drop_target: bool,
     pub clipboard: bool,
+    /// A file manager to show a part in. **A fact about the computer**, like `download` and unlike
+    /// the two above it — `drops::can_reveal()` asks whether `open`, `explorer` or `xdg-open` is
+    /// there, and on a headless Linux box the honest answer is no.
     pub reveal: bool,
     /// The drawer's Devices page. **Derived, never declared** — `main::caps()` asks
     /// `Page::Devices.slot()`, which answers `Some(1)` the day `ui/drawer.slint` gains a child that
@@ -1207,13 +1270,45 @@ mod tests {
             "`Cancel` is refused, and it needs no mechanism this build lacks"
         );
 
-        // And with every mechanism present, nothing is disabled and nothing needs a way round it.
+        // **And with every mechanism present, the only thing still refused is the one with no
+        // mechanism to have.** That distinction is [`Next::unwired`] and it is asserted in both
+        // directions: an unwired step stays refused however many caps are on — a capability cannot
+        // conjure a route — and every step that is not unwired goes live and needs no way round it.
+        let mut unwired = 0usize;
         for c in every_class() {
             for n in c.next(0, ALL_CAPS) {
-                assert!(n.available(ALL_CAPS), "{} is refused with every cap on", n.label());
-                assert!(n.escape_hatch(ALL_CAPS).is_empty());
+                match n.unwired() {
+                    Some(why) => {
+                        unwired += 1;
+                        assert!(
+                            !n.available(ALL_CAPS),
+                            "{} has no route and every cap on made it live anyway",
+                            n.label()
+                        );
+                        assert_eq!(n.reason(), why, "{} words its absence twice", n.label());
+                        assert!(
+                            !n.escape_hatch(ALL_CAPS).is_empty(),
+                            "{} is refused for good and offers no way round it (§9.4)",
+                            n.label()
+                        );
+                    }
+                    None => {
+                        assert!(
+                            n.available(ALL_CAPS),
+                            "{} is refused with every cap on",
+                            n.label()
+                        );
+                        assert!(n.escape_hatch(ALL_CAPS).is_empty());
+                    }
+                }
             }
         }
+        // The control: a sweep that reached no unwired step would have asserted nothing about the
+        // distinction and still read green.
+        assert!(
+            unwired > 0,
+            "not one step in the ten classes has no route, so the arm above is about nothing"
+        );
     }
 
     /// **No failure in this build is a dead end**, which is §9.4's rule about a project state:

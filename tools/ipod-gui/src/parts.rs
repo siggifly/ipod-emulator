@@ -577,9 +577,11 @@ impl Parts {
             ));
         }
         match a {
-            // §11.4's Snapshots verb, and it is the only group verb this build can perform. The
-            // other five need a file picker, a drop target, a download or the Composer, and each
-            // is drawn disabled wearing `rail::Next`'s own sentence about which.
+            // §11.4's Snapshots verb, and it is the only group verb this file performs on its own.
+            // Four of the other five are routed by `main.rs` before they arrive — `Synthesise…` and
+            // `Build…` to the Composer, `Add a dump…` and `Provide…` to a file picker — because
+            // opening a page and opening a dialog are both things a toolkit-free file cannot do.
+            // `Fetch…` is the one with no mechanism at all, and it is drawn disabled with a route.
             Action::Discard => {
                 let parked: Vec<String> = s
                     .devices
@@ -610,9 +612,17 @@ impl Parts {
                 }
                 Ok(if moved { Wrote::Library } else { Wrote::Nothing })
             }
-            // Drawn disabled — there is neither a picker nor a drop target — so a press cannot
-            // reach here from the window and the sentence is the one under the greyed control.
-            Action::AddDump | Action::Provide => Err(refused_because(&Next::Provide)),
+            // **`main.rs` routes these two before they arrive**, exactly as it routes the Composer's
+            // pair below. They were greyed out here wearing `Next::Provide`'s *no file picker in
+            // this build*, which was true of every build until `drops` existed; opening a modal
+            // dialog is not something a toolkit-free file can do, so the press goes to
+            // `drops::Ask::Part(group)` and comes back through `drops::provide`. Reaching this arm
+            // at all is a defect in the window rather than in the library.
+            Action::AddDump | Action::Provide => Err(format!(
+                "{} opens a file picker rather than changing the library on its own, so arriving \
+                 here means the press is not wired",
+                a.label()
+            )),
             // **Drawn DISABLED, and the sentence is the one under the greyed control.** It shipped
             // LIVE: [`Action::needs`] answered `Some(Next::Retry)`, which asks *is curl on this
             // computer*, `caps.download` measures that by running `curl --version`, and so on every
@@ -645,6 +655,7 @@ impl Parts {
     pub fn row_action(
         &mut self,
         s: &mut Settings,
+        shell: &crate::drops::Shell,
         a: RowAction,
         id: i32,
         machine: Option<&str>,
@@ -660,6 +671,9 @@ impl Parts {
             return Ok(Wrote::Nothing);
         };
         let (group, key, locked) = (e.group, e.key.clone(), e.locked_by.clone());
+        // `Reveal` needs the file behind the row, and the row is dropped the moment the borrow
+        // above ends. `None` for a part that names no path — a synthesised iPod is a recipe.
+        let path = e.path.clone();
         match a {
             RowAction::ShowIdentity => {
                 if let Some(o) = self.open.as_mut().filter(|o| o.id == id) {
@@ -715,7 +729,17 @@ impl Parts {
                 }
                 Ok(Wrote::Library)
             }
-            RowAction::Reveal => Err(refused_because(&Next::Reveal)),
+            // **The one row control in this file that reaches outside the process**, and it is
+            // `drops::reveal` rather than a `Command` written here: three platforms, three
+            // arguments, and `Next::Reveal`'s capability is read from the same module — so the
+            // control that is drawn live and the act that runs cannot disagree about whether this
+            // computer has a file manager. It shipped as `Err(refused_because(&Next::Reveal))`
+            // under *no file manager here*, which was true of the build and is now true only of a
+            // computer that has none.
+            RowAction::Reveal => match path {
+                Some(p) => shell.reveal(&p),
+                None => Err(format!("{key} is a recipe, so there is no file to show")),
+            },
             RowAction::CopyPath => Err(refused_because(&Next::CopyDetails)),
             // **The three that belong to a device**, and the sentence says whose they are rather
             // than what this page does with them — which is the half of the pair `devices.rs`'s
@@ -1679,6 +1703,7 @@ fn refused_because_unwired(a: Action, g: Group) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drops::Shell;
 
     /// The markup this crate actually compiles, read from disk.
     ///
@@ -2205,7 +2230,7 @@ mod tests {
         let s = library();
         let v = view_of(&mut Parts::new(), &s, Caps::default());
         let provide = &group(&v, Group::Firmware).b.as_ref().expect("Provide…").1;
-        assert!(!provide.enabled, "this build has neither a picker nor a drop target");
+        assert!(!provide.enabled, "a fixture with no picker and no drop target drew `Provide…` live");
         assert_eq!(provide.reason, Next::Provide.reason());
         // And the Composer exists, so the two verbs that need one are drawn live.
         let synth = &group(&v, Group::Ipods).b.as_ref().expect("Synthesise…").1;
@@ -2327,11 +2352,11 @@ mod tests {
 
         let id = rom.id;
         let before = s.resources.len();
-        let refused = p.row_action(&mut s, RowAction::Remove, id, Some("My 5.5G"));
+        let refused = p.row_action(&mut s, &Shell::answering([]), RowAction::Remove, id, Some("My 5.5G"));
         assert!(refused.is_err(), "the machine's own ROM was removed out from under it");
         assert_eq!(s.resources.len(), before, "a refusal mutated the library");
 
-        let done = p.row_action(&mut s, RowAction::Remove, id, None);
+        let done = p.row_action(&mut s, &Shell::answering([]), RowAction::Remove, id, None);
         assert_eq!(done, Ok(Wrote::Library));
         assert_eq!(s.resources.len(), before - 1);
     }
@@ -2353,7 +2378,7 @@ mod tests {
 
         let first = row_named(&before, "Black 5.5G").id;
         assert!(s.remove_resource("Black 5.5G"));
-        assert!(p.row_action(&mut s, RowAction::Remove, first, None).is_ok());
+        assert!(p.row_action(&mut s, &Shell::answering([]), RowAction::Remove, first, None).is_ok());
 
         let after = p.view(&s, &mut seen, Caps::default(), false, None);
         assert_eq!(
@@ -2387,7 +2412,7 @@ mod tests {
         let mut p = Parts::new();
         let mut seen = Presence::new();
         let before = s.clone();
-        assert_eq!(p.row_action(&mut s, RowAction::Remove, 9_999, None), Ok(Wrote::Nothing));
+        assert_eq!(p.row_action(&mut s, &Shell::answering([]), RowAction::Remove, 9_999, None), Ok(Wrote::Nothing));
         assert_eq!(s, before);
         p.open_row(&s, 9_999, true);
         assert_eq!(p.view(&s, &mut seen, Caps::default(), false, None).detail_of, -1);
@@ -2748,7 +2773,7 @@ mod tests {
         let masked = guid(&p.view(&s, &mut seen, Caps::default(), false, None));
         assert!(masked.contains('•') || masked.contains('*') || masked.len() < 16, "{masked}");
 
-        assert_eq!(p.row_action(&mut s, RowAction::ShowIdentity, id, None), Ok(Wrote::Nothing));
+        assert_eq!(p.row_action(&mut s, &Shell::answering([]), RowAction::ShowIdentity, id, None), Ok(Wrote::Nothing));
         let shown = guid(&p.view(&s, &mut seen, Caps::default(), false, None));
         assert_ne!(shown, masked, "Show revealed nothing");
         assert_eq!(shown.len(), 16, "a FireWire GUID is sixteen hex digits: {shown}");
@@ -2813,7 +2838,7 @@ mod tests {
         p.open_row(&s, id, true);
         assert!(p.view(&s, &mut seen, Caps::default(), false, None).preview.is_none());
 
-        assert_eq!(p.row_action(&mut owned, RowAction::ShowBootScreen, id, None), Ok(Wrote::Nothing));
+        assert_eq!(p.row_action(&mut owned, &Shell::answering([]), RowAction::ShowBootScreen, id, None), Ok(Wrote::Nothing));
         let v = p.view(&s, &mut seen, Caps::default(), false, None);
         let shot = v.preview.as_ref().expect("a framebuffer");
         assert_eq!((shot.w as usize, shot.h as usize), (crate::emu::FB_W, crate::emu::FB_H));
@@ -2821,7 +2846,7 @@ mod tests {
         assert!(shot.rgb.iter().any(|b| *b != 0), "the mark was not drawn");
         assert!(shot.rgb.contains(&0), "every pixel is lit, so nothing was drawn on it");
 
-        assert_eq!(p.row_action(&mut owned, RowAction::ShowBootScreen, id, None), Ok(Wrote::Nothing));
+        assert_eq!(p.row_action(&mut owned, &Shell::answering([]), RowAction::ShowBootScreen, id, None), Ok(Wrote::Nothing));
         assert!(p.view(&s, &mut seen, Caps::default(), false, None).preview.is_none());
         assert_eq!(owned, s, "showing a picture wrote to the library");
     }
@@ -2856,11 +2881,16 @@ mod tests {
         assert!(p.group_action(&mut s, Group::Snapshots, Action::Fetch).is_err());
         assert!(p.group_action(&mut s, Group::Ipods, Action::Discard).is_err());
         assert_eq!(s, before, "a mismatched pair mutated the library");
-        // …and a verb drawn DISABLED wears the Rail's own sentence for the missing capability.
-        assert_eq!(
-            p.group_action(&mut s, Group::Firmware, Action::Provide),
-            Err(Next::Provide.reason().to_string())
-        );
+        // …and the two verbs `main.rs` routes to a file picker say so, rather than wearing the
+        // sentence they wore for as long as there was no picker. `Provide…` answered
+        // `Next::Provide.reason()` — *no file picker in this build* — which was true then and is
+        // the phantom's mirror image now: a refusal naming an absence that has been filled.
+        for (g, a) in [(Group::Firmware, Action::Provide), (Group::Ipods, Action::AddDump)] {
+            let why = p.group_action(&mut s, g, a).expect_err("the picker's, not the library's");
+            assert!(why.contains("file picker"), "{why}");
+            assert!(why.contains("not wired"), "§9.4 wants the defect named: {why}");
+            assert_ne!(why, Next::Provide.reason(), "the press wears the disabled sentence");
+        }
         // **A verb drawn LIVE must not.** `Fetch…` is blue exactly when `caps.download` is true,
         // and `Next::Retry`'s sentence is *curl is not on this computer* — so the press that only
         // happened because curl is there used to answer that it is not.
