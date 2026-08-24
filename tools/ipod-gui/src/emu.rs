@@ -47,6 +47,16 @@ pub const FB_FRONT: u32 = 0x000e_0000;
 /// The second surface the same allocator hands out — one frame further on.
 pub const FB_BACK: u32 = 0x0010_6000;
 
+/// The instruction count `--snap-at` defaulted to, and what `Config::snap_at` still means when
+/// nothing writes a snapshot: **the fallback that ends `Phase::Booting`.**
+///
+/// The boot phase normally ends when RetailOS asks for wheel frames, which is an observation. This
+/// is the answer for the case the signal never comes — see the `asked_for_frames` test in
+/// `session`. It matters that it is not zero: `Booting { target: 0 }` ends the boot phase on the
+/// first slice, so a window built on `Config::default()` would say *running* over a machine that
+/// had executed 250 000 instructions, which is the shape of instrument this project keeps deleting.
+pub const SNAP_AT: u64 = 1_600_000_000;
+
 /// Apple's ISR frame decoder. Entering it is the evidence that a frame this GUI caused was read
 /// and parsed by RetailOS rather than merely posted into a register; see research/10 Addendum 21 §6.
 pub const PC_DECODER: u32 = 0x0028_1350;
@@ -75,9 +85,10 @@ pub const WATCHED: [(u32, &str); 5] = [
 /// other eighteen fields to do it.
 #[derive(Clone, Default)]
 pub struct Config {
-    /// The path a supplied dump came from. Empty when the ROM is synthesised — [`Config::nor`] is
-    /// what actually produces the bytes.
-    pub flash: PathBuf,
+    // **`flash` was here and is deleted.** It held *the path a supplied dump came from*, which is
+    // the same path `Source::File` already carries — so it was one fact in two fields, and nothing
+    // in this file ever read the second. Setting it was the shape of defect a module blanket hides:
+    // a value computed on every launch and dropped.
     /// Where the boot ROM comes from. A synthesised one is built here, in memory, from a recipe:
     /// there is no file, nothing to cache and nothing to go stale.
     pub nor: eapp_loader::nor::Source,
@@ -151,12 +162,14 @@ pub struct Config {
     pub boot: BootTarget,
     /// `--press=BUTTON@SECONDS`, repeatable — press a button through the window's own input path,
     /// at a moment measured from when the window opened.
+    #[allow(dead_code)]  // retired when: `args::FLAGS` accepts `--press=` again — it refuses it as `Gone::Machine`, and nothing else in this program schedules a press
     ///
     /// It exists to make the window's input testable from a command line: a screenshot of Apple's
     /// diagnostics with its menu open is otherwise something only a person with a mouse can take,
     /// and "the wheel does not reach diagnostics" is otherwise something only a person with a
     /// mouse can discover.
     pub presses: Vec<(String, f32)>,
+    #[allow(dead_code)]  // retired when: `args::FLAGS` accepts `--window-shot=` again; the window has no other route to a picture of itself
     /// `--window-shot=FILE` — write a PNG of **the whole window** and quit.
     ///
     /// Not the same picture as the `S` key, which captures the 320x240 panel. The two shipped
@@ -166,6 +179,7 @@ pub struct Config {
     pub window_shot: Option<PathBuf>,
     /// Seconds to let the machine run before the shot is taken. The window is drawing from the
     /// first frame, but the iPod on it is not: a shot at zero is a picture of a black panel.
+    #[allow(dead_code)]  // retired when: `window_shot` has a reader — this is the delay before it, and it has no second use
     pub shot_after: f32,
     /// No window: drive to the main menu at a fixed instruction anchor and watch the panel while
     /// the machine idles. See [`Probe`].
@@ -207,6 +221,7 @@ pub struct Config {
     /// that deliberately to a *cold* machine is the only way to ask whether it is what matters,
     /// short of putting the chip in the snapshot and changing every restored run to find out.
     pub ablate_pmu: bool,
+    #[allow(dead_code)]  // retired when: `args::FLAGS` accepts `--control=` again and `control::serve` has a caller; §12.8's Readout is the surface that wants it
     /// Where to open the control socket, if anywhere.
     ///
     /// Absent by default. A socket that appears without being asked for is an interface nobody
@@ -263,6 +278,7 @@ pub struct Config {
 
 /// The scripted measurements this front end can make with no window and no hand.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(dead_code)]  // retired when: `args::FLAGS` accepts `--probe=` again — `Menu` and `ComboControl` are two arms of a measurement the command line no longer offers, and a probe with half its arms is not a controlled one
 pub enum Probe {
     /// Press Select at the anchor — from the first-run Language list that is the main menu — and
     /// then sample the panel six times over the next 800 M instructions while nothing touches it.
@@ -298,6 +314,7 @@ enum Outcome {
 /// co-processor, the wheel, the identity out of the NOR — is the same machine, which is the point:
 /// Rockbox and Apple's diagnostics are not modes of this program, they are programs this iPod runs.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[allow(dead_code)]  // retired when: §12.5's `Start into` rows are drawn — the drawer's device page is where `Nor("diag")` and `Image(path)` are chosen, and the window boots `Os` until it exists
 pub enum BootTarget {
     /// The operating system on the drive, entered the way the machine enters it — from the reset
     /// vector on a real dump, or through the high-level boot on a synthesised one.
@@ -325,6 +342,7 @@ impl BootTarget {
     }
 
     /// One line for a person, and for the window's picker.
+    #[allow(dead_code)]  // retired when: §12.5's boot-target picker is drawn; this is the label on its rows
     pub fn label(&self) -> String {
         match self {
             BootTarget::Os => "iPod software".into(),
@@ -339,6 +357,7 @@ impl BootTarget {
     }
 
     /// `os`, a NOR tag, or a path — the one spelling the command line and the settings file share.
+    #[allow(dead_code)]  // retired when: something reads a boot target back — `args::FLAGS` refuses `--boot=`, and no settings key holds one
     pub fn parse(s: &str) -> BootTarget {
         match s.trim() {
             "" | "os" => BootTarget::Os,
@@ -355,6 +374,7 @@ impl BootTarget {
 /// control that claimed to be the hardware combo while actually restarting the emulator would be
 /// the UI lying about what the machine does. These restart the *emulator*, and say so.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[allow(dead_code)]  // retired when: §12.5's power rows are drawn on the drawer's device page — `PowerCycle` and `Boot` are two of the four it offers, and the bench's centre button is only ever `PowerOff` (§7.3's booting row) or `PowerOn`
 pub enum Cmd {
     PowerOff,
     /// Power on from off — always a cold boot, never a restore.
@@ -2755,7 +2775,6 @@ mod tests {
         std::fs::write(&snap, b"snapshot").unwrap();
 
         let mut cfg = Config {
-            flash: dir.join("f.bin"),
             disk: dir.join("d.img"),
             workdisk: dir.join("w.img"),
             frozen: frozen.clone(),
@@ -2813,7 +2832,6 @@ mod tests {
         // Direct mode: the working drive IS the user's image, which is the condition that makes
         // the stamp necessary in the first place.
         let cfg = Config {
-            flash: dir.join("f.bin"),
             disk: drive.clone(),
             workdisk: drive.clone(),
             frozen: dir.join("b.frozen"),

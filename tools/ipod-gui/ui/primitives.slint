@@ -189,6 +189,16 @@ export struct PartRow {
 // `ResourceRow` went with the Resources tab. Its one test —
 // `no_row_claims_a_verification_the_model_did_not_record` — was re-expressed onto
 // `Provenance::line()` rather than dropped (§16.10), and is still in `main.rs`.
+// §6.4: **three colours and one shape, not four colours.** A closed set, declared as one, so a
+// fourth cannot arrive by accident — and the shape (a *broken* ring) is the fourth state, because
+// there is no fourth colour on `bg-sunken` that clears 3 : 1 and does not already mean something
+// else.
+//
+// It lives in this leaf rather than in `bench.slint`, which draws it, because since Phase 7 the
+// ring is **decided in Rust** — `machine::cradle` returns the colour and the continuity together —
+// so it is a field of `DeviceRow` below, and `bench.slint` imports this file.
+export enum CradleRing { accent, dim, danger }
+
 export struct DeviceRow {
     name: string,
     summary: string,
@@ -210,6 +220,20 @@ export struct DeviceRow {
     // `selected` the way `cradle-label` does rather than being pushed once for a bench that has
     // moved on.
     press-label: string,
+    // §7.3's ring, decided by `machine::cradle` alongside the label above — one call, so the colour
+    // and the sentence cannot describe two different states of one iPod.
+    //
+    // **`danger` is reachable now, and that is the whole reason this stopped being a markup
+    // expression.** `ui/window.slint` computed the ring from `startable`, which has two values, and
+    // §7.3's table has three: `accent` for a device that can be pressed, `fg-dim` for one that
+    // cannot, and `danger` for **a machine that stopped** — a state no build before Phase 7 could
+    // be in. Spending `danger` on *a file moved* would leave nothing to say *a machine died* with.
+    cradle-ring: CradleRing,
+    // Gaps in the outline (§7.3). **Not `!startable`**, which is what the markup computed: §7.3
+    // gives a broken ring to its three `cannot start` rows and to nothing else, so a composed
+    // device this build cannot make a drive for is *unfinished*, not broken. `machine::Blocked::
+    // breaks_the_ring` is the one place that decides.
+    cradle-broken: bool,
 }
 
 // One line inside an expanded row — `parts::Detail` flattened. A `Fact`, a `Paragraph`, a

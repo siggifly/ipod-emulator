@@ -1526,7 +1526,7 @@ window (§9.6, §16.1) with hysteresis, and re-evaluated on `Resized`, `Moved` a
  │        drawn. Nothing is wrong with your files and nothing is missing —              │
  │        the press that was on the centre button is the row below.                     │
  │                                                                                     │
- │      ▓▓▓▓▓▓▓▓▓▓▓  Press here — running is not wired  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓   │  ← 44 px, the material,
+ │      ▓▓▓▓▓▓▓▓▓▓▓  Press here — cold boot, about 75 s  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓   │  ← 44 px, the material,
  │                                                                                     │     the cradle's own
  └─────────────────────────────────────────────────────────────────────────────────────┘     label and callback
         └── 420 px, `Geometry.short-measure` = `min-width − DRAWER_W − 2 × WELL_AIR`:
@@ -2553,7 +2553,15 @@ plausible-looking substitute for the other — a bar drawn over the wrong one is
 at a plausible rate, and nothing would report it.
 `the_boot_bar_divides_by_the_last_cold_boot_and_not_by_the_snapshot_instant` is the test, and it
 carries the substitution as its own control so a reading that proves nothing cannot pass it.
-**Nothing is wired to the window** — that is a separate pass, and this is the model it will read.)*
+**Wired 2026-08-24.** `main::life` reads `Out.phase` through `Life::read` and nothing else in the
+window decides a phase; `machine::cradle` is every §7.3 caption on the bench; `machine::Glass` is
+what is on the panel; `machine::centre` and `machine::permits` are what the centre button means and
+whether a power command is physical. The press builds an `emu::Config` from the device
+`Settings::run_device` resolved and spawns `emu::run` on its own thread. Three of the table's four
+rows are reachable from the window today — `Off`, `Booting` and `Stopped`; `Running` needs a drive
+with an OS on it, which is a fixture no test suite can carry. **Two things in the table are still
+not drawn**: §12.4's `parking` caption has no producer because nothing configures a snapshot, and
+the `stalled` line below the table is §12.8's Readout, which does not exist.)*
 
 `Stopped` is the opposite and for the opposite reason: **the last frame is evidence** and is kept.
 Row 2 carries the reason in `fg`, row 3's trailing slot offers `Cold boot` and `Copy the reason`, and

@@ -781,30 +781,52 @@ fn nothing_in_the_bench_reads_the_windows_own_height() {
 /// `stopped — Lost(0xe19b0000)`. The first cut of `ui/window.slint` bound `danger` to *not
 /// startable*, which spends the one colour that means *a machine died* on *a file moved* — and
 /// leaves nothing to tell them apart the day §12.2's `Stopped` lands.
+///
+/// **§12.2's `Stopped` has landed, and the retirement condition on that binding with it.** The
+/// markup used to compute the ring from `startable`, which has two values against the table's
+/// three, under a note saying `danger` was unreachable and that the binding would *gain the arm
+/// rather than borrow it*. It cannot gain an arm from a boolean, so the ring is `machine::cradle`'s
+/// and arrives on the row. What this test asserts is therefore the opposite of what it asserted:
+/// **the markup decides nothing about which colour a state gets**, because a `?:` chain over
+/// `startable` is exactly how `danger` came to be spent on the wrong row the first time.
 #[test]
 fn the_cradle_ring_means_what_the_table_says_it_means() {
     let stmt = statement(&ui("window.slint"), "cradle-ring:");
     assert!(
-        stmt.contains("CradleRing.accent") && stmt.contains("CradleRing.dim"),
-        "the cradle no longer distinguishes startable from not:\n  {stmt}"
+        !stmt.contains("CradleRing."),
+        "`ui/window.slint` names a ring colour, so it is deciding one. §7.3's table has three \
+         colours and §12.2 gives one of them to a phase; both live in `machine::cradle`, and the \
+         markup's job is to draw what the row says:\n  {stmt}"
     );
     assert!(
-        !stmt.contains("CradleRing.danger"),
-        "the cradle is painted `danger` for something other than a stopped machine. §6.4 gives \
-         a refusal `fg-dim` plus a BROKEN RING, and `danger` to §12.2's `Stopped` alone — a phase \
-         this build cannot be in.\n  {stmt}"
+        stmt.contains("root.current."),
+        "the cradle's ring comes from somewhere other than the row the bench is drawing:\n  {stmt}"
+    );
+    // The control: a matcher that read the wrong statement would pass both of the above.
+    assert!(
+        statement(&ui("window.slint"), "cradle-label:").contains("root.current."),
+        "the statement reader is not reading the Bench use site"
     );
 
     // …and the shape that carries the refusal is still there, or the state has no tell at all.
     let broken = statement(&ui("window.slint"), "cradle-broken:");
     assert!(
-        broken.contains("startable"),
-        "the broken ring is no longer bound to startability, so a refused device is drawn exactly \
-         like a startable one:\n  {broken}"
+        broken.contains("root.current.cradle-broken"),
+        "the broken ring is no longer the model's answer, so §7.3's three `cannot start` rows and \
+         a composed device nobody has built a drive for are drawn the same:\n  {broken}"
     );
 
-    // The enum is closed at three, which is what stops a fourth colour arriving by accident.
-    let decl = statement(&bench(), "export enum CradleRing");
+    // The enum is closed at three, which is what stops a fourth colour arriving by accident. It
+    // moved to `primitives.slint` with the field — see the note there.
+    //
+    // Read as a **line** rather than through `statement`, which runs on to the next `;`: an enum
+    // declaration ends in `}`, so from here that swallowed the whole of `DeviceRow` and counted its
+    // twenty-nine commas. A sweep that reads too much is the same defect as one that reads too
+    // little, in the direction that is harder to notice.
+    let decl = code(&ui("primitives.slint"))
+        .into_iter()
+        .find(|l| l.starts_with("export enum CradleRing"))
+        .expect("`CradleRing` is declared in `ui/primitives.slint`, beside the row that carries it");
     assert_eq!(
         decl.matches(',').count(),
         2,
@@ -1076,15 +1098,15 @@ fn nothing_is_drawn_inside_the_glass_but_the_machines_own_panel() {
 fn an_empty_bench_is_pressable_and_is_not_broken() {
     let ring = statement(&window(), "cradle-ring:");
     assert!(
-        ring.contains("startable"),
-        "the cradle's ring no longer reads startability, so it says nothing about whether the \
-         thing on the bench can be pressed:\n  {ring}"
-    );
-    assert!(
         !ring.contains("has-devices"),
         "the cradle's ring is gated on the library having something in it, so §10.1's one press is \
          drawn `fg-dim` — the colour this design uses for *there is nothing to do here*:\n  {ring}"
     );
+    // **The startability half moved to Rust with the ring**, and it is asserted where it now lives:
+    // `main::empty_device` gives the empty bench `accent` when there is one thing to press, and
+    // `the_empty_benchs_ring_follows_the_one_thing_there_is_to_press` is the test. Kept as a
+    // pointer rather than deleted, because *which file answers this* is the thing a reader of this
+    // test needs and is exactly what a silent deletion takes away.
 
     for (what, head) in [
         ("broken ring", "cradle-broken:"),

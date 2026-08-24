@@ -592,13 +592,14 @@ fn removal_consequence(s: &Settings, d: &Device) -> String {
 ///    and `remove_row` ask. Those two refuse *this* device because it is executing; this one
 ///    refuses *every* device because the bench has only one place to draw a machine in.
 ///
-/// 2. **Otherwise `crate::cradle_label`, whatever it says.** Not re-worded here and not
+/// 2. **Otherwise `crate::blocked_label`, whatever it says.** Not re-worded here and not
 ///    paraphrased: it is the sentence the shelf and the cradle are already wearing for this
-///    device, and two surfaces disagreeing about why one iPod will not start is precisely the
-///    divergence `resolve_for_start`'s own doc records being fixed once already.
+///    device — `machine::cradle` calls the same function — and two surfaces disagreeing about why
+///    one iPod will not start is precisely the divergence `resolve_for_start`'s own doc records
+///    being fixed once already.
 ///
-/// 3. **And `reason` is empty when the control is live**, which `cradle_label` is not — its
-///    enabled arm is §7.3's caption, *press the centre button*, and `Pressable.reason` is the
+/// 3. **And `reason` is empty when the control is live**, which `blocked_label` is not — every one
+///    of its arms is a refusal, and `Pressable.reason` is the
 ///    refusal slot: `primitives.slint:507` is `text: root.enabled ? root.consequence : root.reason`,
 ///    so a live control draws its consequence there and its reason nowhere. (Not `:418`, which this
 ///    used to cite — that is `tells`, and it reserves the slot for **three** reasons: disabled, two
@@ -633,10 +634,24 @@ fn start_row(s: &Settings, d: &Device, seen: &mut Presence, machine: Option<&str
     let gone = s.missing_with(d, seen);
     row.enabled = gone.is_empty() && !crate::composed_and_unbuilt(d);
     if !row.enabled {
-        row.reason = crate::cradle_label(d, &gone);
-        // A file that is not there cannot be read by anything; a thing this program has not
-        // written yet is a project state and carries a command instead (§9.4).
-        row.machine_rule = !gone.is_empty();
+        // **One classification, one sentence, one kind.** `Blocked::of` asks the same two questions
+        // `enabled` above asks — and §10.3's third, which leaves the control live — so the arm that
+        // words this row and the arm that decides whether it is §9.4's *machine rule* or its
+        // *project state* cannot come apart. `machine_rule` used to be `!gone.is_empty()` computed
+        // here, which is the same answer written twice.
+        //
+        // `None` is unreachable — `enabled` is false only where `Blocked::of` is `Some` — and the
+        // fallback is the model's own sentence rather than an `expect`, because a panic in a row
+        // builder takes the window down over a caption.
+        match crate::machine::Blocked::of(Some(d), &gone) {
+            Some(b) => {
+                row.reason = crate::blocked_label(crate::Press::Centre, d, &gone, b);
+                // A file that is not there cannot be read by anything; a thing this program has not
+                // written yet is a project state and carries a command instead (§9.4).
+                row.machine_rule = b.machine_rule();
+            }
+            None => row.reason = crate::cradle_label(d, &gone),
+        }
     }
     row
 }

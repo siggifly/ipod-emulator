@@ -164,9 +164,16 @@ export component IPod inherits Rectangle {
     // bench draws it and only it.
     animate marks { duration: Motion.tight; easing: ease-out-quad; }
 
-    // §7.4's two sentences, written once. They are the cradle's for the duration of the press.
-    property <string> wheel-refusal: "the wheel and the buttons belong to the machine, and there is no machine";
-    property <string> hold-refusal: "the hold switch belongs to the machine, and there is no machine";
+    // §7.4's two sentences. They are the cradle's for the duration of the press, and they are
+    // **pushed** rather than typed here.
+    //
+    // They were literals, and one of them was `machine::NO_MACHINE` written a second time — one
+    // sentence in two files, which is the divergence every other caption in this program is
+    // arranged to prevent. It stopped being merely untidy the day the bench could hold a machine:
+    // *there is no machine* is false over a running iPod, and this file cannot tell the two states
+    // apart. Rust can, so Rust says which sentence it is.
+    in property <string> wheel-refusal;
+    in property <string> hold-refusal;
 
     width: Geometry.body-aspect * h;
     height: h;

@@ -41,13 +41,12 @@
 import { Ink, Metric, Motion } from "tokens.slint";
 import { Geometry } from "@geometry";
 import { IPod } from "ipod.slint";
-import { Pressable } from "primitives.slint";
-
-// §6.4: **three colours and one shape, not four colours.** A closed set, declared as one, so a
-// fourth cannot arrive by accident — and the shape (a *broken* ring) is the fourth state, because
-// there is no fourth colour on `bg-sunken` that clears 3 : 1 and does not already mean something
-// else.
-export enum CradleRing { accent, dim, danger }
+// **`CradleRing` moved to the leaf and is re-exported from here.** §7.3's ring is now decided in
+// Rust — `machine::cradle` returns it — so it has to be a field of `DeviceRow`, and `DeviceRow`
+// lives in `primitives.slint`, which this file imports. Declaring the enum here and the struct
+// there would be a cycle. Re-exported so every existing importer still names one place.
+import { Pressable, CradleRing } from "primitives.slint";
+export { CradleRing } from "primitives.slint";
 
 // ─── The two drawn marks this file needs (§6.7) ─────────────────────────────────────────────────
 //
@@ -306,6 +305,10 @@ export component Bench inherits Rectangle {
 
     // ── The machine (§7.4, §12.2) ──
     in property <bool> has-machine: false;
+    // §7.4's two sentences, forwarded to the drawn device. See `ipod.slint`, where they used to be
+    // typed as literals.
+    in property <string> wheel-refusal;
+    in property <string> hold-refusal;
     in property <bool> hold: false;
     in property <bool> held-menu: false;
     in property <bool> held-next: false;
@@ -621,6 +624,8 @@ export component Bench inherits Rectangle {
                 select-d: root.select-d;
                 pressable: true;
                 has-machine: root.has-machine;
+                wheel-refusal: root.wheel-refusal;
+                hold-refusal: root.hold-refusal;
                 hold: root.hold;
                 held-menu: root.held-menu;
                 held-next: root.held-next;

@@ -1,20 +1,23 @@
 //! **What a running machine IS**, before anything draws it — GUI.md §12 and §7.3, with no toolkit
 //! in it.
 //!
-//! Phase 7 is the last phase and it has not started. `Verb::Start` deliberately ends
-//! `Kind::Planned`, `main::phase` answers `Off` unconditionally, and `on_start_device` resolves a
-//! device and then files a note saying running is not wired — *"a cradle promising to start would
-//! be the window making a claim the program does not keep"*. This module is the half of the claim
-//! that can be made keepable with no window at all: the states a machine can be in, what each one
-//! permits, and the caption §7.3 wants for each.
+//! **Phase 7 landed and this module is what the window now asks.** It was written a wave ahead of
+//! the wiring, when `Verb::Start` still ended `Kind::Planned` and `main::phase` answered `Off`
+//! unconditionally — *"a cradle promising to start would be the window making a claim the program
+//! does not keep"*. The claim is kept: `main::start_machine` builds an `emu::Config` from the
+//! device the press resolved and spawns `emu::run`, `main::life` reads `Out.phase` through
+//! [`Life::read`], and every §7.3 caption on the bench is [`cradle`]'s. What has *not* changed is
+//! the rule this file was built on — the states a machine can be in, what each one permits, and
+//! the caption §7.3 wants for each, decided with no toolkit in the room.
 //!
 //! **It decides nothing the machine already decides.** `emu::Phase` is the phase, and [`Life::read`]
 //! is the only constructor here — every value of [`Life`] came out of an [`Out`] the emulator thread
 //! published, so this cannot become a second opinion about what the machine is doing.
 //! [`Config::may_restore`] is asked rather than re-derived, and [`Restore`] is checked against it in
 //! this module's own tests. The sentences a device's parts are refused with are
-//! `main::cradle_label_at`'s, called rather than copied, so the bench and the Devices page cannot
-//! say two things about one iPod.
+//! `main::blocked_label`'s, called rather than copied, so the bench and the Devices page cannot
+//! say two things about one iPod — and that function is now keyed on [`Blocked`], so the arm that
+//! words a row and the arm that classifies it cannot drift into two different orders.
 //!
 //! **Four things §12 asks for that the model cannot answer, named here rather than invented.**
 //!
@@ -36,8 +39,9 @@
 //!   and no ratio at all.
 //! - **§7.3's `running · wheel 41 queued` names `Stats::queued`, which §12.8 decides does not earn a
 //!   row** — *"a refused step is a lie about what you did and a deep queue is only ever the reason
-//!   for one"*. Two sections of one document want opposite things from one field. Nothing here reads
-//!   it; the running caption carries the speed instead.
+//!   for one"*. Two sections of one document want opposite things from one field. Nothing here
+//!   reads it, so §7.3's running row is the bare word — see [`cradle`], where the reason it is not
+//!   the speed instead was found by looking at a picture rather than by reading.
 //!
 //! **And one it asks for that the model can answer and must spell differently, found by a gate
 //! rather than by reading: §7.3's own separator is a glyph this program may not type.** Every
@@ -73,7 +77,7 @@ pub const NOTHING_MOUNTED: &str = "nothing is mounted";
 /// against `geometry::CRADLE_LABEL_MAX_CHARS` = 48, so what a person sees at the smallest window
 /// this program draws a device on is `the wheel and the buttons belong to the machine, and t…`.
 /// Kept whole rather than shortened here: the first clause is the whole sentence's meaning and it
-/// survives the elision, which is the same trade `main::cradle_label`'s refusal arm already makes
+/// survives the elision, which is the same trade `main::blocked_label`'s `Parts` arm already makes
 /// for a sentence carrying a path. See GUI.md §7.3's measurement table.
 pub const NO_MACHINE: &str =
     "the wheel and the buttons belong to the machine, and there is no machine";
@@ -252,7 +256,7 @@ impl Pace {
 /// - `Stopped` cannot exist without a [`Reason`], and a `Reason` is never empty.
 ///
 /// **`Phase::Booting { target }` is deliberately not read for the denominator.** Its `target` is
-/// `cfg.snap_at`, the instruction count the *snapshot* will be taken at — `emu.rs:1466` is where it
+/// `cfg.snap_at`, the instruction count the *snapshot* will be taken at — `emu.rs:1486` is where it
 /// becomes the phase, and the run loop compares the phase against that same value again to decide
 /// the boot has ended. §12.3 is explicit that the progress denominator is a different number,
 /// `Device::boot_instructions`, *"this device's own last completed cold boot"*. Two numbers for two
@@ -301,6 +305,7 @@ impl Life {
     /// `Some(secs)` only past the threshold, and only while `Running` — a machine that is off has
     /// not moved either, and reporting that as a stall would be the instrument shouting about the
     /// one state where nothing moving is correct.
+    #[allow(dead_code)]  // retired when: §12.8's Readout is drawn — that is where §12.2 puts the stalled Gauge and the one line beside it, and there is no other surface in this window that reports a machine's own counters
     pub fn stalled(&self) -> Option<f32> {
         match self {
             Life::Running { stalled_secs, .. } if *stalled_secs > STALL_SECS => Some(*stalled_secs),
@@ -341,6 +346,7 @@ impl Life {
 /// so the Readout and the cradle cannot end up with two thresholds, which is how one session sat
 /// dead at 2 791 999 952 instructions and was noticed only because two `state` replies happened to
 /// be compared by hand.
+#[allow(dead_code)]  // retired when: `Life::stalled` has a caller — this is the threshold that method compares against and it has no second reader by design
 pub const STALL_SECS: f32 = 2.0;
 
 /// §12.8's Gauge freshness, as a fact about the model rather than a discipline the drawing keeps.
@@ -349,6 +355,7 @@ pub const STALL_SECS: f32 = 2.0;
 /// ended there* against `Stale`'s *we stopped looking*. §12.8 is explicit that those are different,
 /// and a two-state `bool fresh` is what makes them the same.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(dead_code)]  // retired when: §12.8's Readout is drawn — every Gauge on it renders one of these four, and nothing else in this window has a sample age to describe
 pub enum Freshness {
     /// Sampled within [`SAMPLE_FRESH_MS`].
     Live,
@@ -361,10 +368,12 @@ pub enum Freshness {
 }
 
 /// §12.8: *"live — sampled within 500 ms"*.
+#[allow(dead_code)]  // retired when: `Freshness::of` has a caller — this is the boundary it compares against and it has no second reader by design
 pub const SAMPLE_FRESH_MS: u64 = 500;
 
 impl Freshness {
     /// `sampled_ms_ago` is `None` when nothing has ever sampled this machine.
+    #[allow(dead_code)]  // retired when: §12.8's Readout is drawn and something in the window records when it last sampled a Gauge — `sampled_ms_ago` is a fact nothing in this program measures yet
     pub fn of(life: &Life, sampled_ms_ago: Option<u64>) -> Freshness {
         let Some(ms) = sampled_ms_ago else {
             return Freshness::Unmeasured;
@@ -426,6 +435,7 @@ impl Glass {
 ///
 /// `seen` is the caller's stat cache, so a bench drawing this every frame reads the filesystem once
 /// per pass rather than once per repaint.
+#[allow(dead_code)]  // retired when: §12.4's park runs — `main::machine_config` sets `snapshot: None`, so nothing writes a `<device>.parked.png`, and nothing in this program can decode one (`png.rs` only encodes)
 pub fn parked_frame(cfg: &Config, seen: &mut Presence) -> Option<PathBuf> {
     let png = cfg.snapshot.as_ref()?.with_extension("parked.png");
     seen.exists(&png).then_some(png)
@@ -523,11 +533,11 @@ pub struct Cradle {
 
 /// Why `Start` cannot run, classified — the sentence itself is not written here.
 ///
-/// **`main::cradle_label_at` words three of these four and this module calls it**, which is the
-/// point: `devices.rs`'s `start_row` already refuses a device with the same words on the Devices
-/// page, and a second wording on the bench is how one iPod comes to be described two ways. The
-/// fourth, [`Blocked::Nothing`], is about there being no device at all, which no other producer has
-/// a sentence for.
+/// **`main::blocked_label` words these and this module calls it**, which is the point:
+/// `devices.rs`'s `start_row` already refuses a device with the same words on the Devices page, and
+/// a second wording on the bench is how one iPod comes to be described two ways. It takes a
+/// [`Blocked`] rather than re-testing the device, so there is one classification and one sentence
+/// per row rather than two sequences of `if`s that have to be kept in the same order.
 ///
 /// **There is no `Running` variant.** The cradle draws the device in the well, which is by
 /// definition the live one; *another* device's `Start` being refused because this one is running is
@@ -548,9 +558,10 @@ pub enum Blocked {
 impl Blocked {
     /// `None` when nothing is in the way.
     ///
-    /// The order is `main::cradle_label_at`'s order, and it has to be: a composed device is
-    /// unfinished in the same way as a half-made one and the remedy is not the same, so the
-    /// composed test comes first. Two orders would put two sentences on one device.
+    /// The order is the table's: a composed device is unfinished in the same way as a half-made
+    /// one and the remedy is not the same, so the composed test comes first. **This is now the
+    /// only place that order exists** — `main::blocked_label` is a `match` on what this returns,
+    /// which is what makes two orders unwritable rather than merely discouraged.
     pub fn of(device: Option<&Device>, absent: &[Absent]) -> Option<Blocked> {
         let Some(d) = device else {
             return Some(Blocked::Nothing);
@@ -627,12 +638,12 @@ impl Stand<'_> {
 /// `cannot start` rows, startable-never-booted, startable-parked, and parked-pair-broken.
 ///
 /// **Rows it deliberately does not**: `first run`, `first run, partly done` and the empty bench are
-/// `main::empty_cradle_label` and `main::cradle_label_at`'s — this calls the latter rather than
+/// `main::empty_cradle_label` and `main::blocked_label`'s — this calls the latter rather than
 /// re-typing it — `working` is `work::Queue`'s, and `a title` is §13, which has no boot and no 0.5
 /// surface. The set is closed between the two files and
 /// `every_row_of_the_seven_three_table_has_exactly_one_owner` is what keeps it closed.
 ///
-/// `press` selects §7.3's prefix or §9.5's, exactly as `main::cradle_label_at` does, so a machine
+/// `press` selects §7.3's prefix or §9.5's, exactly as `main::blocked_label` does, so a machine
 /// caption drawn on the short-window pane does not point at a centre button that is not on screen.
 pub fn cradle(press: crate::Press, st: &Stand) -> Cradle {
     // **Parking outranks everything**, including a stopped machine. It is a ~1.6 GB write the person
@@ -643,7 +654,14 @@ pub fn cradle(press: crate::Press, st: &Stand) -> Cradle {
     }
     match st.life {
         Life::Booting { progress, .. } => Cradle {
-            ring: Ring::Dim,
+            // **Asked of [`Life::ring`] rather than typed here**, and that is a defect this pass
+            // found rather than a tidiness point: this `match` carried a second copy of §12.2's
+            // ring column — `Dim`, `Dim`, `Danger` — beside the one `Life::ring` already answered,
+            // and two tables for one column is how a `Stopped` machine comes to be drawn in the
+            // colour that means *a file moved*. The `Off` row is the exception the type's own doc
+            // names: `off_cradle` is the only thing that may answer `Dim` for a machine that is off,
+            // because the broken half is a fact about the device's parts.
+            ring: st.life.ring(),
             broken: false,
             // **The stop comes first and the progress second.** §7.3 writes it the other way —
             // `booting · 62 % · press ● to stop` — and that sentence is 48 characters at two digits
@@ -654,18 +672,31 @@ pub fn cradle(press: crate::Press, st: &Stand) -> Cradle {
             // rather than asserting it here in prose.
             label: format!("{} to stop — booting, {}", press.verb(), progress.caption()),
         },
-        Life::Running { pace, .. } => Cradle {
-            ring: Ring::Dim,
+        Life::Running { .. } => Cradle {
+            ring: st.life.ring(),
             broken: false,
-            // No press in this label, deliberately: §7.4 gives every drawn control to the machine
+            // §7.3's table, first alternative: the bare word.
+            //
+            // **It carried the speed, and the first picture of a running bench is what found that
+            // out.** [`Life::shelf`] is §12.2's fourth column and puts `running — 14 M instr/s` in
+            // the shelf's row-1 trailing slot; this row was building the same string, and the two
+            // are drawn about fifty pixels apart on one screen — so `bench-running.png` came out
+            // with one sentence printed twice, one line above itself, and no test could see it
+            // because each producer was right on its own.
+            //
+            // §7.3's own row offers three forms — `running`, `running · wheel 41 queued`, and the
+            // fullscreen hint — and this module's header already records why the middle one is
+            // unavailable: it names `Stats::queued`, which §12.8 decides does not earn a row. The
+            // third needs `Window.full-screen`, which is §12.6 and not wired. That leaves the bare
+            // word, which is the row as written and the only one of the three that does not repeat
+            // what is already on screen.
+            //
+            // No press in it either, deliberately: §7.4 gives every drawn control to the machine
             // while it is running, so there is nothing for the cradle to promise.
-            label: match pace.caption() {
-                Some(c) => format!("running — {c}"),
-                None => "running".into(),
-            },
+            label: "running".into(),
         },
         Life::Stopped { reason, .. } => Cradle {
-            ring: Ring::Danger,
+            ring: st.life.ring(),
             broken: false,
             // Exempt from the 48-character budget for the same reason `main::gone_sentence` is: it
             // carries a machine fact whose length is not ours, and the first words survive.
@@ -687,7 +718,7 @@ const PARKING: &str = "parking";
 fn off_cradle(press: crate::Press, st: &Stand) -> Cradle {
     if let Some(b) = Blocked::of(st.device, st.absent) {
         let label = match st.device {
-            Some(d) => crate::cradle_label_at(press, d, st.absent),
+            Some(d) => crate::blocked_label(press, d, st.absent, b),
             None => NOTHING_MOUNTED.to_string(),
         };
         return Cradle { ring: Ring::Dim, broken: b.breaks_the_ring(), label };
@@ -1203,9 +1234,13 @@ mod tests {
 
     /// **Every refusal on the bench is the sentence the Devices page already uses.**
     ///
-    /// Not "is similar to" — is the same call. `main::cradle_label_at` is the producer for all
+    /// Not "is similar to" — is the same call. `main::blocked_label` is the producer for all
     /// three device refusals, and this compares what [`cradle`] drew against what that function
     /// returns for the same inputs, so a reworded arm moves both surfaces or fails here.
+    ///
+    /// **It asks the producer directly rather than through `main::cradle_label_at`**, which since
+    /// Phase 7 routes through [`cradle`] itself — comparing this function's output with its own
+    /// would be an equality that cannot fail.
     #[test]
     fn the_bench_refuses_a_device_in_the_devices_pages_own_words() {
         let dir = scratch("words");
@@ -1221,9 +1256,10 @@ mod tests {
             ("composed", &composed, &[]),
         ] {
             let drew = cradle(crate::Press::Centre, &stand(Some(dev), absent, &off, None));
+            let b = Blocked::of(Some(dev), absent).expect("every row here is a refusal");
             assert_eq!(
                 drew.label,
-                crate::cradle_label_at(crate::Press::Centre, dev, absent),
+                crate::blocked_label(crate::Press::Centre, dev, absent, b),
                 "the bench and the Devices page word `{what}` differently"
             );
         }
@@ -1276,7 +1312,7 @@ mod tests {
             ("resume", format!("{verb} — resume, about 3 s")),
             ("no resume", format!("{verb} — no resume, about 75 s")),
             ("booting", format!("{verb} to stop — booting, 62 %")),
-            ("running", "running — 14 M instr/s".to_string()),
+            ("running", "running".to_string()),
             ("parking", PARKING.to_string()),
             ("nothing", NOTHING_MOUNTED.to_string()),
         ] {
