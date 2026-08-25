@@ -14,6 +14,78 @@ belongs here.
 
 ---
 
+## ~~The window's high-level boot put the OS beside SDRAM instead of in it~~ — FIXED 2026-08-25
+
+Found by pressing `Start` on a first run. Every synthesised iPod died in about a third of a second:
+
+```
+stopped: lost 33554432 at 8388485 instructions
+```
+
+`33554432` is `0x02000000` and it is a **program counter** — `Stop::Lost(pc)`, the CPU having left
+every mapped region. The arithmetic names the fault before anything is opened:
+`8 388 485 × 4 = 33 553 940` and `0x02000000 − 33 553 940 = 0x1ec`, so the CPU walked from `0x1ec`
+to the top of a 32 MB window without taking one branch. `0x00000000` decodes as `andeq r0, r0, r0`;
+it was sliding through zeros.
+
+**`emu::build` registered the OS as a region at `0x10000000` and a live mirror at 0, and started the
+CPU at 0.** Region lookup is first-match and `map_hardware` had already put 64 MB of `sdram` at
+`0x10000000`, so the `osos` region was read by nothing — SDRAM was zeros with a copy of the OS filed
+behind it. About `0x220` bytes into its own entry RetailOS programs the PP's remap windows at
+`0xf000f000`, one of which is `0x00000000..0x01ffffff -> 0x10000000`. `Memory::translate` runs ahead
+of the region list, so from that instruction on every low address resolved into the zeros and the
+code vanished from under the program counter.
+
+**Apple's own bootloader is the oracle and it does neither thing.** `ipod-boot retail` on a drive
+that boots: 58 `READ DMA` put the firmware partition **into** SDRAM at `0x10000000..0x10736000`, and
+the console then says `Running 'osos' 0 from 0x10000000`. The high-level boot now does the same —
+the bytes are written into SDRAM and the CPU starts at `load_at + entry` — so there is one storage
+and the remap points at it.
+
+| `ipod-emulator --headless=200000000`, same ROM and drive | before | after |
+|---|---|---|
+| ending | **`Lost(33554432)` @ 8 388 485** | `BudgetExhausted` @ 200 149 075 |
+| ata commands | **0** | **290** |
+| code buckets | 2 097 122, every one of them the slide | 20 196 |
+
+Covered by `emu.rs`'s `a_high_level_boot_survives_the_os_remapping_low_memory_onto_sdram`, which is
+the same failure in a twenty-one-instruction operating system and needs nothing out of `resources/`,
+and by `a_synthesised_rom_boots_the_os_and_this_needs_resources`, which is the whole boot.
+
+**And what it was nearly filed as.** The run's log held twenty-five identical high-level boots and
+no reason for any of them, so it read as a retry loop. There is no retry loop — `session` parks on
+`wait_after_stop` and only a power command moves it, and every one of those is queued from
+`on_start_device`, which is reached from a press and from nothing else. Twenty-five boots was
+twenty-five presses. What was actually wrong is that **a machine that stopped printed nothing**:
+`build` prints two lines and the stop path printed none. It prints `stopped: <reason>` now, on the
+same stream as the boot line it ends, and a second identical ending says it is the second.
+
+---
+
+## ~~`ipod-boot <recipe> --flash=FILE` ignored the file~~ — FIXED 2026-08-25
+
+Every recipe appends the caller's flags after its own, and `trace` reads a single-valued flag with
+`args.iter().find_map(|a| a.strip_prefix("--flash="))` — the **first** match. So
+
+```sh
+ipod-boot warm --flash=my-synthetic.bin
+```
+
+composed `… --flash=<the configured retail dump> … --flash=my-synthetic.bin`, booted the retail
+dump, and named it in its own output (`sysinfo at 0x40015898, sdram_size 0x4000000, from MA146`).
+The same held for `--disk=` and for every recipe. Every `warm` measurement anyone had taken with
+`--flash=` was taken on the wrong ROM, and nothing said so.
+
+Fixed twice over: `resolve` reads `--flash=`/`--disk=` as **inputs**, ahead of `FLASH=`/`DISK=`, so
+`--print` reports `command line`; and `passthrough_wins` drops the recipe's own copy of any
+single-valued `--key=` the caller spelled — only keys the caller wrote, and only from the recipe's
+half of the argv. `--osos-at=` is exempt by name, because `trace` collects it with `filter_map` and
+`ipod-boot warm` writes one deliberately, so taking it away would be a fix that broke a mirror.
+`every_repeatable_flag_a_recipe_writes_is_exempt` reads `trace.rs` and holds that exemption list to
+exactly the flags that need to be on it.
+
+---
+
 ## ~~The window declares the cold boot over 2 250 000 instructions in, before the drive has answered~~ — FIXED 2026-08-25
 
 Found by booting Apple's software from the bench for the first time. The window's start path **does**
@@ -100,6 +172,23 @@ figure in that directory quoted from a run past ~70 ATA commands describes the m
 the logo. It also cost this file a wrong sentence: `--enterlog` reporting zero arrivals at all five
 of RetailOS's `0x052a` senders over 1.2 G was written up as *RetailOS never sends the command*, when
 what it measures is a machine that never reaches the code. Found while fixing the entry above.
+
+**One datum for whoever picks this up, measured 2026-08-25 while fixing the high-level boot.**
+*Apple's bootloader is not where the trace front end stops.* `BUDGET=1500000000
+DISK=resources/drives/ipod8g-retail.PRISTINE.img ipod-boot retail` prints
+
+```
+Running 'osos' 0 from 0x10000000
+```
+
+and the last instructions of that run are at `0x0029d944` / `0x00289e98` — **low** addresses, which
+on the cold map are RetailOS itself seen through the remap window it programmed. 140 function names
+were recovered from loaded SDRAM. So the bootloader hands over and RetailOS executes for the rest of
+the budget; what it does not do is ask for the drive. Counted the same day, one line printed per
+`rebuild_mmap_aliases`: `ipod-boot retail --clock=5` at 600 M programs those windows **56** times,
+and the window's high-level boot on the same drive programs them **408** times in 400 M and reaches
+**484** ATA commands. Whatever divides the two front ends, it is downstream of the handover and it
+is not the address map.
 
 ## ~~The window opens at its minimum height, not its preferred one~~ — FIXED 2026-08-21
 

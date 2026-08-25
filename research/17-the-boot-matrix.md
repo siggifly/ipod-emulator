@@ -89,13 +89,20 @@ re-run says.
 | | real 5G dump | synthetic 5G | synthetic 5.5G |
 |---|---|---|---|
 | **RetailOS**, cold | ✅ boots — 611 READ DMA, 4 WRITE DMA | — *needs Apple's bootloader* | — |
-| **RetailOS**, high-level | ✅ | ✅ | ✅ |
+| **RetailOS**, high-level | ✅ | ✅ | ✅ *(the command line's high-level boot — see §2026-08-25)* |
 | **Rockbox**, warm | ✅ **main menu, 74 057 lit pixels** | ✅ **74 057** | ✅ **74 057** |
 | **ipodloader2** | ✅ its own console, `Found 1 valid partitions` | ✅ *(reached, via the loader recipe)* | ✅ |
 | **iPodLinux** | ✅ **boots to ZeroSlackr's userland** | ✅ **same dmesg** | ✅ **same dmesg** |
 | **diag** (service diagnostics) | ✅ **draws, and is drivable** | ⛔ **impossible** | ⛔ |
 | **disk** (target disk mode) | ⚠️ faults — USB unmodelled | ⛔ | ⛔ |
 | **aupd** (`flash-update`) | ✅ | ⛔ | ⛔ |
+
+> **Corrected 2026-08-25, and the correction is about the word "high-level" rather than about the
+> three ticks.** There are **two** high-level boots in this project and this row measures one of
+> them. The command line's — `ipod-boot warm`, `trace --boot-osos` without `--cold-boot` — and the
+> window's, `ipod-gui`'s `emu::build` when the ROM is synthetic. They are different machines, and
+> the window's was ❌ on every column of this row until the day of this note. See
+> §*2026-08-25: the high-level row was two boots, and only one of them was ever measured* below.
 
 **Read the three columns as two questions, not one.** A synthesised NOR carries an identity block
 and a reset vector and **none of Apple's code**. So:
@@ -179,6 +186,136 @@ No valid paritions found!
 
 A real 5G with a `0x0C` volume would fail identically on real hardware. `install-linux` refuses
 those drives now rather than writing 1 776 files onto a disk that cannot boot.
+
+## 2026-08-25: the high-level row was two boots, and only one of them was ever measured
+
+**A first run on a synthesised 5.5G, pressed Start, died in a third of a second.**
+
+```
+stopped: lost 33554432 at 8388485 instructions
+```
+
+`33554432` is `0x02000000` and it is a **program counter**, not a size — `Stop::Lost(pc)`, the CPU
+having left every mapped region. Reproduced from the command line, deterministically, on the
+identity the window minted:
+
+```sh
+ipod-boot make-nor --model A446 --seed 1904983579699507775 repro.bin   # JQ652FQUX3N
+IPOD_EMULATOR_DATA=<scratch> ipod-emulator --headless=10000000
+```
+```
+  high-level boot: 7561216 bytes of OS from …/my-5.5g.img -> 0x10000000
+  identity: JQ652FQUX3N · 000A27CB851F81B9
+headless: Lost(33554432) after 8388485 instructions
+  ata commands: 0        2097122 code buckets executed        bcm: 0 kicked, 0 frame updates
+```
+
+**The arithmetic names the failure before anything is opened.** `8 388 485 × 4 = 33 553 940`, and
+`0x02000000 − 33 553 940 = 0x1ec`. The CPU executed a straight line from `0x1ec` to the top of a
+32 MB window without taking one branch — a NOP slide, because `0x00000000` decodes as
+`andeq r0, r0, r0`. `2 097 122` code buckets at 16 bytes each is the same 32 MB counted the other
+way. Nothing was faulting; the code had gone out from under the program counter.
+
+### What the oracle does, and what we were doing instead
+
+`ipod-boot retail` on a drive that boots — Apple's own bootloader, in the emulator, doing the thing
+the high-level boot exists to imitate:
+
+```
+  lba 14692  -> 0x10720000  90112 bytes
+  last: lba 14692 -> 0x10720000 + 90112 = 0x10736000
+…
+Running 'osos' 0 from 0x10000000
+```
+
+58 `READ DMA` commands put the firmware partition **into SDRAM** at `0x10000000..0x10736000` — a
+7 561 216-byte image, exactly what `ipsw::osos_from_drive` hands back — and the console then names
+`0x10000000` as where it goes. Instrumented, RetailOS's first act at `pc 0x10000220` is to program
+the PP's remap windows at `0xf000f000`, one of which is `0x00000000..0x01ffffff -> 0x10000000`;
+after that it runs from low addresses (`0x000a601c`, `0x00289e98`, …), which are that window.
+
+`emu::build` did neither. It **pushed** the image as a region at `0x10000000` and mirrored it as a
+second live region at 0, and entered the CPU at 0. Region lookup is first-match and `map_hardware`
+had already registered 64 MB of `sdram` at `0x10000000`, so the `osos` region was read by nothing:
+SDRAM was 64 MB of zeros with a copy of the OS filed behind it. That held up exactly as long as it
+took RetailOS to program its own window — `Memory::translate` runs ahead of the region list — and
+then every low address resolved into the zeros.
+
+**Fixed by doing what the bootloader is measured doing**: write the bytes into SDRAM, and start the
+CPU at `load_at + entry`. One storage, and the remap points at it. Same drive, same ROM, same seed:
+
+| `ipod-emulator --headless=200000000` | before | after |
+|---|---|---|
+| ending | **`Lost(33554432)` @ 8 388 485** | `BudgetExhausted` @ 200 149 075 |
+| ata commands | **0** | **290** — 20 READ DMA, 264 WRITE DMA, IDENTIFY, 5 SET FEATURES |
+| code buckets | 2 097 122 *(all of them the slide)* | 20 196 |
+| backlight | 16 / 32, never moved | 17 / 32, **1 step up** |
+| wheel | 0 `0x052a` commands | **1** |
+
+The 264 `WRITE DMA` is RetailOS bootstrapping its own volume, which is what it does on a drive it
+has not seen before.
+
+### Why no recipe in `ipod-boot` could have caught it
+
+**The remap is modelled only on the cold map.** `map_hardware` sets `mmap_base = Some(0xf000f000)`
+inside `if cold_boot`; `trace` passes `--cold-boot` on the cold recipe alone, and `emu::build`
+passes `cfg.boot.is_os()`, which is true for the window's OS boot. So a warm run's writes to
+`0xf000f000` land in the `cache` region as plain memory and nothing happens.
+
+Counted, with a control, by printing one line per `rebuild_mmap_aliases` — all four on the same
+`PRISTINE` drive at `--clock=5`:
+
+| run | map | MMAP window rebuilds |
+|---|---|---|
+| `ipod-emulator --headless=200000000` (the window's high-level boot) | cold | **408** |
+| `ipod-boot retail`, 600 M | cold | **56** |
+| `ipod-boot warm --flash=<synthetic>`, 600 M | warm | **0** |
+| `ipod-boot rockbox`, 200 M — **the control**, because Rockbox demonstrably runs on this path | warm | **0** |
+
+The Rockbox row is what makes the two zeros mean something: a zero from a run where nothing
+executed would prove nothing at all.
+
+So the ✅ in this file's *RetailOS, high-level* row is a true statement about `ipod-boot warm`, and
+`ipod-boot warm` is a different machine from the one the window builds — **different memory map**
+(warm has SDRAM's storage at 0 and no remap at all), **different entry** (`0x10000000` either way,
+but the window's used to be 0), **different source for the OS** (`--osos=` reads a file;
+`emu::build` reads the drive's own firmware partition), and one extra mirror at `0x04000000` that
+the window does not make. The row was never a measurement of the window's boot, and no flag on the
+command line would have made it one.
+
+**The corrected cell**, measured today:
+
+| **RetailOS**, high-level — *the window's* (`emu::build`) | real 5G dump | synthetic 5G | synthetic 5.5G |
+|---|---|---|---|
+| before 2026-08-25 | n/a — a real dump cold-boots | ❌ `Lost(0x02000000)`, 0 ATA | ❌ `Lost(0x02000000)`, 0 ATA |
+| after | n/a | ✅ | ✅ |
+
+### And the instrument that hid the ROM under test
+
+`ipod-boot warm --flash=synth.bin` **ignored the flag**. Every recipe appends the caller's
+passthrough after its own flags, and `trace` reads a single-valued flag with
+`args.iter().find_map(|a| a.strip_prefix("--flash="))` — the *first* match. So the composed argv
+carried two `--flash=` and the recipe's won:
+
+```
+trace 600000000 --osos=… --boot-osos --osos-at=0x04000000 --sysinfo \
+      --flash=…/retail_5g_MA146_… --disk=… --bcm --pmu --flash=…/repro.bin
+  sysinfo at 0x40015898, sdram_size 0x4000000, from MA146      <- the RETAIL dump
+```
+
+The run named the retail dump in its own output while the operator watched, so this is the ninth
+instrument in this project to report something it could not have observed. Fixed twice over: the
+caller's `--flash=`/`--disk=` is now an *input* (`resolve` reads it ahead of `FLASH=`, and `--print`
+says `command line`), and `passthrough_wins` drops the recipe's copy of any single-valued `--key=`
+the caller spelled. `--osos-at=` is exempt by name — `trace` collects it with `filter_map` and
+`ipod-boot warm` writes one on purpose — and a test reads `trace.rs` to keep that list honest.
+
+**`sdram_size 0x4000000` is not a fact about the ROM.** It is `trace`'s `--sysinfo` default
+(`trace.rs`, `spec.and_then(parse_addr).unwrap_or(0x0400_0000)`) and the same constant
+`emu::build` writes as `MEASURED_SDRAM_WORD` on both the synthetic and the real path. A synthesised
+ROM does not tell RetailOS it has 32 MB — it says nothing about memory at all — and the 32 MB in
+`0x02000000` is the size of the remap window, not of anybody's SDRAM. This paragraph exists because
+that was the first hypothesis and it was wrong.
 
 ## Superseded: the whole matrix, measured 2026-08-19
 

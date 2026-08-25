@@ -200,6 +200,67 @@ the GUI was broken on `main` for an hour because a merge verified only one crate
 > handoff dump — and the Rockbox oracle's whole run log is byte-identical across the change. Those
 > are the things to check a run against; the instruction count is what to check the model against.
 
+## 0v — ~~Press Start on a synthesised iPod and it dies at 8.4 M instructions~~ · **FIXED 2026-08-25 — the OS was never in SDRAM**
+
+A clean first run, one press, and the bench said `stopped: lost 33554432 at 8388485 instructions`.
+`33554432` is `0x02000000` and it is a **PC**, not a size: `Stop::Lost(pc)`. The arithmetic names
+it — `8 388 485 × 4 = 33 553 940` and `0x02000000 − 33 553 940 = 0x1ec`, so the CPU walked from
+`0x1ec` to the top of a 32 MB window without taking a branch. A NOP slide; `0x00000000` decodes as
+`andeq r0, r0, r0`.
+
+**`emu::build` filed the OS behind SDRAM instead of putting it in.** The image was pushed as a
+region at `0x10000000` — where `map_hardware` has already registered 64 MB of `sdram`, and region
+lookup is first-match — so nothing ever read it, and a second live copy at 0 was what the CPU
+actually executed. About `0x220` bytes into its own entry RetailOS programs the PP's remap windows
+at `0xf000f000`, one of which is `0x00000000..0x01ffffff -> 0x10000000`. `Memory::translate` runs
+ahead of the region list, so from that instruction every low address resolved into the zeroed
+SDRAM and the code went out from under the program counter.
+
+The oracle is Apple's own bootloader, in `ipod-boot retail`: 58 `READ DMA` land the firmware
+partition at `0x10000000..0x10736000` and the console says `Running 'osos' 0 from 0x10000000`. So
+the high-level boot now writes the bytes **into** SDRAM and starts the CPU at `load_at + entry`,
+which is one storage with the remap pointing at it.
+
+| `ipod-emulator --headless=200000000`, same ROM and drive | before | after |
+|---|---|---|
+| ending | **`Lost(33554432)` @ 8 388 485** | `BudgetExhausted` @ 200 149 075 |
+| ata commands | **0** | **290** (264 of them `WRITE DMA` — RetailOS bootstrapping its volume) |
+| code buckets | 2 097 122, all of them the slide | 20 196 |
+| wheel | 0 `0x052a` | 1 |
+
+**Two things came with it, and both are the kind this file exists for.**
+
+1. **`ipod-boot warm --flash=X` ignored `--flash=X`.** Every recipe appends the caller's flags after
+   its own and `trace` reads a single-valued flag with `find_map` — the *first* match — so the argv
+   carried two `--flash=` and the recipe's won. The run printed the retail dump's model in its own
+   `sysinfo at …, from MA146` line while a synthetic ROM sat unused on the command line. Ninth
+   instrument. `resolve` now reads `--flash=`/`--disk=` as inputs (so `--print` says
+   `command line`) and `passthrough_wins` drops the recipe's duplicate.
+2. **A machine that stopped printed nothing.** `build` prints two lines per machine and the stop
+   path printed none, so the log of that first run is twenty-five identical boots and no reason for
+   any of them — which reads as a program restarting itself in a loop, and was reported as one.
+   **There is no retry loop**: `session` parks on `wait_after_stop` and only a power command moves
+   it, and every one of those is queued from `on_start_device`, reached from `pressed-centre` and
+   the Devices page's `activated`. Both are people. Twenty-five boots is twenty-five presses, which
+   is what somebody does when each press dies in a third of a second and the bench says the same
+   thing every time. The log says it now — `stopped: <reason>`, on the same stream as the boot line,
+   and the second one in a row says it is the second.
+
+**And the record it corrects.** `research/17`'s *RetailOS, high-level* row is ✅ on both synthetic
+columns and always was — for `ipod-boot warm`, which is a **different machine**. The remap this bug
+turns on is modelled only on the cold map (`map_hardware` sets `mmap_base` inside `if cold_boot`),
+so no warm recipe can reach it. Counted, with a control, on the same drive:
+
+| run | map | MMAP window rebuilds |
+|---|---|---|
+| the window's high-level boot, 200 M | cold | **408** |
+| `ipod-boot retail`, 600 M | cold | **56** |
+| `ipod-boot warm --flash=<synthetic>`, 600 M | warm | **0** |
+| `ipod-boot rockbox`, 200 M — the control, because Rockbox demonstrably runs here | warm | **0** |
+
+The retraction sits beside the claim in `research/17`. **§0y's table below is untouched by this**:
+those are Rockbox and iPodLinux warm boots on the warm map, and nothing in this fix moves them.
+
 ## 0 — ~~The Apple logo is missing from the boot~~ · **DONE 2026-08-14 — it was never missing, it was never placed**
 
 The 2 922-pixel frame this project has carried since research/03 as "the handoff frame" **is the

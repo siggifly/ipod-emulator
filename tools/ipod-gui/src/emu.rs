@@ -1110,59 +1110,53 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
                 (osos, load_at, entry)
             }
         };
-        // Apple's boot code jumps to physical 0x23c, so the image has to answer at 0 as well —
-        // the usual ARM arrangement where the vector table is mirrored low. This is also where the
-        // CPU begins, which is why no reset vector has to be synthesised for it to execute.
-        // The image also answers at 0, the usual ARM arrangement where the vector table is
-        // mirrored low, and that is where the CPU begins. **Unless the directory records an entry
-        // offset** — non-zero once a bootloader has been appended to `osos`, and mirroring low
-        // would then start the OS behind the loader rather than the loader.
+        // **The image is WRITTEN INTO SDRAM, never registered as a region beside it**, and the
+        // machine is entered where the bootloader enters it. Both halves are what Apple's own
+        // bootloader is measured doing, and this HLE exists to leave what it leaves.
+        //
+        // The measurement, off `ipod-boot retail` on a drive that boots: 58 READ DMA commands land
+        // the firmware partition at `0x10000000` and the last of them ends at `0x10736000` — a
+        // 7 561 216-byte image, exactly what `osos_from_drive` hands back — and then the console
+        // says `Running 'osos' 0 from 0x10000000`. The OS is in SDRAM and the CPU goes to the top
+        // of it.
+        //
+        // **What was here instead, and how it failed.** The OS was pushed as a region named `osos`
+        // at `0x10000000` and mirrored as a live region named `osos-low` at 0, and the CPU entered
+        // at 0. Region lookup is first-match and `map_hardware` has already registered 64 MB of
+        // `sdram` at `0x10000000`, so the `osos` region was never read by anything: SDRAM was 64 MB
+        // of zeros with a copy of the OS filed behind it. That held up only until RetailOS did what
+        // RetailOS does about 0x220 bytes into its own entry — program the PP's remap windows at
+        // `0xf000f000`, one of which is `0x00000000..0x01ffffff -> 0x10000000`. `Memory::translate`
+        // runs before the region list, so from that instruction on every low address resolved into
+        // the zeroed SDRAM and the code the CPU was executing went out from under it. It then
+        // NOP-slid — `0x00000000` decodes as `andeq r0, r0, r0` — from `0x1ec` to the top of the
+        // window and left every mapped region: **`Lost(0x02000000)` after 8 388 485 instructions**,
+        // which is `(0x02000000 - 0x1ec) / 4` to the instruction.
+        //
+        // With the bytes in SDRAM there is one storage and the remap points at it, which is the
+        // arrangement the hardware has. Nothing is mirrored at 0: before RetailOS programs that
+        // window it is running from `0x1000xxxx`, and after it, address 0 *is* SDRAM.
+        for (i, chunk) in osos.chunks(4).enumerate() {
+            let mut w = [0u8; 4];
+            w[..chunk.len()].copy_from_slice(chunk);
+            m.mem
+                .write32(load_at + (i as u32) * 4, u32::from_le_bytes(w));
+        }
+        // **Where the machine starts, decided here and read back by the run loop.** `Machine::new`
+        // puts the PC at the placeholder app's entry, which is 0; `session` used to re-decide the
+        // address with a second `if cfg.boot.is_os()` of its own, and two places deciding one thing
+        // is how the OS came to be entered somewhere its bootloader never enters it.
+        //
+        // `entry` is non-zero once a bootloader has been appended to `osos` — `ipodloader2` sits at
+        // `0x735a00` — and Apple's bootloader honours the directory's offset rather than the load
+        // address, printing `Running 'osos' 0 from 0x10735A00` when it does. Starting at `load_at`
+        // regardless would run the OS sitting behind the loader instead of the loader.
+        m.cpu.regs[15] = load_at + entry;
         if entry != 0 {
             println!(
                 "  entry offset {entry:#x} — starting at {:#010x}",
                 load_at + entry
             );
-        }
-        // **The low mirror is the OS's, not every image's.** RetailOS is linked to run at 0 and
-        // Apple's boot code jumps to physical 0x23c, so the OS has to answer there. A `flsh` image
-        // is linked to run at 0x10000000 and is *placed in SDRAM*, which starts there — mirroring
-        // it at 0 as well would shadow the low window it expects to be memory, and the command
-        // line's `ipod-boot flsh` does not do it either.
-        if cfg.boot.is_os() {
-            m.mem.regions.push(Region {
-                name: "osos-low",
-                base: 0,
-                data: osos.clone(),
-            });
-        }
-        // **A boot image is inserted at the front; the OS is pushed.** Region lookup is
-        // first-match and SDRAM is already registered at 0x10000000, so a pushed image sits behind
-        // it and the CPU executes zeroed memory — 1.5 M "code buckets" of it, which reads as a
-        // machine running rather than a machine lost. `trace.rs` inserts `--boot-flash`'s region at
-        // the front for this reason.
-        //
-        // It has never mattered for the OS, which executes from the low mirror at 0, and the OS
-        // keeps the old order deliberately: putting a 7.5 MB image in front of 64 MB of SDRAM
-        // changes what every address in that span reads, and that is a change to measure on its
-        // own rather than to make in passing.
-        if !cfg.boot.is_os() {
-            // **Written into memory, not registered as a region.** With the non-cold map SDRAM's
-            // storage is at 0 and 0x10000000 is an *alias* of it, resolved before the region list
-            // is consulted — so a region at 0x10000000 is never read, however early it is inserted.
-            // Copying the bytes in is also what actually happens: Apple's boot ROM copies the
-            // image it is about to run into SDRAM.
-            for (i, chunk) in osos.chunks(4).enumerate() {
-                let mut w = [0u8; 4];
-                w[..chunk.len()].copy_from_slice(chunk);
-                m.mem
-                    .write32(load_at + (i as u32) * 4, u32::from_le_bytes(w));
-            }
-        } else {
-            m.mem.regions.push(Region {
-                name: "osos",
-                base: load_at,
-                data: osos,
-            });
         }
 
         // The handoff, byte for byte as a cold boot leaves it.
@@ -1584,6 +1578,48 @@ fn collect(m: &Machine, started: Instant, base: (u64, u32)) -> Stats {
     s
 }
 
+/// **What the log says when a machine dies, and what it says when the same one dies again.**
+///
+/// A window run leaves a log, and the log is the part a person keeps. The one this type came out
+/// of held **twenty-five identical high-level boots and not one word about why any of them
+/// ended** — because [`build`] prints two lines per machine and a machine that stops printed none.
+/// Read back afterwards that is indistinguishable from a program restarting itself in a loop, and
+/// it was read that way: the same failure, twenty-five times, filed as a retry loop.
+///
+/// **There is no retry loop, and that is the fact this replaces the guess with.** `session` parks
+/// on `wait_after_stop` when a machine stops and only a `Cmd::PowerOff` / `PowerOn` / `PowerCycle`
+/// / `Boot` moves it, every one of which is queued from one place — `on_start_device`, reached from
+/// `pressed-centre` and from the Devices page's `activated`. Both are people. Twenty-five boots is
+/// twenty-five presses, which is exactly what somebody does when a press appears to do nothing:
+/// each one died in about a third of a second and left the bench saying the same thing.
+///
+/// So the run is not bounded here — a person may start an iPod as often as they like — but the
+/// *log* now says what happened each time, and says when it has said it before.
+#[derive(Default)]
+struct Deaths {
+    last: Option<String>,
+    run: u32,
+}
+
+impl Deaths {
+    /// The line for this stop. Never empty: a death that printed nothing is the whole defect.
+    fn note(&mut self, why: &str) -> String {
+        if self.last.as_deref() == Some(why) {
+            self.run += 1;
+        } else {
+            self.last = Some(why.to_string());
+            self.run = 1;
+        }
+        match self.run {
+            1 => format!("stopped: {why}"),
+            n => format!(
+                "stopped: {why} — {n} starts in a row have ended in the same place, so \
+                 this is something about the iPod rather than about the start"
+            ),
+        }
+    }
+}
+
 /// The emulator thread. Owns the machine outright; the UI never touches it.
 ///
 /// **One iteration of this loop is one power cycle.** Powering off drops the `Machine` — every
@@ -1599,8 +1635,10 @@ fn collect(m: &Machine, started: Instant, base: (u64, u32)) -> Stats {
 pub fn run(cfg: Config, link: Arc<Link>) {
     let mut cfg = cfg;
     let mut first = true;
+    // Across sessions, because "again" is a fact about the sequence and a session cannot see one.
+    let mut deaths = Deaths::default();
     loop {
-        match session(&cfg, &link, first) {
+        match session(&cfg, &link, first, &mut deaths) {
             Outcome::Quit => return,
             Outcome::ColdBoot => first = false,
             // Changing the boot target is a power cycle, and a session reached by one never
@@ -1647,10 +1685,13 @@ fn wait_for_power(link: &Arc<Link>) -> bool {
 }
 
 /// One power cycle: build the machine, run it, and stop when the window closes or power is cut.
-fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
+fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> Outcome {
     let mut m = match build(cfg, first) {
         Ok(m) => m,
         Err(e) => {
+            // Said, not merely shown. The window puts this on the bench; a machine that could not
+            // be built and printed nothing leaves a log with a boot line missing and no reason.
+            println!("{}", deaths.note(&e));
             link.out.lock().unwrap().phase = Phase::Stopped(e);
             return Outcome::Quit;
         }
@@ -1689,6 +1730,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                     match build(&cold, first) {
                         Ok(fresh) => m = fresh,
                         Err(e) => {
+                            println!("{}", deaths.note(&e));
                             link.out.lock().unwrap().phase = Phase::Stopped(e);
                             return Outcome::Quit;
                         }
@@ -1830,10 +1872,12 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
             m.run(SLICE)
         } else {
             entered = true;
-            // A boot image is entered where it is loaded — it is not mirrored low and its code
-            // addresses itself at 0x10000000. Everything else enters at 0, where the CPU fetches
-            // out of reset.
-            let pc = if cfg.boot.is_os() { 0 } else { 0x1000_0000 };
+            // **Where `build` left the PC**, and it is read rather than re-decided. A cold boot off
+            // a real dump leaves it at 0, where the CPU fetches out of reset; a high-level boot
+            // leaves it at the entry the bootloader would have jumped to. This line used to be its
+            // own `if cfg.boot.is_os() { 0 } else { 0x1000_0000 }`, which is the same decision
+            // taken twice in two files — and the OS's arm of it was the wrong answer.
+            let pc = m.cpu.regs[15];
             // The coprocessor comes out of reset running the same code and decides for itself, on
             // `PROC_ID`, that it is not the CPU — Apple's bootloader branches on it at 0x8738 and
             // parks it three instructions later.
@@ -2127,7 +2171,12 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
             }
         }
         if stop != Stop::BudgetExhausted && stop != Stop::Idle {
-            out.phase = Phase::Stopped(format!("{stop:?} at {executed} instructions"));
+            let why = format!("{stop:?} at {executed} instructions");
+            // **On the same stream as the boot line it ends**, so a log reads as boot/death rather
+            // than as a list of boots. See [`Deaths`], which is also what makes the second one
+            // say it is a second one.
+            println!("{}", deaths.note(&why));
+            out.phase = Phase::Stopped(why);
             drop(out);
             // A machine that has run off the rails is exactly when someone wants to power-cycle it,
             // so the thread stays alive holding the failure on screen rather than exiting and
@@ -3625,4 +3674,288 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// **A synthesised ROM boots Apple's software as far as a real dump does — measured, on the
+    /// reference drive.**
+    ///
+    /// `#[ignore]`, and the name says which kind: it needs `resources/drives/`, which is not in git.
+    /// Run it by name from a release build, because a debug interpreter takes about twenty times as
+    /// long to do the same 400 M instructions:
+    ///
+    /// ```text
+    /// cargo test --release -p ipod-gui --bin ipod-emulator \
+    ///     a_synthesised_rom_boots_the_os_and_this_needs_resources -- --ignored --nocapture
+    /// ```
+    ///
+    /// The floor is `research/04` row 9's discriminator rather than a round number: **102** ATA
+    /// commands for a retail cold boot against **24** for the same boot with the IDE interrupt latch
+    /// ablated, where the 24 is Apple's bootloader painting its own screen and never handing
+    /// RetailOS the disk. Anything in the hundreds is RetailOS working the volume.
+    ///
+    /// **What it measured, 2026-08-25**, `--headless=400000000` at the real clock on
+    /// `ipod8g-retail.PRISTINE.img` with a synthesised `A146`:
+    ///
+    /// ```text
+    /// BudgetExhausted after 400 044 725 instructions
+    /// ata commands: 484   —  387 READ DMA · 91 WRITE DMA · 1 IDENTIFY · 5 SET FEATURES
+    /// 28 105 code buckets      unmapped: 0 reads, 0 writes
+    /// ```
+    ///
+    /// **How to make it go red**: put the OS back in a region beside SDRAM instead of writing it
+    /// into SDRAM — see `a_high_level_boot_survives_the_os_remapping_low_memory_onto_sdram`, which
+    /// is the same defect in twenty-one instructions and no `resources/` — and this run ends
+    /// `Lost(0x02000000)` after 8 388 485 instructions with **0** ATA commands and 2 097 122 code
+    /// buckets, every one of them a NOP slide.
+    #[test]
+    #[ignore = "needs resources/: a real drive image, which is not in git"]
+    fn a_synthesised_rom_boots_the_os_and_this_needs_resources() {
+        let pristine = eapp_loader::settings::repo_root()
+            .join("resources/drives/ipod8g-retail.PRISTINE.img");
+        assert!(
+            pristine.is_file(),
+            "this test was asked for by name and {} is not on this machine. See \
+             tools/ipod-boot/DISK-IMAGES.md.",
+            pristine.display()
+        );
+
+        let dir = std::env::temp_dir().join(format!("ipod-synth-boot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Never the source: RetailOS bootstraps its own volume during boot, and the reference image
+        // is `chmod 444` on purpose. `cp -c` carries the mode across, so the clone is made writable.
+        let work = dir.join("work.img");
+        clone_disk(&pristine, &work).expect("a writable clone of the reference drive");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&work, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        let cfg = Config {
+            // A synthesised ROM, which is the whole point: no Apple code anywhere in this machine
+            // except what comes off the drive.
+            nor: eapp_loader::nor::Source::Synthetic {
+                model: "A146".into(),
+                seed: 1,
+                serial: None,
+                guid: None,
+                splash: None,
+            },
+            disk: work.clone(),
+            workdisk: work.clone(),
+            frozen: dir.join("m.frozen"),
+            clock: eapp_loader::CLOCK,
+            boot: BootTarget::Os,
+            ..Default::default()
+        };
+        let mut m = build(&cfg, true).expect("a machine off a synthesised ROM and the reference drive");
+
+        // The run loop's own two calls: `call_with` for the first slice, `run` for the rest, and
+        // the entry is the PC `build` left rather than a second decision about where an OS starts.
+        const BUDGET: u64 = 400_000_000;
+        let pc = m.cpu.regs[15];
+        let mut stop = m.call_with(pc, &[0, 0, 0, 0], SLICE);
+        while stop == eapp_loader::Stop::BudgetExhausted && (m.executed as u64) < BUDGET {
+            stop = m.run(SLICE);
+        }
+
+        let ata = m.mem.ata.as_ref().map_or(0, |(_, a)| a.commands.seen());
+        assert!(
+            !matches!(stop, eapp_loader::Stop::Lost(_)),
+            "the machine left every mapped region after {} instructions with {ata} ATA commands: \
+             {stop:?}",
+            m.executed
+        );
+        assert!(
+            ata > 100,
+            "{ata} ATA commands in {} instructions. research/04 row 9: a retail cold boot is 102 \
+             and a bootloader that never hands over the disk is 24, so this is not a boot",
+            m.executed
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A machine that dies says so, and a machine that dies the same way again says that.**
+    ///
+    /// The log this came out of — a real first run, 2026-08-25 — is fifty lines of
+    ///
+    /// ```text
+    ///   high-level boot: 7561216 bytes of OS from …/my-5.5g.img -> 0x10000000
+    ///   identity: JQ652FQUX3N · 000A27CB851F81B9
+    /// ```
+    ///
+    /// twenty-five times over, and **nothing else**: no reason, no ending, no difference between
+    /// the first boot and the twenty-fifth. It was read as a retry loop, which is the only thing
+    /// that log can be read as, and it was twenty-five presses on a bench whose iPod died in a
+    /// third of a second each time.
+    ///
+    /// **How to make it go red**: delete the `println!("{}", deaths.note(&why))` from `session` and
+    /// the program is back to printing two lines per machine and none per death.
+    #[test]
+    fn a_machine_that_dies_the_same_way_twice_says_it_is_the_same_way() {
+        let mut d = Deaths::default();
+        let why = "Lost(33554432) at 8388485 instructions";
+        assert_eq!(d.note(why), format!("stopped: {why}"));
+        // The second one is not the first one repeated: it says *again*, with a count, because a
+        // person looking at two identical lines cannot tell a second failure from a second copy.
+        let again = d.note(why);
+        assert!(again.contains(why), "the reason went missing on the second death: {again}");
+        assert!(again.contains('2'), "the second death does not say it is the second: {again}");
+        assert!(d.note(why).contains('3'), "the count is not advancing past two");
+        // A different ending starts the count over — two failures are not one failure twice.
+        let other = d.note("Returned at 12 instructions");
+        assert_eq!(other, "stopped: Returned at 12 instructions");
+    }
+
+    /// **An OS that remaps low memory onto SDRAM and carries on running there** — the thing
+    /// RetailOS does 0x220 bytes into its own entry, in twenty-one instructions.
+    ///
+    /// This is what a high-level boot has to survive, and it is the whole of the failure the
+    /// window shipped with. Apple's bootloader is measured — `ipod-boot retail`, 58 READ DMA
+    /// commands ending at `0x10736000`, then `Running 'osos' 0 from 0x10000000` — putting the OS
+    /// **into SDRAM** and entering it there. RetailOS then programs the PP's remap windows at
+    /// `0xf000f000`, one of which is `0x00000000..0x01ffffff -> 0x10000000`, and from that
+    /// instruction on it executes from low addresses. `Memory::translate` runs ahead of the region
+    /// list, so after the remap *only what is really in SDRAM answers*.
+    ///
+    /// **How to make it go red**, and this is the bug it was written for: put the image back in a
+    /// region beside SDRAM —
+    ///
+    /// ```text
+    ///     m.mem.regions.push(Region { name: "osos-low", base: 0, data: osos.clone() });
+    ///     m.mem.regions.push(Region { name: "osos", base: load_at, data: osos });
+    ///     …and enter at 0 instead of `load_at + entry`
+    /// ```
+    ///
+    /// — and the sentinel below is never written. Region lookup is first-match and `map_hardware`
+    /// has already registered 64 MB of `sdram` at `0x10000000`, so the `osos` region is read by
+    /// nothing and SDRAM is zeros with a copy of the OS filed behind it. The remap then points the
+    /// low window at those zeros, the code goes out from under the PC, and the CPU NOP-slides
+    /// (`0x00000000` decodes as `andeq r0, r0, r0`) to the top of the window: on the real thing,
+    /// `Lost(0x02000000)` after 8 388 485 instructions, which is `(0x02000000 - 0x1ec) / 4`.
+    ///
+    /// The image here is twenty-one words rather than 7.5 MB of RetailOS, so this runs in the
+    /// ordinary suite with nothing out of `resources/` — but it is the same twenty-one
+    /// instructions and the same window.
+    #[test]
+    fn a_high_level_boot_survives_the_os_remapping_low_memory_onto_sdram() {
+        use arm7tdmi::Bus as _;
+
+        // Hand-assembled, because what is under test is where the bytes are rather than what they
+        // say, and a 21-word program that can be read in place beats a fixture nobody can check.
+        //
+        //   0x00  b 0x20                     the two branches `ipsw::image_header` looks for
+        //   0x04  b 0x20
+        //   0x08  b .                        the rest of the vector table
+        //   0x20  mov r0, #0xf0000000        MMAP window 0
+        //         orr r0, r0, #0xf000
+        //         mov r1, #0x3e00            logical: mask 0x3e000000 -> a 32 MB window at 0
+        //         mov r2, #0x10000000        physical: SDRAM
+        //         str r1, [r0]
+        //         str r2, [r0, #4]           the window is live from here
+        //         mov pc, #0x40              …so jump into the LOW view of this same image
+        //   0x40  mov r3, #0x10000000        the sentinel address, 0x10010000
+        //         orr r3, r3, #0x10000
+        //         mov r4, #0xa5
+        //         str r4, [r3]               "the low half ran"
+        //   0x50  b .
+        const OS: [u32; 21] = [
+            0xea00_0006, 0xea00_0005, 0xeaff_fffe, 0xeaff_fffe, 0xeaff_fffe, 0xeaff_fffe,
+            0xeaff_fffe, 0xeaff_fffe, 0xe3a0_04f0, 0xe380_0cf0, 0xe3a0_1c3e, 0xe3a0_2410,
+            0xe580_1000, 0xe580_2004, 0xe3a0_f040, 0xeaff_fffe, 0xe3a0_3410, 0xe383_3801,
+            0xe3a0_40a5, 0xe583_4000, 0xeaff_fffe,
+        ];
+        const SENTINEL_AT: u32 = 0x1001_0000;
+        const SPINNING_AT: u32 = 0x50;
+
+        let dir = std::env::temp_dir().join(format!("ipod-remap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let disk = dir.join("d.img");
+
+        // A drive is a file with a firmware partition at LBA 63 and an `!ATA` directory in it.
+        // Nothing else here reads the volume, so nothing else is written.
+        let image: Vec<u8> = OS.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let base = eapp_loader::ipsw::FIRMWARE_LBA as u64 * 512;
+        const DEV_OFFSET: u32 = 0x4400;
+        let mut entry = [0u8; 40];
+        entry[..4].copy_from_slice(b"!ATA");
+        // The tag is a little-endian u32 of four characters, so `osos` is stored backwards.
+        entry[4..8].copy_from_slice(b"soso");
+        entry[8..12].copy_from_slice(&0u32.to_le_bytes());
+        entry[0x0c..0x10].copy_from_slice(&DEV_OFFSET.to_le_bytes());
+        entry[0x10..0x14].copy_from_slice(&(image.len() as u32).to_le_bytes());
+        entry[0x14..0x18].copy_from_slice(&eapp_loader::ipsw::LOAD_ADDR_5G.to_le_bytes());
+        entry[0x18..0x1c].copy_from_slice(&0u32.to_le_bytes());
+        {
+            use std::io::{Seek, SeekFrom, Write};
+            let mut f = std::fs::File::create(&disk).unwrap();
+            f.set_len(1 << 20).unwrap();
+            f.seek(SeekFrom::Start(base + eapp_loader::ipsw::DIRECTORY_AT as u64))
+                .unwrap();
+            f.write_all(&entry).unwrap();
+            f.seek(SeekFrom::Start(base + DEV_OFFSET as u64)).unwrap();
+            f.write_all(&image).unwrap();
+        }
+
+        let cfg = Config {
+            nor: eapp_loader::nor::Source::Synthetic {
+                model: eapp_loader::nor::DEFAULT_MODEL.into(),
+                seed: 1,
+                serial: None,
+                guid: None,
+                splash: None,
+            },
+            disk: disk.clone(),
+            // Direct mode: the working drive IS this file, so `clone_disk` is a no-op and the
+            // machine reads what was just written.
+            workdisk: disk.clone(),
+            frozen: dir.join("m.frozen"),
+            clock: eapp_loader::CLOCK,
+            boot: BootTarget::Os,
+            ..Default::default()
+        };
+        let mut m = build(&cfg, true).expect("a machine off a synthesised ROM and a drive with an OS");
+
+        // **The OS is in SDRAM, before a single instruction runs.** This is the state Apple's
+        // bootloader leaves and the reason the rest of the test can pass: a region filed behind
+        // `sdram` reads as zero here.
+        assert_eq!(
+            m.mem.read32(eapp_loader::ipsw::LOAD_ADDR_5G),
+            OS[0],
+            "SDRAM does not hold the OS at its load address, so the remap below has nothing to \
+             point at"
+        );
+        // And the machine starts where the bootloader's console says it starts.
+        assert_eq!(
+            m.cpu.regs[15],
+            eapp_loader::ipsw::LOAD_ADDR_5G,
+            "the CPU was not left at the entry `Running 'osos' 0 from 0x10000000` names"
+        );
+
+        // The run loop's own entry: `session` reads the PC `build` left rather than deciding again.
+        let pc = m.cpu.regs[15];
+        let stop = m.call_with(pc, &[0, 0, 0, 0], 100_000);
+
+        assert_eq!(
+            stop,
+            eapp_loader::Stop::BudgetExhausted,
+            "the machine left every mapped region after remapping low memory onto SDRAM"
+        );
+        assert_eq!(
+            m.mem.read32(SENTINEL_AT),
+            0xa5,
+            "the half of the OS that runs from the LOW view never executed: after the remap, \
+             address 0 is SDRAM and SDRAM did not have the OS in it"
+        );
+        assert_eq!(
+            m.cpu.regs[15], SPINNING_AT,
+            "the CPU is not spinning where the image says it should be, so it reached the \
+             sentinel by some route this test does not describe"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

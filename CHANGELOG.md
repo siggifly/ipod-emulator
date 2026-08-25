@@ -57,9 +57,10 @@ large it is, and clearing it is one button.
 ### It boots without a dump, on all three revisions
 
 A synthesised ROM is not a copy of Apple's bootloader — nobody can distribute that — so it does not
-run one. It reproduces the **effects** of the boot: the handoff block Apple's bootloader leaves for
-the OS, measured out of a real cold boot rather than guessed, with this iPod's identity in it, and
-then hands control to the operating system on the drive.
+run one. It reproduces the **effects** of the boot, measured off a real one rather than guessed:
+Apple's bootloader reads the operating system off the drive into memory at `0x10000000` and jumps to
+the top of it, leaving a handoff block with this iPod's identity in it, and that is what the
+synthesised boot leaves too.
 
 All three firmware revisions boot this way — 5G Initial, 5G Rev A and the 5.5G — each with the
 firmware bundle that belongs to it, and each reaching the same place the real ROM does.
@@ -392,6 +393,20 @@ Settings → About carries the repository link.
 
 ### Fixed
 
+- **Press Start on an iPod you had just made, and it died before the drive answered.** The
+  operating system was read off the drive and then filed *beside* memory instead of into it, so the
+  moment Apple's software remapped its own address space — about a fifth of a millisecond in — the
+  code went out from under it and the machine walked off the end of memory. `stopped: lost 33554432
+  at 8388485 instructions`, every time, with the drive untouched. It is put where Apple's own
+  bootloader is measured putting it now, and the same iPod reaches **484 disk commands** and a lit
+  panel in the same run that used to reach none.
+- **A machine that stopped said nothing to the log.** Starting one prints two lines; stopping one
+  printed nothing at all, so a session where the same iPod died five times read as five identical
+  boots with no endings — which is indistinguishable from a program restarting itself. It says
+  `stopped:` and why, now, and the second one in a row says it is the second.
+- **`ipod-boot warm --flash=…` ignored the file you named** and ran the configured ROM instead,
+  printing the configured ROM's model in its own output. The same held for `--disk=` and for every
+  recipe. Your flag wins now, and `--print` says so.
 - **`--headless`, `--selftest`, `--probe` and `--power-cycle-at` could not open a drive.** Which
   drive the machine writes to was decided inside the window, so every path without a window pointed
   at a working copy nothing had made.
