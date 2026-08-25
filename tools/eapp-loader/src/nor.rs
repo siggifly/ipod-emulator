@@ -542,11 +542,29 @@ pub fn is_synthetic(nor: &[u8]) -> bool {
     nor.get(SYNTH_MARK_AT..SYNTH_MARK_AT + SYNTH_MARK.len()) == Some(SYNTH_MARK)
 }
 
-/// The iPod this program makes when nobody has said which — a 30 GB black 5.5G.
+/// The iPod this program makes when nobody has said which — a 30 GB **white** 5.5G.
 ///
 /// **The only model number written in this program.** [`Source::default`] reads it, and so does
 /// `compose::FIRST_RUN_MODEL`, so the three cannot come to describe different machines.
-pub const DEFAULT_MODEL: &str = "A446";
+///
+/// **`A444` is not a number anybody here made up.** It is a row of
+/// [`crate::models::MODELS`] — the table transcribed from libgpod's `ipod_model_table`
+/// (`src/itdb_device.c`) and corroborated against Apple's published *Identify your iPod model*
+/// pages — where it reads 30 GB, `IpodModel::VideoWhite`, `Generation::Video2`. It is the white
+/// peer of `A446` in the same row of that table's 5.5G block: same capacity, same generation, same
+/// board, different case. `research/16` §"The table, from libgpod" prints the block, and its
+/// 5.5G line reads `A444 / A446 | 30 GB | white / black | VIDEO_2` — one row, two colours.
+///
+/// **The generation is the decision the operator made; the colour is not.** `ROADMAP.md`
+/// §"5G, 5.5G, and which is the default" settles 5.5G and says nothing about the case, so moving
+/// from `A446` to `A444` moves the case alone — and the case is the half a person sees first.
+///
+/// **The model number is part of the identity, so this is not a cosmetic constant.**
+/// [`crate::identity::Identity::generate`] mixes `model.number` into the seed, so `A444` and `A446`
+/// at one seed are two different iPods with two different serials and two different FireWire GUIDs.
+/// An iPod already minted under the old default keeps the one it was minted with; nothing here
+/// reaches back.
+pub const DEFAULT_MODEL: &str = "A444";
 
 /// A seed nobody chose, for an identity that is minted **once** and is then permanent.
 ///
@@ -621,8 +639,8 @@ pub enum Source {
 }
 
 impl Default for Source {
-    /// A 30 GB black **5.5G** — the newest generation, per the operator decision recorded in
-    /// [ROADMAP] §"5G, 5.5G, and which is the default".
+    /// A 30 GB white **5.5G** — the newest generation, per the operator decision recorded in
+    /// [ROADMAP] §"5G, 5.5G, and which is the default", in the case [`DEFAULT_MODEL`] names.
     ///
     /// Synthesis is what makes that default honest. It was previously blocked on this project
     /// owning exactly one dump, which is a 5G: defaulting to a machine we could not produce would
@@ -1327,5 +1345,31 @@ mod mint_tests {
         };
         assert_eq!(seed, 0, "the default seed moved, so 0 is no longer the marker");
         assert_eq!(model, DEFAULT_MODEL, "two spellings of which iPod this program makes");
+    }
+
+    /// **The iPod one press makes is a WHITE 30 GB 5.5G**, and every figure is the model table's.
+    ///
+    /// Operator, having watched a first run: *"it made me synthesise bootrom 5.5g 30gb black
+    /// (should default to white instead imo)"*. The generation and the capacity are settled
+    /// elsewhere — `ROADMAP.md` §"5G, 5.5G, and which is the default" for the one, `A444`'s own row
+    /// for the other — so this asserts all three together: a change that got the colour by picking
+    /// a number outside the 5.5G block would move one of the other two and be caught here.
+    ///
+    /// It reads them out of [`Model`] rather than restating them, which is the point: a model
+    /// number this program invented would resolve to nothing and fail at the first line.
+    #[test]
+    fn the_ipod_one_press_makes_is_a_white_thirty_gigabyte_five_and_a_half() {
+        use crate::identity::Colour;
+        let m = Model::lookup(DEFAULT_MODEL)
+            .expect("the default is a model number this build's table holds");
+        assert_eq!(m.colour(), Colour::White, "the default iPod is not white");
+        assert_eq!(m.capacity_gb, 30, "the default iPod is not a 30 GB one");
+        assert_eq!(m.generation.label(), "5.5G", "the default iPod is not a 5.5G");
+        // And the black one it replaced is still in the table, still black, still a 5.5G — this
+        // moved which one is preselected and removed nothing.
+        let black = Model::lookup("A446").expect("the black 5.5G is still a model");
+        assert_eq!(black.colour(), Colour::Black);
+        assert_eq!(black.capacity_gb, m.capacity_gb);
+        assert_eq!(black.generation, m.generation);
     }
 }

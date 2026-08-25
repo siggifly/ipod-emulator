@@ -794,8 +794,7 @@ pub fn land(s: &mut Settings, files: &[PathBuf]) -> Landed {
     // than a second entry for one iPod.
     let src = nor::Source::File(rom.clone());
     let name = device_name(s, &src, &rom);
-    s.chassis = src.model().map(|m| m.colour());
-    s.nor = src;
+    s.set_ipod(src);
     // A drive is **built** from an `.ipsw` and is not one, so there is nothing to point at yet.
     // `Absent`'s own vocabulary calls this unfinished rather than broken.
     s.disk = None;

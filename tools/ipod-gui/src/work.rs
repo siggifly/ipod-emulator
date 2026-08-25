@@ -886,6 +886,58 @@ enum Stop {
     Failed(Fault),
 }
 
+/// What a fetch that **already had the bytes** says.
+///
+/// The one sentence on this row that was never in doubt: it is not a sentence the plan could have
+/// written, so a cached hit has always been visible as one.
+fn cached_line(file: &str) -> String {
+    format!("{file} — already here, SHA-256 checked")
+}
+
+/// What a fetch that **really downloaded** says — and it must not be the plan's own promise.
+///
+/// **Reported as: *"seems to have had the ipod ipsw file, at least it didn't show it
+/// downloading"*, on a run with an empty data directory.** The cache is `data_dir()/firmware`
+/// unless `IPOD_EMULATOR_FIRMWARE_DIR` says otherwise, so nothing could have been there — and the
+/// bundle was on disk afterwards, timestamped to the minute of the first run, filed
+/// `provenance = fetched-sha256`. The download happened. Two things hid it:
+///
+///  1. **It is over before it can be read.** Measured: 6 533 633 B in **0.44 s** at 14.7 MB/s,
+///     which is four frames at [`firmware::WATCH_TICK`]'s 10 Hz. There is nothing to do about that
+///     and nothing should be — a progress indication padded out to be seen is the lying instrument
+///     §12.3 is written against.
+///  2. **The words never changed**, and that is the defect. `compose::Recipe::steps` writes
+///     `<file> — <n> B — from Apple, SHA-256 checked` on the *planned* row, and this used to send
+///     that identical string back when the bytes had arrived. Before, during and after, the row
+///     read the same — a sentence that states a file and a checksum in the present tense, which is
+///     exactly how somebody reads *it already had it*.
+///
+/// So the finished line says what the promise cannot: the past tense, and **how long it took**,
+/// measured across the transfer. The byte count is the catalogue's, which is not a claim — it is
+/// the figure `firmware::verify` has just refused the file against, so it is what landed.
+fn downloaded_line(file: &str, from: &str, bytes: u64, took: std::time::Duration) -> String {
+    format!(
+        "{file} — {} B downloaded {from} in {} — SHA-256 checked",
+        eapp_loader::group(bytes),
+        elapsed(took)
+    )
+}
+
+/// A duration in the units a person reads it in, and never `0.0 s`.
+///
+/// Under a second is milliseconds, because this is the range every cached-network fetch lands in
+/// and `0.4 s` rounds a 44 ms one to nothing.
+fn elapsed(d: std::time::Duration) -> String {
+    let ms = d.as_millis();
+    if ms < 1000 {
+        format!("{ms} ms")
+    } else if ms < 10_000 {
+        format!("{:.1} s", d.as_secs_f64())
+    } else {
+        format!("{} s", d.as_secs())
+    }
+}
+
 fn fetch(
     i: usize,
     plan: &Plan,
@@ -896,7 +948,7 @@ fn fetch(
     if firmware::is_cached(rel, &plan.cache) {
         let _ = tx.send(Report::Detail {
             i,
-            sub: format!("{} — already here, SHA-256 checked", rel.file),
+            sub: cached_line(rel.file),
         });
         // **Still `Fetched`.** The bytes are here and they verify, which is the whole of what the
         // word means; reporting nothing would leave the library without the bundle the drive was
@@ -915,15 +967,14 @@ fn fetch(
         meter: Meter::Apparent,
     });
     let mut w = Reporter { i, tx, cancel };
+    // **Timed across the transfer**, because how long it took is the one fact about this download
+    // that the plan could not already have written on the row. See [`downloaded_line`].
+    let started = std::time::Instant::now();
     match firmware::download_watched(rel, &plan.cache, &mut w) {
         Ok(path) => {
             let _ = tx.send(Report::Detail {
                 i,
-                sub: format!(
-                    "{} — {} B — from Apple, SHA-256 checked",
-                    rel.file,
-                    eapp_loader::group(rel.bytes)
-                ),
+                sub: downloaded_line(rel.file, "from Apple", rel.bytes, started.elapsed()),
             });
             Ok(Outcome::Fetched {
                 path,
@@ -1117,7 +1168,7 @@ fn fetch_run(wants: Vec<Want>, cache: PathBuf, tx: &mpsc::Sender<Report>, cancel
         if want.cached(&cache) {
             let _ = tx.send(Report::Detail {
                 i,
-                sub: format!("{} — already here, SHA-256 checked", want.file()),
+                sub: cached_line(want.file()),
             });
             // **Still `Fetched`.** The bytes are here and they verify, and filing them is the whole
             // of what this press was for: a bundle sitting in the cache that the library has never
@@ -1139,15 +1190,16 @@ fn fetch_run(wants: Vec<Want>, cache: PathBuf, tx: &mpsc::Sender<Report>, cancel
             meter: Meter::Apparent,
         });
         let mut w = Reporter { i, tx, cancel };
+        let started = std::time::Instant::now();
         match want.download(&cache, &mut w) {
             Ok(path) => {
                 let _ = tx.send(Report::Detail {
                     i,
-                    sub: format!(
-                        "{} — {} B — {}, SHA-256 checked",
+                    sub: downloaded_line(
                         want.file(),
-                        eapp_loader::group(want.bytes()),
-                        want.from()
+                        want.from(),
+                        want.bytes(),
+                        started.elapsed(),
                     ),
                 });
                 let _ = tx.send(Report::Done {
@@ -1601,7 +1653,12 @@ impl Queue {
         // `remember_as` files the LIVE ROM, and on a resumed run in a fresh process `settings.nor`
         // is `Source::default()` — the never-chosen seed-0 iPod. Setting it only when minting left
         // the install step filing a default synthetic ROM into the library beside the real one.
-        settings.nor = rom.clone();
+        //
+        // **And the case it is drawn in, which this route was the one not to set.** `set_ipod`
+        // resolves the colour out of the `Mod#`, the way the field's own documentation has always
+        // said `auto` does; without it the device came out `chassis: None` and the shelf drew
+        // `Colour::default()` — black — over whichever iPod this actually is.
+        settings.set_ipod(rom.clone());
         if minted(settings).is_none() {
             settings.file_away(
                 Resource::Firmware(rom.clone()),
@@ -1704,9 +1761,22 @@ impl Queue {
         //
         // It is out here rather than in the `else` because both branches need it and only one had
         // it. The same-process retry was green because `pump` had already ticked those steps.
-        for (id, d) in self.ids.iter().zip(self.done.iter_mut()).take(from) {
+        //
+        // **And a skipped step says why it was skipped.** A ticked row keeps the sub-line the
+        // *plan* wrote — `<file> — 6 533 633 B — from Apple, SHA-256 checked` — which is a
+        // sentence about a download in the present tense, sitting green over a step that did not
+        // run. `resume_from` ticked the fetch because `firmware::is_cached` read the file and
+        // matched its SHA-256, so the row can say that instead, in the same words the fetcher's own
+        // already-here arm uses. It is the third of three ways this row goes green and was the
+        // second of two that said nothing about which.
+        for (i, (id, d)) in self.ids.iter().zip(self.done.iter_mut()).enumerate().take(from) {
             rail.done(*id);
             *d = true;
+            if plan.steps.get(i).is_some_and(|s| s.kind == Verb::Fetch) {
+                if let Some(rel) = self.release {
+                    rail.detail(*id, &cached_line(rel.file));
+                }
+            }
         }
         self.steps = plan.steps.clone();
         for id in self.ids.iter().skip(from) {
@@ -2639,6 +2709,53 @@ mod tests {
             .map(|s| s.verb())
             .collect();
         assert_eq!(quoted, ["build"], "8 GiB is quoted on {quoted:?}");
+    }
+
+    /// **A download that happened has to say something the plan could not have said.**
+    ///
+    /// Reported as *"seems to have had the ipod ipsw file, at least it didn't show it
+    /// downloading"* — from a run whose data directory, and therefore whose cache, was empty. It
+    /// did download; see [`downloaded_line`] for the measurement. What it did not do was **change
+    /// its words**: the finished line was `format!`ed from the same pieces
+    /// `compose::Recipe::steps` had already written on the planned row, so the only two states a
+    /// person could tell apart were *cached* and *everything else*.
+    ///
+    /// Held against the plan's own string rather than a copy of it, so a reworded plan cannot
+    /// silently make this vacuous again — which is exactly how the two came to be identical.
+    #[test]
+    fn a_finished_download_does_not_repeat_the_plans_own_promise() {
+        let promised = plan(Holes::Sparse)
+            .into_iter()
+            .find(|s| s.kind == Verb::Fetch)
+            .expect("the first run's plan fetches Apple's firmware")
+            .sub;
+        let rel = release().expect("a release in the catalogue");
+
+        let landed = downloaded_line(rel.file, "from Apple", rel.bytes, TICK);
+        assert_ne!(
+            landed, promised,
+            "a finished download says exactly what the plan promised, so nothing on the row moves"
+        );
+        assert!(
+            landed.contains("downloaded"),
+            "the finished line does not say the bytes came down: {landed}"
+        );
+        assert!(
+            landed.contains(&eapp_loader::group(rel.bytes)),
+            "the finished line does not carry the byte count: {landed}"
+        );
+
+        // The other half of the pair, and the one that was already honest: a cached hit says so.
+        let already = cached_line(rel.file);
+        assert_ne!(already, promised, "a cached hit repeats the plan's promise");
+        assert_ne!(already, landed, "a cached hit and a real download read the same");
+        assert!(already.contains("already here"), "{already}");
+
+        // And the two numbers a person reads. `0.0 s` for a 44 ms transfer is the rounding that
+        // made *nothing happened* the honest reading of the screen.
+        assert_eq!(elapsed(std::time::Duration::from_millis(444)), "444 ms");
+        assert_eq!(elapsed(std::time::Duration::from_millis(1_450)), "1.4 s");
+        assert_eq!(elapsed(std::time::Duration::from_secs(24)), "24 s");
     }
 
     /// **The plan and the Rail are one list.** It fails the moment anybody composes a step's
@@ -3702,6 +3819,157 @@ mod offline_worker_tests {
         );
     }
 
+    /// **The iPod one press makes is drawn in its own case.**
+    ///
+    /// Reported as *"it made me synthesise bootrom 5.5g 30gb black"*, and the colour was only half
+    /// of it: the shelf draws `d.chassis.unwrap_or_default()`, so a device filed with `chassis:
+    /// None` is drawn in [`eapp_loader::identity::Colour`]'s `Black` whatever its `Mod#` says. The
+    /// Composer's `commit` and `drops::land` both resolved the colour before saving; `press` — the
+    /// route that makes the *only* iPod nobody chose the model for — did not, so a white `A444`
+    /// came out in a black case.
+    ///
+    /// Asserted against the model's own answer rather than against the word *white*, so it goes on
+    /// meaning something if the default moves again — and against `Colour::default()` as well,
+    /// because equality with the model is satisfied for free on the day those two agree.
+    #[test]
+    fn the_first_run_files_the_case_its_own_model_number_names() {
+        let data = DataDir::new("first-run-chassis");
+        let fixture = a_plan(&data.at);
+        let drives = data.at.join("drives");
+        let cache = data.at.join("firmware");
+
+        let mut settings = Settings::default();
+        let mut rail = Rail::new();
+        let mut q = Queue::fetching(drives, cache, fixture.release);
+        match q.press(&mut settings, &mut rail, true) {
+            Press::Running { embodied, .. } => assert!(embodied, "the press minted no iPod"),
+            other => panic!("the first run would not start: {other:?}"),
+        }
+        let t = drain_to_a_stop(&mut q, &mut settings, &mut rail);
+        assert_eq!(rail.failures(), 0, "the run failed: {}", rail.announce());
+        assert_eq!(t.ready.as_deref(), Some("My 5.5G"), "the machine was never handed off");
+
+        let d = settings.devices.first().expect("the run filed a device");
+        let want = settings
+            .nor_of(d)
+            .and_then(|src| src.model())
+            .expect("the device's iPod resolves to a model")
+            .colour();
+        assert_eq!(
+            d.chassis,
+            Some(want),
+            "`{}` was filed saying nothing about its case, so the shelf draws it {:?}",
+            d.name,
+            d.chassis.unwrap_or_default()
+        );
+        assert_ne!(
+            want,
+            eapp_loader::identity::Colour::default(),
+            "the default model's colour is the fallback colour, so the line above cannot fail"
+        );
+    }
+
+    /// **A download that really happened says so on the Rail** — the shipped path, end to end.
+    ///
+    /// This is the half `a_finished_download_does_not_repeat_the_plans_own_promise` cannot see. It
+    /// holds two strings against each other; a call site left on the old `format!` would satisfy it
+    /// for ever. So the bundle is put **outside** the cache and the release is given a `file://`
+    /// URL, which `curl -fsSL` fetches like any other — the same `firmware::download_watched`, the
+    /// same `.part`-then-rename, the same `verify` — and what is read back is the Rail entry the
+    /// window draws.
+    ///
+    /// **Both arms in one test**, because the pair is the point: press once and it downloads, press
+    /// again and the bytes are in the cache. The sentences have to differ, and neither may be the
+    /// plan's own line.
+    ///
+    /// The second press is the **resume** route rather than `fetch`'s own already-here arm —
+    /// `resume_from` sees `firmware::is_cached` answer true and ticks the step off unrun, which is
+    /// what a second press does in the shipped program. That was the arm saying nothing: it kept
+    /// the plan's promise and went green over a step that never ran.
+    #[test]
+    fn a_download_that_really_ran_says_so_on_the_rail() {
+        let data = DataDir::new("really-downloaded");
+        let drives = data.at.join("drives");
+        let cache = data.at.join("firmware");
+        std::fs::create_dir_all(&drives).expect("a drives directory");
+        std::fs::create_dir_all(&cache).expect("a cache");
+
+        // **Not in the cache.** `a_plan` puts its bundle there, which is why every offline run so
+        // far has taken the already-here arm and this one could not have been noticed.
+        let bundle = zip_of("Firmware-25.1.3.MnOpQr.ipsw", &firmware_partition());
+        let served = data.at.join("served-from-here.ipsw");
+        std::fs::write(&served, &bundle).expect("the bundle to serve");
+        let release: &'static Release = Box::leak(Box::new(Release {
+            updater_family: compose::FIRST_RUN_FAMILY,
+            family: 0,
+            model: "iPod (5th generation)",
+            variant: "offline fixture, served over file://",
+            file: "served-fixture.ipsw",
+            url: Box::leak(format!("file://{}", served.display()).into_boxed_str()),
+            bytes: bundle.len() as u64,
+            sha256: Some(Box::leak(
+                eapp_loader::firmware::sha256(&bundle).into_boxed_str(),
+            )),
+            served: true,
+        }));
+
+        let promised = plan(Holes::Sparse)
+            .into_iter()
+            .find(|s| s.kind == Verb::Fetch)
+            .expect("the plan fetches")
+            .sub;
+
+        let said = |rail: &Rail| -> String {
+            rail.entries()
+                .iter()
+                .find(|e| e.verb == Verb::Fetch.as_str())
+                .expect("the Rail carries the fetch row")
+                .sub
+                .clone()
+        };
+
+        // ---- first press: the bytes are not here, so they come down.
+        let mut settings = Settings::default();
+        let mut rail = Rail::new();
+        let mut q = Queue::fetching(drives.clone(), cache.clone(), release);
+        match q.press(&mut settings, &mut rail, true) {
+            Press::Running { .. } => {}
+            other => panic!("the run would not start: {other:?}"),
+        }
+        drain_to_a_stop(&mut q, &mut settings, &mut rail);
+        assert_eq!(rail.failures(), 0, "the run failed: {}", rail.announce());
+        assert!(
+            cache.join(release.file).is_file(),
+            "nothing arrived in the cache, so this proves nothing about a download"
+        );
+        let downloaded = said(&rail);
+        assert_ne!(
+            downloaded, promised,
+            "the row a real download left reads exactly like the plan's promise"
+        );
+        assert!(
+            downloaded.contains("downloaded"),
+            "a real download did not say it downloaded: {downloaded}"
+        );
+
+        // ---- second press: the same bytes, already here.
+        let mut settings = Settings::default();
+        let mut rail = Rail::new();
+        let mut q = Queue::fetching(drives, cache, release);
+        match q.press(&mut settings, &mut rail, true) {
+            Press::Running { .. } => {}
+            other => panic!("the second run would not start: {other:?}"),
+        }
+        drain_to_a_stop(&mut q, &mut settings, &mut rail);
+        assert_eq!(rail.failures(), 0, "the second run failed: {}", rail.announce());
+        let cached = said(&rail);
+        assert!(
+            cached.contains("already here"),
+            "a cached hit did not say the bytes were already there: {cached}"
+        );
+        assert_ne!(cached, downloaded, "the two outcomes read the same on the Rail");
+    }
+
     /// **A device whose drive has gone runs the one that replaces it.**
     ///
     /// The other end of the same preference, reached without a first run: a finished device whose
@@ -3727,7 +3995,11 @@ mod offline_worker_tests {
             splash: None,
         };
         settings.nor = rom.clone();
-        settings.file_away(Resource::Firmware(rom), "Black 5.5G", None);
+        settings.file_away(
+            Resource::Firmware(rom.clone()),
+            &settings::suggest_ipod_name(&rom),
+            None,
+        );
         let lost = drives.join("the-one-that-went.img");
         settings.disk = Some(lost.clone());
         settings.file_disk(lost.clone(), "the-one-that-went");
@@ -4053,7 +4325,11 @@ mod offline_worker_tests {
             splash: None,
         };
         settings.nor = rom.clone();
-        settings.file_away(Resource::Firmware(rom), "Black 5.5G", None);
+        settings.file_away(
+            Resource::Firmware(rom.clone()),
+            &settings::suggest_ipod_name(&rom),
+            None,
+        );
         settings.remember_as("My 5.5G");
 
         let mut rail = Rail::new();

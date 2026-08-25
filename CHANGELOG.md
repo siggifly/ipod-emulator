@@ -33,8 +33,10 @@ like the real thing because it is assembled the way Apple assembled them (factor
 week, a production code from the range that model actually shipped in).
 
 **And the case colour is not a switch.** It is read out of the model number, the way the iPod itself
-reads it, so a `MA146` is white and a `MA446` is black and a U2 special edition is black with a red
+reads it, so a `MA444` is white and a `MA446` is black and a U2 special edition is black with a red
 wheel — because that is what those part numbers *are*. Nothing to set, and nothing to get wrong.
+
+**The one the button makes is a white 30 GB 5.5G**, `A444` — a real Late-2006 configuration.
 
 If you *do* have a dump, nothing changes: it is still the more faithful machine, and pointing at one
 still wins. If you have a real iPod's **drive**, the identity found on it is used in preference to
@@ -400,6 +402,16 @@ Settings → About carries the repository link.
   at 8388485 instructions`, every time, with the drive untouched. It is put where Apple's own
   bootloader is measured putting it now, and the same iPod reaches **484 disk commands** and a lit
   panel in the same run that used to reach none.
+- **A download said the same thing before, during and after.** The plan promises
+  `iPod_25.1.3.ipsw — 6 533 633 B — from Apple, SHA-256 checked`, and the finished step reported
+  that identical sentence — so a real 6.5 MB fetch left nothing on screen to distinguish it from a
+  file that was already on the disk, and got reported as *"seems to have had the ipod ipsw file, at
+  least it didn't show it downloading"*. It did download; it took 0.44 s, which at 10 Hz is four
+  frames. A step that downloaded now says so in the past tense and says how long it took; one that
+  found the bytes already cached — including one skipped by a resume — says *already here*.
+- **A first-run iPod was drawn in the wrong case.** The colour a device is drawn in is read out of
+  its own model number, and the one route that never did it was the press that makes an iPod out of
+  nothing — so the plan said one colour and the drawing was black regardless.
 - **A machine that stopped said nothing to the log.** Starting one prints two lines; stopping one
   printed nothing at all, so a session where the same iPod died five times read as five identical
   boots with no endings — which is indistinguishable from a program restarting itself. It says

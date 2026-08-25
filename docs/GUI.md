@@ -887,7 +887,7 @@ The only surface the program can open on, because there is nowhere else.
  │                                                                                                         │ ▏ gap, 16 px
  ├─────────────────────────────────────────────────────────────────────────────────────────────────────────┤ ▏ 1 px line + the 3 px
  │  My 5.5G                                                                          parked · 4 min ago    │ ▏ progress bar, when there
- │  5.5G · 30 GB · black · Apple 25.1.3 · Rockbox 4.0             panel 1× · 320×240 · nearest neighbour   │ ▏ is one
+ │  5.5G · 30 GB · white · Apple 25.1.3 · Rockbox 4.0             panel 1× · 320×240 · nearest neighbour   │ ▏ is one
  │  works on a copy of my-5.5g.img                        MENU ›  Devices · Parts · Games · Work · Readout │ ▏ THE SHELF, 88 px,
  └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘ ▏ flush to the bottom
                                                                                                           ▲
@@ -935,6 +935,27 @@ that Rust sets true on a change and false 140 ms later.
 
 `Colour::Unspecified` is drawn `#E4E4E2` and never black — drawing an unknown chassis black would
 invent a fact about somebody's iPod, and the model already refuses to.
+
+#### The case follows the `Mod#`, and the first run was the route that did not *(added 2026-08-25)*
+
+**The rule has always been stated twice**: `Settings::chassis`'s own comment — *`None` means
+"whatever the ROM says", and that is the default* — and the line the settings file writes above the
+key, *`auto` reads it out of the NOR's `Mod#`*. Nothing in the model did it. The resolution lived in
+the window, written out at `Composer::commit` and again at `drops::land`, and **`work::press` — the
+route that makes the one iPod nobody chooses a model for — did not have it at all.** So a first-run
+device was filed `chassis: None`, and the shelf draws `d.chassis.unwrap_or_default()`, which is
+`Colour`'s `Black`.
+
+That agreed with the iPod by coincidence for exactly as long as the default was a black `A446`. The
+day the default became the white `A444` it stopped: the plan said *white*, the shelf said *white*,
+and the drawn case was black. `Settings::set_ipod` is the one call now — the ROM and the case it is
+drawn in, set together, because they are one statement — and all three routes go through it.
+
+**What is deliberately not changed**: `d.chassis.unwrap_or_default()` is still `Black` for a device
+that states no colour. Every route that files one states it now, so what is left is a library
+written by an older build — where the device *is* an `A446` and black is the right answer — and a
+dump this build cannot read a `Mod#` out of. Making the fallback `Unspecified` would repaint the
+first case wrongly to fix the second.
 
 #### `Start` asks the model's question, not two thirds of it *(added 2026-08-25)*
 
@@ -1746,7 +1767,7 @@ only the drawn body that is withheld. **Which makes the shelf this section's sec
 was still live until the pane landed**: row 2's empty-bench copy opened *The centre button makes
 one*, and the shelf is deliberately left alone below the threshold, so that sentence was being read
 against a bench with no device on it. It counts the press instead now — *One press makes one: a
-5.5G, 30 GB, black* — which is true on both surfaces and drops a route the cradle line already
+5.5G, 30 GB, white* — which is true on both surfaces and drops a route the cradle line already
 states. The route belongs where a route belongs (§7.3); row 2 was naming it twice.
 
 **It replaces the layout rather than shrinking it**, and that is §9.6 applied rather than restated:
@@ -1900,7 +1921,7 @@ is a three-platform promise and Reference says so rather than pretending).
 ```
  ├──────────────────────────────────────────────────────────────────────────────────────────────────────────┤
  │  No iPod yet                                                                            nothing mounted  │
- │  You do not need an iPod, or any files off one. One press makes one: a 5.5G, 30 GB, black —              │
+ │  You do not need an iPod, or any files off one. One press makes one: a 5.5G, 30 GB, white —              │
  │  6.5 MB to download, about 28 MB on disk.      MENU ›  Parts, if you have files  ·  or drop them here    │
  └──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1957,7 +1978,7 @@ are not available (§9.3's `volume` class) the number *is* 8.6 GB and the sub-li
  │ This is what pressing ● does         │
  │                                      │
  │ ○ synthesise  a boot ROM             │
- │      5.5G, 30 GB, black · A446       │
+ │      5.5G, 30 GB, white · A444       │
  │      instant, nothing downloaded     │
  │ ○ fetch       Apple's firmware       │
  │      iPod_25.1.3.ipsw · 6 533 633 B  │
@@ -1991,17 +2012,18 @@ design takes it literally: **the button is on the iPod.**
 
 In order, narrated in the Work Rail, as a `Recipe` with ticked `Step`s:
 
-1. **The identity is minted and written.** `nor::Source::Synthetic { model: "A446", seed: <random>, .. }`
-   is created, filed in Parts under `Black 5.5G`, and **`Settings::save()` is called here** — the
+1. **The identity is minted and written.** `nor::Source::Synthetic { model: "A444", seed: <random>, .. }`
+   is created, filed in Parts under `White 5.5G`, and **`Settings::save()` is called here** — the
    first write the program makes. **The live drive is cleared in the same breath**, because the iPod
    being made has not got one and the drive that was live is whatever ran before: an installation
    carried forward from before the device list is a `disk =` line with no devices, seeding files that
    drive, and `Settings::as_device` derives a new device's from the live path. Without that line the
    first run minted an iPod already naming somebody else's image — which step 3 of the resume table
    reads as a **finished** drive, so the press hands off and the centre button on an empty bench
-   starts a machine over a stranger's drive having downloaded nothing and built nothing. The body cross-dissolves from 45 % `Unspecified` to solid black the
-   moment `Source::identity()` answers, which is before a single byte is fetched, and **nothing else
-   moves**. **This step is idempotent**: if an in-flight first run already has a synthesised ROM, it is
+   starts a machine over a stranger's drive having downloaded nothing and built nothing. The body
+   cross-dissolves from 45 % `Unspecified` to the case its own `Mod#` names — `#F2F2F0` for the
+   `A444` §10.1 plans — the moment `Source::identity()` answers, which is before a single byte is
+   fetched, and **nothing else moves**. **This step is idempotent**: if an in-flight first run already has a synthesised ROM, it is
    reused rather than re-minted.
 2. **The target volume is checked, then free space.** The volume check is §9.3's `volume` class — can
    this filesystem hold the file at all, and does it do sparse — and it runs *at the press, before
@@ -2013,7 +2035,8 @@ In order, narrated in the Work Rail, as a `Recipe` with ticked `Step`s:
    or 8.6 GB where sparse is unavailable). A shortfall is the *space, pre-flight* class with both
    numbers and the path.
 3. `iPod_25.1.3.ipsw` is fetched to `<file>.part`, verified against the recorded size and SHA-256,
-   and renamed into place **only then**.
+   and renamed into place **only then** — and the row says which of the three ways it got there;
+   see below.
 4. An 8 GiB sparse image is built, with `aupd` marked applied so the first boot runs the OS rather
    than the updater.
 5. The device is named `My 5.5G`. `Settings::save()` again — and after every completed step, which is
@@ -2025,8 +2048,46 @@ In order, narrated in the Work Rail, as a `Recipe` with ticked `Step`s:
 7. `record_boot()` writes the denominator. Every subsequent boot of this device shows a real
    percentage — until the recipe changes, and §12.3 says what happens then.
 
+#### The fetch row has three green states and said one thing *(added 2026-08-25)*
+
+**Reported as: *"seems to have had the ipod ipsw file, at least it didn't show it downloading"*** —
+on a run with an empty data directory, which is also an empty cache: `firmware::cache_dir` is
+`data_dir()/firmware` unless `IPOD_EMULATOR_FIRMWARE_DIR` overrides it. The bundle was there
+afterwards, timestamped to the minute of that first run and filed `provenance = fetched-sha256`.
+**It downloaded.** Two things hid it, and only one of them is fixable.
+
+**Not fixable, and it should not be.** 6 533 633 B took **0.44 s** at 14.7 MB/s, measured. That is
+four frames at `firmware::WATCH_TICK`'s 10 Hz. A download too fast to watch is a download too fast
+to watch; padding the indication out to be seen is exactly the lying instrument §12.3 is written
+against, and the moving byte count is honest for as long as there is something to count.
+
+**Fixable, and it is the actual defect: the words never changed.** `Recipe::steps` writes
+`<file> — 6 533 633 B — from Apple, SHA-256 checked` on the **planned** row, and the finished row
+sent that same sentence back. Read after the fact — which is when a person reads it — a file name
+and a checksum in the present tense say *this file is here and it is the right one*, which is
+precisely the reading the report gives.
+
+There are **three** ways that row goes green and they now say three different things:
+
+| how | what the row reads |
+|---|---|
+| it downloaded | `served-fixture.ipsw — 262 296 B downloaded from Apple in 129 ms — SHA-256 checked` |
+| the fetcher found it cached | `served-fixture.ipsw — already here, SHA-256 checked` |
+| `resume_from` ticked it off unrun | the same *already here* line — because `firmware::is_cached` read the file and matched its SHA-256, which is what that sentence claims |
+
+Those are the strings themselves, read off the Rail by
+`a_download_that_really_ran_says_so_on_the_rail`, which serves a fixture bundle over `file://` so
+the shipped fetcher really runs. `served-fixture.ipsw` is what that fixture is called; on a real
+first run it is `iPod_25.1.3.ipsw` and the figure is 6 533 633 B.
+
+The past tense and the **elapsed time** are the two things the plan could not have written, so they
+are what a finished download carries. The byte count is the catalogue's, which is not a claim:
+`firmware::verify` has just refused the file against it. The third row was the quiet one — a step
+skipped by the resume kept the plan's promise, green, saying nothing about where the bytes came
+from.
+
 **Everything it made is a named, editable resource.** `MENU › Parts` afterwards shows the synthesised
-iPod under `Black 5.5G · synthesised · seed 9380292`, the `.ipsw` under its filename with
+iPod under `White 5.5G · synthesised · seed 9380292`, the `.ipsw` under its filename with
 `fetched · SHA-256 verified`, and the drive under `my-5.5g.img · 8.0 GB · FAT32 0x0B · from
 iPod_25.1.3`. Nothing was magic.
 
@@ -4265,7 +4326,7 @@ is cheap rather than archaeological.
 | **Accent** | `#2969d6` / `#5292e7` | RetailOS's own selection blue, sampled off a frame we drew. Derived, not chosen |
 | **Accent's three uses** | focus ring (except on the cradle) · progress · the cradle when startable | four blue things is no primary action |
 | **The material's three uses** | the selected drawer row · the one primary row per page · §9.5's primary row | everything glossy is a pastiche; the third is the same row as the second, on a bench that cannot draw a cradle |
-| **The one button's default iPod** | 5.5G, 30 GB, black | a real Late-2006 configuration; images are sparse so capacity costs nothing |
+| **The one button's default iPod** | 5.5G, 30 GB, **white** — `A444` | a real Late-2006 configuration; images are sparse so capacity costs nothing. The generation is `ROADMAP.md`'s decision and the capacity is the model row's; the **colour** is the operator's, on seeing a first run: *"should default to white instead imo"*. `A444` is the white peer of `A446` in libgpod's own 5.5G block — same 30 GB, same `VIDEO_2`, different case |
 | **`display` type role** | retired | 36 px of a budget with none to spare, over a rendering of the same thing |
 | **`readout` type role** | added | 25 numbers want tabular figures; without them a changing value reflows its own digits |
 | **Cradle, Gauge and Scroll** | added to the closed vocabulary | principle 3 needs somewhere to put state; the Readout needs a not-measured that is not a zero; three drawer pages do not fit in a drawer |

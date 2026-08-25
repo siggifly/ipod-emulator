@@ -1758,6 +1758,27 @@ impl Settings {
         out
     }
 
+    /// Make this the **live iPod**: the boot ROM, and the case the window draws it in.
+    ///
+    /// **One call because they are one statement**, and they were four. `chassis` is documented in
+    /// two places — the field's own comment and the line [`Settings::render`] writes above the key
+    /// — as *`auto` reads it out of the NOR's `Mod#`*, and nothing in this crate ever did that: the
+    /// resolution lived in the window, spelled out at the Composer's `commit` and again at the
+    /// drop landing, and the **first run did not have it at all**. So the one iPod nobody chooses —
+    /// the one press makes — was filed with `chassis: None`, and the shelf draws
+    /// `d.chassis.unwrap_or_default()`, which is [`crate::identity::Colour`]'s `Black`.
+    ///
+    /// That agreed with the model by coincidence for as long as [`crate::nor::DEFAULT_MODEL`] was
+    /// a black `A446`. It stopped agreeing the moment the default became the white `A444`, which is
+    /// how it was found: a white iPod on the plan, drawn in a black case.
+    ///
+    /// `None` for a dump this build cannot read, which is the honest answer and is what
+    /// `Colour::Unspecified` versus a fallback is for — not a colour invented for somebody's iPod.
+    pub fn set_ipod(&mut self, src: crate::nor::Source) {
+        self.chassis = src.model().map(|m| m.colour());
+        self.nor = src;
+    }
+
     /// Resolve a device's parts and make it the live one.
     ///
     /// `false`, and **nothing is mutated**, when there is no device of that name or when a name it
@@ -3803,16 +3824,21 @@ mod device_tests {
         // mints for `machine.0`, which names a drive and no iPod — §20 item 1's stated behaviour:
         // a device that said nothing at all is given, in a list, the ROM it used to boot silently.
         // Asserting only that the drive left would let a third entry appear unnoticed.
+        // The minted name is spelled from [`crate::nor::DEFAULT_MODEL`] rather than typed, because
+        // this test is about the *migration* and not about which iPod is preselected — pinning the
+        // model number here made it fail the day the default moved from `A446` to `A444`, which is
+        // a fact `nor.rs` already has a test for.
+        let minted = format!("{}, seed 0", crate::nor::DEFAULT_MODEL);
         assert_eq!(
             s.resources
                 .iter()
                 .map(|i| i.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["my dump", "A446, seed 0"],
+            vec!["my dump", minted.as_str()],
             "{:?}",
             s.resources
         );
-        assert_eq!(s.devices[0].firmware, "A446, seed 0");
+        assert_eq!(s.devices[0].firmware, minted);
         assert_eq!(s.disks.len(), 1, "the disk did not arrive in the disks");
         assert_eq!(s.disks[0].name, "ipod8g");
         assert_eq!(s.disks[0].path, PathBuf::from("/drives/ipod8g.img"));
@@ -4910,12 +4936,12 @@ mod first_run_naming_tests {
 
     /// The names first run puts on the shelf are the words a person would use, not the recipe.
     ///
-    /// `suggest_nor_name` is `A446, seed 7` — right for a row in a list of recipes, and not
+    /// `suggest_nor_name` is `A444, seed 7` — right for a row in a list of recipes, and not
     /// something anybody would say out loud about the iPod on the bench.
     #[test]
     fn the_suggested_names_are_the_words_a_person_would_use() {
         let src = an_ipod();
-        assert_eq!(suggest_ipod_name(&src), "Black 5.5G");
+        assert_eq!(suggest_ipod_name(&src), "White 5.5G");
         assert_eq!(suggest_device_name(&src), "My 5.5G");
         assert_eq!(suggest_disk_stem(&src), "my-5.5g");
         assert!(

@@ -1255,8 +1255,10 @@ impl Composer {
         }
 
         let rom = self.rom.clone().ok_or(NO_IPOD)?;
-        s.nor = rom.clone();
-        s.chassis = rom.model().map(|m| m.colour());
+        // The ROM and the case are one statement — see [`Settings::set_ipod`], which is where the
+        // `Mod#`-to-colour resolution lives now that three call sites had to remember it and the
+        // fourth did not.
+        s.set_ipod(rom.clone());
         // A drive already in the library is referenced; one that has still to be built is not there
         // to reference, and the device is *unfinished* rather than broken until it is.
         s.disk = match &self.recipe.start {
@@ -2378,7 +2380,7 @@ mod tests {
             .join("\n")
     }
 
-    /// The 30 GB black 5.5G this program makes when nobody has said which.
+    /// The 30 GB white 5.5G this program makes when nobody has said which.
     fn synthetic() -> nor::Source {
         nor::Source::Synthetic {
             model: nor::DEFAULT_MODEL.into(),
@@ -2503,7 +2505,9 @@ mod tests {
         bump(&c, &mut last, "took_reading");
         c.make_one();
         bump(&c, &mut last, "make_one");
-        c.set_model("A444").expect("a white 5.5G");
+        // The model the default is **not**, so the setter really moves something — `with_ipod`
+        // opens on `nor::DEFAULT_MODEL` and `make_one` keeps it.
+        c.set_model("A446").expect("a black 5.5G");
         bump(&c, &mut last, "set_model");
     }
 
@@ -3255,12 +3259,14 @@ mod tests {
             row.note
         );
 
-        // And it really does. Black `A446` and white `A444` are the same iPod in two colours.
+        // And it really does. White `A444` and black `A446` are the same iPod in two colours, and
+        // the direction follows the default: `with_ipod` opens on `nor::DEFAULT_MODEL`, so the
+        // press under test has to move it to the *other* one or the fixture changes nothing.
         let before = c.identity().expect("an identity");
         let mut d = with_ipod();
-        d.set_model("A444").expect("a white 5.5G");
+        d.set_model("A446").expect("a black 5.5G");
         let after = d.identity().expect("an identity");
-        assert_eq!(d.model().unwrap().colour(), Colour::White);
+        assert_eq!(d.model().unwrap().colour(), Colour::Black);
         assert_ne!(before.guid, after.guid, "a different iPod produced the same GUID");
         assert_ne!(before.serial, after.serial, "a different iPod produced the same serial");
     }
@@ -3834,13 +3840,18 @@ mod tests {
             "`Create` filed the iPod under a name no other route spells"
         );
 
-        // And the chassis follows the model, so a white iPod does not draw black.
-        let mut white = ready();
-        white.set_model("A444").expect("a white 5.5G");
-        white.set_start(Start::FromIpsw("iPod_25.1.3.ipsw".into()));
-        white.set_name("A white one");
-        white.commit(&mut s).expect("a free name");
-        assert_eq!(s.chassis, Some(Colour::White), "a white iPod was filed as black");
+        // **And the chassis follows the model, in both directions.** One arm is not enough and
+        // never was: `Colour` has a `Default`, so an arm that files the colour the default already
+        // is passes over a `commit` that files nothing at all. The default moved from black to
+        // white, which flipped which of the two was the free pass — so both are here now.
+        for (model, want) in [("A444", Colour::White), ("A446", Colour::Black)] {
+            let mut other = ready();
+            other.set_model(model).expect("a 5.5G");
+            other.set_start(Start::FromIpsw("iPod_25.1.3.ipsw".into()));
+            other.set_name(&format!("A {model} one"));
+            other.commit(&mut s).expect("a free name");
+            assert_eq!(s.chassis, Some(want), "{model} was filed as some other colour");
+        }
     }
 
     /// **Changing the iPod re-points the device at it.** `Settings::as_device` deliberately keeps
@@ -4103,7 +4114,10 @@ mod tests {
         assert_eq!(c.lock(Field::Colour, &s, false), Lock::Shared { devices: 2 });
         assert_eq!(c.lock(Field::Colour, &s, false).presses(), 2);
 
-        c.set_model("A444").expect("the white 5.5G");
+        // The other colour, whichever the default is not — the same argument
+        // `changing_the_colour_says_it_changes_the_ipod` makes. Editing to the model the fixture
+        // already holds edits nothing, and everything below would then prove nothing.
+        c.set_model("A446").expect("the black 5.5G");
         c.commit(&mut s).expect("save");
 
         let now = c.rom().cloned().expect("an iPod");

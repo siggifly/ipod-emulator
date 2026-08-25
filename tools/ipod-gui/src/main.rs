@@ -11652,7 +11652,11 @@ pub(crate) mod tests {
         // The device made of them, saved the way the program saves one: the live fields, then
         // `remember_as`. It files nothing new — both halves are already in the lists — and the
         // device comes out naming them rather than copying them.
-        s.nor = synth.clone();
+        //
+        // **`set_ipod` and not `s.nor =`**, because the shipped routes are `set_ipod` — a fixture
+        // that sets the ROM by hand files a device with no case colour and every page shot from it
+        // draws an iPod in `Colour::default()` rather than in its own.
+        s.set_ipod(synth.clone());
         s.disk = Some(image);
         s.remember_as(&settings::suggest_device_name(&synth));
 
@@ -11660,7 +11664,10 @@ pub(crate) mod tests {
         // no `parked_at` contributes no row there, so without this the sixth group is the one
         // section of the page nothing proves.
         let second = "Rockbox on a 5G";
-        s.nor = dump;
+        // `set_ipod`, so the dump does not inherit the previous iPod's case: a `Source::File` this
+        // build cannot read a `Mod#` out of states no colour, and inheriting one would put a white
+        // case on somebody's 5G because the device filed before it was white.
+        s.set_ipod(dump);
         s.disk = None;
         s.remember_as(second);
         assert!(
@@ -12004,7 +12011,7 @@ pub(crate) mod tests {
         std::fs::write(&image, [0u8; 64]).expect("a fabricated drive");
         s.file_disk(image.clone(), &stem);
 
-        s.nor = synth;
+        s.set_ipod(synth);
         s.disk = Some(image);
         s.remember_as("The one in the drawer");
         s.remember_as("The one in the car");
@@ -13852,17 +13859,18 @@ pub(crate) mod tests {
                 "empty" => {}
                 "one device" => s = a_library_of_one(),
                 "a half-made one" => {
+                    // **Named from the model, not typed.** A fixture that spells the colour goes on
+                    // calling the default iPod black the day the default stops being black.
+                    let src = eapp_loader::nor::Source::Synthetic {
+                        model: compose::FIRST_RUN_MODEL.into(),
+                        seed: 424_242,
+                        serial: None,
+                        guid: None,
+                        splash: None,
+                    };
                     let rom = s.file_away(
-                        eapp_loader::settings::Resource::Firmware(
-                            eapp_loader::nor::Source::Synthetic {
-                                model: compose::FIRST_RUN_MODEL.into(),
-                                seed: 424_242,
-                                serial: None,
-                                guid: None,
-                                splash: None,
-                            },
-                        ),
-                        "Black 5.5G",
+                        eapp_loader::settings::Resource::Firmware(src.clone()),
+                        &eapp_loader::settings::suggest_ipod_name(&src),
                         None,
                     );
                     s.devices.push(Device {
@@ -14194,15 +14202,16 @@ pub(crate) mod tests {
     fn the_press_routes_by_the_row_it_was_given() {
         let _held = use_a_scratch_data_dir();
         let mut s = Settings::default();
+        let src = eapp_loader::nor::Source::Synthetic {
+            model: compose::FIRST_RUN_MODEL.into(),
+            seed: 909_090,
+            serial: None,
+            guid: None,
+            splash: None,
+        };
         let rom = s.file_away(
-            eapp_loader::settings::Resource::Firmware(eapp_loader::nor::Source::Synthetic {
-                model: compose::FIRST_RUN_MODEL.into(),
-                seed: 909_090,
-                serial: None,
-                guid: None,
-                splash: None,
-            }),
-            "Black 5.5G",
+            eapp_loader::settings::Resource::Firmware(src.clone()),
+            &eapp_loader::settings::suggest_ipod_name(&src),
             None,
         );
         // The half-made first-run device: minted, and no drive.

@@ -357,8 +357,10 @@ halfway through the test that had set it up.
 
 ## The iPod the first run makes says 30 GB and its drive is 8 GiB — 2026-08-21
 
-`work::plan`'s first step reads *5.5G, 30 GB, black, model A446* — the model table's own figures for
-that part number — and `Plan::of` then builds a drive of `ipsw::DEFAULT_SECTORS`, which is 8 GiB.
+`work::plan`'s first step reads *5.5G, 30 GB, white, model A444* — the model table's own figures for
+that part number; it read `black, model A446` until the default moved on 2026-08-25, and the
+disagreement this entry is about is untouched by that, because `A444` and `A446` are one 30 GB row in
+two colours — and `Plan::of` then builds a drive of `ipsw::DEFAULT_SECTORS`, which is 8 GiB.
 RetailOS learns its capacity from ATA `IDENTIFY`, so its About screen will read 8 GB on a device the
 shelf, the plan and Parts all call 30 GB. Nothing is corrupt and the drive boots; the two numbers
 simply disagree, and somebody will notice.
@@ -369,7 +371,7 @@ objection.
 
 GUI.md §10.1 says 8 GiB three times, so this is an **operator decision** rather than a defect with
 an obvious fix: either the drive follows the model (and §10.1's three figures change), or the model
-follows the drive (and the synthesised iPod stops being an A446). The plan and the worker take
+follows the drive (and the synthesised iPod stops being a 30 GB one). The plan and the worker take
 `sectors` from one call, so whichever way it goes they cannot end up disagreeing with each other.
 
 ## ~~A resumed machine was dead, and looked like one that ignored input~~ — FIXED 2026-08-20
