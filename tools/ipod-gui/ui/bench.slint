@@ -46,6 +46,7 @@ import { IPod } from "ipod.slint";
 // lives in `primitives.slint`, which this file imports. Declaring the enum here and the struct
 // there would be a cycle. Re-exported so every existing importer still names one place.
 import { Pressable, CradleRing } from "primitives.slint";
+import { DrawerPage } from "drawer.slint";
 export { CradleRing } from "primitives.slint";
 
 // ─── The two drawn marks this file needs (§6.7) ─────────────────────────────────────────────────
@@ -265,6 +266,68 @@ component ShelfControl inherits Rectangle {
     accessible-action-default => { root.activated(); }
 }
 
+// **Each word of the menu strip is its own route into the drawer, and the departure is worth
+// stating.** §4's model is three surfaces and a menu bar, and this does not add a fourth: every one
+// of these opens the DRAWER, at the page it names. One press instead of two, landing exactly where
+// `MENU` would have taken you in two.
+//
+// It exists because the strip drew five destinations and behaved as one button — a control naming
+// places it would not take you to. That is the same defect as a `Start` live over an iPod with no
+// drive and a fetch row whose words did not change while it downloaded 6.5 MB, and it is the one
+// the operator noticed first.
+//
+// **`Ink.fg` on hover, `Ink.fg-dim` at rest**, so the strip reads as five things you can press
+// rather than five words painted on one.
+component ShelfWord inherits Rectangle {
+    in property <string> label;
+    callback go();
+
+    // §8.1 item 9: instant, always. A focus ring that animates is a focus ring you lose.
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        border-width: Geometry.focus-ring-w;
+        border-color: Ink.accent;
+        border-radius: Metric.s1;
+        visible: focus.has-focus;
+    }
+
+    HorizontalLayout {
+        Text {
+            text: root.label;
+            font-size: Metric.label-size;
+            color: touch.has-hover ? Ink.fg : Ink.fg-dim;
+            vertical-alignment: center;
+        }
+    }
+
+    focus := FocusScope {
+        key-pressed(e) => {
+            if (e.text == " " || e.text == Key.Return) {
+                root.go();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => {
+            focus.focus();
+            root.go();
+        }
+    }
+
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.label;
+    accessible-description: "opens the drawer at " + root.label;
+    accessible-enabled: true;
+    accessible-action-default => { root.go(); }
+}
+
 // ─── The bench ──────────────────────────────────────────────────────────────────────────────────
 
 export component Bench inherits Rectangle {
@@ -386,6 +449,8 @@ export component Bench inherits Rectangle {
     callback hold-pressed();
     callback hold-released();
     callback open-drawer();
+    // §4: not a fourth surface — each word opens the DRAWER at the page it names.
+    callback go-to-page(DrawerPage);
     callback why();
 
     // §7.3: **the cradle is the Button**, so it is what a window hands focus to when it opens. The
@@ -964,52 +1029,47 @@ export component Bench inherits Rectangle {
                 // window minimum. The first words survive an elide, so the *safety* held; the
                 // filename did not. §16.3's anti-shuffle argument does not apply here either: the
                 // leading slot is `horizontal-stretch: 1` and grows into whatever is left.
-                if !root.drawer-open: ShelfControl {
-                    a11y-label: "menu";
-                    a11y-description: "Devices, Parts, Games, Work, Readout";
-                    activated => { root.open-drawer(); }
+                if !root.drawer-open: HorizontalLayout {
+                    spacing: Metric.s1;
 
-                    Text {
-                        text: "MENU";
-                        font-size: Metric.label-size;
-                        font-weight: Metric.weight-label;
-                        color: Ink.fg-dim;
-                        vertical-alignment: center;
+                    ShelfControl {
+                        a11y-label: "menu";
+                        a11y-description: "Devices, Parts, Games, Work, Readout";
+                        activated => { root.open-drawer(); }
+
+                        Text {
+                            text: "MENU";
+                            font-size: Metric.label-size;
+                            font-weight: Metric.weight-label;
+                            color: Ink.fg-dim;
+                            vertical-alignment: center;
+                        }
+                        Chevron { ink: Ink.fg-dim; }
                     }
-                    Chevron { ink: Ink.fg-dim; }
-                    Text {
-                        text: "Devices";
-                        font-size: Metric.label-size;
-                        color: Ink.fg-dim;
-                        vertical-alignment: center;
-                    }
-                    Dot { }
-                    Text {
-                        text: "Parts";
-                        font-size: Metric.label-size;
-                        color: Ink.fg-dim;
-                        vertical-alignment: center;
+
+                    ShelfWord {
+                        label: "Devices";
+                        go => { root.go-to-page(DrawerPage.devices); }
                     }
                     Dot { }
-                    Text {
-                        text: "Games";
-                        font-size: Metric.label-size;
-                        color: Ink.fg-dim;
-                        vertical-alignment: center;
+                    ShelfWord {
+                        label: "Parts";
+                        go => { root.go-to-page(DrawerPage.parts); }
                     }
                     Dot { }
-                    Text {
-                        text: "Work";
-                        font-size: Metric.label-size;
-                        color: Ink.fg-dim;
-                        vertical-alignment: center;
+                    ShelfWord {
+                        label: "Games";
+                        go => { root.go-to-page(DrawerPage.games); }
                     }
                     Dot { }
-                    Text {
-                        text: "Readout";
-                        font-size: Metric.label-size;
-                        color: Ink.fg-dim;
-                        vertical-alignment: center;
+                    ShelfWord {
+                        label: "Work";
+                        go => { root.go-to-page(DrawerPage.work); }
+                    }
+                    Dot { }
+                    ShelfWord {
+                        label: "Readout";
+                        go => { root.go-to-page(DrawerPage.readout); }
                     }
                 }
             }

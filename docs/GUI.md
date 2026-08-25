@@ -1261,6 +1261,20 @@ drawer you are already inside. Row 3's leading slot then keeps the full narrowed
 | 2 | 20 | the facts, **or the reason**, or the current Rail line (`body`) | the fidelity fact (`mono` 13) |
 | 3 | 16 | **the write target, permanently** (`label`) | `MENU ›  Devices · Parts · Games · Work · Readout` — **empty while the drawer is open** |
 
+**The five words are five controls, one per page, added 2026-08-25.** They were `Text` painted
+inside a single `ShelfControl` labelled *menu*: the strip drew five destinations and behaved as one
+button, so pressing `Parts` opened the menu rather than Parts. The operator found it by pressing it.
+
+**They are not a fourth surface and §4 stands.** Each one calls `open-page(<its page>, 1)` — the
+drawer, at the page it names, which is exactly where `MENU` would have taken you in two presses.
+Depth 1 because every one of them is a first-level drawer page, and `Stack::go` refuses a page at a
+depth its own `slot()` denies, so a wrong number there is a blank panel rather than a silent miss.
+
+`every_word_of_the_menu_strip_opens_the_drawer_at_the_page_it_names` reads the drawn accessible tree
+and presses each of them. It was shown red two ways: one word reverted to a `Text` (*"the menu strip
+draws 0 control(s) labelled `Parts`"*) and one word pointed at the wrong page (*left `Some((Work, 1))`,
+right `Some((Games, 1))`*).
+
 **Row 3 never goes away.** It is `write_target()` and it is the one line standing between an
 afternoon and somebody's only image of an iPod they own. **Four sentences about a drive that
 resolves, not three**, because `work_on_copy`'s `None` and `built_from`'s `Some`/`None` are two

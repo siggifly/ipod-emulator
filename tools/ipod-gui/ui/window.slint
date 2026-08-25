@@ -895,6 +895,12 @@ export component MainWindow inherits Window {
                 open-drawer => {
                     root.drawer-toggled();
                 }
+                // §7.5's menu strip. Depth 1 because every one of these is a first-level drawer
+                // page; `Stack::go` refuses a page at a depth its own `slot()` denies, so a wrong
+                // number here is a blank panel rather than a silent miss.
+                go-to-page(p) => {
+                    root.open-page(p, 1);
+                }
                 // §7.6: the shelf elides a refusal to one line and this opens the drawer at the page
                 // that owns it, where the paragraph and its next steps live **under the control that
                 // caused them**. Today that is Work, which is the page the Rail is on — and the

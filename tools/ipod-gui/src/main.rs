@@ -13346,6 +13346,86 @@ pub(crate) mod tests {
             "the update toggle does not read what the library says"
         );
     }
+    /// **The menu strip's five words are five controls, and each one goes where it says.**
+    ///
+    /// It used to be ONE `ShelfControl` labelled *menu* with five `Text` children painted inside
+    /// it: the strip drew five destinations and behaved as one button, so pressing `Parts` opened
+    /// the menu rather than Parts. The operator found it by pressing it. That is the same shape as
+    /// a `Start` live over an iPod with no drive — a control naming something it will not do — and
+    /// it is the third time this window has been caught at it.
+    ///
+    /// §4 is why they open the DRAWER rather than becoming a fourth surface: the navigation model
+    /// is three surfaces and a menu bar, and these are a shortcut into the menu bar's own rows, not
+    /// a tab strip beside it. One press instead of two, landing where `MENU` would have landed.
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "reads the drawn accessible tree, which needs SLINT_EMIT_DEBUG_INFO — build.rs \
+                  emits it in debug only"
+    )]
+    #[test]
+    fn every_word_of_the_menu_strip_opens_the_drawer_at_the_page_it_names() {
+        let w = a_window();
+        w.show().expect("the headless backend shows a window");
+        w.window().set_size(slint::LogicalSize::new(
+            geometry::PREF_WIDTH as f32,
+            geometry::PREF_HEIGHT as f32,
+        ));
+        // The strip is drawn only while the drawer is CLOSED (§7.5: it is a route into a drawer you
+        // are not already inside), so this walks the default stack rather than toggling one open.
+        let stack = nav::Stack::new();
+        push_nav(&w, &stack);
+        let_the_drawer_settle();
+
+        let asked: Rc<RefCell<Vec<(DrawerPage, i32)>>> = Rc::new(RefCell::new(Vec::new()));
+        {
+            let asked = asked.clone();
+            w.on_open_page(move |page, depth| asked.borrow_mut().push((page, depth)));
+        }
+
+        let want = [
+            ("Devices", DrawerPage::Devices),
+            ("Parts", DrawerPage::Parts),
+            ("Games", DrawerPage::Games),
+            ("Work", DrawerPage::Work),
+            ("Readout", DrawerPage::Readout),
+        ];
+
+        for (label, page) in want {
+            let mut hit = i_slint_backend_testing::ElementQuery::from_root(&w)
+                .match_descendants()
+                .match_accessible_role(i_slint_backend_testing::AccessibleRole::Button)
+                .find_all()
+                .into_iter()
+                .filter(|e| e.accessible_label().is_some_and(|l| l == label))
+                .collect::<Vec<_>>();
+            // A chain optimised into one `ItemRc` reports once per element index, so the query is
+            // deduplicated by position exactly as `drawer_rows` does.
+            hit.dedup_by_key(|e| {
+                let at = e.absolute_position();
+                (at.x.to_bits(), at.y.to_bits())
+            });
+            assert_eq!(
+                hit.len(),
+                1,
+                "the menu strip draws {} control(s) labelled {label:?}; it must draw exactly one, \
+                 and it drew none for as long as the five words were `Text` inside a single button",
+                hit.len()
+            );
+            hit[0].invoke_accessible_default_action();
+            assert_eq!(
+                asked.borrow().last().copied(),
+                Some((page, 1)),
+                "pressing {label:?} did not ask for its own page at depth 1"
+            );
+        }
+
+        assert_eq!(
+            asked.borrow().len(),
+            want.len(),
+            "five presses did not produce five requests"
+        );
+    }
+
 
     // **Ignored in a release profile rather than failing there.** `build.rs` emits Slint's debug
     // info only when `PROFILE` is `debug`, and `ElementHandle` refuses to run without it — so under
