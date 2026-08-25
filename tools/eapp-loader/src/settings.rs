@@ -1502,12 +1502,29 @@ impl Settings {
                         .map(|i| self.resources[i].name.clone())
                 })
                 .unwrap_or_default(),
-            disk: existing.and_then(|d| d.disk.clone()).or_else(|| {
-                self.disk
-                    .as_ref()
-                    .and_then(|p| self.disks.iter().find(|d| d.path == *p))
-                    .map(|d| d.name.clone())
-            }),
+            // **The live drive wins whenever the library holds it**, which is the opposite
+            // preference to the firmware above and is not an inconsistency — it is the line below
+            // this one. `disk_path` is taken from `self.disk` unconditionally, so a device that
+            // kept a stale name was a device stating two different images; and [`Settings::disk_of`]
+            // reads the name first, so the stale one is the one that ran.
+            //
+            // What that cost: the first run's install sets the live drive to the image it has just
+            // built and re-saves the device, and the re-save kept whatever the device already
+            // named. A device that had been minted while another drive was live stayed on it for
+            // ever, with the drive this program made an orphan in the library beside it — and a
+            // device whose image had been deleted came out of a rebuild still naming the file that
+            // had gone, so the remedy for *a part is missing* was a build that changed nothing.
+            //
+            // **The stored name is the fallback and not the preference.** A live path the library
+            // does not hold is a device being written back over an image nobody filed, and
+            // dropping the name there would cut it loose from a drive the library does know about
+            // — which is the same argument the firmware field makes, applied where it holds.
+            disk: self
+                .disk
+                .as_ref()
+                .and_then(|p| self.disks.iter().find(|d| d.path == *p))
+                .map(|d| d.name.clone())
+                .or_else(|| existing.and_then(|d| d.disk.clone())),
             disk_path: self.disk.clone(),
             chassis: self.chassis,
             work_on_copy: self.work_on_copy,

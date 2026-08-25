@@ -1993,7 +1993,13 @@ In order, narrated in the Work Rail, as a `Recipe` with ticked `Step`s:
 
 1. **The identity is minted and written.** `nor::Source::Synthetic { model: "A446", seed: <random>, .. }`
    is created, filed in Parts under `Black 5.5G`, and **`Settings::save()` is called here** — the
-   first write the program makes. The body cross-dissolves from 45 % `Unspecified` to solid black the
+   first write the program makes. **The live drive is cleared in the same breath**, because the iPod
+   being made has not got one and the drive that was live is whatever ran before: an installation
+   carried forward from before the device list is a `disk =` line with no devices, seeding files that
+   drive, and `Settings::as_device` derives a new device's from the live path. Without that line the
+   first run minted an iPod already naming somebody else's image — which step 3 of the resume table
+   reads as a **finished** drive, so the press hands off and the centre button on an empty bench
+   starts a machine over a stranger's drive having downloaded nothing and built nothing. The body cross-dissolves from 45 % `Unspecified` to solid black the
    moment `Source::identity()` answers, which is before a single byte is fetched, and **nothing else
    moves**. **This step is idempotent**: if an in-flight first run already has a synthesised ROM, it is
    reused rather than re-minted.
@@ -4309,6 +4315,14 @@ has already been had.
   with the recipe that measured each. §10.1.
 - **The retry path re-minted the identity.** Three failed first runs left three iPods with three
   FireWire GUIDs. Identity is the one permanent decision in this program. §10.2, §10.3.
+- **The first run gave its new iPod somebody else's drive, and then could not take it back.** An
+  installation carried forward from before the device list is a `disk =` line and no devices;
+  seeding files that drive, the mint derived the new device's from the live path, and
+  `as_device` prefers a name a device already carries — so the install's own re-save could not
+  repoint it, and the drive the run built was filed and attached to nothing. Where the named image
+  was **present** the run never happened at all: `resume_from` read *the minted device names a drive
+  and nothing about it is missing* as finished and handed a stranger's drive to the machine. §10.2,
+  §10.3.
 - **A one-press `Fix` detached a 55.9 GB reference with no sentence.** §11.3.
 - **A `Fix` offered a value the picker four rows above it refuses.** §11.3, and §20 deletes the
   project state rather than papering it.
@@ -4393,6 +4407,12 @@ In order, because each depends on the one before it.
    started with no drive at all while `missing()` was already reporting the name as absent. Three of
    the four `disk_of` outcomes had the two functions disagreeing. It refuses now, and naming **no**
    disk still starts, because that is an unfinished device rather than a broken one.
+   **And the device's own two fields got it on 2026-08-25**, being the last pair that could
+   disagree: `as_device` takes `disk_path` from the live drive unconditionally and preferred a
+   *name* the device already carried, so a device re-saved while a different image was live came out
+   stating two drives — and `disk_of` reads the name first, so the stale one is the one that ran.
+   The live drive wins now whenever the library holds it; the stored name is what a live path nobody
+   has filed falls back to.
    **And §7.5's row 3 got it on 2026-08-22**, being the last place still reading `Device::disk_path`
    directly: it told every saved device from its second launch on that there was *no drive yet —
    nothing will be written*, while `writes_to_your_own_image` resolved the same drive by name and

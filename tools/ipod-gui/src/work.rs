@@ -1611,6 +1611,20 @@ impl Queue {
                 // one fact.
                 None,
             );
+            // **And the live machine has no drive, because this one has not been made yet.** The
+            // line above says the live iPod is the one being minted; this is the other half of
+            // that same statement, and leaving it out did not leave the drive unstated — it left
+            // the *previous* machine's under a brand-new iPod. `Settings::as_device` derives a new
+            // device's drive from the live path, so an installation carried forward from before
+            // the device list — a `disk =` line, no devices, `seed_resources` filing that drive —
+            // minted an iPod already naming somebody else's image. `resume_from`'s step 3 is *the
+            // minted device names a drive and nothing about it is missing*, which that satisfies
+            // the moment it is minted: the press then answered `HandOff`, and the centre button on
+            // an empty bench started a machine over a stranger's drive having downloaded nothing,
+            // built nothing and installed nothing. `drops::land` writes the same line for the same
+            // reason — a drive is built from an `.ipsw` and is not one, so there is nothing to
+            // point at yet.
+            settings.disk = None;
             settings.remember_as(&device_name);
             if let Err(e) = settings.save() {
                 return Press::Refused(Failure::saying(
@@ -2267,13 +2281,17 @@ mod tests {
     }
 
     /// Point the data directory somewhere disposable for the length of one test.
-    struct DataDir {
+    ///
+    /// `pub(super)` because `offline_worker_tests` presses the button over a **data directory**
+    /// rather than over a `Settings` built in memory, and a second copy of this would be a second
+    /// answer to *where does a test's library live*.
+    pub(super) struct DataDir {
         _guard: crate::DataDirLock,
         pub at: PathBuf,
     }
 
     impl DataDir {
-        fn new(name: &str) -> DataDir {
+        pub(super) fn new(name: &str) -> DataDir {
             // Taking the lock is also what redirects `IPOD_EMULATOR_DATA` away from the operator's
             // real library, once per binary — so by the time this line returns, the variable is
             // already pointing somewhere disposable and the override below only narrows it further.
@@ -3114,15 +3132,11 @@ mod tests {
         }
     }
 
-    // ── end to end, and it reaches Apple's servers ──────────────────────────────────────────────
-    //
-    // `--ignored` for the same reason `firmware_fetch.rs` is: a release build must not depend on a
-    // third party being up. Run them when touching this file:
-    //
-    //     cargo test -p ipod-gui --bins -- --ignored --test-threads=1
-
     /// Drive the queue to a stop, or panic saying where it got stuck.
-    fn drain_to_a_stop(q: &mut Queue, settings: &mut Settings, rail: &mut Rail) -> Tick {
+    ///
+    /// `pub(super)` for `offline_worker_tests`, which drives the same queue with nothing
+    /// downloaded — this is the window's 10 Hz timer and there is only one of it.
+    pub(super) fn drain_to_a_stop(q: &mut Queue, settings: &mut Settings, rail: &mut Rail) -> Tick {
         // At [`TICK`], because that is the rate the window's own timer runs at: a test that drove
         // this faster would be testing a program nobody runs.
         for _ in 0..600 {
@@ -3138,6 +3152,13 @@ mod tests {
         }
         panic!("the run never stopped");
     }
+
+    // ── end to end, and it reaches Apple's servers ──────────────────────────────────────────────
+    //
+    // `--ignored` for the same reason `firmware_fetch.rs` is: a release build must not depend on a
+    // third party being up. Run them when touching this file:
+    //
+    //     cargo test -p ipod-gui --bins -- --ignored --test-threads=1
 
     /// **The promise, end to end.** Press the button: it synthesises a boot ROM, downloads Apple's
     /// firmware from Apple, builds a drive from it and installs Apple's software onto it — and the
@@ -3361,6 +3382,7 @@ mod tests {
 /// The one thing still behind `#[ignore]` is the **download**, which genuinely needs a third party.
 #[cfg(test)]
 mod offline_worker_tests {
+    use super::tests::{drain_to_a_stop, DataDir};
     use super::*;
     use eapp_loader::ipsw::{self, DIRECTORY_AT, LOAD_ADDR_5G};
 
@@ -3515,6 +3537,228 @@ mod offline_worker_tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         panic!("the worker did not finish inside two minutes; it said {all:?}");
+    }
+
+    // ── what a first run attaches ───────────────────────────────────────────────────────────────
+    //
+    // These drive `Queue::press` over a **data directory that starts empty**, which is the one
+    // thing nothing else here does: every other press test hands `press` a `Settings::default()`
+    // built in memory, so the library it works over is the library the test wrote, and the shape a
+    // real launch produces — `Settings::load_and_seed` over whatever is on disk — was never once
+    // the input. `library_seeded` is what makes that shape different: an installation from before
+    // the device list existed has a live drive and no devices, and seeding files that drive.
+
+    /// The settings file an installation that predates the device list leaves behind: a live drive,
+    /// no devices, no library. `Settings::load_and_seed` is what carries it forward, and this is
+    /// the only shape that reaches `seed_resources`'s drive-gathering arm at all.
+    fn a_library_carried_forward(at: &Path, drive: &Path) -> Settings {
+        std::fs::write(
+            at.join("settings.txt"),
+            format!("disk = {}\n", drive.display()),
+        )
+        .expect("a settings file");
+        let s = Settings::load_and_seed();
+        assert!(
+            s.devices.is_empty(),
+            "the fixture is not a library with no devices in it: {:?}",
+            s.devices
+        );
+        assert_eq!(
+            s.disks.len(),
+            1,
+            "seeding did not carry the live drive into the library, so this fixture is not the \
+             shape it is meant to be"
+        );
+        assert_eq!(s.disk.as_deref(), Some(drive), "the live drive is not the fixture's");
+        s
+    }
+
+    /// **The drive a first run attaches is the drive a first run built.** Compared by path,
+    /// because a name is what the defect got right.
+    ///
+    /// The library here is one carried onto a machine that does not hold the drive it names —
+    /// `disk.0` is a real seeded entry pointing at an image that is somewhere else, which is what
+    /// every carried-forward library looks like on a second computer. The run therefore has work
+    /// to do: it mints an iPod, builds a drive and installs onto it. And then it attached the
+    /// **seeded** entry to the device and left the drive it had just made an orphan, because
+    /// `Settings::as_device` prefers whatever a device already names and the iPod had been minted
+    /// naming the live one.
+    ///
+    /// Nothing caught it: `a_first_run_makes_an_ipod_end_to_end` asserts the device names a drive
+    /// and that the drive resolves and is 8 GiB — all true of the wrong one — and it starts from a
+    /// library with nothing in it, where there is no wrong one to attach.
+    #[test]
+    fn a_first_run_attaches_the_drive_it_built_and_not_the_one_that_was_there() {
+        let data = DataDir::new("attaches-what-it-built");
+        let fixture = a_plan(&data.at);
+        let drives = data.at.join("drives");
+        let cache = data.at.join("firmware");
+
+        let elsewhere = data.at.join("not-on-this-machine.img");
+        let mut settings = a_library_carried_forward(&data.at, &elsewhere);
+        assert!(
+            !elsewhere.exists(),
+            "the fixture's drive is on this machine, which is not the case this is about"
+        );
+
+        let mut rail = Rail::new();
+        let mut q = Queue::fetching(drives.clone(), cache, fixture.release);
+        match q.press(&mut settings, &mut rail, true) {
+            Press::Running { from, embodied } => {
+                assert_eq!(from, 2, "the run did not resume at the build");
+                assert!(embodied, "the press that mints the iPod did not say so");
+            }
+            other => panic!("the first run would not start: {other:?}"),
+        }
+        let t = drain_to_a_stop(&mut q, &mut settings, &mut rail);
+        assert_eq!(rail.failures(), 0, "the run failed: {}", rail.announce());
+        assert_eq!(t.ready.as_deref(), Some("My 5.5G"), "the machine was never handed off");
+
+        // **The drive that was written, read off the filesystem.** The library is the thing under
+        // test, so the answer it is checked against cannot come out of it.
+        let mut written: Vec<PathBuf> = std::fs::read_dir(&drives)
+            .expect("the drives directory")
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "img"))
+            .collect();
+        written.sort();
+        assert_eq!(
+            written.len(),
+            1,
+            "the run did not leave exactly one drive behind: {written:?}"
+        );
+        let built = written.remove(0);
+
+        let d = settings.devices.first().expect("the run filed a device");
+        let attached = settings
+            .disk_of(d)
+            .expect("the device this run made names no drive at all")
+            .expect("the drive it names is not in the library");
+        assert_eq!(
+            attached,
+            built,
+            "`{}` runs {} and the run built {} — the drive this program just made is an orphan \
+             and the machine boots whatever the library named before it",
+            d.name,
+            attached.display(),
+            built.display()
+        );
+    }
+
+    /// **A newly minted iPod has no drive**, and a first run that gives it one it did not make is
+    /// a first run that makes nothing at all.
+    ///
+    /// The same carried-forward library, with the drive it names **present** — and that one
+    /// difference is the whole of it. `Queue::resume_from`'s step 3 is *the minted device names a
+    /// drive and nothing about it is missing*, which a device born naming somebody else's image
+    /// satisfies the instant it is minted. The plan then reads as finished, `press` answers
+    /// `HandOff`, and the centre button on an empty bench boots a stranger's drive having
+    /// downloaded nothing, built nothing and installed nothing.
+    ///
+    /// `drops::land` already says the sentence this is: *a drive is built from an `.ipsw` and is
+    /// not one, so there is nothing to point at yet.*
+    #[test]
+    fn a_first_run_mints_an_ipod_that_names_no_drive() {
+        let data = DataDir::new("mints-no-drive");
+        let fixture = a_plan(&data.at);
+        let drives = data.at.join("drives");
+        let cache = data.at.join("firmware");
+
+        let theirs = data.at.join("somebody-elses.img");
+        std::fs::write(&theirs, vec![0u8; 512]).expect("a drive image");
+        let mut settings = a_library_carried_forward(&data.at, &theirs);
+
+        let mut rail = Rail::new();
+        let mut q = Queue::fetching(drives, cache, fixture.release);
+        match q.press(&mut settings, &mut rail, true) {
+            Press::Running { from, embodied } => {
+                assert_eq!(from, 2, "the run did not resume at the build");
+                assert!(embodied, "the press that mints the iPod did not say so");
+            }
+            Press::HandOff(name) => panic!(
+                "the press built nothing and handed `{name}` to the machine: the iPod it had just \
+                 minted was given {}, which the plan then read as a finished drive",
+                theirs.display()
+            ),
+            other => panic!("the first run would not start: {other:?}"),
+        }
+        let born_with = minted(&settings)
+            .expect("the press minted an iPod")
+            .disk
+            .clone();
+        assert_eq!(
+            born_with, None,
+            "the iPod that was just minted already names a drive, and it is one this program did \
+             not make"
+        );
+
+        let t = drain_to_a_stop(&mut q, &mut settings, &mut rail);
+        assert_eq!(rail.failures(), 0, "the run failed: {}", rail.announce());
+        assert_eq!(t.ready.as_deref(), Some("My 5.5G"), "the machine was never handed off");
+        assert!(
+            theirs.is_file(),
+            "the run wrote over the drive that was already in the library"
+        );
+    }
+
+    /// **A device whose drive has gone runs the one that replaces it.**
+    ///
+    /// The other end of the same preference, reached without a first run: a finished device whose
+    /// image was deleted resumes at the build — `Settings::missing` reports it `Gone`, so
+    /// `resume_from` answers 2 — and the install then filed the new drive and left the device
+    /// naming the deleted one. Somebody presses the button because their iPod says a file is
+    /// missing, waits for a drive to be built, and is told the same file is missing.
+    #[test]
+    fn a_rebuilt_drive_replaces_the_one_the_device_lost() {
+        let data = DataDir::new("rebuilt-drive");
+        let fixture = a_plan(&data.at);
+        let drives = data.at.join("drives");
+        let cache = data.at.join("firmware");
+
+        // A finished device, and then its image is not there. Filed under a name of its own, so
+        // that the drive the build makes cannot accidentally be filed under the same one.
+        let mut settings = Settings::default();
+        let rom = nor::Source::Synthetic {
+            model: nor::DEFAULT_MODEL.into(),
+            seed: 5_150,
+            serial: None,
+            guid: None,
+            splash: None,
+        };
+        settings.nor = rom.clone();
+        settings.file_away(Resource::Firmware(rom), "Black 5.5G", None);
+        let lost = drives.join("the-one-that-went.img");
+        settings.disk = Some(lost.clone());
+        settings.file_disk(lost.clone(), "the-one-that-went");
+        settings.remember_as("My 5.5G");
+        assert!(!lost.exists(), "the fixture's drive is on disk");
+
+        let mut rail = Rail::new();
+        let mut q = Queue::fetching(drives.clone(), cache, fixture.release);
+        match q.press(&mut settings, &mut rail, true) {
+            Press::Running { from, embodied } => {
+                assert_eq!(from, 2, "a device whose drive is gone did not resume at the build");
+                assert!(!embodied, "a resume minted a second iPod");
+            }
+            other => panic!("the run would not start: {other:?}"),
+        }
+        let t = drain_to_a_stop(&mut q, &mut settings, &mut rail);
+        assert_eq!(rail.failures(), 0, "the run failed: {}", rail.announce());
+        assert_eq!(t.ready.as_deref(), Some("My 5.5G"), "the machine was never handed off");
+
+        let d = settings.devices.first().expect("the device is still there");
+        let attached = settings
+            .disk_of(d)
+            .expect("the device names no drive at all")
+            .expect("the drive it names is not in the library");
+        assert!(
+            attached.is_file(),
+            "`{}` still runs {}, which is the file that was missing before the build — the drive \
+             the run made is filed and attached to nothing",
+            d.name,
+            attached.display()
+        );
     }
 
     /// **The build and the install, for real.**
