@@ -14,6 +14,53 @@ belongs here.
 
 ---
 
+
+## ~~Every drive this program builds stops at its own boot logo~~ — FIXED 2026-08-25
+
+Reported by the operator from a clean first run: *"it never reaches RetailOS — it just gets stuck on
+the synthesised bootloader logo and then stops."*
+
+Isolated by swapping one variable at a time through the window's own start path. Same synthesised
+ROM, same code, only the drive changed:
+
+```
+                                        ata    lit pixels   co-proc frames
+a real iPod's drive (PRISTINE)          698      75 267           —
+the drive the first run built            22       2 612           0
+  ... and unchanged from 356 M instructions to 4.4 G
+the same built drive, `rsrc` corrected   70      71 695           4
+```
+
+Those 2 612 pixels are the synthesised bootloader's own logo, which is exactly what the operator
+described, and the machine never did anything after drawing it.
+
+**The cause is `mark_aupd_applied` doing half of what Apple's updater does.** An IPSW's firmware
+partition is written to the drive verbatim, and the updater is then marked already-applied so the
+drive boots its OS on the first power-up rather than the second. But the updater's last act is not
+one byte: it also rewrites `rsrc`'s load address and entry point from the values a *shipped bundle*
+carries to the values a *restored drive* carries.
+
+```
+                  a real iPod, post-restore   an IPSW as shipped
+    rsrc  addr          0x10000000                 0x00000000
+    rsrc  entry         0x0                        0x600
+```
+
+The function's own doc asserted the opposite in as many words — *"Nothing else in the partition is
+touched: `osos` and `rsrc` are Apple's bytes, unaltered"* — and that sentence is why nobody looked.
+
+**Not fixed, and now the thing in front:** the corrected drive stops at **70 ATA and 71 695 lit
+pixels**, which is where `ipod-boot retail` also stops. That is the older `ipod-boot`-vs-`ipod-gui`
+divergence recorded below, and it was hidden behind this one.
+
+**Not established:** whether every IPSW family's post-update `rsrc` takes `LOAD_ADDR_5G`. The
+reference drive measured is a 5G's; the drive that exposed this was built from a 5.5G bundle. One
+family measured, the other inferred from `osos` sharing the constant.
+
+**Also unfixed, and it is an instrument:** `--check-images` calls the broken drive **OK**. It reads
+the directory, reports `osos` present and `aupd` not armed, and has nothing to say about an `rsrc`
+that cannot be loaded where it claims.
+
 ## ~~The window's high-level boot put the OS beside SDRAM instead of in it~~ — FIXED 2026-08-25
 
 Found by pressing `Start` on a first run. Every synthesised iPod died in about a third of a second:

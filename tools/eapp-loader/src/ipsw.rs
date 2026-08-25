@@ -673,10 +673,31 @@ pub const MIN_FAT32_SECTORS: u64 = (FAT32_MIN_CLUSTERS as u64 + 1) * FAT32_SPC a
 /// `aupd`'s field at +0x08 to 1 so the next boot skips it. That is why a real iPod boots its OS on
 /// the second power-up after a restore and not the first.
 ///
-/// Writing the 1 here produces exactly the state a real iPod is in **after** that has happened, so
-/// a freshly built disk boots RetailOS straight away instead of asking the user to sit through a
-/// firmware update they did not ask for on a NOR the emulator is not writing anyway. Nothing else
-/// in the partition is touched: `osos` and `rsrc` are Apple's bytes, unaltered.
+/// **The updater's last act is not one byte, and believing it was is why every drive this program
+/// built stopped at its own boot logo.** This function used to write only the 1 and say so:
+/// *"Nothing else in the partition is touched: `osos` and `rsrc` are Apple's bytes, unaltered."*
+/// Measured 2026-08-25 against `ipod8g-retail.PRISTINE.img`, which is a real iPod after a real
+/// restore, that claim is false — Apple's updater rewrites `rsrc`'s load address and entry point
+/// too:
+///
+/// ```text
+///                    a real iPod, post-restore   an IPSW as shipped
+///     rsrc  addr           0x10000000                  0x00000000
+///     rsrc  entry          0x0                         0x600
+/// ```
+///
+/// An IPSW's `rsrc` carries its *packaging* values; a drive's carries its *runtime* ones. Writing
+/// the partition verbatim and marking `aupd` applied left the packaging values in place, and the
+/// window's boot went **22 ATA commands and 2 612 lit pixels, frozen from 356 M instructions to
+/// 4.4 G** — the synthesised bootloader's own logo and nothing after it. With `rsrc` corrected the
+/// same drive reaches **70 ATA, 71 695 lit pixels and four co-processor frames**, which is where
+/// `ipod-boot retail` also stops and is a different, older defect (see `KNOWN-BUGS.md`).
+///
+/// **`LOAD_ADDR_5G` rather than a literal**, because it is the same constant `osos` is loaded at
+/// and the same one the directory already records for it. What is NOT established is whether every
+/// IPSW family's post-update `rsrc` takes that address: the reference drive measured is a 5G's and
+/// the drive that exposed this was built from a 5.5G bundle. One family, measured; the other,
+/// inferred from `osos` sharing the constant.
 ///
 /// `with_aupd` leaves it armed, which is the configuration `flash-update.sh` measures.
 pub fn mark_aupd_applied(fw: &mut [u8]) -> bool {
@@ -689,6 +710,14 @@ pub fn mark_aupd_applied(fw: &mut [u8]) -> bool {
     }
     let at = DIRECTORY_AT + i * 40 + 8;
     fw[at..at + 4].copy_from_slice(&1u32.to_le_bytes());
+    // The other half of what the updater does, and the half this function spent its whole life
+    // claiming it did not need to. `rsrc` is not executed, so `entry` is 0 on a drive; `addr` is
+    // where the image is loaded, which is the same place `osos` goes.
+    if let Some(r) = dir.iter().position(|e| e.tag == "rsrc") {
+        let at = DIRECTORY_AT + r * 40;
+        fw[at + 0x14..at + 0x18].copy_from_slice(&LOAD_ADDR_5G.to_le_bytes());
+        fw[at + 0x18..at + 0x1c].copy_from_slice(&0u32.to_le_bytes());
+    }
     true
 }
 
@@ -1378,6 +1407,69 @@ mod firmware_state_tests {
         );
         let _ = std::fs::remove_file(p);
     }
+
+    /// **A drive this program builds carries the directory a real iPod carries after a restore.**
+    ///
+    /// The `aupd` byte was the whole of what `mark_aupd_applied` used to write, and a drive built
+    /// that way stopped at its own boot logo: 22 ATA commands and 2 612 lit pixels, unchanged from
+    /// 356 M instructions to 4.4 G. `rsrc` still held its packaging values — the address a shipped
+    /// IPSW records rather than the one a restored iPod records.
+    ///
+    /// Both fields are asserted because both were wrong, and because the easy one to believe
+    /// harmless is `entry`: `rsrc` is never executed, so a non-zero entry on it reads as a number
+    /// nobody looks at.
+    #[test]
+    fn the_updater_rewrites_rsrc_as_well_as_marking_itself_applied() {
+        let mut fw = vec![0u8; DIRECTORY_AT + 0x200];
+        for (i, (tag, dev, addr, entry)) in [
+            ("osos", 0u32, LOAD_ADDR_5G, 0u32),
+            ("rsrc", 0, 0, 0x600),
+            ("aupd", 0, LOAD_ADDR_5G, 0),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let at = DIRECTORY_AT + i * 40;
+            fw[at..at + 4].copy_from_slice(b"!ATA");
+            let mut t: Vec<u8> = tag.bytes().collect();
+            t.reverse();
+            fw[at + 4..at + 8].copy_from_slice(&t);
+            fw[at + 8..at + 0x0c].copy_from_slice(&dev.to_le_bytes());
+            fw[at + 0x14..at + 0x18].copy_from_slice(&addr.to_le_bytes());
+            fw[at + 0x18..at + 0x1c].copy_from_slice(&entry.to_le_bytes());
+        }
+
+        let r = images(&fw)
+            .into_iter()
+            .find(|i| i.tag == "rsrc")
+            .expect("rsrc");
+        assert_eq!(
+            (r.addr, r.entry),
+            (0, 0x600),
+            "the fixture does not carry an IPSW's own rsrc, so this test cannot show the defect"
+        );
+
+        assert!(mark_aupd_applied(&mut fw));
+        let after = images(&fw);
+
+        let aupd = after.iter().find(|i| i.tag == "aupd").expect("aupd");
+        assert_eq!(aupd.dev, 1, "the updater is not marked applied");
+
+        let r = after.iter().find(|i| i.tag == "rsrc").expect("rsrc");
+        assert_eq!(
+            (r.addr, r.entry),
+            (LOAD_ADDR_5G, 0),
+            "`rsrc` still carries the IPSW's packaging values, so this drive stops at the boot logo"
+        );
+
+        let o = after.iter().find(|i| i.tag == "osos").expect("osos");
+        assert_eq!(
+            (o.addr, o.entry),
+            (LOAD_ADDR_5G, 0),
+            "`osos` was altered; it is Apple's bytes and the updater does not move it"
+        );
+    }
+
 
     /// A drive with nothing bootable on it, which is the honest reading of a file that is not an
     /// iPod drive at all.
