@@ -73,22 +73,39 @@ pub const NOTHING_MOUNTED: &str = "nothing is mounted";
 
 /// §7.4's refusal, held while the pointer is down on a drawn control that is not the centre button.
 ///
-/// **The design's own wording, and it does not fit the row it is drawn on.** It is 71 characters
-/// against `geometry::CRADLE_LABEL_MAX_CHARS` = 48, so what a person sees at the smallest window
-/// this program draws a device on is `the wheel and the buttons belong to the machine, and t…`.
-/// Kept whole rather than shortened here: the first clause is the whole sentence's meaning and it
-/// survives the elision, which is the same trade `main::blocked_label`'s `Parts` arm already makes
-/// for a sentence carrying a path. See GUI.md §7.3's measurement table.
-pub const NO_MACHINE: &str =
-    "the wheel and the buttons belong to the machine, and there is no machine";
+/// **It used to be 71 characters against a 48-character row, and `bench-refused.png` is what that
+/// looked like**: `the wheel and the buttons belong to the machine, and there is no…`. The note
+/// here argued the elision was survivable because *"the first clause is the whole sentence's
+/// meaning"* — and the first clause does survive, but what a person actually reads ends on **`and
+/// there is no`**, a sentence cut off in the middle of naming the thing that is missing. That is
+/// the trade `main::blocked_label`'s `Parts` arm makes for a path, and it was wrong here for the
+/// reason that arm is right there: a path has a length this program does not choose, and this
+/// sentence is entirely ours.
+///
+/// **So it is shorter, and it fits.** Same fact, in the register §7.4 is actually about — what the
+/// drawn controls are for and when they work — rather than an ownership claim the reader has to
+/// finish for themselves. `every_machine_caption_this_module_types_fits_its_own_row` now measures
+/// it in the list of captions that fit rather than the list that elides gracefully.
+pub const NO_MACHINE: &str = "the wheel and buttons work once the iPod runs";
 
 /// §7.4's other refusal, for the one drawn control that is not a button.
 ///
-/// The design's own wording, and it was a literal inside `main::refusals` — the only sentence in
-/// §7.4 that lived outside this module, which is exactly the arrangement `NO_MACHINE` was moved
-/// here to end. Same exemption from `geometry::CRADLE_LABEL_MAX_CHARS`, for the same reason: there
-/// is no press in it to shorten and the first clause survives the elision.
-pub const NO_MACHINE_HOLD: &str = "the hold switch belongs to the machine, and there is no machine";
+/// It was a literal inside `main::refusals` — the only sentence in §7.4 that lived outside this
+/// module, which is exactly the arrangement `NO_MACHINE` was moved here to end.
+///
+/// **Shortened with its sibling, and for the same reason.** At 62 characters it elided to `the hold
+/// switch belongs to the machine, and there…`, which is the same sentence-cut-in-half as
+/// [`NO_MACHINE`] and was covered by the same note claiming the first clause was enough. It was
+/// also the one §7.4 refusal no test measured at all — it is in the budget list now.
+pub const NO_MACHINE_HOLD: &str = "the hold switch works once the iPod runs";
+
+/// §7.3's `Running` cradle: **[`NO_MACHINE`] with the tense turned round.**
+///
+/// The row used to read `running`, which is [`Life::shelf`]'s word for the same phase and drawn
+/// fifty pixels from it. See [`cradle`]'s `Running` arm for why that stopped being tenable and why
+/// this is the sentence that replaces it — the same reason the speed came off the shelf, reached
+/// from the other side.
+pub const WHEEL_IS_LIVE: &str = "the wheel and buttons are the iPod's now";
 
 /// **A count of instructions, for a person.** `412 M instr`, `21.5 G instr`, `900 instr`.
 ///
@@ -320,15 +337,29 @@ impl Life {
         }
     }
 
-    /// §12.2's fourth column — the shelf's row 1 trailing slot.
+    /// §12.2's fourth column — the shelf's row 1 trailing slot. **A state, and never a meter.**
+    ///
+    /// Every other row here is what the machine *is*: `off`, `stopped`, `off, parked 4 min ago`.
+    /// `Booting` carries a fraction because a person waiting on a 75-second cold boot is owed how
+    /// far along it is, and that is the same fact the progress bar under it draws.
+    ///
+    /// **`Running` used to carry the speed and no longer does.** §12.2's table asks for `running ·
+    /// 14.2 M instr/s · 24 % of real`, and the wider half was never built for a reason `readout.rs`
+    /// and this module's own header both record — *"`14.2 M instr/s` against a real 5G is 18.9 %"*,
+    /// a comparison nothing here can make honestly. The narrower half went with it: instructions
+    /// per second is a fact about how fast the *host* is emulating, not about the iPod, and the
+    /// shelf is the one band a person cannot navigate away from. §12.9 draws that line — the ~90
+    /// trace instruments are *"terminal instruments for a person already holding a hypothesis"* —
+    /// and a speed you would have to compare against a remembered number to learn anything from is
+    /// exactly that shape. The Readout's `MACHINE` block still has it, next to `instructions`,
+    /// `simulated`, `wall` and `stalled`, opt-in behind the Menu, which is where a person holding
+    /// that hypothesis goes. Nothing is hidden: `Pace::caption` is unchanged and `readout.rs`
+    /// is its caller.
     pub fn shelf(&self) -> String {
         match self {
             Life::Off => "off".into(),
             Life::Booting { progress, .. } => format!("booting — {}", progress.caption()),
-            Life::Running { pace, .. } => match pace.caption() {
-                Some(c) => format!("running — {c}"),
-                None => "running".into(),
-            },
+            Life::Running { .. } => "running".into(),
             Life::Stopped { .. } => "stopped".into(),
         }
     }
@@ -762,13 +793,22 @@ pub fn cradle(press: crate::Press, st: &Stand) -> Cradle {
             // §7.3's own row offers three forms — `running`, `running · wheel 41 queued`, and the
             // fullscreen hint — and this module's header already records why the middle one is
             // unavailable: it names `Stats::queued`, which §12.8 decides does not earn a row. The
-            // third needs `Window.full-screen`, which is §12.6 and not wired. That leaves the bare
-            // word, which is the row as written and the only one of the three that does not repeat
-            // what is already on screen.
+            // third needs `Window.full-screen`, which is §12.6 and not wired.
             //
-            // No press in it either, deliberately: §7.4 gives every drawn control to the machine
-            // while it is running, so there is nothing for the cradle to promise.
-            label: "running".into(),
+            // **That left the bare word, and the bare word has stopped working.** It was chosen as
+            // *the only one of the three that does not repeat what is already on screen*, which was
+            // true while [`Life::shelf`] read `running — 14 M instr/s`; the shelf is a state slot
+            // now and reads `running`, so the two are one word printed twice, fifty pixels apart —
+            // which is the defect the speed was taken off this row for in the first place, arrived
+            // at from the other direction.
+            //
+            // **So the cradle does its own job instead**, which §7.3 states as *what pressing will
+            // cost, or why it cannot be pressed*. While a machine runs there is no press for this
+            // caption to promise — §7.4 hands every drawn control to the machine — and that IS the
+            // answer, said plainly rather than by omission. It is [`NO_MACHINE`]'s sentence with
+            // the tense turned round: off, the wheel and buttons *work once the iPod runs*; running,
+            // they are the iPod's. One fact, two faces, and neither is the shelf's word.
+            label: WHEEL_IS_LIVE.into(),
         },
         Life::Stopped { reason, .. } => Cradle {
             ring: st.life.ring(),
@@ -1249,7 +1289,9 @@ mod tests {
     fn parking_outranks_the_phase_and_claims_no_fraction() {
         let life = Life::read(&out(Phase::Running, stats(487_220_016, 34.8)), &BootTarget::Os, None);
         let mut st = stand(None, &[], &life, None);
-        assert!(cradle(crate::Press::Centre, &st).label.starts_with("running"));
+        // The control: this is the `Running` row, so `parking` below is the rank rather than the
+        // only caption this stand could produce.
+        assert_eq!(cradle(crate::Press::Centre, &st).label, WHEEL_IS_LIVE);
         st.parking = true;
         let c = cradle(crate::Press::Centre, &st);
         assert_eq!(c.label, "parking");
@@ -1388,9 +1430,13 @@ mod tests {
             ("resume", format!("{verb} — resume, about 3 s")),
             ("no resume", format!("{verb} — no resume, about 75 s")),
             ("booting", format!("{verb} to stop — booting, 62 %")),
-            ("running", "running".to_string()),
+            ("running", WHEEL_IS_LIVE.to_string()),
             ("parking", PARKING.to_string()),
             ("nothing", NOTHING_MOUNTED.to_string()),
+            // §7.4's two refusals, which used to be two of the three below. `bench-refused.png`
+            // is why they moved: both cut off mid-clause on the row they are drawn on.
+            ("no machine", NO_MACHINE.to_string()),
+            ("no machine, hold", NO_MACHINE_HOLD.to_string()),
         ] {
             assert!(
                 said.chars().count() <= budget,
@@ -1399,8 +1445,15 @@ mod tests {
             );
         }
 
-        // **And the three that do not fit put the load-bearing words first.** `survives` is what a
+        // **And the two that do not fit put the load-bearing words first.** `survives` is what a
         // person reads at the smallest window; every clause named beside it has to be in there.
+        //
+        // It was three. Both of §7.4's refusals were down here on the argument that their first
+        // clause carries the meaning — true, and not the whole question: what a person read ended
+        // on `and there is no`, which is not a graceful elision but a sentence stopping in the
+        // middle of the noun it came to say. The two that are left carry a length this program does
+        // not choose — an instruction count and an emulator's own stop reason — which is the
+        // difference that earns the exemption.
         for (what, said, needs) in [
             (
                 "counted",
@@ -1412,7 +1465,6 @@ mod tests {
                 "stopped — Lost(0xe19b0000) at 128000 instructions".to_string(),
                 vec!["stopped", "Lost"],
             ),
-            ("no machine", NO_MACHINE.to_string(), vec!["belong to the machine"]),
         ] {
             let survives: String = said.chars().take(budget).collect();
             assert!(

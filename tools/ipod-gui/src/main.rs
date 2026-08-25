@@ -357,7 +357,7 @@ fn main() -> Result<(), slint::PlatformError> {
         window_logical: geometry::PREF_HEIGHT,
         sf,
     });
-    push_fit(&window, &fitter.fit(), sf, geometry::PREF_HEIGHT);
+    push_fit(&window, &fitter.fit(), geometry::PREF_HEIGHT);
     client_height::dump_layout(
         window.window(),
         &fitter.fit(),
@@ -486,7 +486,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let mut verb_width = None;
         if changed || fit.too_short {
             if let Some(w) = weak.upgrade() {
-                push_fit(&w, &fit, sf, measured);
+                push_fit(&w, &fit, measured);
                 // §17.Q12: the text renderer's answer, read off the composed window rather than
                 // computed from a budget. It is only available while the window is alive.
                 verb_width = Some(w.get_verb_width());
@@ -4271,8 +4271,29 @@ fn resolve_for_start(
     // one question. `run_device`'s own refusal is still consulted below: it catches the *unlisted*
     // case, which is a name that resolves to nothing and which no `stat` can see.
     let absent = settings.missing(&d);
-    if !absent.is_empty() {
-        return Err((d.name.clone(), refusal(&d, &absent)));
+    // **`Blocked::of` and not `absent.is_empty()`, and that is the floor under the whole press.**
+    //
+    // This asked one of the model's three questions, so a device that names **no drive at all**
+    // walked straight through it: `missing` reports nothing for such a device — §10.3's
+    // *unfinished, not broken* — and `run_device` accepts it, so the press built a `Config` around
+    // a machine with no disk and started it. What a person saw was a black panel that never
+    // changed, under a cradle that had promised to finish making the device.
+    //
+    // The two surfaces above no longer offer that press ([`startable`]), and this is still here
+    // because a view is not an authority on what the program can do — the same reason
+    // `take_next_step` re-checks a `Pressable` the markup already disabled. The first-run route is
+    // decided in `on_start_device` **before** this is called, so an `Unfinished` device arriving
+    // here is one whose press genuinely has nowhere to go.
+    if let Some(b) = machine::Blocked::of(Some(&d), &absent) {
+        // The cradle's own words, so this cannot become a fourth account of one device.
+        return Err((
+            d.name.clone(),
+            rail::Failure::saying(
+                rail::Class::Missing,
+                format!("starting {}", d.name),
+                blocked_label(Press::Centre, &d, &absent, b),
+            ),
+        ));
     }
     if settings.run_device(&d.name) {
         return Ok(d.name);
@@ -4372,6 +4393,35 @@ fn composed_and_unbuilt(d: &Device) -> bool {
     d.composed && !d.names_a_disk()
 }
 
+/// **§10.3's half-made first run**: a device with no drive whose press finishes the build.
+///
+/// The identity test is [`work::minted`]'s and not a name, for the reason that function gives: a
+/// person may rename the device and a rename must not mint a second iPod. This is the same pair of
+/// questions [`press_is_first_run`] asks on the press itself, factored out so the controls drawn
+/// *before* the press can ask it too — which is what they were not doing.
+fn finishes_the_first_run(s: &Settings, d: &Device) -> bool {
+    !d.names_a_disk() && work::minted(s).is_some_and(|m| m.name == d.name)
+}
+
+/// **Whether the press this device is drawn with has anywhere to go**, for §7.5's bench row and
+/// §7.2's `Start` alike.
+///
+/// One predicate, because they are one press — `start-device(i)` — and it was written out twice as
+/// `gone.is_empty() && !composed_and_unbuilt(d)`. That form asks two of the three questions
+/// [`machine::Blocked::of`] asks, and the missing one is §10.3's `Unfinished`: a device that names
+/// no drive at all. `Settings::missing` sees nothing wrong with such a device — *unfinished, not
+/// broken* — so both booleans answered *yes*, the bench drew a live ring and the Devices page drew
+/// a live blue `Start`, while `machine::cradle` — which does ask all three — captioned the very
+/// same iPod *press the centre button to finish making it*. One device, two answers, on one screen.
+/// Pressing it reached [`resolve_for_start`], which started a machine with no disk in it.
+///
+/// **The one exception is that same half-made first run**, whose press really does have somewhere
+/// to go: [`press_is_first_run`] routes it into `work::Queue` rather than at a machine. Refusing it
+/// here would take the only way to finish a device off both surfaces.
+fn startable(s: &Settings, d: &Device, absent: &[Absent]) -> bool {
+    machine::Blocked::of(Some(d), absent).is_none() || finishes_the_first_run(s, d)
+}
+
 /// §7.3's cradle label: **what pressing will cost, or why it cannot be pressed**, before it is
 /// pressed — for a device with **no machine**.
 ///
@@ -4390,6 +4440,15 @@ fn composed_and_unbuilt(d: &Device) -> bool {
 /// rows that arrived with the machine. The refusal arm is deliberately **not** held to the budget —
 /// `gone_sentence` carries a path, and §7.3's own note says the path goes on the end where there is
 /// one, so that line elides by design and the first words are what survive it.
+///
+/// **`#[cfg(test)]`, and that is a statement about the shipped window rather than about this
+/// function.** The drawing asks [`cradle_of`] directly, at the point it draws, because it wants the
+/// whole [`machine::Cradle`] — the ring and the broken flag as well as the sentence. This is the
+/// sentence alone, and what still wants it is the tests that check some *other* surface is quoting
+/// the cradle rather than inventing a second wording for one device. `#[cfg(test)]` rather than
+/// `#[allow(dead_code)]` for [`Press::ALL`]'s reason: an allow would go on covering it after the
+/// last caller left, and this is an oracle, so its being unreferenced is a thing worth hearing.
+#[cfg(test)]
 fn cradle_label(s: &Settings, d: &Device, absent: &[Absent]) -> String {
     cradle_label_at(Press::Centre, s, d, absent)
 }
@@ -4502,6 +4561,10 @@ impl Press {
 ///
 /// Every refusal arm is surface-independent by construction: a part that has left the library is
 /// gone wherever you are standing, and none of those sentences contains a press at all.
+///
+/// `#[cfg(test)]` for the reason [`cradle_label`] carries, which is the only caller left outside
+/// the tests that walk both of [`Press::ALL`] against one device.
+#[cfg(test)]
 fn cradle_label_at(press: Press, s: &Settings, d: &Device, absent: &[Absent]) -> String {
     cradle_of(press, s, d, absent, None).label
 }
@@ -4682,13 +4745,13 @@ fn panel_description(g: &machine::Glass) -> &'static str {
 /// function, so there is one thing to forget rather than two — and `window_logical` is a parameter
 /// rather than a field of [`fit::Fit`] because adding it there would make every plain resize
 /// `changed`, and `changed` is what stops a drag re-setting seven properties sixty times a second.
-fn push_fit(window: &MainWindow, fit: &fit::Fit, sf: f64, window_logical: f64) {
+fn push_fit(window: &MainWindow, fit: &fit::Fit, window_logical: f64) {
     window.set_hero(fit.hero_logical as f32);
     window.set_screen_w(fit.panel_w as f32);
     window.set_screen_h(fit.panel_h as f32);
     window.set_screen_scale(fit.k);
     window.set_too_short(fit.too_short);
-    window.set_fidelity(fidelity(fit.k, sf).into());
+    window.set_fidelity(fidelity(fit.k).into());
     window.set_select_d(select_d(fit.hero_logical));
     let (headline, body) = short_pane(fit, window_logical);
     window.set_short_headline(headline.into());
@@ -4749,22 +4812,40 @@ fn select_d(hero_logical: f64) -> f32 {
     2.0 * wheel::WheelRing::new(0.0, 0.0, outer).select
 }
 
-/// §7.5's row-2 trailing slot: *a number a bug report can quote*.
+/// §7.5's row-2 trailing slot: **which `k` is in force, and nothing else.**
 ///
-/// It names the display scale only where it differs from `k`, because otherwise the two numbers are
-/// the same fact written twice and the shorter line is the one that fits the narrowed measure.
+/// It used to read `panel 2x, 320x240 physical, display scale 200 %`, in mono, on every screen this
+/// window draws — and the operator's word for it was *debuggy*. It is the §12.9 line exactly: the
+/// program is *"a terminal instrument for a person already holding a hypothesis"* pinned to a band
+/// that a person who just wants to use an iPod cannot get away from. §12.9's bridge for that reader
+/// is `Copy the command line for this device`, on request; the Readout's `MACHINE` block is where a
+/// number a bug report can quote actually lives, opt-in behind the Menu, in mono, next to every
+/// other number of its kind.
+///
+/// **What survives is what §17.Q11 asked for and only that.** Q11 settles that a plain resize does
+/// not re-decide `k` — *"a drawn iPod that changes size while you drag an edge is worse"* — and
+/// pays for it by making the answer visible: *"the shelf's fidelity slot says which `k` is in
+/// force, so it is a stated limitation rather than a mystery."* That is `k`. It is not the panel's
+/// pixel dimensions, which are `320x240` on every iPod this program emulates and so distinguish
+/// nothing; it is not the display's scale factor, which is the platform's business and which a
+/// person cannot act on from here; and it is not `nearest neighbour`, which is the name of a
+/// resampling filter. `2x` is the whole of the fact.
+///
+/// **`1x` draws nothing at all.** A slot that says *this iPod is drawn at its own size* on the
+/// commonest configuration in the world is a label with no reader; the fact Q11 wants visible is
+/// only a fact when `k` is doing something. `push_fit` writes the empty string through, and
+/// `bench.slint` draws an empty string as nothing.
 ///
 /// **ASCII, and the `·` and `×` it used to carry are the point.** This string is drawn on shelf row
 /// 2, twenty pixels above a row 3 that goes to the trouble of drawing `·` as a `Path` because §6.7
 /// considers it unproven — and `·` is the exact character §6.7 names as the one the shipped window
 /// built into UI strings with no coverage gate at all. One band cannot have two answers to one
-/// question, and Rust has no drawn-Path escape hatch, so Rust types ASCII.
-fn fidelity(k: i32, sf: f64) -> String {
-    let scale_pct = (sf * 100.0).round();
-    if (scale_pct - 100.0).abs() < 0.5 {
-        format!("panel {k}x, 320x240, nearest neighbour")
+/// question, and Rust has no drawn-Path escape hatch, so Rust types ASCII. That rules out `2×`.
+fn fidelity(k: i32) -> String {
+    if k <= 1 {
+        String::new()
     } else {
-        format!("panel {k}x, 320x240 physical, display scale {scale_pct:.0} %")
+        format!("{k}x")
     }
 }
 
@@ -5747,9 +5828,11 @@ fn device_rows(settings: &Settings, live: Option<&Live>) -> Vec<DeviceRow> {
                 name: d.name.clone().into(),
                 summary: summary(settings, d, &mut seen).into(),
                 // **The label's own boolean**, so a cradle that refuses is not also drawn
-                // pressable. `gone.is_empty()` alone answered `true` for a composed device, because
-                // nothing about it is missing — it was never made.
-                startable: gone.is_empty() && !composed_and_unbuilt(d),
+                // pressable — and it is [`startable`] now, which is the same classification the
+                // caption above it comes from. Written out here it asked two of `Blocked::of`'s
+                // three questions, so a device with no drive was drawn live under a cradle
+                // refusing it. See [`startable`].
+                startable: startable(settings, d, &gone),
                 cradle_label: cradle.label.into(),
                 // §7.3's ring and its continuity, from the same call as the sentence above.
                 cradle_ring: ring(cradle.ring),
@@ -7473,6 +7556,85 @@ pub(crate) mod tests {
         }
     }
 
+    /// **A device that has nothing does not start, and the one that can be finished still can.**
+    ///
+    /// The operator's question was *how can I be starting an iPod that has nothing*, and this is
+    /// the whole of it. A device may name **no drive at all**: `Settings::missing` reports nothing
+    /// wrong with it — §10.3's *unfinished, not broken* — and `run_device` accepts it. So the two
+    /// booleans that guarded the press, both written as `gone.is_empty() &&
+    /// !composed_and_unbuilt(d)`, both answered *yes*; the bench drew a live ring, the Devices page
+    /// drew a live blue `Start`, and `resolve_for_start` built a machine around a device with no
+    /// disk and ran it. What that looks like is a black panel that never changes — an iPod that has
+    /// nothing, started. `machine::cradle` was captioning that same device *press the centre button
+    /// to finish making it* at the same moment, because it asks [`machine::Blocked::of`], which has
+    /// had the third question all along.
+    ///
+    /// **Both arms, because the fix is a refusal and a refusal is easy to over-apply.** §10.3's
+    /// half-made first run has no drive either, and its press really does finish the build — take
+    /// that away and the only route to finishing a device is gone from both surfaces. `work::minted`
+    /// is what separates them, and it is the same identity test `press_is_first_run` makes.
+    ///
+    /// Proved red both ways: the `dump` arm starts against `absent.is_empty()`, and the `minted`
+    /// arm is refused if `startable` drops the `finishes_the_first_run` half.
+    #[test]
+    fn a_device_that_names_no_drive_does_not_start() {
+        // The half-made first run: a synthesised ROM with a minted seed, and no drive yet.
+        let dir = temp_dir("nothing-minted");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(Device { disk: None, ..d });
+        assert!(
+            finishes_the_first_run(&s, &s.devices[0]),
+            "the fixture is not the half-made first run this arm is about"
+        );
+        assert!(
+            device_rows(&s, None)[0].startable,
+            "§10.3's half-made first run cannot be finished from the bench any more"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+
+        // The same shape with a boot ROM nothing minted — a dump somebody has, and no drive built
+        // from it yet. `work::minted` does not claim it, so the press has nowhere to go.
+        let dir = temp_dir("nothing-dump");
+        let rom = dir.join("nor-a146.bin");
+        std::fs::create_dir_all(&dir).ok();
+        std::fs::write(&rom, b"not really a ROM").unwrap();
+        let mut s = Settings::default();
+        let named = s.file_away(
+            eapp_loader::settings::Resource::Firmware(eapp_loader::nor::Source::File(rom)),
+            "nor-a146",
+            None,
+        );
+        s.devices.push(Device {
+            name: "From a dump".into(),
+            firmware: named,
+            disk: None,
+            ..Device::default()
+        });
+
+        assert!(
+            !finishes_the_first_run(&s, &s.devices[0]),
+            "the fixture is the first run after all, which is the other arm"
+        );
+        let row = &device_rows(&s, None)[0];
+        assert!(
+            !row.startable,
+            "the bench offers to start an iPod with no drive: {:?}",
+            row.cradle_label
+        );
+        // The bench and the press are one question — the rule this test's neighbour above states.
+        let pressed = resolve_for_start(&mut s, 0);
+        assert!(
+            pressed.is_err(),
+            "a device with no drive started: {:?}",
+            pressed
+        );
+        assert!(
+            s.current.is_none(),
+            "a refused device was made the live one anyway"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// **The handler `main` actually registers, driven end to end.**
     ///
     /// This is the test that was missing, and its absence is why a panic on the success path shipped
@@ -9041,7 +9203,7 @@ pub(crate) mod tests {
             "The panel is showing the boot sequence."
         );
 
-        // (2) `Running`, with the speed §12.2 puts in the shelf's trailing slot.
+        // (2) `Running`, with a speed on the machine that the bench does **not** draw.
         {
             let held = live.borrow();
             let mut out = held.as_ref().unwrap().link.out.lock().unwrap();
@@ -9051,11 +9213,28 @@ pub(crate) mod tests {
         }
         pump_machine(&w, &live, &devices, &s);
         let row = devices.row_data(0).expect("the row");
-        // **The cradle says the word and the shelf says the speed, and neither says both.** The
-        // first picture of a running bench had `running — 14 M instr/s` on both, fifty pixels
-        // apart — see `machine::cradle`'s `Running` arm, where the reason is written down.
-        assert_eq!(row.cradle_label.to_string(), "running");
-        assert!(row.state.starts_with("running — 14 M instr/s"), "{:?}", row.state);
+        // **Neither the cradle nor the shelf says the speed, and the machine is publishing one.**
+        //
+        // The first picture of a running bench had `running — 14 M instr/s` on both, fifty pixels
+        // apart; the cradle dropped it then, and the shelf has dropped it now — see
+        // `machine::Life::shelf`, where the reason is written down. The pace is set above precisely
+        // so this is a measurement rather than a fixture with nothing to print: `Pace::caption`
+        // would answer `14 M instr/s` for these numbers, and the Readout is what asks it.
+        assert_eq!(row.state.to_string(), "running", "the shelf is a meter again");
+        assert!(
+            !row.state.contains("instr"),
+            "instructions per second on the one band a person cannot leave: {:?}",
+            row.state
+        );
+        // **And the two are not one word printed twice.** The cradle said `running` while the shelf
+        // said `running — 14 M instr/s`; taking the meter off the shelf made them identical, so the
+        // cradle took §7.3's actual question back — see `machine::cradle`'s `Running` arm.
+        assert_eq!(row.cradle_label.to_string(), machine::WHEEL_IS_LIVE);
+        assert_ne!(
+            row.cradle_label.to_string(),
+            row.state.to_string(),
+            "the cradle and the shelf are printing one word twice, fifty pixels apart"
+        );
         assert!(w.get_running(), "the machine is running and the window has not noticed");
         assert_eq!(
             w.get_panel_description().to_string(),
@@ -10839,7 +11018,7 @@ pub(crate) mod tests {
             panel_h: 240.0,
             too_short: true,
         };
-        push_fit(&w, &f, 2.0, geometry::PREF_HEIGHT);
+        push_fit(&w, &f, geometry::PREF_HEIGHT);
         assert_eq!(w.get_screen_scale(), 2);
         assert!(w.get_too_short(), "the too-short input did not reach the window");
         assert!(
@@ -11006,7 +11185,7 @@ pub(crate) mod tests {
         // One pixel under, and it is.
         let (fit, _) = fitter.apply(fit::Moment::Resized { window_logical: need - 1.0 });
         assert!(fit.too_short, "{:.1} px is under {need:.1} and did not flip", need - 1.0);
-        push_fit(&w, &fit, sf, need - 1.0);
+        push_fit(&w, &fit, need - 1.0);
         assert!(w.get_too_short(), "the flip did not reach the window");
         // …and so did the sentence the pane draws, which is the other half of the same push. A
         // boolean that arrives without it draws §9.5's state with an empty line where the
@@ -11031,7 +11210,7 @@ pub(crate) mod tests {
         let (fit, _) =
             fitter.apply(fit::Moment::Resized { window_logical: need + geometry::HYSTERESIS + 1.0 });
         assert!(!fit.too_short, "it cleared the whole band and stayed too short");
-        push_fit(&w, &fit, sf, need + geometry::HYSTERESIS + 1.0);
+        push_fit(&w, &fit, need + geometry::HYSTERESIS + 1.0);
         assert!(!w.get_too_short(), "the flip back did not reach the window");
     }
 
@@ -11978,7 +12157,7 @@ pub(crate) mod tests {
         w.set_held_sentence(slint::SharedString::new());
         w.global::<Motion>().set_scale(motion::scale());
         w.global::<Metric>().set_mono_family(mono_family().into());
-        push_fit(w, &dressed_fit(), 2.0, geometry::PREF_HEIGHT);
+        push_fit(w, &dressed_fit(), geometry::PREF_HEIGHT);
         push_ledger(w, None, &temp_dir("shots"), None);
         let rows: Rc<VecModel<RailRow>> = Rc::new(VecModel::default());
         w.set_rail(ModelRc::from(rows.clone()));
@@ -12384,7 +12563,7 @@ pub(crate) mod tests {
         // logical px of window against the 809.8 the iPod at 1:1 needs — the display class §9.5 is
         // written for, and the one a laptop this program will actually be run on has.
         let short = fit::Fit { too_short: true, ..dressed_fit() };
-        push_fit(&w, &short, 2.0, 735.0);
+        push_fit(&w, &short, 735.0);
         shots.push(("bench-too-short", shoot(&w, &nav::Stack::new(), &full, "bench-too-short")));
         // …and back to a window tall enough to draw the device, so the shot below stands where
         // every shot above it did.
@@ -12890,7 +13069,7 @@ pub(crate) mod tests {
         // makes the two halves comparable: `push_short`'s sentences are the pane's own and nothing
         // else in the window is touched.
         let short = fit::Fit { too_short: true, ..dressed_fit() };
-        push_fit(&w, &short, 2.0, 735.0);
+        push_fit(&w, &short, 735.0);
         draw(&w, &at, &f);
         let drawn = text_on_screen(&w);
 
@@ -12961,7 +13140,7 @@ pub(crate) mod tests {
         );
 
         // (3) …and back, because a state that never goes away is not a state.
-        push_fit(&w, &dressed_fit(), 2.0, geometry::PREF_HEIGHT);
+        push_fit(&w, &dressed_fit(), geometry::PREF_HEIGHT);
         draw(&w, &at, &f);
         let back = text_on_screen(&w);
         assert!(
@@ -15393,20 +15572,34 @@ pub(crate) mod tests {
         }
     }
 
-    /// §7.5's row-2 trailing slot names the display scale only where it differs from `k`.
+    /// §7.5's row-2 trailing slot carries **`k` and no other measurement**, and is empty at `k = 1`.
+    ///
+    /// §17.Q11 is the whole warrant for this slot existing — *"the shelf's fidelity slot says which
+    /// `k` is in force"* — and the line had grown three more numbers than that sentence asks for.
+    /// The panel's dimensions are the same on every iPod this program emulates, the display's scale
+    /// factor is the platform's and not actionable from here, and `nearest neighbour` is the name of
+    /// a resampling filter; all three were mono instrumentation on a band a person cannot leave.
     ///
     /// **And it is ASCII.** It used to read `panel 2× · 320×240 · nearest neighbour`, drawn on shelf
     /// row 2 — twenty pixels above a row 3 that draws `·` as a `Path` because §6.7 does not consider
-    /// it proven. One band, two answers.
+    /// it proven. One band, two answers. That is what rules out `2×` here.
+    ///
+    /// Proved red by restoring the `320x240` half, and by returning `1x` for `k = 1`.
     #[test]
-    fn the_fidelity_line_carries_a_number_a_bug_report_can_quote() {
-        let one = fidelity(1, 1.0);
-        assert!(one.contains("320x240"), "{one}");
-        assert!(!one.contains("display scale"), "the same fact written twice: {one}");
-        let two = fidelity(1, 1.25);
-        assert!(two.contains("display scale 125 %"), "{two}");
-        for s in [&one, &two] {
+    fn the_fidelity_line_carries_k_and_nothing_else() {
+        assert_eq!(fidelity(1), "", "the commonest display in the world gets a label to ignore");
+        assert_eq!(fidelity(2), "2x");
+        assert_eq!(fidelity(8), "8x");
+        for k in 1..=geometry::K_MAX {
+            let s = fidelity(k);
             assert!(s.is_ascii(), "the fidelity line carries a glyph nothing has proved: {s:?}");
+            // The four instruments that were on this line, none of which §17.Q11 asked for.
+            for banned in ["320", "240", "panel", "scale", "%", "nearest"] {
+                assert!(
+                    !s.contains(banned),
+                    "the fidelity line is instrumentation again at k={k}: {s:?} carries {banned:?}"
+                );
+            }
         }
     }
 

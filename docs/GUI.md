@@ -936,6 +936,35 @@ that Rust sets true on a change and false 140 ms later.
 `Colour::Unspecified` is drawn `#E4E4E2` and never black — drawing an unknown chassis black would
 invent a fact about somebody's iPod, and the model already refuses to.
 
+#### `Start` asks the model's question, not two thirds of it *(added 2026-08-25)*
+
+**Reported as: *how can I be starting an iPod that has nothing?*** The answer is that two surfaces
+were deciding *can this be pressed* by re-deriving the model's classification instead of asking for
+it, and each got two of its three questions.
+
+`machine::Blocked::of` asks three: is a part gone (`Parts`), was this composed and not yet built
+(`Unbuilt`), and **does it name a drive at all** (`Unfinished`). §7.5's bench row and §7.2's `Start`
+both wrote the predicate out by hand as `gone.is_empty() && !composed_and_unbuilt(d)` — the first two.
+The third is §10.3's *unfinished, not broken*: `Settings::missing` reports nothing for a device with
+no drive, because there is no file to be missing, and `Settings::run_device` accepts it. So a device
+that named a boot ROM and no drive answered *yes* to both booleans. The bench drew a live ring and
+the Devices page drew a live blue `Start` wearing no sentence — while `machine::cradle`, which does
+ask all three, captioned that same iPod *press the centre button to finish making it*, fifty pixels
+away, in the same frame. Pressing it reached `resolve_for_start`, which asked only whether anything
+was *missing*, found nothing, and started a machine with no disk in it. What that looks like is a
+black panel that never changes.
+
+**One predicate now answers it for both surfaces** — `main::startable` — and `resolve_for_start` asks
+`Blocked::of` too, because a view is not an authority on what the program can do.
+
+**The exception is the half-made first run, and it is why this is not simply a refusal.** §10.3's
+device has no drive either, and pressing it genuinely does something: `press_is_first_run` routes it
+into `work::Queue` to finish the build. Refusing every diskless device would have taken the only way
+to finish a device off both surfaces. `work::minted` separates them — it is the same identity test
+the press itself makes — and the Devices row that stays live says **`Finish making it`** rather than
+`Start`, because the press builds, and a control labelled `Start` over a device with no drive is what
+made the question askable in the first place.
+
 #### A fact is not a reason, and it wraps *(added 2026-08-24)*
 
 The five `Made of` lines — `iPod`, `Drive`, `Built from`, `Installed`, `Writes to` — are a labelled
@@ -976,14 +1005,14 @@ on either side. Its geometry is constant. Only its colour and its continuity cha
 | first run | `accent` | `press ● to make an iPod · 6.5 MB to download, about 28 MB on disk` |
 | **first run, partly done** | `accent` | `press ● to finish making My 5.5G` |
 | **booting** | `fg-dim` | `booting · 62 %` — or `booting · 412 M instructions` with no denominator — **and always** ` · press ● to stop` |
-| running | `fg-dim` | `running` — or `running · wheel 41 queued` — or, where fullscreen is available and the strip is not drawable, `running · ⌃⌘F for 7× · Esc to come back` |
+| running | `fg-dim` | `the wheel and buttons are the iPod's now` — was `running`, until §12.2's shelf slot became that same word; see §7.4 |
 | working | `fg-dim` | `building · 41 % · fetching Rockbox 4.0` |
 | parking | `fg-dim` | `parking · 0.7 of 1.6 GB` |
 | stopped | `danger` | `stopped — Lost(0xe19b0000)` |
 | **cannot start, one part gone** | `fg-dim`, **broken ring** | `cannot start — my-5.5g.img is not where it was` |
 | **cannot start, more than one** | `fg-dim`, **broken ring** | `cannot start — two of its parts are missing · MENU › Devices ›` |
 | **cannot start, not a 5.5G** | `fg-dim`, **broken ring** | `cannot start — that boot ROM is a nano-class device` |
-| **a control was pressed and there is no machine** | unchanged | `the wheel and the buttons belong to the machine, and there is no machine` — held while the pointer is down |
+| **a control was pressed and there is no machine** | unchanged | `the wheel and buttons work once the iPod runs` — held while the pointer is down |
 | nothing mounted | `fg-dim` | `nothing is mounted` |
 | focused | +2 px **`fg`** ring, 4 px outside, **instant** | unchanged |
 
@@ -1116,8 +1145,9 @@ hardware is not a trade worth making.
   one the machine's own hit test uses.
 - **The hold switch is drawn, on the top edge**, and it is a first-class concept and not a button:
   it has its own command (`holdsw on|off`), its own field (`Stats::hold`) and its own key (`H`).
-  With no machine it sits in the off position, inert, with the reason `the hold switch belongs to
-  the machine, and there is no machine`.
+  With no machine it sits in the off position, inert, with the reason `the hold switch works once
+  the iPod runs` — shortened from `the hold switch belongs to the machine, and there is no machine`,
+  which did not fit the row it is drawn on. See §7.4.
 
 **The two real latencies are visible rather than hidden**, because the machine runs at ~24 % of real
 time and pretending otherwise makes the drawing lie:
@@ -1132,9 +1162,12 @@ time and pretending otherwise makes the drawing lie:
   `tight` and restores it. Principle 3's exception says both halves for exactly this reason.
 - The wheel drains one event per `click_gap` = 300 000 instructions ≈ 21 ms wall ≈ **47 clicks a
   second**, so a full 96-detent rotation takes about two seconds to deliver, and `MAX_QUEUE` is 96.
-  **Momentum scrolling is therefore not viable and is not offered.** The backlog is shown on the
-  **cradle label** — `running · wheel 41 queued` — and never on the wheel itself, and
-  `input_dropped > 0` turns that clause `warn`, because a refused step is a lie about what you did.
+  **Momentum scrolling is therefore not viable and is not offered.** The backlog was to be shown on
+  the **cradle label** — `running · wheel 41 queued` — and never on the wheel itself, with
+  `input_dropped > 0` turning that clause `warn`, because a refused step is a lie about what you did.
+  **§12.8 refuses `Stats::queued` a row and that refusal won**; §7.3's running caption is now `the
+  wheel and buttons are the iPod's now` and carries no number at all. The backlog has no surface,
+  which is a gap rather than a decision — see §12.8's bullet for the whole argument.
 
 #### Built 2026-08-24, and three corrections the building produced
 
@@ -1154,17 +1187,34 @@ because §16.8's rows were not built when it was written. `M` on a bench with no
 §14.1 is the reason and it does not distinguish between a finger and a keystroke. The one row that
 is **not** refused is `← →`, because §16.8 gives it a second job — see there.
 
-**Measured: at `hero` the elision drops the noun.** `machine::NO_MACHINE` is 71 characters and this
-section's own note predicts `the wheel and the buttons belong to the machine, and t…` at
-`CRADLE_LABEL_MAX_CHARS` = 48. That is the *narrowest* window; at hero the label is wider and
-`_out/gui/bench-refused.png` reads
+**Measured: at `hero` the elision dropped the noun, and the sentence is shorter now.** The wording
+was `the wheel and the buttons belong to the machine, and there is no machine` — 71 characters
+against `CRADLE_LABEL_MAX_CHARS` = 48. This section predicted the narrowest window's cut as `…and
+t…`; `_out/gui/bench-refused.png` showed what is actually drawn at `hero`:
 
 > the wheel and the buttons belong to the machine, and there is no…
 
-— which stops one word short of the word the sentence is about. The first clause survives, which is
-the trade this section already accepted, so nothing is changed here; it is recorded because the
-predicted elision and the drawn one are not the same string and only one of them had ever been
-looked at.
+That was recorded once as acceptable, on the ground that the first clause carries the meaning and
+survives. **It is not acceptable, and the picture is the argument**: what a person reads ends on
+*and there is no*, a sentence stopped in the middle of naming the thing that is missing. The trade
+this section borrowed is `blocked_label`'s, for a sentence carrying a filesystem path — and that
+trade is earned by the path's length not being ours to choose. This sentence was entirely ours.
+
+**So it fits now**: `the wheel and buttons work once the iPod runs`, 45 characters, and it says the
+same thing in the register §7.4 is actually about — what the drawn controls are for and when they
+work — rather than an ownership claim the reader has to finish for themselves. The hold switch's
+refusal was 62 characters and cut the same way; it is `the hold switch works once the iPod runs`.
+Both are measured by `every_machine_caption_this_module_types_fits_its_own_row`, in its list of
+captions that **fit** rather than its list of captions that elide gracefully — and the hold switch's
+was in neither list before, so nothing had ever measured it at all.
+
+**And §7.3's `Running` cradle is the same sentence with the tense turned round**: `the wheel and
+buttons are the iPod's now`. That row was the bare word `running` until the shelf's trailing slot
+became `running` too — see §12.2 — at which point the bench was printing one word twice, fifty
+pixels apart. The cradle cannot simply fall silent there: `bench.slint` uses `cradle-label` as the
+drawn well's `accessible-description`, so an empty caption is a screen reader losing the iPod. It
+answers §7.3's own question instead, which while a machine runs is *the controls you can see are
+live*.
 
 ### 7.5 The shelf — 88 px, three rows, flush to the bottom, full width
 
@@ -1227,9 +1277,14 @@ qualifier after the em-dash is dropped and lives on the device's drawer page ins
 copy of` and `writes to` are the first words on the line, so even a hard truncation preserves the
 dangerous one.
 
-The right-hand slot of row 2 always carries a number a bug report can quote:
-`panel 1× · 320×240 · nearest neighbour`, or where `k` and the display scale differ,
-`panel 1× · 320×240 physical · display scale 125 %`.
+**The right-hand slot of row 2 carries `k`, and nothing else.** `2x` where the iPod is drawn at
+double, and *empty* at `k = 1`. It was specified here as *a number a bug report can quote* —
+`panel 1× · 320×240 · nearest neighbour`, or `panel 1× · 320×240 physical · display scale 125 %` —
+and shipped as the ASCII form of exactly that. §17.Q11 is the only thing that ever asked for this
+slot, and it asks for one fact: which `k` is in force, because a plain resize does not re-decide it.
+The rest was instrumentation on a band with no exit, and it was crowding the sentence beside it —
+see §17.Q11 for the measurement and the before-and-after picture. A bug report quotes the Readout,
+which is where every number of that kind lives.
 
 The left slot of row 3 is the program's entire discoverability and is also a control: clicking it
 opens the drawer. That, the 12 px handle, `⌘\`, `⌘,` and the menu bar are the four routes in — `Esc`
@@ -2678,7 +2733,7 @@ much), and put the number in the changelog.
 |---|---|---|---|
 | `Off` | `accent`, or a broken ring | **dark** | `off` |
 | `Booting { target }` | `fg-dim` | the ROM's boot screen | `booting · 62 %` or the instruction count |
-| `Running` | `fg-dim` | live | `running · 14.2 M instr/s · 24 % of real` |
+| `Running` | `fg-dim` | live | `running` |
 | `Stopped(reason)` | `danger` | **its last frame, kept** | `stopped` |
 
 `Off` means **no machine exists, nothing is executing, and the panel is dark** — the state a 5G is in
@@ -2713,6 +2768,22 @@ not drawn**, and both are now: §12.4's `parking` caption has a producer — `Es
 a Gauge on §12.8's Readout, which is built. **The glass gained a fifth state with the park**:
 `panel-lit` is `Glass != Dark` rather than `phase != Off`, because a device that is off with a
 restore point beside it has §12.4's frame on it and an unlit panel draws it at `opacity: 0`.)*
+
+*(**The `Running` row lost its meters, 2026-08-25.** It read `running · 14.2 M instr/s · 24 % of
+real`. The wider half was never built and cannot be: `readout.rs` and `machine.rs` both record that
+*"`14.2 M instr/s` against a real 5G is 18.9 %"* — the comparison needs a real 5G's rate, which
+nothing here measures. The narrower half was built, drawn, and is now gone too. **The trailing slot
+is a state slot** — `off`, `booting — 62 %`, `stopped`, `off, parked 4 min ago` are all what the
+machine *is*, and instructions per second is how fast the host happens to be emulating. It is a fact
+about this laptop, not about the iPod, pinned to the one band a person cannot navigate away from;
+§12.9's line puts an instrument behind a request, and the Readout's `MACHINE` block already has this
+one, opt-in behind the Menu, beside `instructions`, `simulated`, `wall` and `stalled`. Nothing is
+hidden — `Pace::caption` is unchanged and `readout.rs` is its caller. **§7.3's `Running` cradle moved
+with it**: that row was the bare word `running`, chosen as *the only one of the three forms that does
+not repeat what is already on screen*, which stopped being true the moment the shelf's word became
+`running` too. One word printed twice, fifty pixels apart, is the defect the speed came off this row
+to avoid, arrived at from the other side — so the cradle answers §7.3's own question instead, and
+says that the drawn controls are live. See §7.4.)*
 
 `Stopped` is the opposite and for the opposite reason: **the last frame is evidence** and is kept.
 Row 2 carries the reason in `fg`, row 3's trailing slot offers `Cold boot` and `Copy the reason`, and
@@ -3117,13 +3188,16 @@ comes off both.
   which. `machine::Pace` therefore publishes the speed it can measure — `here / wall_secs`, which is
   a division of two numbers the run loop actually keeps — and **no ratio at all**. The row comes back
   when somebody writes down what it divides by.
-- **§7.3 wants `queued` on the cradle and this section refuses it a row.** The cradle's running line
-  is specified as `running` — *or* `running · wheel 41 queued`, and `Stats::queued` is the field that
-  would fill it. Two sections of one document asking opposite things of one number is the shape §16.9
-  exists to delete. This section's argument is the stronger one and holds: `machine::Life` reads
-  `queued` nowhere, and the running caption carries the measured speed instead. **§7.3's row should
-  lose the clause**; it is left in place here rather than edited silently, because that table is the
-  design's own wording.
+- **§7.3 wanted `queued` on the cradle and this section refused it a row.** That table specified the
+  running line as `running` — *or* `running · wheel 41 queued`, and `Stats::queued` is the field that
+  would have filled it. Two sections of one document asking opposite things of one number is the
+  shape §16.9 exists to delete. This section's argument was the stronger one and held: `machine::Life`
+  reads `queued` nowhere. **§7.3's row has lost the clause** (2026-08-25) — and the whole rest of it
+  besides. The line it specified was resolved by *"the running caption carries the measured speed
+  instead"*, which is no longer true either: the speed came off the shelf as an instrument (§12.2),
+  the bare word `running` then collided with the shelf's own word, and §7.3's running row now answers
+  what pressing costs rather than restating the phase. One number, one section, and the caption is
+  not about the number at all.
 
 **Cost discipline.** The run loop takes the `out` lock once per `SLICE` = 250 000 instructions —
 about 56 times a second at 14 M instr/s — and memcpys 230 400 bytes into `out.fb` on refresh frames.
@@ -3421,6 +3495,8 @@ Each for a stated reason, not for lack of time.
 | **Target disk mode as a working target** | a USB feature, and USB is unmodelled. `Lost(0xe19b0000)` after 127 952 instructions. Offered as a **disabled project state** |
 | **Audio** | a 1.0 condition. The Wolfson codec is unmodelled |
 | **The ~90 trace instruments, `dis`, `tcb`, `ghidra`, `ipod-film`, the boot recipes, the control socket** | §12.9. Terminal instruments for a person already holding a hypothesis. The bridge is `Copy the command line for this device`, masked by default |
+| **A framebuffer scale, a panel size, a display scale factor and a filter name on shelf row 2** | §12.9, and the same argument one band lower. §17.Q11 asks this slot for `k`; it had grown three more numbers, in mono, on every screen. It reads `2x`, and nothing at `k = 1` |
+| **Instructions per second on shelf row 1** | §12.2. A state slot holds what the machine *is*. A rate is how fast the host is emulating — a fact about this laptop — and the Readout's `MACHINE` block already has it, opt-in |
 | **A second window, tear-off panels, multiple machines** | there is exactly one machine, by design. §7.2 is what makes "look at a second device" possible without one |
 | **A shader pipeline, any scaler above nearest** | §13.4 and principle 9 |
 | **Remembering window position on Wayland** | `set_outer_position` is documented Unsupported there, and there is no work-area query either. Stated in Reference rather than pretended |
@@ -4091,6 +4167,24 @@ immediately and would make the iPod change size under a drag, which is principle
 which `k` is in force, so it is a stated limitation rather than a mystery. If it turns out to annoy,
 the cheapest fix is a one-line offer in that slot (`2× fits this window — relaunch to use it`), not a
 live recompute.
+
+*(**And that slot is now only that, 2026-08-25.** It had grown into `panel 2x, 320x240 physical,
+display scale 200 %` — mono, on shelf row 2, on every screen this window draws. This paragraph is
+the whole warrant for the slot existing, and it asks for one thing: which `k` is in force. The panel
+is `320x240` on every iPod this program emulates, so those digits distinguish nothing; the display's
+scale factor is the platform's and not actionable from here; `nearest neighbour` is the name of a
+resampling filter. All three were §12.9's *terminal instruments for a person already holding a
+hypothesis*, pinned to the one band a person cannot navigate away from — and the operator's word for
+the result was **debuggy**. The slot reads `2x`, and at `k = 1` it reads nothing at all: a label
+saying *this iPod is drawn at its own size* on the commonest configuration in the world has no
+reader, and the fact this paragraph wants visible is only a fact when `k` is doing something. It
+stays ASCII — `2×` would be a glyph §6.7 has not proved — so `2x` it is.
+
+**What deleting it bought, which was not the point but is the best evidence for it**: the empty
+bench's row 2 reads *You do not need an iPod, or any files off one. One press makes one: a 5.5G,
+30 GB, black.* — and it had been eliding at *One …* because the mono line was sitting in the space
+it needed. Compare `_out/gui/parts-empty.png` before and after. The instrument was not merely
+useless to that reader; it was taking the sentence written for them.)*
 
 **Q12 — five numbers in `src/geometry.rs` that this document does not state.** Added 2026-08-21,
 because they are load-bearing and were derived rather than read. **The verb columns are answered**;

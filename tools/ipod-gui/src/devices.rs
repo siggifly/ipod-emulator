@@ -99,8 +99,11 @@
 //
 // So this page answers it for itself, in [`start_row`], and it is not a second writer for one
 // pixel: `DeviceRow.cradle_label` stays §7.3's cradle caption and this is §7.2's refusal. Nothing
-// is re-worded — `crate::cradle_label` is called for every arm that is not the machine rule, so
-// the shelf and this page cannot say two things about one device. **The bindings are now this
+// is re-worded — `crate::blocked_label` words every refusal, from the `machine::Blocked` that
+// `crate::startable` decided the row's own `enabled` from, so the shelf and this page cannot say
+// two things about one device. (This note used to name `crate::cradle_label` and to say *every arm
+// that is not the machine rule*; the machine rule is one of `blocked_label`'s arms, and
+// `cradle_label` was only ever reached on a branch that could not happen.) **The bindings are now this
 // row's**, counted off the markup rather than off the two fields this note opened with:
 // `devices.slint:55` `label`, `:274` `enabled`, `:275` `reason`, `:276` `escape-hatch`, `:282`
 // `machine-rule` — which was a literal `true`, and is wrong for the composed-and-unbuilt arm —
@@ -632,26 +635,35 @@ fn start_row(s: &Settings, d: &Device, seen: &mut Presence, machine: Option<&str
     // `made_of` has already read this device's paths through it, so the two answers on one row
     // cost one `stat` between them and cannot disagree.
     let gone = s.missing_with(d, seen);
-    row.enabled = gone.is_empty() && !crate::composed_and_unbuilt(d);
-    if !row.enabled {
-        // **One classification, one sentence, one kind.** `Blocked::of` asks the same two questions
-        // `enabled` above asks — and §10.3's third, which leaves the control live — so the arm that
-        // words this row and the arm that decides whether it is §9.4's *machine rule* or its
-        // *project state* cannot come apart. `machine_rule` used to be `!gone.is_empty()` computed
-        // here, which is the same answer written twice.
-        //
-        // `None` is unreachable — `enabled` is false only where `Blocked::of` is `Some` — and the
-        // fallback is the model's own sentence rather than an `expect`, because a panic in a row
-        // builder takes the window down over a caption.
-        match crate::machine::Blocked::of(Some(d), &gone) {
-            Some(b) => {
-                row.reason = crate::blocked_label(crate::Press::Centre, d, &gone, b);
-                // A file that is not there cannot be read by anything; a thing this program has not
-                // written yet is a project state and carries a command instead (§9.4).
-                row.machine_rule = b.machine_rule();
-            }
-            None => row.reason = crate::cradle_label(s, d, &gone),
-        }
+    // **One classification, one sentence, one kind — and now it is genuinely one.** `Blocked::of`
+    // asks three questions; `enabled` used to ask two of them itself (`gone.is_empty() &&
+    // !composed_and_unbuilt(d)`) and leave the third, §10.3's `Unfinished`, to leave the control
+    // live. That is the divergence the operator found by pressing it: `library`'s `Third` names a
+    // boot ROM and no drive, `Settings::missing` sees nothing wrong with it, nothing composed it —
+    // so both questions answered *yes*, `Start` was drawn live and blue wearing no sentence, and
+    // the press reached `resolve_for_start`, which started a machine with no disk in it. The bench
+    // was saying *press the centre button to finish making Third* about the same iPod at the same
+    // moment. Two surfaces, one device, two answers.
+    let blocked = crate::machine::Blocked::of(Some(d), &gone);
+    // **`Unfinished` still leaves the control live, for exactly one device.** §10.3's half-made
+    // first run is finished by pressing it — `press_is_first_run` routes that press to
+    // `work::Queue` rather than to a machine — and refusing it here would move the only way to
+    // finish a device off this page. Every *other* diskless device is one the press has nowhere to
+    // take: `work::minted` is the same identity test `press_is_first_run` makes, so the row goes
+    // live only where the press has somewhere to go.
+    let finishing = crate::finishes_the_first_run(s, d);
+    row.enabled = crate::startable(s, d, &gone);
+    if finishing {
+        // **The verb has to be the press's.** `Start` over a device with no drive is the label that
+        // made the question askable at all: the press builds, and a row that says `Start` promises
+        // a boot it will not do. The device's own name is already the heading this row is drawn
+        // under, so it is `it` here and the full sentence stays on the cradle.
+        row.label = "Finish making it".into();
+    } else if let Some(b) = blocked {
+        // A file that is not there cannot be read by anything; a thing this program has not
+        // written yet is a project state and carries a command instead (§9.4).
+        row.reason = crate::blocked_label(crate::Press::Centre, d, &gone, b);
+        row.machine_rule = b.machine_rule();
     }
     row
 }
@@ -1343,9 +1355,15 @@ mod tests {
         let mut p = Devices::new();
         let mut seen = Presence::new();
 
-        // The control: with no machine, every device in this fixture starts, so an absence below
-        // is the rule firing rather than a fixture that could never start anything.
-        for i in 0..3 {
+        // The control: with no machine, these devices start, so an absence below is the rule firing
+        // rather than a fixture that could never start anything.
+        //
+        // **Two of the three, and the third is the point of `start_is_refused_for_a_device_that
+        // _names_no_drive`.** `library`'s `Third` names no drive, so it is refused with or without
+        // a machine — it was in this loop while `enabled` asked two of `Blocked::of`'s three
+        // questions, which is exactly the bug that test now holds shut. A control that is refused
+        // for its own reasons can prove nothing about a rule that refuses everything.
+        for i in 0..2 {
             p.open_row(&s, i, true);
             let start = p
                 .view(&s, &mut seen, all_on(), None)
@@ -1359,6 +1377,9 @@ mod tests {
             assert!(start.reason.is_empty(), "a live control wears a refusal");
         }
 
+        // All three here, `Third` included: **the machine rule outranks every other refusal**, so
+        // a device that could not have started anyway still says the machine's name rather than its
+        // own complaint. `start_row` asks the machine first for that reason.
         for i in 0..3 {
             p.open_row(&s, i, true);
             let start = p
@@ -1431,6 +1452,45 @@ mod tests {
             start.reason
         );
         assert!(start.reason.contains("not wired"), "{}", start.reason);
+    }
+
+    /// **A device that names no drive at all is refused, and the Composer is not what makes it so.**
+    ///
+    /// The operator's question was *how can I be starting an iPod that has nothing*, and this is the
+    /// shape: `library`'s `Third` names a boot ROM and no disk. `Settings::missing` sees nothing
+    /// wrong with it — §10.3's *unfinished, not broken* — and [`crate::composed_and_unbuilt`] is
+    /// false because nothing composed it, so [`start_row`]'s two questions both answered *yes* and
+    /// the control was drawn live, in blue, wearing no sentence. `machine::Blocked::of` has asked a
+    /// third question all along (`Unfinished`), and the bench's cradle has been answering it: the
+    /// two surfaces said different things about one iPod, which is the divergence §7.2 is written
+    /// against.
+    ///
+    /// Proved red against the `gone.is_empty() && !composed_and_unbuilt(d)` form, which enables it.
+    #[test]
+    fn start_is_refused_for_a_device_that_names_no_drive() {
+        let dir = scratch("start-nothing");
+        let s = library(&dir);
+        let mut p = Devices::new();
+        p.open_row(&s, 2, true);
+
+        let start = view_of(&mut p, &s, all_on()).start.expect("a `Start`");
+        assert!(
+            !start.enabled,
+            "a device with no drive offers to start: {:?}",
+            start.reason
+        );
+        assert!(
+            !start.machine_rule,
+            "an unfinished device is drawn as a law of physics: {}",
+            start.reason
+        );
+        // The bench's own words for this device, and not a second sentence beside them.
+        let mut fresh = Presence::new();
+        assert_eq!(
+            start.reason,
+            crate::cradle_label(&s, &s.devices[2], &s.missing_with(&s.devices[2], &mut fresh)),
+            "the Devices page and the bench describe one iPod two ways"
+        );
     }
 
     // ─── Acting ─────────────────────────────────────────────────────────────────────────────────
