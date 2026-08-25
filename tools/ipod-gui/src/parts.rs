@@ -45,6 +45,7 @@ use eapp_loader::{firmware, identity, inspect, nor, si};
 
 use crate::composer::{FixRow, Secret};
 use crate::rail::{Caps, Next};
+use crate::work::{self, Want};
 
 /// The six sections of the Parts page, in the order they are drawn.
 ///
@@ -448,6 +449,55 @@ pub struct Parts {
     /// Starts at 1. `-1` is the markup's *nothing open*, and `0` is left free so that a defaulted
     /// `int` arriving from anywhere cannot name a row.
     next_id: i32,
+    /// Which iPod each filed dump is, remembered. See [`Models`].
+    models: Models,
+}
+
+/// **Which model a filed iPod is, remembered per file.**
+///
+/// `nor::Source::model()` for a `Synthetic` is a table lookup on a string this program wrote down;
+/// for a `File` it is *"opened, all `inspect::NOR_LEN` of it, and its SysCfg parsed"* — one
+/// mebibyte, in that function's own words. §11.4's Apple-firmware offer is narrowed by which iPods
+/// are in the library, so it needs the answer for every one of them — and `Parts::view` is in
+/// `main.rs`'s repaint registry, **which a 10 Hz timer runs**. Asked straight through, a library
+/// with two dumps in it would have read 20 MB a second for as long as the page was open during a
+/// build.
+///
+/// **Keyed on what the filesystem says the file is, not on its path alone.** A memo keyed on the
+/// path is a memo that never notices the operator replacing a dump with a different iPod's, which
+/// is the shape of staleness this program is otherwise careful about — see `Presence`. Length and
+/// modified time cost one `stat`, which is what `Presence::exists` already spends per row.
+#[derive(Debug, Default)]
+struct Models {
+    seen: std::collections::BTreeMap<PathBuf, (Stamp, Option<&'static identity::Model>)>,
+}
+
+/// A file's identity as the filesystem reports it: how long it is, and when it last changed.
+///
+/// `None` for the modified time rather than a fabricated one — some filesystems do not report it,
+/// and a memo that invented a timestamp would key two different files to one entry.
+type Stamp = (u64, Option<std::time::SystemTime>);
+
+impl Models {
+    /// The model behind one filed iPod, read at most once per version of the file.
+    fn of(&mut self, src: &nor::Source) -> Option<&'static identity::Model> {
+        let nor::Source::File(p) = src else {
+            // A recipe carries its model number as a string; the lookup is a scan of a table this
+            // program compiled in, and memoising it would cost more than it saves.
+            return src.model();
+        };
+        let stamp: Stamp = std::fs::metadata(p)
+            .map(|m| (m.len(), m.modified().ok()))
+            .unwrap_or((0, None));
+        if let Some((was, model)) = self.seen.get(p) {
+            if *was == stamp {
+                return *model;
+            }
+        }
+        let model = src.model();
+        self.seen.insert(p.clone(), (stamp, model));
+        model
+    }
 }
 
 impl Parts {
@@ -456,7 +506,58 @@ impl Parts {
             open: None,
             ids: std::collections::BTreeMap::new(),
             next_id: 1,
+            models: Models::default(),
         }
+    }
+
+    /// **What `Fetch…` would download under this group, right now** — §11.4's per-part fetch.
+    ///
+    /// Three groups fetch and three do not, and what each of the three offers is narrowed
+    /// differently:
+    ///
+    ///   - **Apple firmware is narrowed by the iPods in the library.** Every filed
+    ///     `Resource::Firmware` names a model; a model names a generation; a generation names its
+    ///     `UpdaterFamilyID`s — the one number that separates a 5G from a 5.5G, since they share
+    ///     `FamilyID` 6 — and each family offers its newest served, verifiable release. So a
+    ///     library holding one 5.5G is offered one bundle rather than seventy-one, and a library
+    ///     holding a 5G and a 5.5G is offered three: families 13, 20 and 25.
+    ///   - **Bootloaders and Software are fixed lists**, because their catalogues are two entries
+    ///     and one. `work::bootloaders` and `work::software` are the producers, and `work::software`
+    ///     carries the argument for what it leaves out.
+    ///
+    /// **Then everything the library already holds is taken out, and the test is the FILE NAME.**
+    /// Not the path: a bundle the operator provided from their own Downloads folder is the same
+    /// release as the one the cache would hold, and offering to fetch it would file a second row
+    /// for one release under two names. A catalogue entry's name is Apple's or Rockbox's own, so
+    /// two different files sharing one is not a case this can produce.
+    pub fn offer(&mut self, s: &Settings, g: Group) -> Vec<Want> {
+        let all: Vec<Want> = match g {
+            Group::Firmware => {
+                let mut families: Vec<u16> = Vec::new();
+                for it in &s.resources {
+                    let Resource::Firmware(src) = &it.what else {
+                        continue;
+                    };
+                    let Some(m) = self.models.of(src) else { continue };
+                    for f in work::families_of(m) {
+                        // De-duplicated, because two iPods of one generation are one offer. Two
+                        // 5.5Gs asking for `iPod_25.1.3.ipsw` twice would file one resource and
+                        // download it twice, and the plan would say so on two rows.
+                        if !families.contains(&f) {
+                            families.push(f);
+                        }
+                    }
+                }
+                families
+                    .iter()
+                    .filter_map(|f| work::newest_for_family(*f))
+                    .collect()
+            }
+            Group::Bootloaders => work::bootloaders(),
+            Group::Software => work::software(),
+            Group::Ipods | Group::Disks | Group::Snapshots => Vec::new(),
+        };
+        all.into_iter().filter(|w| !filed(s, w.file())).collect()
     }
 
     /// The whole page, recomputed.
@@ -511,9 +612,14 @@ impl Parts {
             self.open = None;
         }
 
+        // **Computed before the groups are built, because building one takes `&self`.** Six offers,
+        // one walk of the library each; the Apple-firmware one is the only expensive question and
+        // [`Models`] is what keeps it to a `stat` per filed dump.
+        let offers: Vec<Vec<Want>> = Group::ALL.iter().map(|g| self.offer(s, *g)).collect();
         let groups = Group::ALL
             .iter()
-            .map(|g| self.group_view(*g, &rows, caps, busy))
+            .zip(offers.iter())
+            .map(|(g, offer)| self.group_view(*g, &rows, caps, busy, s, offer))
             .collect();
 
         let detail = self.detail(&entries, caps);
@@ -623,17 +729,21 @@ impl Parts {
                  here means the press is not wired",
                 a.label()
             )),
-            // **Drawn DISABLED, and the sentence is the one under the greyed control.** It shipped
-            // LIVE: [`Action::needs`] answered `Some(Next::Retry)`, which asks *is curl on this
-            // computer*, `caps.download` measures that by running `curl --version`, and so on every
-            // computer that has curl the control was blue and every press failed. `Fetch…` was a
-            // control that only refused — the same defect as a callback nobody registered, one
-            // layer quieter.
+            // **`main.rs` routes this one too, and for the same reason the four above it are
+            // routed: it is not a change to the library.** A fetch is N downloads on a worker
+            // thread, and `work::Queue` is what owns that thread — this file may not, being
+            // toolkit-free and having no queue. What arrives back here is a `Report`, applied by
+            // `Queue::apply` on the window's thread, which is the one writer of `Settings` during a
+            // run.
             //
-            // What is true is narrower and is §9.4's second kind: the fetchers exist —
-            // `firmware::download` and `rockbox::download` — and nothing on this page reaches
-            // either. So [`Action::unwired`] words it once and both sides say it.
-            Action::Fetch => Err(refused_because_unwired(a, g)),
+            // It used to be the arm that refused, because there was nothing else it could be:
+            // `Fetch…` was drawn disabled with *no fetcher on this page yet*. Reaching it now is a
+            // defect in the window rather than in the library.
+            Action::Fetch => Err(format!(
+                "{} starts a download on the work queue rather than changing the library on its \
+                 own, so arriving here means the press is not wired",
+                a.label()
+            )),
             // **`main.rs` routes these two before they arrive**, in the same way it routes
             // `RowAction::Edit`: the Composer is the surface that holds a recipe — which is what
             // [`Action::needs`] says makes both of them live — and opening a page is not something
@@ -770,7 +880,15 @@ impl Parts {
         self.ids.get(&(g, name.to_string())).copied()
     }
 
-    fn group_view(&self, g: Group, rows: &[PartView], caps: Caps, busy: bool) -> GroupView {
+    fn group_view(
+        &self,
+        g: Group,
+        rows: &[PartView],
+        caps: Caps,
+        busy: bool,
+        s: &Settings,
+        offer: &[Want],
+    ) -> GroupView {
         let (a, b) = g.actions();
         GroupView {
             group: g,
@@ -778,8 +896,8 @@ impl Parts {
             count: rows.iter().filter(|r| r.group == g && r.kind != Kind::Mounted).count(),
             verb: g.verb().to_string(),
             empty: g.empty().to_string(),
-            a: a.map(|a| (a, verb_row(a, rows, g, caps, busy))),
-            b: b.map(|b| (b, verb_row(b, rows, g, caps, busy))),
+            a: a.map(|a| (a, verb_row(a, rows, g, caps, busy, s, offer))),
+            b: b.map(|b| (b, verb_row(b, rows, g, caps, busy, s, offer))),
         }
     }
 
@@ -960,26 +1078,61 @@ impl Group {
         x == Some(a) || y == Some(a)
     }
 
-    /// **The command that fetches what belongs in this group, from a terminal.**
+    /// **The command that fetches what this window will NOT**, from a terminal.
     ///
-    /// §9.4's rule for a project state: name a route that is real and was run to check it. Both of
-    /// these exist in `ipod-boot` today and both **download**:
+    /// It used to name what `Fetch…` could not do, on all three groups, because `Fetch…` could do
+    /// nothing. The verb works now, so the question this answers changed with it: §9.4's rule is
+    /// that a disabled control names a route that is real, and the only thing left to route to is
+    /// what the offer deliberately leaves out.
     ///
-    ///   - `firmware get` takes an `UpdaterFamilyID` or a filename and lands the bundle in
-    ///     `firmware::cache_dir()` — the same cache this page reads. `firmware list` prints the
-    ///     numbers to put in `<family>`.
-    ///   - `rockbox-install` downloads Rockbox's bootloader **and** its release, verifies both by
-    ///     SHA-256, and installs each into the half of a drive that wants it. It does more than
-    ///     fetch, and it is named here rather than a narrower command because there is no narrower
-    ///     one: nothing in this program downloads a bootloader on its own.
+    ///   - **Apple firmware** keeps its command, and it is the one with the most left over.
+    ///     [`Parts::offer`] gives one release per updater family — the newest Apple still serves
+    ///     that can be checked byte for byte — and the catalogue holds seventy-one. Family 24 alone
+    ///     has six. `firmware get` takes an `UpdaterFamilyID` or a filename and lands the bundle in
+    ///     the same cache this page reads; `firmware list` prints the numbers.
+    ///   - **Software** names `install-linux`, which is the command that fetches the 101 MB
+    ///     ZeroSlackr archive [`work::software`] refuses to offer — see that function for why.
+    ///   - **Bootloaders** names none, and that is the honest answer rather than an omission: the
+    ///     window fetches both entries in that group's catalogue, so there is nothing a terminal
+    ///     can get that this page cannot. `rockbox-install` used to be named here and it does more
+    ///     than fetch — it writes a drive — which makes it the wrong thing to hand somebody who
+    ///     pressed a verb called `Fetch…`.
     ///
     /// `None` for the three groups that do not offer [`Action::Fetch`] at all — an unreachable
     /// route named anyway is the phantom this page is about.
     pub fn fetch_route(self) -> Option<&'static str> {
         match self {
             Group::Firmware => Some("ipod-boot firmware get <family>"),
-            Group::Bootloaders | Group::Software => Some("ipod-boot rockbox-install"),
-            Group::Ipods | Group::Disks | Group::Snapshots => None,
+            Group::Software => Some("ipod-boot install-linux"),
+            Group::Bootloaders | Group::Ipods | Group::Disks | Group::Snapshots => None,
+        }
+    }
+
+    /// **Why `Fetch…` has nothing to do here**, for the control and for the press.
+    ///
+    /// One producer, two use sites — [`verb_row`] words the disabled control and `main.rs` words
+    /// the note a press files when the offer went empty between the push and the press. That
+    /// second one is reachable: the offer is a fact about the library, and pressing `Fetch…` twice
+    /// quickly is two presses against two different libraries.
+    ///
+    /// **Two sentences for Apple firmware, because they are two different facts.** An empty library
+    /// has nothing an `.ipsw` could fit, and that is the state a new user is in; a library whose
+    /// iPods are all covered is finished, and that is the state a returning one is in. Collapsing
+    /// them into *nothing left to fetch* would tell somebody with no iPod that they had everything.
+    ///
+    /// Each is written to `geometry::PARTS_VERB_W` 180 px, which the reason sweep in `main.rs`
+    /// measures — a group verb's reason elides and cannot wrap.
+    pub fn nothing_to_fetch(self, s: &Settings) -> &'static str {
+        let an_ipod = s
+            .resources
+            .iter()
+            .any(|it| matches!(it.what, Resource::Firmware(_)));
+        match self {
+            Group::Firmware if !an_ipod => "no iPod here to fit one to",
+            Group::Firmware => "nothing left to fetch",
+            Group::Bootloaders => "both bootloaders are here",
+            Group::Software => "Rockbox is already here",
+            Group::Ipods | Group::Disks | Group::Snapshots => "",
         }
     }
 
@@ -1016,16 +1169,21 @@ impl Action {
     ///   - a file has to arrive from outside — a picker or a drop — for `Add a dump…` and
     ///     `Provide…`;
     ///   - a surface that holds a recipe for `Synthesise…` and `Build…`, which is the Composer,
-    ///     and this build has one — so both are drawn live.
+    ///     and this build has one — so both are drawn live;
+    ///   - **`curl`, for `Fetch…`** — because every download in this program goes through it, and
+    ///     `caps.download` is `eapp_loader::tooling::can_download()` measured once per launch.
     ///
-    /// **Two answer `None`, for two different reasons, and neither is *no capability is needed*
-    /// alone.** `Discard` needs nothing: the parked machines are this program's own files on this
-    /// computer, in the same way `Next::CancelWrite` needs no capability. `Fetch…` needs nothing
-    /// **because no capability is what is missing** — see [`Action::unwired`]. It used to answer
-    /// `Some(Next::Retry)`, which asks *is curl on this computer*, and on every computer that has
-    /// curl the answer was yes and the control was drawn blue. It was blue and it only ever
-    /// refused. A capability question is the wrong question when the mechanism behind the control
-    /// does not exist, and asking it draws a live control over a hole.
+    /// **`Fetch…` asks `Next::Retry` again, and the argument for taking it away has expired.** It
+    /// was moved off that question because *a capability question is the wrong question when the
+    /// mechanism behind the control does not exist, and asking it draws a live control over a
+    /// hole*: `curl` was present, so the verb was blue on three groups and every press failed. The
+    /// mechanism exists now — [`Parts::offer`] names the files and `work::Queue::fetch` downloads
+    /// them on a worker — so the capability question is the right one, and the hole it used to be
+    /// drawn over is filled. What is still not a capability question is *is there anything left to
+    /// fetch*, and [`verb_row`] asks the library that separately.
+    ///
+    /// **`Discard` alone answers `None`**: the parked machines are this program's own files on this
+    /// computer, in the same way `Next::CancelWrite` needs no capability.
     pub fn needs(self) -> Option<Next> {
         match self {
             Action::AddDump | Action::Provide => Some(Next::Provide),
@@ -1033,45 +1191,8 @@ impl Action {
                 label: self.label(),
                 presses: 1,
             }),
-            Action::Fetch | Action::Discard => None,
-        }
-    }
-
-    /// **The verb this build DRAWS and has no mechanism for**, and the sentence that says so.
-    ///
-    /// §14.1: a control that cannot do the thing is disabled, states why, and names what to do
-    /// instead — it is never drawn live so it can apologise on press. `Fetch…` was drawn live on
-    /// three groups and every press failed, because there is no per-part fetch behind it: the only
-    /// download this build starts is `work::Queue`'s first-run plan, whose releases are fixed at
-    /// `compose::FIRST_RUN_FAMILY`.
-    ///
-    /// **This is §9.4's second kind — a project state, not a machine rule.** Nothing about the
-    /// computer refuses. `eapp_loader::firmware::download` and `eapp_loader::rockbox::download`
-    /// both exist and both work; what does not exist is a route from a group's verb to either one,
-    /// and the group's own [`Group::fetch_route`] is the command that has it today.
-    ///
-    /// `None` for the other five: their availability is a capability question and [`Action::needs`]
-    /// asks `rail::Next` it.
-    ///
-    /// **One producer for two use sites.** `verb_row` words the disabled control and
-    /// `Parts::group_action` words the arm that runs if a press arrives anyway, and a refusal
-    /// written twice is a refusal that comes to be worded twice.
-    pub fn unwired(self) -> Option<&'static str> {
-        match self {
-            // **One clause, measured.** It is drawn in §11.4's group-verb pair and, through
-            // [`refused_because_unwired`], in a Rail entry as well — and a reason slot elides and
-            // cannot wrap. What shipped here — *nothing on this page reaches a fetcher yet — the
-            // only download this build starts is the first run's own plan* — measures **558 px**
-            // against a 146 px column, so what a person read was
-            // *nothing on this page reaches a …*. The half that is gone said which download this
-            // build *does* start; `Group::fetch_route`'s command is drawn directly underneath and
-            // is the answer a person at this control actually needs.
-            Action::Fetch => Some("no fetcher on this page yet"),
-            Action::AddDump
-            | Action::Synthesise
-            | Action::Provide
-            | Action::Build
-            | Action::Discard => None,
+            Action::Fetch => Some(Next::Retry),
+            Action::Discard => None,
         }
     }
 }
@@ -1605,7 +1726,15 @@ fn next_row(label: &str, n: &Next, caps: Caps) -> FixRow {
 }
 
 /// One of a group's verbs.
-fn verb_row(a: Action, rows: &[PartView], g: Group, caps: Caps, busy: bool) -> FixRow {
+fn verb_row(
+    a: Action,
+    rows: &[PartView],
+    g: Group,
+    caps: Caps,
+    busy: bool,
+    s: &Settings,
+    offer: &[Want],
+) -> FixRow {
     let mut row = match a.needs() {
         Some(n) => next_row(&a.label(), &n, caps),
         // The one verb that needs no capability. It is still not unconditionally enabled: there
@@ -1620,15 +1749,25 @@ fn verb_row(a: Action, rows: &[PartView], g: Group, caps: Caps, busy: bool) -> F
             consequence: String::new(),
         },
     };
-    // **§14.1 for the one verb with no mechanism behind it.** It is disabled here rather than left
-    // blue to refuse on press, and the sentence is [`Action::unwired`]'s so the drawn refusal and
-    // the pressed one are the same words. The escape hatch is the group's, because what you would
-    // fetch differs per group and a command that fetches the wrong thing is worse than none.
-    if let Some(why) = a.unwired() {
+    // **§14.1 for a verb whose mechanism works and has nothing to work on.** `Fetch…` is live
+    // because `curl` is here — that is [`Action::needs`]'s question, and the machine rule it draws
+    // when the answer is no is the right refusal. This is the second question, and it is not a
+    // capability: **is there anything in this group left to fetch.**
+    //
+    // Asked in that order deliberately. On a computer with no `curl` the row is already disabled
+    // wearing *no curl on this computer*, and overwriting it with *nothing left to fetch* would
+    // replace a fact about the machine with a fact about the library, under a control that cannot
+    // download either way.
+    //
+    // The escape hatch is the group's, and it names what this window does **not** fetch — see
+    // [`Group::fetch_route`]. `Next::Retry` deliberately carries none, so a missing `curl` draws
+    // no command: every download in this program is `curl`, and naming one that is not would be
+    // the phantom route in its original shape.
+    if a == Action::Fetch && row.enabled && offer.is_empty() {
         row.enabled = false;
-        row.reason = why.into();
+        row.reason = g.nothing_to_fetch(s).into();
         row.escape = g.fetch_route().unwrap_or_default().into();
-        // Not a machine rule: nothing about this computer refuses. See [`Action::unwired`].
+        // Not a machine rule: nothing about this computer refuses.
         row.machine_rule = false;
     }
     if a == Action::Discard {
@@ -1682,22 +1821,22 @@ fn refused_because(n: &Next) -> String {
     n.reason().into()
 }
 
-/// The sentence under a control this build draws **disabled because it has no mechanism**, for the
-/// arm that would run if a press arrived anyway.
+/// **Does the library already hold a part with this file name?**
 ///
-/// [`refused_because`]'s sibling, and the difference is which question was refused: that one is for
-/// a control an absent **capability** greys out, this one for a control an absent **route** greys
-/// out. Both are §9.4; only the second names a command, because only the second has one.
+/// The test [`Parts::offer`] takes things out of the offer by. A name and not a path, and that
+/// function carries the argument for it.
 ///
-/// **What a press produces is the drawn sentence plus the route**, joined rather than re-worded, so
-/// `every_verb_with_no_mechanism_is_drawn_disabled_with_a_route` can hold the two to each other with
-/// a `starts_with`.
-fn refused_because_unwired(a: Action, g: Group) -> String {
-    let why = a.unwired().expect("the caller is an unwired verb");
-    match g.fetch_route() {
-        Some(cmd) => format!("{why}. `{cmd}` does it from a terminal."),
-        None => why.into(),
-    }
+/// It walks `resources` rather than one group's, on purpose: a bundle the operator filed under
+/// Bootloaders because they pressed `Provide…` there is still that file, and offering to fetch a
+/// second copy of it into Apple firmware would be this window disagreeing with somebody about what
+/// they already have.
+fn filed(s: &Settings, file: &str) -> bool {
+    s.resources.iter().any(|it| {
+        it.what
+            .path()
+            .and_then(|p| p.file_name())
+            .is_some_and(|n| n == file)
+    })
 }
 
 #[cfg(test)]
@@ -1872,16 +2011,22 @@ mod tests {
             resources: vec![
                 rom("Black 5.5G", "/tmp/ipod-parts-nowhere/rom.bin"),
                 synthetic("From my 30 GB", 20_266),
+                // **Filed at the name each release actually has**, and it used to be `a.ipsw` and
+                // `b.ipsw` — two files claiming `Provenance::Fetched` under names no fetch
+                // produces. `Queue::record` files a fetched bundle under `path.file_name()`, so a
+                // fetched `.ipsw` is at Apple's own name by construction; the fixture said
+                // otherwise, and `Parts::offer` — which asks *is this release already here* of the
+                // path — read the library as holding neither of them.
                 filed(
                     "iPod_25.1.3.ipsw",
-                    Resource::Installer(PathBuf::from("/tmp/ipod-parts-nowhere/a.ipsw")),
+                    Resource::Installer(PathBuf::from("/tmp/ipod-parts-nowhere/iPod_25.1.3.ipsw")),
                     Provenance::Fetched {
                         verified: Verification::Sha256,
                     },
                 ),
                 filed(
                     "iPod_20.1.3.ipsw",
-                    Resource::Installer(PathBuf::from("/tmp/ipod-parts-nowhere/b.ipsw")),
+                    Resource::Installer(PathBuf::from("/tmp/ipod-parts-nowhere/iPod_20.1.3.ipsw")),
                     Provenance::Fetched {
                         verified: Verification::SizeOnly,
                     },
@@ -2241,63 +2386,182 @@ mod tests {
         assert!(synth.reason.is_empty());
     }
 
-    /// **A verb with no mechanism behind it is drawn DISABLED, says why, and names a route.**
+    /// **`Fetch…` is LIVE where there is something to fetch**, on all three groups that offer it.
     ///
-    /// §14.1, and `Fetch…` was the counter-example: [`Action::needs`] answered `Some(Next::Retry)`,
-    /// which asks *is curl on this computer*, `caps.download` answers that by running
-    /// `curl --version`, and so on every computer that has curl the control was **blue on all three
-    /// groups that offer it** and every press failed. A live control that only refuses is the same
-    /// defect as a callback nobody registered.
+    /// §14.1's construction, arrived at from the other side. This test used to assert the opposite
+    /// and was right to: [`Action::needs`] answered `Some(Next::Retry)` — *is curl on this
+    /// computer* — so on every computer that has curl the verb was blue on all three groups and
+    /// every press failed, which is a live control over a hole. The hole is filled, so the
+    /// capability question is the right question again and the control it draws is the right
+    /// control.
     ///
-    /// **Three claims, and the third is the one worth having.** It is drawn disabled in the fixture
-    /// where every capability — `download` included — answers yes, so curl cannot be what greys it
-    /// out; its sentence is a project state naming a real command rather than a machine rule blaming
-    /// the computer; and **the drawn refusal and the pressed one are the same words**, which is what
-    /// stops one refusal from coming to be worded twice.
+    /// **Three claims.** It is blue where the offer is not empty; it does not blame the computer
+    /// for a fact about the library; and the offer it is blue for is the one the press would run,
+    /// because both come out of [`Parts::offer`].
     #[test]
-    fn every_verb_with_no_mechanism_is_drawn_disabled_with_a_route() {
+    fn the_fetch_verb_is_live_on_every_group_that_has_something_to_fetch() {
         let s = library();
-        // `all_on()` is the fixture where every capability answers yes — including `download`, so
-        // curl cannot be what greys this out.
         assert!(all_on().download, "the fixture that proves the point has no curl in it");
-        let v = view_of(&mut Parts::new(), &s, all_on());
+        let mut p = Parts::new();
+        let v = view_of(&mut p, &s, all_on());
         let mut checked = 0;
         for g in Group::ALL {
             if !g.offers(Action::Fetch) {
-                assert_eq!(g.fetch_route(), None, "{g:?} names a route to a verb it does not offer");
+                assert_eq!(
+                    g.fetch_route(),
+                    None,
+                    "{g:?} names a route to a verb it does not offer"
+                );
                 continue;
             }
+            let offer = p.offer(&s, g);
+            assert!(!offer.is_empty(), "{g:?} offers nothing in the fixture, so nothing is proved");
             let row = &group(&v, g).a.as_ref().expect("Fetch… is the first of the pair").1;
             assert_eq!(row.label, Action::Fetch.label());
-            assert!(!row.enabled, "`Fetch…` is drawn live on {g:?} and pressing it only refuses");
-            assert!(!row.reason.is_empty(), "a disabled control with nothing to say (§9.4)");
             assert!(
-                !row.machine_rule,
-                "`Fetch…` on {g:?} blames the computer; nothing about this computer refuses"
-            );
-            let cmd = g.fetch_route().expect("a group that offers Fetch… has a route");
-            assert_eq!(row.escape, cmd, "{g:?} greys a verb out and offers no way round it");
-            assert!(
-                !row.reason.contains("curl"),
-                "{g:?} still names the capability that made it live: {}",
+                row.enabled,
+                "`Fetch…` on {g:?} is grey with {} files to fetch: {}",
+                offer.len(),
                 row.reason
             );
-
-            // …and the arm that runs if a press arrives anyway says the same thing.
-            let mut s2 = s.clone();
-            let said = Parts::new()
-                .group_action(&mut s2, g, Action::Fetch)
-                .expect_err("nothing here fetches yet");
-            assert!(
-                said.starts_with(&row.reason),
-                "{g:?} draws `{}` and refuses with `{said}`",
-                row.reason
-            );
-            assert!(said.contains(cmd), "the press refused without naming the route: {said}");
-            assert_eq!(s2, s, "a refusal mutated the library");
+            assert!(row.reason.is_empty(), "a live control apologising: {}", row.reason);
+            assert!(row.escape.is_empty(), "a live control naming a way round itself");
             checked += 1;
         }
         assert_eq!(checked, 3, "only {checked} groups offer `Fetch…`; §11.4's table says three");
+    }
+
+    /// **A group with nothing left to fetch draws the verb DISABLED and says which**, and the
+    /// sentence is a project state rather than a machine rule.
+    ///
+    /// The other half of the one above. It drives the two states Apple firmware has — a library
+    /// with no iPod in it, and one whose every iPod is already covered — because they are two
+    /// different facts and collapsing them would tell somebody with no iPod that they had
+    /// everything.
+    #[test]
+    fn a_group_with_nothing_left_to_fetch_greys_the_verb_and_says_which() {
+        let mut p = Parts::new();
+        // ── no iPod at all: nothing an `.ipsw` could fit ────────────────────────────────────────
+        let bare = Settings::default();
+        let v = view_of(&mut p, &bare, all_on());
+        let row = &group(&v, Group::Firmware).a.as_ref().expect("Fetch…").1;
+        assert!(!row.enabled, "an empty library was offered Apple firmware for an iPod it has not");
+        assert_eq!(row.reason, "no iPod here to fit one to");
+        assert!(!row.machine_rule, "a fact about the library blaming the computer");
+        assert_eq!(
+            row.escape,
+            Group::Firmware.fetch_route().expect("§9.4 wants a route under a greyed verb"),
+            "a greyed verb with no way round it"
+        );
+
+        // ── every iPod covered: the fetch is finished rather than impossible ────────────────────
+        let mut covered = library();
+        for w in p.offer(&library(), Group::Firmware) {
+            covered.file_away(
+                Resource::Installer(PathBuf::from("/tmp/ipod-parts-nowhere").join(w.file())),
+                w.file(),
+                None,
+            );
+        }
+        assert!(p.offer(&covered, Group::Firmware).is_empty(), "the fixture did not cover it");
+        let v = view_of(&mut p, &covered, all_on());
+        let row = &group(&v, Group::Firmware).a.as_ref().expect("Fetch…").1;
+        assert!(!row.enabled);
+        assert_eq!(row.reason, "nothing left to fetch");
+
+        // ── and a computer with no curl is told THAT, not this ─────────────────────────────────
+        //
+        // Order matters and this is what asserts it: on a machine that cannot download at all,
+        // replacing *no curl on this computer* with a sentence about the library would be swapping
+        // a machine rule for a project state under a control that cannot download either way.
+        let v = view_of(&mut p, &bare, Caps::default());
+        let row = &group(&v, Group::Firmware).a.as_ref().expect("Fetch…").1;
+        assert!(!row.enabled);
+        assert_eq!(row.reason, Next::Retry.reason());
+        assert!(row.machine_rule, "no curl is a fact about the computer (§9.4)");
+        assert!(
+            row.escape.is_empty(),
+            "every download in this program is curl, so naming a command is a phantom route: {}",
+            row.escape
+        );
+    }
+
+    /// **The Apple-firmware offer is the iPods in the library, not the catalogue.**
+    ///
+    /// Seventy-one releases exist and the fixture is offered one, because its one readable iPod is
+    /// a 5G — `MA146` → `Generation::Video1` → updater families 13 and 20 — and family 20's newest
+    /// is already filed. That chain is the whole narrowing, and each link is what makes `Fetch…`
+    /// something other than *download 2.7 GB of other people's iPods*.
+    #[test]
+    fn the_apple_firmware_offer_is_narrowed_to_the_ipods_in_the_library() {
+        let mut p = Parts::new();
+        let offered: Vec<&str> = p.offer(&library(), Group::Firmware).iter().map(|w| w.file()).collect();
+        assert_eq!(
+            offered,
+            vec!["iPod_13.1.3.ipsw"],
+            "the offer is not the 5G's newest un-filed release"
+        );
+        assert!(
+            firmware::CATALOGUE.len() > 60,
+            "the catalogue shrank, so this test is no longer about narrowing anything"
+        );
+
+        // A library with a 5.5G in it is offered family 25's newest instead — a different iPod, a
+        // different bundle, out of the same catalogue.
+        let mut fivefive = Settings::default();
+        fivefive.file_away(
+            Resource::Firmware(nor::Source::Synthetic {
+                model: "MA446".into(),
+                seed: 7,
+                serial: None,
+                guid: None,
+                splash: None,
+            }),
+            "a 5.5G",
+            None,
+        );
+        let offered: Vec<&str> = p.offer(&fivefive, Group::Firmware).iter().map(|w| w.file()).collect();
+        assert_eq!(offered, vec!["iPod_25.1.3.ipsw"]);
+
+        // And every one of them can be checked byte for byte before it is filed. A release Apple
+        // no longer serves, or one with no hash on record, is never offered — the window would be
+        // starting a download it already knows will fail, or filing a row that cannot say
+        // *verified*.
+        for g in [Group::Firmware, Group::Bootloaders, Group::Software] {
+            for w in p.offer(&library(), g) {
+                assert!(w.bytes() > 0, "{} is offered with no size to measure against", w.file());
+                if let Want::Firmware(r) = w {
+                    assert!(r.served, "{} is offered and Apple answers 403 for it", r.file);
+                    assert!(r.is_verifiable(), "{} is offered with no hash on record", r.file);
+                }
+            }
+        }
+    }
+
+    /// **What the library already holds is not offered again**, and the test is the file name.
+    ///
+    /// A bundle the operator provided out of their own Downloads folder is the same release as the
+    /// one the cache would hold; offering to fetch it would file a second row for one release under
+    /// two names, which is exactly the *two names for one thing* `Settings::file_away` refuses one
+    /// level down.
+    #[test]
+    fn a_part_the_library_already_holds_is_not_offered_again() {
+        let mut p = Parts::new();
+        let before = p.offer(&library(), Group::Bootloaders);
+        assert_eq!(before.len(), 2, "§11.4's Bootloaders sketch draws two, both fetchable");
+
+        let mut s = library();
+        s.file_away(
+            Resource::Bootloader(PathBuf::from("/somewhere/else").join(before[0].file())),
+            "somebody's own copy",
+            Some(Provenance::Provided),
+        );
+        let after: Vec<&str> = p.offer(&s, Group::Bootloaders).iter().map(|w| w.file()).collect();
+        assert_eq!(
+            after,
+            vec![before[1].file()],
+            "a file already in the library, under another path, was offered for download again"
+        );
     }
 
     /// A build owns the drive it is writing. A verb that would start a second one waits — and
@@ -2313,6 +2577,15 @@ mod tests {
         assert!(verb(&idle, Group::Disks).enabled);
         assert!(!verb(&busy, Group::Disks).enabled);
         assert!(!verb(&busy, Group::Disks).reason.is_empty());
+        // **`Fetch…` is one of them now**, and it is the reason the gate is not only about builds:
+        // `work::Queue` owns exactly one worker thread, so a fetch started while anything else is
+        // running would answer `Press::Busy` — a live control that only refuses. It was outside the
+        // gate for as long as it needed no capability at all.
+        for g in [Group::Firmware, Group::Bootloaders, Group::Software] {
+            assert!(verb(&idle, g).enabled, "{g:?} has nothing to fetch, so nothing is proved");
+            assert!(!verb(&busy, g).enabled, "{g:?} would start a second run");
+            assert_eq!(verb(&busy, g).reason, "a build is already running");
+        }
         assert!(
             busy.rows.iter().filter(|r| r.removable).all(|r| r.locked_by.is_empty()),
             "a build blocked a Remove, which deletes no file and takes nothing the build is using"
@@ -2891,17 +3164,23 @@ mod tests {
             assert!(why.contains("not wired"), "§9.4 wants the defect named: {why}");
             assert_ne!(why, Next::Provide.reason(), "the press wears the disabled sentence");
         }
-        // **A verb drawn LIVE must not.** `Fetch…` is blue exactly when `caps.download` is true,
-        // and `Next::Retry`'s sentence is *curl is not on this computer* — so the press that only
-        // happened because curl is there used to answer that it is not.
+        // **`Fetch…` is the third routed verb now**, and it says the same kind of thing the two
+        // above it say: this file does not perform it, `main.rs` does, and reaching this arm is a
+        // defect in the window. It used to be the one arm that refused outright, because there was
+        // no per-part fetch to route to.
+        //
+        // **And it must not wear `Next::Retry`'s sentence.** The verb is blue exactly when
+        // `caps.download` is true, so a press that only happened because `curl` is there would be
+        // answering that it is not — which is the shape the old live-and-only-refusing control had.
         let fetch = p
             .group_action(&mut s, Group::Firmware, Action::Fetch)
-            .expect_err("nothing here fetches yet");
+            .expect_err("this file starts no downloads");
         assert!(
-            !fetch.contains("not on this computer"),
+            !fetch.contains("no curl"),
             "a live control refuses by naming the capability that made it live: {fetch}"
         );
-        assert!(fetch.contains("ipod-boot firmware get"), "§9.4 wants a real route: {fetch}");
+        assert!(fetch.contains("work queue"), "§9.4 wants the route named: {fetch}");
+        assert!(fetch.contains("not wired"), "§9.4 wants the defect named: {fetch}");
         // …and the two the Composer answers say so, rather than claiming it does not exist.
         for (g, a) in [(Group::Ipods, Action::Synthesise), (Group::Disks, Action::Build)] {
             let why = p.group_action(&mut s, g, a).expect_err("the Composer's, not the library's");

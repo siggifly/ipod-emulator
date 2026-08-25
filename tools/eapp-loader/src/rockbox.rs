@@ -92,48 +92,36 @@ pub fn cache_dir() -> std::path::PathBuf {
 }
 
 /// Check bytes against what the catalogue says they should be.
+///
+/// [`crate::firmware::checked`]'s wording, because this catalogue and Apple's are checked against
+/// the same two facts and a person reading two different sentences about one kind of wrongness has
+/// to work out whether they mean the same thing.
 pub fn verify(p: &Piece, data: &[u8]) -> Result<(), String> {
-    if data.len() as u64 != p.bytes {
-        return Err(format!(
-            "{}: expected {} bytes, got {} — a truncated download, or not the file we meant",
-            p.file,
-            p.bytes,
-            data.len()
-        ));
-    }
-    let got = crate::firmware::sha256(data);
-    if got != p.sha256 {
-        return Err(format!(
-            "{}: sha256 is {got}, expected {}",
-            p.file, p.sha256
-        ));
-    }
-    Ok(())
+    crate::firmware::checked(p.file, p.bytes, p.sha256, data)
+}
+
+/// The `.part` a download of this piece writes to, so whoever draws the progress and whoever writes
+/// the bytes cannot disagree about which file that is.
+pub fn part_path(p: &Piece, dir: &std::path::Path) -> std::path::PathBuf {
+    crate::firmware::part_named(p.file, dir)
 }
 
 /// Fetch a piece into `dir`, or return the copy already there if it verifies.
 pub fn download(p: &Piece, dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
-    let dest = dir.join(p.file);
-    if let Ok(existing) = std::fs::read(&dest) {
-        if verify(p, &existing).is_ok() {
-            return Ok(dest);
-        }
-        // Present but wrong: say so rather than silently re-using or silently clobbering.
-        eprintln!(
-            "{}: already here but does not verify — downloading again",
-            dest.display()
-        );
-    }
-    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let part = dir.join(format!("{}.part", p.file));
-    crate::firmware::http_get_to_file(p.url, &part)?;
-    let got = std::fs::read(&part).map_err(|e| format!("{}: {e}", part.display()))?;
-    if let Err(e) = verify(p, &got) {
-        let _ = std::fs::remove_file(&part);
-        return Err(e);
-    }
-    std::fs::rename(&part, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-    Ok(dest)
+    download_watched(p, dir, &mut crate::firmware::Silent).map_err(|(_, said)| said)
+}
+
+/// The same, reporting bytes as they land and stopping when asked.
+///
+/// **What the window fetches a bootloader or a release through.** It reports [`Piece::bytes`] as
+/// the denominator, which this catalogue records for every entry, so the bar drawn over it is a
+/// measurement rather than a shape that moves.
+pub fn download_watched(
+    p: &Piece,
+    dir: &std::path::Path,
+    w: &mut dyn crate::firmware::Watch,
+) -> Result<std::path::PathBuf, (crate::firmware::Trouble, String)> {
+    crate::firmware::get_watched(p.file, p.url, p.bytes, p.sha256, dir, w)
 }
 
 #[cfg(test)]

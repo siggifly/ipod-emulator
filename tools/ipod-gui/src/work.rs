@@ -37,7 +37,7 @@ use std::sync::{mpsc, Arc};
 use eapp_loader::compose::{self, Cost, Holes, Loader, Os, Recipe, Start, Step, Verb};
 use eapp_loader::firmware::{self, Release, Trouble, Watch};
 use eapp_loader::settings::{self, Device, Provenance, Resource, Settings, Verification};
-use eapp_loader::{ipsw, nor, si, volume};
+use eapp_loader::{identity, ipodlinux, ipsw, nor, rockbox, si, volume};
 
 use crate::rail::{Class, Failure, Kind, Progress, Rail, Tool};
 
@@ -270,6 +270,12 @@ pub enum Outcome {
     Fetched {
         path: PathBuf,
         verified: Verification,
+        /// **Which of §11.4's three shelves it goes on.** It used to be implied — [`Queue::record`]
+        /// filed every `Fetched` as a [`Resource::Installer`], which was right for the only fetch
+        /// this program could start and wrong for the moment a second one existed. A bootloader
+        /// filed as an installer is a row in the wrong group offering the wrong verb, and nothing
+        /// downstream could tell.
+        filed_as: Filing,
     },
     Installed {
         path: PathBuf,
@@ -278,6 +284,241 @@ pub enum Outcome {
     },
     /// Nothing to record: the container half of the build, and a fetch that was already cached.
     Nothing,
+}
+
+/// Which shelf a fetched file belongs on.
+///
+/// **Derived from the catalogue entry, never declared beside it** — see [`Want::filing`]. Rockbox
+/// publishes two files and the difference between them is exactly this: one goes in the firmware
+/// partition and one goes on the volume, and `rockbox::Where` already says which.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Filing {
+    /// An `.ipsw`. A drive is built from it.
+    Installer,
+    /// Goes in the firmware partition, which holds exactly one thing.
+    Bootloader,
+    /// Installed onto a drive's volume.
+    Software,
+}
+
+impl Filing {
+    /// The library's own type for this shelf.
+    fn resource(self, path: PathBuf) -> Resource {
+        match self {
+            Filing::Installer => Resource::Installer(path),
+            Filing::Bootloader => Resource::Bootloader(path),
+            Filing::Software => Resource::Software(path),
+        }
+    }
+}
+
+/// One thing this window can fetch on its own.
+///
+/// **Three catalogues, one verb.** `firmware::CATALOGUE` is Apple's 71 releases,
+/// `rockbox::CATALOGUE` is the bootloader and the release zip, and `ipodlinux::LOADER` is
+/// `ipodloader2` v2.8.1 — and every entry in all three carries a URL, a byte count and a SHA-256,
+/// which is what makes a fetch of any of them verifiable and its progress honest.
+///
+/// **Borrowed rather than owned, and `'static` rather than cloned.** A catalogue entry is a
+/// constant in `eapp-loader`; copying one into a plan would be a second copy of a hash that the
+/// verifier does not read, and the first thing to go stale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Want {
+    Firmware(&'static Release),
+    Rockbox(&'static rockbox::Piece),
+    Loader(&'static ipodlinux::Piece),
+}
+
+impl Want {
+    /// What it is called on disk and in the cache.
+    pub fn file(self) -> &'static str {
+        match self {
+            Want::Firmware(r) => r.file,
+            Want::Rockbox(p) => p.file,
+            Want::Loader(p) => p.file,
+        }
+    }
+
+    /// How many bytes, from the catalogue. **Never zero for anything offered** — [`Want::offered`]
+    /// refuses an entry without one, because a step whose denominator is zero draws a number that
+    /// moves and no bar, and §12.3 would rather have that than a bar over a guess.
+    pub fn bytes(self) -> u64 {
+        match self {
+            Want::Firmware(r) => r.bytes,
+            Want::Rockbox(p) => p.bytes,
+            Want::Loader(p) => p.bytes,
+        }
+    }
+
+    /// Whether this entry can be checked byte for byte once it lands, and is worth offering at all.
+    ///
+    /// **Both halves, and the second is not a formality.** Five of Apple's seventy-one releases
+    /// answer 403 and are recorded `served: false`; offering one would be a control that starts a
+    /// download this program already knows will fail. And a release with no hash on record can only
+    /// be size-checked, which never renders as *verified* — so the window does not offer it either,
+    /// and `ipod-boot firmware get` stays the route for anybody who wants one anyway.
+    fn offered(self) -> bool {
+        match self {
+            Want::Firmware(r) => r.served && r.is_verifiable() && r.bytes != 0,
+            // Both `Piece` catalogues assert this of every entry in their own tests, so this is
+            // the same claim asked at the point of use rather than trusted from over there.
+            Want::Rockbox(p) => p.bytes != 0 && p.sha256.len() == 64,
+            Want::Loader(p) => p.bytes != 0 && p.sha256.len() == 64,
+        }
+    }
+
+    /// Which shelf the fetched file is filed on. **Read off the catalogue**, never declared here:
+    /// Rockbox's two pieces differ by `rockbox::Where` and that is the whole of the difference.
+    pub fn filing(self) -> Filing {
+        match self {
+            Want::Firmware(_) => Filing::Installer,
+            Want::Rockbox(p) => match p.goes {
+                rockbox::Where::FirmwarePartition => Filing::Bootloader,
+                rockbox::Where::Volume => Filing::Software,
+            },
+            Want::Loader(_) => Filing::Bootloader,
+        }
+    }
+
+    /// The plan line. **[`crate::rail::Rail::plan`] takes `Step`s**, so a fetch a person asked for
+    /// is filed on the Rail by the same call the first run's plan is — one list, rendered twice,
+    /// with the same verb column and the same progress.
+    ///
+    /// `what` is the **file** rather than a kind, and that is a decision this plan forces: a
+    /// library with a 5G and a 5.5G in it offers two Apple bundles at once, and two rows both
+    /// reading `fetch Apple's firmware` is a plan nobody can read. `crate::group` and not `si` for
+    /// the same reason `compose.rs` gives one line from its own fetch step: this is the number the
+    /// verifier refuses against, so it is printed exactly.
+    pub fn step(self) -> Step {
+        Step {
+            kind: Verb::Fetch,
+            what: self.file().to_string(),
+            sub: format!(
+                "{} B — {}, SHA-256 checked",
+                eapp_loader::group(self.bytes()),
+                self.from()
+            ),
+            cost: Cost {
+                down: self.bytes(),
+                disk: self.bytes(),
+                apparent: None,
+            },
+        }
+    }
+
+    /// Whose server it comes off, in the words a person would use for it.
+    fn from(self) -> &'static str {
+        match self {
+            Want::Firmware(_) => "from Apple",
+            Want::Rockbox(_) => "from rockbox.org",
+            Want::Loader(_) => "from the ipodloader2 releases",
+        }
+    }
+
+    /// Where it lands, once it verifies.
+    pub fn lands_at(self, cache: &Path) -> PathBuf {
+        cache.join(self.file())
+    }
+
+    /// The `.part` it is written as. **Announced before a byte goes into it**, so a cancel can say
+    /// what it costs and so the only file a fetch can ever delete has been named first.
+    fn part_path(self, cache: &Path) -> PathBuf {
+        match self {
+            Want::Firmware(r) => firmware::part_path(r, cache),
+            Want::Rockbox(p) => rockbox::part_path(p, cache),
+            Want::Loader(p) => ipodlinux::part_path(p, cache),
+        }
+    }
+
+    /// Fetch it, watched. Three catalogues, three fetchers, one `.part`-then-rename discipline.
+    fn download(self, cache: &Path, w: &mut dyn Watch) -> Result<PathBuf, (Trouble, String)> {
+        match self {
+            Want::Firmware(r) => firmware::download_watched(r, cache, w),
+            Want::Rockbox(p) => rockbox::download_watched(p, cache, w),
+            Want::Loader(p) => ipodlinux::download_watched(p, cache, w),
+        }
+    }
+
+    /// Is it already here, and does it still verify?
+    ///
+    /// **Asked before the `.part` is announced**, and that ordering is the whole of why this
+    /// exists. `Report::Writing` sets `Rail::writing`, which arms a `Cancel` whose own caption says
+    /// *`<file>.part` is 0 B and cancelling deletes it* — and for a file that was already in the
+    /// cache no `.part` is ever created, so the caption would be describing a file that does not
+    /// exist. It reads and hashes the file, which is why it belongs on the worker.
+    fn cached(self, cache: &Path) -> bool {
+        match self {
+            Want::Firmware(r) => firmware::is_cached(r, cache),
+            Want::Rockbox(p) => std::fs::read(self.lands_at(cache))
+                .is_ok_and(|b| rockbox::verify(p, &b).is_ok()),
+            Want::Loader(p) => std::fs::read(self.lands_at(cache))
+                .is_ok_and(|b| ipodlinux::verify(p, &b).is_ok()),
+        }
+    }
+}
+
+/// **The newest Apple release worth offering for one `UpdaterFamilyID`**, or nothing.
+///
+/// The same choice [`release`] makes for first run and the same one
+/// `tests/firmware_fetch.rs` calls *"the exact choice the wizard makes"* — the last served,
+/// verifiable entry of the family. The catalogue is oldest-first within a model, so the newest is
+/// the last match.
+///
+/// **One release per family and not all of them.** Family 25 has three entries and family 24 has
+/// six; a verb that fetched every one of them would spend 360 MB on a press whose caption said
+/// `Fetch…`. Anybody who wants an older one has `ipod-boot firmware get <family>`, which is what
+/// the group's escape hatch names.
+pub fn newest_for_family(family: u16) -> Option<Want> {
+    firmware::by_updater_family(family)
+        .map(Want::Firmware)
+        .filter(|w| w.offered())
+        .last()
+}
+
+/// **The bootloaders this window can fetch**, in the order §11.4's Bootloaders group draws them.
+///
+/// Two, and both are in the sketch that section carries: Rockbox's `bootloader-ipodvideo.ipod`
+/// (51 996 B) and `ipodloader2` v2.8.1 (56 912 B) — which that sketch already calls the row where
+/// *`Fetch…` is the whole answer*, because `install-linux` stopped reaching into
+/// `resources/vendor/` and now resolves the fetched release.
+pub fn bootloaders() -> Vec<Want> {
+    rockbox::CATALOGUE
+        .iter()
+        .map(Want::Rockbox)
+        .chain(std::iter::once(Want::Loader(&ipodlinux::LOADER)))
+        .filter(|w| w.offered() && w.filing() == Filing::Bootloader)
+        .collect()
+}
+
+/// **The software this window can fetch.** One: Rockbox 4.0 itself, 9 090 335 B.
+///
+/// **ZeroSlackr is deliberately not in it**, and the reason is a measurement rather than a taste.
+/// `ipodlinux::CATALOGUE`'s one entry is 101 146 859 B behind SourceForge's
+/// `files/latest/download` redirect, and nothing in this build unpacks a `.7z` —
+/// `rail::Tool::SevenZip`'s own retirement condition is *"the iPodLinux install lands"*, and it has
+/// not. A verb that spent 101 MB on an archive this program cannot open would be §14.1's defect
+/// with a progress bar on it. It stays in the catalogue, where `ipod-boot` reaches it.
+pub fn software() -> Vec<Want> {
+    rockbox::CATALOGUE
+        .iter()
+        .map(Want::Rockbox)
+        .filter(|w| w.offered() && w.filing() == Filing::Software)
+        .collect()
+}
+
+/// **Which `UpdaterFamilyID`s an iPod's firmware is published under**, from the model in its ROM.
+///
+/// `identity::Generation::updater_families` is the one table that knows, and it is the only thing
+/// that separates a 5G from a 5.5G in a bundle — they share `FamilyID` 6. **An empty list means
+/// *cannot say* rather than *nothing matches***, so a generation this project has not established
+/// the mapping for offers nothing rather than offering the wrong bundle.
+pub fn families_of(model: &identity::Model) -> Vec<u16> {
+    model
+        .generation
+        .updater_families()
+        .iter()
+        .filter_map(|f| u16::try_from(*f).ok())
+        .collect()
 }
 
 // ── the plan, resolved on the window's thread before the thread exists ──────────────────────────
@@ -462,11 +703,36 @@ impl Worker {
     /// Out of file descriptors or out of thread stacks is the one resource failure that is
     /// genuinely plausible here, and it was the one that said nothing.
     pub fn spawn(plan: Plan, cancel: Arc<Cancel>) -> Result<Worker, std::io::Error> {
+        Worker::start("ipod-first-run", cancel, move |tx, flag| run(plan, tx, flag))
+    }
+
+    /// §11.4's per-part fetch, on a thread of its own.
+    ///
+    /// **The second body and the last one**, and it goes through [`Worker::start`] rather than
+    /// through a second copy of the channel-and-handle dance — the `.ok()` defect that made a
+    /// failed spawn read as *already finished* was in that dance, and one copy of it is one place
+    /// for that to be true.
+    pub fn spawn_fetch(
+        wants: Vec<Want>,
+        cache: PathBuf,
+        cancel: Arc<Cancel>,
+    ) -> Result<Worker, std::io::Error> {
+        Worker::start("ipod-fetch", cancel, move |tx, flag| {
+            fetch_run(wants, cache, tx, flag)
+        })
+    }
+
+    /// The channel, the thread and the handle — **one implementation for both bodies**.
+    fn start(
+        name: &str,
+        cancel: Arc<Cancel>,
+        body: impl FnOnce(&mpsc::Sender<Report>, &Cancel) + Send + 'static,
+    ) -> Result<Worker, std::io::Error> {
         let (tx, rx) = mpsc::channel();
         let flag = Arc::clone(&cancel);
         let handle = std::thread::Builder::new()
-            .name("ipod-first-run".into())
-            .spawn(move || run(plan, &tx, &flag))?;
+            .name(name.to_string())
+            .spawn(move || body(&tx, &flag))?;
         Ok(Worker {
             rx,
             cancel,
@@ -638,6 +904,7 @@ fn fetch(
         return Ok(Outcome::Fetched {
             path: plan.cache.join(rel.file),
             verified: Verification::Sha256,
+            filed_as: Filing::Installer,
         });
     }
     // **Named before a byte goes into it**, so cancelling can say what it costs and so the only
@@ -665,6 +932,8 @@ fn fetch(
                 } else {
                     Verification::SizeOnly
                 },
+                // §10's fetch is an `.ipsw` and the drive is built from it.
+                filed_as: Filing::Installer,
             })
         }
         // The fetcher removed its own `.part` on the way out, so reporting a file we did not
@@ -821,6 +1090,100 @@ fn install(
         path: plan.image.clone(),
         allocated,
     })
+}
+
+// ── the per-part fetch, on the same thread boundary ─────────────────────────────────────────────
+
+/// §11.4's `Fetch…`, as a worker body.
+///
+/// **It is not a [`Plan`], and that is the point.** A `Plan` is one drive being made: it carries a
+/// release, an image, a `.part` and a sector count, and every one of those is meaningless here.
+/// What a per-part fetch has is a list of files and a directory to put them in, so that is what it
+/// takes — and it reports through the same [`Report`] channel, so [`Queue::apply`] draws it,
+/// records it and saves it by the same code that draws the first run.
+///
+/// `cancel` is observed at two places: the top of each want, and inside each download's own watcher
+/// once per [`firmware::WATCH_TICK`]. Between those the work is one `curl` and one `rename`.
+fn fetch_run(wants: Vec<Want>, cache: PathBuf, tx: &mpsc::Sender<Report>, cancel: &Cancel) {
+    for (i, want) in wants.iter().enumerate() {
+        if cancel.asked() {
+            // **`removed: None`, always.** A fetch's only file is its `.part`, and the fetcher
+            // deletes that itself on the way out — reporting a file this thread did not delete
+            // would be a false claim, which is the same rule `fetch` keeps for `Trouble::Stopped`.
+            let _ = tx.send(Report::Cancelled { i, removed: None });
+            return;
+        }
+        let _ = tx.send(Report::Started { i });
+        if want.cached(&cache) {
+            let _ = tx.send(Report::Detail {
+                i,
+                sub: format!("{} — already here, SHA-256 checked", want.file()),
+            });
+            // **Still `Fetched`.** The bytes are here and they verify, and filing them is the whole
+            // of what this press was for: a bundle sitting in the cache that the library has never
+            // heard of is exactly the state `Fetch…` exists to end.
+            let _ = tx.send(Report::Done {
+                i,
+                outcome: Outcome::Fetched {
+                    path: want.lands_at(&cache),
+                    verified: Verification::Sha256,
+                    filed_as: want.filing(),
+                },
+            });
+            continue;
+        }
+        // Named before a byte goes into it, so cancelling can say what it costs.
+        let _ = tx.send(Report::Writing {
+            i,
+            path: want.part_path(&cache),
+            meter: Meter::Apparent,
+        });
+        let mut w = Reporter { i, tx, cancel };
+        match want.download(&cache, &mut w) {
+            Ok(path) => {
+                let _ = tx.send(Report::Detail {
+                    i,
+                    sub: format!(
+                        "{} — {} B — {}, SHA-256 checked",
+                        want.file(),
+                        eapp_loader::group(want.bytes()),
+                        want.from()
+                    ),
+                });
+                let _ = tx.send(Report::Done {
+                    i,
+                    outcome: Outcome::Fetched {
+                        path,
+                        // **`Sha256` and never `SizeOnly`.** `Want::offered` refuses an entry with
+                        // no hash on record, so nothing this function can be handed is checked any
+                        // more weakly than this claims.
+                        verified: Verification::Sha256,
+                        filed_as: want.filing(),
+                    },
+                });
+            }
+            Err((Trouble::Stopped, _)) => {
+                let _ = tx.send(Report::Cancelled { i, removed: None });
+                return;
+            }
+            Err((t, said)) => {
+                let _ = tx.send(Report::Failed {
+                    i,
+                    fault: Fault {
+                        class: class_of(t),
+                        said,
+                    },
+                });
+                return;
+            }
+        }
+    }
+    // **A cancel that arrived after the last boundary is answered rather than swallowed**, exactly
+    // as the first run answers one: [`Queue::cancel`] has already told the person their request was
+    // accepted, and without this that is the last they hear of it.
+    if cancel.asked() {
+        let _ = tx.send(Report::TooLate);
+    }
 }
 
 /// Classify a write failure **by measuring**, never by matching on the message.
@@ -988,6 +1351,12 @@ pub enum Press {
     Busy,
     /// Every step but the boot is done. The boot is Phase 7; this is the handoff.
     HandOff(String),
+    /// **Nothing was started and nothing is wrong.** [`Queue::fetch`] with an empty offer: every
+    /// file that group can fetch is already in the library, which is a good state and not a
+    /// failure. The Rail carries the sentence, which is the caller's — see [`Queue::fetch`].
+    ///
+    /// [`Queue::press`] never answers it: a first run always has five steps.
+    Nothing,
 }
 
 /// What one tick changed, so the caller knows what to re-push, save and delete.
@@ -1014,11 +1383,31 @@ pub struct Shape {
     pub running: bool,
 }
 
+/// Which run this queue is holding.
+///
+/// **A queue runs one thing at a time, and now there are two things it can run.** Everything below
+/// `ids`/`steps`/`done` used to mean *the first run's plan* by construction; with §11.4's per-part
+/// fetch filing its own plan through the same three fields, four places had to be told apart —
+/// the resumed-plan update in [`Queue::press`], the handoff in [`Queue::pump`], the busy note, and
+/// which worker to release. A boolean would have done three of them and got the fourth wrong.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Run {
+    /// Nothing has been pressed in this window.
+    #[default]
+    Idle,
+    /// §10's five steps: the mint, the fetch, the build, the install, the boot.
+    First,
+    /// §11.4's `Fetch…`: N downloads and nothing else. No identity, no drive, no handoff.
+    Fetch,
+}
+
 /// One first run: its plan, its identity, its thread.
 #[derive(Debug)]
 pub struct Queue {
     drives: PathBuf,
     cache: PathBuf,
+    /// What the plan on the Rail is about. See [`Run`].
+    run: Run,
     ids: Vec<u64>,
     steps: Vec<Step>,
     done: Vec<bool>,
@@ -1066,6 +1455,7 @@ impl Queue {
         Queue {
             drives,
             cache,
+            run: Run::Idle,
             ids: Vec::new(),
             steps: Vec::new(),
             done: Vec::new(),
@@ -1146,6 +1536,11 @@ impl Queue {
         if !self.ids.is_empty() {
             return;
         }
+        // **The plan on screen before anything is pressed is the FIRST RUN's**, and saying so here
+        // is what stops [`Queue::press`] treating it as somebody else's and filing a second copy
+        // beside it. `Rail::plan` collapses only *finished* entries, so five `Planned` rows plus
+        // five more `Planned` rows is ten rows and no way back.
+        self.run = Run::First;
         self.steps = steps.to_vec();
         self.done = vec![false; steps.len()];
         self.ids = rail.plan(steps);
@@ -1167,12 +1562,19 @@ impl Queue {
     /// borrows in one block and this can re-enter none of them.
     pub fn press(&mut self, settings: &mut Settings, rail: &mut Rail, can_download: bool) -> Press {
         if self.busy() {
-            let device = self.device.clone().unwrap_or_else(|| "an iPod".into());
-            rail.note(&format!(
-                "Already making {device}. The steps below are what it is doing."
-            ));
+            rail.note(&self.already_running());
             return Press::Busy;
         }
+        // **A plan that is not this run's is cleared rather than resumed.** `show` is idempotent on
+        // `ids` being non-empty, so a finished fetch's rows would have stopped the first run's plan
+        // from ever being filed — and every refusal below returns with the Work page showing the
+        // wrong five lines. `Rail::plan` folds the finished ones into one note on the way past.
+        if self.run != Run::First {
+            self.ids.clear();
+            self.steps.clear();
+            self.done.clear();
+        }
+        self.run = Run::First;
         if self.ids.is_empty() {
             self.show(rail, &plan(Holes::Sparse));
         }
@@ -1262,9 +1664,13 @@ impl Queue {
         }
 
         // **The plan on the Rail is the plan being run**, and a resumed run re-files nothing: a
-        // second `plan()` would append five more entries, because `collapse_finished` folds only
-        // finished ones. Where the probe changed a sub-line — a volume with no holes says so — the
+        // second `plan()` would append five more entries — `Rail::retire_previous` drops the plan it
+        // replaces, and re-filing this one would be replacing it with itself. Where the probe changed a sub-line — a volume with no holes says so — the
         // detail is updated in place instead.
+        //
+        // The length is not enough to know they are the same plan, which is why the block above
+        // clears a foreign one: a five-want fetch and a five-step first run agree on the count, and
+        // this branch would have written the first run's sub-lines onto the fetch's rows.
         if self.ids.len() == plan.steps.len() {
             for (id, s) in self.ids.iter().zip(plan.steps.iter()) {
                 rail.detail(*id, s.sub());
@@ -1309,6 +1715,76 @@ impl Queue {
                 "starting the work",
                 format!("this program could not start a thread to do the work: {e}"),
             )),
+        }
+    }
+
+    /// **§11.4's per-part fetch.** N downloads, on the one worker thread this queue owns.
+    ///
+    /// The whole reason it is here rather than under the press is §12.3: *a progress indication
+    /// with no measurement behind it is worse than none*, and the measurement is
+    /// `firmware::download_watched`'s — which only exists off the window's thread. A blocking
+    /// download on the UI thread is a window that stops repainting for as long as somebody's
+    /// connection takes, with no bar, no cancel and no way to tell it apart from a hang.
+    ///
+    /// **`nothing_to_fetch` is the caller's sentence, not this file's.** An empty offer means
+    /// *every file this group can fetch is already in the library*, which is a fact about a group —
+    /// and `work.rs` has no groups. `parts::Group::nothing_to_fetch` is the one producer, and it
+    /// words the disabled verb as well, so the drawn refusal and the pressed one cannot drift.
+    ///
+    /// **Nothing is minted, probed or gated.** A fetch writes one file per want into the firmware
+    /// cache and touches no drive, so `Plan::of`'s volume probe and the free-space gate are not
+    /// this act's — the disk cost is the download's own bytes and `Cost::down` on each step carries
+    /// it. What a full disk produces here is the fetcher's own `Trouble::Io`, which
+    /// `class_of` files as `Class::Permission` with the operating system's sentence.
+    pub fn fetch(&mut self, rail: &mut Rail, wants: &[Want], nothing_to_fetch: &str) -> Press {
+        if self.busy() {
+            rail.note(&self.already_running());
+            return Press::Busy;
+        }
+        if wants.is_empty() {
+            rail.note(nothing_to_fetch);
+            return Press::Nothing;
+        }
+        // **The plan is replaced, never appended to.** `Rail::plan` collapses the previous run's
+        // finished rows into one note, so pressing `Fetch…` under three groups in a row leaves
+        // three notes and one plan rather than nine step rows.
+        let steps: Vec<Step> = wants.iter().map(|w| w.step()).collect();
+        self.run = Run::Fetch;
+        self.device = None;
+        self.ids = rail.plan(&steps);
+        self.done = vec![false; steps.len()];
+        self.steps = steps;
+        let cancel = Cancel::new();
+        match Worker::spawn_fetch(wants.to_vec(), self.cache.clone(), Arc::clone(&cancel)) {
+            Ok(w) => {
+                self.cancel = Some(cancel);
+                self.worker = Some(w);
+                Press::Running {
+                    from: 0,
+                    embodied: false,
+                }
+            }
+            // Out of threads. Nothing has been written and nothing has been minted, so this refuses
+            // the fetch and costs nothing.
+            Err(e) => Press::Refused(Failure::saying(
+                Class::Permission,
+                "starting the work",
+                format!("this program could not start a thread to do the work: {e}"),
+            )),
+        }
+    }
+
+    /// What a second press is told while a run is in flight.
+    ///
+    /// **Two runs, one sentence each, and the first-run one used to be said about both.** *Already
+    /// making an iPod* under a `Fetch…` press would name a device this queue is not making.
+    fn already_running(&self) -> String {
+        match self.run {
+            Run::Fetch => "Already fetching. The steps below are what it is doing.".into(),
+            _ => format!(
+                "Already making {}. The steps below are what it is doing.",
+                self.device.clone().unwrap_or_else(|| "an iPod".into())
+            ),
         }
     }
 
@@ -1407,12 +1883,28 @@ impl Queue {
             }
         }
         // Every step but the boot is done, and nothing is running: the machine is made.
-        let all_but_the_boot = self.done.len() >= 2
+        //
+        // **Gated on which run this is, and it was gated on the shape of the plan.** A fetch files
+        // its own steps into `self.done`, and a two-want fetch with one want finished satisfies
+        // `first_unticked() >= len - 1` — so the handoff fired mid-fetch. `t.ready` would have been
+        // `None` (a fetch has no device) and the *visible* damage was the line below it: the worker
+        // handle dropped while its thread was still downloading, which asks the `Drop` impl to set
+        // the cancel flag. §12.2's handoff belongs to the run that makes a machine.
+        let all_but_the_boot = self.run == Run::First
+            && self.done.len() >= 2
             && self.first_unticked() >= self.done.len() - 1
             && rail.failures() == 0;
         if !self.busy() && all_but_the_boot {
             t.ready = self.device.clone();
             // Reported once. The handle also goes here, which is what releases the thread.
+            self.worker = None;
+        }
+        // **A fetch has no handoff, so this is where its worker is released.** Without it the
+        // handle sits in `self.worker` until the next press: `busy()` reads `is_finished`, so the
+        // queue is not *busy*, but the finished thread is never joined and every subsequent `pump`
+        // drains a dead channel. It is deliberately not gated on the steps having finished — a
+        // failed or cancelled fetch is over too, and `Kind::Failed` stays on the Rail either way.
+        if self.run == Run::Fetch && !self.busy() {
             self.worker = None;
         }
         t.fraction = rail
@@ -1528,9 +2020,13 @@ impl Queue {
     fn record(&mut self, settings: &mut Settings, outcome: &Outcome) -> bool {
         match outcome {
             Outcome::Nothing => false,
-            Outcome::Fetched { path, verified } => {
+            Outcome::Fetched {
+                path,
+                verified,
+                filed_as,
+            } => {
                 let name = settings.file_away(
-                    Resource::Installer(path.clone()),
+                    filed_as.resource(path.clone()),
                     path.file_name()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default()
@@ -1539,7 +2035,12 @@ impl Queue {
                         verified: *verified,
                     }),
                 );
-                self.installer = Some(name);
+                // **Only an installer is what a drive was built from**, and this used to be set for
+                // every fetch because every fetch was one. A bootloader fetched under §11.4's verb
+                // would otherwise become the `built_from` of whatever drive the next build made.
+                if *filed_as == Filing::Installer {
+                    self.installer = Some(name);
+                }
                 true
             }
             Outcome::Installed { path, .. } => {
@@ -3461,6 +3962,296 @@ mod offline_worker_tests {
             "the close threw away the `Done` that carries the finished drive, so the settings file \
              it writes next does not mention a drive that is on disk"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── §11.4's per-part fetch ──────────────────────────────────────────────────────────────────
+
+    /// A Rockbox piece this test wrote, hashed here.
+    ///
+    /// **`Box::leak`, because a [`Want`] borrows its catalogue entry.** In the running program that
+    /// entry is a `const` in `eapp-loader`; in a test it is a few bytes this function makes, and
+    /// leaking one per test is what lets the offline path drive the real `Want` rather than a
+    /// second type standing in for it. `a_plan` does the same thing for a `Release`.
+    fn a_piece(
+        file: &'static str,
+        body: &[u8],
+        goes: rockbox::Where,
+    ) -> &'static rockbox::Piece {
+        Box::leak(Box::new(rockbox::Piece {
+            file,
+            // Never reached by the tests that put the bytes in the cache first: `Want::cached`
+            // answers true and the fetcher is not called at all.
+            url: "http://127.0.0.1:1/never",
+            bytes: body.len() as u64,
+            sha256: Box::leak(eapp_loader::firmware::sha256(body).into_boxed_str()),
+            goes,
+            about: "a fixture",
+        }))
+    }
+
+    /// The same, for the catalogue `ipodloader2` lives in.
+    fn a_loader(file: &'static str, body: &[u8]) -> &'static ipodlinux::Piece {
+        Box::leak(Box::new(ipodlinux::Piece {
+            file,
+            url: "http://127.0.0.1:1/never",
+            bytes: body.len() as u64,
+            sha256: Box::leak(eapp_loader::firmware::sha256(body).into_boxed_str()),
+            about: "a fixture",
+        }))
+    }
+
+    /// Pump until the queue stops, or fail rather than hang.
+    fn pump_to_a_stop(q: &mut Queue, settings: &mut Settings, rail: &mut Rail) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while q.busy() && std::time::Instant::now() < deadline {
+            q.pump(settings, rail);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!q.busy(), "the worker never finished");
+        // The one after the loop is not a nicety: `busy()` goes false the instant the thread exits,
+        // which can be after the last drain inside it.
+        q.pump(settings, rail);
+    }
+
+    /// **Each download is filed in the group it belongs to**, and the group is read off the
+    /// catalogue rather than assumed.
+    ///
+    /// The defect this is about had exactly one shape while there was one fetcher and no way to
+    /// see it: `Queue::record` filed every `Outcome::Fetched` as a `Resource::Installer`, because
+    /// the only thing this program could download was an `.ipsw`. Fetch a bootloader through the
+    /// same channel and it lands in Apple firmware — a row in the wrong group, offering the wrong
+    /// verb, with nothing downstream able to tell.
+    ///
+    /// Offline: the verified bytes are put in the cache first, so `Want::cached` answers true and
+    /// every step is the already-here path. What that leaves under test is the whole of the window
+    /// side — the plan, the worker, the reports, `apply`, `record` and the save.
+    #[test]
+    fn a_per_part_fetch_files_each_download_in_the_group_it_belongs_to() {
+        let _data = crate::data_dir_lock();
+        let dir = scratch_dir("per-part-fetch");
+        let cache = dir.join("firmware");
+        std::fs::create_dir_all(&cache).expect("a cache");
+
+        let bodies: [Vec<u8>; 3] = [
+            b"a bootloader, as far as this test is concerned".to_vec(),
+            b"nine megabytes of Rockbox, abbreviated".to_vec(),
+            b"ipodloader2, abbreviated".to_vec(),
+        ];
+        let wants = vec![
+            Want::Rockbox(a_piece(
+                "bootloader-fixture.ipod",
+                &bodies[0],
+                rockbox::Where::FirmwarePartition,
+            )),
+            Want::Rockbox(a_piece("rockbox-fixture.zip", &bodies[1], rockbox::Where::Volume)),
+            Want::Loader(a_loader("loader-fixture.bin", &bodies[2])),
+        ];
+        for (w, body) in wants.iter().zip(bodies.iter()) {
+            std::fs::write(w.lands_at(&cache), body).expect("the fixture in the cache");
+        }
+
+        let mut rail = Rail::new();
+        let mut settings = Settings::default();
+        let mut q = Queue::at(dir.join("drives"), cache.clone());
+        assert!(
+            matches!(q.fetch(&mut rail, &wants, "unreachable"), Press::Running { .. }),
+            "the fetch did not start"
+        );
+        pump_to_a_stop(&mut q, &mut settings, &mut rail);
+
+        // **Three shelves, and the middle one is the whole point.** Rockbox publishes two files and
+        // the only thing that separates them is `rockbox::Where`.
+        let filed: Vec<(&str, &str)> = settings
+            .resources
+            .iter()
+            .map(|it| (it.what.kind(), it.name.as_str()))
+            .collect();
+        assert_eq!(
+            filed,
+            vec![
+                ("bootloader", "bootloader-fixture.ipod"),
+                ("software", "rockbox-fixture.zip"),
+                ("bootloader", "loader-fixture.bin"),
+            ],
+            "a fetched part was filed on the wrong shelf"
+        );
+        // …and every one of them says how hard it was checked, because `Want::offered` refuses an
+        // entry with no hash and this is what carries that promise into the library.
+        for it in &settings.resources {
+            assert_eq!(
+                it.from,
+                Some(Provenance::Fetched {
+                    verified: Verification::Sha256
+                }),
+                "{} arrived without saying what was checked",
+                it.name
+            );
+        }
+        // **No drive was told it was built from a bootloader.** `record` used to set `installer`
+        // for every fetch, and the next build would have written that name into the drive's
+        // `built_from`.
+        assert_eq!(q.installer, None, "a bootloader became what a drive was built from");
+        assert_eq!(
+            rail.entries().iter().filter(|e| e.kind == Kind::Done).count(),
+            3,
+            "the Rail did not tick all three: {:?}",
+            rail.entries().iter().map(|e| (e.kind, e.what.clone())).collect::<Vec<_>>()
+        );
+        // The plan drew a real denominator on every row, which is what §12.3 asks of a bar.
+        for (w, s) in wants.iter().zip(q.steps.iter()) {
+            assert_eq!(s.cost.down, w.bytes(), "{} planned against no byte count", w.file());
+            assert_ne!(s.cost.down, 0);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A fetch asked to stop before it starts downloads nothing at all.**
+    ///
+    /// The first of the two boundaries `fetch_run` reads the flag at, driven directly so the answer
+    /// is not a race: the flag is already true when the worker body is entered.
+    #[test]
+    fn a_fetch_asked_to_stop_before_it_starts_downloads_nothing() {
+        let dir = scratch_dir("fetch-stop-first");
+        let cache = dir.join("firmware");
+        std::fs::create_dir_all(&cache).expect("a cache");
+        let body = b"a cached fixture".to_vec();
+        let want = Want::Rockbox(a_piece(
+            "cached-fixture.ipod",
+            &body,
+            rockbox::Where::FirmwarePartition,
+        ));
+        // In the cache and verifying — so a run that ignored the flag would report `Done`, which is
+        // what makes this test able to fail.
+        std::fs::write(want.lands_at(&cache), &body).expect("the fixture in the cache");
+
+        let (tx, rx) = mpsc::channel();
+        let cancel = Cancel::new();
+        cancel.ask();
+        fetch_run(vec![want], cache, &tx, &cancel);
+        drop(tx);
+        let said: Vec<Report> = rx.try_iter().collect();
+        assert!(
+            matches!(
+                said.as_slice(),
+                [Report::Cancelled {
+                    i: 0,
+                    removed: None
+                }]
+            ),
+            "a stopped fetch said {said:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A fetch in flight is stopped through the queue, and the Rail says so.**
+    ///
+    /// The second boundary — inside the download's own watcher, once per `firmware::WATCH_TICK` —
+    /// and it is driven against a **socket that accepts and never answers**. `TcpListener::bind`
+    /// with nobody calling `accept` still completes the handshake out of the kernel's backlog, so
+    /// `curl` connects, sends its request and waits, which is a download that lasts exactly as long
+    /// as this test wants it to and reaches no third party.
+    ///
+    /// It is not `#[ignore]`d for that reason: the only thing on the far end of the wire is this
+    /// process.
+    #[test]
+    fn a_fetch_in_flight_is_stopped_and_leaves_no_partial_file() {
+        assert!(
+            eapp_loader::tooling::can_download(),
+            "this test drives the fetcher, and the fetcher is curl"
+        );
+        let _data = crate::data_dir_lock();
+        let dir = scratch_dir("fetch-cancel");
+        let cache = dir.join("firmware");
+        std::fs::create_dir_all(&cache).expect("a cache");
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a socket");
+        let port = listener.local_addr().expect("a port").port();
+        let piece: &'static rockbox::Piece = Box::leak(Box::new(rockbox::Piece {
+            file: "never-arrives.ipod",
+            url: Box::leak(format!("http://127.0.0.1:{port}/never").into_boxed_str()),
+            // A denominator, so the bar drawn over this would be a real one — and so
+            // `Want::offered` would accept it.
+            bytes: 4096,
+            sha256: Box::leak(eapp_loader::firmware::sha256(b"never").into_boxed_str()),
+            goes: rockbox::Where::FirmwarePartition,
+            about: "a fixture that never arrives",
+        }));
+        let want = Want::Rockbox(piece);
+        let part = want.part_path(&cache);
+
+        let mut rail = Rail::new();
+        let mut settings = Settings::default();
+        let mut q = Queue::at(dir.join("drives"), cache.clone());
+        assert!(matches!(
+            q.fetch(&mut rail, &[want], "unreachable"),
+            Press::Running { .. }
+        ));
+        let id = q.ids[0];
+
+        // **Wait for the file to be announced before cancelling**, which is what makes this the
+        // in-flight boundary rather than the one above it. `Rail::writing` is what sets
+        // `cancellable`, and `Entry::cancel_cost` is the caption that reads off it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            q.pump(&mut settings, &mut rail);
+            if rail.find(id).is_some_and(|e| e.cancellable) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            rail.find(id).is_some_and(|e| e.cancellable),
+            "the fetch never announced the file it is writing, so nothing could be cancelled"
+        );
+        // **A second fetch while one is in flight is a note, not a second worker.** And it is the
+        // fetch's own sentence: `Queue::press`'s is *Already making an iPod*, which would name a
+        // device this queue is not making.
+        assert!(matches!(q.fetch(&mut rail, &[want], "unreachable"), Press::Busy));
+        assert!(
+            rail.entries().iter().any(|e| e.what == "Already fetching. The steps below are what it is doing."),
+            "a second press was told about a machine nobody is making: {:?}",
+            rail.entries().iter().map(|e| e.what.clone()).collect::<Vec<_>>()
+        );
+
+        assert!(q.cancel(id), "the queue refused to stop a fetch it is running");
+        pump_to_a_stop(&mut q, &mut settings, &mut rail);
+
+        assert!(!part.exists(), "a cancelled fetch left its partial file: {}", part.display());
+        assert!(
+            !want.lands_at(&cache).exists(),
+            "a cancelled fetch left a file wearing a real name"
+        );
+        assert!(
+            settings.resources.is_empty(),
+            "a cancelled fetch filed {:?}",
+            settings.resources.iter().map(|it| it.name.clone()).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            rail.find(id).map(|e| e.kind),
+            Some(Kind::Cancelled),
+            "the Rail does not say the fetch was stopped: {:?}",
+            rail.entries().iter().map(|e| (e.kind, e.what.clone())).collect::<Vec<_>>()
+        );
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **An empty offer is a note and not a failure**, and the sentence is the caller's.
+    #[test]
+    fn a_fetch_with_nothing_to_do_says_so_in_the_words_the_greyed_verb_wears() {
+        let dir = scratch_dir("fetch-nothing");
+        let mut rail = Rail::new();
+        let mut q = Queue::at(dir.join("drives"), dir.join("firmware"));
+        let said = crate::parts::Group::Bootloaders.nothing_to_fetch(&Settings::default());
+        assert!(matches!(q.fetch(&mut rail, &[], said), Press::Nothing));
+        assert_eq!(rail.failures(), 0, "having everything was reported as something going wrong");
+        assert_eq!(
+            rail.entries().iter().map(|e| e.what.as_str()).collect::<Vec<_>>(),
+            vec![said],
+            "the note is not the sentence the disabled verb draws"
+        );
+        assert!(!q.busy(), "an empty fetch started a thread");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

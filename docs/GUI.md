@@ -1529,7 +1529,7 @@ would cost it 16 px per row on every page:
 |---|---|
 | `there is no file picker in this build yet, and nothing here accepts a dropped file` — 411 px, drew *…and not…* | `no file picker in this build` |
 | `there is one palette in this build and nothing keys on a scheme, so the control would write a preference no pixel reads` — 623 px, drew *…so t…* | `one palette in this build` |
-| `nothing on this page reaches a fetcher yet — the only download this build starts is the first run's own plan` — 558 px | `no fetcher on this page yet` |
+| `nothing on this page reaches a fetcher yet — the only download this build starts is the first run's own plan` — 558 px | `no fetcher on this page yet`, and **it is gone**: the fetcher landed, and what is drawn there now is why there is nothing to fetch — `no iPod here to fit one to`, `nothing left to fetch`, `both bootloaders are here`, `Rockbox is already here`, all measured in the same 180 |
 | `every download in this program goes through curl, and it is not on this computer` — 423 px | `no curl on this computer` |
 | `My 5.5G is running. Stop it first.` — 168 px, drew *…Stop it f…* | it kept the imperative; see below |
 
@@ -1594,8 +1594,9 @@ block's full width, and a pair that contains one stacks.** `ui/rail.slint`'s `Ne
 layouts — and both gate on `escape-hatch != ""`. Stacked, a `Next` gets `ACT_MEASURE` 324 and a
 group verb gets `PAGE_REASON_MEASURE` 372, which holds the longest command with 65 px to spare.
 
-It costs 78 px on a failure block whose two next steps both refuse, and the same on the three Parts
-groups that offer a `Fetch…`. That is the trade §17.Q1 refused for the *shelf* — 46 px of permanent
+It costs 78 px on a failure block whose two next steps both refuse, and the same on a Parts group
+whose `Fetch…` has nothing left to fetch — two of the three that offer the verb name a route, and
+only while the verb is grey. That is the trade §17.Q1 refused for the *shelf* — 46 px of permanent
 chrome for a paragraph — taken here for the opposite reason: this is not permanent chrome and not a
 paragraph. It is the one line on the page whose entire job is to be copied into a terminal, on a
 control that has just refused, and half of it is worth nothing at all.
@@ -2357,16 +2358,49 @@ entrance `+ New device ›` uses. What a live verb must never say is `rail::Next
 sentences are why a control is **disabled**, and using one under a live press had `Synthesise…`
 answering *there is no Composer in this build yet* one row from the page it opens.
 
-**`Fetch…` is drawn DISABLED on all three groups that offer it, and it used to be live.** It asked
-`Next::Retry`, which asks *is curl on this computer*; `curl` is measured at launch by running it; so
-on every computer that has curl the verb was blue and every press failed, because there is no
-per-part fetch behind it — the only download this build starts is the first run's own plan. **A
-capability question is the wrong question when the mechanism behind the control does not exist**, and
-asking it draws a live control over a hole. So it is §14.1's construction instead: disabled, wearing
-§9.4's second kind — *nothing on this page reaches a fetcher yet* — and naming the group's own route,
-which is `ipod-boot firmware get <family>` under Apple firmware and `ipod-boot rockbox-install` under
-Bootloaders and Software. The fetchers themselves exist and work; what does not exist is a way here
-to reach them.
+**`Fetch…` fetches.** It was drawn live and only ever refused; then it was drawn disabled wearing
+*nothing on this page reaches a fetcher yet*, which was the honest thing to say for as long as it was
+true. It is not true any more. The verb builds an **offer** — a list of files, per group — hands it
+to `work::Queue::fetch`, and the download happens on the queue's worker thread, reported through the
+same `Report` channel §10's first run reports through: the same plan rows, the same byte counts, the
+same `Cancel`, the same failure classes, and the same `Queue::apply` filing what landed.
+
+**Never on the window's thread**, which is the whole reason it is the queue's. §12.3's rule is that a
+progress indication with no measurement behind it is worse than none, and the measurement is
+`firmware::download_watched`'s — a `.part` polled every 100 ms against a byte count the catalogue
+records. A blocking download under this press would freeze the window for as long as somebody's
+connection took, with no bar, no cancel and nothing to tell it apart from a hang.
+
+**What each group offers, and it is narrowed rather than dumped.**
+
+| group | offer | why not more |
+|---|---|---|
+| Apple firmware | the newest **served, verifiable** release of every `UpdaterFamilyID` the library's iPods name | the catalogue is 71 releases; family 24 alone has six. A library with one 5.5G is offered one bundle. `Generation::updater_families` is the narrowing, and it is the only thing that separates a 5G from a 5.5G — they share `FamilyID` 6 |
+| Bootloaders | `bootloader-ipodvideo.ipod` (51 996 B) and `ipodloader2` v2.8.1 (56 912 B) | that is the whole of both catalogues. The sketch below already drew the second one as the row where *`Fetch…` is the whole answer* |
+| Software | Rockbox 4.0 (9 090 335 B) | ZeroSlackr is 101 MB behind a SourceForge redirect and **nothing in this build unpacks a `.7z`** — `Tool::SevenZip`'s own retirement condition is *the iPodLinux install lands*, and it has not. A verb that spent 101 MB on an archive this program cannot open is §14.1's defect with a bar on it |
+
+Everything the library already holds comes out of the offer, and the test is the **file name** rather
+than the path: a bundle somebody provided from their own Downloads folder is the same release the
+cache would hold, and offering to fetch it would file a second row for one release under two names.
+
+**A release Apple no longer serves, or one with no SHA-256 on record, is never offered.** Five of the
+seventy-one answer 403 and the catalogue records it; offering one is starting a download this program
+already knows will fail. And a size-only check never renders as *verified* (§3.2), so a row filed
+from one would have to say something weaker than every other row in the group. Both stay reachable
+through `ipod-boot firmware get`.
+
+**So the verb has two refusals and they are §9.4's two kinds, asked in that order.** `Action::needs`
+asks `Next::Retry` again — *is curl on this computer* — because the mechanism behind the control now
+exists, which is exactly the condition that made that the wrong question before. Then, and only if
+the answer was yes, the library is asked whether there is anything left: *no iPod here to fit one to*
+with nothing filed, *nothing left to fetch* when every iPod is covered, *both bootloaders are here*,
+*Rockbox is already here*. The first is a machine rule and carries no command — every download in
+this program **is** `curl`. The second is a project state and carries the group's own
+`fetch_route`, which now names **what this window will not fetch**: `ipod-boot firmware get <family>`
+for the other sixty-eight releases, `ipod-boot install-linux` for ZeroSlackr, and **nothing at all**
+for Bootloaders, because there is nothing left for a terminal to get. `ipod-boot rockbox-install` was
+named there and is the wrong thing to hand somebody who pressed a verb called `Fetch…`: it writes a
+drive.
 
 **Both verbs carry `geometry::PARTS_VERB_W` as a floor**, because without one `Fetch…` drew as `F…`.
 It is the **half-share** rather than the label's own budget, because the same shrink that ate the
@@ -3968,7 +4002,9 @@ smaller cost than that.
 > inside that directory, so there is not even a key to write the choice into. Wiring the picker to
 > it would have been a dialog that opened, took a choice, and did nothing with it: §19.1's first
 > fatal finding, arrived at by adding a dependency. So `rail::Next` grows an `unwired()` — the same
-> distinction `parts::Action::unwired` already draws for `Fetch…` — the control stays disabled, and
+> distinction `parts::Action::unwired` drew for `Fetch…` at the time, and which has since been
+> deleted along with that function, the per-part fetch having been built — the control stays
+> disabled, and
 > its reason changed from *no folder picker yet* to **`nothing moves the library`**, which is what
 > is actually missing. The escape hatch it already carried, `IPOD_EMULATOR_DATA=<path>`, is the
 > real remedy and always was.
@@ -4416,7 +4452,8 @@ In order, because each depends on the one before it.
       the device, computed when its row was built; the Rail only ever got an entry from a press. It
       carries the device index now and files the sentence before it opens the page.
     - **The Rail grew without bound.** The module's own claim that it does not was true of no code
-      path — `collapse_finished` is called only from `plan`, which nothing calls. A note or a failure
+      path — `collapse_finished` — since renamed `retire_previous`, having been widened to drop
+      un-started rows as well — is called only from `plan`, which nothing calls. A note or a failure
       identical to the one before it is now one entry; two *different* ones are still two.
 13. **`Settings::save()` acquires callers**: **at first-run step 1**, after every completed first-run
     step, after any Composer `Create` or `Save`, after any Parts add or remove, and on close (together
@@ -4604,14 +4641,18 @@ In order, because each depends on the one before it.
     **`Fetch…` was drawn live on all three groups that offer it and every press failed.** The verb
     asked `rail::Next::Retry`, which asks *is curl on this computer*; `caps.download` answers that by
     running `curl --version`; so on every computer with curl the control was blue over a hole. There
-    is no per-part fetch — the only download this build starts is the first run's own plan — so it is
-    now **disabled with a reason and a route** (§14.1, §9.4's second kind): the fetchers exist
-    (`firmware::download`, `rockbox::download`) and nothing on this page reaches them, and the
-    command that does it from a terminal is the group's own — `ipod-boot firmware get <family>` for
-    Apple firmware, `ipod-boot rockbox-install` for a bootloader or for Rockbox. **A capability
+    was no per-part fetch — the only download that build started was the first run's own plan — so it
+    became **disabled with a reason and a route** (§14.1, §9.4's second kind): the fetchers existed
+    (`firmware::download`, `rockbox::download`) and nothing on this page reached them. **A capability
     question is the wrong question when the mechanism behind the control does not exist**, and asking
     it draws a live control over a hole; that is the general form and it is worth more than the
     instance.
+
+    **The hole is filled and the capability question is the right one again**, which is the other
+    half of that general form and is easy to miss: a control moved off a capability question because
+    of an absent mechanism has to be moved *back* the day the mechanism arrives, or it is greyed out
+    for a reason that has stopped being true. §11.4 has the per-group offer; `Action::unwired` and
+    `refused_because_unwired` were deleted rather than left answering `None` for all six verbs.
 
 21. **DONE 2026-08-22. Three guards that read source text instead of watching the program, and two
     of them were green through a working defect.** The fourth of the family was found in

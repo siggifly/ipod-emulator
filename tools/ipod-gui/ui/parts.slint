@@ -433,9 +433,10 @@ export component PartsPage inherits Rectangle {
                     // cut mid-token, and `work-failed.png` drew two *different* commands as one
                     // byte-identical `ipod-boot firmwar\u{2026}`. So when either half names a hatch the
                     // row is not a row: each verb takes the group's full 372 px, where every
-                    // command this program names fits with 113 px to spare. It costs 78 px on the
-                    // three groups that offer a `Fetch\u{2026}`, and buys back the only line on the page
-                    // whose whole job is to be copied.
+                    // command this program names fits with 113 px to spare. It costs 78 px on a
+                    // group whose `Fetch\u{2026}` has nothing left to fetch \u{2014} which is the only state any
+                    // verb here still names a hatch in, the per-part fetch having landed \u{2014} and buys
+                    // back the only line on the page whose whole job is to be copied.
                     property <bool> stacked: (g.has-a && g.a.escape-hatch != "")
                         || (g.has-b && g.b.escape-hatch != "");
 

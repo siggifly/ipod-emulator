@@ -741,7 +741,7 @@ impl Rail {
     /// bar is drawn on any of them: §9.2's *never a spinner* holds by construction rather than by
     /// the caller remembering.
     pub fn plan(&mut self, steps: &[compose::Step]) -> Vec<u64> {
-        self.collapse_finished();
+        self.retire_previous();
         steps
             .iter()
             .map(|s| {
@@ -764,16 +764,30 @@ impl Rail {
             .collect()
     }
 
-    /// The previous plan's finished steps become one line, so the Rail cannot grow for ever.
+    /// **The previous plan is retired**: its finished steps become one line, and its un-started
+    /// ones are dropped.
     ///
-    /// Only `Done` entries — a failure stays until it is dismissed and a cancellation is a fact
-    /// somebody may want to read twice.
-    fn collapse_finished(&mut self) {
+    /// A failure stays until it is dismissed and a cancellation is a fact somebody may want to read
+    /// twice — those are outcomes, and a new plan does not undo one. `Planned` is not an outcome.
+    /// It is a claim about what is **about** to happen, and the moment a different plan is filed it
+    /// is a claim about something that is not going to.
+    ///
+    /// **It used to fold only `Done`, and that left un-started rows standing.** Nothing reached it
+    /// while the first run's five steps were the only plan this program had: `Queue::show` returns
+    /// early once its ids exist, and `Queue::press` re-files only when the step count changed —
+    /// which is the resume case, and which therefore left the old plan's rows behind beside the new
+    /// ones. §11.4's per-part fetch is what made it visible: pressing `Fetch…` on a fresh window
+    /// drew six rows, five of them §10.1's plan for a button nobody had pressed, and pressing the
+    /// centre button afterwards would have added five more — this module's own claim that the Rail
+    /// *"does not grow without bound, and that is a mechanism rather than a hope"* failing in the
+    /// one place it had never been asked.
+    fn retire_previous(&mut self) {
         let done = self.entries.iter().filter(|e| e.kind == Kind::Done).count();
+        self.entries
+            .retain(|e| !matches!(e.kind, Kind::Done | Kind::Planned));
         if done == 0 {
             return;
         }
-        self.entries.retain(|e| e.kind != Kind::Done);
         let id = self.mint();
         self.entries.insert(
             0,
@@ -800,7 +814,7 @@ impl Rail {
     ///
     /// **A note that repeats the last one is not filed twice**, and it returns the existing id. The
     /// module's own claim that the Rail *"does not grow without bound, and that is a mechanism
-    /// rather than a hope"* was true of no code path: [`Rail::collapse_finished`] is called only
+    /// rather than a hope"* was true of no code path: [`Rail::retire_previous`] is called only
     /// from [`Rail::plan`], which nothing in this build calls, and it collapses only `Done`. So
     /// pressing the centre button N times appended N identical entries, each needing its own
     /// dismissal. Consecutive-identical is the honest bound — two *different* notes are two things
@@ -1431,7 +1445,7 @@ mod tests {
     /// **The same thing said twice in a row is one entry, and that is the bound.**
     ///
     /// This module's own header claims the Rail *"does not grow without bound, and that is a
-    /// mechanism rather than a hope."* That was true of no code path: `collapse_finished` is called
+    /// mechanism rather than a hope."* That was true of no code path: `retire_previous` is called
     /// only from `plan`, which nothing in this build calls, and it collapses only `Done`. So
     /// pressing the centre button N times appended N identical entries, each needing its own
     /// dismissal, and `why ›` — which files the refusal it was pressed for — stacked one per press.
@@ -1465,6 +1479,59 @@ mod tests {
             Failure::saying(Class::Missing, "starting iPod 2", "its ROM is not where it was"),
         );
         assert_eq!(rail.failures(), 2, "two devices with two problems collapsed into one");
+    }
+
+    /// **A second plan retires the first**, and the un-started rows go with it.
+    ///
+    /// `retire_previous` folded `Done` and left `Planned` standing, which nothing reached while the
+    /// first run's five steps were the only plan this program had. §11.4's per-part fetch is a
+    /// second one: pressing `Fetch…` on a fresh window drew its row **under** §10.1's five, for a
+    /// button nobody had pressed — and pressing the centre button afterwards would have put five
+    /// more beside those, which is this module's own bound failing.
+    ///
+    /// **An outcome is not retired.** A failure stays until it is dismissed and a cancellation is a
+    /// fact somebody may want to read twice; a finished step becomes the one-line note. Only the
+    /// claim about what was *about* to happen goes, because that is the only one a new plan makes
+    /// false.
+    #[test]
+    fn a_second_plan_retires_the_first_and_keeps_what_actually_happened() {
+        let step = |what: &str| compose::Step {
+            kind: compose::Verb::Fetch,
+            what: what.into(),
+            sub: String::new(),
+            cost: compose::Cost::NONE,
+        };
+        let mut rail = Rail::new();
+        let first = rail.plan(&[step("a"), step("b"), step("c")]);
+        assert_eq!(rail.entries().len(), 3);
+
+        // One finished, one failed, one never started — the three shapes a retired plan can be in.
+        rail.done(first[0]);
+        rail.fail(
+            first[1],
+            Failure::saying(Class::Network, "fetching b", "the connection was reset"),
+        );
+
+        let second = rail.plan(&[step("d")]);
+        let what: Vec<&str> = rail.entries().iter().map(|e| e.what.as_str()).collect();
+        assert_eq!(
+            what,
+            vec!["1 step finished", "b", "d"],
+            "the previous plan was not retired: {what:?}"
+        );
+        assert_eq!(rail.failures(), 1, "a new plan undid a failure");
+        assert_eq!(rail.find(second[0]).map(|e| e.kind), Some(Kind::Planned));
+
+        // And the bound holds over repeats: three plans of three do not leave nine rows.
+        for _ in 0..3 {
+            rail.plan(&[step("x"), step("y"), step("z")]);
+        }
+        assert_eq!(
+            rail.entries().iter().filter(|e| e.kind == Kind::Planned).count(),
+            3,
+            "planned rows accumulated: {:?}",
+            rail.entries().iter().map(|e| (e.kind, e.what.clone())).collect::<Vec<_>>()
+        );
     }
 
     /// **A Rail made only of notes announces the note, not `0 done.`**

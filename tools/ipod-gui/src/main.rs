@@ -1094,6 +1094,12 @@ fn wire(
                     ticking();
                 }
                 Route::First(work::Press::Busy) => ticking(),
+                // **`press` never answers this and `fetch` does** — §11.4's verb with an empty
+                // offer, which is routed from the Parts page and not from here. Named rather than
+                // folded into the arm above it, because *a run is already going* and *there was
+                // nothing to do* are two different things to be told and the centre button can
+                // only produce the first.
+                Route::First(work::Press::Nothing) => {}
                 Route::First(work::Press::Refused(f)) => {
                     // Refused before anything was fetched or built. It goes on the plan, and the
                     // drawer opens on the page that holds it.
@@ -1736,6 +1742,7 @@ fn wire(
         let repaint_all = repaint_all.clone();
         let live = live.clone();
         let shell = shell.clone();
+        let ticking = ticking.clone();
         let weak = window.as_weak();
         window.on_parts_group_action(move |g, a| {
             let Some(w) = weak.upgrade() else { return };
@@ -1743,6 +1750,55 @@ fn wire(
             else {
                 return;
             };
+            // **§11.4's per-part fetch, routed here for the same reason the four verbs below are:
+            // it is not a change to the library.** It is N downloads on `work::Queue`'s worker
+            // thread, and `parts.rs` owns no queue and may not — a blocking download under this
+            // press would stop the window repainting for as long as somebody's connection took,
+            // with no bar, no cancel and nothing to tell it apart from a hang (§12.3).
+            //
+            // **The offer is recomputed here rather than trusted from the drawn control.** The
+            // control was worded at the last push; the library may have moved since, and two quick
+            // presses of one verb are two presses against two different libraries. An offer that
+            // has gone empty is a note and not a failure — nothing is wrong with having everything.
+            if action == parts::Action::Fetch && group.offers(action) {
+                let wants = {
+                    let s = settings.borrow();
+                    parts.borrow_mut().offer(&s, group)
+                };
+                let started = {
+                    let mut r = rail.borrow_mut();
+                    work.borrow_mut()
+                        .fetch(&mut r, &wants, group.nothing_to_fetch(&settings.borrow()))
+                };
+                match started {
+                    // §12.3's bar and §9.2's Rail move from here on, and the timer is what moves
+                    // them — the same call the centre button makes, for the same reason.
+                    work::Press::Running { .. } | work::Press::Busy => ticking(),
+                    work::Press::Refused(f) => {
+                        rail.borrow_mut().failed("fetch", group.heading(), f);
+                    }
+                    // The Rail already carries the sentence; `Queue::fetch` filed it with the
+                    // group's own words, which are the words the greyed verb wears.
+                    work::Press::Nothing => {}
+                    // `fetch` cannot answer it: a handoff is a finished machine, and this makes
+                    // none.
+                    work::Press::HandOff(_) => {}
+                }
+                // **The Rail is pushed here, because nothing else pushes it.** `sync_rail` is not
+                // in the repaint registry — every site that moves the Rail pushes it itself — and
+                // the fallthrough at the end of this closure gets it through `library_moved`, which
+                // this arm returns before reaching. Without it the note and the plan both existed
+                // in the model and the Work page drew whatever was on it before, which is a press
+                // that changed nothing a person can see.
+                sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+                // **The drawer moves to the page that says what is happening.** A press on Parts
+                // whose whole result is five rows on the Work page is a press that looks like it
+                // did nothing, which is the complaint §9.2 exists to answer.
+                stack.borrow_mut().go(nav::Page::Work, 1);
+                push_nav(&w, &stack.borrow());
+                repaint_all();
+                return;
+            }
             // **The two verbs the Composer answers, routed here in the same way `Edit` is.**
             // `Action::needs` says both are live *because this build has a Composer* — a surface
             // that holds a recipe is what `Synthesise…` and `Build…` need — and opening a page is
@@ -4013,7 +4069,7 @@ fn take_next_step(
         //
         // The arm is correct and the gate is now honest, and no press a person can make gets here.
         // Traced rather than assumed: the only `Class::Incompatible` constructed outside a test is
-        // `work::Plan::of`'s defensive refusal at `work.rs:336`, which fires when a step's verb is
+        // `work::Plan::of`'s defensive refusal at `work.rs:577`, which fires when a step's verb is
         // `Verb::Copy` — and the only producer of `Verb::Copy` is `compose::Recipe::steps` under
         // `Start::FromImage` or `Start::FromDisk` (`compose.rs:913` and `:926`). `work::plan` is
         // `Verb::Synthesise`, then `work::recipe()`'s steps, then `Verb::Start`, and `recipe()`
@@ -16182,6 +16238,190 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **§11.4's `Fetch…`, through the callback the markup fires, with nothing to fetch.**
+    ///
+    /// The wiring assertion, and it costs no network: an empty library has no iPod, so Apple
+    /// firmware's offer is empty and the press does the one thing an empty offer can do. What it
+    /// proves is the half no unit test can — that the arm is **registered**, that it reaches
+    /// `work::Queue::fetch` rather than falling through to `Parts::group_action`'s refusal, and
+    /// that the sentence it files is the group's own rather than a second wording of it.
+    ///
+    /// `Parts::group_action`'s `Fetch` arm is the control: it answers *the press is not wired*, so
+    /// a callback that fell through would put that on the Rail as a failure and this would say so.
+    #[test]
+    fn the_registered_fetch_verb_reaches_the_queue_with_nothing_to_fetch() {
+        let (settings, _held) = a_fresh_installation_in("fetch-nothing-wired");
+        let w = a_window();
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
+        w.invoke_open_page(DrawerPage::Parts, 1);
+
+        w.invoke_parts_group_action(
+            parts::Group::Firmware.as_i32(),
+            parts::Action::Fetch.as_i32(),
+        );
+
+        assert_eq!(
+            w.get_drawer_page(),
+            DrawerPage::Work,
+            "the press stayed on Parts, so whatever it did is somewhere the person cannot see"
+        );
+        let said = parts::Group::Firmware.nothing_to_fetch(&settings.borrow());
+        let rail = w.get_rail();
+        let rows: Vec<(RailKind, String)> = (0..rail.row_count())
+            .filter_map(|i| rail.row_data(i))
+            .map(|r| (r.kind, r.what.to_string()))
+            .collect();
+        assert!(
+            rows.iter().any(|(k, what)| *k == RailKind::Note && what == said),
+            "the Rail does not carry the group's own sentence: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|(k, _)| *k == RailKind::Failed),
+            "having nothing to fetch was reported as something going wrong: {rows:?}"
+        );
+        assert!(
+            settings.borrow().resources.is_empty(),
+            "a press with nothing to fetch changed the library"
+        );
+        assert_eq!(
+            std::fs::read_dir(eapp_loader::firmware::cache_dir())
+                .map(|d| d.flatten().count())
+                .unwrap_or(0),
+            0,
+            "a press with nothing to fetch downloaded something"
+        );
+    }
+
+    /// **§11.4's per-part fetch, end to end, through the control a person presses.**
+    ///
+    /// The whole route and no stand-in for any of it: `invoke_parts_group_action` is the callback
+    /// `wire` registered and `parts.slint`'s `GroupVerb` fires; the offer is computed by the same
+    /// `Parts` the page draws from; the download runs on `work::Queue`'s worker; `(wiring.tick)()`
+    /// is the closure the 100 ms timer runs; and the bytes come from `secure-appldnld.apple.com`.
+    ///
+    /// **What it checks that the fetcher already checked, it checks again.** `firmware::verify` is
+    /// what refused anything that did not match on the way in; a test that took the fetcher's word
+    /// for the fetcher's work would have checked nothing, so the bytes are read back and hashed
+    /// here.
+    ///
+    /// Ignored by default because it reaches a third party and writes about 6.5 MB.
+    ///
+    /// ```text
+    /// cargo test --release -p ipod-gui --bin ipod-emulator -- --ignored --nocapture \
+    ///     a_real_per_part_fetch_from_the_registered_parts_verb
+    /// ```
+    #[test]
+    #[ignore = "reaches Apple's servers and writes ~6.5 MB; run with --ignored --nocapture"]
+    fn a_real_per_part_fetch_from_the_registered_parts_verb() {
+        let (settings, _held) = a_fresh_installation_in("e2e-per-part-fetch");
+        // The library a person would be standing in front of: one iPod, no firmware for it.
+        settings.borrow_mut().file_away(
+            eapp_loader::settings::Resource::Firmware(eapp_loader::nor::Source::default()),
+            "a 5.5G",
+            Some(eapp_loader::settings::Provenance::Synthesised { seed: 1 }),
+        );
+        let w = a_window();
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
+        w.invoke_open_page(DrawerPage::Parts, 1);
+
+        println!("\ndata directory  {}", eapp_loader::settings::data_dir().display());
+        let verb = |w: &MainWindow| {
+            w.get_parts_groups()
+                .iter()
+                .find(|g| g.group == parts::Group::Firmware.as_i32())
+                .expect("§11.4's six groups")
+                .a
+        };
+        let before = verb(&w);
+        println!("verb            `{}` enabled={}", before.label, before.enabled);
+        assert!(
+            before.enabled,
+            "`Fetch…` is grey with an iPod filed and nothing to run it: {}",
+            before.reason
+        );
+        assert_eq!(
+            std::fs::read_dir(eapp_loader::firmware::cache_dir())
+                .map(|d| d.flatten().count())
+                .unwrap_or(0),
+            0,
+            "something was downloaded to draw the page"
+        );
+
+        // ── the press ───────────────────────────────────────────────────────────────────────────
+        println!("\n── the press ──");
+        w.invoke_parts_group_action(
+            parts::Group::Firmware.as_i32(),
+            parts::Action::Fetch.as_i32(),
+        );
+        assert_eq!(w.get_drawer_page(), DrawerPage::Work, "the press showed nothing");
+        let plan = w.get_rail();
+        assert_eq!(plan.row_count(), 1, "one iPod of one generation is one download");
+        let row = plan.row_data(0).expect("the plan");
+        println!("plan            {} {} — {}", row.verb, row.what, row.sub);
+        assert_eq!(row.verb, "fetch");
+
+        // ── the run, one tick at a time, exactly as the timer drives it ─────────────────────────
+        let began = std::time::Instant::now();
+        let mut peak = String::new();
+        let mut most = 0.0f32;
+        let deadline = began + std::time::Duration::from_secs(600);
+        loop {
+            (wiring.tick)();
+            let r = w.get_rail().row_data(0).expect("the plan");
+            if !r.measure.is_empty() {
+                peak = r.measure.to_string();
+            }
+            most = most.max(r.fraction);
+            if matches!(r.kind, RailKind::Done | RailKind::Failed) || std::time::Instant::now() > deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let done = w.get_rail().row_data(0).expect("the plan");
+        println!("finished in     {:.2?}", began.elapsed());
+        println!("measured        {peak}");
+        println!("bar reached     {:.0} %", most * 100.0);
+        println!("said            {}", done.sub);
+        assert_eq!(done.kind, RailKind::Done, "the fetch failed: {}", done.happened);
+
+        // **§12.3: a real denominator, observed.** `X of Y` and a fraction that moved, both read
+        // off the pushed row rather than off the model behind it.
+        assert!(peak.contains(" of "), "the bar had no denominator behind it: `{peak}`");
+        assert!(most > 0.0, "the fraction never left `no measurement`");
+
+        // ── the library ─────────────────────────────────────────────────────────────────────────
+        let filed = settings
+            .borrow()
+            .resources
+            .iter()
+            .find(|it| it.what.kind() == "installer")
+            .cloned()
+            .expect("the fetched bundle reached the library");
+        let path = filed.what.path().expect("an installer is a file").to_path_buf();
+        println!("filed           {} — {}", filed.name, filed.from.map(|f| f.line()).unwrap_or_default());
+        println!("                {}", path.display());
+        assert_eq!(
+            filed.from,
+            Some(eapp_loader::settings::Provenance::Fetched {
+                verified: eapp_loader::settings::Verification::Sha256
+            })
+        );
+        // Checked again here, because a test that trusts the fetcher to verify its own download has
+        // checked nothing.
+        let name = path.file_name().expect("a name").to_string_lossy().into_owned();
+        let rel = eapp_loader::firmware::by_file(&name).expect("a catalogued release");
+        let bytes = std::fs::read(&path).expect("the bundle");
+        eapp_loader::firmware::verify(rel, &bytes).expect("the bytes on record");
+        println!("verified        {} bytes, sha256 on record", bytes.len());
+
+        // …and the verb has gone grey, because there is nothing left for it to do.
+        w.invoke_open_page(DrawerPage::Parts, 1);
+        let after = verb(&w);
+        println!("verb            `{}` enabled={} — {}", after.label, after.enabled, after.reason);
+        assert!(!after.enabled, "the release it just filed is still on offer");
+        assert_eq!(after.reason, "nothing left to fetch");
+    }
+
     /// **The Composer's `‹` names the page it returns to, and there are two of them now.**
     ///
     /// `composer.slint` carried the literal `back: "Devices"` because that was the only entrance.
@@ -16775,10 +17015,28 @@ pub(crate) mod tests {
             );
         }
 
-        // ── parts.rs: the verb with no mechanism behind it ────────────────────────────────────
-        for a in parts::Action::ALL {
-            if let Some(why) = a.unwired() {
-                say(Slot::Verb, &format!("parts::Action::{a:?}::unwired"), why);
+        // ── parts.rs: why `Fetch…` has nothing left to do ─────────────────────────────────────
+        //
+        // **Enumerated rather than swept out of `Parts::view`, and two libraries rather than one.**
+        // The view sweep below drives an empty library and a furnished one, and neither of them
+        // reaches four of these five sentences: an empty library has no iPod, so Apple firmware
+        // draws *no iPod here to fit one to* and never its other one; and neither fixture has
+        // Rockbox's two pieces or `ipodloader2`'s release filed under their catalogue names, so
+        // both of those groups have a non-empty offer and draw no reason at all. A sentence no
+        // fixture reaches is a sentence no gate measures — `AGENTS.md` §6 — so they are named here.
+        let mut with_an_ipod = Settings::default();
+        with_an_ipod.file_away(
+            eapp_loader::settings::Resource::Firmware(eapp_loader::nor::Source::default()),
+            "an iPod",
+            None,
+        );
+        for lib in [&Settings::default(), &with_an_ipod] {
+            for g in parts::Group::ALL {
+                say(
+                    Slot::Verb,
+                    &format!("parts::Group::{g:?}::nothing_to_fetch"),
+                    g.nothing_to_fetch(lib),
+                );
             }
         }
 

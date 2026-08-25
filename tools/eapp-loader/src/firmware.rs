@@ -303,7 +303,18 @@ pub const WATCH_TICK: std::time::Duration = std::time::Duration::from_millis(100
 /// **Extracted so the fetcher and whoever watches the progress cannot drift about where it is.** A
 /// progress bar measuring a path the downloader is not writing reads zero for ever.
 pub fn part_path(rel: &Release, dir: &std::path::Path) -> std::path::PathBuf {
-    dir.join(format!("{}.part", rel.file))
+    part_named(rel.file, dir)
+}
+
+/// The same, for a catalogue entry that is not a [`Release`].
+///
+/// **One spelling of `.part` for all three catalogues.** `rockbox::download` and
+/// `ipodlinux::download` each wrote `format!("{}.part", p.file)` out again, which is three copies
+/// of a suffix that the temp-then-rename discipline turns on: a fetcher writing `.partial` while
+/// the window measured `.part` would draw a bar at zero for the whole download and delete nothing
+/// on a cancel.
+pub fn part_named(file: &str, dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join(format!("{file}.part"))
 }
 
 /// Is this release already here, and does it still verify?
@@ -435,16 +446,80 @@ pub fn verify(rel: &Release, data: &[u8]) -> Result<(), String> {
     }
 }
 
-/// HTTPS GET to a file, via `curl` — and `powershell` as the Windows fallback.
+/// Check bytes against a size **and** a hash somebody wrote down.
 ///
-/// The same reasoning as the update check in the window: `curl` is on macOS, on every Linux, and on
-/// Windows since 1803. Speaking TLS ourselves would mean a dependency, and shelling out to fetch a
-/// file is a thing this project already does.
+/// **[`verify`]'s stricter sibling, and the difference is what the catalogue can promise.** A
+/// [`Release`] may carry no hash and may carry no size, so `verify` has three arms and one of them
+/// prints a warning about the weaker check. A [`crate::rockbox::Piece`] and a
+/// [`crate::ipodlinux::Piece`] carry both, always — their own catalogue tests assert it — so this
+/// refuses rather than degrading.
 ///
-/// **One implementation, two doors.** This is [`fetch_watched`] with a watcher that wants nothing;
-/// the Rockbox and iPodLinux fetchers come through here, the window comes through the other.
-pub(crate) fn http_get_to_file(url: &str, dest: &std::path::Path) -> Result<(), String> {
-    fetch_watched(url, dest, 0, &mut Silent).map_err(|(_, said)| said)
+/// **One implementation for the two catalogues that had one each.** `rockbox::verify` and
+/// `ipodlinux::verify` were byte-identical apart from the field access, which is two places for one
+/// sentence to be reworded in and two places for the size check to be dropped from.
+pub fn checked(file: &str, want_bytes: u64, want_sha: &str, data: &[u8]) -> Result<(), String> {
+    if data.len() as u64 != want_bytes {
+        return Err(format!(
+            "{file}: expected {want_bytes} bytes, got {} — a truncated download, or not the file \
+             we meant",
+            data.len()
+        ));
+    }
+    let got = sha256(data);
+    if got != want_sha {
+        return Err(format!("{file}: sha256 is {got}, expected {want_sha}"));
+    }
+    Ok(())
+}
+
+/// Fetch a file whose size and hash are both on record, reporting bytes and stopping when asked.
+///
+/// **[`download_watched`]'s sibling for the catalogues that are not [`Release`]s.** Rockbox's two
+/// pieces and `ipodloader2`'s release went through [`http_get_to_file`], which passes [`Silent`] —
+/// so those two fetchers could report no progress and could not be cancelled, and the window had no
+/// way to put them behind §12.3's honest bar. Every one of them records a byte count, so the
+/// denominator was there the whole time and nothing was reading it.
+///
+/// The discipline is [`download_watched`]'s, unchanged: write `<file>.part`, check the bytes,
+/// rename only then — so **nothing acquires a real name until it verifies**, and the only file this
+/// ever removes is the one it created.
+pub fn get_watched(
+    file: &str,
+    url: &str,
+    want_bytes: u64,
+    want_sha: &str,
+    dir: &std::path::Path,
+    w: &mut dyn Watch,
+) -> Result<std::path::PathBuf, (Trouble, String)> {
+    let dest = dir.join(file);
+    if let Ok(existing) = std::fs::read(&dest) {
+        if checked(file, want_bytes, want_sha, &existing).is_ok() {
+            return Ok(dest);
+        }
+        // Present but wrong: say so rather than silently re-using or silently clobbering.
+        eprintln!(
+            "{}: already here but does not verify — downloading again",
+            dest.display()
+        );
+    }
+    std::fs::create_dir_all(dir).map_err(|e| (Trouble::Io, format!("{}: {e}", dir.display())))?;
+    let part = part_named(file, dir);
+    if let Err((t, said)) = fetch_watched(url, &part, want_bytes, w) {
+        // A transfer that ended early leaves its `.part` and nothing ever comes back for it — the
+        // same litter `download_watched` sweeps up, for the same reason: nothing here resumes a
+        // download, so the bytes are worth nothing.
+        let _ = std::fs::remove_file(&part);
+        return Err((t, said));
+    }
+    let got =
+        std::fs::read(&part).map_err(|e| (Trouble::Io, format!("{}: {e}", part.display())))?;
+    if let Err(e) = checked(file, want_bytes, want_sha, &got) {
+        let _ = std::fs::remove_file(&part);
+        return Err((Trouble::Verification, e));
+    }
+    std::fs::rename(&part, &dest)
+        .map_err(|e| (Trouble::Io, format!("{}: {e}", dest.display())))?;
+    Ok(dest)
 }
 
 /// What curl's exit code means, in curl's own words.
@@ -467,6 +542,12 @@ fn curl_meaning(code: i32) -> &'static str {
 }
 
 /// HTTPS GET to a file, reporting bytes as they land and stopping when asked.
+///
+/// **The one fetcher, and there is no second door any more.** `http_get_to_file` was this with a
+/// [`Silent`] watcher, and it existed so Rockbox and iPodLinux could download without one — which
+/// is precisely what made those two fetches unwatchable and uncancellable. Both now come through
+/// [`get_watched`], which comes through here, so *every* download this program starts reports its
+/// bytes and reads a stop flag; a caller that wants neither passes `Silent` itself.
 ///
 /// **Spawn and poll rather than block.** `Command::status()` returns when the download is over,
 /// which is precisely too late to draw a progress bar or to honour a cancel; this starts the child,
