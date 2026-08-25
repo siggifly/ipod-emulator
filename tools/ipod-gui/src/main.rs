@@ -3011,6 +3011,12 @@ struct Live {
     /// same reason: the machine runs at about a quarter of the part, and pretending otherwise makes
     /// the drawing lie.
     hold: Cell<bool>,
+    /// Whether the machine has put anything on its own panel — `Out.fb_nonzero != 0`.
+    ///
+    /// Read under `sample`'s one lock, because that function's doc says it is the only place that
+    /// takes it and a second reader would make that false. It exists so `Glass::of` can stop
+    /// painting a ROM's boot screen over a framebuffer that has something in it.
+    drawn: Cell<bool>,
     buttons: Cell<u8>,
 }
 
@@ -3050,6 +3056,7 @@ impl Live {
         // that only redrew when the panel did would be a control whose state was reported by the
         // co-processor.
         self.hold.set(out.stats.hold);
+        self.drawn.set(out.fb_nonzero != 0);
         self.buttons.set(out.stats.buttons);
         if out.fb_seq == self.seq.get() {
             return None;
@@ -3280,6 +3287,7 @@ fn start_machine(
         // finger living here — see the field.
         finger: RefCell::new(wheel::Finger::default()),
         hold: Cell::new(false),
+        drawn: Cell::new(false),
         buttons: Cell::new(0),
     });
     Ok(())
@@ -3617,7 +3625,7 @@ fn pump_machine(
     let parked = matches!(life, machine::Life::Off)
         .then(|| machine::parked_frame(&l.cfg, &mut Presence::new()))
         .flatten();
-    let on_glass = machine::Glass::of(&life, parked.as_deref());
+    let on_glass = machine::Glass::of(&life, parked.as_deref(), l.drawn.get());
     if let Some(img) = glass(frame, &on_glass) {
         window.set_screen_source(img);
     }
@@ -6341,7 +6349,7 @@ fn resting_glass(s: &Settings, selected: i32) -> machine::Glass {
         .and_then(|i| s.devices.get(i))
         .filter(|d| d.parked_at.is_some())
         .and_then(|d| machine::parked_frame(&restore_point_of(&d.name), &mut Presence::new()));
-    machine::Glass::of(&machine::Life::Off, parked.as_deref())
+    machine::Glass::of(&machine::Life::Off, parked.as_deref(), false)
 }
 
 /// Which device the emulator has a machine for, by name.
@@ -8848,6 +8856,7 @@ pub(crate) mod tests {
             parking: Cell::new(false),
             finger: RefCell::new(wheel::Finger::default()),
             hold: Cell::new(false),
+            drawn: Cell::new(false),
             buttons: Cell::new(0),
         }
     }

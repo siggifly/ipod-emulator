@@ -448,12 +448,26 @@ pub enum Glass {
 
 impl Glass {
     /// `parked` is [`parked_frame`]'s answer, and is only consulted when nothing is running.
-    pub fn of(life: &Life, parked: Option<&Path>) -> Glass {
+    ///
+    /// `drawn` is `Out.fb_nonzero != 0` — whether the machine has put anything on its own panel.
+    ///
+    /// **The ROM's boot screen stands in for a machine that has not drawn yet, and it used to cover
+    /// one that had.** `Booting` returned [`Glass::Boot`] unconditionally, so a synthesised ROM's
+    /// mark was painted over a framebuffer holding **71 695 lit pixels of 76 800** for as long as
+    /// the phase lasted — and when a boot stalls, that is for ever. The operator reported the
+    /// program *"stuck on the synthesised logo"* twice; the second time the machine behind the logo
+    /// had booted far enough to fill its screen, and nothing on the bench said so.
+    ///
+    /// A real 5G draws its own logo from ROM into the framebuffer, so on a retail dump the two
+    /// pictures agree and this changes nothing. On a synthesised ROM there is no such draw, and the
+    /// substitute is the only thing standing between the operator and what the machine is doing.
+    pub fn of(life: &Life, parked: Option<&Path>, drawn: bool) -> Glass {
         match life {
             Life::Off => match parked {
                 Some(p) => Glass::Parked(p.to_path_buf()),
                 None => Glass::Dark,
             },
+            Life::Booting { .. } if drawn => Glass::Live,
             Life::Booting { .. } => Glass::Boot,
             Life::Running { .. } => Glass::Live,
             Life::Stopped { .. } => Glass::Held,
@@ -1078,7 +1092,7 @@ mod tests {
         let life = Life::read(&o, &BootTarget::Os, Some(1_600_000_000));
         assert_eq!(life, Life::Off);
         assert!(!life.alive());
-        assert_eq!(Glass::of(&life, None), Glass::Dark, "an off panel kept a frame");
+        assert_eq!(Glass::of(&life, None, false), Glass::Dark, "an off panel kept a frame");
         assert_eq!(life.shelf(), "off");
         assert_eq!(no_machine(&life), Some(NO_MACHINE));
     }
@@ -1092,8 +1106,8 @@ mod tests {
         let s = stats(1_612_004_992, 34.8);
         let stopped = Life::read(&out(Phase::Stopped("Lost".into()), s), &BootTarget::Os, None);
         let off = Life::read(&out(Phase::Off, s), &BootTarget::Os, None);
-        assert_eq!(Glass::of(&stopped, None), Glass::Held);
-        assert_eq!(Glass::of(&off, None), Glass::Dark);
+        assert_eq!(Glass::of(&stopped, None, false), Glass::Held);
+        assert_eq!(Glass::of(&off, None, false), Glass::Dark);
         assert_eq!(stopped.ring(), Ring::Danger);
         assert_eq!(off.ring(), Ring::Accent);
     }
@@ -1272,16 +1286,45 @@ mod tests {
         let cfg = config(&dir, true);
         let mut seen = Presence::new();
         assert_eq!(parked_frame(&cfg, &mut seen), None);
-        assert_eq!(Glass::of(&Life::Off, None), Glass::Dark);
+        assert_eq!(Glass::of(&Life::Off, None, false), Glass::Dark);
 
         let png = dir.join("m.parked.png");
         std::fs::write(&png, b"\x89PNG").expect("a scratch frame");
         let mut fresh = Presence::new();
         let found = parked_frame(&cfg, &mut fresh).expect("the frame beside the snapshot");
         assert_eq!(found, png, "the frame is not beside the snapshot under the same stem");
-        assert_eq!(Glass::of(&Life::Off, Some(&found)), Glass::Parked(png));
+        assert_eq!(Glass::of(&Life::Off, Some(&found), false), Glass::Parked(png));
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    /// **A machine that has drawn is shown, not covered.**
+    ///
+    /// `Booting` returned [`Glass::Boot`] whatever the panel held, so a synthesised ROM's mark was
+    /// painted over a framebuffer with 71 695 lit pixels of 76 800 in it — and because the boot it
+    /// was covering had stalled, for ever. The operator reported the program *"stuck on the
+    /// synthesised logo"* twice; the second time the machine behind that logo had filled its screen.
+    ///
+    /// The substitute is for a machine that has not drawn. Once it has, it is the machine's picture.
+    #[test]
+    fn a_booting_machine_that_has_drawn_shows_its_own_panel() {
+        let booting = Life::Booting {
+            target: BootTarget::default(),
+            progress: Progress::read(1_000, Some(800_000_000)),
+        };
+        assert_eq!(
+            Glass::of(&booting, None, false),
+            Glass::Boot,
+            "a machine that has drawn nothing has nothing of its own to show"
+        );
+        assert_eq!(
+            Glass::of(&booting, None, true),
+            Glass::Live,
+            "the ROM's boot screen is still being painted over a panel with something on it"
+        );
+        // A drawn frame does not overrule the states that are not about drawing.
+        assert_eq!(Glass::of(&Life::Off, None, true), Glass::Dark);
+    }
+
 
     /// **Parking says what it is waiting for and outranks every other row** — §12.4, and it says
     /// only what is known.
