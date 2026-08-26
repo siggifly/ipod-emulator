@@ -1022,3 +1022,55 @@ on 20.1.3 and lethal here.)
 
 **Next: why does the first reset happen at 84 740 143?** That is one event, deterministic, with a
 named site — and it is the whole bug, because nothing downstream of it can recover.
+
+### The first reset, as far as it has been traced
+
+`--stop-at=0x00000000:1` stops the machine *at* the first reset, and the fault register file is
+now printed (the break log's 16-register dump had been disabled with `.take(0)`):
+
+```
+at 0x000fb8d4  ldrne r2, [r7, r1]
+   r0 =00000000   <- the `this` pointer, null
+   r1 =ea00007a   <- [r0], the image's own reset-vector word
+   r7 =0000001c   <- the member offset
+   r14=0011e1cc   <- the caller
+   r7=7777772d  r8=8888882d  r9=9999992d  r12=cccccc2d
+```
+
+Those last four are a **poison fill** — `0x77777777`, `0x88888888`, `0x99999999`, `0xcccccccc`
+with a low byte written over — so this runs on memory nobody initialised.
+
+The caller at `0x0011e1a8`..`0x0011e1c8` loads a **member-function pointer from a global at
+`0x004f3fb4`** and invokes it through `0x000fb8a4`. That pointer is not the problem:
+
+```
+                       [0x004f3fb4]  [0x004f3fb8]
+  static, 20.1.3         0x0000001c    0x00000001
+  static, 25.1.3         0x0000001c    0x00000001
+  runtime, both arms     1c 00 00 00   01 00 00 00
+```
+
+Offset `0x1c`, virtual bit set — which is exactly `r7` and the `tst r6,#1` above. **And the two
+images are byte-identical over this whole call site**, so the difference is data, not code. Inside
+`0x000fb8a4` the object arrives as `ldmia r1,{r0,r1}` from the caller's `r5`, so the null is
+`[r5]`, a field of a structure passed down the chain.
+
+Another difference worth recording rather than acting on yet: **25.1.3 puts its stack near the top
+of 64 MB** (`r13=0x13edaca4`) where 20.1.3's sits about 9 MB in (`r13=0x108c6e04`).
+
+### Ruled out, with the reset count as the discriminator
+
+| tried | 25.1.3 resets |
+|---|---|
+| baseline | 29 |
+| `rsrc` at Apple's `0x00000000/0x600` instead of `0x10000000/0` | 29 |
+| handoff SDRAM word `0x02000000` (32 MB) instead of `0x04000000` | 29 |
+| `--clock=5`, fifteen times the simulated time | still 290 ata / 0 lit |
+| the same twelve register blocks as 20.1.3 | no missing peripheral |
+
+The SDRAM word is worth calling out because `emu.rs` flags it as unverified — *"whether it varies
+by model is NOT established"* — and the stack placement above made it look like a live suspect. It
+is not this bug.
+
+**Where it stands:** one deterministic event, at 84 740 143 instructions, in code that is byte-for-
+byte the same in a build that boots. Not fixed.
