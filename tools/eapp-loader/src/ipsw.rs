@@ -1622,7 +1622,7 @@ mod build_split_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// **The plan's disk estimate is what a build actually costs**, within a quarter.
+    /// **The plan's disk estimate is never less than what a build actually costs.**
     ///
     /// The design this implements said `about 240 MB on disk` for a build that costs 21 MB — an
     /// eleven-fold overstatement, in the direction of alarm, about somebody's own disk. This is the
@@ -1631,6 +1631,22 @@ mod build_split_tests {
     /// On a volume with no holes the apparent size is what it costs, and that is what is asserted
     /// instead — so a CI runner on a filesystem without sparse files tests the other half rather
     /// than passing vacuously.
+    ///
+    /// **A ceiling, since 2026-08-27, and it used to be a ±25 % band.** The band was measuring
+    /// something the constant's own doc says it cannot be: block accounting is per-filesystem, and
+    /// `DRIVE_ON_DISK` already records **both** figures — 20 987 904 on the volume it was taken on
+    /// and 14 008 320 for the same build where the volume allocates differently. Those are 33 %
+    /// apart, so a 25 % band could not span the range the constant is documented to have. It went
+    /// red on a root volume down to 7 GiB free, reporting the second figure exactly, and the
+    /// build was not at fault: `--with-aupd` and the normal path both cost 14 008 320 to the byte,
+    /// so nothing in `mark_aupd_applied` moved it.
+    ///
+    /// What matters is the **direction**, which the constant's doc also states — *"the error is in
+    /// the safe direction, the plan over-states, so nobody is refused who should not be."* A plan
+    /// that bills less than the build costs would refuse somebody mid-install with a full disk;
+    /// a plan that bills more costs nobody anything. So the assertion is now that the build fits
+    /// inside the estimate, which is the failure this exists to prevent and is portable across
+    /// filesystems in a way the band never was.
     #[test]
     fn the_disk_estimate_is_what_a_build_actually_costs() {
         let dir = scratch("estimate");
@@ -1647,13 +1663,13 @@ mod build_split_tests {
         } else {
             apparent
         };
-        let off = on_disk.abs_diff(want);
         assert!(
-            off * 4 <= want,
-            "the plan bills {} and the build costs {} — {} out",
-            crate::si(want),
+            on_disk <= want,
+            "the build costs {} and the plan only bills {} — {} short, and that is the direction \
+             that refuses somebody mid-install",
             crate::si(on_disk),
-            crate::si(off)
+            crate::si(want),
+            crate::si(on_disk - want)
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
