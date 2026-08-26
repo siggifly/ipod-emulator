@@ -279,8 +279,15 @@ fn main() {
         .find_map(|a| a.strip_prefix("--pp-dma-irq="))
         .and_then(|v| v.parse().ok());
     // Implies --novelty: the idle test is "no bucket was new", and only novelty tracking knows.
+    // LAST wins, not first. `ipod-film` prepends its own `--stop-when-idle=` (env `IDLE`, default
+    // 400 M) before the caller's passthrough flags, so `find_map` — first match — silently ignored
+    // an explicit `--stop-when-idle=` given after `--`. A film of a 30 G boot then ended at 511 M
+    // with the heuristic's own "BUSY, not blocked: raise --stop-when-idle" warning printed, which
+    // is the tool telling you to raise a value it will not let you raise. Shell convention is that
+    // the later flag wins; so is this now.
     if let Some(v) = args
         .iter()
+        .rev()
         .find_map(|a| a.strip_prefix("--stop-when-idle="))
     {
         m.stop_when_idle = v.replace('_', "").parse::<u64>().ok();
