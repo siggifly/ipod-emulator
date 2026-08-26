@@ -812,8 +812,19 @@ fn main() {
         //
         // The script is expanded and PRINTED before the run, so the schedule in the log is the
         // schedule that executed and a run is reproducible from its own output.
+        // **The wheel is modelled by default since 2026-08-26.** A real iPod always has one, the
+        // window has always built one unconditionally, and this required `--clickwheel` — which
+        // made it the last of the three knobs the two front ends disagreed about in silence.
+        // Measured, same NOR dump, same `PRISTINE` drive, one core, registry on: **705 ATA
+        // commands without the wheel and 769 with**, and 769 is the window's own number. That gap
+        // was the whole ATA residual left after the second-core and registry defaults were fixed.
+        //
+        // `--no-clickwheel` answers the four registers with zero again, which is a smaller machine
+        // than the part and an honest thing to be able to ask for — the same standing as
+        // `--no-second-core`. `--wheel-no-irq` is the narrower ablation and still means what it
+        // said: model the registers, never raise IRQ 40.
         let wheel_spec = args.iter().find_map(|a| a.strip_prefix("--wheel="));
-        if args.iter().any(|a| a == "--clickwheel") || wheel_spec.is_some() {
+        if !args.iter().any(|a| a == "--no-clickwheel") {
             let mut w = eapp_loader::ClickWheel::new(0x7000_c000);
             w.irq_enabled = !args.iter().any(|a| a == "--wheel-no-irq");
             let gap = args

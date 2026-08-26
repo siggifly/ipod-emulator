@@ -299,17 +299,26 @@ without the registry   769 ata    2 916 lit   Apple's logo
 with the registry      705 ata   75 267 lit   the language picker
 ```
 
-**Both front ends, no flags on either side, now:**
+**3. The clickwheel.** The window builds one unconditionally; `trace` required `--clickwheel`.
+A real iPod always has one. This was the whole of the ATA residual left by the first two:
+
+```
+without the wheel   705 ata
+with the wheel      769 ata      <- the window's own number
+```
+
+**Both front ends, no flags on either side:**
 
 | | ATA | instructions | panel |
 |---|---|---|---|
-| `ipod-boot retail` | 705 | 872 005 510 | **75 267** |
-| `ipod-emulator --headless` | 769 | 872 236 211 | **75 267** |
+| `ipod-boot retail` | **769** | 872 646 182 | **75 267** |
+| `ipod-emulator --headless` | **769** | 872 236 211 | **75 267** |
 
-The same screen to the pixel, and instruction counts 0.03 % apart. **The 64-command ATA gap is a
-real residual and is not closed** — as is the fact that the window reaches 75 267 with the registry
-ablated and `trace` does not, which its own comment in `emu::build` records and which means the two
-still need different things to draw.
+The same ATA count, the same screen to the pixel, instruction counts 0.05 % apart. Closed.
+
+One asymmetry survives and is **not** closed: the window reaches 75 267 with `bcm.registry`
+ablated and `trace` does not, which `emu::build`'s own comment records from 2026-08-24. The two
+still need different things to draw, and neither knows what.
 
 **What this costs.** Every figure in `research/` taken through `ipod-boot` past ~70 ATA commands
 describes the machine that stalled at the logo, and that is now a re-baseline rather than a mystery.
