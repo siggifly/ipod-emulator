@@ -971,3 +971,54 @@ would then jump somewhere else and still be wrong. **Next: find what writes `+0x
 in the 20.1.3 arm, and what it is waiting on in 25.1.3.** `--storeaddr` over the object is the
 instrument, and research/10 §2 used exactly that to settle the last argument about an unwritten
 field on this same shape.
+
+### The loop is self-sustaining, and the first reset is the one that matters
+
+`--storeaddr` on the two fields in the dispatch chain, both arms, same command:
+
+```
+[0x10874224]   ( = r4+0x440 )
+  20.1.3   0x000843a8 -> 0            @482293      bss clear
+           0x00183f84 -> 0x10873958   @9937707     set, and stays
+  25.1.3   the same two, then zeroed and re-set on every pass — 59 stores
+
+[0x10873974]   ( = the +0x1c that dispatches through null )
+  20.1.3   0x000843a8 -> 0            @480069      bss clear
+           0x14936ce4 -> 0x1086cc7c   @9941435     set, and stays
+  25.1.3   the same two on the FIRST pass, then ONLY
+           0x000843a8 -> 0            @85220211, @95212013, @105204717, @115196269 …
+```
+
+**The initialiser at `0x14936ce4` runs once and never again.** So the first pass sets the field
+correctly; the first reset zeroes it with the bss clear; and every pass after that dispatches
+through null, resets, and zeroes it again. The loop feeds itself.
+
+Which means **the first reset is the cause and the other twenty-eight are aftermath**. It arrives
+at `@84740143` with `lr=0x000fb8ec`, and that site is the same shape as the other:
+
+```
+000fb8c4  tst   r6, #0x1          ; the Itanium-ABI member-pointer test
+000fb8cc  ldrne r1, [r0, #0x0]    ; vtable, from an object that is null
+000fb8d4  ldrne r2, [r7, r1]      ; the entry — unmapped, answers 0
+000fb8e4  mov   lr, pc            ; lr = 0x000fb8ec
+000fb8e8  bx    r2                ; bx 0
+```
+
+A C++ pointer-to-member call on a **null `this`**, exactly like `0x00183e7c`. Two sites, one bug
+class. (`research/04` ledger row at §687 records a third of the same family — four reads at
+`0xea000078` from `0x000a0bd0` — which is more evidence that this shape is normal *and survivable*
+on 20.1.3 and lethal here.)
+
+### Ruled out, each with the instrument that can now see a reset
+
+- **`rsrc`'s load address.** The one thing that genuinely differs between the two bundles — 20.1.3
+  ships `rsrc` at `0x10000000/0`, 25.1.3 at `0x00000000/0x600`. Two drives differing in exactly
+  those two words: **29 resets either way**, 290 ata, 0 lit. Yesterday's retraction of the `rsrc`
+  boot-effect claim stands, and now on evidence that could have shown a difference.
+- **A missing peripheral.** The register-block census is the **same twelve blocks** on both arms.
+- **Simulated time.** At `--clock=5`, fifteen times more per instruction, 25.1.3 is still 290 ata
+  and 0 lit while 20.1.3 reaches the picker. The 100 ms delay is not slowness.
+- **NOR identity.** Already known from the two synthesised arms being identical to the code bucket.
+
+**Next: why does the first reset happen at 84 740 143?** That is one event, deterministic, with a
+named site — and it is the whole bug, because nothing downstream of it can recover.

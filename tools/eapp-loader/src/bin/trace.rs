@@ -3191,7 +3191,14 @@ fn report_break_watch(m: &mut eapp_loader::Machine) {
                 r[0], r[1], r[2], r[3], r[14]
             );
         }
-        for (pc, regs) in m.break_log.iter().take(0) {
+        // **The whole register file, for the last few hits.** This loop was `.take(0)` — disabled
+        // by neutering it rather than deleting it, so it read as a feature and emitted nothing.
+        // The comment above is right that a 16-register dump of the *first* 64 hits answers
+        // nothing; the answer is in the last ones, and `r4` is where these objects live, which
+        // `r0..r3` above cannot show. Four is enough to see an object and not enough to bury the
+        // tally.
+        let full = m.break_log.len().saturating_sub(4);
+        for (pc, regs) in m.break_log.iter().skip(full) {
             println!("  at {pc:#010x}");
             for row in 0..4 {
                 let cells: Vec<String> = (0..4)
