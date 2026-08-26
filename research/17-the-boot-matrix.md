@@ -530,3 +530,73 @@ through `--osos=`, and burned its whole 200 M budget with **zero** ATA commands 
 That is not evidence about the bootloader: it expects to be *installed in the firmware partition and
 entered by Apple's bootloader*, which is a cold boot. The run says nothing until it is redone that
 way — and redoing it needs `install-os`, which is blocked above.
+
+
+---
+
+## Addendum — the 5.5G does not boot, and it is the FIRMWARE, not the ROM (2026-08-26)
+
+Measured with `ipod-emulator --headless=400000000`, one data directory per arm, every path pinned.
+**The control is the identity line**: each synthesised arm prints its own serial, so an arm that did
+not change is visible rather than assumed.
+
+| ROM | drive | ata | lit pixels | |
+|---|---|---|---|---|
+| Apple's 5G dump | built from `iPod_20.1.3` | **617** | **75 267** | boots |
+| synthesised **5G** (`MA146`) | built from `iPod_20.1.3` | **264** | **75 267** | boots |
+| synthesised **5.5G** (`A444`) | built from `iPod_20.1.3` | **280** | **75 267** | boots |
+| synthesised **5G** (`MA146`) | built from `iPod_25.1.3` | **22** | **2 612** | **stops** |
+| synthesised **5.5G** (`A444`) | built from `iPod_25.1.3` | **22** | **2 612** | **stops** |
+
+75 267 is Addendum 10 §8's own fingerprint, to the pixel. **The ROM is not the variable and the
+generation of the ROM is not the variable.** Every ROM boots a 5G drive; no ROM boots a 5.5G one.
+What does not boot is **RetailOS 25.1.3**.
+
+### The prime suspect is dead, with a control
+
+`nor.rs`'s `Spec::hw_vr` exists for exactly this — *"the 5.5G's `0x000B0010` is the one value in this
+whole system that came from a comment rather than from hardware, and the 5.5G does not boot"* — and
+line 436 above says the same. `ipod-boot make-nor --hwvr` reaches it and is absent from the usage
+text, which is why it had never been turned.
+
+Turned, over the failing drive, nothing else moving:
+
+```
+HwVr 0x000B0010   22 ata   2 612 lit   19 754 code buckets
+HwVr 0x000B0011   22 ata   2 612 lit   19 754 code buckets
+```
+
+Identical, including the bucket count — which is §6's signature of a change that did not take
+effect, so the control was run: `cmp -l` reports the two ROMs differ in **exactly one byte**, at
+`0x405D`, `0x10` -> `0x11`, which is the `HwVr` record's value word. The arms were real. **`HwVr` is
+not the cause.**
+
+### And it is not the header, which this file has blamed before
+
+`image_from_drive` finds the header rather than assuming it, and both drives come back correct:
+
+```
+5G   7 559 680 bytes  addr=0x10000000 entry=0x0  first8=[7a 00 00 ea 67 00 00 ea]
+5.5G 7 561 216 bytes  addr=0x10000000 entry=0x0  first8=[7a 00 00 ea 67 00 00 ea]
+```
+
+Same vector table at the base of both. The 0x200-versus-0x800 defect recorded in `ipsw.rs` is fixed
+and is not this.
+
+### Also ruled out
+
+- **`aupd`.** Removing the directory entry entirely leaves the boot byte-for-byte identical.
+- **A regression from the window rebuild.** `ipod-boot retail`, pinned identically, at `e127849`
+  (before the first Slint commit) and at HEAD 53 commits later: **599 999 952 instructions, second
+  core 315 681 at pc `0x000dee20`, 70 ata** in both. The machine did not move.
+
+### What a mismatch is supposed to look like, and does not
+
+`make-disk` warns that a family mismatch *"does not fail loudly: RetailOS boots and then asks you to
+restore it from iTunes, after roughly 70 ATA commands instead of 600."* A synthesised **5.5G** ROM on
+a **5G** drive is that mismatch, and it reached **280 ata and a full panel** instead. So either the
+synthesised NOR does not carry what RetailOS tests the family against, or the test is somewhere this
+machine does not reach. That is a second open question and it is not the same as this one.
+
+**Next:** trace `iPod_25.1.3` against `iPod_20.1.3` from the handoff and find the first divergence.
+Bisection by file-swapping is finished — it has taken this as far as it goes.

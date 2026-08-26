@@ -2509,7 +2509,7 @@ fn make_nor_cmd(args: &[String]) -> Result<(), String> {
     let out = args
         .iter()
         .rfind(|a| !a.starts_with("--") && !args.iter().any(|f| f.starts_with("--") && args.iter().position(|x| x == f).map(|i| args.get(i + 1) == Some(*a)).unwrap_or(false)))
-        .ok_or("usage: ipod-boot make-nor [--model A146] [--seed N] [--from FILE] [--serial S] [--guid HEX] OUT.bin")?;
+        .ok_or("usage: ipod-boot make-nor [--model A146] [--seed N] [--from FILE] [--serial S] [--guid HEX] [--hwvr HEX] OUT.bin")?;
 
     // The model decides the colour, the capacity and the generation — there is no separate colour
     // setting because no SysCfg has ever carried one.
