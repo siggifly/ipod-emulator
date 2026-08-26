@@ -631,27 +631,9 @@ fn main() {
             }
         }
         map_hardware(&mut m, args.iter().any(|a| a == "--cold-boot"));
-        // **The part's own name, at the register Rockbox calls `PP_VER1`/`PP_VER2`.**
-        //
-        // This used to be `0x00360000` — one byte in the right place and zeroes around it, shaped to
-        // pass Apple's bootloader's single test (it takes bits 16..23 of `0x70000000` and compares
-        // to `0x36`) and nothing else. That is not a chip id, and it is why the second reader of
-        // this register could not work: `debug-pp.c` spells an eight-character part name out of
-        // `PP_VER2` then `PP_VER1`, and out of `0x00360000` it spells `"\0\0\0\0\0006\0\0"`.
-        //
-        // The full string keeps Apple's byte exactly where Apple looks — `'6'` is the third
-        // character of `PP5026C-` — so the boot is unmoved, and everything else about the register
-        // stops being a hole. **The generation is inferred from Apple's own comparison, not from a
-        // datasheet**: the ROM's name table at `0x10ae4` lists `PP5020`, `PP5022` and `PP5026` and
-        // no `PP5021`, and its bootloader tests for `'6'`.
-        for (i, b) in 0x3232_432Du32.to_le_bytes().iter().enumerate() {
-            // PROBE
-            m.mem.write8(0x7000_0000 + i as u32, *b);
-        }
-        for (i, b) in 0x5050_3530u32.to_le_bytes().iter().enumerate() {
-            // 'P','P','5','0'
-            m.mem.write8(0x7000_0004 + i as u32, *b);
-        }
+        // The part's own name at `PP_VER1`/`PP_VER2`, from the one place that decides it —
+        // which byte, and why that one, is [`eapp_loader::seed_chip_id`].
+        eapp_loader::seed_chip_id(&mut m);
         for (base, size) in &maps {
             m.mem.regions.push(eapp_loader::Region {
                 name: "extra",
@@ -789,10 +771,32 @@ fn main() {
         // --bcm : model the video co-processor's host protocol instead of leaving it as memory.
         if args.iter().any(|a| a == "--bcm") {
             let mut b = eapp_loader::Bcm::new(0x3000_0000);
-            // --bcm-registry : publish the GENCMD service directory RetailOS reads at internal
-            // 0x1f0, and answer the ring RPC behind it. Off by default — every baseline number in
-            // research/20 was measured with the co-processor as a memory and a protocol.
-            b.registry = args.iter().any(|a| a == "--bcm-registry");
+            // --no-bcm-registry : do NOT publish the GENCMD service directory RetailOS reads at
+            // internal 0x1f0, nor answer the ring RPC behind it.
+            //
+            // **On by default since 2026-08-26, because the window has always had it on and the
+            // two disagreeing in silence is what `KNOWN-BUGS.md` was recording.** It was off here,
+            // with the reason *"every baseline number in research/20 was measured with the
+            // co-processor as a memory and a protocol"* — true, and those numbers were all taken
+            // on the machine that stopped at Apple's logo, so the baseline was not what it said.
+            //
+            // Measured the day it flipped, same NOR dump, same `PRISTINE` drive, one core,
+            // `BUDGET=1500000000`, panel read with `--bcm-dump=e0000:140:f0:`:
+            //
+            // ```text
+            //   without the registry   769 ata    2 916 lit   Apple's logo
+            //   with the registry      705 ata   75 267 lit   the language picker
+            // ```
+            //
+            // 75 267 is the window's own number, to the pixel. The panel is the whole difference —
+            // this decides whether RetailOS ever draws anything but the boot logo, and `--bcm` on
+            // its own is not enough to get there.
+            //
+            // The ablation recorded in `ipod-gui`'s `emu::build` — *"one flag, same ROM, same
+            // drive, same start path, the boot is indistinguishable"* — is a measurement of the
+            // WINDOW, which reaches 75 267 either way. That the two front ends need different
+            // things here is a real residual and is not closed by this line.
+            b.registry = !args.iter().any(|a| a == "--no-bcm-registry");
             if b.registry {
                 println!("  bcm gencmd registry: publishing a tag-2 display service");
             }
@@ -901,16 +905,38 @@ fn main() {
         // single-core one. A wake ends the running core's turn, which is what makes Apple's
         // two-instruction hand-off through the entry vector at `0x40000050` observable.
         //
-        // **The default was flipped on evidence, not on principle**: at the moment of flipping,
-        // every recipe measured here is identical with one core and two — retail 599 ATA commands
-        // and 2 916 non-black pixels, cold-booted Rockbox 10 304 and 74 057, in **both** arms. So
-        // the flip re-baselines nothing, and `research/`'s existing numbers stand unchanged.
+        // **It was defaulted ON on 2026-08-19 on evidence, and the evidence expired.** The
+        // argument, kept verbatim because it was a good one: *at the moment of flipping, every
+        // recipe measured here is identical with one core and two — retail 599 ATA commands and
+        // 2 916 non-black pixels, cold-booted Rockbox 10 304 and 74 057, in both arms. So the flip
+        // re-baselines nothing.* `research/04` ledger row 7 carries the same sentence.
         //
-        // `--no-second-core` is arm B and is why this can still be A/B'd. It is not a bypass — it
-        // is a smaller machine than the part, which is a different and honest thing to be able to
-        // ask for. Note that asking for it puts ledger #7's `COP_STATUS` override back, because a
-        // machine with no coprocessor has to answer that register somehow.
-        if !args.iter().any(|a| a == "--no-second-core") {
+        // **Measured 2026-08-26, same NOR dump, same `PRISTINE` drive, `BUDGET=900000000`:**
+        //
+        // ```text
+        //                                 ata   lit      where
+        //   ipod-boot retail --no-second-core   766   —        past the logo, still going
+        //   ipod-boot retail (two cores)         70   —        Apple's logo
+        //   ipod-emulator --headless            769   75 267   the language picker, then Idle
+        //   ipod-emulator --headless --second-core  70    2 916   Apple's logo
+        // ```
+        //
+        // The arms are no longer identical; they differ by a factor of eleven, and they differ the
+        // same way in **both front ends**, so it is the coprocessor and not a harness. The one-core
+        // boot has moved a long way since the flip — 599 ATA and 2 916 pixels then, 769 and 75 267
+        // now, which is the Apple logo replaced by RetailOS's first interactive screen — and the
+        // two-core boot has not come with it. Whatever fixed the one-core path did not carry.
+        //
+        // So the default goes back to one core, on the same kind of evidence that moved it: a
+        // default that stalls RetailOS at the logo silently re-baselines every measurement taken
+        // through this program, and `KNOWN-BUGS.md`'s *"`ipod-boot retail` and `ipod-gui` do not
+        // boot the same machine"* is exactly that happening. `--second-core` asks for the bigger
+        // machine and is where the defect now lives; `--no-second-core` still says what it says.
+        //
+        // Note that one core puts ledger #7's `COP_STATUS` override back, because a machine with
+        // no coprocessor has to answer that register somehow. That is the cost of this, and it is
+        // written into the ledger rather than left here.
+        if args.iter().any(|a| a == "--second-core") {
             m.mem.second_core = true;
             if let Some(q) = args.iter().find_map(|a| a.strip_prefix("--quantum=")) {
                 m.mem.quantum = q.parse().unwrap_or(eapp_loader::Machine::QUANTUM).max(1);
@@ -2351,6 +2377,7 @@ fn main() {
         // this call --break, --watch and --dump are accepted, do fire, and print nothing — which
         // reads as "breakpoints do not work on the boot path" and cost a long detour to diagnose.
         report_break_watch(&mut m);
+        report_ppm(&args, &m);
         return;
     }
 
@@ -2412,6 +2439,7 @@ fn main() {
             println!("    {addr:08x}  {}", disasm::arm(w, *addr, None));
         }
         report_unmapped(&mut m);
+        report_ppm(&args, &m);
         return;
     }
 
@@ -2489,16 +2517,7 @@ fn main() {
         "frames presented: {}  clears: {}  quads drawn: {}",
         m.frames_presented, m.clears, m.quads_drawn
     );
-    if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--ppm=")) {
-        match fs::write(path, m.framebuffer_ppm()) {
-            Ok(()) => println!(
-                "wrote {path} ({}x{})",
-                eapp_loader::FB_WIDTH,
-                eapp_loader::FB_HEIGHT
-            ),
-            Err(e) => eprintln!("{path}: {e}"),
-        }
-    }
+    report_ppm(&args, &m);
     if !m.output.is_empty() {
         println!(
             "\n--- the game's own debug output ---\n{}",
@@ -3049,6 +3068,28 @@ fn report_unmapped(m: &mut eapp_loader::Machine) {
                 .collect();
             println!("       {}", c.join("  "));
         }
+    }
+}
+
+/// Write the panel to a PPM if `--ppm=` asked for one.
+///
+/// Shared for the same reason as [`report_break_watch`], and found the same way: `--boot-osos`
+/// returns from `main` early, so while this lived at the bottom of `main` the flag was **accepted,
+/// silent and did nothing** on the one recipe anybody points it at. Asked for the panel of a
+/// 766-ATA retail boot on 2026-08-26 and got "no such file" — the run had already exited through
+/// the early return. An instrument that writes no file and reports no error is indistinguishable
+/// from a boot that drew nothing, which is the question it was being asked.
+fn report_ppm(args: &[String], m: &eapp_loader::Machine) {
+    let Some(path) = args.iter().find_map(|a| a.strip_prefix("--ppm=")) else {
+        return;
+    };
+    match fs::write(path, m.framebuffer_ppm()) {
+        Ok(()) => println!(
+            "wrote {path} ({}x{})",
+            eapp_loader::FB_WIDTH,
+            eapp_loader::FB_HEIGHT
+        ),
+        Err(e) => eprintln!("{path}: {e}"),
     }
 }
 

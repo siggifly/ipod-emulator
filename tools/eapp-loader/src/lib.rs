@@ -8509,6 +8509,48 @@ impl Machine {
 /// below. That shadowing is load-bearing history rather than an oversight — every measurement in
 /// `research/` was taken through it — so a caller that wants the boot this project has measured
 /// must build its machine with the same `ram_base`/`ram_size` and call this at the same point.
+/// Seed `PP_VER1`/`PP_VER2` — the part's own name, at `0x70000000`.
+///
+/// **Not folded into [`map_hardware`], and not because nobody got round to it.** The comment
+/// inside that function records the reason: two drivers want different answers from this one
+/// register, so which byte is right is not settled and the choice belongs where it can be argued
+/// with. What does *not* belong anywhere is **two front ends disagreeing about it in silence**,
+/// which is what this function exists to end.
+///
+/// Until 2026-08-26 `trace.rs` wrote the eight characters below and `ipod-gui`'s `emu::build`
+/// wrote `0x00360000` — the shape `research/16` calls the chip lie, one byte in the right place
+/// with zeroes around it. Neither call site named the other and neither said which was current, so
+/// the same machine answered two different part numbers depending on which program started it.
+///
+/// **The value, and why this one.** `PP_VER2` then `PP_VER1` spell an eight-character part name
+/// that Rockbox's `debug-pp.c` prints; these two words spell `PP5022C-`. Byte 16..23 of `PP_VER2`
+/// is the character both readers test:
+///
+/// - `ipodloader2`'s `ipod_is_pp5022()` tests it for `'2'` (`ipodhw.c:27`). With `'2'` the loader
+///   stops addressing a 1G iPod's registers at `0xcf00xxxx`, relocates into IRAM and issues
+///   `IDENTIFY DEVICE` — **research/16 measures 30 437 746 unmapped reads and 0 ATA commands
+///   becoming none and one.** That is the measurement this value is chosen by.
+/// - Apple's bootloader takes bits 16..23 and compares against `'6'`. It gets `'2'` here and
+///   **boots anyway**: `ipod-boot retail` hands over and RetailOS runs for the rest of the budget.
+///   So the comparison is not the gate the older comments read it as, and swapping this to `'6'`
+///   was tried on 2026-08-26 — the second core moved (315 681 -> 312 671 instructions, so the arm
+///   was live) and the boot did not, still 70 ATA and Apple's logo.
+///
+/// **What is still not settled** is whether real hardware answers `'2'` at all. research/16 §"Our
+/// reference hardware may not be a PP5022" reads `PP5021C-2` out of the reference drive's own
+/// `BoardHwName`, which would make the character `'1'` and both tests above false. The register is
+/// *supplied* here, as this emulator supplies every register, and the value is sourced from
+/// Rockbox's decoding rather than measured off a part. Deriving it from `BoardHwName` is the open
+/// end of that note.
+pub fn seed_chip_id(m: &mut Machine) {
+    for (i, b) in 0x3232_432Du32.to_le_bytes().iter().enumerate() {
+        m.mem.write8(0x7000_0000 + i as u32, *b);
+    }
+    for (i, b) in 0x5050_3530u32.to_le_bytes().iter().enumerate() {
+        m.mem.write8(0x7000_0004 + i as u32, *b);
+    }
+}
+
 pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
     for (name, base, size) in [
         // SDRAM, as the hardware actually has it: one contiguous 64 MB at 0x10000000, plus the

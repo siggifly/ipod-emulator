@@ -227,7 +227,7 @@ It prints the whole boot as a timeline of halted fractions, every `0x052a` the b
 instruction count of each, and what the window said about it — and it now **asserts** the three
 numbers this entry is about instead of printing them under a `KNOWN BUG` heading.
 
-## `ipod-boot retail` and `ipod-gui` do not boot the same machine — 2026-08-25
+## ~~`ipod-boot retail` and `ipod-gui` do not boot the same machine~~ — ROOT-CAUSED + FIXED 2026-08-26
 
 Same NOR dump, same `PRISTINE` drive, both pinned on the command line:
 
@@ -265,6 +265,58 @@ the budget; what it does not do is ask for the drive. Counted the same day, one 
 and the window's high-level boot on the same drive programs them **408** times in 400 M and reaches
 **484** ATA commands. Whatever divides the two front ends, it is downstream of the handover and it
 is not the address map.
+
+### It was two defaults, and neither was the address map
+
+Both front ends build the machine in their own code — `trace.rs`'s flag parsing and `emu::build` —
+and they disagreed about exactly two knobs. Each is worth an order of magnitude on its own.
+
+**1. The second core.** `trace` ran it unless told not to; the window runs it only under
+`--second-core`. Same NOR dump, same `PRISTINE` drive, `BUDGET=900000000`:
+
+```
+ipod-boot retail --no-second-core       766 ata
+ipod-boot retail (two cores)             70 ata
+ipod-emulator --headless                769 ata   75 267 lit   the language picker
+ipod-emulator --headless --second-core   70 ata    2 916 lit   Apple's logo
+```
+
+The same factor of eleven in **both** front ends, so it is the coprocessor and not a harness. It
+was defaulted on in `research/04` ledger row 7 on the evidence that *"every recipe is identical
+with one core and two — retail 599 ATA commands and 2 916 non-black pixels"*, which was true then.
+The one-core boot has since gone to 769 and 75 267 — Apple's logo replaced by RetailOS's first
+interactive screen — and the two-core boot did not come with it. **The premise expired**, so the
+default is one core again and `--second-core` is where the defect now lives. Row 7 is reopened,
+because one core puts its `COP_STATUS` override back on the retail path.
+
+**2. The co-processor's GENCMD registry.** The window sets `bcm.registry` unconditionally; `trace`
+required `--bcm-registry`. This is the whole of the *panel*, and it was tried in the table above
+and ruled out — at 70 ATA, on a machine that never reached the code that reads it. Retried once the
+first fix let it get there, one core, `BUDGET=1500000000`:
+
+```
+without the registry   769 ata    2 916 lit   Apple's logo
+with the registry      705 ata   75 267 lit   the language picker
+```
+
+**Both front ends, no flags on either side, now:**
+
+| | ATA | instructions | panel |
+|---|---|---|---|
+| `ipod-boot retail` | 705 | 872 005 510 | **75 267** |
+| `ipod-emulator --headless` | 769 | 872 236 211 | **75 267** |
+
+The same screen to the pixel, and instruction counts 0.03 % apart. **The 64-command ATA gap is a
+real residual and is not closed** — as is the fact that the window reaches 75 267 with the registry
+ablated and `trace` does not, which its own comment in `emu::build` records and which means the two
+still need different things to draw.
+
+**What this costs.** Every figure in `research/` taken through `ipod-boot` past ~70 ATA commands
+describes the machine that stalled at the logo, and that is now a re-baseline rather than a mystery.
+`--ppm` was no help in finding it: on the `--boot-osos` path it sat below an early return and wrote
+nothing at all, and once that was fixed it wrote 76 800 magenta pixels, because it dumps the *game*
+framebuffer and not the panel. `--bcm-dump=e0000:140:f0:FILE` is the one that reads what the window
+counts.
 
 ## ~~The window opens at its minimum height, not its preferred one~~ — FIXED 2026-08-21
 

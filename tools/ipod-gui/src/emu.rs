@@ -1025,10 +1025,21 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // which is why the same image driven from the command line always worked.
     m.mem.second_core = cfg.second_core;
     eapp_loader::map_hardware(&mut m, cfg.boot.is_os());
-    // Hardware revision probe: boot reads 0x70000000, takes bits 16..23 and compares to 0x36.
+    // The part's own name at `PP_VER1`/`PP_VER2`, from the one place that decides it.
+    //
+    // This wrote `0x00360000` until 2026-08-26 — `research/16`'s chip lie, one byte shaped to pass
+    // Apple's bootloader's single test and nothing else — while `trace.rs` had already been moved
+    // to the eight characters that spell a part number. So the same machine answered two different
+    // chips depending on which program started it, which is one half of the `ipod-boot`-versus-
+    // `ipod-gui` divergence in `KNOWN-BUGS.md`. Measured across the change on the PRISTINE drive,
+    // one core: **768 ATA / 872 147 649 instructions / 38 313 buckets** before and **769 /
+    // 872 236 211 / 38 307** after — one extra `READ DMA`, and the same 75 267 lit pixels and the
+    // same `Idle` at the language picker. Not identical, so it is a real if small change, and
+    // saying "identical" here before measuring it is the mistake this comment is now the record
+    // of. See [`eapp_loader::seed_chip_id`] for which byte and why.
+    eapp_loader::seed_chip_id(&mut m);
     {
         use arm7tdmi::Bus as _;
-        m.mem.write32(0x7000_0000, 0x0036_0000);
         // `--charger`: GPIOL bit 3 low is "mains charger attached", and it is what decides between
         // the charging screen and the UI. See research/10 Addendum 30 §1 and §6.
         if cfg.charger {
