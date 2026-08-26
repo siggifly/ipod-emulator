@@ -2861,6 +2861,12 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
         "  unmapped: {reads} reads, {writes} writes across {} pages",
         m.mem.unmapped.len()
     );
+    // A total with no address is a number nobody can act on. The window's readout has always named
+    // the pages; the headless summary printed the count alone, so the one run you can do over SSH
+    // was the one that could not say *what* the firmware reached for. Same report `trace` prints.
+    for line in m.mem.unmapped_report() {
+        println!("    {line}");
+    }
     // Printed unconditionally when a range was asked for, including when it is empty. "Nothing was
     // recorded" and "nothing was asked" must not look the same, because an instrument that stays
     // silent when it found nothing is indistinguishable from one that is not running.

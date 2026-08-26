@@ -686,18 +686,35 @@ pub const MIN_FAT32_SECTORS: u64 = (FAT32_MIN_CLUSTERS as u64 + 1) * FAT32_SPC a
 ///     rsrc  entry          0x0                         0x600
 /// ```
 ///
-/// An IPSW's `rsrc` carries its *packaging* values; a drive's carries its *runtime* ones. Writing
-/// the partition verbatim and marking `aupd` applied left the packaging values in place, and the
-/// window's boot went **22 ATA commands and 2 612 lit pixels, frozen from 356 M instructions to
-/// 4.4 G** — the synthesised bootloader's own logo and nothing after it. With `rsrc` corrected the
-/// same drive reaches **70 ATA, 71 695 lit pixels and four co-processor frames**, which is where
-/// `ipod-boot retail` also stops and is a different, older defect (see `KNOWN-BUGS.md`).
+/// An IPSW's `rsrc` carries its *packaging* values; a drive's carries its *runtime* ones, so a
+/// drive built by writing the partition verbatim did not match a drive Apple's updater had been
+/// through. Making it match is what this half does.
+///
+/// **It changes no boot, and the claim that it did is withdrawn.** This doc used to say the fix
+/// took the window's boot from *"22 ATA commands and 2 612 lit pixels"* to *"70 ATA, 71 695 lit
+/// pixels and four co-processor frames"*. Re-measured 2026-08-26 with one variable and the arms
+/// proved distinct — two drives differing in exactly the two `rsrc` words, `cmp -l` showing the
+/// diff and nothing else:
+///
+/// ```text
+/// ROM                 rsrc                        ata   lit      buckets
+/// synthesised 5.5G    forced 0x10000000 / 0       290   2 612    20 196
+/// synthesised 5.5G    Apple's 0x00000000 / 0x600  290   2 612    20 196
+/// Apple's retail 5G   forced 0x10000000 / 0        70   71 695    1 812
+/// Apple's retail 5G   Apple's 0x00000000 / 0x600   70   71 695    1 812
+/// ```
+///
+/// `70 / 71 695` is Apple's ROM at either value; `2 612` is a synthesised ROM at either value. The
+/// original comparison moved the ROM as well as the drive. Keep the write — a built drive should
+/// carry a real drive's values — but as a correctness fix with no observed boot effect, which is a
+/// much weaker claim than the one that was here.
 ///
 /// **`LOAD_ADDR_5G` rather than a literal**, because it is the same constant `osos` is loaded at
 /// and the same one the directory already records for it. What is NOT established is whether every
-/// IPSW family's post-update `rsrc` takes that address: the reference drive measured is a 5G's and
-/// the drive that exposed this was built from a 5.5G bundle. One family, measured; the other,
-/// inferred from `osos` sharing the constant.
+/// IPSW family's post-update `rsrc` takes that address: the reference drive measured is a 5G's.
+/// The 5.5G bundle ships `rsrc` at `0x00000000 / 0x600` and this function rewrites it to
+/// `0x10000000 / 0` on the 5G's authority alone — untested, and now known to be unobservable
+/// either way, so nothing yet distinguishes "right" from "harmless".
 ///
 /// `with_aupd` leaves it armed, which is the configuration `flash-update.sh` measures.
 pub fn mark_aupd_applied(fw: &mut [u8]) -> bool {

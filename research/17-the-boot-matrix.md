@@ -600,3 +600,150 @@ machine does not reach. That is a second open question and it is not the same as
 
 **Next:** trace `iPod_25.1.3` against `iPod_20.1.3` from the handoff and find the first divergence.
 Bisection by file-swapping is finished — it has taken this as far as it goes.
+
+---
+
+## Addendum, same day: RetailOS 25.1.3 is not broken, and half of what is above is now wrong
+
+Written after the section above, from the handoff-comparison it said to do next. Two of its
+conclusions survive, two do not, and the one that matters most reverses.
+
+### The instrument, corrected first
+
+Everything above was measured through `ipod-boot retail`, which runs **Apple's shipping 5G
+bootloader out of a real NOR dump**. A synthesised ROM has no bootloader in it — `ipod-boot facts`
+reports `Images: logo` and nothing else — so `retail` on a synthesised ROM is not a boot at all.
+Run anyway, three different synthesised ROM/drive pairs give:
+
+```
+second core: 238000 instructions, pc 0xffcc2fe4, awake
+ata commands: 0
+```
+
+The *same numbers for all three*, which is §6's signature of an arm that did not vary. The
+synthesised paths above were measuring the harness. They are re-run here through
+`ipod-emulator --headless`, which is what the window uses and what a synthesised ROM needs: one
+`IPOD_EMULATOR_DATA` per arm, its own clone of the drive, `work_on_copy = false`, and the printed
+`identity:` line as the control that the arms differ.
+
+### The matrix, on the harness that fits
+
+```
+ROM                          drive        ata   lit      buckets  stopped
+Apple's retail 5G dump       20.1.3       617   75 267    31 480  budget
+Apple's retail 5G dump       25.1.3        70   71 695     1 812  budget
+synthesised 5G   (MA146)     25.1.3       290    2 612    20 196  budget
+synthesised 5.5G (A444)      25.1.3       290    2 612    20 196  budget
+synthesised 5.5G (A444)      20.1.3       547   75 267    29 964  idle
+```
+
+**Read the second row.** 71 695 lit pixels of 76 800, four blits ending in a `320x176` band at
+`(0,32)-(319,207)`, and 70 ATA commands after 58 DMA transfers have landed all 7 561 216 bytes of
+the image. That is `make-disk`'s own documented mismatch screen — *"RetailOS boots and then asks
+you to restore it from iTunes, after roughly 70 ATA commands instead of 600."*
+
+Where it goes afterwards is worth naming, because "stuck" and "waiting" look identical from
+outside. The profile is 100 % in IRAM, and the hot address disassembles to a delay loop:
+
+```
+40009cec  mov r1, r3            ; a duration
+40009cf0  mov r0, r4            ; r4 = [0x60005010], captured on entry
+40009cf4  bl  0x4000e744        ; (now - start) >= duration ?
+40009cf8  cmp r0, #0
+40009cfc  beq 0x40009cec
+```
+
+`0x60005010` is the PP502x microsecond timer. It drew the screen and is waiting. **RetailOS 25.1.3
+loads, executes, drives the display and reaches its own idle. It is not broken, and a drive built
+from `iPod_25.1.3` is a working drive.** The section above concluded *"what does not boot is
+RetailOS 25.1.3"* and that is withdrawn.
+
+### `HwVr` is dead twice over now
+
+The bisect above varied the *synthesised* ROM's Gestalt. This varies **Apple's**, which is the
+stronger arm — same real bootloader, same everything, one byte:
+
+```
+$ printf '\x10' | dd of=<copy of the retail dump> bs=1 seek=$((0x405C)) count=1 conv=notrunc
+$ cmp -l <Apple's dump> <the copy>
+16477 5 20            # one byte, offset 0x405c, 0x05 -> 0x10
+```
+
+`0x4054` is the `rVwH` record — the tag stored byte-reversed, value word at `+0x08`. Exactly one of
+the three `rVwH` occurrences in the dump is the SysCfg record; the other two are at `0xf160` and
+`0xc90c8` and were left alone. Booted:
+
+```
+Apple's ROM, HwVr 0x000B0005 (untouched)  x 25.1.3   70 ata  71 695 lit   1 812 buckets
+Apple's ROM, HwVr 0x000B0010 (patched)    x 25.1.3   70 ata  71 695 lit   1 812 buckets
+Apple's ROM, HwVr 0x000B0010 (patched)    x 20.1.3  617 ata  75 267 lit  31 480 buckets
+```
+
+The Gestalt moved and nothing else did. **Whatever RetailOS pairs a drive against, it is not
+`HwVr`** — so the doc on `Spec::hw_vr` that put *"came from a comment"* and *"and the 5.5G does not
+boot"* in one sentence was asserting a link nothing ever supported. Corrected in place.
+
+### And it is not `rsrc` either, which is a retraction of this session's other fix
+
+`mark_aupd_applied` was changed earlier today to rewrite `rsrc`'s load address and entry as well as
+marking the updater applied, and `KNOWN-BUGS.md` recorded that as taking a boot from 22 ATA and
+2 612 lit pixels to 70 ATA and 71 695. Three drives built here — Apple's shipped values, the
+forced values, and the armed updater — differ in exactly the three bytes the diff names and in
+nothing else:
+
+```
+abs 49215   0x10 -> 0x00     rsrc addr, high byte
+abs 49217   0x00 -> 0x06     rsrc entry
+abs 49240   0x01 -> 0x00     aupd applied
+```
+
+```
+ROM                 rsrc                        ata   lit      buckets
+synthesised 5.5G    forced 0x10000000 / 0       290   2 612    20 196
+synthesised 5.5G    Apple's 0x00000000 / 0x600  290   2 612    20 196
+Apple's retail 5G   forced 0x10000000 / 0        70   71 695    1 812
+Apple's retail 5G   Apple's 0x00000000 / 0x600   70   71 695    1 812
+```
+
+`70 / 71 695` is Apple's ROM either way; `2 612` is a synthesised ROM either way. **The original
+comparison moved the ROM as well as the drive** and read the difference as the drive's — §6's fifth
+shape, in a session that had already quoted §6 twice. The write stays, because a built drive
+carrying a real drive's values is still the drive to build; the boot-effect claim does not.
+
+### What is actually left, stated narrowly
+
+Only the **high-level boot** — the path a synthesised ROM takes, where the ROM's *effects* are
+produced instead of its instructions being run. On it, 25.1.3 stops after 20 `READ DMA` where
+20.1.3 does 277, and `2 612` lit pixels is the synthesised bootloader's own logo and nothing after.
+
+The strongest single clue is that the two synthesised arms are **identical to the code bucket**:
+`MA146` and `A444`, different serials, different GUIDs, different Gestalts, same 290 / 2 612 /
+20 196. On this path the OS's fate does not depend on the NOR's contents at all, so the divergence
+is machine state at OS entry, not identity — which is the same conclusion the ROM arms reach from
+the other side.
+
+Ruled out inside that, each with its control:
+
+- **The warm-path tag scaffolding.** `emu.rs` copies `trace`'s `install_sysinfo` records —
+  `Flsh` / `Sdrm` / `Frwr` / `Iram` at `+0x60` / `+0x74` / `+0x88` / `+0x9c` — onto this path.
+  Apple's real cold boot leaves all four **zero** (dumped at `0x40015898`), and `Frwr` at `+0x88`
+  additionally overwrites the measured `"1.00    "`. Removed: the 25.1.3 arm is unchanged to the
+  instruction, 290 / 2 612 / 20 196; the 20.1.3 arm shifts by 26 786 instructions and still idles
+  at 547 / 75 267, so the edit was live and the control holds. Not it.
+- **`0xea000078`.** The failing arm's only unmapped page, 144 reads, and it is a **known-benign
+  artifact** — research/07 §"`0xea000078` was never a real address", research/02 §372, and
+  research/10's own healthy 600 M baseline where it is the *only* unmapped page. It is RetailOS
+  dereferencing a null object and reading its own reset vector. Nearly filed as the cause; the
+  grep that NEXT.md R3 asks for is what stopped it.
+
+`trace` cannot currently reproduce this arm: `--osos-from-disk` uses `Machine::map_osos`, which
+pushes `osos` as a **region** at `0x10000000`, and the window's HLE deliberately does not — its own
+comment records that arrangement producing `Lost(0x02000000)` after 8 388 485 instructions, which
+is the failure the operator reported at the start of this session. So the CLI instrument and the
+shipped machine disagree about how a high-level boot is arranged, and the profile, register-file
+and watch instruments are all on the side that does not match. **That is the next thing to fix**,
+and it is a prerequisite for the trace this section keeps saying to run.
+
+Meanwhile `--headless` names its unmapped pages now, with PCs, the way the window's readout and
+`trace` always have. A total with no address is a number nobody can act on, and the one run that
+works over SSH was the one that could not say what the firmware reached for.

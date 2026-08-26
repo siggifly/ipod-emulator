@@ -34,6 +34,35 @@ the same built drive, `rsrc` corrected   70      71 695           4
 Those 2 612 pixels are the synthesised bootloader's own logo, which is exactly what the operator
 described, and the machine never did anything after drawing it.
 
+> ## RETRACTED 2026-08-26 — the last row of that table is not a `rsrc` measurement
+>
+> **`rsrc` is not what moved it.** Re-run with one variable and the arms proved distinct, two
+> drives differing in exactly the two `rsrc` words and nothing else (`cmp -l`: `0x405c`-style
+> single-field diffs at drive offsets 49215 and 49217, plus the one `aupd` byte at 49240):
+>
+> ```
+> ROM                 rsrc                       ata   lit      buckets
+> synthesised 5.5G    forced 0x10000000 / 0      290   2 612    20 196
+> synthesised 5.5G    Apple's 0x00000000 / 0x600 290   2 612    20 196
+> Apple's retail 5G   forced 0x10000000 / 0       70   71 695    1 812
+> Apple's retail 5G   Apple's 0x00000000 / 0x600  70   71 695    1 812
+> ```
+>
+> `70 / 71 695` is what **Apple's own ROM** gives on that drive, at either `rsrc` value. `2 612` is
+> what a **synthesised** ROM gives, at either `rsrc` value. The original comparison moved the ROM
+> as well as the drive and read the result as the drive's doing — §6's fifth shape, *"a comparison
+> that let each arm resolve its own paths, so it compared two machines as well as two builds."*
+>
+> **The code change stands and the reasoning below it stands**; only the boot-effect claim is
+> withdrawn. A built drive whose `rsrc` matches a real drive's measured state is still the right
+> drive to build — it is now known to be a *correctness* fix with no measured effect on any boot,
+> which is a different and much weaker claim than the one this entry made.
+>
+> What actually stops that boot is not on the drive at all. research/17 has the five-arm matrix:
+> **every** drive built from `iPod_25.1.3` stops, on every ROM, and RetailOS 25.1.3 is not at
+> fault — under Apple's real bootloader it loads, runs and reaches Apple's own "restore from
+> iTunes" screen, which is the correct response to a 5G ROM holding a 5.5G OS.
+
 **The cause is `mark_aupd_applied` doing half of what Apple's updater does.** An IPSW's firmware
 partition is written to the drive verbatim, and the updater is then marked already-applied so the
 drive boots its OS on the first power-up rather than the second. But the updater's last act is not

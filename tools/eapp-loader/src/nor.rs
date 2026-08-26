@@ -70,9 +70,21 @@ pub struct Spec {
     /// Force `HwVr` instead of taking it from the generation.
     ///
     /// **A bisect control, not a setting.** The 5G's Gestalt is measured; the 5.5G's `0x000B0010`
-    /// is the one value in this whole system that came from a comment rather than from hardware,
-    /// and the 5.5G does not boot. Being able to vary exactly that, with nothing else moving, is
-    /// how it gets isolated.
+    /// is the one value in this whole system that came from a comment rather than from hardware.
+    /// Being able to vary exactly that, with nothing else moving, is how it gets isolated.
+    ///
+    /// **It has now been isolated, and it is not the reason a 5.5G drive does not boot.** This
+    /// doc used to say "and the 5.5G does not boot" in the same breath, which read as a link
+    /// there was never any evidence for. Two measurements, 2026-08-26, in research/17:
+    ///
+    /// - Over a drive built from `iPod_25.1.3`, `0x000B0010` and `0x000B0011` give the same run
+    ///   to the code bucket. `cmp -l` proves the two ROMs differ in exactly one byte.
+    /// - Apple's own retail 5G dump, with `HwVr` patched from `0x000B0005` to `0x000B0010` —
+    ///   one byte at flash `0x405c`, `cmp -l` against the untouched dump proving it — boots that
+    ///   drive to **the same 70 ATA commands and the same 71 695 lit pixels** as unpatched, and
+    ///   still boots a 20.1.3 drive to 617. The Gestalt moved and nothing else did.
+    ///
+    /// Whatever RetailOS pairs a drive against, it is not this word.
     pub hw_vr: Option<u32>,
 }
 
