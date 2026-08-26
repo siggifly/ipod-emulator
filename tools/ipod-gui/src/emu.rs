@@ -1147,12 +1147,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         // With the bytes in SDRAM there is one storage and the remap points at it, which is the
         // arrangement the hardware has. Nothing is mirrored at 0: before RetailOS programs that
         // window it is running from `0x1000xxxx`, and after it, address 0 *is* SDRAM.
-        for (i, chunk) in osos.chunks(4).enumerate() {
-            let mut w = [0u8; 4];
-            w[..chunk.len()].copy_from_slice(chunk);
-            m.mem
-                .write32(load_at + (i as u32) * 4, u32::from_le_bytes(w));
-        }
+        eapp_loader::place_image(&mut m, load_at, &osos);
         // **Where the machine starts, decided here and read back by the run loop.** `Machine::new`
         // puts the PC at the placeholder app's entry, which is 0; `session` used to re-decide the
         // address with a second `if cfg.boot.is_os()` of its own, and two places deciding one thing

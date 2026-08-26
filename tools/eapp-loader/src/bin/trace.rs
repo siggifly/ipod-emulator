@@ -405,6 +405,13 @@ fn main() {
     // separate file. This is what a high-level boot does, and it is the difference between
     // "supply three files" and "supply one" -- the drive already carries the OS.
     let mut osos_entry: Option<u32> = None;
+    // **The image, held back until `map_hardware` has run.** On the `--boot-osos` path it is
+    // written INTO SDRAM rather than pushed in front of it — see [`eapp_loader::place_image`] for
+    // why, and for the two `Lost(…)` addresses that are what getting this wrong looks like.
+    let mut pending_osos: Option<(Vec<u8>, u32)> = None;
+    // Set once an image has actually been written into SDRAM, which is the fact the `--boot-osos`
+    // guard below needs and cannot get by looking at an address.
+    let mut image_placed = false;
     // `--osos-from-disk[=TAG]` — TAG defaults to `osos`. The one worth naming is **`aupd`**, Apple's
     // flash updater: it is the program that writes the NOR, and entering it directly is the only way
     // to ask what it would do on a machine whose ROM cannot launch it.
@@ -427,10 +434,20 @@ fn main() {
                     Ok((d, at, entry)) => {
                         let n = d.len();
                         m.symbols = eapp_loader::extract_symbols(&d, 0);
-                        match m.map_osos(d) {
+                        // A boot places the image in SDRAM after the map is built; everything else
+                        // keeps the region, which is what the eApp and `--native` paths read.
+                        let booting = args.iter().any(|a| a == "--boot-osos");
+                        let placed = if booting {
+                            pending_osos = Some((d, at));
+                            Ok(())
+                        } else {
+                            m.map_osos(d)
+                        };
+                        match placed {
                             Ok(()) => {
                                 println!(
-                                    "mapped `{fw_tag}` from the drive: {n} bytes at {at:#010x}"
+                                    "{} `{fw_tag}` from the drive: {n} bytes at {at:#010x}",
+                                    if booting { "loading" } else { "mapped" }
                                 );
                                 // **Honour the entry offset.** Zero for a stock image, non-zero once a
                                 // bootloader has been appended -- and ignoring it boots the OS sitting
@@ -630,7 +647,36 @@ fn main() {
                 });
             }
         }
-        map_hardware(&mut m, args.iter().any(|a| a == "--cold-boot"));
+        // **This argument is not "was `--cold-boot` given". It is "is this an OS boot".**
+        //
+        // `ipod-gui`'s `emu::build` calls the same function with `cfg.boot.is_os()`, and the two
+        // are different questions that happened to have the same answer on the recipe everybody
+        // ran. `map_hardware`'s flag decides where SDRAM's *storage* lives: true puts it at
+        // `0x10000000` with address 0 belonging to the NOR, which is the map a machine has out of
+        // reset; false puts the storage at 0 with `0x10000000` an alias.
+        //
+        // A high-level boot — the OS lifted out of the drive's own firmware partition, which is
+        // what a synthesised ROM needs since it has no bootloader to do it — passes no
+        // `--cold-boot`, so it got the second map and RetailOS ran off the end of IRAM:
+        // **`Lost(0x40020000)` after 2 238 004 instructions, identical for two different drives**,
+        // which is the signature of a machine that never got far enough to tell them apart. With
+        // the right map, the same two runs are 531 ATA and 75 267 lit pixels against 290 and a
+        // stall — the window's own numbers, and the first time `trace` has been able to see the
+        // difference between them.
+        //
+        // **Not simply `true` here, and `ipod-boot flsh` is why.** `flsh` boots one of the NOR's
+        // own images and also comes through `--boot-osos`; the window passes `is_os() == false`
+        // for it deliberately, because that image is entered at `0x10000000` with the CPU already
+        // running and the first interrupt vectors to `0x18`, which has to be memory it can install
+        // a handler into. `emu.rs` records what forcing the other map does to it: `Lost(24)` the
+        // instant a button is pressed. So the test is whether the OS came off the **drive**, which
+        // is exactly the distinction `is_os()` draws.
+        let os_boot = args.iter().any(|a| a == "--cold-boot") || pending_osos.is_some();
+        map_hardware(&mut m, os_boot);
+        if let Some((data, at)) = pending_osos.take() {
+            eapp_loader::place_image(&mut m, at, &data);
+            image_placed = true;
+        }
         // The part's own name at `PP_VER1`/`PP_VER2`, from the one place that decides it —
         // which byte, and why that one, is [`eapp_loader::seed_chip_id`].
         eapp_loader::seed_chip_id(&mut m);
@@ -1205,7 +1251,20 @@ fn main() {
         // in the cold-boot recipe (ledger #14). A cold boot enters the NOR at 0 and the ROM loads
         // the image itself; only a warm boot, which starts at 0x10000000 with SDRAM freshly zeroed,
         // has nothing to execute. Say so, rather than running 200M instructions of zeros.
-        if !cold && !restored && flash_entry.is_none() && m.mem.region_named("osos").is_none() {
+        //
+        // **Two ways an image can be present, and the region list only knows one of them.** This
+        // tested `region_named("osos")` alone, which was complete while every image was *pushed as
+        // a region*. A boot image is now written INTO SDRAM instead (see
+        // [`eapp_loader::place_image`]), and against that the region test refused a machine that
+        // was in fact loaded and ready at its entry.
+        //
+        // Probing the address directly was tried first and is not reliable here: SDRAM's storage
+        // is at 0 with `0x10000000` an alias, or the other way round, depending on `--cold-boot`,
+        // and `peek32(entry)` came back empty on a machine whose image was demonstrably there. So
+        // the guard asks the code that did the placing, and keeps the region test for the paths
+        // that still use one.
+        let have_image = image_placed || m.mem.region_named("osos").is_some();
+        if !cold && !restored && flash_entry.is_none() && !have_image {
             eprintln!(
                 "--boot-osos enters {entry:#010x}, where a warm boot has only zeroed SDRAM.\n\
                  Give it an image: --osos=FILE, or --cold-boot so the ROM loads one off --disk."

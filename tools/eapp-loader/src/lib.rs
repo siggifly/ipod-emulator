@@ -8542,6 +8542,35 @@ impl Machine {
 /// *supplied* here, as this emulator supplies every register, and the value is sourced from
 /// Rockbox's decoding rather than measured off a part. Deriving it from `BoardHwName` is the open
 /// end of that note.
+/// Write a boot image **into** SDRAM at `load_at`, which is what a real bootloader leaves.
+///
+/// **Not [`Machine::map_osos`], and the difference is the whole of a boot.** `map_osos` pushes the
+/// image as a *region*; [`map_hardware`] has already registered 64 MB of SDRAM at `0x10000000`,
+/// region lookup is first-match, and about `0x220` bytes into its own entry RetailOS programs the
+/// PP's remap windows at `0xf000f000` — one of which is `0x00000000..0x01ffffff -> 0x10000000`.
+/// `Memory::translate` runs ahead of the region list, so from that instruction every low address
+/// resolves into the *zeroed* SDRAM sitting behind the image, and the code the CPU is executing
+/// goes out from under it.
+///
+/// Both front ends have hit it and the arithmetic names it each time. In the window it was
+/// `Lost(0x02000000)` after 8 388 485 instructions — `8 388 485 x 4 = 33 553 940` and
+/// `0x02000000 - 33 553 940 = 0x1ec`, a NOP-slide from `0x1ec` to the top of a 32 MB window without
+/// one branch, because `0x00000000` decodes as `andeq r0, r0, r0`. In `trace` it was
+/// `Lost(0x40020000)` after 2 238 004, off the end of `iram`, **identical for two different
+/// drives** — the signature of a machine that never got far enough to tell them apart.
+///
+/// With the bytes in SDRAM there is one storage and the remap points at it, which is the
+/// arrangement the hardware has. Nothing is mirrored at 0: before RetailOS programs that window it
+/// runs from `0x1000xxxx`, and after it, address 0 *is* SDRAM. Call this **after** [`map_hardware`],
+/// because it writes through the map rather than in front of it.
+pub fn place_image(m: &mut Machine, load_at: u32, data: &[u8]) {
+    for (i, chunk) in data.chunks(4).enumerate() {
+        let mut w = [0u8; 4];
+        w[..chunk.len()].copy_from_slice(chunk);
+        m.mem.write32(load_at + (i as u32) * 4, u32::from_le_bytes(w));
+    }
+}
+
 pub fn seed_chip_id(m: &mut Machine) {
     for (i, b) in 0x3232_432Du32.to_le_bytes().iter().enumerate() {
         m.mem.write8(0x7000_0000 + i as u32, *b);

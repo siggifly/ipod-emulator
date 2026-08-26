@@ -281,7 +281,7 @@ impl Pace {
 /// - `Stopped` cannot exist without a [`Reason`], and a `Reason` is never empty.
 ///
 /// **`Phase::Booting { target }` is deliberately not read for the denominator.** Its `target` is
-/// `cfg.snap_at`, the instruction count the *snapshot* will be taken at — `emu.rs:1803` is where it
+/// `cfg.snap_at`, the instruction count the *snapshot* will be taken at — `emu.rs:1798` is where it
 /// becomes the phase, and the run loop compares the phase against that same value again to decide
 /// the boot has ended. §12.3 is explicit that the progress denominator is a different number,
 /// `Device::cold_boot_instructions`, *"this device's own last completed cold boot"*. Two numbers for two
