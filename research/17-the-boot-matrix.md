@@ -914,3 +914,60 @@ the other side.
 where 25.1.3 asks something 20.1.3 does not — or gets an answer our model invents. The retry is
 deterministic and 133 ms apart, so a single `--watch-range` over the driver object at `0x1087198c`
 should show what it is testing.
+
+### Corrected, an hour later: it is a reset loop, and `0xea000078` is the fault after all
+
+The section above is right about the measurements and **wrong about what they mean**. Climbing the
+stack settles it, and the answer retro-fits the very first thing this investigation looked at.
+
+`--enterlog` on the codec init's caller gives `lr=0x000002d4`, and `0x2d0` sits in a **straight-line
+boot sequence** in low memory — a run of `bl`s ending `b 0x000af468` into the main loop. A straight
+line does not loop. So if the audio init runs 30 times, the boot runs 30 times. Armed:
+
+```
+                        iPod_25.1.3   iPod_20.1.3
+0x00000290  boot sequence      x30            x1
+0x00000000  the reset vector   x29     NEVER REACHED
+0x000002e0  b to the main loop x29            x1
+```
+
+**RetailOS 25.1.3 completes its boot, enters its main loop, and jumps to address 0 — twenty-nine
+times.** 20.1.3 goes round once and stays. The codec was never retrying; the *machine* was
+restarting, and the 1 264 I²C transfers are one init sequence run thirty times.
+
+`--enterlog=0x00000000` names where from. Twenty-eight of the twenty-nine arrive with
+**`lr=0x00183e90`**, which is this:
+
+```
+00183e64  ldr r0, [r4, #0x440]
+00183e6c  ldr r0, [r0, #0x1c]     ; <- null
+00183e74  ldr r1, [r0, #0x0]      ; <- reads the image's own reset-vector word
+00183e7c  ldr r12, [r1, #0x5c]    ; <- reads unmapped 0xea0000d4, which answers 0
+00183e88  mov lr, pc              ; lr = 0x00183e90
+00183e8c  bx  r12                 ; bx 0  ->  the reset vector
+```
+
+`lr = 0x00183e90` can only be written by the `mov lr, pc` at `0x00183e88`, and the only instruction
+after it is `bx r12`. **Arriving at `0x00000000` with that `lr` is itself the proof that `r12` was
+zero**, so no extra run is needed to confirm it. (The remaining one of the twenty-nine comes from
+`lr=0x000fb8ec` and is the first reset; the other twenty-eight are the steady loop.)
+
+**And that is the `0xea000078` this file dismissed on day one.** It was dismissed correctly *for
+the runs that had been measured*: research/07 §"`0xea000078` was never a real address", research/02
+§372 and research/10's healthy 600 M baseline all record it as a null-object dereference RetailOS
+does harmlessly, the only unmapped page in a boot that works. Every one of those is a **20.1.3**
+measurement. On 25.1.3 the same dereference goes one field further, into `+0x5c`, and what it finds
+there is used as a **function pointer**. Benign in one build, fatal in the other. NEXT.md R3's grep
+is what stopped it being filed as the cause on day one, and it was the cause all along — which is
+the more useful lesson: *a prior "known benign" is scoped to the runs that measured it.*
+
+The 20.1.3 arm reports `unmapped: 0 reads, 0 writes across 0 pages` on this same high-level boot,
+so it does not take this path at all.
+
+**Where the emulator is wrong is upstream of the `bx`.** `[[r4+0x440]+0x1c]` should not be null;
+something earlier failed to fill it, and the null dispatch is the consequence. Reading unmapped
+memory as `0` is a second-order question — a real bus might answer something else, and the firmware
+would then jump somewhere else and still be wrong. **Next: find what writes `+0x1c` on that object
+in the 20.1.3 arm, and what it is waiting on in 25.1.3.** `--storeaddr` over the object is the
+instrument, and research/10 §2 used exactly that to settle the last argument about an unwritten
+field on this same shape.
