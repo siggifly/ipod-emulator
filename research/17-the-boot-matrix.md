@@ -747,3 +747,31 @@ and it is a prerequisite for the trace this section keeps saying to run.
 Meanwhile `--headless` names its unmapped pages now, with PCs, the way the window's readout and
 `trace` always have. A total with no address is a number nobody can act on, and the one run that
 works over SSH was the one that could not say what the firmware reached for.
+
+### Two more things, and one of them changes the shape of the question
+
+**It is not running out of budget. It goes to sleep.** Fresh drive, five times the budget:
+
+```
+25.1.3   Idle after 494 749 605   290 ata (20 READ DMA, 264 WRITE DMA)   2 612 lit
+20.1.3   Idle after 302 191 833   547 ata (277 READ DMA, 264 WRITE DMA)  75 267 lit
+```
+
+Both reach `Idle`, which is `emu::Quiet` — a trailing window that is 95 % halted. So RetailOS 25.1.3
+is not spinning on anything and is not being cut off: it initialises, **writes the same 264 sectors
+the working boot writes** — it bootstraps the volume, so it is doing real work and the drive is not
+being rejected — reads 20 sectors where the other reads 277, and then halts waiting for an interrupt
+that never arrives. The 2 612 lit pixels are the synthesised bootloader's logo, never overwritten.
+
+That is a different question from the one this file has been asking. Not *"why does it die"* —
+**"which interrupt does 25.1.3 wait for that 20.1.3 does not?"**
+
+**And the 22-versus-290 discrepancy between this file's two matrices is the drive, not the run.**
+`work_on_copy = false` means a second boot in the same data directory starts on the drive the first
+boot wrote. First boot: 290 ata, 264 of them writes. Second boot on that same drive: 22 ata, 4
+writes — it finds the volume already bootstrapped. The earlier matrix was measuring second boots.
+Every number in this addendum is a fresh clone per arm, and an arm re-run for a second measurement
+gets a fresh clone first.
+
+Worth stating plainly because it is the same trap in a new place: an emulator arm is not fresh
+because the *settings* are fresh. The drive is state, and it is 8 GiB of it.
