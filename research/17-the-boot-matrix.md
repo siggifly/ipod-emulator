@@ -775,3 +775,42 @@ gets a fresh clone first.
 
 Worth stating plainly because it is the same trap in a new place: an emulator arm is not fresh
 because the *settings* are fresh. The drive is state, and it is 8 GiB of it.
+
+### The harness split, which is the finding under all of the others
+
+Same ROM, same drive, both pinned, both built by `ipod-boot make-disk` from `iPod_20.1.3`:
+
+```
+ipod-emulator --headless   617 ata   75 267 lit   31 480 buckets   full panel
+ipod-boot retail            70 ata    2 blits                      Apple logo, then nothing
+```
+
+`retail` does not get further with more budget. At `BUDGET=2000000000`, and again through
+`from-idle`'s 1.6 G snapshot — the recipe that exists *because* a run needs 1.6 G to reach the menu
+— it is still 70 ata, still the two blits, still `usec 21333333` of a machine sitting at the Apple
+logo. The `70` that `ipsw.rs` records as *"where `ipod-boot retail` also stops and is a different,
+older defect"* is real, and it is **not** on the drive: the same drive boots to the language picker
+under the window's own machine.
+
+So the CLI recipe and the shipped emulator disagree about the same two files, and the instruments
+are all on the losing side. `--profile`, `--disasm`, `--watch`, `--break`, the register file at a
+fault and the wheel script are `trace` flags; `--headless` has none of them. Everything this file
+concluded from `ipod-boot retail` was measured on a machine that stops at the Apple logo.
+
+**The wheel bears this out.** Driven on `retail`, anchored in simulated time the way
+`parse_wheel_script`'s own doc insists:
+
+```
+--wheel='@8s:touch,@8500ms:rotate=+6,@10s:rotate=+6,@11s:press=select,@13s:release'
+  wheel script: 16 steps        script: 16 of 16 steps fired
+  clickwheel: 19 frames posted (15 dropped unread), 3 word reads of DATA
+```
+
+16 of 16 is the control §6 asks for, so the injector works and the anchor is right. But 15 frames
+dropped unread and 3 reads of DATA is a firmware that is not listening — because it is at the Apple
+logo, not at a menu. **There is currently no way to drive the wheel on a configuration that boots.**
+
+That is the next thing to fix, ahead of everything else in this file. `Machine::map_osos` pushing
+`osos` as a region at `0x10000000` is one half of it and is named above; the `70` is the other half
+and is not yet explained. Until the two harnesses agree, a trace of 25.1.3 against 20.1.3 would be
+a trace of the wrong machine.
