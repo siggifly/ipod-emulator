@@ -814,3 +814,103 @@ That is the next thing to fix, ahead of everything else in this file. `Machine::
 `osos` as a region at `0x10000000` is one half of it and is named above; the `70` is the other half
 and is not yet explained. Until the two harnesses agree, a trace of 25.1.3 against 20.1.3 would be
 a trace of the wrong machine.
+
+---
+
+## The 25.1.3 stall, root-caused: an I²C device that never answers what it is asked
+
+Written once `trace` could reproduce the arm (see `KNOWN-BUGS.md` on the two front ends, and the
+`--boot-osos` map argument). Everything below is the same command on two drives, one variable:
+
+```
+trace 400000000 --boot-osos --osos-from-disk --disk=<drive> --flash=<synth 5.5G NOR> \
+      --sysinfo --bcm --pmu --disk-writable
+```
+
+```
+drive from iPod_20.1.3   531 ata   75 267 lit   the language picker
+drive from iPod_25.1.3   290 ata        0 lit   stalled
+```
+
+290 and 75 267 are the window's own numbers for the same two arms, so this is the shipped machine.
+
+### It is not waiting for an interrupt. It is retrying, for ever
+
+`--profile` on the failing arm puts **60 %** of the budget in three addresses, and they are one
+function — a `udelay` on the PP502x microsecond timer at `0x60005010`:
+
+```
+002828b8  stmdb sp!, {r4, lr}
+002828bc  mov   r4, r0          ; the duration
+002828c4  ldr   r3, [r0, #0x10] ; the timer, read ONCE — the loop re-enters below this
+002828c8  mov   r1, r4
+002828d0  bl    0x002840b8      ; (now - start) >= duration ?
+002828d8  beq   0x002828c8
+```
+
+`--enterlog=0x002828b8` gives 84 arrivals and the tail is the finding. From 256 M instructions to
+the end of the budget the *same* call repeats every **9 992 960 instructions**, from **one** caller,
+with the same arguments every time:
+
+```
+lr=0x0015d360  r0=0x000186a0  r2=0x1087198c  @256949483
+lr=0x0015d360  r0=0x000186a0  r2=0x1087198c  @266942443
+lr=0x0015d360  r0=0x000186a0  r2=0x1087198c  @276934891
+…
+```
+
+`r0 = 0x000186a0` is **100 000 µs**. At 75 instructions per simulated microsecond that is 7.5 M
+instructions of delay inside a ~10 M instruction period, or one attempt every **133 ms**. So #39's
+framing — *"which interrupt does 25.1.3 wait for"* — is wrong, and pleasantly so: nothing is
+waiting on an interrupt. **A device initialisation is failing and being retried for ever.**
+
+### What it is retrying
+
+`0x0015d360` is the return address, so the call sits inside a straight-line init sequence: a run of
+`bl 0x0015c1cc`, each with a byte out of a table at `r4+0x32`, `+0x33`, `+0x37`, `+0x38`, each
+error-checked with `cmp r0,#0 / bne 0x0015d400`, and the 100 ms settle in the middle of them.
+
+`0x0015c1cc` builds a **two-byte packet on the stack** and pushes it through a vtable:
+
+```
+0015c1d4  mov  r0, r1, lsl #1        ; register address << 1
+0015c1dc  and  r1, r2, #0x100
+0015c1e0  orr  r0, r0, r1, lsr #8    ; …with bit 8 of the value as its LSB
+0015c1e4  strb r0, [sp, #0x0]
+0015c1e8  strb r2, [sp, #0x1]        ; value bits 7..0
+0015c1fc  ldr  r12, [r1, #0x10]      ; driver->write
+0015c210  bx   r12                   ; (driver, sp, 2, 0)
+```
+
+A 7-bit register address with 9 bits of data, packed into two bytes. On failure it calls
+`[vtable+0x1c]` and goes round again.
+
+### And `--i2c` names the device
+
+```
+                      dev 0x10   dev 0x11   dev 0x34   total
+drive from 20.1.3          156        164         52     372
+drive from 25.1.3           56         83      1 264   1 403
+```
+
+`0x10`/`0x11` are the PCF50605 the machine already models (7-bit `0x08`, write and read). **`0x34`
+is a fourth-and-a-half times as busy on the arm that stalls and 24× busier than on the arm that
+boots** — 1 264 transfers against 52 — and its hottest register pair is `reg 0x54`, 149 times.
+
+Address `0x34` is 7-bit `0x1a`. **Inference, not measurement, and flagged as such:** `0x1a` with a
+9-bit-data-in-two-bytes register format is the Wolfson codec convention, and a WM8758 is what a 5G
+and 5.5G carry. That would make this the **audio codec**, not the display — which is worth saying
+because "it never draws" reads like a display fault and the panel is downstream of this, not the
+cause of it.
+
+**So: RetailOS 25.1.3 asks I²C device `0x34` something during init, does not get the answer it
+needs, waits 100 ms, and asks again — 1 264 times in 400 M instructions, never getting past it.**
+20.1.3 asks 52 times and goes on to the language picker. Whatever the difference between the two
+sequences is, it is on that bus and not in the NOR — which is what the earlier finding that the two
+synthesised arms are *identical to the code bucket across different identities* already said, from
+the other side.
+
+**Next:** log the actual bytes of the `0x34` exchange on both arms, and find the first transfer
+where 25.1.3 asks something 20.1.3 does not — or gets an answer our model invents. The retry is
+deterministic and 133 ms apart, so a single `--watch-range` over the driver object at `0x1087198c`
+should show what it is testing.
