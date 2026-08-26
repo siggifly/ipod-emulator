@@ -1074,3 +1074,72 @@ is not this bug.
 
 **Where it stands:** one deterministic event, at 84 740 143 instructions, in code that is byte-for-
 byte the same in a build that boots. Not fixed.
+
+---
+
+## SOLVED: the 5.5G's `rsrc` is 0xc00 further in than RetailOS looks
+
+The stack-climbing above ends here, and `research/10`'s first paragraph called it two weeks early:
+*"RetailOS's boot loop is a missing font… the lookup returns a null delegate, that null is bound
+into 400 objects, and the first call through one of them lands on `bx 0`."* That is the reset loop,
+exactly, and the reason the font is missing is now measured.
+
+### The reads say where it gives up
+
+The ATA command logs are identical through drive init — `IDENTIFY`, five `SET FEATURES`, then
+`READ DMA` at LBA 0 — and diverge on one command:
+
+```
+20.1.3   … lba 0, 32768, 0, 64, 14864, 22429, 14870, 22645, 22646, 22772, …   walks on
+25.1.3   … lba 0, 32768, 0, 64, 14872, 32768, 40974, then only repeats        gives up
+```
+
+Each of `14864` and `14872` is that build's `rsrc` **+ 0x200**. Read the firmware directory instead
+of guessing, and locate each volume's FAT12 boot sector by its `eb ?? 90` jump:
+
+| | `rsrc` devOffset | drive LBA | FAT boot sector | OEM | signature |
+|---|---|---|---|---|---|
+| 20.1.3 | `0x73a000` | 14863 | **+0x200** | `MTOOL399` | `55aa` |
+| 25.1.3 | `0x73b000` | 14871 | **+0xe00** | `MTOOL399` | `55aa` |
+
+**RetailOS reads `rsrc + 0x200` in both.** On the 5G that is the boot sector. On the 5.5G the boot
+sector is `0xc00` further in, so the mount fails, `/Resources/Fonts/PodiumSans18.ttf` is never
+opened, the font registry answers null the way it is designed to, and the first call through that
+null is `bx 0`.
+
+**Both volumes are genuine and identical in kind** — same OEM string, same `0x55aa`. And a control,
+because "it looks like garbage" was very nearly written up as "Apple encrypted the 5.5G's
+resources": over the whole 5 MB image, **entropy 5.614 bits/byte and 34.4 % zeros for 20.1.3
+against 5.615 and 34.4 % for 25.1.3**. Statistically the same file. It is a layout difference and
+nothing more; the encryption reading came from staring at sixteen bytes.
+
+### The proof
+
+One 8 GiB copy of the 25.1.3 drive, with `rsrc`'s payload moved so the boot sector lands at
+`devOffset + 0x200` and nothing else touched:
+
+```
+                              resets   ata   lit pixels
+25.1.3, as built                 29    290        0
+25.1.3, rsrc shifted 0xc00        0    531    75 267
+20.1.3, for comparison            0    531    75 267
+```
+
+**`0x00000000` NEVER REACHED, 531 ATA commands, and 75 267 lit — the same count as the working
+build, to the pixel.** RetailOS 25.1.3 boots to its language picker.
+
+### What the fix is, and what it is not
+
+It is **not** a 0xc00 constant. The header before an image's payload varies by image *and* by
+family — `osos` is `0x200` on the 5G bundle and `0x800` on the 5.5G's, and `rsrc` is `0x200` and
+`0xe00`. `image_from_drive` already finds `osos`'s header rather than assuming it, which is why the
+OS loads; **nothing does the same for the drive `build_disk` hands to RetailOS**, and RetailOS reads
+that drive itself.
+
+So the invariant to restore is the one the 5G already satisfies: **an image's real content begins
+`0x200` after the offset its directory entry declares.** `build_disk` writes the extracted
+`Firmware-*` file verbatim, which is true to the file and not to the layout a device has.
+
+**Next: implement that in `build_disk` rather than in a scratch copy, and re-run the matrix.** The
+gate is the table above — 0 resets, 531 ATA, 75 267 lit, on a drive `make-disk` produced — plus the
+5G drive unchanged, since its headers are already `0x200` and normalising must be a no-op there.
