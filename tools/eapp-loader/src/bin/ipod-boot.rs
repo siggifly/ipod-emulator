@@ -1384,6 +1384,8 @@ fn yes() -> Result<bool, String> {
     Ok(matches!(line.trim(), "y" | "Y" | "yes"))
 }
 
+const HEADER_EXPECTED: u32 = 0x200;
+
 fn make_disk(args: &[String]) -> Result<(), String> {
     let src = args.first().ok_or(
         "usage: ipod-boot make-disk IPSW OUT.img [SECTORS]\n\
@@ -1425,11 +1427,21 @@ fn make_disk(args: &[String]) -> Result<(), String> {
              armed and reproduces the two-boot sequence."
         );
     }
+    // Before the write, not after: the drive RetailOS reads has to be in the layout RetailOS
+    // reads. See `normalise_image_headers` — on a 5G bundle this does nothing at all.
+    for (tag, header, shift) in eapp_loader::ipsw::normalise_image_headers(&mut fw) {
+        println!(
+            "  `{tag}` content sits {header:#x} into its image where RetailOS looks {HEADER_EXPECTED:#x} \
+             in; its directory offset is moved on by {shift:#x} so the two agree. Without this the \
+             5.5G's `rsrc` never mounts, its font is never found, and RetailOS resets in a loop."
+        );
+    }
     eapp_loader::ipsw::build_disk(&fw, Path::new(out), sectors)?;
     println!(
         "wrote {out} — {sectors} sectors ({} MiB), sparse. \
-         The firmware partition is Apple's, byte for byte; the FAT32 volume is empty and RetailOS \
-         populates it on first boot.",
+         The firmware partition is Apple's payload byte for byte — only the directory's offsets are \
+         corrected, and only where they disagree with where the content is; the FAT32 volume is \
+         empty and RetailOS populates it on first boot.",
         sectors / 2048
     );
     println!("  ipod-boot retail     # DISK={out}");

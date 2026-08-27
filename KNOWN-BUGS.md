@@ -15,6 +15,54 @@ belongs here.
 ---
 
 
+## ~~A drive built from a 5.5G IPSW never boots~~ — FIXED 2026-08-27
+
+Reported by the operator, twice, and chased through three wrong framings before the answer:
+*"it doesnt make sense that a synth 5g would even be able to run a 5.5g drive and vice versa — it
+means our emulator is wrong in some way."* It did, and it was.
+
+**RetailOS reads `rsrc + 0x200` looking for the resource volume's FAT12 boot sector.** On a 5G
+bundle that is exactly where it is. On a 5.5G bundle the boot sector is `0xc00` further in:
+
+| | `rsrc` devOffset | FAT boot sector | OEM | signature |
+|---|---|---|---|---|
+| `iPod_20.1.3` | `0x73a000` | **+0x200** | `MTOOL399` | `55aa` |
+| `iPod_25.1.3` | `0x73b000` | **+0xe00** | `MTOOL399` | `55aa` |
+
+So the mount fails, `/Resources/Fonts/PodiumSans18.ttf` is never opened, the font registry answers
+null the way it is designed to for a font it does not have, that null is bound into objects, and the
+first call through one of them is `bx 0` — RetailOS's own reset vector. **Twenty-nine times in a
+400 M run.** `research/10`'s opening paragraph described that loop; what was missing was why the
+font was missing.
+
+**The fix is `ipsw::normalise_image_headers`**, run by `make-disk` before the write: every image
+whose content this program can locate has its **declared offset** corrected so the content begins
+`0x200` after it, which is the layout the 5G already has and RetailOS already reads. Offsets are
+rewritten and **bytes are never moved** — shifting five megabytes of payload could overrun the next
+image; `len` shrinks by exactly what `devOffset` gains, so an image still ends where it ended.
+
+```
+drive built from      what moves                      resets   ata   lit pixels
+iPod_20.1.3           nothing — already 0x200              0   531    75 267
+iPod_25.1.3, before   —                                   29   290         0
+iPod_25.1.3, after    osos by 0x600, rsrc by 0xc00         0   531    75 267
+```
+
+75 267 is `research/10` Addendum 10 §8's fingerprint to the pixel, and through the window's own
+machine all three synthesised arms now reach it: **547 ATA, 75 267 lit, `Idle`** for 5.5G×25.1.3,
+5G×25.1.3 and 5.5G×20.1.3 alike.
+
+**`aupd` is deliberately untouched.** Neither signature finds its content on *either* bundle, so it
+is not that the 5.5G's is unusual — this code cannot see inside it. Leaving it alone is symmetric
+across families and keeps the 5G's measured `flash-update` path as it was. **Whether a 5.5G's `aupd`
+needs the same correction is not established; nothing has run one.**
+
+**One thing nearly went in as a finding and was wrong.** Sixteen bytes of the 5.5G's `rsrc` look
+like ciphertext, and "Apple encrypted the 5.5G's resources" was most of a paragraph before the
+control: over the whole 5 MB image, **entropy 5.614 bits/byte and 34.4 % zero bytes for 20.1.3
+against 5.615 and 34.4 % for 25.1.3**. Statistically the same file, same OEM string, same `0x55aa`.
+A layout difference and nothing else.
+
 ## ~~Every drive this program builds stops at its own boot logo~~ — FIXED 2026-08-25
 
 Reported by the operator from a clean first run: *"it never reaches RetailOS — it just gets stuck on

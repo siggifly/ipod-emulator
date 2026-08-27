@@ -515,6 +515,76 @@ pub fn image_header(window: &[u8]) -> Option<usize> {
         .find(|&o| window[o + 3] == 0xEA && window[o + 7] == 0xEA)
 }
 
+/// Where a **resource** volume's content starts inside the bytes at its `devOffset`.
+///
+/// `rsrc` is a FAT12 volume, not an ARM image, so [`image_header`] cannot see it: its first bytes
+/// are a boot-sector jump, `eb ?? 90`, with `0x55aa` at `+0x1fe`. Both are required, because a
+/// lone `eb ?? 90` occurs by chance in five megabytes of resources.
+fn fat_header(window: &[u8]) -> Option<usize> {
+    (0..window.len().saturating_sub(0x200))
+        .step_by(0x200)
+        .find(|&o| {
+            window[o] == 0xEB && window[o + 2] == 0x90 && window[o + 0x1fe..o + 0x200] == [0x55, 0xAA]
+        })
+}
+
+/// Rewrite the directory so **every image's content begins `0x200` after the offset it declares**,
+/// which is the layout RetailOS reads and the one a 5G bundle already has.
+///
+/// **This is what stopped the 5.5G booting, and it is the same defect twice.** `image_from_drive`
+/// already *finds* `osos`'s header instead of assuming it — `0x200` on the 5G bundle, `0x800` on
+/// the 5.5G's — which is why the OS loads on both. Nothing did the same for the drive this module
+/// hands to **RetailOS**, and RetailOS reads that drive itself:
+///
+/// ```text
+///          rsrc devOffset   FAT boot sector   what RetailOS reads
+///  20.1.3  0x73a000         +0x200            rsrc + 0x200   <- lands on it
+///  25.1.3  0x73b000         +0xe00            rsrc + 0x200   <- 0xc00 short
+/// ```
+///
+/// On the 5.5G the mount therefore fails, `/Resources/Fonts/PodiumSans18.ttf` is never opened, the
+/// font registry answers null the way it is designed to for a font it does not have, and the first
+/// call through that null is `bx 0` — RetailOS's own reset vector, twenty-nine times in a 400 M
+/// run. `research/10`'s opening paragraph describes that loop; this is why the font was missing.
+///
+/// **Offsets are corrected, bytes are never moved.** Shifting five megabytes of payload could
+/// overrun the next image; rewriting `devOffset` and `len` cannot. `content_len` shrinks by exactly
+/// what `devOffset` gains, so an image still ends where it ended.
+///
+/// **`aupd` is deliberately left alone.** Neither signature finds its content, on *either* bundle —
+/// so it is not that the 5.5G's is unusual, it is that this function cannot see inside it. Leaving
+/// it untouched is symmetric across the two families and keeps the 5G's measured `flash-update`
+/// path exactly as it was. Whether a 5.5G's `aupd` needs the same correction is **not established**;
+/// nothing has booted one.
+///
+/// A no-op on any bundle already in this layout, which is every 5G one: the 5G's headers are
+/// `0x200` and the loop below skips them.
+pub fn normalise_image_headers(fw: &mut [u8]) -> Vec<(String, u32, u32)> {
+    let mut moved = Vec::new();
+    for (i, img) in images(fw).iter().enumerate() {
+        let at = img.offset as usize;
+        let window = match fw.get(at..at + (img.len as usize).min(0x2000)) {
+            Some(w) => w,
+            None => continue,
+        };
+        let Some(h) = image_header(window).or_else(|| fat_header(window)) else {
+            continue;
+        };
+        if h <= HEADER {
+            continue;
+        }
+        let shift = (h - HEADER) as u32;
+        let e = DIRECTORY_AT + i * 40;
+        fw[e + 0x0c..e + 0x10].copy_from_slice(&(img.offset + shift).to_le_bytes());
+        fw[e + 0x10..e + 0x14].copy_from_slice(&(img.len - shift).to_le_bytes());
+        moved.push((img.tag.clone(), h as u32, shift));
+    }
+    moved
+}
+
+/// The header RetailOS expects in front of every image's content.
+const HEADER: usize = 0x200;
+
 /// Pull the OS image out of a drive's own firmware partition.
 ///
 /// **This is what a high-level boot needs and a warm boot did not.** `--osos=` takes the image as a
@@ -1537,6 +1607,73 @@ mod build_split_tests {
             fw[at + 8..at + 12].copy_from_slice(&dev.to_le_bytes());
         }
         fw
+    }
+
+    /// **A 5.5G bundle's images are declared 0xc00 short of their own content, and that is what
+    /// stopped it booting.** Both cases in one test, because the no-op half is the half that would
+    /// silently break every 5G drive this program has ever built.
+    ///
+    /// Red before the fix: the `rsrc` arm asserted the declared offset had moved and it had not.
+    #[test]
+    fn an_images_declared_offset_is_corrected_to_where_its_content_actually_is() {
+        // 0x200 in — the layout a 5G bundle has, and the one RetailOS reads.
+        let mut already_right = firmware();
+        let osos_at = 0x8000usize;
+        put(&mut already_right, 0, osos_at as u32, 0x4000);
+        vector_table(&mut already_right, osos_at + 0x200);
+
+        // 0xe00 in — the 5.5G's `rsrc`, a FAT12 volume behind a seven-sector header.
+        let mut needs_moving = already_right.clone();
+        let rsrc_at = 0x10000usize;
+        put(&mut needs_moving, 1, rsrc_at as u32, 0x4000);
+        boot_sector(&mut needs_moving, rsrc_at + 0xe00);
+
+        let moved = normalise_image_headers(&mut already_right);
+        assert!(
+            moved.is_empty(),
+            "a bundle already in the right layout was rewritten: {moved:?}"
+        );
+
+        let moved = normalise_image_headers(&mut needs_moving);
+        assert_eq!(
+            moved,
+            vec![("rsrc".to_string(), 0xe00, 0xc00)],
+            "the 0xe00 header was not corrected"
+        );
+        let e = DIRECTORY_AT + 40;
+        let off = u32::from_le_bytes(needs_moving[e + 0x0c..e + 0x10].try_into().unwrap());
+        let len = u32::from_le_bytes(needs_moving[e + 0x10..e + 0x14].try_into().unwrap());
+        assert_eq!(
+            off as usize + HEADER,
+            rsrc_at + 0xe00,
+            "the declared offset plus RetailOS's 0x200 does not land on the boot sector"
+        );
+        assert_eq!(
+            off + len,
+            rsrc_at as u32 + 0x4000,
+            "the image no longer ends where it ended, so it now overruns its neighbour"
+        );
+    }
+
+    /// Write `offset` and `len` into directory entry `i`.
+    fn put(fw: &mut [u8], i: usize, offset: u32, len: u32) {
+        let at = DIRECTORY_AT + i * 40;
+        fw[at + 0x0c..at + 0x10].copy_from_slice(&offset.to_le_bytes());
+        fw[at + 0x10..at + 0x14].copy_from_slice(&len.to_le_bytes());
+    }
+
+    /// Two ARM branch words, which is what `image_header` looks for.
+    fn vector_table(fw: &mut [u8], at: usize) {
+        fw[at + 3] = 0xEA;
+        fw[at + 7] = 0xEA;
+    }
+
+    /// A FAT12 boot sector's jump and signature, which is what `fat_header` looks for.
+    fn boot_sector(fw: &mut [u8], at: usize) {
+        fw[at] = 0xEB;
+        fw[at + 2] = 0x90;
+        fw[at + 0x1fe] = 0x55;
+        fw[at + 0x1ff] = 0xAA;
     }
 
     /// **The split is transparent.** `build_disk` is the two halves in order, and the bytes it
