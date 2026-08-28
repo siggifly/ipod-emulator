@@ -111,6 +111,18 @@ pub fn article(n: u64) -> &'static str {
     }
 }
 
+/// Offsets into an `AsyncFileIO` request object. Read out of a live request while Minigolf had
+/// one in flight, and corroborated against Apple's own implementations in `osos`: the read at
+/// `0x001e36c8` gates on `+0x04`, and the 76 at `+0x18` is `jdmgsheets0`'s exact file size.
+pub const REQ_STATE: u32 = 0x04;
+pub const REQ_FILE_OBJ: u32 = 0x08;
+pub const REQ_BUFFER: u32 = 0x14;
+pub const REQ_LENGTH: u32 = 0x18;
+pub const REQ_STATUS: u32 = 0x20;
+/// The completion callback the game parks here, and the context it wants alongside it.
+pub const REQ_CALLBACK: u32 = 0x34;
+pub const REQ_CONTEXT: u32 = 0x38;
+
 pub const EAPP_MAGIC: &[u8; 4] = b"eapp";
 /// Corrected 2026-08-11 against RetailOS 1.3's own loader — see `eapp-inspect` for the evidence.
 /// The reversed order is still accepted, because the prior public report had it that way and only
@@ -381,6 +393,82 @@ impl EApp {
     pub fn import_count(&self) -> usize {
         self.frameworks.iter().map(|f| f.thunks.len()).sum()
     }
+}
+
+/// Find a title's click-wheel button flags word by its signature in the input poll.
+///
+/// Minigolf's was measured by hand at `0x18037a0c`, and its poll reads:
+///
+/// ```asm
+/// 18018a18  ldr r0, [r9, #0x14]
+/// 18018a1c  cmp r6, #1            ; not adjacent — hence the small window below
+/// 18018a20  bic r0, r0, #0x60     ; clear ONLY the two wheel bits
+/// 18018a24  str r0, [r9, #0x14]
+/// ```
+///
+/// The `bic` with `0x60` is the signature: it clears the wheel bits and leaves the five button
+/// bits standing, which is the whole reason a button set elsewhere in the frame survives into
+/// dispatch. Nothing else in these binaries masks a word with that constant and writes it back to
+/// where it came from.
+///
+/// The base register is resolved from the nearest preceding `ldr rN, [pc, #imm]`, so the answer is
+/// `literal + offset`. **This reproduces Minigolf's hand-measured address exactly** — see the test
+/// — and finds one for nine further titles that had no buttons at all before.
+///
+/// Returning `None` is a real answer, not a failure: six titles have no such pattern because they
+/// take buttons as event-list nodes instead (§13.5), which is a different mechanism entirely.
+pub fn find_flags_word(image: &[u8]) -> Option<u32> {
+    // No load base is needed: a literal pool is PC-relative, so its FILE offset is `pc + 8 + imm`
+    // whatever the image is linked at, and the word it holds is already an absolute address.
+    // `bic rD, rN, #imm` with a rotate of zero, i.e. exactly the constant 0x60.
+    const BIC_IMM: u32 = 0x03C0_0000;
+    const LDR_IMM: u32 = 0x0590_0000;
+    const STR_IMM: u32 = 0x0580_0000;
+    let w = |off: usize| -> u32 {
+        if off + 4 > image.len() {
+            0
+        } else {
+            u32::from_le_bytes([image[off], image[off + 1], image[off + 2], image[off + 3]])
+        }
+    };
+
+    for off in (0..image.len().saturating_sub(3)).step_by(4) {
+        let ins = w(off);
+        if ins & 0x0FF0_0000 != BIC_IMM || ins & 0xFFF != 0x060 {
+            continue;
+        }
+        let d = (ins >> 12) & 15;
+
+        // The load, within a few instructions back.
+        let Some((rn, k)) = (1..5).find_map(|b| {
+            let p = off.checked_sub(4 * b)?;
+            let prev = w(p);
+            ((prev & 0x0FF0_0000 == LDR_IMM) && (prev >> 12) & 15 == d)
+                .then(|| ((prev >> 16) & 15, prev & 0xFFF))
+        }) else {
+            continue;
+        };
+        if rn == 15 {
+            continue;
+        }
+        // The store back to the same slot — without it this is some other mask, not the poll.
+        if !(1..5).any(|f| {
+            let nxt = w(off + 4 * f);
+            nxt & 0x0FF0_0000 == STR_IMM && (nxt >> 16) & 15 == rn && nxt & 0xFFF == k
+        }) {
+            continue;
+        }
+        // Where the base came from.
+        for b in 1..60usize {
+            let Some(p) = off.checked_sub(4 * b) else { break };
+            let i2 = w(p);
+            if i2 & 0x0FF0_0000 == LDR_IMM && (i2 >> 12) & 15 == rn && (i2 >> 16) & 15 == 15 {
+                let lit = p + 8 + (i2 & 0xFFF) as usize;
+                return Some(w(lit).wrapping_add(k));
+            }
+        }
+    }
+    None
 }
 
 /// Framework descriptor layout, verified against real binaries *and* RetailOS's validator
@@ -884,6 +972,32 @@ fn manifest_paths(path: &std::path::Path) -> Option<Vec<String>> {
     (!out.is_empty()).then_some(out)
 }
 
+/// The title's display name, from `Manifest.plist`'s top-level `<key>Name</key>`.
+///
+/// The games sit in directories named by an opaque id — `50513`, `88888`, `1500C` — so that is
+/// what a window titled from the path shows. The manifest carries the real name: "Mini Golf",
+/// "Texas Hold'em", "Ms. PAC-MAN", "The Sims Bowling".
+///
+/// The first `Name` in the document is the title's own; the entries inside the `Files` array are
+/// keyed by `Path`, not `Name`, so there is nothing earlier to confuse it with. Checked against
+/// every manifest in the set.
+pub fn manifest_name(dir: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(dir.join("Manifest.plist")).ok()?;
+    let i = text.find("<key>Name</key>")?;
+    let rest = &text[i + 15..];
+    let a = rest.find("<string>")?;
+    let b = rest[a + 8..].find("</string>")?;
+    let name = rest[a + 8..a + 8 + b].trim();
+    // XML entities, of which apostrophes are the only ones these manifests actually use.
+    let name = name
+        .replace("&amp;", "&")
+        .replace("&apos;", "'")
+        .replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">");
+    (!name.is_empty()).then_some(name)
+}
+
 /// Expand a 16-bit A1R5G5B5 or RGB565 pixel to RGBA8, colour-keying magenta.
 fn expand16(v: u16, rgb565: bool) -> [u8; 4] {
     let (r, g, b) = if rgb565 {
@@ -952,6 +1066,144 @@ fn decode_ipd(d: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
     Some((w, h, rgba))
 }
 
+/// Decode a `.pix` texture, which is **a Windows BMP** — the extension is the only thing unusual
+/// about it.
+///
+/// Tetris ships 38 of these and Cubis 2 six, and nothing decoded them, so Tetris was drawing its
+/// whole interface as untextured white quads on a white clear: a blank screen with the occasional
+/// solid bar where the geometry happened not to be white. The filenames declare the format and
+/// the headers agree with them:
+///
+/// | suffix | header | what it is |
+/// |---|---|---|
+/// | `_5551` | 56-byte V3 header, 16 bpp, `BI_BITFIELDS` | masks `0x7C00/0x03E0/0x001F/0x8000` — **ARGB1555** |
+/// | `_8888` | 40-byte header, 32 bpp, `BI_RGB` | BGRA, one byte a channel |
+/// | `_a8` | 40-byte header, 8 bpp, 256-entry palette | see below |
+///
+/// The `_a8` palette is a greyscale ramp whose entries are `(i, i, i, 0)` — every alpha byte is
+/// zero. Taking that literally gives a fully transparent image, so the index is the **coverage**
+/// and the colour comes from the draw's modulate register (§16.2); these are font atlases. That
+/// reading is applied only when the palette really is such a ramp, and any other palette is used
+/// as ordinary colour — a file that is not a font should not be silently turned into one.
+///
+/// Row padding is BMP's usual 4-byte alignment, and a negative height means top-down.
+fn decode_bmp(d: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
+    if d.len() < 54 || &d[0..2] != b"BM" {
+        return None;
+    }
+    let rd32 = |o: usize| -> Option<u32> {
+        d.get(o..o + 4).and_then(|s| s.try_into().ok()).map(u32::from_le_bytes)
+    };
+    let rd16 = |o: usize| -> Option<u16> {
+        d.get(o..o + 2).and_then(|s| s.try_into().ok()).map(u16::from_le_bytes)
+    };
+    let data_off = rd32(10)? as usize;
+    let hdr = rd32(14)? as usize;
+    if hdr < 40 {
+        return None;
+    }
+    let w = rd32(18)? as i32;
+    let h = rd32(22)? as i32;
+    let bpp = rd16(28)?;
+    let compression = rd32(30)?;
+    let top_down = h < 0;
+    let (w, h) = (w as usize, h.unsigned_abs() as usize);
+    if w == 0 || h == 0 || w > 4096 || h > 4096 {
+        return None;
+    }
+
+    // Channel masks: present for BI_BITFIELDS, otherwise the defaults for the depth.
+    let (mr, mg, mb, ma) = match (compression, bpp) {
+        (3, _) => (rd32(54)?, rd32(58)?, rd32(62)?, rd32(66).unwrap_or(0)),
+        (0, 32) => (0x00FF_0000, 0x0000_FF00, 0x0000_00FF, 0xFF00_0000),
+        (0, 16) => (0x7C00, 0x03E0, 0x001F, 0x8000),
+        (0, 24) | (0, 8) => (0, 0, 0, 0),
+        _ => return None, // RLE and JPEG-in-BMP are not something these titles ship
+    };
+    let chan = |v: u32, mask: u32| -> u8 {
+        if mask == 0 {
+            return 255;
+        }
+        let shift = mask.trailing_zeros();
+        let width = mask.count_ones();
+        let x = (v & mask) >> shift;
+        // Expand to 8 bits by replication, so a 5-bit 0x1F becomes 0xFF and not 0xF8.
+        match width {
+            0 => 255,
+            8 => x as u8,
+            n => ((x * 255 + ((1u32 << n) - 1) / 2) / ((1u32 << n) - 1)) as u8,
+        }
+    };
+
+    // An `_a8`-style palette: a pure greyscale ramp with no alpha anywhere.
+    let pal_n = {
+        let used = rd32(46).unwrap_or(0) as usize;
+        if bpp <= 8 {
+            if used == 0 {
+                1usize << bpp
+            } else {
+                used
+            }
+        } else {
+            0
+        }
+    };
+    let pal_off = 14 + hdr;
+    let ramp = bpp == 8
+        && pal_n >= 2
+        && (0..pal_n).all(|i| {
+            let o = pal_off + i * 4;
+            match d.get(o..o + 4) {
+                Some(e) => e[0] == e[1] && e[1] == e[2] && e[0] as usize == i && e[3] == 0,
+                None => false,
+            }
+        });
+
+    let row_bytes = (w * bpp as usize).div_ceil(8);
+    let stride = row_bytes.div_ceil(4) * 4;
+    if data_off + stride * h > d.len() {
+        return None;
+    }
+
+    let mut rgba = vec![0u8; w * h * 4];
+    for y in 0..h {
+        let src_row = if top_down { y } else { h - 1 - y };
+        let base = data_off + src_row * stride;
+        for x in 0..w {
+            let px: [u8; 4] = match bpp {
+                8 => {
+                    let i = d[base + x] as usize;
+                    if ramp {
+                        [255, 255, 255, i as u8]
+                    } else {
+                        let o = pal_off + i * 4;
+                        match d.get(o..o + 4) {
+                            Some(e) => [e[2], e[1], e[0], 255],
+                            None => [0, 0, 0, 0],
+                        }
+                    }
+                }
+                16 => {
+                    let v = u16::from_le_bytes([d[base + x * 2], d[base + x * 2 + 1]]) as u32;
+                    [chan(v, mr), chan(v, mg), chan(v, mb), chan(v, ma)]
+                }
+                24 => {
+                    let o = base + x * 3;
+                    [d[o + 2], d[o + 1], d[o], 255]
+                }
+                32 => {
+                    let o = base + x * 4;
+                    let v = u32::from_le_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]]);
+                    [chan(v, mr), chan(v, mg), chan(v, mb), chan(v, ma)]
+                }
+                _ => return None,
+            };
+            rgba[(y * w + x) * 4..][..4].copy_from_slice(&px);
+        }
+    }
+    Some((w, h, rgba))
+}
+
 /// Headerless RGB565, dimensions inferred from the file size (square, or 2:1).
 fn decode_raw_rgb565(d: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
     let px = d.len() / 2;
@@ -980,6 +1232,10 @@ struct Vertex {
     y: f32,
     u: f32,
     w: f32,
+    /// Per-vertex colour, interpolated across the triangle.
+    rgb: [f32; 3],
+    /// Per-vertex alpha. Comes from attribute 1 component 3 when that array is a colour.
+    a: f32,
 }
 
 /// A decoded texture, RGBA8.
@@ -987,11 +1243,33 @@ struct Texture {
     w: usize,
     h: usize,
     rgba: Vec<u8>,
+    /// The texture supplies COVERAGE ONLY — a `GL_ALPHA` upload, whose RGB is not a colour.
+    ///
+    /// GL's texture-environment rules say a one-component alpha texture leaves the fragment's
+    /// colour alone: under `GL_MODULATE`, `Cv = Cp` and only `Av = Ap * As`. Sampling its RGB and
+    /// replacing the fragment with it paints black, because that RGB is zero by definition — which
+    /// is what turned Cubis 2's whole menu and Tetris's name-entry text into unreadable dark grey.
+    alpha_only: bool,
+}
+
+/// Which `mat4` helper a `Stub::GlMatrixOp` performs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatrixOp {
+    /// `m = m * translate(x, y, z)`
+    Translate,
+    /// `m = m * scale(x, y, z)`
+    Scale,
+    /// `m = m * rotate(angle_degrees, axis)`
+    Rotate,
+    /// `dst = a * b`
+    Mult,
 }
 
 /// One registered vertex attribute array.
 #[derive(Debug, Clone, Copy)]
 struct VertexArray {
+    /// The GL component type, e.g. `GL_FIXED` (`0x140C`) or `GL_FLOAT` (`0x1406`).
+    ty: u32,
     size: usize,
     stride: usize,
     ptr: u32,
@@ -1830,6 +2108,22 @@ impl Bus for Memory {
 }
 
 impl Memory {
+    /// Write one byte from outside the machine, so a harness can stand in for state a real
+    /// RetailOS would have written — see trace's `--poke-at`, which delivers an async file
+    /// completion nothing in this crate models yet.
+    pub fn poke8(&mut self, addr: u32, val: u8) {
+        self.write8_inner(addr, val)
+    }
+
+    /// Write one word from outside the machine. See [`poke8`](Self::poke8).
+    pub fn poke32(&mut self, addr: u32, val: u32) {
+        for (i, b) in val.to_le_bytes().iter().enumerate() {
+            self.write8_inner(addr + i as u32, *b);
+        }
+    }
+}
+
+impl Memory {
     fn read8_inner(&mut self, addr: u32) -> u8 {
         // **`PROC_ID` is the one address whose answer depends on who is asking**, and it has to be
         // answered here rather than seeded as memory, because the two cores share the bus and a
@@ -2525,6 +2819,9 @@ const SYS_EXIT: u32 = 0x18;
 pub const FB_WIDTH: usize = 320;
 pub const FB_HEIGHT: usize = 240;
 
+/// The PP5022's on-chip SRAM, which eApps use for small hot state.
+pub const IRAM_BASE: u32 = 0x4000_0000;
+pub const IRAM_SIZE: usize = 0x0002_0000; // 128 KB
 pub const HEAP_BASE: u32 = 0x1900_0000;
 pub const HEAP_SIZE: usize = 0x0400_0000; // 64 MB — see the note on miscTBD #0 in the README
 
@@ -2542,6 +2839,15 @@ pub enum Stub {
     /// nine blocks per frame. A bump allocator is enough to reach a first frame and nowhere near
     /// enough to keep running.
     Free { arg: usize },
+    /// Resize a block, preserving its contents — `realloc`.
+    ///
+    /// Left unbound this answered 0, and a NULL from `realloc` is not a benign "no memory" for
+    /// these titles: Vortex builds every parsed string through one, so its `text.strings` keys all
+    /// came out NULL. Its parser stops when a key fails to `atoi` to -1 (the file's last line is
+    /// literally `"-1"="";`, commented "Unique ID is to mark end of file"), so with every key
+    /// empty it never terminated — it scanned 1.3 MB past the buffer and the load callback never
+    /// returned.
+    Realloc { ptr: usize, size: usize },
     /// Return a fixed value.
     Value(u32),
     /// A monotonic microsecond clock, reporting through the out-pointer in `arg`.
@@ -2556,6 +2862,386 @@ pub enum Stub {
     GlClearColor,
     /// `glClear(mask)` — fills the framebuffer when `GL_COLOR_BUFFER_BIT` is set.
     GlClear,
+    /// `miscTBD #14` — resolve a resource name into a descriptor.
+    ///
+    /// The game calls it as `(0, out_buf, &len, name)` and hands the result straight to
+    /// `Audio #40`. Measured: the names are `a0.m4a`, `m0.m4a`, `a1.m4a`, `m1.m4a`, `a2.m4a`,
+    /// `m2.m4a`, in that order. Recording the name here is what lets `Audio #40` know which file
+    /// a stream is, and writing the descriptor back keeps the game's own bookkeeping coherent:
+    /// word 0 is zero, word 1 is the offset to the string (8), then the string.
+    ResolveName { name: usize, out: usize },
+    /// `Audio #48` — set the player's repeat mode. **0 = off, 1 = one, 2 = all**, the same order
+    /// as the iPod's own Settings > Repeat menu.
+    ///
+    /// Traced end to end: `#48` posts message `0x66000017`, the player task's dispatcher at
+    /// `0x0012e58c` routes index 10 to `0x00268d68`, which tail-calls `setRepeatMode` at
+    /// `0x000b3908`. That remaps the public value (0->0, **1<->2**) and stores it as a halfword at
+    /// `engine+0xE4`. Two readers fix the meaning of that field beyond doubt:
+    ///
+    /// * skip-forward `0x0009dc54` leaves the track index **unchanged** for internal 2, and wraps
+    ///   it to 0 past the end for internal 1 — so internal 2 is "one" and internal 1 is "all",
+    ///   which after the swap makes the public order off / one / all.
+    /// * end-of-item `0x000c9610` re-queues the finished item **only when the mode is not off**
+    ///   (`ldrh r0,[r0,#0xe4] / cmp r0,#0 / beq`).
+    ///
+    /// That second one is precisely the behaviour a host has to supply: the device restarts the
+    /// stream itself, which is why Minigolf sets mode 1 once and never issues another play for a
+    /// 45-second track. `Audio #50` is the matching shuffle setter, and `#47` the getter.
+    AudioRepeat { arg: usize },
+    /// Print a framework call's arguments and return 0, which is what an unstubbed entry already
+    /// does. A way to see what the game is asking for without changing what it is told.
+    Probe { label: &'static str },
+    /// `glUniformMatrix4fv(location, count, transpose, value)` — read only for its Y direction.
+    ///
+    /// The matrices themselves are not applied: the games hand vertices to `glDrawArrays` already
+    /// in screen coordinates, so the projection is the identity as far as this renderer is
+    /// concerned. What it does carry is which way up the game thinks the screen is.
+    GlUniformMatrix { value: usize },
+    /// `OpenGLES #152` — start the render server, and reset the GL context.
+    ///
+    /// `int(int unused, int *outA, int *outB)`. Apple's implementation at `0x0026b138` boots the
+    /// driver singleton, allocates a sixteen-buffer command ring, and resets the context; it
+    /// returns 1, or 0 only if the ring allocation fails. The two out-parameters are hard
+    /// constants 1 and 2.
+    ///
+    /// **Returning 0 means "the renderer failed to start".** Unstubbed entries return 0, which is
+    /// why Lost sat in a present-only loop forever without ever issuing a draw call — it was
+    /// being told, every frame, that it had no renderer. The four lifecycle entries
+    /// (#152 start, #153 stop, #159 select-pipeline, #164 set-image) all signal success as 1.
+    GlStartRenderServer,
+    /// `Metadata #134` — how many tracks the now-playing playlist holds.
+    ///
+    /// Ordinal 62 is that playlist (its constructor calls `SPlaylist`'s and then overwrites the
+    /// vptr, and its typeinfo pointer is deliberately NULL, which is why no RTTI string names it);
+    /// #119-#140 are its methods. Lost samples #134 either side of an `Audio #40` registration and
+    /// returns `count - 1`, so the count must GROW by one per registered stream — a constant makes
+    /// the caller answer -1, its failure value, forever.
+    AudioStreamCount,
+    /// `miscTBD #12` — fill a time-of-day struct at the address in register `out`.
+    ///
+    /// Minigolf's status bar calls this once per frame and formats two of its fields with
+    /// `"% 2d:%02d"` (the string at `0x1800ecc4`, reached by `add r1,pc` at `0x1800eb78`, which is
+    /// why a literal-pool search for it found nothing):
+    ///
+    /// ```asm
+    /// 1800eb6c  bl 0x18012c00     ; -> b 0x1800099c, the miscTBD #12 thunk
+    /// 1800eb70  ldr r2,[sp,#36]   ; struct +8  -> the hour
+    /// 1800eb74  ldr r3,[sp,#32]   ; struct +4  -> the minute
+    /// 1800eb80  bl <sprintf>
+    /// ```
+    ///
+    /// So `+4` = minute and `+8` = hour are MEASURED. The remaining fields are written in the
+    /// usual `tm` order — second, minute, hour, day, month, year — which the two known offsets
+    /// agree with, and which nothing in this game reads either way.
+    ///
+    /// The hour is 12-hour, as the device's own status bar shows it; the format carries no AM/PM.
+    HostTime { out: usize },
+    /// `miscTBD #13` — the battery level, on the **0..20 scale the game decodes**.
+    ///
+    /// Not a percentage: `0x180140cc` clamps the returned value to 20 and then computes
+    /// `level * 100 / 20`, so 20 is full and 10 is half. Returning a percentage here would peg the
+    /// gauge full at anything above 20%.
+    HostBattery,
+    /// `miscTBD #5(level)` — store a level, clamped to `0..=100`.
+    ///
+    /// The trio `#5`/`#6`/`#7` share one singleton, reached through the lazy getter at
+    /// `0x001c2aa4`, which returns `0x10800090`. Its constructor (`0x001c2c48`) is a bare
+    /// `bx lr`, so every field starts at zero, and a `--wordref` sweep finds exactly one
+    /// reference to the object in the whole image — these three functions are all that touch it.
+    ///
+    /// ```asm
+    /// 0026a96c  mov r4,r0 ; bl 0x001c2aa4 ; mov r1,r4 ; b 0x001c2b38   ; #5 set
+    /// 001c2b38  cmp r1,#0x64 ; movgt r1,#0x64 ; cmp r1,#0 ; movlt r1,#0
+    /// 001c2b54  str r1,[r0,#0]      ; the level
+    /// 001c2b58  strb r2,[r0,#5]     ; r2 = 1, a "has been set" byte
+    /// ```
+    ///
+    /// The clamp to 0..100 is measured, not assumed. What device it drives is NOT established:
+    /// the value passes through a scaling curve at `0x00118fe8` and is applied by a vtable call
+    /// (`[[obj+0]+0x18]`) on a driver singleton whose identity this reading did not settle.
+    /// Nothing in the emulator needs to know — no game reads back anything but the level.
+    DeviceLevelSet { arg: usize },
+    /// `miscTBD #6()` — return the level `#5` stored. Takes no arguments.
+    ///
+    /// ```asm
+    /// 0026853c  stmdb sp!,{r4,lr} ; bl 0x001c2aa4 ; ldr r0,[r0,#0] ; ldmia sp!,{r4,pc}
+    /// ```
+    ///
+    /// **This corrects the `MemoryReport` hypothesis below**, which had `#6` as a two-out-param
+    /// memory report. It has no out-parameters and no arguments at all.
+    DeviceLevelGet,
+    /// `miscTBD #3(fmt, ...)` — the games' own `printf`, routed to the emulator log.
+    ///
+    /// ```asm
+    /// 00266d78  stmdb sp!, {r0-r3}    ; spill the register arguments
+    /// 00266d7c  stmdb sp!, {r4, lr}
+    /// 00266d80  ldr r0, [sp, #0x8]    ; the spilled r0 -> the format string
+    /// 00266d84  add r1, sp, #0xc      ; &spilled r1  -> the va_list, starting at arg 1
+    /// 00266d88  bl 0x00286860         ; a formatter: it scans for '%', '\', '\n' and NUL
+    /// ```
+    ///
+    /// The register spill is what identifies it — no fixed-arity function needs `{r0-r3}` on
+    /// entry, and taking the address of the second slot is the standard ARM va_start.
+    Printf { fmt: usize, first_vararg: usize },
+    /// One field of a sound descriptor, set (`Audio #8`–`#15`, `#17`, `#18`) or read (`#23`).
+    ///
+    /// Every one of these is the same six instructions: look the handle up, store one field,
+    /// return. The lookup is `0x0029cbc4(tracker, handle)`, a bounds-checked table index —
+    /// `handle >= 0 && handle < tracker[+4] ? tracker[+0][handle] : 0` — so a sound handle is an
+    /// index and the descriptor is whatever the register/`#40` path allocated.
+    ///
+    /// ```asm
+    /// 0026a600  mov r4,r1 ; mov r1,r0 ; ldr r0,=0x10800024 ; ldr r0,[r0]
+    ///           bl 0x0029cbc4 ; str r4,[r0,#0x8]           ; #8
+    /// ```
+    ///
+    /// | ordinal | offset | width |    | ordinal | offset | width |
+    /// |---|---|---|---|---|---|---|
+    /// | `#8`  | `+0x08` | word | | `#13` | `+0x1c` | word |
+    /// | `#9`  | `+0x0c` | byte | | `#14` | `+0x24` | word |
+    /// | `#10` | `+0x10` | word | | `#15` | `+0x20` | word |
+    /// | `#11` | `+0x14` | word | | `#17` | `+0x3d` | byte |
+    /// | `#12` | `+0x18` | word | | `#18` | `+0x3e` | byte |
+    /// | `#23` | `+0x04` | word (**read**) |
+    ///
+    /// None of them touches the mixer at call time — the values are consumed later — so what
+    /// each field *means* is not established and does not have to be: the emulator keeps them so
+    /// that a setter and a reader agree, which is the only contract a game can observe through
+    /// this interface. `#17` additionally walks the `+0x40` sibling chain writing the same byte
+    /// to every linked descriptor; with no chain to walk that is one write.
+    AudioFieldSet { handle: usize, value: usize, off: u32, byte: bool },
+    /// A `(handle, char *buf, int *len)` string getter, answering with the empty string.
+    ///
+    /// Metadata's string getters all share this shape (§11.3), and every one of them is gated on
+    /// its object being valid — with an empty library none are. **Writing the terminator is the
+    /// whole point**: a getter that returns without touching `buf` leaves the caller reading
+    /// uninitialised stack, which is exactly the fault `Settings #0("TimeFormat")` had.
+    EmptyString { buf: usize, len: usize },
+    /// `Audio #39(handle)` — is this sound playing?
+    ///
+    /// ```asm
+    /// 0026a4dc  ... bl 0x0029cbc4 ; ldrb r0,[r0,#0x3d]
+    /// 0026a4f4  cmp r0,#1 ; movne r0,#0 ; moveq r0,#1
+    /// ```
+    ///
+    /// The same state byte `Audio #2`/`#3`/`#4`/`#5`/`#17` write, compared against the PLAYING
+    /// value that `0x001b9168` stores at the end of the play path. This is why the transport
+    /// states are worth keeping rather than discarding: five titles ask this question, and
+    /// without the byte the honest answer would have to be a guess.
+    AudioIsState { handle: usize, state: u32 },
+    /// `Audio #1(handle)` — destroy a sound.
+    ///
+    /// `0x0029caac` is the tracker's release: bounds-check the handle, fetch `slot[handle]`, and
+    /// if it is not null make the virtual call `[[obj]+4]()` — a destructor. Freeing a sound has
+    /// to stop it, or a looping effect outlives the object that owned it.
+    AudioRelease { handle: usize },
+    /// `Settings #0(name, void *out, int *size)` — read one of the device's user settings.
+    ///
+    /// The dispatcher at `0x002686a8` walks a three-entry table at `0x10800050`, matching `name`
+    /// against `[e+4]` with `[e+8]` as its length, and tail-calls `[e+0xc](name, out, size, [e+0x10])`.
+    /// `out == 0` is `-49`; no match is `-50`. The table is filled at runtime, so the three names
+    /// are not in the image — but the callers name them, and there are only two:
+    ///
+    /// | name | titles | how the caller reads it |
+    /// |---|--:|---|
+    /// | `Language` | 18 | as a **word**, then `cmp #0x18` + `addls pc,pc,r1,lsl #2` — a 25-way jump table |
+    /// | `TimeFormat` | 10 | as a **string**, `strcmp(out, "12")` |
+    ///
+    /// Ms. PAC-MAN gives both, and the difference is measured, not assumed:
+    ///
+    /// ```asm
+    /// 180029b4  str r0,[sp,#4]     ; out = 0    <- pre-zeroed, so 0 is a language the game accepts
+    /// 180029bc  str r0,[sp,#0]     ; size = 4
+    /// 180029cc  bl <Settings #0>   ; ("Language", sp+4, sp)
+    /// 180029d0  ldr r1,[sp,#4] ; cmp r1,#0x18 ; addls pc,pc,r1,lsl #2
+    ///
+    /// 18002c1c  str r0,[sp,#0]     ; size = 4;  out NOT initialised
+    /// 18002c2c  bl <Settings #0>   ; ("TimeFormat", sp+4, sp)
+    /// 18002c3c  bl 0x18001398      ; strcmp(out, "12") — the literal is at 0x18002c5c
+    /// 18002c40  cmp r0,#0 ; movne r4,#1        ; is24 = out != "12"
+    /// ```
+    ///
+    /// The `TimeFormat` case is a live bug in the unimplemented version: the game never zeroes
+    /// that buffer, so `strcmp` runs against **uninitialised stack** and the 12/24-hour choice is
+    /// whatever was left there. `Language` is the opposite — the game pre-zeroes it, so answering
+    /// nothing already means language 0.
+    SettingGet { name: usize, out: usize, size: usize },
+    /// `Audio #3`/`#4`/`#5(handle)` — write the transport state byte at descriptor `+0x3d`.
+    ///
+    /// All three are the same shape as `Audio #17` with the value fixed: look the handle up, get
+    /// the mixer singleton, then tail-call a three-line routine that stores one constant into
+    /// `+0x3d` and repeats it down the `+0x40` sibling chain.
+    ///
+    /// ```asm
+    /// 001b929c  mov r0,r1 ; mov r2,#1 ; strb r2,[r0,#0x3d]   ; <- Audio #4
+    /// 001b927c  mov r0,r1 ; mov r2,#2 ; strb r2,[r0,#0x3d]   ; <- Audio #3
+    /// 001b925c  mov r0,r1 ; mov r2,#3 ; strb r2,[r0,#0x3d]   ; <- Audio #5
+    /// ```
+    ///
+    /// **State 1 is PLAYING, and that is measured**: the play path behind `Audio #2`
+    /// (`0x001b9168`) ends with exactly the same loop storing 1, so `#4` re-marks a sound as
+    /// playing. States 2 and 3 are two distinct halted states; which is *pause* and which is
+    /// *stop* is NOT established. `stops_voice` carries the reading that `#5` is stop, on two
+    /// grounds — it is the one fourteen of the eighteen titles call, against six for `#3` and
+    /// three for `#4`, and a routine transport call is far more likely to be "stop this effect"
+    /// than "pause it". If that is backwards, the cost is a paused sound being cut short rather
+    /// than a stopped sound playing on forever, which is the better way to be wrong.
+    AudioSetState { handle: usize, state: u32, stops_voice: bool },
+    /// `OpenGLES #0 glActiveTexture(unit)` — select one of three texture units.
+    ///
+    /// ```asm
+    /// 26c534  sub r0,r0,#0x8000 ; sub r0,r0,#0x4c0   ; unit - GL_TEXTURE0
+    /// 26c540  cmp r0,#2 ; strls r0,[r1,#0x8c]        ; ctx+0x8C = active unit
+    /// 26c550  mov r0,#0x500 ; str r0,[r1,#0x88]      ; else GL_INVALID_ENUM
+    /// ```
+    ///
+    /// The emulator has ONE binding slot, so this records the unit and says so the first time a
+    /// title selects a unit other than 0. Only Vortex does — it passes `GL_TEXTURE1` at one of
+    /// its two call sites; the other titles that reach `#0` pass unit 0 or reach it through a
+    /// path this scan could not resolve. Silently accepting unit 1 and then sampling unit 0's
+    /// texture would be a rendering bug with no symptom in the log.
+    GlActiveTexture,
+    /// `OpenGLES #159(index)` — select one of the fifty built-in pipelines (§12.5).
+    ///
+    /// Recorded rather than acted on: which pipeline is live decides what the uniform at location
+    /// 4 MEANS, and this renderer applies it unconditionally as a modulating colour.
+    PipelineSelect,
+    /// `OpenGLES #84 glPixelStorei(pname, param)` — row alignment for pixel transfers.
+    ///
+    /// ```asm
+    /// 26f4fc  cmp r1,#1 ; cmpne r1,#2 ; cmpne r1,#4 ; cmpne r1,#8   ; else GL_INVALID_VALUE
+    /// 26f51c  sub r12,r0,#0xc00 ; subs r12,r12,#0xf5   ; GL_UNPACK_ALIGNMENT 0x0CF5
+    /// 26f524  streq r1,[r2,#0x268]
+    /// 26f52c  sub r12,r0,#0xd00 ; subs r12,r12,#0x05   ; GL_PACK_ALIGNMENT   0x0D05
+    /// 26f534  streq r1,[r2,#0x264]
+    /// ```
+    ///
+    /// Anything else panics through `glPixelStorei` — this is not a permissive entry point.
+    /// Every title's textures are 320×240 or power-of-two at 2 or 4 bytes a texel, so each row is
+    /// already a multiple of 8 and the alignment cannot change a byte of any upload we have seen.
+    /// Kept as real state anyway: the day a title uploads an odd-width `GL_LUMINANCE` image, the
+    /// difference between alignment 1 and 4 is a skewed texture, and guessing then is worse than
+    /// having recorded it now.
+    GlPixelStore,
+    /// `Audio #23(handle)` — read the word at descriptor `+0x04`. See [`Stub::AudioFieldSet`].
+    ///
+    /// Nothing in the missing set writes `+0x04`; it is set when the sound is created. Until
+    /// something is shown to write it this returns 0, which is what the unimplemented ordinal
+    /// already did — the point of implementing it is that a future writer will be read back.
+    AudioFieldGet { handle: usize, off: u32 },
+    /// `Audio #7` — set a sound effect's PCM buffer pointer. `handle` and `ptr` name registers.
+    ///
+    /// RetailOS copies this address into the voice at play time and nothing else identifies the
+    /// sound, so this is where the handle gets tied to a file.
+    SfxSetBuffer { handle: usize, ptr: usize },
+    /// `glDrawElements(mode, count, type, indices)` — indexed drawing.
+    GlDrawElements,
+    /// `glUniform4xvAPPLE(location, count, const GLfixed *v4)` — **the per-draw modulate colour**.
+    ///
+    /// Named by the function's own validator (the string `glUniform4xvAPPLE` at `0x002a97e4`,
+    /// loaded at `0x002717f4`). The payload is 16.16 FIXED, proven by `#120 glUniform4fv` being
+    /// the identical routine with a `float -> ldexp(.,16)` conversion in front.
+    ///
+    /// Locations map to hardware constant registers as `0..3 -> 0x0001..0x0004` and
+    /// `>=4 -> 0x0101 + (location-4)`. A `mat4` uploaded at location 0 fills 0..3, so **location 4
+    /// is the first slot past the MVP matrix** and is where the colour lives. Zuma builds it
+    /// straight from an RGB565 word plus 8-bit alpha at `0x180022fe8`, every channel saturating at
+    /// `0x10000` = 1.0, and passes opaque white when it wants no tint.
+    ///
+    /// `location == -1` is a documented no-op.
+    GlUniform4x { fixed: bool },
+    /// `glGenTextures(n, GLuint *out)` — hand out texture NAMES, creating nothing.
+    ///
+    /// The driver's counter lives at `ctx+0x270` and **starts at 1**, so 0 is never issued and
+    /// stays meaningful as "unbound".
+    GlGenTextures,
+    /// `#165 loadIdentity(GLfloat m[16])` — pure matrix maths, no driver state.
+    GlLoadIdentity { fixed: bool },
+    /// **Refuted, kept as a record.** This was `miscTBD #6` under test as a memory report —
+    /// Sudoku, SimsBowling and SimsPool all size a pool of ten 512 KB blocks and then die when
+    /// it is exhausted, at a heap footprint of 5.24 MB in every case, so "how much memory is
+    /// there" fit the symptom.
+    ///
+    /// It is not what `#6` is. The function is four instructions long, takes no arguments and
+    /// returns one word — see [`Stub::DeviceLevelGet`]. The pool-exhaustion symptom is real and
+    /// still unexplained; whatever answers it is somewhere else.
+    MemoryReport { bytes: u32 },
+    /// `glTexSubImage2D(target, level, x, y, w, h, format, type, pixels)`.
+    GlTexSubImage2D,
+    /// `#147 glUniform4xAPPLE(location, x, y, z, w)` — the SCALAR form of `#148`.
+    ///
+    /// Five arguments, the fifth on the stack (`0x00271680: ldr ip,[sp,#48]`), all 16.16 fixed,
+    /// writing the same constant-register bank. Lost calls it once per draw block and never
+    /// calls `#148`, so dropping it would paint every tinted Lost quad white — the same fault
+    /// that buried Zuma's art (§16.2).
+    GlUniform4xScalar,
+    /// `#149 glUniformMatrix4xvAPPLE(location, count, transpose, value)` — the 16.16 twin of
+    /// `#125`. Lost's ONLY matrix path: it has eleven call sites and never calls `#125`.
+    GlUniformMatrixFixed,
+    /// `#169 translatef(m, x, y, z)` / `#171 scalef(m, x, y, z)` / `#173 rotatef(m, a, x, y, z)`
+    /// / `#175 multMatrixf(dst, a, b)` — the `mat4` helpers, column-major.
+    ///
+    /// **`#175` was a live bug.** Minigolf has exactly one `glUniformMatrix4fv` call site and the
+    /// matrix it uploads is built by `#175` into a **stack frame** (`0x1800eaa8: sub sp,#68`),
+    /// so with `#175` a no-op that buffer stayed uninitialised and `GlUniformMatrix` read its
+    /// Y-sign out of stack garbage — which sets `proj_flips_y`, a sticky flag. Minigolf could
+    /// render upside down depending on what happened to be on the stack.
+    GlMatrixOp { op: MatrixOp },
+    /// `#167 ortho(GLfloat m[16], left, right, bottom, top, zNear, zFar)` — column-major.
+    ///
+    /// Zuma calls `ortho(m, 0, 320, 240, 0, -50, 50)` and Pac-Man `ortho(m, 0, 320, 0, 240, -1, 1)`.
+    /// Note Zuma's bottom > top: that is a Y-DOWN projection, which is exactly the thing
+    /// `--flip-y` exists to say by hand.
+    GlOrtho,
+    /// `Audio #16` — a sound effect's repeat count, at descriptor `+0x38`.
+    ///
+    /// **Zero means loop forever.** Measured on Pac-Man, which sets it on exactly two handles —
+    /// its sirens, the continuous background tone — and on nothing else; without it the siren
+    /// plays once and the level runs in silence.
+    SfxRepeat { handle: usize, count: usize },
+    /// `Audio #2` — `Play(handle)`. **This is the sound-effect trigger.**
+    ///
+    /// It was mistaken for a lookup because its first two instructions are one (`0x0026a534`
+    /// indexes the descriptor table), but the tail is `b 0x001b9168` — allocate a voice from the
+    /// four-voice pool and start it. `Audio #8`, the previous suspect, only sets a buffer length.
+    SfxPlay { handle: usize },
+    /// `Audio #0` — register a sound effect and hand back a handle.
+    ///
+    /// The game calls it ten times with `r1` = 0..9, one per `c00bank/N.wav`. Unstubbed it
+    /// returns 0 for every one, so all ten effects share handle 0 — which is why the only audio
+    /// traffic during play is a refresh on handle 0, and why the voice gate never matches.
+    /// Handles start at 1 so that 0 stays "invalid", as the game expects.
+    AudioSfxRegister { idx: usize },
+    /// `Audio #40` — register the resolved stream. Takes the index in call order.
+    AudioRegister,
+    /// `Audio #43` — play the stream at the index in register `arg`.
+    AudioPlay { arg: usize },
+    /// Log the NUL-terminated string at register `arg`, and the first bytes there.
+    ///
+    /// Used to see what the game registers as an audio stream: its wrapper at `0x18014ba4` fills
+    /// a 512-byte buffer through `miscTBD #14` and hands that to `Audio #40`, so whatever is in
+    /// the buffer identifies the stream.
+    PeekStr { arg: usize, off: u32 },
+    /// `glEnableVertexAttribArray(index)` / `glDisableVertexAttribArray(index)`.
+    ///
+    /// Named from Apple's own implementations at `0x0026e43c` and `0x0026d8e0`, which carry the
+    /// strings. Without them a vertex array stays registered forever, so a later *untextured*
+    /// draw still looks textured to us and samples whatever sheet was last bound — which is what
+    /// painted the menu and overlay backgrounds as a flat grey corner texel.
+    GlEnableVertexAttribArray,
+    GlDisableVertexAttribArray,
+    /// `glCopyTexImage2D(target, level, internalformat, x, y, width, height, border)` — capture
+    /// the framebuffer into the bound texture.
+    ///
+    /// This is render-to-texture, and Minigolf depends on it: it uploads a screen-sized RGBA
+    /// texture whose pixels are a repeating `0x0001` placeholder in its own BSS, then fills it
+    /// from the framebuffer. Without this the placeholder is what gets drawn, which is the noise
+    /// the course rendered as.
+    GlCopyTexImage2D,
+    /// `glTexImage2D(target, level, internalformat, width, height, border, format, type, pixels)`
+    /// — nine arguments, so everything from `height` on is on the stack. Named from Apple's own
+    /// implementation at `0x00270240`, which carries the string `"glTexImage2D"`.
+    GlTexImage2D,
     /// Present the framebuffer. Identified by bracketing every frame, first call and last.
     GlSwap,
     /// `glVertexAttribPointer(index, size, type, normalized, stride, pointer)` — six arguments,
@@ -2567,7 +3253,60 @@ pub enum Stub {
     /// Games load their artwork and audio from the directory beside the executable — Pac-Man
     /// ships `tex_ig.tga`, `tex_menu1.tga`, `PM_Logo.raw.lcd5` and a tree of WAVs. Returning
     /// zero here is why sixteen of twenty titles never draw anything.
-    FileOpen { path: usize, out: usize },
+    ///
+    /// `return_handle` picks which of the two conventions this import answers to, and the two
+    /// are opposites — which is why it has to be a per-title choice rather than a default:
+    ///
+    /// - `false` — return 0. Pac-Man's `Filesytem #0` treats zero as success.
+    /// - `true` — return the handle, so a miss (handle 0) reads as failure. Minigolf's
+    ///   `AsyncFileIO #0` needs this: its call site at `0x18018044` is
+    ///   `movs r6,r0 / movne r0,#1 / strneb r0,[r4,#4] / bne`, so a **non-zero** return is what
+    ///   advances the request object's state byte to 1 and keeps the transfer alive. Returning
+    ///   zero takes the else-branch, which frees the request through `0x180184b4` (observed as
+    ///   `miscTBD #1` on `0x19001768`) and abandons the load — leaving the title screen up
+    ///   forever with no error anywhere.
+    FileOpen { path: usize, out: usize, return_handle: bool },
+    /// `AsyncFileIO #0` / `#3` — open, the way RetailOS actually implements it.
+    ///
+    /// Measured against Apple's own code in `osos`, reached through the shim at `0x002680e4`:
+    /// the implementation at `0x001e3310` reads the request out of the *fifth* argument, checks
+    /// `request->state == 1`, then allocates and **enqueues** the operation and returns non-zero.
+    /// It never touches the file inside the call. Completion is a callback the game parked at
+    /// `request+0x34`, invoked with the request — which is why a synchronous stub, whatever it
+    /// returns, leaves the title wedged on its first screen.
+    ///
+    /// `request` names the register holding the request object: r3 for `#0`, r2 for `#3`.
+    AsyncOpen { path: usize, request: usize },
+    /// Any other `AsyncFileIO` entry that only queues work: accept it, report success through
+    /// `request+0x20`, and let the frame loop run the callback.
+    ///
+    /// `#1` is the one that matters first. Apple's implementation at `0x001e33a0` requires
+    /// `request->state == 2` — the value the open's completion leaves behind — and the game's
+    /// side sets state 3 only when the call returns non-zero. Left unstubbed it returns 0, so the
+    /// sequence dies one step after the open with nothing to show for it.
+    AsyncOp { request: usize },
+    /// `AsyncFileIO #12(mode, name, fileobj, size)` — the SYNCHRONOUS open-for-write.
+    ///
+    /// Distinct from the async open (#0/#3): LOST's save path at `0x18004980` is
+    /// open (#12) → write (#14) → close (#16), all blocking, and it judges the whole thing by
+    ///
+    /// ```text
+    /// rsbs r4, r0, #0x1      ; success only when the status is ZERO
+    /// ```
+    ///
+    /// so this must report 0 on success, not 1. It also has to publish the handle at
+    /// `[fileobj+0]`, because #14 is handed that word as its handle — left at the -1 the caller
+    /// seeded, every write went to a non-existent file.
+    SyncOpenWrite { mode: usize, name: usize, obj: usize },
+    /// `AsyncFileIO #14(handle, buffer, length)` — the synchronous write. Zero on success.
+    SyncWrite { handle: usize, buffer: usize, length: usize },
+    /// `AsyncFileIO #16(handle)` — the synchronous close. Zero on success.
+    SyncClose { handle: usize },
+    /// `AsyncFileIO #2` — read. Apple's implementation at `0x001e36c8` takes the request alone
+    /// and refuses it unless `request->state` is 3, 4 or 5. Buffer and length live in the
+    /// request, not in registers, which is why a `read(handle, buf, len, &out)` stub read
+    /// nonsense: the fields are `+0x14` and `+0x18`, and the file object is `+0x08`.
+    AsyncRead { request: usize },
     /// `read(handle, buffer, length, &bytesRead)`.
     ///
     /// Identified from the sequence a game runs verbatim: open the path, allocate exactly N
@@ -2731,7 +3470,7 @@ pub struct Machine {
     /// slot. Anything that hooks the call instruction misses both.
     pub enter_pcs: Vec<u32>,
     pub enter_bloom: u64,
-    pub enter_log: Capped<(u32, u32, [u32; 4], u64)>,
+    pub enter_log: Capped<(u32, u32, [u32; 8], u64)>,
     /// `(pc, lr) -> count`, **uncapped**. `NEXT.md` has described this histogram as "the honest
     /// census" to read when the detail rows are truncated — which was only true below the log's own
     /// 65 536-entry cap, because it was tallied from the log. It is now tallied on arrival, so the
@@ -2775,13 +3514,180 @@ pub struct Machine {
     pub game_dir: Option<std::path::PathBuf>,
     /// Contents and read position of each opened file, indexed by handle - 1.
     open_files: Vec<(Vec<u8>, usize)>,
+    /// The file behind each open handle, parallel to `open_files`.
+    open_paths: Vec<String>,
+    /// Rewind a file after a load-on-open, so a later read starts from the beginning.
+    ///
+    /// On by default because that is what a title reading a header at open and then reading the
+    /// body through `#2` expects. Pac-Man wants the opposite: it opens the same file repeatedly
+    /// and expects each load to continue where the last stopped.
+    pub rewind_after_load: bool,
+    /// Let a write-mode open create a missing file under the game directory.
+    pub allow_creates: bool,
+    /// Whether each open handle was opened for writing, parallel to `open_files`.
+    writable: Vec<bool>,
+    /// The host's UTC offset in seconds, read once on first use.
+    tz_offset: Option<i64>,
+    /// The host battery charge, with the elapsed second it was sampled at.
+    battery: Option<(u64, u8)>,
+    /// Report this charge instead of the host's. For testing the gauge at a known level.
+    pub battery_override: Option<u8>,
+    /// Treat an async open whose request carries a buffer as a whole-file load.
+    ///
+    /// Off by default. Lost needs it — it hands `#3` a 512 KB buffer and never issues a read,
+    /// going straight to collecting the data when the completion arrives. Minigolf must NOT have
+    /// it: it opens each `c00bank/*.wav` with a 44-byte buffer for the header and then reads
+    /// through `#2`, and pre-filling that buffer perturbs the sequence enough to silence its
+    /// sound effects. Which request field distinguishes the two is not yet known — Lost's carries
+    /// `2` at +0x1c — so this stays an explicit choice rather than a guess made per request.
+    pub load_on_open: bool,
+    /// The current model-view-projection matrix, column-major, from `glUniformMatrix4fv` at
+    /// location 0. `None` until a game uploads one, in which case vertices are already in screen
+    /// coordinates and are used as they are.
+    pub mvp: Option<[f32; 16]>,
+    /// The per-draw modulate colour from `glUniform4xvAPPLE`, RGBA in 0..1.
+    pub modulate: [f32; 4],
+    /// The last texture name handed out by `glGenTextures`. Starts at 0 so the first name is 1.
+    next_texture_name: u32,
+    /// Whether the game already works in top-left screen coordinates, so the rasteriser must not
+    /// flip Y a second time.
+    pub proj_flips_y: bool,
+    /// The course whose assets are loaded, e.g. `c00`. Names the sound bank.
+    pub course: String,
+    /// Where each file's bytes were copied to: `(start, end, file name)`.
+    ///
+    /// A sound effect is handed to RetailOS as a bare pointer — `Audio #7` takes the PCM address
+    /// and nothing else — so the only way to know WHICH sound is being played is to remember
+    /// which file's contents live at that address. Newest first, so a buffer reused by a later
+    /// load resolves to the later file.
+    pub file_extents: Vec<(u32, u32, String)>,
     /// Diagnostic log of file activity.
     pub file_log: Capped<String>,
+    /// Async file requests accepted this frame, awaiting their completion callback.
+    ///
+    /// RetailOS queues an `AsyncFileIO` operation and calls the game's callback when it finishes;
+    /// see `Stub::AsyncOpen`. Nothing can call that callback from inside a stub — the guest is
+    /// mid-call — so the request is parked here and the frame loop drains it.
+    pub pending_completions: Vec<u32>,
+    /// Sound effects the game has asked to play, as file paths, for a host to sound. Drained by
+    /// the viewer, and kept apart from `audio_play_queue` because the two are different
+    /// subsystems on the device: effects come from a four-voice mixer pool, music from the iPod's
+    /// own player task, and only the effects are subject to the voice limit.
+    pub sfx_queue: Vec<(String, bool)>,
+    /// Effects the game has asked to stop. Drained by the viewer, which kills the voice.
+    pub sfx_stop_queue: Vec<String>,
+    /// The last name resolved by `miscTBD #14`, waiting for the `Audio #40` that consumes it.
+    pub pending_name: Option<String>,
+    /// The player's repeat mode, from `Audio #48`: 0 = off, 1 = one, 2 = all.
+    pub music_repeat: u8,
+    /// Registered audio streams, in the order `Audio #40` took them.
+    pub audio_streams: Vec<String>,
+    /// Streams the game has asked to play. Drained by the viewer.
+    pub audio_play_queue: Vec<String>,
+    /// Sound files in the order the game opened them, for titles that identify an effect only by
+    /// having opened it. See `Stub::AudioSfxRegister`.
+    pub sfx_files: Vec<String>,
+    /// Every texture name the game has ever bound. A texture that is uploaded but never bound is
+    /// art the game loaded and then did not draw — which is a different fault from drawing it
+    /// wrongly, and only this distinguishes them.
+    pub bound_ever: std::collections::BTreeSet<u32>,
+    /// Handles whose repeat count is zero, i.e. loop forever. See `Stub::SfxRepeat`.
+    pub sfx_loop: std::collections::HashSet<usize>,
+    /// Sound-descriptor fields, keyed `(handle, offset)`. See `Stub::AudioFieldSet` — RetailOS
+    /// keeps these inside a struct the game never sees, so a flat map is the same contract.
+    pub audio_fields: std::collections::HashMap<(u32, u32), u32>,
+    /// The 0..100 level behind `miscTBD #5`/`#6`. Zero until the game sets it, exactly as the
+    /// device's own zero-initialised singleton behaves.
+    pub device_level: u32,
+    /// What `Settings #0` answers. The language index is the 0..24 the callers jump-table on;
+    /// 0 is what every caller already reads today, so it is the default that changes nothing.
+    pub language: u32,
+    pub time_format_24: bool,
+    /// `glActiveTexture`'s unit, and whether the "only unit 0 is modelled" note has been said.
+    pub active_texture_unit: u32,
+    warned_texture_unit: bool,
+    /// `glPixelStorei` alignments, GL's own defaults of 4 until a title says otherwise.
+    pub unpack_alignment: u32,
+    pub pack_alignment: u32,
+    /// Write the request's buffer to disk when a file is merely OPENED for writing. Off by
+    /// default now that op 3 does the writing where RetailOS does it.
+    pub write_on_open: bool,
+    /// Report zero rather than the handle in `[obj+8]` after a bufferless open.
+    pub zero_open_result: bool,
+    /// Treat op 3 as the write RetailOS says it is, rather than as "advance by len".
+    pub op3_writes: bool,
+    /// Dispatch async operations on `[req+0x04]` the way RetailOS's worker does.
+    pub op_dispatch: bool,
+    /// Report the file's size in `[req+0x24]` on a bufferless open. Speculative — RetailOS's
+    /// op-1 handler at `0x001e3cec` writes only `[req+0x2c]` and `[req+0x20]`.
+    pub size_on_open: bool,
+    /// Whether each open handle was opened for writing. Indexed like `open_files`.
+    pub open_writable: Vec<bool>,
+    /// Leave a read that has neither a buffer nor a length uncompleted. See `Stub::AsyncRead`.
+    pub drop_empty_reads: bool,
+    /// Collapse repeat completions on one request object. See `queue_completion`.
+    pub merge_completions: bool,
+    /// Allocation instrumentation, behind `EAPP_LOG_ALLOC=1`. See `alloc`.
+    /// Which built-in pipeline `#159` last selected.
+    pub pipeline: u32,
+    /// `EAPP_NO_MODULATE=1` — ignore the constant colour register entirely.
+    pub no_modulate: bool,
+    pub log_alloc: bool,
+    /// Extra bytes delivered past a read's length, for `EAPP_READAHEAD`.
+    pub readahead: u32,
+    /// `EAPP_NO_READ_POS=1` — do not publish the new position after a catch-all read.
+    pub no_read_pos: bool,
+    /// `EAPP_SEEK_RETURNS_ZERO=1` — restore the old "a seek returns 0" behaviour.
+    pub seek_returns_zero: bool,
+    /// `EAPP_HANDLE_OPEN_RESULT=1` — leave the handle in `[obj+8]` after a bufferless open.
+    pub handle_open_result: bool,
+    /// `EAPP_NO_READ_RESULT2=1` — do not publish the byte count at `+0x24` after a transfer.
+    pub no_read_result2: bool,
+    /// `EAPP_LENIENT_READ_LEN=1` — treat a short read as a successful operation.
+    pub lenient_read_len: bool,
+    /// `EAPP_NO_PARTIAL_LOAD=1` — refuse to fill a load-on-open buffer smaller than the file.
+    pub no_partial_load: bool,
+    /// Largest buffer treated as a header probe worth filling (`EAPP_PARTIAL_LOAD_MAX`).
+    pub partial_load_max: u32,
+    pub alloc_census: std::collections::BTreeMap<u32, u64>,
+    pub free_census: std::collections::BTreeMap<u32, u64>,
+    pub free_rejected: u64,
+    /// Lines the game printed through `miscTBD #3`. Echoed to stderr as they arrive; kept so a
+    /// caller that runs headless can still read them.
+    pub printf_lines: Vec<String>,
+    /// The file behind each sound-effect handle, indexed BY handle. `Audio #0` appends an empty
+    /// slot and `Audio #7` fills it in once the game points the descriptor at its PCM.
+    pub sfx_handles: Vec<String>,
+    /// Our host handle for each game-side file object, keyed on `request+0x08`.
+    pub handles_by_obj: HashMap<u32, u32>,
     /// Diagnostic log of uploads and draws.
     pub tex_log: Capped<String>,
     /// Decoded textures, keyed by the name passed to `glBindTexture`.
     textures: std::collections::HashMap<u32, Texture>,
+    /// Which vertex attribute arrays are currently enabled.
+    attr_enabled: [bool; 8],
+    /// Draw colour-keyed texels anyway — a diagnostic, to tell "sampled transparent" apart from
+    /// "never drawn".
+    pub ignore_colour_key: bool,
+    /// Drive `miscTBD #9` from real elapsed time rather than a fixed step per call.
+    pub wall_clock: bool,
+    /// When the machine started, for `wall_clock`.
+    pub started: Option<std::time::Instant>,
+    /// `glBindTexture`'s target per texture name — GL_TEXTURE_2D means normalised coordinates.
+    texture_target: std::collections::HashMap<u32, u32>,
     bound_texture: u32,
+    /// The texture bound to UNIT 0, which is the one draws sample.
+    ///
+    /// `bound_texture` follows `glActiveTexture`, because an upload targets whatever the active
+    /// unit has bound. The rasteriser models one unit, so a game that binds a second texture to
+    /// unit 1 and then draws must still see unit 0's — Vortex does exactly that, and sharing one
+    /// field meant the unit-1 bind silently replaced the texture the draw was meant to sample.
+    /// For the titles that never call `glActiveTexture` this tracks `bound_texture` exactly.
+    bound_texture_u0: u32,
+    /// What unit 1 has bound, for diagnostics — the rasteriser does not sample it.
+    bound_texture_u1: u32,
+    /// Pipeline ids whose fragment program ADDS rather than replaces. See the blend step.
+    pub additive_pipes: std::collections::HashSet<u32>,
     /// Vertex arrays registered by `glVertexAttribPointer`, indexed by attribute number.
     arrays: [Option<VertexArray>; 8],
     /// Quads actually rasterised.
@@ -2945,6 +3851,18 @@ impl Machine {
                     base: HEAP_BASE,
                     data: vec![0; HEAP_SIZE],
                 },
+                // The PP5022's on-chip IRAM. A game running as an eApp still uses it: Sudoku
+                // keeps a state flag at 0x4000003d and writes it with `strb r7,[r4]` at
+                // 0x180313dc. Unmapped, that write went nowhere and the flag read back as zero
+                // forever, so the game re-ran its whole initialisation — including creating a
+                // ~10 KB screen object — on EVERY frame until its own 5.24 MB pool was exhausted
+                // and its allocator returned null. That is the `Lost(0)` crash shared by Sudoku,
+                // Solitaire, SimsBowling and SimsPool.
+                Region {
+                    name: "iram",
+                    base: IRAM_BASE,
+                    data: vec![0; IRAM_SIZE],
+                },
             ],
             unmapped: BTreeMap::new(),
             aliases: Vec::new(),
@@ -3081,10 +3999,85 @@ impl Machine {
             watch_log: Capped::new(4096),
             game_dir: None,
             open_files: Vec::new(),
+            open_paths: Vec::new(),
+            rewind_after_load: true,
+            allow_creates: false,
+            writable: Vec::new(),
+            load_on_open: false,
+            tz_offset: None,
+            battery: None,
+            battery_override: None,
+            mvp: None,
+            modulate: [1.0; 4],
+            next_texture_name: 0,
+            proj_flips_y: false,
+            course: String::from("c00"),
+            file_extents: Vec::new(),
             file_log: Capped::new(4096),
-            tex_log: Capped::new(64),
+            pending_completions: Vec::new(),
+            sfx_queue: Vec::new(),
+            sfx_stop_queue: Vec::new(),
+            pending_name: None,
+            music_repeat: 0,
+            audio_streams: Vec::new(),
+            audio_play_queue: Vec::new(),
+            sfx_files: Vec::new(),
+            bound_ever: std::collections::BTreeSet::new(),
+            sfx_loop: std::collections::HashSet::new(),
+            audio_fields: std::collections::HashMap::new(),
+            device_level: 0,
+            write_on_open: std::env::var("EAPP_WRITE_ON_OPEN").is_ok(),
+            zero_open_result: std::env::var("EAPP_ZERO_OPEN_RESULT").is_ok(),
+            op3_writes: std::env::var("EAPP_OP3_WRITES").is_ok(),
+            op_dispatch: std::env::var("EAPP_NO_OP_DISPATCH").is_err(),
+            size_on_open: std::env::var("EAPP_SIZE_ON_OPEN").is_ok(),
+            open_writable: Vec::new(),
+            drop_empty_reads: std::env::var("EAPP_DROP_EMPTY_READS").is_ok(),
+            merge_completions: std::env::var("EAPP_MERGE_COMPLETIONS").is_ok(),
+            pipeline: 0,
+            no_modulate: std::env::var("EAPP_NO_MODULATE").is_ok(),
+            log_alloc: std::env::var("EAPP_LOG_ALLOC").is_ok(),
+            readahead: std::env::var("EAPP_READAHEAD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+            no_read_pos: std::env::var("EAPP_NO_READ_POS").is_ok(),
+            seek_returns_zero: std::env::var("EAPP_SEEK_RETURNS_ZERO").is_ok(),
+            handle_open_result: std::env::var("EAPP_HANDLE_OPEN_RESULT").is_ok(),
+            no_read_result2: std::env::var("EAPP_NO_READ_RESULT2").is_ok(),
+            lenient_read_len: std::env::var("EAPP_LENIENT_READ_LEN").is_ok(),
+            no_partial_load: std::env::var("EAPP_NO_PARTIAL_LOAD").is_ok(),
+            partial_load_max: std::env::var("EAPP_PARTIAL_LOAD_MAX")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(u32::MAX),
+            alloc_census: std::collections::BTreeMap::new(),
+            free_census: std::collections::BTreeMap::new(),
+            free_rejected: 0,
+            language: 0,
+            time_format_24: false,
+            active_texture_unit: 0,
+            warned_texture_unit: false,
+            unpack_alignment: 4,
+            pack_alignment: 4,
+            printf_lines: Vec::new(),
+            sfx_handles: Vec::new(),
+            handles_by_obj: HashMap::new(),
+            tex_log: Capped::new(200000),
             textures: std::collections::HashMap::new(),
+            // Nothing is enabled until the title says so.
+            attr_enabled: [false; 8],
+            ignore_colour_key: false,
+            wall_clock: false,
+            started: None,
+            texture_target: std::collections::HashMap::new(),
             bound_texture: 0,
+            bound_texture_u0: 0,
+            bound_texture_u1: 0,
+            additive_pipes: std::env::var("EAPP_ADDITIVE_PIPES")
+                .ok()
+                .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
+                .unwrap_or_default(),
             arrays: Default::default(),
             quads_drawn: 0,
             framebuffer: [255u8, 0, 255]
@@ -3133,6 +4126,405 @@ impl Machine {
                 break;
             }
             out.push(c as char);
+        }
+        out
+    }
+
+    /// Install the stubs the §18.0 coverage audit settled, in one place for every front end.
+    ///
+    /// `play` and `trace` had drifted to 61 and 31 `set_stub` calls respectively, which meant a
+    /// finding could be true in the viewer and absent from the headless tool that is supposed to
+    /// measure it. Everything the audit adds goes here instead.
+    pub fn install_audit_stubs(&mut self) {
+        // `EAPP_AUDIT_SKIP=audio,misc,gl` leaves a group unimplemented. This exists because a
+        // batch of stubs that lands together cannot be bisected afterwards, and the first one
+        // that went in did break a title — being able to halve the set in one run is worth an
+        // environment variable.
+        let skip = std::env::var("EAPP_AUDIT_SKIP").unwrap_or_default();
+        let skipping = |g: &str| skip.split(',').any(|s| s.trim() == g);
+        if !skip.is_empty() {
+            eprintln!("audit stubs: skipping {skip}");
+        }
+        if !skipping("audio") {
+            self.install_audit_audio();
+        }
+        if !skipping("gl") {
+            self.install_audit_gl();
+        }
+        if !skipping("misc") {
+            self.install_audit_misc();
+        }
+        if !skipping("metadata") {
+            self.install_audit_metadata();
+        }
+        if !skipping("twa") {
+            self.install_audit_twa();
+        }
+    }
+
+    fn install_audit_audio(&mut self) {
+        // The sound-descriptor block. Apple's are all `lookup(handle); store one field; return`,
+        // so they are pure state; see `Stub::AudioFieldSet` for where each offset comes from.
+        // Written out one per line rather than looped over a table because `covscan` reads this
+        // file to decide what is implemented, and a loop hides the ordinals from it.
+        let set = |off, byte| Stub::AudioFieldSet { handle: 0, value: 1, off, byte };
+        self.set_stub("Audio", 8, set(0x08, false));
+        self.set_stub("Audio", 9, set(0x0c, true));
+        self.set_stub("Audio", 10, set(0x10, false));
+        self.set_stub("Audio", 11, set(0x14, false));
+        self.set_stub("Audio", 12, set(0x18, false));
+        self.set_stub("Audio", 13, set(0x1c, false));
+        self.set_stub("Audio", 14, set(0x24, false));
+        self.set_stub("Audio", 15, set(0x20, false));
+        self.set_stub("Audio", 17, set(0x3d, true));
+        self.set_stub("Audio", 18, set(0x3e, true));
+        self.set_stub("Audio", 23, Stub::AudioFieldGet { handle: 0, off: 0x04 });
+        // The transport trio. See `Stub::AudioSetState` for why `#5` is the one that stops.
+        let st = |state, stops_voice| Stub::AudioSetState { handle: 0, state, stops_voice };
+        self.set_stub("Audio", 3, st(2, false));
+        self.set_stub("Audio", 4, st(1, false));
+        self.set_stub("Audio", 5, st(3, true));
+        self.set_stub("Audio", 20, set(0x28, false));
+        self.set_stub("Audio", 39, Stub::AudioIsState { handle: 0, state: 1 });
+        self.set_stub("Audio", 1, Stub::AudioRelease { handle: 0 });
+
+        // The rest of the Audio surface is the iPod's OWN music player, not the game's sound
+        // engine, and it divides cleanly in two. Neither half can do anything here, and saying so
+        // explicitly is the point: these are answered correctly, not left unanswered.
+        //
+        // Commands post a message to the player task and return. `0x001301a0` allocates a 12-byte
+        // message, `0x001300f4` fills in an id and payload, `0x0012e520` finds the task and
+        // `0x0012d930` posts it. There is no player task in this emulator to receive them.
+        //
+        //   #41 -> 0x6600000e   #44 -> 0x66000012   #45 -> 0x66000015   #46 -> 0x66000013
+        //   #42 -> 0x66000010   #50 -> 0x66000016   #53 -> 0x66000019 (volume, arg scaled to 255)
+        self.set_stub("Audio", 41, Stub::ReturnZero);
+        self.set_stub("Audio", 42, Stub::ReturnZero);
+        self.set_stub("Audio", 44, Stub::ReturnZero);
+        self.set_stub("Audio", 45, Stub::ReturnZero);
+        self.set_stub("Audio", 46, Stub::ReturnZero);
+        self.set_stub("Audio", 50, Stub::ReturnZero);
+        self.set_stub("Audio", 53, Stub::ReturnZero);
+        // Queries read the player's state through `[[0x1081da18]+0x1c]`. With nothing playing,
+        // every one of them answers 0 on the device too — `#51` in particular computes
+        // `min(pos,len)*255/len`, a 0..255 progress ratio, which is 0 before playback starts.
+        self.set_stub("Audio", 47, Stub::Value(0));
+        self.set_stub("Audio", 49, Stub::Value(0));
+        self.set_stub("Audio", 51, Stub::Value(0));
+        // `#52` is the *denominator* of that same ratio. MEASURED: Apple's implementation at
+        // `0x00268890` is literally `mov r0,#0xff; bx lr` — it returns 255 unconditionally.
+        //
+        // This lived only in `play` for a long time, so `trace` answered 0 here and diverged from
+        // the viewer on any title that divides by it. Texas Hold'em does, in its frame vector:
+        //
+        //   1800acec  bl 0x180067bc            ; wraps Audio #52
+        //   1800acf0  mov r5, r0               ; divisor
+        //   1800acf4  bl 0x18004d18            ; wraps Audio #51
+        //   1800acf8  rsb r0, r0, r0, lsl #8   ; r0 * 255
+        //   1800ad00  bl 0x18001a2c            ; (pos * 255) / len   <- Divide By Zero at 0
+        //
+        // With 255 the frame vector runs to completion instead of aborting after 281k
+        // instructions: heap 328K -> 2.6M, and the first frame reaches the screen.
+        self.set_stub("Audio", 52, Stub::Value(0xff));
+        self.set_stub("Audio", 55, Stub::Value(0));
+        self.set_stub("Audio", 56, Stub::Value(0));
+        self.set_stub("Audio", 60, Stub::Value(0));
+        // `#37` reads the descriptor's attached voice at `+0x34` and returns 0 when there is
+        // none — `moveq r0,#0` is in Apple's code. No voice object exists here, ever.
+        self.set_stub("Audio", 37, Stub::Value(0));
+    }
+
+    fn install_audit_gl(&mut self) {
+        self.set_stub("OpenGLES", 0, Stub::GlActiveTexture);
+        self.set_stub("OpenGLES", 84, Stub::GlPixelStore);
+        // `#53 glGetError` reads and zeroes `ctx+0x88` and nothing in this emulator ever sets an
+        // error, so 0 — GL_NO_ERROR — is the answer, not a placeholder. Minigolf calls it 24
+        // times, once after each group of GL calls.
+        self.set_stub("OpenGLES", 53, Stub::Value(0));
+        // `#35 glDisable` is a real no-op HERE rather than an unimplemented one. Scanning every
+        // call site in all eighteen binaries for the enum in r0 turns up exactly two values:
+        // GL_CULL_FACE (0x0B44, seven titles) and GL_DEPTH_TEST (0x0B71, Pac-Man). This
+        // rasteriser has neither — it paints quads in submission order — so switching them off
+        // is already its behaviour. Nothing disables GL_BLEND, which is the one that WOULD
+        // matter, and `#39 glEnable` is not called by any title at all.
+        self.set_stub("OpenGLES", 35, Stub::ReturnZero);
+        // `#101 glTexParameterf` validates GL_TEXTURE_MIN_FILTER / MAG_FILTER / WRAP_S / WRAP_T
+        // and then throws them away — the shared validator at 0x00107a58 is pure, and only
+        // GL_TEXTURE_PRIORITY reaches the hardware (§18.3). Sampling on this device is
+        // fixed-function bilinear over texel coordinates no matter what a game asks for.
+        self.set_stub("OpenGLES", 101, Stub::ReturnZero);
+    }
+
+    /// Metadata, as an **empty music library** — which is a real device state, not a placeholder.
+    ///
+    /// Only two titles reach this framework: molly (23 ordinals) and TWA (15). Both browse the
+    /// iPod's own library, and there is no iTunesDB behind this emulator, so the honest answer to
+    /// "how many artists are there" is zero and the honest answer to "give me track 0" is
+    /// out-of-range. An iPod with no music on it reports exactly this.
+    ///
+    /// Three values here are not zero, and each would be a bug if it were:
+    ///
+    /// * `#0 MusicLibraryCreate` returns a **handle**, `-1` on failure. Zero is a plausible
+    ///   Tracker index, so a distinct non-zero handle keeps "created" distinguishable from
+    ///   "failed" no matter which convention the caller assumes.
+    /// * `#125` is the now-playing **current index**, and `-1` means "none" (§11.5:
+    ///   `ldr r0,[r0,#0x14] ; bx lr`, and the field is initialised to `-1` by `#119 Clear`).
+    ///   Zero would claim the first track of an empty queue is playing.
+    /// * `#53`/`#54`/`#55`/`#58` return **`-50`** for an out-of-range index — measured, and
+    ///   §11.7 flags it specifically as a value a port must copy rather than invent. Every index
+    ///   into an empty library is out of range.
+    ///
+    /// `#43` is the one place where zero is right for a subtle reason: it returns the playlist
+    /// count **minus one**, excluding the master library playlist at index 0. An empty library
+    /// still has that one playlist, so 1 - 1 = 0.
+    ///
+    /// Wiring a real library in later means replacing this function, not extending it — the
+    /// project already has an iTunesDB parser (§11.4 measures `STrack` against it).
+    fn install_audit_metadata(&mut self) {
+        self.set_stub("Metadata", 0, Stub::Value(1)); // MusicLibraryCreate -> handle
+        self.set_stub("Metadata", 2, Stub::Value(2)); // ArtworkLibraryCreate -> handle
+        self.set_stub("Metadata", 125, Stub::Value(u32::MAX)); // current index = none
+
+        // Out-of-range index: artist/album/genre name-at-index, and track-at-index.
+        let oor = Stub::Value(0u32.wrapping_sub(50));
+        self.set_stub("Metadata", 53, oor.clone());
+        self.set_stub("Metadata", 54, oor.clone());
+        self.set_stub("Metadata", 55, oor.clone());
+        self.set_stub("Metadata", 58, oor);
+
+        // `(handle, char *buf, int *len)` getters. See `Stub::EmptyString` — the terminator
+        // matters more than the return value.
+        let s = || Stub::EmptyString { buf: 1, len: 2 };
+        self.set_stub("Metadata", 65, s()); // track path
+        self.set_stub("Metadata", 66, s()); // title
+        self.set_stub("Metadata", 67, s()); // album
+        self.set_stub("Metadata", 68, s()); // artist
+        self.set_stub("Metadata", 69, s()); // genre
+        self.set_stub("Metadata", 74, s()); // a further pooled string
+        self.set_stub("Metadata", 114, s()); // playlist name
+        self.set_stub("Metadata", 118, s()); // filter name
+
+        // Everything else the two titles touch answers zero, and zero is the empty library's
+        // real answer: no counts, no handles, nothing valid, and the void-returning setters,
+        // releases and browse-mode switches have nothing to act on.
+        //
+        //   1 3 5 13 60      releases and destructors      -> void
+        //   4 11 17 108      handles into an empty store   -> none
+        //   6 63             IsValid                       -> false
+        //   29 30 31 32 33 34 36 39 46 47 48 51 52 119 127 setters/filters -> void
+        //   40 41 42 43 45   counts                        -> 0 (see #43 above)
+        //   59               track by persistent ID        -> none
+        //   64 84 85 88 93 133 149  numeric STrack getters -> 0
+        // Written out one per line, not looped, so `covscan` can see them (it reads this file).
+        let z = Stub::ReturnZero;
+        self.set_stub("Metadata", 1, z.clone());
+        self.set_stub("Metadata", 3, z.clone());
+        self.set_stub("Metadata", 4, z.clone());
+        self.set_stub("Metadata", 5, z.clone());
+        self.set_stub("Metadata", 6, z.clone());
+        self.set_stub("Metadata", 11, z.clone());
+        self.set_stub("Metadata", 13, z.clone());
+        self.set_stub("Metadata", 17, z.clone());
+        self.set_stub("Metadata", 29, z.clone());
+        self.set_stub("Metadata", 30, z.clone());
+        self.set_stub("Metadata", 31, z.clone());
+        self.set_stub("Metadata", 32, z.clone());
+        self.set_stub("Metadata", 33, z.clone());
+        self.set_stub("Metadata", 34, z.clone());
+        self.set_stub("Metadata", 36, z.clone());
+        self.set_stub("Metadata", 39, z.clone());
+        self.set_stub("Metadata", 40, z.clone());
+        self.set_stub("Metadata", 41, z.clone());
+        self.set_stub("Metadata", 42, z.clone());
+        self.set_stub("Metadata", 43, z.clone());
+        self.set_stub("Metadata", 45, z.clone());
+        self.set_stub("Metadata", 46, z.clone());
+        self.set_stub("Metadata", 47, z.clone());
+        self.set_stub("Metadata", 48, z.clone());
+        self.set_stub("Metadata", 51, z.clone());
+        self.set_stub("Metadata", 52, z.clone());
+        self.set_stub("Metadata", 59, z.clone());
+        self.set_stub("Metadata", 60, z.clone());
+        self.set_stub("Metadata", 63, z.clone());
+        self.set_stub("Metadata", 64, z.clone());
+        self.set_stub("Metadata", 84, z.clone());
+        self.set_stub("Metadata", 85, z.clone());
+        self.set_stub("Metadata", 88, z.clone());
+        self.set_stub("Metadata", 93, z.clone());
+        self.set_stub("Metadata", 108, z.clone());
+        self.set_stub("Metadata", 119, z.clone());
+        self.set_stub("Metadata", 127, z.clone());
+        self.set_stub("Metadata", 133, z.clone());
+        self.set_stub("Metadata", 149, z);
+    }
+
+    /// The five ordinals only TWA reaches. Accepted, and honestly labelled.
+    ///
+    /// TWA does not boot, so none of these has ever executed. That matters for how far the
+    /// reading below is taken: each one is identified from Apple's implementation, and none is
+    /// given behaviour that a trace has not been able to confirm.
+    ///
+    /// * **`AsyncFileIO #10`** — `0x00268260` tail-calls `0x0029d6e0(tracker, handle)`, the same
+    ///   bounds-check-then-virtual-destructor shape as `Audio #1`. A release. Nothing here holds
+    ///   the object it would destroy, so zero is the whole of it.
+    /// * **`AsyncFileIO #9`** — `0x0026829c` queues a four-parameter operation through
+    ///   `0x001e410c`. Accepted, like `#12`/`#14`/`#16`.
+    /// * **`AsyncFileIO #7`** — `0x002682d0` does `and r1, r0, #0xff` before calling
+    ///   `0x001e3b48`, and a mode in the low byte of argument 0 is precisely how `#0` and `#3`
+    ///   open a file (§19). So this is a **fourth open variant** taking four arguments. It is NOT
+    ///   wired to the file layer: which register carries the path and which the out-handle cannot
+    ///   be read off the shim, and the one title that calls it has never got there. Guessing
+    ///   would hand the game a handle to the wrong file rather than no handle at all.
+    /// * **`OpenGLES #160`** — `0x0026b214(slot<8, size>=0x38, data)` allocates a pair of
+    ///   0x1c-byte descriptors in the tables at `0x1084bb44`/`0x1084bb84` and copies a program
+    ///   image out of `data`: **uploading a custom pipeline** into one of eight user slots, the
+    ///   counterpart to `#159` selecting one of the fifty built-in programs (§17). This
+    ///   rasteriser executes no programs at all, built-in or otherwise — it reads the pipeline
+    ///   table to learn a program's *shape*. Accepting the upload is as far as that goes.
+    /// * **`OpenGLES #168`** — `0x0027369c` runs its arguments through the double-precision
+    ///   soft-float library (`0x002a8418`, `0x002a929c`, `0x002a7900`, `0x002a71cc`,
+    ///   `0x002a6e08`), so it builds a matrix in doubles. Which matrix is not established.
+    fn install_audit_twa(&mut self) {
+        self.set_stub("AsyncFileIO", 10, Stub::ReturnZero);
+        self.set_stub("AsyncFileIO", 9, Stub::Value(1));
+        self.set_stub("AsyncFileIO", 7, Stub::Value(1));
+        self.set_stub("OpenGLES", 160, Stub::Value(1));
+        self.set_stub("OpenGLES", 168, Stub::Value(1));
+    }
+
+    fn install_audit_misc(&mut self) {
+        self.set_stub("Settings", 0, Stub::SettingGet { name: 0, out: 1, size: 2 });
+        self.set_stub("miscTBD", 3, Stub::Printf { fmt: 0, first_vararg: 1 });
+        self.set_stub("miscTBD", 5, Stub::DeviceLevelSet { arg: 0 });
+        self.set_stub("miscTBD", 6, Stub::DeviceLevelGet);
+        // The one that was actually wrong: `mov r0,#0x3e8; bx lr` returns 1000, and we answered
+        // 0 to seventeen of the eighteen titles.
+        self.set_stub("miscTBD", 10, Stub::Value(1000));
+
+        // Verified no-ops rather than unimplemented ones, recorded so the audit stops counting
+        // them as gaps. `#7` stores an enable byte the device consults later and no getter
+        // exposes; `#11` is `mov r0,#0; bx lr`; `InputEvents #1` posts a system message to a
+        // player task we do not have; `Filesytem #1` unregisters a handle from a table only
+        // RetailOS reads.
+        self.set_stub("miscTBD", 7, Stub::ReturnZero);
+        self.set_stub("miscTBD", 11, Stub::Value(0));
+        // `#2` is realloc: `r0` = the old block, `r1` = the new size.
+        //
+        // The engine's wrapper at Vortex's `0x18000fac` shows the contract — a null old pointer
+        // tail-calls malloc (`#0`), a zero size tail-calls free — but not the register order:
+        // it ends `b 0x18020d90`, and whatever that does to the arguments, what arrives at the
+        // import is (old, size). MEASURED, not read off that branch: with `(r0, r1)` Vortex's
+        // `text.strings` keys come out as 602, 603, 700, 800, 900 — the real keys; with
+        // `(r1, r2)` they come out 0, 1, 2, i.e. only the last character of each, because the
+        // accumulator is handed a fresh block on every append.
+        //
+        // Left unbound it answered 0, and a NULL realloc is not benign here: every key was NULL,
+        // `atoi` read address 0, and the parser — which stops when a key fails to reach -1, the
+        // file's last line being `"-1"="";` — never terminated.
+        self.set_stub("miscTBD", 2, Stub::Realloc { ptr: 0, size: 1 });
+        self.set_stub("InputEvents", 1, Stub::ReturnZero);
+        self.set_stub("Filesytem", 1, Stub::ReturnZero);
+    }
+
+    /// Format a `miscTBD #3` call the way the OS formatter at `0x00286860` would.
+    ///
+    /// The argument list follows the ARM procedure standard: registers `first..=3`, then the
+    /// caller's stack upwards from `sp`. This runs at the thunk, before any prologue, so `sp`
+    /// still points at the caller's outgoing arguments.
+    ///
+    /// Unknown conversions are emitted verbatim rather than guessed at, and no argument is
+    /// consumed for them — a wrong guess would desynchronise every later conversion in the line
+    /// and quietly corrupt output that exists precisely to be trusted.
+    fn format_printf(&mut self, fmt_addr: u32, first: usize) -> String {
+        let fmt = self.read_cstr(fmt_addr, 512);
+        let mut next = first;
+        let mut out = String::new();
+        let mut it = fmt.chars().peekable();
+
+        while let Some(c) = it.next() {
+            if c != '%' {
+                out.push(c);
+                continue;
+            }
+            // Flags, width and precision, kept so the spec can be echoed if it turns out to be
+            // one this does not implement.
+            let mut spec = String::from("%");
+            while let Some(&f) = it.peek() {
+                if "-+ #0".contains(f) || f.is_ascii_digit() || f == '.' || f == '*' {
+                    spec.push(f);
+                    it.next();
+                } else {
+                    break;
+                }
+            }
+            let mut length = String::new();
+            while matches!(it.peek(), Some('h') | Some('l') | Some('L') | Some('z')) {
+                length.push(*it.peek().unwrap());
+                it.next();
+            }
+            let Some(conv) = it.next() else {
+                out.push_str(&spec);
+                break;
+            };
+            if conv == '%' {
+                out.push('%');
+                continue;
+            }
+
+            let arg = {
+                let v = if next <= 3 {
+                    self.cpu.regs[next]
+                } else {
+                    let sp = self.cpu.regs[13];
+                    self.mem.read32(sp.wrapping_add(4 * (next as u32 - 4)))
+                };
+                next += 1;
+                v
+            };
+            // Width and precision are honoured only for the padding cases that actually appear;
+            // anything more elaborate prints unpadded rather than wrongly.
+            let width: usize = spec[1..]
+                .trim_start_matches(['-', '+', ' ', '#', '0'])
+                .split('.')
+                .next()
+                .unwrap_or("")
+                .parse()
+                .unwrap_or(0);
+            let zero = spec.contains('0') && !spec[1..].starts_with(|c: char| c.is_ascii_digit() && c != '0');
+            let left = spec.contains('-');
+            let body = match conv {
+                'd' | 'i' => (arg as i32).to_string(),
+                'u' => arg.to_string(),
+                'x' => format!("{arg:x}"),
+                'X' => format!("{arg:X}"),
+                'p' => format!("0x{arg:08x}"),
+                'o' => format!("{arg:o}"),
+                'c' => char::from_u32(arg & 0xff).unwrap_or('?').to_string(),
+                's' => {
+                    if arg == 0 {
+                        "(null)".to_string()
+                    } else {
+                        self.read_cstr(arg, 256)
+                    }
+                }
+                // Soft floats: the games are compiled without an FPU, so a `%f` argument arrives
+                // as an IEEE-754 word in the integer register.
+                'f' | 'g' | 'e' => format!("{}", f32::from_bits(arg)),
+                _ => {
+                    next -= 1; // not consumed — see the note above
+                    spec.push_str(&length);
+                    spec.push(conv);
+                    spec
+                }
+            };
+            let pad = width.saturating_sub(body.chars().count());
+            if left {
+                out.push_str(&body);
+                out.extend(std::iter::repeat(' ').take(pad));
+            } else {
+                out.extend(std::iter::repeat(if zero { '0' } else { ' ' }).take(pad));
+                out.push_str(&body);
+            }
         }
         out
     }
@@ -3202,6 +4594,14 @@ impl Machine {
                 "ipd" => decode_ipd(&d),
                 // Ms. Pac-Man ships headerless RGB565 — dimensions come from the file size.
                 "bin" => decode_raw_rgb565(&d),
+                // Tetris and Cubis 2 ship BMPs under a `.pix` extension. See `decode_bmp`.
+                //
+                // `EAPP_TEX_SKIP_PIX=1` puts the numbering back to what it was before these
+                // decoded, because adding a format SHIFTS every index after it and the base
+                // itself is still unresolved (see `tex_base`). Cubis 2 renders with `.ipd`
+                // indices that were assigned while `.pix` was being skipped, so the two states
+                // have to stay comparable until one of them is shown to be right.
+                "pix" | "bmp" if std::env::var("EAPP_TEX_SKIP_PIX").is_err() => decode_bmp(&d),
                 _ => None,
             };
             let Some((w, h, rgba)) = decoded else {
@@ -3213,7 +4613,7 @@ impl Machine {
                 "tex#{name} <- {} ({w}x{h}, .{ext})",
                 path.file_name().unwrap_or_default().to_string_lossy()
             ));
-            self.textures.insert(name, Texture { w, h, rgba });
+            self.textures.insert(name, Texture { w, h, rgba, alpha_only: false });
         }
         loaded
     }
@@ -3223,6 +4623,36 @@ impl Machine {
     /// Lookup is case-insensitive and tries the basename as a fallback, because the games ask
     /// for paths as they appeared on a FAT32 volume and the layout on disk here is not
     /// guaranteed to match byte for byte.
+    /// Resolve `rel` under `root` one component at a time, case-insensitively.
+    ///
+    /// The games were authored against a FAT32 volume, so they mix `Textures/` with `textures/`
+    /// and `EN.LPROJ` with `en.lproj` freely. A plain `root.join(rel)` works on macOS by accident
+    /// (HFS+/APFS are usually case-insensitive) and fails on a case-sensitive volume; doing it
+    /// explicitly keeps the loader honest on both. Returns `None` if any component is missing,
+    /// which is the signal to fall back to the basename search.
+    fn resolve_ci(root: &std::path::Path, rel: &str) -> Option<std::path::PathBuf> {
+        let mut at = root.to_path_buf();
+        for part in rel.split('/').filter(|p| !p.is_empty() && *p != ".") {
+            if part == ".." {
+                if !at.pop() {
+                    return None;
+                }
+                continue;
+            }
+            let direct = at.join(part);
+            if direct.exists() {
+                at = direct;
+                continue;
+            }
+            let want = part.to_ascii_lowercase();
+            let hit = std::fs::read_dir(&at).ok()?.flatten().find(|e| {
+                e.file_name().to_str().is_some_and(|n| n.to_ascii_lowercase() == want)
+            })?;
+            at = hit.path();
+        }
+        at.is_file().then_some(at)
+    }
+
     fn open_file(&mut self, name: &str) -> u32 {
         let Some(root) = self.game_dir.clone() else {
             return 0;
@@ -3235,27 +4665,43 @@ impl Machine {
             .unwrap_or(target)
             .to_ascii_lowercase();
 
-        let mut found = None;
-        let mut stack = vec![root];
-        while let Some(dir) = stack.pop() {
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    stack.push(p);
-                } else if p
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.to_ascii_lowercase() == base)
-                {
-                    found = Some(p);
-                    break;
+        // The path the game actually asked for, first. The basename walk below is a fallback for
+        // titles that hand over a mangled path (LOST doubles its soundbank directory), but it
+        // cannot be the primary rule: Hold'em ships eleven `Localization/*.lproj/strings.strings`
+        // and asks for `en.lproj`, and a basename match handed it whichever `.lproj` the
+        // directory iterator reached first — which is how an English build rendered "DRUK OP
+        // SELECTIE". Case-insensitively, because these are FAT32 volumes.
+        // `EAPP_LEGACY_OPEN=1` restores the basename-only search, so the two rules can be
+        // compared on one binary.
+        let legacy = std::env::var_os("EAPP_LEGACY_OPEN").is_some();
+        let mut found = if legacy { None } else { Self::resolve_ci(&root, target) };
+        if found.is_none() {
+            // Fallback: find the basename anywhere under the root. Directory order is not
+            // stable across filesystems, so visit in sorted order and take the shallowest
+            // match — otherwise the answer depends on how the volume happens to be laid out.
+            let mut level = vec![root];
+            'outer: while !level.is_empty() {
+                let mut next = Vec::new();
+                for dir in level {
+                    let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+                    let mut files: Vec<std::path::PathBuf> = Vec::new();
+                    for e in entries.flatten() {
+                        let p = e.path();
+                        if p.is_dir() { next.push(p) } else { files.push(p) }
+                    }
+                    files.sort();
+                    for p in files {
+                        if p.file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| n.to_ascii_lowercase() == base)
+                        {
+                            found = Some(p);
+                            break 'outer;
+                        }
+                    }
                 }
-            }
-            if found.is_some() {
-                break;
+                next.sort();
+                level = next;
             }
         }
 
@@ -3264,7 +4710,176 @@ impl Machine {
             return 0;
         };
         self.open_files.push((data, 0));
+        self.open_writable.push(false); // opened to READ — a write here is refused
+        // The FULL path, not the base name: sound effects live in `c00bank/`, and the player
+        // resolves what it is handed. A bare "0.wav" would not be found from the game directory.
+        let full = path.to_string_lossy().into_owned();
+        // Remember sound files in the order the game asks for them. A title that names its
+        // effects only by opening them — Pac-Man creates all sixteen descriptors up front and
+        // never calls the buffer setter — is matched by position: the Nth descriptor is the Nth
+        // sound opened. Deduplicated, because a game may re-open one while streaming it.
+        if full.to_ascii_lowercase().ends_with(".wav") && !self.sfx_files.contains(&full) {
+            self.sfx_files.push(full.clone());
+        }
+        self.open_paths.push(full);
+        // Which course's assets these are. Minigolf ships one sound bank per course — `c00bank/`,
+        // `c01bank/`, `c02bank/` — and its course files are named `c00`, `c000`, `c00.en` and so
+        // on, so the two digits after a leading `c` name the course that is currently loaded.
+        // Without this an effect from course 2 would play course 1's sound.
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            let b = name.as_bytes();
+            if b.len() >= 3 && b[0] == b'c' && b[1].is_ascii_digit() && b[2].is_ascii_digit() {
+                self.course = name[..3].to_string();
+            }
+        }
         self.open_files.len() as u32 // handles are 1-based; 0 means failure
+    }
+
+    /// Open a file for writing, creating it if it does not exist.
+    ///
+    /// `AsyncFileIO`'s open takes a mode in the low byte of its first argument: **0 reads, 1
+    /// writes**. Measured — Minigolf opens every asset with 0, and Bejeweled opens `Prefs` with 1,
+    /// gets a miss because the file has never existed, and retries forever. A game asking to
+    /// create its save file is not a failure, so a write-mode open must succeed.
+    ///
+    /// The file is created under the game directory, which is where a title's own data lives and
+    /// where it will look for it next launch.
+    fn open_file_write(&mut self, name: &str) -> u32 {
+        let Some(root) = self.game_dir.clone() else { return 0 };
+        // Only a plain relative name; never let a title write outside its own directory.
+        if name.is_empty() || name.contains("..") || name.starts_with('/') {
+            self.file_log.push(format!("write open {name:?} refused"));
+            return 0;
+        }
+        let path = root.join(name);
+        // Keep whatever is already there — a save file opened for writing is usually rewritten
+        // wholesale, but truncating on open would lose it if the game only meant to update it.
+        let data = std::fs::read(&path).unwrap_or_default();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if !path.exists() && std::fs::write(&path, &data).is_err() {
+            return 0;
+        }
+        self.open_files.push((data, 0));
+        self.open_writable.push(true);
+        self.open_paths.push(path.to_string_lossy().into_owned());
+        self.writable.push(true);
+        self.open_files.len() as u32
+    }
+
+    /// Write a loaded texture out as a PNG, so its contents can be looked at.
+    ///
+    /// A wrong-looking sprite has two very different causes — the coordinates are wrong, or the
+    /// decode is — and no amount of reading draw logs separates them. Seeing the atlas does.
+    /// Returns the pixel dimensions written.
+    pub fn dump_texture(&self, name: u32, path: &std::path::Path) -> Option<(usize, usize)> {
+        let t = self.textures.get(&name)?;
+        // The PNG encoder takes packed RGB; drop alpha onto a mid-grey so a transparent region is
+        // visibly distinct from a black one.
+        let mut rgb = Vec::with_capacity(t.w * t.h * 3);
+        for px in t.rgba.chunks_exact(4) {
+            let a = px[3] as u32;
+            for c in 0..3 {
+                let over = (px[c] as u32 * a + 0x80 * (255 - a)) / 255;
+                rgb.push(over as u8);
+            }
+        }
+        // Alpha is what the composited PNG cannot show, and it is usually the question being
+        // asked of a dump — a texel that looks like a solid colour may be a translucent overlay,
+        // or a colour key the alpha channel failed to mark.
+        let at = |x: usize, y: usize| -> String {
+            let o = (y.min(t.h - 1) * t.w + x.min(t.w - 1)) * 4;
+            format!(
+                "({x},{y})={:02x}{:02x}{:02x}{:02x}",
+                t.rgba[o], t.rgba[o + 1], t.rgba[o + 2], t.rgba[o + 3]
+            )
+        };
+        println!(
+            "  texel probe {} {} {} {}",
+            at(t.w / 8, t.h / 2),
+            at(t.w / 4, t.h / 4),
+            at(t.w / 2, t.h / 2),
+            at(t.w - 4, t.h / 2)
+        );
+        std::fs::write(path, crate::png::encode(&rgb, t.w, t.h)).ok()?;
+        Some((t.w, t.h))
+    }
+
+    /// The names and sizes of every loaded texture.
+    pub fn texture_list(&self) -> Vec<(u32, usize, usize)> {
+        let mut v: Vec<_> = self.textures.iter().map(|(k, t)| (*k, t.w, t.h)).collect();
+        v.sort();
+        v
+    }
+
+    /// How many files are currently open.
+    pub fn open_file_count(&self) -> usize {
+        self.open_files.len()
+    }
+
+    /// Advance an open file's position without transferring anything, returning how far it moved.
+    fn seek_file(&mut self, handle: usize, by: u32) -> u32 {
+        if handle == 0 || handle > self.open_files.len() {
+            return 0;
+        }
+        let (data, pos) = &self.open_files[handle - 1];
+        let moved = (by as usize).min(data.len().saturating_sub(*pos));
+        self.open_files[handle - 1].1 += moved;
+        moved as u32
+    }
+
+    /// Write `len` bytes from guest memory into the open file, advancing its position, and
+    /// persist it. This is `AsyncFileIO` op 3 — see `0x001e3d90`.
+    fn write_file(&mut self, handle: usize, buf: u32, len: u32) -> u32 {
+        if handle == 0 || handle > self.open_files.len() || buf == 0 || len == 0 || len >= 1 << 24 {
+            return 0;
+        }
+        // A write may only ever touch a file that was OPENED FOR WRITING.
+        //
+        // Without this, a wrong handle turns a write into data loss on read-only game data: it
+        // overwrote five of Minigolf's asset files in place, and the resulting hang cost an hour
+        // of bisecting changes that were never at fault. The mode is recorded at open; anything
+        // opened to read is refused here no matter what the request says.
+        if !self.open_writable.get(handle - 1).copied().unwrap_or(false) {
+            self.file_log
+                .push(format!("  REFUSED write to handle {handle}: not opened for writing"));
+            return 0;
+        }
+        let bytes: Vec<u8> = (0..len).map(|i| self.mem.read8(buf + i)).collect();
+        let (data, pos) = &mut self.open_files[handle - 1];
+        let end = *pos + bytes.len();
+        if data.len() < end {
+            data.resize(end, 0);
+        }
+        data[*pos..end].copy_from_slice(&bytes);
+        *pos = end;
+        let (snapshot, path) = (data.clone(), self.open_paths[handle - 1].clone());
+        let ok = std::fs::write(&path, &snapshot).is_ok();
+        self.file_log
+            .push(format!("  write {len} bytes at {} -> {path} ({})", end - len as usize, if ok { "ok" } else { "FAILED" }));
+        len
+    }
+
+    /// Move an open file's position, the way `AsyncFileIO` op 5 does.
+    ///
+    /// RetailOS's worker dispatches `[req+0x04]` through the table at `0x001e3788`, and op 5 lands
+    /// on `0x001e3db8`: it reads the whence byte from `[req+0x10]`, sign-extends `[req+0x0c]` to a
+    /// 64-bit offset (`mov r1, r2, asr #31`) and calls the stream's seek at `0x002258a4`. Whence
+    /// follows the C convention it is checked against — 0 set, 1 current, 2 end.
+    fn seek_to(&mut self, handle: usize, offset: i32, whence: u32) -> u32 {
+        if handle == 0 || handle > self.open_files.len() {
+            return 0;
+        }
+        let (data, pos) = &self.open_files[handle - 1];
+        let base = match whence {
+            1 => *pos as i64,
+            2 => data.len() as i64,
+            _ => 0,
+        };
+        let want = (base + offset as i64).clamp(0, data.len() as i64) as usize;
+        self.open_files[handle - 1].1 = want;
+        want as u32
     }
 
     /// Copy up to `len` bytes from the open file into guest memory, advancing its position.
@@ -3280,62 +4895,388 @@ impl Machine {
         for (i, b) in bytes.iter().enumerate() {
             self.mem.write8(buf.wrapping_add(i as u32), *b);
         }
+        if n > 0 {
+            let name = self.open_paths.get(handle - 1).cloned().unwrap_or_default();
+            self.file_extents
+                .insert(0, (buf, buf.wrapping_add(n as u32), name));
+            self.file_extents.truncate(512);
+        }
         n as u32
     }
 
     /// Decode a `GL_PALETTE8_RGBA8_OES` image into RGBA for the currently bound texture.
-    fn upload_paletted(&mut self, w: usize, h: usize, data: u32) {
+    fn upload_paletted(&mut self, w: usize, h: usize, data: u32, ifmt: u32) {
         if w == 0 || h == 0 || w > 2048 || h > 2048 {
             return;
         }
+        // The OES paletted formats differ in their PALETTE ENTRY SIZE, which sets both the colour
+        // decode and where the index array starts. Decoding every one of them as RGBA8 reads the
+        // indices 512 bytes late and every colour through the wrong lens — which is exactly the
+        // diagonal-streak garbage Sims Bowling's bowling scene rendered as.
+        //
+        // Measured: it uploads `0x8b96` (PALETTE8_RGBA8) and `0x8b97` (PALETTE8_R5_G6_B5).
+        let entry = match ifmt {
+            0x8b95 | 0x8b90 => 3, // PALETTE8/4_RGB8
+            0x8b97 | 0x8b98 | 0x8b99 | 0x8b92 | 0x8b93 | 0x8b94 => 2, // 565 / 4444 / 5551
+            _ => 4,               // PALETTE8/4_RGBA8 (0x8b96, 0x8b91) and anything unrecognised
+        };
         let palette: Vec<[u8; 4]> = (0..256)
             .map(|i| {
-                let a = data + (i * 4) as u32;
-                [
-                    self.mem.read8(a),
-                    self.mem.read8(a + 1),
-                    self.mem.read8(a + 2),
-                    self.mem.read8(a + 3),
-                ]
+                let a = data + (i * entry) as u32;
+                match (entry, ifmt) {
+                    (3, _) => [self.mem.read8(a), self.mem.read8(a + 1), self.mem.read8(a + 2), 0xff],
+                    // R5 G6 B5 — 5 bits red, 6 green, 5 blue, no alpha.
+                    (2, 0x8b97) | (2, 0x8b92) => {
+                        let v = self.mem.read8(a) as u16 | ((self.mem.read8(a + 1) as u16) << 8);
+                        let (r, g, b) = ((v >> 11) & 0x1f, (v >> 5) & 0x3f, v & 0x1f);
+                        [((r * 255 + 15) / 31) as u8, ((g * 255 + 31) / 63) as u8, ((b * 255 + 15) / 31) as u8, 0xff]
+                    }
+                    // RGBA4 — four bits each.
+                    (2, 0x8b98) | (2, 0x8b93) => {
+                        let v = self.mem.read8(a) as u16 | ((self.mem.read8(a + 1) as u16) << 8);
+                        let n = |x: u16| ((x * 255 + 7) / 15) as u8;
+                        [n((v >> 12) & 0xf), n((v >> 8) & 0xf), n((v >> 4) & 0xf), n(v & 0xf)]
+                    }
+                    // RGB5 A1.
+                    (2, _) => {
+                        let v = self.mem.read8(a) as u16 | ((self.mem.read8(a + 1) as u16) << 8);
+                        let (r, g, b) = ((v >> 11) & 0x1f, (v >> 6) & 0x1f, (v >> 1) & 0x1f);
+                        let n = |x: u16| ((x * 255 + 15) / 31) as u8;
+                        [n(r), n(g), n(b), if v & 1 != 0 { 0xff } else { 0 }]
+                    }
+                    _ => [
+                        self.mem.read8(a),
+                        self.mem.read8(a + 1),
+                        self.mem.read8(a + 2),
+                        self.mem.read8(a + 3),
+                    ],
+                }
             })
             .collect();
-        let base = data + 1024;
+        let base = data + 256 * entry as u32;
         let mut rgba = Vec::with_capacity(w * h * 4);
         for i in 0..w * h {
             rgba.extend_from_slice(&palette[self.mem.read8(base + i as u32) as usize]);
         }
         let opaque = rgba.chunks_exact(4).filter(|p| p[3] >= 8).count();
+        // The corner texels, because the titles draw solid shapes by sampling ONE flat texel out
+        // of the atlas (Minigolf's backgrounds are a quad with uv pinned to (1,1)). If a corner
+        // decodes wrong, every solid fill in the game takes that colour.
+        let px = |x: usize, y: usize| -> String {
+            let o = (y.min(h - 1) * w + x.min(w - 1)) * 4;
+            format!("{:02x}{:02x}{:02x}{:02x}", rgba[o], rgba[o + 1], rgba[o + 2], rgba[o + 3])
+        };
         self.tex_log.push(format!(
-            "upload tex#{} {}x{} opaque={}/{}",
+            "upload tex#{} target={:#06x} {}x{} opaque={}/{} texel(0,0)={} texel(1,1)={} far({},{})={} mid={}",
             self.bound_texture,
-            w,
-            h,
-            opaque,
-            w * h
+            self.texture_target.get(&self.bound_texture).copied().unwrap_or(0),
+            w, h, opaque, w * h,
+            px(0, 0), px(1, 1), w - 1, h - 1, px(w - 1, h - 1), px(w / 2, h / 2)
         ));
-        self.textures
-            .insert(self.bound_texture, Texture { w, h, rgba });
+        let alpha_only = false;
+        self.textures.insert(self.bound_texture, Texture { w, h, rgba, alpha_only });
+    }
+
+    /// `glTexSubImage2D(target, level, x, y, w, h, format, type, pixels)` — refill part of a
+    /// texture that already exists.
+    ///
+    /// Bejeweled and Zuma share an uploader that branches here for **every re-upload into an
+    /// existing texture name** (`0x1801a324: ldr r0,[r6,#28] / cmp r0,#0 / bne`), so ignoring it
+    /// leaves a texture that was created empty still empty.
+    fn upload_sub(&mut self, x: usize, y: usize, w: usize, h: usize, format: u32, ty: u32, data: u32) {
+        if w == 0 || h == 0 || w > 4096 || h > 4096 {
+            return;
+        }
+        // Decode the patch by uploading it into a scratch name, then blit it in. Reusing the one
+        // decoder keeps every format working here for free rather than duplicating the table.
+        let name = self.bound_texture;
+        let Some(dst) = self.textures.get(&name).map(|t| (t.w, t.h)) else {
+            self.tex_log
+                .push(format!("texSubImage2D tex#{name}: no such texture"));
+            return;
+        };
+        const SCRATCH: u32 = u32::MAX;
+        self.bound_texture = SCRATCH;
+        self.upload_plain(w, h, format, ty, data);
+        let patch = self.textures.remove(&SCRATCH);
+        self.bound_texture = name;
+        let Some(patch) = patch else { return };
+        let (dw, dh) = dst;
+        if let Some(t) = self.textures.get_mut(&name) {
+            for row in 0..h.min(dh.saturating_sub(y)) {
+                for col in 0..w.min(dw.saturating_sub(x)) {
+                    let si = (row * w + col) * 4;
+                    let di = ((y + row) * dw + (x + col)) * 4;
+                    t.rgba[di..di + 4].copy_from_slice(&patch.rgba[si..si + 4]);
+                }
+            }
+        }
+        self.tex_log.push(format!(
+            "texSubImage2D tex#{name} {w}x{h} at ({x},{y}) into {dw}x{dh}"
+        ));
+    }
+
+    /// Capture a framebuffer rectangle into the bound texture, for `glCopyTexImage2D`.
+    ///
+    /// GL's origin is bottom-left and the framebuffer's is top-left, so rows are taken bottom-up
+    /// to match the flip `fill_triangle` already applies when sampling.
+    fn copy_framebuffer_to_texture(&mut self, x: i64, y: i64, w: usize, h: usize) {
+        if w == 0 || h == 0 || w > 2048 || h > 2048 {
+            return;
+        }
+        let mut rgba = Vec::with_capacity(w * h * 4);
+        for row in 0..h {
+            let sy = FB_HEIGHT as i64 - 1 - (y + row as i64);
+            for col in 0..w {
+                let sx = x + col as i64;
+                if sx < 0 || sy < 0 || sx >= FB_WIDTH as i64 || sy >= FB_HEIGHT as i64 {
+                    rgba.extend_from_slice(&[0, 0, 0, 0xff]);
+                    continue;
+                }
+                let o = ((sy as usize) * FB_WIDTH + sx as usize) * 3;
+                rgba.extend_from_slice(&[
+                    self.framebuffer[o],
+                    self.framebuffer[o + 1],
+                    self.framebuffer[o + 2],
+                    0xff,
+                ]);
+            }
+        }
+        self.tex_log.push(format!(
+            "copyTexImage2D tex#{} {w}x{h} from ({x},{y})",
+            self.bound_texture
+        ));
+        // A framebuffer capture always carries real colour.
+        let alpha_only = false;
+        self.textures.insert(self.bound_texture, Texture { w, h, rgba, alpha_only });
+    }
+
+    /// `glTexImage2D` — an uncompressed upload.
+    ///
+    /// `format`/`type` are GL ES 1.1's, and these four cover what the titles ship:
+    /// `GL_RGB`/`GL_RGBA` as bytes, and the two packed 16-bit forms. Anything else is logged
+    /// rather than guessed at, because a silently wrong decode looks like a rendering bug and a
+    /// missing one looks like white.
+    fn upload_plain(&mut self, w: usize, h: usize, format: u32, ty: u32, data: u32) {
+        // The single-channel and two-channel formats. Lost uploads every one of its textures as
+        // LUMINANCE_ALPHA — small strips like 122x10 that are rendered text — and dropping them
+        // meant it could not have shown a glyph even once the geometry path exists.
+        const GL_ALPHA: u32 = 0x1906;
+        const GL_LUMINANCE: u32 = 0x1909;
+        const GL_LUMINANCE_ALPHA: u32 = 0x190a;
+        const GL_RGB: u32 = 0x1907;
+        const GL_RGBA: u32 = 0x1908;
+        const GL_UNSIGNED_BYTE: u32 = 0x1401;
+        const GL_UNSIGNED_SHORT_4_4_4_4: u32 = 0x8033;
+        const GL_UNSIGNED_SHORT_5_5_5_1: u32 = 0x8034;
+        const GL_UNSIGNED_SHORT_5_6_5: u32 = 0x8363;
+        // `EAPP_TEX_SRC_DUMP=WxH` prints the raw source bytes for uploads of that size, so an
+        // upload that looks wrong on screen can be traced back to what the game actually wrote.
+        if std::env::var("EAPP_TEX_SRC_DUMP").as_deref() == Ok(&format!("{w}x{h}")[..]) {
+            let bpt = match ty {
+                GL_UNSIGNED_BYTE => match format {
+                    GL_RGB => 3,
+                    GL_RGBA => 4,
+                    GL_LUMINANCE_ALPHA => 2,
+                    _ => 1,
+                },
+                _ => 2,
+            };
+            let n = w * h * bpt;
+            let bytes: Vec<String> =
+                (0..n).map(|i| format!("{:02x}", self.mem.read8(data + i as u32))).collect();
+            println!("texsrc {w}x{h} fmt={format:#x} ty={ty:#x} src={data:#010x} {}", bytes.join(""));
+        }
+        if w == 0 || h == 0 || w > 2048 || h > 2048 || data == 0 {
+            return;
+        }
+        let mut rgba = Vec::with_capacity(w * h * 4);
+        match (format, ty) {
+            (GL_RGB, GL_UNSIGNED_BYTE) => {
+                for i in 0..w * h {
+                    let a = data + (i * 3) as u32;
+                    rgba.extend_from_slice(&[
+                        self.mem.read8(a),
+                        self.mem.read8(a + 1),
+                        self.mem.read8(a + 2),
+                        0xff,
+                    ]);
+                }
+            }
+            (GL_RGBA, GL_UNSIGNED_BYTE) => {
+                for i in 0..w * h {
+                    let a = data + (i * 4) as u32;
+                    rgba.extend_from_slice(&[
+                        self.mem.read8(a),
+                        self.mem.read8(a + 1),
+                        self.mem.read8(a + 2),
+                        self.mem.read8(a + 3),
+                    ]);
+                }
+            }
+            (GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE) => {
+                // Two bytes per texel, luminance first then alpha — the GL component order for a
+                // two-component format. The luminance drives all three colour channels.
+                for i in 0..w * h {
+                    let a = data + (i * 2) as u32;
+                    let (l, al) = (self.mem.read8(a), self.mem.read8(a + 1));
+                    rgba.extend_from_slice(&[l, l, l, al]);
+                }
+            }
+            (GL_LUMINANCE, GL_UNSIGNED_BYTE) => {
+                for i in 0..w * h {
+                    let l = self.mem.read8(data + i as u32);
+                    rgba.extend_from_slice(&[l, l, l, 0xff]);
+                }
+            }
+            (GL_ALPHA, GL_UNSIGNED_BYTE) => {
+                // RGB reads as zero for an alpha-only texture, per the GL component rules.
+                for i in 0..w * h {
+                    let a = self.mem.read8(data + i as u32);
+                    rgba.extend_from_slice(&[0, 0, 0, a]);
+                }
+            }
+            (_, GL_UNSIGNED_SHORT_5_6_5) => {
+                for i in 0..w * h {
+                    let p = self.mem.read16(data + (i * 2) as u32) as u32;
+                    let (r, g, b) = ((p >> 11) & 0x1f, (p >> 5) & 0x3f, p & 0x1f);
+                    rgba.extend_from_slice(&[
+                        ((r * 255 + 15) / 31) as u8,
+                        ((g * 255 + 31) / 63) as u8,
+                        ((b * 255 + 15) / 31) as u8,
+                        0xff,
+                    ]);
+                }
+            }
+            (_, GL_UNSIGNED_SHORT_5_5_5_1) => {
+                for i in 0..w * h {
+                    let p = self.mem.read16(data + (i * 2) as u32) as u32;
+                    let (r, g, b, a) = ((p >> 11) & 0x1f, (p >> 6) & 0x1f, (p >> 1) & 0x1f, p & 1);
+                    rgba.extend_from_slice(&[
+                        ((r * 255 + 15) / 31) as u8,
+                        ((g * 255 + 15) / 31) as u8,
+                        ((b * 255 + 15) / 31) as u8,
+                        if a == 1 { 0xff } else { 0 },
+                    ]);
+                }
+            }
+            (_, GL_UNSIGNED_SHORT_4_4_4_4) => {
+                for i in 0..w * h {
+                    let p = self.mem.read16(data + (i * 2) as u32) as u32;
+                    let (r, g, b, a) = ((p >> 12) & 0xf, (p >> 8) & 0xf, (p >> 4) & 0xf, p & 0xf);
+                    rgba.extend_from_slice(&[
+                        (r * 17) as u8,
+                        (g * 17) as u8,
+                        (b * 17) as u8,
+                        (a * 17) as u8,
+                    ]);
+                }
+            }
+            _ => {
+                self.tex_log.push(format!(
+                    "texImage2D tex#{} {w}x{h} UNHANDLED format={format:#06x} type={ty:#06x}",
+                    self.bound_texture
+                ));
+                return;
+            }
+        }
+        let opaque = rgba.chunks_exact(4).filter(|p| p[3] >= 8).count();
+        // The first source bytes, so a wrong pointer can be told from a wrong decode: real image
+        // data has structure, unmapped memory reads back as zeros, and a stale heap looks random.
+        let head: Vec<String> =
+            (0..16).map(|i| format!("{:02x}", self.mem.read8(data + i))).collect();
+        self.tex_log.push(format!(
+            "texImage2D tex#{} {w}x{h} fmt={format:#06x} type={ty:#06x} opaque={opaque}/{} \
+             src={data:#010x} [{}]",
+            self.bound_texture,
+            w * h,
+            head.join(" ")
+        ));
+        // `GL_ALPHA` carries coverage and no colour, so the fragment must keep the colour it
+        // already has. Cubis 2's menu font and Tetris's name-entry font are both this format.
+        let alpha_only = format == GL_ALPHA;
+        self.textures.insert(self.bound_texture, Texture { w, h, rgba, alpha_only });
     }
 
     /// Read one attribute component as 16.16 fixed point, in pixels.
     fn attr(&mut self, index: usize, vertex: u32, comp: usize) -> f32 {
-        let Some(a) = self.arrays[index].as_ref() else {
+        if !self.attr_enabled[index] {
             return 0.0;
-        };
+        }
+        let Some(a) = self.arrays[index].as_ref() else { return 0.0 };
         if comp >= a.size {
             return 0.0;
         }
         // A stride of 0 means tightly packed, per GL. Taking it literally made every vertex
         // read the same address — Pac-Man registers its arrays this way and drew degenerate
         // quads because of it.
-        let stride = if a.stride == 0 { a.size * 4 } else { a.stride };
-        let addr = a.ptr + vertex * stride as u32 + (comp * 4) as u32;
-        self.mem.read32(addr) as i32 as f32 / 65536.0
+        const GL_BYTE: u32 = 0x1400;
+        const GL_UNSIGNED_BYTE: u32 = 0x1401;
+        const GL_SHORT: u32 = 0x1402;
+        const GL_UNSIGNED_SHORT: u32 = 0x1403;
+        const GL_FLOAT: u32 = 0x1406;
+        let width = match a.ty {
+            GL_BYTE | GL_UNSIGNED_BYTE => 1,
+            GL_SHORT | GL_UNSIGNED_SHORT => 2,
+            _ => 4,
+        };
+        let stride = if a.stride == 0 { a.size * width } else { a.stride };
+        let addr = a.ptr + vertex * stride as u32 + (comp * width) as u32;
+        match a.ty {
+            GL_BYTE => self.mem.read8(addr) as i8 as f32,
+            GL_UNSIGNED_BYTE => self.mem.read8(addr) as f32,
+            GL_SHORT => self.mem.read16(addr) as i16 as f32,
+            GL_UNSIGNED_SHORT => self.mem.read16(addr) as f32,
+            GL_FLOAT => f32::from_bits(self.mem.read32(addr)),
+            // GL_FIXED, and the default: 16.16.
+            _ => self.mem.read32(addr) as i32 as f32 / 65536.0,
+        }
+    }
+
+    /// Transform a vertex by the MVP and the viewport, giving screen pixels.
+    ///
+    /// An identity matrix is treated as "no transform": a game that supplies screen coordinates
+    /// and uploads the identity (Bejeweled does, on six of its twenty upload sites) must not have
+    /// them run through a viewport map that would scale them by half the screen.
+    fn project(&self, x: f32, y: f32, z: f32, w: f32) -> (f32, f32) {
+        let Some(m) = self.mvp else { return (x, y) };
+        if !self.transforming() {
+            return (x, y);
+        }
+        const IDENTITY: [f32; 16] = [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ];
+        if m == IDENTITY {
+            return (x, y);
+        }
+        // Column-major: element (row r, col c) is m[c * 4 + r].
+        let v = [x, y, z, w];
+        let mut o = [0f32; 4];
+        for (r, out) in o.iter_mut().enumerate() {
+            *out = (0..4).map(|c| m[c * 4 + r] * v[c]).sum();
+        }
+        let iw = if o[3].abs() > 1e-6 { 1.0 / o[3] } else { 1.0 };
+        (
+            (o[0] * iw + 1.0) * 0.5 * FB_WIDTH as f32,
+            (o[1] * iw + 1.0) * 0.5 * FB_HEIGHT as f32,
+        )
+    }
+
+    /// Whether the current MVP is a real transform rather than the identity.
+    ///
+    /// When it is, the Y direction is already encoded in the matrix and the rasteriser uses the
+    /// plain GL convention. The `proj_flips_y` heuristic exists only for titles whose vertices
+    /// pass through untransformed, and applying both would flip twice.
+    fn transforming(&self) -> bool {
+        const IDENTITY: [f32; 16] = [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ];
+        self.mvp.is_some_and(|m| m != IDENTITY)
     }
 
     /// Whether a vertex attribute array is registered.
     fn has_attr(&self, index: usize) -> bool {
-        self.arrays[index].is_some()
+        self.arrays[index].is_some() && self.attr_enabled[index]
     }
 
     /// Rasterise a draw as triangles, with per-vertex texture-coordinate interpolation.
@@ -3348,37 +5289,100 @@ impl Machine {
     /// only correct for a single screen-aligned sprite filling its own quad; the games pack 8x8
     /// tiles out of a 512x512 atlas and flip them freely, which the approximation smeared.
     fn draw_arrays(&mut self, mode: u32, first: u32, count: u32) {
-        if !(3..=64).contains(&count) {
+        if !(3..=4096).contains(&count) {
             return;
         }
-        let v: Vec<Vertex> = (0..count)
-            .map(|i| {
-                let n = first + i;
+        let idx: Vec<u32> = (0..count).map(|i| first + i).collect();
+        self.draw_indexed(mode, &idx);
+    }
+
+    /// `glDrawElements(mode, count, type, indices)` — the same pipeline, vertices chosen by index.
+    ///
+    /// Pac-Man draws its maze and its pellet field this way and nothing else does, which is why
+    /// the maze arrived as bare outlines with the dots missing: every indexed draw was dropped on
+    /// the floor. `#38` is `glDrawElements` in the recovered name table.
+    fn draw_elements(&mut self, mode: u32, count: u32, ty: u32, ptr: u32) {
+        if count < 3 || count > 65536 || ptr == 0 {
+            return;
+        }
+        const GL_UNSIGNED_BYTE: u32 = 0x1401;
+        const GL_UNSIGNED_SHORT: u32 = 0x1403;
+        const GL_UNSIGNED_INT: u32 = 0x1405;
+        let idx: Vec<u32> = (0..count)
+            .map(|i| match ty {
+                GL_UNSIGNED_BYTE => self.mem.read8(ptr + i) as u32,
+                GL_UNSIGNED_INT => self.mem.read32(ptr + i * 4),
+                // Shorts are the common case and the sane default for an unknown type: a wrong
+                // stride here would read neighbouring indices as garbage vertices.
+                GL_UNSIGNED_SHORT | _ => self.mem.read16(ptr + i * 2) as u32,
+            })
+            .collect();
+        self.draw_indexed(mode, &idx);
+    }
+
+    fn draw_indexed(&mut self, mode: u32, idx: &[u32]) {
+        let count = idx.len() as u32;
+        if count < 3 {
+            return;
+        }
+        // Attribute 1 carries either texture coordinates or a colour, and its component count
+        // says which: `size=2` is (u,v), `size=4` is (r,g,b,a). Every textured draw in Minigolf
+        // registers it as 2, and every flat panel — the menu backgrounds, the "OUT OF BOUNDS"
+        // banner — registers it as 4. Reading components 0..1 as uv regardless is what turned
+        // those panels into opaque grey: we sampled a texture with what were really red and green.
+        let attr1_is_colour = matches!(self.arrays[1], Some(a) if a.size == 4);
+        let has_colour = self.has_attr(2);
+        let v: Vec<Vertex> = idx
+            .iter()
+            .map(|&n| {
+                let (rgb, a) = if attr1_is_colour {
+                    (
+                        [self.attr(1, n, 0), self.attr(1, n, 1), self.attr(1, n, 2)],
+                        self.attr(1, n, 3),
+                    )
+                } else if has_colour {
+                    (
+                        [self.attr(2, n, 0), self.attr(2, n, 1), self.attr(2, n, 2)],
+                        1.0,
+                    )
+                } else {
+                    ([1.0, 1.0, 1.0], 1.0)
+                };
+                let (ax, ay, az) = (self.attr(0, n, 0), self.attr(0, n, 1), self.attr(0, n, 2));
+                let aw = if self.arrays[0].map_or(4, |a| a.size) >= 4 {
+                    self.attr(0, n, 3)
+                } else {
+                    1.0
+                };
+                let (vx, vy) = self.project(ax, ay, az, aw);
                 Vertex {
-                    x: self.attr(0, n, 0),
-                    y: self.attr(0, n, 1),
+                    x: vx,
+                    y: vy,
                     u: self.attr(1, n, 0),
                     w: self.attr(1, n, 1),
+                    rgb,
+                    a,
                 }
             })
             .collect();
 
-        let colour = if self.has_attr(2) {
-            [
-                (self.attr(2, first, 0).clamp(0.0, 1.0) * 255.0) as u8,
-                (self.attr(2, first, 1).clamp(0.0, 1.0) * 255.0) as u8,
-                (self.attr(2, first, 2).clamp(0.0, 1.0) * 255.0) as u8,
-            ]
-        } else {
-            // GL's default vertex colour is opaque white; defaulting to black hides geometry.
-            [255, 255, 255]
-        };
-        let textured = self.arrays[1].is_some() && self.textures.contains_key(&self.bound_texture);
+
+        let textured = self.has_attr(1)
+            && !attr1_is_colour
+            && self.textures.contains_key(&self.bound_texture_u0);
 
         // `push_with`, not a `len()` guard: the row costs eight folds over the vertex list plus a
         // `format!`, so it must stay lazy — but the draw still has to be counted, or the report's
         // total becomes the cap the moment a title draws more than a handful of times.
-        let (bound, known) = (self.bound_texture, textured);
+        let (bound, known) = (self.bound_texture_u0, textured);
+        let u1 = self.bound_texture_u1;
+        let (en0, en1, en2) = (self.attr_enabled[0], self.attr_enabled[1], self.attr_enabled[2]);
+        let arr = |a: &Option<VertexArray>| match a {
+            Some(v) => format!("ptr={:#x},size={},stride={}", v.ptr, v.size, v.stride),
+            None => "none".to_string(),
+        };
+        let (a0, a1, a2) = (arr(&self.arrays[0]), arr(&self.arrays[1]), arr(&self.arrays[2]));
+        let zw = (self.attr(0, idx[0], 2), self.attr(0, idx[0], 3));
         let log = &mut self.tex_log;
         log.push_with(|| {
             let rng = |f: fn(&Vertex) -> f32| {
@@ -3386,20 +5390,96 @@ impl Machine {
             };
             let (px, py, pu, pv) = (rng(|p| p.x), rng(|p| p.y), rng(|p| p.u), rng(|p| p.w));
             format!(
-                "n={count} mode={mode} pos=[{:.1}..{:.1} , {:.1}..{:.1}] uv=[{:.1}..{:.1} , {:.1}..{:.1}] tex#{bound} known={known}",
-                px.start, px.end, py.start, py.end, pu.start, pu.end, pv.start, pv.end
+                "n={count} mode={mode} pos=[{:.1}..{:.1} , {:.1}..{:.1}] uv=[{:.1}..{:.1} , {:.1}..{:.1}] \
+                 zw=({:.1},{:.1}) tex#{bound} known={known} tgt={:#06x} u1={u1} attr[{}{}{}] rgb0=[{:.2} {:.2} {:.2}] mod=[{:.2} {:.2} {:.2} {:.2}] pipe={} A0[{a0}] A1[{a1}] A2[{a2}]",
+                px.start, px.end, py.start, py.end, pu.start, pu.end, pv.start, pv.end,
+                zw.0, zw.1,
+                self.texture_target.get(&bound).copied().unwrap_or(0),
+                if en0 { "0" } else { "-" },
+                if en1 { "1" } else { "-" },
+                if en2 { "2" } else { "-" },
+                v[0].rgb[0], v[0].rgb[1], v[0].rgb[2],
+                self.modulate[0], self.modulate[1], self.modulate[2], self.modulate[3],
+                self.pipeline
             )
         });
 
-        // GL_QUADS fans from vertex 0; GL_TRIANGLE_STRIP walks in pairs.
+        // Mode 7 is Apple's quad list: vertices in independent groups of four, NOT one fan.
+        //
+        // A fan and a quad are the same three-plus-three triangles when count is 4, which is why
+        // every title-screen draw looked right and hid this: Minigolf's course draws arrive as
+        // n=16, 20, 28 and 36, and fanning those from vertex 0 stretches triangles between
+        // unrelated quads — the coloured streaks across the frame were exactly that.
         const GL_TRIANGLE_STRIP: u32 = 5;
+        const QUAD_LIST: u32 = 7;
+        let n = count as usize;
         let tris: Vec<[usize; 3]> = if mode == GL_TRIANGLE_STRIP {
-            (0..count as usize - 2).map(|i| [i, i + 1, i + 2]).collect()
+            (0..n - 2).map(|i| [i, i + 1, i + 2]).collect()
+        } else if mode == QUAD_LIST && n >= 4 && n % 4 == 0 {
+            (0..n / 4)
+                .flat_map(|q| {
+                    let b = q * 4;
+                    [[b, b + 1, b + 2], [b, b + 2, b + 3]]
+                })
+                .collect()
         } else {
-            (1..count as usize - 1).map(|i| [0, i, i + 1]).collect()
+            (1..n - 1).map(|i| [0, i, i + 1]).collect()
+        };
+        // `EAPP_QUAD_DUMP=N` prints each quad's own position/uv mapping for draws of N vertices.
+        // A block of text drawn as several sub-quads looks like one huge minification in the
+        // summary row (its pos/uv are the min/max over ALL of them) while each quad may be 1:1 —
+        // the only way to tell is per quad.
+        if std::env::var("EAPP_QUAD_DUMP").ok().and_then(|v| v.parse::<usize>().ok())
+            == Some(count as usize)
+        {
+            for q in 0..n / 4 {
+                let b = q * 4;
+                let (xs, ys): (Vec<f32>, Vec<f32>) =
+                    (0..4).map(|k| (v[b + k].x, v[b + k].y)).unzip();
+                let (us, vs): (Vec<f32>, Vec<f32>) =
+                    (0..4).map(|k| (v[b + k].u, v[b + k].w)).unzip();
+                let sp = |a: &Vec<f32>| {
+                    let (lo, hi) = (a.iter().cloned().fold(f32::MAX, f32::min), a.iter().cloned().fold(f32::MIN, f32::max));
+                    (lo, hi, hi - lo)
+                };
+                let (px0, px1, pw) = sp(&xs);
+                let (py0, py1, ph) = sp(&ys);
+                let (uu0, uu1, uw) = sp(&us);
+                let (vv0, vv1, vh) = sp(&vs);
+                println!(
+                    "  quad{q}: pos[{px0:.1}..{px1:.1} , {py0:.1}..{py1:.1}] ({pw:.1}x{ph:.1})  \
+                     uv[{uu0:.1}..{uu1:.1} , {vv0:.1}..{vv1:.1}] ({uw:.1}x{vh:.1})  scale={:.2}x{:.2}",
+                    if pw > 0.0 { uw / pw } else { 0.0 },
+                    if ph > 0.0 { vh / ph } else { 0.0 }
+                );
+            }
+        }
+        // Is this draw a 1:1 blit? If so, sample NEAREST rather than bilinear.
+        //
+        // Bilinear exists for the titles that scale — Pac-Man draws its whole maze as one image at
+        // a non-integer factor, and nearest sampling there drops entire rows of pellets. But at 1:1
+        // it buys nothing and costs sharpness: SAT Prep lays its text out at fractional positions
+        // (91.9, 336.5 …), so every glyph samples between texels and softens, and while the page
+        // scrolls that offset changes continuously — the text visibly smears as it moves.
+        //
+        // At a 1:1 scale the correct sample IS the nearest texel, so this sharpens the stationary
+        // case and stops the shimmer in the moving one, without touching anything that scales.
+        let one_to_one = textured && {
+            let ext = |f: fn(&Vertex) -> f32| {
+                let (lo, hi) = v.iter().map(f).fold((f32::MAX, f32::MIN), |(a, b), x| {
+                    (a.min(x), b.max(x))
+                });
+                hi - lo
+            };
+            let (pw, ph) = (ext(|p| p.x), ext(|p| p.y));
+            let (uw, vh) = (ext(|p| p.u), ext(|p| p.w));
+            pw > 0.5
+                && ph > 0.5
+                && (uw / pw - 1.0).abs() < 0.02
+                && (vh / ph - 1.0).abs() < 0.02
         };
         for t in tris {
-            self.fill_triangle(&v[t[0]], &v[t[1]], &v[t[2]], colour, textured);
+            self.fill_triangle(&v[t[0]], &v[t[1]], &v[t[2]], textured, one_to_one);
         }
         self.quads_drawn += 1;
     }
@@ -3409,8 +5489,8 @@ impl Machine {
         a: &Vertex,
         b: &Vertex,
         c: &Vertex,
-        colour: [u8; 3],
         textured: bool,
+        one_to_one: bool,
     ) {
         let area = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
         if area.abs() < 1e-6 {
@@ -3438,22 +5518,233 @@ impl Machine {
                     continue;
                 }
 
-                let mut rgb = colour;
+                // Interpolate the vertex colour across the triangle, so gradients are gradients.
+                let lerp = |i: usize| {
+                    ((w0 * a.rgb[i] + w1 * b.rgb[i] + w2 * c.rgb[i]).clamp(0.0, 1.0) * 255.0) as u8
+                };
+                let mut rgb = [lerp(0), lerp(1), lerp(2)];
+                // Source alpha, for blending. Titles draw their overlays — "OUT OF BOUNDS", the
+                // pause menu — as a translucent panel over the live course, and a rasteriser that
+                // only understands "skip or paint opaque" turns every one of those into a solid
+                // slab. `tex#5` carries texels at alpha 0x80, so the data is there to blend with.
+                // Whether the sampled texture supplies coverage only — decided inside the
+                // textured branch, needed by the colour-register block below.
+                let mut tex_alpha_only = false;
+                let mut alpha: u8 = if textured {
+                    255
+                } else {
+                    ((w0 * a.a + w1 * b.a + w2 * c.a).clamp(0.0, 1.0) * 255.0) as u8
+                };
+                if alpha == 0 {
+                    continue;
+                }
                 if textured {
                     let fu = w0 * a.u + w1 * b.u + w2 * c.u;
                     let fv = w0 * a.w + w1 * b.w + w2 * c.w;
-                    let t = &self.textures[&self.bound_texture];
-                    let tx = (fu.max(0.0) as usize).min(t.w - 1);
-                    let ty = (fv.max(0.0) as usize).min(t.h - 1);
-                    let ti = (ty * t.w + tx) * 4;
-                    if t.rgba[ti + 3] < 8 {
+                    let t = &self.textures[&self.bound_texture_u0];
+                    // Texture coordinates are in TEXELS on this driver, whatever target the game
+                    // named. Desktop GL would read 0x0DE1 (GL_TEXTURE_2D) as normalised 0..1 and
+                    // only rectangle targets as texels, and that is what this used to do — but
+                    // three independent measurements say the distinction does not exist here:
+                    //
+                    //   * Minigolf binds ONLY 0x84F5, so the normalising branch never ran for the
+                    //     title it was written for. Its backgrounds were fixed by the attribute-1
+                    //     colour/uv disambiguation, not by this.
+                    //   * Bejeweled binds 0x0DE1 and then supplies uv of 1..154 against a
+                    //     512-wide texture — texels. Scaling those by the texture size ran every
+                    //     sample off the edge, which is why its screen was uniformly white.
+                    //   * Lost's own mapper at 0x18008634 rewrites 0x0DE1 -> 0x84F5 before every
+                    //     call, i.e. the game treats them as the same target.
+                    // BILINEAR, not nearest.
+                    //
+                    // The device filters, and at these scales that is not a cosmetic difference:
+                    // Pac-Man draws its whole maze as one image scaled by a non-integer factor, so
+                    // nearest sampling steps over whole texel rows and columns. Every
+                    // one-pixel feature in that image — the wall lines and the entire pellet
+                    // field — was being skipped, which is why the maze arrived dashed and the dots
+                    // were missing altogether while the 12x12 sprites beside them looked right.
+                    //
+                    // Sampling is at texel CENTRES: a coordinate of 0.5 is the middle of texel 0,
+                    // so subtract half a texel before splitting into index and fraction.
+                    let sx = (fu - 0.5).max(0.0).min((t.w - 1) as f32);
+                    let sy = (fv - 0.5).max(0.0).min((t.h - 1) as f32);
+                    let (x0, y0) = (sx as usize, sy as usize);
+                    let (x1, y1) = ((x0 + 1).min(t.w - 1), (y0 + 1).min(t.h - 1));
+                    let (dx, dy) = (sx - x0 as f32, sy - y0 as f32);
+                    let at = |x: usize, y: usize| (y * t.w + x) * 4;
+                    let (p00, p10, p01, p11) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
+                    // Filter the colour WEIGHTED BY ALPHA — i.e. premultiplied.
+                    //
+                    // Straight bilinear averages the RGB of all four texels regardless of whether
+                    // they are transparent, and these titles key transparency with MAGENTA
+                    // (0xff00ff at alpha 0). Every keyed edge therefore blended real colour with
+                    // bright magenta and came out fringed in pink: around the letter selection,
+                    // the click-wheel art, its header and footer boxes, and the outline of Jack.
+                    //
+                    // Weighting each texel's colour by its own alpha drops transparent texels out
+                    // of the colour average entirely, which is what a premultiplied pipeline does
+                    // and what the hardware effectively did. Alpha itself still filters normally,
+                    // so edges keep their soft falloff.
+                    // A 1:1 blit takes the nearest texel outright — see `one_to_one`.
+                    let (dx, dy) = if one_to_one {
+                        (if dx >= 0.5 { 1.0 } else { 0.0 }, if dy >= 0.5 { 1.0 } else { 0.0 })
+                    } else {
+                        (dx, dy)
+                    };
+                    let w00 = (1.0 - dx) * (1.0 - dy);
+                    let w10 = dx * (1.0 - dy);
+                    let w01 = (1.0 - dx) * dy;
+                    let w11 = dx * dy;
+                    let (a00, a10, a01, a11) = (
+                        t.rgba[p00 + 3] as f32,
+                        t.rgba[p10 + 3] as f32,
+                        t.rgba[p01 + 3] as f32,
+                        t.rgba[p11 + 3] as f32,
+                    );
+                    let a_sum = w00 * a00 + w10 * a10 + w01 * a01 + w11 * a11;
+                    let a_f = a_sum.round().clamp(0.0, 255.0) as u8;
+                    if a_f < 8 && !self.ignore_colour_key {
                         continue; // colour-keyed transparent texel
                     }
-                    rgb = [t.rgba[ti], t.rgba[ti + 1], t.rgba[ti + 2]];
+                    alpha = a_f;
+                    // An alpha-only texture contributes COVERAGE, not colour: GL's texture
+                    // environment leaves `Cv = Cp` for a one-component alpha texture, so the
+                    // fragment keeps the colour it arrived with and only its alpha is combined.
+                    // Sampling the RGB here instead paints black, because that RGB is zero by
+                    // construction.
+                    if t.alpha_only {
+                        // `rgb` already holds the interpolated vertex colour.
+                        tex_alpha_only = true;
+                        if alpha < 8 && !self.ignore_colour_key {
+                            continue;
+                        }
+                    } else {
+                    // The texture MODULATES the fragment colour, it does not replace it:
+                    // `Cv = Cp * Cs`. Replacing works out identical whenever the primary colour is
+                    // white, which is nearly every draw and is why this went unnoticed — but SAT
+                    // Prep draws its question text from a `GL_LUMINANCE_ALPHA` font whose luminance
+                    // is white, with the INK COLOUR in the vertex colour (`rgb0=[0.00 0.00 0.40]`,
+                    // dark blue). Replacing threw that away and painted the text white on a white
+                    // panel.
+                    let vtx = rgb;
+                    let chan = |i: usize| -> u8 {
+                        if a_sum <= 0.0 {
+                            return 0;
+                        }
+                        let v = w00 * a00 * t.rgba[p00 + i] as f32
+                            + w10 * a10 * t.rgba[p10 + i] as f32
+                            + w01 * a01 * t.rgba[p01 + i] as f32
+                            + w11 * a11 * t.rgba[p11 + i] as f32;
+                        (v / a_sum).round().clamp(0.0, 255.0) as u8
+                    };
+                    rgb = [
+                        ((chan(0) as u32 * vtx[0] as u32 + 127) / 255) as u8,
+                        ((chan(1) as u32 * vtx[1] as u32 + 127) / 255) as u8,
+                        ((chan(2) as u32 * vtx[2] as u32 + 127) / 255) as u8,
+                    ];
+                    }
                 }
-                // Flip Y: GL origin is bottom-left, framebuffer origin is top-left.
-                let row = FB_HEIGHT - 1 - py;
+                // The constant colour register modulates whatever the fragment already is —
+                // textured or not. This is how the titles tint: Zuma fills flat panels by drawing
+                // a 1x1 white texture with a colour in the register, so ignoring it painted every
+                // one of them white.
+                // An ALL-ZERO colour register means "draw nothing", under any reading of it.
+                //
+                // This is deliberately narrower than applying the register. Whether it modulates
+                // at all depends on the pipeline's fixed-function combiner, which is baked into
+                // the fragment program and cannot be decoded here — apply it globally and LOST's
+                // name entry washes olive and SAT Prep's menu turns solid green; ignore it globally
+                // and SAT Prep paints its font atlas across the whole screen as white blobs:
+                //
+                //     pos=[0.0..319.5 , 0.0..239.9]  tex#3  mod=[0.00 0.00 0.00 0.00]  pipe=1
+                //
+                // But zero is not a tint. A register of (0,0,0,0) contributes nothing whether the
+                // combiner modulates, adds or replaces, so skipping the draw is correct under all
+                // three — and it leaves every non-zero register exactly as it was, including
+                // LOST's 0.81 alpha, which an earlier attempt at this wrongly multiplied in and
+                // made its name-entry letters vanish.
+                if self.modulate == [0.0; 4] {
+                    continue;
+                }
+                // An ALPHA-ONLY texture has no colour of its own, so the constant colour
+                // register IS its ink colour and must be applied even when the register is
+                // otherwise switched off.
+                //
+                // SAT Prep's testing screen is the proof: its question text draws `tex#3`
+                // (`GL_ALPHA`) with `mod=[0.00 0.00 0.00 1.00]` — BLACK ink — onto a white panel.
+                // Falling back to the vertex colour painted it white, i.e. invisible, which is
+                // why that screen came up blank while its panel, scrollbar, `1 / 14` counter and
+                // timer all rendered correctly.
+                //
+                // This cannot disturb the titles §26 protects: LOST's letters are `GL_RGBA` 4444,
+                // not alpha-only, so its `[0.45 0.50 0.23 0.81]` register never reaches them, and
+                // Cubis 2's alpha font is drawn with a register of exactly [1,1,1,1].
+                //
+                // — but only when the draw has no COLOUR ARRAY. GL ES 1.1 §2.7: an enabled
+                // `GL_COLOR_ARRAY` supplies the primary colour and the current colour set by
+                // `glColor4f` is not used at all. So the register is the ink only when nothing
+                // else provides one. SAT Prep's text draws `attr[01-]` — no array, register is
+                // the ink, still black. Hold'em's name-entry panel draws the same kind of
+                // alpha mask as `attr[012]` with a gold `rgb0=[0.88 0.65 0.33]` in the array
+                // and a black register, and taking the register there painted the panel as a
+                // solid black bar across the screen.
+                // `EAPP_LEGACY_MODULATE=1` ignores the colour array, for the same A/B reason.
+                let colour_array = self.attr_enabled[2]
+                    && self.arrays[2].is_some()
+                    && std::env::var_os("EAPP_LEGACY_MODULATE").is_none();
+                if self.modulate != [1.0; 4]
+                    && (!self.no_modulate || (tex_alpha_only && !colour_array))
+                {
+                    for i in 0..3 {
+                        rgb[i] = (rgb[i] as f32 * self.modulate[i]).round().clamp(0.0, 255.0) as u8;
+                    }
+                    alpha = (alpha as f32 * self.modulate[3]).round().clamp(0.0, 255.0) as u8;
+                    if alpha < 8 && !self.ignore_colour_key {
+                        continue;
+                    }
+                }
+                // Flip Y: GL's origin is bottom-left, the framebuffer's is top-left — UNLESS the
+                // game's own projection already flips it. `glUniformMatrix4fv` carries that: an
+                // `ortho(l, r, b, t)` puts `2/(t-b)` in element 5, so a NEGATIVE element 5 means
+                // the game built its projection with the top edge above the bottom one, i.e. it is
+                // already working in top-left coordinates and flipping again turns the picture
+                // over. Bejeweled does exactly that and rendered its whole menu upside down;
+                // Minigolf never sets a matrix at all, so it keeps the default flip.
+                let row = if self.proj_flips_y && !self.transforming() {
+                    py
+                } else {
+                    FB_HEIGHT - 1 - py
+                };
                 let o = (row * FB_WIDTH + px) * 3;
+                // `EAPP_ADDITIVE_PIPES=a,b` makes those pipeline ids ADD rather than replace:
+                // `dst = dst + src*a`, saturating. Empty by default.
+                //
+                // Blend mode is baked into the fixed-function program `#159` selects, so it is not
+                // observable from the call stream and can only be established per pipeline id by
+                // trying it. DISPROVED so far: pipeline 9 is NOT additive. It looked like a
+                // candidate because Vortex draws its wheel glyphs through it as `GL_RGB` 5_6_5,
+                // which carries no alpha and therefore paints an opaque black box — but pipeline 9
+                // also draws that screen's text from a `GL_ALPHA` atlas, and adding put a bright
+                // panel behind every letter. Kept as an instrument, not a setting.
+                if self.additive_pipes.contains(&self.pipeline) {
+                    let a = alpha as u32;
+                    for k in 0..3 {
+                        let add = (rgb[k] as u32 * a + 127) / 255;
+                        rgb[k] = (self.framebuffer[o + k] as u32 + add).min(255) as u8;
+                    }
+                    self.framebuffer[o..o + 3].copy_from_slice(&rgb);
+                    continue;
+                }
+                if alpha < 255 {
+                    // Standard source-over: dst = src*a + dst*(1-a).
+                    let a = alpha as u32;
+                    let inv = 255 - a;
+                    for k in 0..3 {
+                        let blended =
+                            (rgb[k] as u32 * a + self.framebuffer[o + k] as u32 * inv + 127) / 255;
+                        rgb[k] = blended as u8;
+                    }
+                }
                 self.framebuffer[o..o + 3].copy_from_slice(&rgb);
             }
         }
@@ -3472,16 +5763,31 @@ impl Machine {
     /// return. First-fit reuse matters more than efficiency here: the games allocate and
     /// release the same shapes every frame, so the free list settles quickly.
     fn alloc(&mut self, want: u32) -> u32 {
+        // `EAPP_LOG_ALLOC=1` records every request and release so a leak can be attributed to a
+        // size rather than guessed at. Off by default — these fire thousands of times a frame.
+        if self.log_alloc {
+            *self.alloc_census.entry(want).or_insert(0) += 1;
+        }
         let size = (want + 7) & !7;
         let total = size + 8;
 
         if let Some(i) = self.free_list.iter().position(|(_, sz)| *sz >= total) {
             let (block, block_size) = self.free_list.remove(i);
             self.mem.write32(block, block_size);
+            // Hand back CLEAN memory. A recycled block still held whatever the last owner left in
+            // it, and a game that checks a field for "unset" then sees stale bytes takes the
+            // wrong branch. Measured on Bejeweled: an object's id field at +0x10 came back as
+            // 0xfff4ffff from a recycled block, and its release path asserts the id is under 64,
+            // so it hit the `b .` trap at 0x18014aac and hung the frame forever.
+            for off in (0..block_size.saturating_sub(8)).step_by(4) {
+                self.mem.write32(block + 8 + off, 0);
+            }
             return block + 8;
         }
 
         if (self.heap_next - HEAP_BASE) as usize + total as usize > HEAP_SIZE {
+            self.file_log
+                .push(format!("alloc {want} REFUSED, heap full at {}", self.heap_used()));
             return 0; // refuse rather than hand back a pointer into nothing
         }
         let block = self.heap_next;
@@ -3492,13 +5798,37 @@ impl Machine {
 
     fn free(&mut self, ptr: u32) {
         if ptr < HEAP_BASE + 8 || ptr >= HEAP_BASE + HEAP_SIZE as u32 {
+            if self.log_alloc {
+                self.free_rejected += 1;
+            }
             return; // not ours; silently ignoring is safer than corrupting the list
         }
         let block = ptr - 8;
         let size = self.mem.read32(block);
+        if self.log_alloc {
+            *self.free_census.entry(size).or_insert(0) += 1;
+        }
         if size >= 8 && !self.free_list.iter().any(|(b, _)| *b == block) {
             self.free_list.push((block, size));
         }
+    }
+
+    /// Owe the game one completion for one operation.
+    ///
+    /// This used to skip a request already in the queue, which silently merged two operations
+    /// into one callback. Titles reuse a single request object for back-to-back operations —
+    /// The Sims Bowling issues `rserver.bin` and then `savefile.dat` through the same object at
+    /// `0x1907d530` inside one frame — so the second operation never completed, its state machine
+    /// stalled, and it rebuilt its whole screen object every other frame until its 5.24 MB heap
+    /// ran out and an allocation returned null.
+    ///
+    /// One operation, one completion. `EAPP_MERGE_COMPLETIONS=1` restores the old behaviour for
+    /// comparison.
+    fn queue_completion(&mut self, req: u32) {
+        if self.merge_completions && self.pending_completions.contains(&req) {
+            return;
+        }
+        self.pending_completions.push(req);
     }
 
     /// Queue an input event. Bit 30 marks "event present"; the low byte carries the code.
@@ -3571,6 +5901,27 @@ impl Machine {
         (0..n)
             .map(|i| self.history[(self.history_at - n + i) % HISTORY])
             .collect()
+    }
+
+    /// The value the microsecond clock last reported.
+    pub fn clock_now(&self) -> u32 {
+        self.clock
+    }
+
+    /// Refuse to let the clock report anything below `floor` from here on.
+    ///
+    /// The frame pump uses this to guarantee a MINIMUM frame time. These titles compute their
+    /// per-frame delta from this clock and then divide by it, and they were written for hardware
+    /// that never produced a short frame — Vortex converts the delta to 16.16 seconds and takes
+    /// `asr #10`, so anything under 1/64 s truncates to zero and its `0x18010aa4` divide faults.
+    /// It ran at 60 fps here, 16.7 ms nominal, and one jittery 14.9 ms frame was enough.
+    ///
+    /// This only ever moves the clock forward, and only when a frame came in faster than the
+    /// throttle was asking for, so the game's clock still tracks the player's in aggregate.
+    pub fn hold_clock_above(&mut self, floor: u32) {
+        if self.clock < floor {
+            self.clock = floor;
+        }
     }
 
     /// Bytes handed out by the bump allocator so far.
@@ -4309,11 +6660,249 @@ impl Machine {
                         self.free(p);
                         0
                     }
+                    Some(Stub::Realloc { ptr, size }) => {
+                        let (old, want) = (self.cpu.regs[*ptr], self.cpu.regs[*size]);
+                        match (old, want) {
+                            (0, 0) => 0,
+                            (0, n) => self.alloc(n),
+                            (p, 0) => {
+                                self.free(p);
+                                0
+                            }
+                            (p, n) if !(HEAP_BASE + 8..HEAP_BASE + HEAP_SIZE as u32).contains(&p) => {
+                                // Not a block this allocator handed out, so there is no header to
+                                // read and nothing safe to copy. `free` already refuses these;
+                                // reading a size out of `p-8` would be reading whatever the image
+                                // happens to hold there and copying that many bytes.
+                                self.alloc(n)
+                            }
+                            // Already big enough: hand back the same block.
+                            //
+                            // Not just an optimisation. `alloc` rounds to 8 bytes, and these
+                            // titles grow strings ONE CHARACTER AT A TIME through this call —
+                            // Vortex appends every byte of its 8 KB `text.strings` that way. A
+                            // realloc that always moves turns each append into an allocate, a
+                            // copy and a free, and since the free list is scanned linearly the
+                            // whole parse goes quadratic: 105 keys cost 20M instructions, and the
+                            // load callback never finished inside any budget. Growing in place
+                            // makes the common append free.
+                            (p, n)
+                                if (HEAP_BASE + 8..HEAP_BASE + HEAP_SIZE as u32).contains(&p)
+                                    && self.mem.read32(p.wrapping_sub(8)).saturating_sub(8) >= n =>
+                            {
+                                p
+                            }
+                            (p, n) => {
+                                // The block header `alloc` writes at `ptr-8` carries the rounded
+                                // total, so the old payload is that minus the header. Copy the
+                                // smaller of the two — growing keeps everything, shrinking keeps
+                                // the prefix, which is what realloc promises.
+                                let old_total = self.mem.read32(p.wrapping_sub(8));
+                                let old_payload = old_total.saturating_sub(8);
+                                let new = self.alloc(n);
+                                if new != 0 {
+                                    let copy = old_payload.min(n);
+                                    for off in 0..copy {
+                                        let b = self.mem.read8(p + off);
+                                        self.mem.poke8(new + off, b);
+                                    }
+                                    self.free(p);
+                                }
+                                new
+                            }
+                        }
+                    }
                     Some(Stub::Value(v)) => *v,
+                    Some(Stub::DeviceLevelSet { arg }) => {
+                        self.device_level = self.cpu.regs[*arg].min(100);
+                        0
+                    }
+                    Some(Stub::DeviceLevelGet) => self.device_level,
+                    Some(Stub::EmptyString { buf, len }) => {
+                        let (b, l) = (self.cpu.regs[*buf], self.cpu.regs[*len]);
+                        if b != 0 {
+                            self.mem.write8(b, 0);
+                        }
+                        if l != 0 {
+                            self.mem.write32(l, 0);
+                        }
+                        0
+                    }
+                    Some(Stub::AudioIsState { handle, state }) => {
+                        let (h, want) = (self.cpu.regs[*handle], *state);
+                        u32::from(self.audio_fields.get(&(h, 0x3d)) == Some(&want))
+                    }
+                    Some(Stub::AudioRelease { handle }) => {
+                        let h = self.cpu.regs[*handle];
+                        self.audio_fields.retain(|(k, _), _| *k != h);
+                        self.sfx_loop.remove(&(h as usize));
+                        let named = self
+                            .sfx_handles
+                            .get(h as usize)
+                            .filter(|n| !n.is_empty())
+                            .or_else(|| self.sfx_files.get(h as usize))
+                            .cloned();
+                        if let Some(name) = named {
+                            self.file_log.push(format!("sfx release {h} -> {name}"));
+                            self.sfx_stop_queue.push(name);
+                        }
+                        0
+                    }
+                    Some(Stub::SettingGet { name, out, size }) => {
+                        let (n, out, size) =
+                            (self.cpu.regs[*name], self.cpu.regs[*out], self.cpu.regs[*size]);
+                        if out == 0 {
+                            0u32.wrapping_sub(49) // the driver's own bad-argument value
+                        } else {
+                            let key = self.read_cstr(n, 32);
+                            let cap = if size != 0 { self.mem.read32(size) } else { 4 };
+                            let written = match key.as_str() {
+                                // A string, and the emulator's answer is the device's default.
+                                // Writing anything at all is the fix here — see `Stub::SettingGet`.
+                                "TimeFormat" => {
+                                    let v = if self.time_format_24 { b"24\0" } else { b"12\0" };
+                                    for (i, b) in v.iter().enumerate() {
+                                        if (i as u32) < cap {
+                                            self.mem.write8(out + i as u32, *b);
+                                        }
+                                    }
+                                    v.len().min(cap as usize) as u32
+                                }
+                                // A word the caller uses as a 0..24 jump-table index. Every
+                                // caller pre-zeroes it, so 0 is what they already read; writing
+                                // it explicitly changes nothing and makes the override real.
+                                "Language" => {
+                                    if cap >= 4 {
+                                        self.mem.write32(out, self.language);
+                                    }
+                                    4
+                                }
+                                _ => {
+                                    self.file_log.push(format!("Settings #0: unknown {key:?}"));
+                                    0
+                                }
+                            };
+                            if written == 0 {
+                                0u32.wrapping_sub(50) // no such setting, as the dispatcher reports
+                            } else {
+                                if size != 0 {
+                                    self.mem.write32(size, written);
+                                }
+                                0
+                            }
+                        }
+                    }
+                    Some(Stub::AudioSetState { handle, state, stops_voice }) => {
+                        let (h, state, stops) = (self.cpu.regs[*handle], *state, *stops_voice);
+                        self.audio_fields.insert((h, 0x3d), state);
+                        if stops {
+                            // A looping effect holds its voice until something stops it. Without
+                            // this the loop set by `Audio #16` never ends.
+                            self.sfx_loop.remove(&(h as usize));
+                            let named = self
+                                .sfx_handles
+                                .get(h as usize)
+                                .filter(|n| !n.is_empty())
+                                .or_else(|| self.sfx_files.get(h as usize))
+                                .cloned();
+                            if let Some(name) = named {
+                                self.file_log.push(format!("sfx stop {h} -> {name}"));
+                                self.sfx_stop_queue.push(name);
+                            }
+                        }
+                        0
+                    }
+                    Some(Stub::GlActiveTexture) => {
+                        let unit = self.cpu.regs[0].wrapping_sub(0x84C0);
+                        if unit > 2 {
+                            0x0500 // GL_INVALID_ENUM, as the driver reports it
+                        } else {
+                            if unit != 0 && !self.warned_texture_unit {
+                                self.warned_texture_unit = true;
+                                eprintln!(
+                                    "glActiveTexture(GL_TEXTURE{unit}): only unit 0 is modelled — \
+                                     draws using this unit will sample unit 0's texture"
+                                );
+                            }
+                            self.active_texture_unit = unit;
+                            0
+                        }
+                    }
+                    Some(Stub::GlPixelStore) => {
+                        let (pname, param) = (self.cpu.regs[0], self.cpu.regs[1]);
+                        match (pname, param) {
+                            (_, p) if !matches!(p, 1 | 2 | 4 | 8) => 0x0501, // GL_INVALID_VALUE
+                            (0x0CF5, p) => {
+                                self.unpack_alignment = p;
+                                0
+                            }
+                            (0x0D05, p) => {
+                                self.pack_alignment = p;
+                                0
+                            }
+                            _ => 0x0500, // GL_INVALID_ENUM
+                        }
+                    }
+                    Some(Stub::Printf { fmt, first_vararg }) => {
+                        let (a, first) = (self.cpu.regs[*fmt], *first_vararg);
+                        let line = self.format_printf(a, first);
+                        // Games print with and without a trailing newline; joining on the guest's
+                        // own line breaks keeps a multi-call line together in the log.
+                        eprint!("[game] {line}");
+                        if !line.ends_with('\n') {
+                            eprintln!();
+                        }
+                        self.printf_lines.push(line);
+                        0
+                    }
+                    Some(Stub::AudioFieldSet {
+                        handle,
+                        value,
+                        off,
+                        byte,
+                    }) => {
+                        let (h, mut v, off) = (self.cpu.regs[*handle], self.cpu.regs[*value], *off);
+                        if *byte {
+                            v &= 0xff;
+                        }
+                        self.audio_fields.insert((h, off), v);
+                        0
+                    }
+                    Some(Stub::AudioFieldGet { handle, off }) => {
+                        let (h, off) = (self.cpu.regs[*handle], *off);
+                        self.audio_fields.get(&(h, off)).copied().unwrap_or(0)
+                    }
                     Some(Stub::Clock { arg, step }) => {
                         let (dst, step) = (self.cpu.regs[*arg], *step);
-                        self.clock = self.clock.wrapping_add(step);
-                        let now = self.clock;
+                        // A fixed step per CALL makes the game's clock run at however fast we
+                        // happen to call it — Minigolf polls it about twice a frame, so at 60 fps
+                        // its timers ran at roughly double real time and every idle timeout fired
+                        // early. `wall_clock` advances by actual elapsed microseconds instead, so
+                        // the game's notion of time matches the player's regardless of frame rate.
+                        let now = if self.wall_clock {
+                            let real = self
+                                .started
+                                .map(|t| t.elapsed().as_micros() as u32)
+                                .unwrap_or(0);
+                            // STRICTLY monotonic. The emulator outruns real time in places, so
+                            // two polls can land inside the same microsecond and report the same
+                            // value — and a game that divides by the delta between them divides
+                            // by zero. Vortex does exactly that: with the host clock it aborted
+                            // with "Arithmetic exception: Divide By Zero" at a frame that moved
+                            // around with machine load (69, 402, 1502 across three runs), and
+                            // with `--fixed-clock` it ran clean to the end of the script.
+                            //
+                            // Forcing at least 1 µs of progress cannot drift meaningfully ahead:
+                            // these titles poll twice a frame, so the floor only binds when real
+                            // time genuinely has not moved, and real time overtakes it again
+                            // immediately.
+                            let next = real.max(self.clock.wrapping_add(1));
+                            self.clock = next;
+                            next
+                        } else {
+                            self.clock = self.clock.wrapping_add(step);
+                            self.clock
+                        };
                         self.mem.write32(dst, now);
                         now
                     }
@@ -4344,14 +6933,21 @@ impl Machine {
                         if idx < 8 {
                             self.arrays[idx] = Some(VertexArray {
                                 size: self.cpu.regs[1] as usize,
+                                // The TYPE, which this used to ignore entirely — every component
+                                // was read as a 4-byte 16.16 fixed. That is right for GL_FIXED,
+                                // which is what the titles measured so far use, but a 2-byte type
+                                // also makes the implied stride wrong and every other vertex is
+                                // then read from the middle of its neighbour.
+                                ty: self.cpu.regs[2],
                                 stride: self.mem.read32(sp) as usize,
                                 ptr: self.mem.read32(sp.wrapping_add(4)),
                             });
                         }
                         0
                     }
-                    Some(Stub::FileOpen { path, out }) => {
-                        let (pa, oa) = (self.cpu.regs[*path], self.cpu.regs[*out]);
+                    Some(Stub::FileOpen { path, out, return_handle }) => {
+                        let (pa, oa, rh) =
+                            (self.cpu.regs[*path], self.cpu.regs[*out], *return_handle);
                         let name = self.read_cstr(pa, 256);
                         let handle = self.open_file(&name);
                         if oa != 0 {
@@ -4363,15 +6959,516 @@ impl Machine {
                             handle,
                             if handle == 0 { "MISS" } else { "ok" }
                         ));
-                        // Zero is success in the calling convention seen so far.
+                        // Which of the two conventions this import answers to — see `FileOpen`.
+                        if rh {
+                            handle
+                        } else {
+                            0
+                        }
+                    }
+                    Some(Stub::AsyncOpen { path, request }) => {
+                        let (pa, req) = (self.cpu.regs[*path], self.cpu.regs[*request]);
+                        let name = self.read_cstr(pa, 256);
+                        // Low byte of the first argument is the mode: 0 read, 1 write.
+                        // Mode 1 is a write-mode open. Creating the file on demand is OFF by
+                        // default: measured on Bejeweled, letting its `Prefs` open succeed against
+                        // a newly created empty file sends it into a 6M-instruction-per-frame
+                        // grind, where a plain miss leaves it running. So "the file does not
+                        // exist" is an answer this title copes with and an empty one is not, and
+                        // until the format is known, inventing one does more harm than good.
+                        let handle = if self.allow_creates && self.cpu.regs[0] & 0xff == 1 {
+                            self.open_file_write(&name)
+                        } else {
+                            self.open_file(&name)
+                        };
+                        let obj = self.mem.read32(req.wrapping_add(REQ_FILE_OBJ));
+                        self.file_log.push(format!(
+                            "async open {:?} mode {:#x} op {} req {:#010x} buf={:#010x} len={} obj {:#010x} stream {:#010x} -> handle {} ({})",
+                            name, self.cpu.regs[0] & 0xff,
+                            self.mem.read8(req.wrapping_add(0x04)), req,
+                            self.mem.read32(req.wrapping_add(REQ_BUFFER)),
+                            self.mem.read32(req.wrapping_add(REQ_LENGTH)), obj,
+                            self.mem.read32(req.wrapping_add(0x2c)), handle,
+                            if handle == 0 { "MISS" } else { "ok" }
+                        ));
+                        if handle == 0 {
+                            // A miss is a real answer: report the failure through the status the
+                            // callback reads rather than pretending the file appeared.
+                            self.mem.write32(req.wrapping_add(REQ_STATUS), !0);
+                            self.queue_completion(req);
+                            0
+                        } else {
+                            // Publish the STREAM ID in `[req+0x2c]`.
+                            //
+                            // RetailOS's open writes it there, and the game caches it: Mahjong's
+                            // open completion at `0x1801da50` does `ldr r1,[r0,#0x2c] /
+                            // str r1,[r4,#0]`, putting it on the file object, and every later
+                            // request gets it back through `0x18021728: ldr r1,[r1,#0] /
+                            // str r1,[r0,#0x2c]`. RetailOS then resolves ops 3/4/5 through THAT
+                            // field (`0x001e36c8: ldr r1,[r4,#0x2c] / bl 0x001e3dfc`), not through
+                            // the file object at `+0x08`.
+                            //
+                            // Left alone it stays at the `0xffffffff` the game initialised it to,
+                            // so the id the game caches and hands back is -1 — a stream that does
+                            // not exist. The handle is a stable non-negative id and is what the
+                            // rest of this file already indexes by.
+                            self.mem.write32(req.wrapping_add(0x2c), handle);
+                            if obj != 0 {
+                                self.handles_by_obj.insert(obj, handle);
+                                // Publish the descriptor in the file object itself, at +8.
+                                //
+                                // This is what an open actually *returns* to the game: Lost's
+                                // completion handler at `0x1803b068` reads `[obj+8]` and stores
+                                // it as the slot's descriptor (`str r0,[ip,#0x11c]`), treating a
+                                // negative value as a failed open. The field arrives as
+                                // `0xffffffff`, so leaving it alone means every open reports
+                                // failure however well it went — which is exactly why Lost opened
+                                // `rserver.bin` successfully and then never read a byte of it.
+                                //
+                                // Minigolf never noticed because it looks the handle up through
+                                // the request rather than through this field.
+                                self.mem.write32(obj.wrapping_add(8), handle);
+                            }
+                            // An open whose request already carries a destination buffer is a
+                            // LOAD, not just an open: Lost hands `#3` a 512000-byte buffer at
+                            // +0x14 and, when the completion arrives, goes straight to collecting
+                            // the data (`0x1803d614`: phase == 2 -> `bl 0x1803483c`). It never
+                            // issues a read, because on the device there is nothing left to read.
+                            //
+                            // The file position is deliberately NOT advanced. Minigolf opens the
+                            // same way and then reads through `#2`; leaving the position at zero
+                            // means that still works and this is purely additive.
+                            let buf = self.mem.read32(req.wrapping_add(REQ_BUFFER));
+                            let len = self.mem.read32(req.wrapping_add(REQ_LENGTH));
+                            // A WRITE-mode open with a buffer is a save: put the bytes on disk.
+                            //
+                            // Sudoku opens `savefile.dat` with mode 1 and a 17 228-byte buffer
+                            // every single frame. With no write path the save never lands, the
+                            // game re-runs the state that issues it, and it re-creates its screen
+                            // object each time until it exhausts its own pool — the `Lost(0)`
+                            // null-object crash at frame 501.
+                            if self.cpu.regs[0] & 0xff == 1 && self.write_on_open {
+                                let buf = self.mem.read32(req.wrapping_add(REQ_BUFFER));
+                                let len = self.mem.read32(req.wrapping_add(REQ_LENGTH));
+                                if buf != 0 && len != 0 && len < 1 << 24 {
+                                    let bytes: Vec<u8> =
+                                        (0..len).map(|i| self.mem.read8(buf + i)).collect();
+                                    let path = self.open_paths[handle as usize - 1].clone();
+                                    let ok = std::fs::write(&path, &bytes).is_ok();
+                                    if ok {
+                                        // Keep the in-memory copy in step, so a read-back in the
+                                        // same session sees what was just written.
+                                        self.open_files[handle as usize - 1] = (bytes, 0);
+                                    }
+                                    self.file_log.push(format!(
+                                        "write {len} bytes -> {path} ({})",
+                                        if ok { "ok" } else { "FAILED" }
+                                    ));
+                                }
+                            }
+                            // Auto-load only when the destination can hold the WHOLE file.
+                            //
+                            // A buffer smaller than the file is the game reading a HEADER and
+                            // intending to stream the rest itself, not asking for the file.
+                            // Measured on Pac-Man: it opens each `.wav` twice — once with a
+                            // 44-byte buffer for the RIFF header, then again with no buffer at all
+                            // — and filling that 44-byte buffer derails its loader into an endless
+                            // retry on the first sound. Its `.dat` and `.tga` opens pass buffers
+                            // larger than the file and want exactly this. Lost and Bejeweled do
+                            // too (512 KB for a 105 KB `rserver.bin`).
+                            let whole = self
+                                .open_files
+                                .get(handle as usize - 1)
+                                .is_some_and(|(d, _)| len as usize >= d.len())
+                                // A buffer SMALLER than the file is a header read, and it has to
+                                // be filled. Sims Bowling opens each `.wav` with a 44-byte buffer
+                                // — the RIFF header — and refusing it stalls its audio loader
+                                // dead: it stops at handle 15 and never reaches its main menu.
+                                // Filled, it goes on to open 66 handles, upload 63 textures and
+                                // arrive at "Bowl Now! / Sims Life / Pass 'n Play".
+                                //
+                                // The guard this replaces was added for Pac-Man, which is derailed
+                                // by exactly this fill — but Pac-Man's per-title default is
+                                // `--no-load-on-open`, so it never reaches this branch at all.
+                                // `EAPP_NO_PARTIAL_LOAD=1` restores the refusal.
+                                //
+                                // Bounded to HEADER-SIZED buffers. SAT Prep opens the 2 122 234-byte
+                                // `Audio/bank0.dat` with a 7 232-byte buffer, and filling that one
+                                // sends it into a spin at `0x1800df88` that costs it 819 of its 931
+                                // frames. A 44-byte buffer on a `.wav` is a header probe; a 7 KB
+                                // buffer on a 2 MB bank is the front of a stream the game means to
+                                // read itself.
+                                || (!self.no_partial_load && len <= self.partial_load_max);
+                            // Never load back into the buffer a WRITE-mode open just saved from.
+                            // Reading a file you opened to write is not something the ABI does,
+                            // and doing it hands the game its own outgoing bytes as if they were
+                            // incoming ones.
+                            let writing = self.cpu.regs[0] & 0xff == 1;
+                            if self.load_on_open && !writing && whole && buf != 0 && len != 0 {
+                                let got = self.read_file(handle as usize, buf, len);
+                                if self.rewind_after_load {
+                                    self.open_files[handle as usize - 1].1 = 0;
+                                }
+                                // The completion's second result word, which Lost's handler
+                                // stores at slot+0x120: how much actually arrived.
+                                self.mem.write32(req.wrapping_add(0x24), got);
+                                // For a LOAD, `[obj+8]` is the operation's RESULT — how many
+                                // bytes arrived — not a file handle. Lost's completion handler
+                                // copies it to the slot (`str r0,[ip,#0x11c]`) and the game hands
+                                // that straight to `OpenGLES #164` as the render-server image
+                                // size. Leaving the handle there told the driver its firmware was
+                                // 1 byte long.
+                                if obj != 0 {
+                                    self.mem.write32(obj.wrapping_add(8), got);
+                                }
+                                self.file_log.push(format!(
+                                    "  load into {buf:#010x} cap {len} -> {got} bytes"
+                                ));
+                            } else if buf != 0 && len != 0 {
+                                // A buffered open we deliberately did NOT load from — a write-mode
+                                // open, or one whose buffer is smaller than the file. It still has
+                                // to report a byte count: `+0x24` and `[obj+8]` are the operation's
+                                // result, and leaving whatever the game happened to have there
+                                // reads back as a transfer that never happened. Zero is the truth.
+                                self.mem.write32(req.wrapping_add(0x24), 0);
+                                if obj != 0 {
+                                    self.mem.write32(obj.wrapping_add(8), 0);
+                                }
+                            }
+                            // A BUFFERLESS open still has to answer "how big is it".
+                            //
+                            // Mahjong opens `main.rlb` with no buffer and no length, then issues
+                            // its streaming reads with the buffer and length it keeps at
+                            // `[lib+0x10c]` / `[lib+0x118]` — both zero, so every read moved zero
+                            // bytes and it reissued forever on its loading screen. The size is the
+                            // one thing a bufferless open can be asking for, and `+0x24` is where
+                            // a load already reports its byte count, so it is where a size goes.
+                            if buf == 0 || len == 0 {
+                                let size = self
+                                    .open_files
+                                    .get(handle as usize - 1)
+                                    .map_or(0, |(d, _)| d.len() as u32);
+                                if self.size_on_open {
+                                    self.mem.write32(req.wrapping_add(0x24), size);
+                                }
+                                // A bufferless open moved NO BYTES, and `[obj+8]` is the
+                                // operation's result — so it must read zero, not the handle.
+                                //
+                                // Mahjong's library-open completion at `0x18016df4` does
+                                // `ldr r0,[r1,#8] / str r0,[r2,#0x11c]`, and the branch at
+                                // `0x18016ca8` posts the callback that starts the resource
+                                // consumer only when that field is ZERO. With the handle sitting
+                                // there it took the other arm and reissued its stream requests
+                                // forever. A loading open still reports its byte count, and the
+                                // handle still reaches the game through `[req+0x2c]` (§22.1).
+                                // NOT zeroed. Mahjong's library completion reads this as its
+                                // result and only starts its consumer when it is zero (§20.5),
+                                // but reporting zero here never moved Mahjong one frame and it
+                                // costs Minigolf five. `EAPP_ZERO_OPEN_RESULT=1` tries it.
+                                if obj != 0 && self.zero_open_result {
+                                    self.mem.write32(obj.wrapping_add(8), 0);
+                                } else if obj != 0 && !self.handle_open_result {
+                                    // `[obj+8]` is the operation's RESULT, and for a bufferless
+                                    // open the result is HOW BIG THE FILE IS. Neither the handle
+                                    // nor zero is right, and both were tried here before.
+                                    //
+                                    // Sims Bowling proves it. Its open completion at `0x1803443c`
+                                    // does `ldrne r0,[r1,#8] / str r0,[r12,#0x11c]`, and the
+                                    // library's size accessor `0x18026680` returns that field
+                                    // straight to `0x18009888`, which is
+                                    //
+                                    //     cmp r0,#4 / bcs <proceed>
+                                    //
+                                    // i.e. "does this resource have at least four bytes". With
+                                    // the handle (3) sitting there the answer was no, so
+                                    // `0x18009894` set the request's size to zero and every
+                                    // subsequent read was clamped to a zero-byte transfer by
+                                    // `0x18009584`. `gameLib.rlb` is 19 997 809 bytes.
+                                    self.mem.write32(obj.wrapping_add(8), size);
+                                }
+                                self.file_log.push(format!("  size of handle {handle} = {size}"));
+                            }
+                            self.mem.write32(req.wrapping_add(REQ_STATUS), 0);
+                            self.queue_completion(req);
+                            handle
+                        }
+                    }
+                    Some(Stub::SyncOpenWrite { mode, name, obj }) => {
+                        let (md, na, ob) =
+                            (self.cpu.regs[*mode], self.cpu.regs[*name], self.cpu.regs[*obj]);
+                        let path = self.read_cstr(na, 256);
+                        // Mode 1 and 2 are both write-ish (create / append); anything else is a
+                        // read and has no business here.
+                        let handle =
+                            if md == 1 || md == 2 { self.open_file_write(&path) } else { 0 };
+                        if ob != 0 {
+                            self.mem.write32(ob, handle);
+                        }
+                        self.file_log.push(format!(
+                            "sync open {path:?} mode {md} -> handle {handle} ({})",
+                            if handle == 0 { "FAILED" } else { "ok" }
+                        ));
+                        // Zero is success.
+                        if handle == 0 { 1 } else { 0 }
+                    }
+                    Some(Stub::SyncWrite { handle, buffer, length }) => {
+                        let (h, buf, len) = (
+                            self.cpu.regs[*handle],
+                            self.cpu.regs[*buffer],
+                            self.cpu.regs[*length],
+                        );
+                        let n = self.write_file(h as usize, buf, len);
+                        self.file_log
+                            .push(format!("sync write handle {h} len {len} -> {n} bytes"));
+                        if n == len && len > 0 { 0 } else { 1 }
+                    }
+                    Some(Stub::SyncClose { handle }) => {
+                        let h = self.cpu.regs[*handle];
+                        self.file_log.push(format!("sync close handle {h}"));
                         0
                     }
-                    Some(Stub::FileRead {
-                        handle,
-                        buffer,
-                        length,
-                        out,
-                    }) => {
+                    Some(Stub::AsyncOp { request }) => {
+                        let req = self.cpu.regs[*request];
+                        let words: Vec<String> = (0..16)
+                            .map(|i| format!("{:08x}", self.mem.read32(req.wrapping_add(4 * i))))
+                            .collect();
+                        self.file_log.push(format!(
+                            "async op   req {req:#010x} op={} obj={:#010x} buf={:#010x} len={} stream={:#010x}",
+                            self.mem.read8(req.wrapping_add(0x04)),
+                            self.mem.read32(req.wrapping_add(REQ_FILE_OBJ)),
+                            self.mem.read32(req.wrapping_add(REQ_BUFFER)),
+                            self.mem.read32(req.wrapping_add(REQ_LENGTH)),
+                            self.mem.read32(req.wrapping_add(0x2c)),
+                        ));
+                        self.file_log.push(format!("  req[0x00..0x40] {}", words.join(" ")));
+                        self.mem.write32(req.wrapping_add(REQ_STATUS), 0);
+                        self.queue_completion(req);
+                        1
+                    }
+                    Some(Stub::AsyncRead { request }) => {
+                        let req = self.cpu.regs[*request];
+                        let buf = self.mem.read32(req.wrapping_add(REQ_BUFFER));
+                        let len = self.mem.read32(req.wrapping_add(REQ_LENGTH));
+                        let obj = self.mem.read32(req.wrapping_add(REQ_FILE_OBJ));
+                        // Prefer the stream id the open published, exactly as RetailOS does. It
+                        // matters when one file object carries two files in turn — Sudoku opens
+                        // `savefile.dat` and `Sudoku.rlb` through the same object at 0x180610a4,
+                        // and a map keyed on the object can only remember the later one.
+                        // The file object first, the stream id only as a fallback.
+                        //
+                        // The stream id is what RetailOS resolves on (§22.1) and it is published
+                        // now, but a request object gets REUSED: Minigolf issues both its `.sav`
+                        // opens through `req 0x19001410`, so a later operation can carry a stream
+                        // id left over from an earlier file. Preferring it sent Minigolf's reads
+                        // to the wrong handle and cost it every frame past the eleventh. The
+                        // object is refreshed on every open and does not go stale that way.
+                        let stream = self.mem.read32(req.wrapping_add(0x2c));
+                        let handle = match self.handles_by_obj.get(&obj).copied() {
+                            Some(h) if h != 0 => h,
+                            _ if stream != 0 && (stream as usize) <= self.open_files.len() => stream,
+                            _ => 0,
+                        };
+                        // A request with a length but NO buffer is a SEEK, not a read.
+                        //
+                        // Test Prep sends these with op type 3 at `+0x04` and `len = 4`: it wants
+                        // the file position advanced past a header, not four bytes delivered.
+                        // Treating it as a read wrote those bytes to address ZERO and left the
+                        // game re-opening the same font blob forever. Advancing the position is
+                        // what the operation means, and it is also what makes the following real
+                        // read return the right part of the file.
+                        // Dispatch on the OP, the way RetailOS's worker does at `0x001e3764`.
+                        //
+                        // Its jump table at `0x001e3788` is the authority, and it disagrees with
+                        // the field map this file used to carry:
+                        //
+                        //   op 3 -> `0x001e3d90`  WRITE  (len `+0x18`, buf `+0x14`, result `+0x24`)
+                        //   op 4 -> `0x001e3e2c`  READ   (same, and the new position to `+0x28`)
+                        //   op 5 -> `0x001e3db8`  SEEK   (offset `+0x0c` sign-extended, whence `+0x10`)
+                        //
+                        // Op 5 was being handled as "a read with no buffer", i.e. as nothing at
+                        // all, which is why Mahjong's `.rlb` reader reissued the same request
+                        // forever. Anything outside 3..=5 keeps the old buffer-shape heuristic,
+                        // because those requests reach this stub through call sites that never
+                        // set an op byte.
+                        let op = if self.op_dispatch { self.mem.read8(req.wrapping_add(0x04)) } else { 0xff };
+                        let got = match op {
+                            _ if handle == 0 => 0,
+                            5 => {
+                                let offset = self.mem.read32(req.wrapping_add(0x0c)) as i32;
+                                let whence = self.mem.read8(req.wrapping_add(0x10)) as u32;
+                                let at = self.seek_to(handle as usize, offset, whence);
+                                self.file_log.push(format!(
+                                    "  seek handle {handle} {offset:+} whence {whence} -> {at}"
+                                ));
+                                self.mem.write32(req.wrapping_add(0x28), at);
+                                0
+                            }
+                            // Op 3 is the WRITE (`0x001e3d90`), and this is where a save should
+                            // land — not at open time. Writing the buffer when the file is merely
+                            // opened puts whatever the game has not filled in yet on disk:
+                            // Minigolf opens `jdmgp.sav` with a 328-byte buffer, reads a length
+                            // back out of it, and asserts it is at least 4. Written at open, that
+                            // length is the zero the buffer still held, and the game hangs on
+                            // `b .` at `0x18008738` eleven frames later.
+                            3 if self.op3_writes => {
+                                let n = self.write_file(handle as usize, buf, len);
+                                let at = self
+                                    .open_files
+                                    .get(handle as usize - 1)
+                                    .map_or(0, |(_, p)| *p as u32);
+                                self.mem.write32(req.wrapping_add(0x28), at);
+                                n
+                            }
+                            4 => {
+                                let n = self.read_file(handle as usize, buf, len);
+                                let at = self
+                                    .open_files
+                                    .get(handle as usize - 1)
+                                    .map_or(0, |(_, p)| *p as u32);
+                                self.mem.write32(req.wrapping_add(0x28), at);
+                                n
+                            }
+                            _ if buf == 0 && len > 0 => self.seek_file(handle as usize, len),
+                            // `EAPP_READAHEAD=N` delivers N extra bytes past the requested
+                            // length without moving the file position, the way a buffered reader
+                            // would. Diagnostic: Lost reads two bytes of `/l` (the entry count)
+                            // and then decodes four 32-bit offsets out of the same buffer, so
+                            // either its request length is being read from the wrong field or the
+                            // real interface fills ahead. This says which.
+                            _ if self.readahead > 0 && buf != 0 && len > 0 => {
+                                let n = self.read_file(handle as usize, buf, len);
+                                let extra = self.readahead;
+                                let at = self
+                                    .open_files
+                                    .get(handle as usize - 1)
+                                    .map_or(0, |(_, p)| *p as u32);
+                                self.read_file(handle as usize, buf.wrapping_add(n), extra);
+                                if let Some((_, p)) = self.open_files.get_mut(handle as usize - 1) {
+                                    *p = at as usize;
+                                }
+                                self.mem.write32(req.wrapping_add(0x28), at);
+                                n
+                            }
+                            // The catch-all read, for the call sites that set no op byte — and
+                            // for op 3 while `op3_writes` is off. It has to publish the new
+                            // position at `+0x28` for the same reason op 4 does: the field means
+                            // "where the file is now", and a game that reads it back after a
+                            // short header read otherwise sees whatever it initialised the
+                            // request with. Lost leaves 0xffffffff there.
+                            _ => {
+                                let n = self.read_file(handle as usize, buf, len);
+                                if !self.no_read_pos {
+                                    let at = self
+                                        .open_files
+                                        .get(handle as usize - 1)
+                                        .map_or(0, |(_, p)| *p as u32);
+                                    self.mem.write32(req.wrapping_add(0x28), at);
+                                }
+                                n
+                            }
+                        };
+                        self.file_log.push(format!(
+                            "async read req {req:#010x} op {op} obj {obj:#010x} stream {:#010x} handle {handle} buf {buf:#010x} len {len} -> {got} bytes",
+                            self.mem.read32(req.wrapping_add(0x2c))
+                        ));
+                        // The whole request, when the length looks implausible. A read that asks
+                        // for two bytes and is followed by a decode of half a megabyte is reading
+                        // its length out of the wrong field, and only the raw struct says which
+                        // field holds the real one.
+                        if std::env::var_os("EAPP_REQ_DUMP").is_some() {
+                            let words: Vec<String> = (0..16)
+                                .map(|i| {
+                                    format!("{:08x}", self.mem.read32(req.wrapping_add(4 * i)))
+                                })
+                                .collect();
+                            self.file_log.push(format!("  req[0x00..0x40] {}", words.join(" ")));
+                            let ow: Vec<String> = (0..8)
+                                .map(|i| {
+                                    format!("{:08x}", self.mem.read32(obj.wrapping_add(4 * i)))
+                                })
+                                .collect();
+                            self.file_log.push(format!("  obj[0x00..0x20] {}", ow.join(" ")));
+                        }
+                        // `+0x24` is the operation's BYTE COUNT, and every transfer has to
+                        // publish it — the field map at the top of this arm has said so for op 3
+                        // all along ("result `+0x24`"), but only the load-on-open path ever wrote
+                        // it. Sims Bowling reads it as the length of the chunk it just fetched:
+                        // its read completion at `0x180345c4` is
+                        //
+                        //     ldr r0,[r2,#0x14c] / str r0,[r2,#0x120]
+                        //
+                        // where `r2` is the stream and `stream+0x128` is the request, so
+                        // `stream+0x14c` IS `req+0x24`. `[stream+0x120]` is then handed back as
+                        // "bytes copied" by `0x180346e8`, and the library advances `[lib+0x110]`
+                        // by it. Left unwritten it read zero, so a 4096-byte read that genuinely
+                        // delivered 4096 bytes advanced the resource by nothing and the game
+                        // re-fetched the same chunk of `gameLib.rlb` forever.
+                        if !self.no_read_result2 {
+                            self.mem.write32(req.wrapping_add(0x24), got);
+                        }
+                        // `[obj+8]` is the operation's RESULT, and an open leaves the handle
+                        // there. Every operation after the open has to overwrite it or the game
+                        // reads the handle back as a byte count.
+                        //
+                        // Mahjong's `.rlb` reader is where this shows: its completion at
+                        // `0x18016c3c` copies `[fileobj+8]` into `[lib+0x11c]`, and the branch at
+                        // `0x18016ca8` opens the resource gate `[lib+0x124]` only when that is
+                        // ZERO. With the stale handle (2) sitting there it took the other arm
+                        // forever and re-issued the same op-5 request instead.
+                        if obj != 0 {
+                            self.mem.write32(obj.wrapping_add(8), got);
+                        }
+                        // A request with no buffer is not a data transfer at all — Mahjong sends
+                        // one with op type 5 at `+0x04` (open is 6, the sibling op is 7) and a
+                        // zero buffer and length. Judging it by "did we move `len` bytes" reports
+                        // failure for an operation that trivially succeeded, and the game reissues
+                        // it forever: 1700 of them in 1500 frames, never leaving its loading screen.
+                        // A SHORT read is not a failure. Asking for 153 600 bytes at 26 262
+                        // bytes from the end of `/d5` and getting 127 338 back is exactly what a
+                        // read at end-of-file does, and the byte count is published at `+0x24` for
+                        // the caller to act on. Reporting it as an error sent LOST into a
+                        // load / tear-down / retry cycle around `0x1803be40`.
+                        // MEASURED AND REJECTED as a default: accepting short reads costs LOST
+                        // 343 distinct code buckets (6 527 -> 6 184) and most of its screen
+                        // clears (408 -> 83), so this title evidently does treat a short read as
+                        // an error and retries deliberately. `EAPP_LENIENT_READ_LEN=1` tries it.
+                        let ok = if op == 5 || len == 0 {
+                            true
+                        } else if self.lenient_read_len {
+                            got > 0
+                        } else {
+                            got == len && got > 0
+                        };
+                        self.mem
+                            .write32(req.wrapping_add(REQ_STATUS), if ok { 0 } else { !0 });
+                        // A read with NEITHER a buffer nor a length has nothing to complete, and
+                        // completing it is what keeps Mahjong spinning: its completion handler at
+                        // `0x18016d5c` re-issues the request from `[lib+0x10c]`/`[lib+0x118]`,
+                        // which are still zero, so every answer produces another identical
+                        // request — about 1 700 of them in 1 500 frames.
+                        //
+                        // `EAPP_DROP_EMPTY_READS=1` stops answering them. It DOES kill the spin,
+                        // and it does not move Mahjong one frame further, so it is off by default:
+                        // measured over all eighteen titles it is neutral everywhere except Zuma,
+                        // which drops from 15 538 quads to 9 860. Kept because the spin it removes
+                        // is real and the next person to look at the `.rlb` reader will want it.
+                        if buf != 0 || len != 0 || !self.drop_empty_reads {
+                            self.queue_completion(req);
+                        }
+                        // A SEEK that succeeded moved no bytes, and returning its byte count says
+                        // "failed" to a caller that only checks for non-zero. Sims Bowling's
+                        // resource library asks for the first 4 KB of `gameLib.rlb` through
+                        // `0x1800432c`, gets 0 back, leaves `[lib+0x108]` unset and re-asks on the
+                        // next frame — forever. The operation was queued; report that it was.
+                        if got > 0 {
+                            got
+                        } else if op == 5 && !self.seek_returns_zero {
+                            1
+                        } else {
+                            0
+                        }
+                    }
+                    Some(Stub::FileRead { handle, buffer, length, out }) => {
                         let h = self.cpu.regs[*handle] as usize;
                         let (buf, len, oa) = (
                             self.cpu.regs[*buffer],
@@ -4391,7 +7488,12 @@ impl Machine {
                         let ev = if self.input_queue.is_empty() {
                             0
                         } else {
-                            self.input_queue.remove(0)
+                            // Bit 30 is EVENT PRESENT. Bejeweled polls and then does
+                            // `tst r0,#0x40000000 / beq skip` at 0x180209f8 before looking at the
+                            // low byte at all, so an event word without it is discarded whole and
+                            // the game never sees a single input. Minigolf reads the low byte
+                            // regardless, which is why this went unnoticed.
+                            self.input_queue.remove(0) | 0x4000_0000
                         };
                         self.mem.write32(dst, ev);
                         self.polls += 1;
@@ -4402,7 +7504,353 @@ impl Machine {
                         0
                     }
                     Some(Stub::GlBindTexture) => {
-                        self.bound_texture = self.cpu.regs[1];
+                        // `glBindTexture(target, texture)`. The target is recorded for diagnostics
+                        // only: coordinates are in texels on this driver whatever target is named
+                        // — see the note in the rasteriser.
+                        let (target, tex) = (self.cpu.regs[0], self.cpu.regs[1]);
+                        self.bound_ever.insert(tex);
+                        self.bound_texture = tex;
+                        match self.active_texture_unit {
+                            0 => self.bound_texture_u0 = tex,
+                            1 => self.bound_texture_u1 = tex,
+                            _ => {}
+                        }
+                        self.texture_target.insert(tex, target);
+                        0
+                    }
+                    Some(Stub::ResolveName { name, out }) => {
+                        let (np, op) = (self.cpu.regs[*name], self.cpu.regs[*out]);
+                        let n = self.read_cstr(np, 64);
+                        if op != 0 {
+                            self.mem.write32(op, 0);
+                            self.mem.write32(op + 4, 8);
+                            for (i, b) in n.as_bytes().iter().enumerate().take(80) {
+                                self.mem.write8(op + 8 + i as u32, *b);
+                            }
+                            self.mem.write8(op + 8 + n.len() as u32, 0);
+                        }
+                        self.pending_name = Some(n);
+                        0
+                    }
+                    Some(Stub::AudioSfxRegister { idx }) => {
+                        // Apple's `Audio #0` mallocs a `SoundEffectDescriptor` (its RTTI name sits
+                        // at 0x00666014), fills in defaults and returns the SLOT INDEX it was
+                        // inserted at — 0-based, so the tenth sound is handle 9.
+                        //
+                        // The game then never calls the buffer setter (#7), so RetailOS is not
+                        // where the PCM comes from. What it does pass is `r1` = 0..9 across ten
+                        // calls at course load, and the course ships exactly ten sounds as
+                        // `cNNbank/0.wav` .. `cNNbank/9.wav`. That is the mapping, and it is a
+                        // one-to-one match rather than an inference: the `c%02dbank/%01d.wav`
+                        // format string is in the game's own data at 0x47b0.
+                        //
+                        // `r2`/`r3` are the game's own handle table (`0x18040ee8` + index*0x21);
+                        // it reads back as 0xff-filled at this point, i.e. it is an output, not a
+                        // description of the sound.
+                        let sound = self.cpu.regs[*idx];
+                        // The table is FINITE, and a full one answers -1.
+                        //
+                        // Apple's `0x0029c960` inserts into a fixed slot table and returns -1 when
+                        // there is no room. Handing out an ever-growing index instead makes a
+                        // caller that registers sounds until it is refused loop forever: Pac-Man
+                        // does exactly that, and reached handle 470 and 10 000 file operations
+                        // without ever leaving its LOADING screen. 64 is the bound Bejeweled's
+                        // own release path asserts on (`cmp r2,#0x40` at 0x18014a70).
+                        const SFX_SLOTS: usize = 64;
+                        if self.sfx_handles.len() >= SFX_SLOTS {
+                            self.file_log.push("sfx create -> table full (-1)".to_string());
+                            !0u32
+                        } else {
+                        let handle = self.sfx_handles.len() as u32;
+                        // Two conventions, and which applies is visible from the game directory.
+                        //
+                        // Minigolf ships its effects as `cNNbank/0.wav`..`9.wav` and passes the
+                        // index in `r1`, so the name is computed. Pac-Man instead OPENS each sound
+                        // right after creating its descriptor and never calls the buffer setter
+                        // (#7) at all — its `Audio` traffic is `[0, 2, 5, 13, 14, 15, 16, 39, ...]`
+                        // — so there is nothing to compute from and the file that follows is the
+                        // sound. `pending_sfx` parks the handle until that open arrives; if a bank
+                        // file exists the computed name wins and the parking is never used.
+                        let path = format!("{}bank/{}.wav", self.course, sound);
+                        let have_bank = self
+                            .game_dir
+                            .as_ref()
+                            .is_some_and(|d| d.join(&path).exists());
+                        if have_bank {
+                            self.file_log
+                                .push(format!("sfx create h{handle} -> {path}"));
+                            self.sfx_handles.push(path);
+                        } else {
+                            // Resolved at play time from `sfx_files`, which is still filling.
+                            self.sfx_handles.push(String::new());
+                        }
+                        handle
+                        }
+                    }
+                    Some(Stub::Probe { label }) => {
+                        println!(
+                            "probe {label}: r0={:#x} r1={:#x} r2={:#x} r3={:#x}",
+                            self.cpu.regs[0], self.cpu.regs[1], self.cpu.regs[2], self.cpu.regs[3]
+                        );
+                        0
+                    }
+                    Some(Stub::GlUniformMatrix { value }) => {
+                        let p = self.cpu.regs[*value];
+                        if p != 0 {
+                            // Element 5 is the Y scale of a column-major 4x4.
+                            // Element 5 is the Y scale of a column-major 4x4. A negative one means
+                            // the game built `ortho` with the top edge above the bottom, i.e. it is
+                            // already working top-left and must not be flipped again.
+                            //
+                            // Measured: Bejeweled passes the IDENTITY here, so this tells us
+                            // nothing about that title — its vertices are in top-left screen
+                            // coordinates regardless, which is what `--flip-y` is for. Kept
+                            // because it is the correct reading for a game that sets a real
+                            // projection, and it costs one compare.
+                            let m5 = f32::from_bits(self.mem.read32(p + 5 * 4));
+                            if m5 < 0.0 {
+                                self.proj_flips_y = true;
+                            }
+                            // Location 0 is the MVP. Every built-in vertex program computes
+                            // `position = MVP * attribute0` and nothing else — no pipeline
+                            // synthesises a transform — so this is the only thing that positions
+                            // geometry, and a game like Tetris that emits model-space vertices is
+                            // drawn entirely at the origin without it.
+                            if self.cpu.regs[0] == 0 {
+                                let mut m = [0f32; 16];
+                                for (i, o) in m.iter_mut().enumerate() {
+                                    *o = f32::from_bits(self.mem.read32(p + (i as u32) * 4));
+                                }
+                                self.mvp = Some(m);
+                            }
+
+                        }
+                        0
+                    }
+                    Some(Stub::GlStartRenderServer) => {
+                        for r in [1usize, 2] {
+                            let p = self.cpu.regs[r];
+                            if p != 0 {
+                                self.mem.write32(p, r as u32);
+                            }
+                        }
+                        1
+                    }
+                    Some(Stub::AudioStreamCount) => self.audio_streams.len() as u32,
+                    Some(Stub::HostTime { out }) => {
+                        let base = self.cpu.regs[*out];
+                        if base != 0 {
+                            let off = *self.tz_offset.get_or_insert_with(host_utc_offset_seconds);
+                            let unix = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs() as i64)
+                                .unwrap_or(0);
+                            let [y, mo, d, h, mi, se] = civil_from_unix(unix + off);
+                            let h12 = match h % 12 {
+                                0 => 12,
+                                n => n,
+                            };
+                            for (i, v) in [se, mi, h12, d, mo, y].into_iter().enumerate() {
+                                self.mem.write32(base + (i as u32) * 4, v as u32);
+                            }
+                            if std::env::var_os("EAPP_TIME_LOG").is_some() {
+                                println!(
+                                    "hosttime base={base:#010x} sec={se} min={mi} h12={h12} d={d} mo={mo} y={y}  after: {}",
+                                    (0..8)
+                                        .map(|i| format!("{:08x}", self.mem.read32(base + i * 4)))
+                                        .collect::<Vec<_>>()
+                                        .join(" ")
+                                );
+                            }
+                        }
+                        0
+                    }
+                    Some(Stub::HostBattery) => {
+                        // Re-read at most once a minute. The game rate-limits its own calls, but
+                        // it does so against the emulated clock, and `pmset` is a process spawn.
+                        let pct = match self.battery_override {
+                            Some(p) => p as u32,
+                            None => {
+                                let now =
+                                    self.started.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+                                let stale = self
+                                    .battery
+                                    .is_none_or(|(t, _)| now.saturating_sub(t) >= 60);
+                                if stale {
+                                    self.battery = Some((now, host_battery_percent()));
+                                }
+                                self.battery.map(|(_, p)| p).unwrap_or(100) as u32
+                            }
+                        };
+                        // 0..20, not 0..100 — see `Stub::HostBattery`. Round rather than truncate
+                        // so a full battery reads as full.
+                        (pct * 20 + 50) / 100
+                    }
+                    Some(Stub::SfxSetBuffer { handle, ptr }) => {
+                        let (h, p) = (self.cpu.regs[*handle], self.cpu.regs[*ptr]);
+                        let name = self
+                            .file_extents
+                            .iter()
+                            .find(|&&(s, e, _)| p >= s && p < e)
+                            .map(|(_, _, n)| n.clone())
+                            .unwrap_or_default();
+                        if let Some(slot) = self.sfx_handles.get_mut(h as usize) {
+                            *slot = name.clone();
+                        }
+                        self.file_log
+                            .push(format!("sfx {h} buffer {p:#010x} -> {name:?}"));
+                        0
+                    }
+                    Some(Stub::SfxRepeat { handle, count }) => {
+                        let (h, n) = (self.cpu.regs[*handle] as usize, self.cpu.regs[*count]);
+                        if n == 0 {
+                            self.sfx_loop.insert(h);
+                        } else {
+                            self.sfx_loop.remove(&h);
+                        }
+                        self.file_log.push(format!("sfx {h} repeat {n}"));
+                        0
+                    }
+                    Some(Stub::SfxPlay { handle }) => {
+                        let h = self.cpu.regs[*handle] as usize;
+                        let named = self
+                            .sfx_handles
+                            .get(h)
+                            .filter(|n| !n.is_empty())
+                            .or_else(|| self.sfx_files.get(h));
+                        match named {
+                            Some(name) if !name.is_empty() => {
+                                let name = name.clone();
+                                let looping = self.sfx_loop.contains(&h);
+                                self.file_log.push(format!(
+                                    "sfx play {h} -> {name}{}",
+                                    if looping { " (looping)" } else { "" }
+                                ));
+                                self.sfx_queue.push((name, looping));
+                            }
+                            _ => self
+                                .file_log
+                                .push(format!("sfx play {h} -> unknown ({} named, {} files)", self.sfx_handles.len(), self.sfx_files.len())),
+                        }
+                        0
+                    }
+                    Some(Stub::AudioRegister) => {
+                        let n = self.pending_name.take().unwrap_or_default();
+                        self.file_log
+                            .push(format!("audio stream {} = {n:?}", self.audio_streams.len()));
+                        self.audio_streams.push(n);
+                        self.audio_streams.len() as u32 - 1
+                    }
+                    Some(Stub::AudioRepeat { arg }) => {
+                        // The handler masks to 8 bits and anything above 2 is rejected downstream.
+                        let v = (self.cpu.regs[*arg] & 0xff).min(2) as u8;
+                        self.music_repeat = v;
+                        self.file_log.push(format!("audio repeat mode {v}"));
+                        0
+                    }
+                    Some(Stub::AudioPlay { arg }) => {
+                        let idx = self.cpu.regs[*arg] as usize;
+                        if let Some(n) = self.audio_streams.get(idx) {
+                            let n = n.clone();
+                            self.file_log.push(format!("audio play stream {idx} = {n:?}"));
+                            self.audio_play_queue.push(n);
+                        } else {
+                            self.file_log.push(format!(
+                                "audio play stream {idx} — out of range ({} registered)",
+                                self.audio_streams.len()
+                            ));
+                        }
+                        0
+                    }
+                    Some(Stub::PeekStr { arg, off }) => {
+                        // Copy the register out before touching `self` again — the match holds an
+                        // immutable borrow of `self.stubs` until the last use of `arg`.
+                        let p = self.cpu.regs[*arg];
+                        let (reg, off) = (*arg, *off);
+                        let p = p.wrapping_add(off);
+                        // The path sits at +8: the first two words are a header (the second is
+                        // the offset to the string).
+                        let txt = self.read_cstr(p, 96);
+                        let head: Vec<String> =
+                            (0..8).map(|i| format!("{:02x}", self.mem.read8(p + i))).collect();
+                        self.file_log.push(format!(
+                            "peek r{reg} = {p:#010x} str={txt:?} [{}]",
+                            head.join(" ")
+                        ));
+                        0
+                    }
+                    Some(Stub::GlEnableVertexAttribArray) => {
+                        let i = self.cpu.regs[0] as usize;
+                        if i < 8 {
+                            self.attr_enabled[i] = true;
+                        }
+                        0
+                    }
+                    Some(Stub::GlDisableVertexAttribArray) => {
+                        let i = self.cpu.regs[0] as usize;
+                        if i < 8 {
+                            self.attr_enabled[i] = false;
+                        }
+                        0
+                    }
+                    Some(Stub::GlCopyTexImage2D) => {
+                        let sp = self.cpu.regs[13];
+                        let x = self.cpu.regs[3] as i64;
+                        let y = self.mem.read32(sp) as i64;
+                        let w = self.mem.read32(sp.wrapping_add(4)) as usize;
+                        let h = self.mem.read32(sp.wrapping_add(8)) as usize;
+                        self.copy_framebuffer_to_texture(x, y, w, h);
+                        0
+                    }
+                    Some(Stub::GlTexImage2D) => {
+                        let sp = self.cpu.regs[13];
+                        let w = self.cpu.regs[3] as usize;
+                        let h = self.mem.read32(sp) as usize;
+                        if std::env::var_os("EAPP_TEX_ARGS").is_some() {
+                            let r: Vec<String> =
+                                (0..4).map(|i| format!("{:08x}", self.cpu.regs[i])).collect();
+                            let st: Vec<String> = (0..8)
+                                .map(|i| format!("{:08x}", self.mem.read32(sp + 4 * i)))
+                                .collect();
+                            println!("texargs r0-3 {} | sp {} ", r.join(" "), st.join(" "));
+                        }
+                        let format = self.mem.read32(sp.wrapping_add(8));
+                        let ty = self.mem.read32(sp.wrapping_add(12));
+                        let data = self.mem.read32(sp.wrapping_add(16));
+                        self.upload_plain(w, h, format, ty, data);
+                        if std::env::var_os("EAPP_TEX_FMT_LOG").is_some() {
+                            println!(
+                                "texfmt PLAIN fmt={format:#06x} type={ty:#06x} -> tex#{} {w}x{h}",
+                                self.bound_texture
+                            );
+                        }
+                        // Who asked for this upload. A title that uploads a texture every frame
+                        // and never draws it has a caller worth naming: the draw is meant to sit
+                        // just past this return, so the LR is the shortlist of one.
+                        let lr = self.cpu.regs[14];
+                        self.tex_log.push(format!("texImage2D   caller lr={lr:#010x}"));
+                        0
+                    }
+                    Some(Stub::MemoryReport { bytes }) => {
+                        let (a, b, n) = (self.cpu.regs[0], self.cpu.regs[1], *bytes);
+                        if a != 0 {
+                            self.mem.write32(a, n);
+                        }
+                        if b != 0 {
+                            self.mem.write32(b, n);
+                        }
+                        n
+                    }
+                    Some(Stub::GlTexSubImage2D) => {
+                        // r0..r3 = target, level, xoffset, yoffset; the rest on the stack.
+                        let sp = self.cpu.regs[13];
+                        let (x, y) = (self.cpu.regs[2] as usize, self.cpu.regs[3] as usize);
+                        let w = self.mem.read32(sp) as usize;
+                        let h = self.mem.read32(sp.wrapping_add(4)) as usize;
+                        let format = self.mem.read32(sp.wrapping_add(8));
+                        let ty = self.mem.read32(sp.wrapping_add(12));
+                        let data = self.mem.read32(sp.wrapping_add(16));
+                        self.upload_sub(x, y, w, h, format, ty, data);
                         0
                     }
                     Some(Stub::GlCompressedTexImage2D) => {
@@ -4410,13 +7858,268 @@ impl Machine {
                         let w = self.cpu.regs[3] as usize;
                         let h = self.mem.read32(sp) as usize;
                         let data = self.mem.read32(sp.wrapping_add(12));
-                        self.upload_paletted(w, h, data);
+                        let ifmt = self.cpu.regs[2];
+                        let isize = self.mem.read32(sp.wrapping_add(8));
+                        let want_fmt_log = std::env::var_os("EAPP_TEX_FMT_LOG").is_some();
+                        self.upload_paletted(w, h, data, ifmt);
+                        if want_fmt_log {
+                            // Sample the decoded RGBA, alpha included — the PNG dump composites
+                            // over grey and hides it, and alpha is what decides whether a texel is
+                            // meant to be translucent or is a colour key we failed to drop.
+                            let probe = |t: &Texture, x: usize, y: usize| -> String {
+                                let o = (y.min(t.h - 1) * t.w + x.min(t.w - 1)) * 4;
+                                format!(
+                                    "{:02x}{:02x}{:02x}{:02x}",
+                                    t.rgba[o], t.rgba[o + 1], t.rgba[o + 2], t.rgba[o + 3]
+                                )
+                            };
+                            if let Some(t) = self.textures.get(&self.bound_texture) {
+                                println!(
+                                    "texfmt {ifmt:#06x} -> tex#{} {w}x{h} q1={} q2={} q3={}",
+                                    self.bound_texture,
+                                    probe(t, w / 8, h / 2),
+                                    probe(t, w / 4, h / 4),
+                                    probe(t, w / 2, h / 2)
+                                );
+                            }
+                        }
                         0
                     }
                     Some(Stub::GlDrawArrays) => {
                         let (mode, first, count) =
                             (self.cpu.regs[0], self.cpu.regs[1], self.cpu.regs[2]);
                         self.draw_arrays(mode, first, count);
+                        0
+                    }
+                    Some(Stub::GlUniform4x { fixed }) => {
+                        let (loc, count, ptr) =
+                            (self.cpu.regs[0] as i32, self.cpu.regs[1], self.cpu.regs[2]);
+                        if loc >= 0 && ptr != 0 && count > 0 {
+                            let read = |m: &mut Memory, i: u32| -> f32 {
+                                let w = m.read32(ptr + i * 4);
+                                if *fixed {
+                                    w as i32 as f32 / 65536.0
+                                } else {
+                                    f32::from_bits(w)
+                                }
+                            };
+                            let v = [
+                                read(&mut self.mem, 0),
+                                read(&mut self.mem, 1),
+                                read(&mut self.mem, 2),
+                                read(&mut self.mem, 3),
+                            ];
+                            if std::env::var_os("EAPP_UNIFORM_LOG").is_some() {
+                                println!(
+                                    "uniform4x loc={loc} fixed={fixed} v=[{:.3} {:.3} {:.3} {:.3}]",
+                                    v[0], v[1], v[2], v[3]
+                                );
+                            }
+                            // Location 4 is the colour register; the rest are the MVP matrix,
+                            // which this renderer does not apply.
+                            if loc == 4 {
+                                self.modulate = v;
+                            }
+
+                        }
+                        0
+                    }
+                    Some(Stub::GlGenTextures) => {
+                        let (n, out) = (self.cpu.regs[0], self.cpu.regs[1]);
+                        for i in 0..n.min(256) {
+                            self.next_texture_name += 1;
+                            if out != 0 {
+                                self.mem.write32(out + i * 4, self.next_texture_name);
+                            }
+                        }
+                        0
+                    }
+                    Some(Stub::GlLoadIdentity { fixed }) => {
+                        let m = self.cpu.regs[0];
+                        if m != 0 {
+                            let one = if *fixed { 0x1_0000 } else { 1.0f32.to_bits() };
+                            for i in 0..16u32 {
+                                let v = if i % 5 == 0 { one } else { 0 };
+                                self.mem.write32(m + i * 4, v);
+                            }
+                        }
+                        0
+                    }
+                    Some(Stub::PipelineSelect) => {
+                        let idx = self.cpu.regs[0];
+                        if self.pipeline != idx {
+                            self.pipeline = idx;
+                            if std::env::var_os("EAPP_UNIFORM_LOG").is_some() {
+                                println!("pipeline #159 -> {idx}");
+                            }
+                        }
+                        1
+                    }
+                    Some(Stub::GlUniform4xScalar) => {
+                        let loc = self.cpu.regs[0] as i32;
+                        if std::env::var_os("EAPP_UNIFORM_LOG").is_some() {
+                            let sp = self.cpu.regs[13];
+                            let fx = |w: u32| w as i32 as f32 / 65536.0;
+                            println!(
+                                "uniform4xScalar loc={loc} v=[{:.3} {:.3} {:.3} {:.3}]",
+                                fx(self.cpu.regs[1]), fx(self.cpu.regs[2]), fx(self.cpu.regs[3]),
+                                fx(self.mem.read32(sp))
+                            );
+                        }
+                        if loc == 4 {
+                            let sp = self.cpu.regs[13];
+                            let fx = |w: u32| w as i32 as f32 / 65536.0;
+                            self.modulate = [
+                                fx(self.cpu.regs[1]),
+                                fx(self.cpu.regs[2]),
+                                fx(self.cpu.regs[3]),
+                                fx(self.mem.read32(sp)),
+                            ];
+                        }
+                        0
+                    }
+                    Some(Stub::GlUniformMatrixFixed) => {
+                        let (loc, p) = (self.cpu.regs[0], self.cpu.regs[3]);
+                        if p != 0 && loc == 0 {
+                            let mut m = [0f32; 16];
+                            for (i, o) in m.iter_mut().enumerate() {
+                                *o = self.mem.read32(p + (i as u32) * 4) as i32 as f32 / 65536.0;
+                            }
+                            if m[5] < 0.0 {
+                                self.proj_flips_y = true;
+                            }
+                            self.mvp = Some(m);
+                        }
+                        0
+                    }
+                    Some(Stub::GlMatrixOp { op }) => {
+                        let op = *op;
+                        let sp = self.cpu.regs[13];
+                        let rd = |m: &mut Memory, base: u32| -> [f32; 16] {
+                            let mut v = [0f32; 16];
+                            for (i, o) in v.iter_mut().enumerate() {
+                                *o = f32::from_bits(m.read32(base + (i as u32) * 4));
+                            }
+                            v
+                        };
+                        let wr = |m: &mut Memory, base: u32, v: &[f32; 16]| {
+                            for (i, x) in v.iter().enumerate() {
+                                m.write32(base + (i as u32) * 4, x.to_bits());
+                            }
+                        };
+                        // Column-major: element (row r, col c) is v[c * 4 + r].
+                        let mul = |a: &[f32; 16], b: &[f32; 16]| {
+                            let mut o = [0f32; 16];
+                            for c in 0..4 {
+                                for r in 0..4 {
+                                    o[c * 4 + r] =
+                                        (0..4).map(|k| a[k * 4 + r] * b[c * 4 + k]).sum();
+                                }
+                            }
+                            o
+                        };
+                        let dst = self.cpu.regs[0];
+                        if dst != 0 {
+                            let out = if op == MatrixOp::Mult {
+                                let (pa, pb) = (self.cpu.regs[1], self.cpu.regs[2]);
+                                if pa == 0 || pb == 0 {
+                                    None
+                                } else {
+                                    let (a, b) = (rd(&mut self.mem, pa), rd(&mut self.mem, pb));
+                                    Some(mul(&a, &b))
+                                }
+                            } else {
+                                let m = rd(&mut self.mem, dst);
+                                let f = |r: usize| f32::from_bits(self.cpu.regs[r]);
+                                let mut t = [0f32; 16];
+                                t[0] = 1.0;
+                                t[5] = 1.0;
+                                t[10] = 1.0;
+                                t[15] = 1.0;
+                                match op {
+                                    MatrixOp::Translate => {
+                                        t[12] = f(1);
+                                        t[13] = f(2);
+                                        t[14] = f(3);
+                                    }
+                                    MatrixOp::Scale => {
+                                        t[0] = f(1);
+                                        t[5] = f(2);
+                                        t[10] = f(3);
+                                    }
+                                    MatrixOp::Rotate => {
+                                        // angle in r1 (degrees), axis in r2, r3 and sp+0.
+                                        let a = f(1).to_radians();
+                                        let (mut x, mut y) = (f(2), f(3));
+                                        let mut z = f32::from_bits(self.mem.read32(sp));
+                                        let len = (x * x + y * y + z * z).sqrt();
+                                        if len > 0.0 {
+                                            x /= len;
+                                            y /= len;
+                                            z /= len;
+                                        }
+                                        let (s, c) = (a.sin(), a.cos());
+                                        let ic = 1.0 - c;
+                                        t[0] = x * x * ic + c;
+                                        t[1] = y * x * ic + z * s;
+                                        t[2] = x * z * ic - y * s;
+                                        t[4] = x * y * ic - z * s;
+                                        t[5] = y * y * ic + c;
+                                        t[6] = y * z * ic + x * s;
+                                        t[8] = x * z * ic + y * s;
+                                        t[9] = y * z * ic - x * s;
+                                        t[10] = z * z * ic + c;
+                                    }
+                                    MatrixOp::Mult => unreachable!(),
+                                }
+                                Some(mul(&m, &t))
+                            };
+                            if let Some(o) = out {
+                                wr(&mut self.mem, dst, &o);
+                            }
+                        }
+                        0
+                    }
+                    Some(Stub::GlOrtho) => {
+                        let m = self.cpu.regs[0];
+                        let sp = self.cpu.regs[13];
+                        let f = |b: u32| f32::from_bits(b);
+                        let (l, r, b) = (
+                            f(self.cpu.regs[1]),
+                            f(self.cpu.regs[2]),
+                            f(self.cpu.regs[3]),
+                        );
+                        let t = f(self.mem.read32(sp));
+                        let zn = f(self.mem.read32(sp + 4));
+                        let zf = f(self.mem.read32(sp + 8));
+                        if m != 0 && r != l && t != b && zf != zn {
+                            let mut o = [0f32; 16];
+                            o[0] = 2.0 / (r - l);
+                            o[5] = 2.0 / (t - b);
+                            o[10] = -2.0 / (zf - zn);
+                            o[12] = -(r + l) / (r - l);
+                            o[13] = -(t + b) / (t - b);
+                            o[14] = -(zf + zn) / (zf - zn);
+                            o[15] = 1.0;
+                            for (i, v) in o.iter().enumerate() {
+                                self.mem.write32(m + (i as u32) * 4, v.to_bits());
+                            }
+                            // A projection whose top edge is above its bottom is already Y-down,
+                            // so the rasteriser must not flip again.
+                            if o[5] < 0.0 {
+                                self.proj_flips_y = true;
+                            }
+                        }
+                        0
+                    }
+                    Some(Stub::GlDrawElements) => {
+                        let (mode, count, ty, ptr) = (
+                            self.cpu.regs[0],
+                            self.cpu.regs[1],
+                            self.cpu.regs[2],
+                            self.cpu.regs[3],
+                        );
+                        self.draw_elements(mode, count, ty, ptr);
                         0
                     }
                     Some(Stub::GlSwap) => {
@@ -4523,7 +8226,7 @@ impl Machine {
             // hit or a collision.
             if self.enter_bloom & (1u64 << ((pc >> 2) & 63)) != 0 && self.enter_pcs.contains(&pc) {
                 let r = &self.cpu.regs;
-                let (args, lr, n) = ([r[0], r[1], r[2], r[3]], r[14], self.executed as u64);
+                let (args, lr, n) = ([r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]], r[14], self.executed as u64);
                 // The caller histogram is tallied here, not derived from the log below it — the log
                 // caps at 65 536 and the histogram is what the instrument table tells readers to
                 // trust when the detail rows are truncated.
@@ -4569,6 +8272,7 @@ impl Machine {
             }
             self.history[self.history_at % HISTORY] = pc;
             self.history_at += 1;
+
 
             // Indirect branches are the edges static analysis cannot resolve: the games are C++
             // with virtual dispatch, so every interesting call goes through a vtable slot.
@@ -6249,6 +9953,85 @@ impl Default for Pcf50605 {
     }
 }
 
+/// The host machine's battery charge, 0..=100.
+///
+/// `pmset -g batt` prints a line per battery with the charge as `NN%;`. A machine with no battery
+/// prints no such line, and a desktop is at wall power by definition, so the answer there is 100.
+/// Any failure — no `pmset`, unreadable output, another platform — answers 100 for the same
+/// reason: an emulated iPod that thinks it is flat will shut itself down, and a wrong shutdown is
+/// far more confusing than a wrong percentage.
+pub fn host_battery_percent() -> u8 {
+    let out = match std::process::Command::new("pmset").args(["-g", "batt"]).output() {
+        Ok(o) => o,
+        Err(_) => return 100,
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.split_whitespace()
+        .find_map(|w| w.strip_suffix("%;").or_else(|| w.strip_suffix('%')))
+        .and_then(|n| n.parse::<u8>().ok())
+        .map(|p| p.min(100))
+        .unwrap_or(100)
+}
+
+/// The host's local time as `[sec, min, hour, weekday, day, month, year-in-century]`.
+///
+/// Shelling out to `date` rather than taking a date-library dependency: the crate has none, and
+/// this needs the host's *local* zone, which `SystemTime` alone does not carry.
+pub fn host_local_time() -> [u8; 7] {
+    let out = std::process::Command::new("date")
+        .arg("+%S %M %H %u %d %m %y")
+        .output();
+    let mut tm = [0u8; 7];
+    if let Ok(o) = out {
+        let text = String::from_utf8_lossy(&o.stdout);
+        for (i, f) in text.split_whitespace().take(7).enumerate() {
+            tm[i] = f.parse().unwrap_or(0);
+        }
+    }
+    tm
+}
+
+/// The host's offset from UTC in seconds, e.g. `-25200` for PDT.
+///
+/// Read once and reused: the game asks for the time on every status-bar draw, i.e. every frame,
+/// and spawning `date` sixty times a second to answer it would cost more than the emulator.
+pub fn host_utc_offset_seconds() -> i64 {
+    let Ok(out) = std::process::Command::new("date").arg("+%z").output() else {
+        return 0;
+    };
+    let t = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // `+HHMM` / `-HHMM`.
+    if t.len() < 5 {
+        return 0;
+    }
+    let sign = if t.starts_with('-') { -1 } else { 1 };
+    let h: i64 = t[1..3].parse().unwrap_or(0);
+    let m: i64 = t[3..5].parse().unwrap_or(0);
+    sign * (h * 3600 + m * 60)
+}
+
+/// Split a Unix timestamp into `[year, month, day, hour, minute, second]`.
+///
+/// Howard Hinnant's `civil_from_days`, which is exact for the whole proleptic Gregorian range and
+/// needs no table. Written out rather than pulled in as a dependency because it is fifteen lines
+/// and the crate otherwise has none.
+pub fn civil_from_unix(secs: i64) -> [i64; 6] {
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    // Shift the epoch to 0000-03-01 so leap day lands at the end of the cycle.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    [y, m, d, rem / 3600, (rem % 3600) / 60, rem % 60]
+}
+
 impl Pcf50605 {
     /// I²C address, from Rockbox's `pcf50605_read`/`_write`, which pass `0x8`.
     pub const ADDR: u8 = 0x08;
@@ -6276,6 +10059,36 @@ impl Pcf50605 {
             adc_by_channel: BTreeMap::new(),
             reads: 0,
             writes: 0,
+        }
+    }
+
+    /// Answer the battery channel from the **host machine's** charge instead of a fixed number.
+    ///
+    /// `pct` is 0..=100. Rockbox's `powermgmt-ipod-pcf.c` fixes the scale in one line —
+    /// `mV = (adc * 6000) >> 10` — so the only invented part is percent-to-millivolts, and that
+    /// is the usual Li-ion working range: 3400 mV (Rockbox's danger threshold, where it prints
+    /// "Battery empty! RECHARGE!") up to 4200 mV at full. A desktop with no battery is reported
+    /// as 100, not as flat, because "no battery" and "dead battery" are opposite facts and only
+    /// one of them should stop a boot.
+    ///
+    /// This pushes onto `adc_values`, so an explicit `--pmu-adc=2=…` set afterwards still wins.
+    pub fn set_battery_percent(&mut self, pct: u8) {
+        let mv = 3400 + u32::from(pct.min(100)) * 8;
+        let code = ((mv << 10) / 6000) as u16;
+        self.adc_values.push((0x2, code));
+    }
+
+    /// Seed the real-time clock registers from the host's local time.
+    ///
+    /// **The register numbers are from the PCF5060x datasheet family, not from a measurement of
+    /// this firmware.** `RTCSC`/`RTCMN`/`RTCHR`/`RTCWD`/`RTCDT`/`RTCMT`/`RTCYR` sit at 0x0a..0x10
+    /// in BCD, seconds first. Nothing in a captured run has been seen reading them — booting the
+    /// firmware needs a NOR dump — so if the iPod turns out to keep its clock somewhere else,
+    /// this is where that will show up, and `polled` will say so as soon as a boot runs.
+    pub fn set_clock(&mut self, tm: [u8; 7]) {
+        let bcd = |v: u8| ((v / 10) << 4) | (v % 10);
+        for (i, &v) in tm.iter().enumerate() {
+            self.regs[0x0a + i] = bcd(v);
         }
     }
 
@@ -9194,6 +13007,74 @@ mod pcf_adc_tests {
         (p.data_byte(0), p.data_byte(1))
     }
 
+    /// The calendar split the status-bar clock is built on, checked against known instants.
+    ///
+    /// Worth testing rather than eyeballing: the emulator has no date dependency, so this is the
+    /// only thing standing between a Unix timestamp and the time the game prints, and its failure
+    /// mode is an hour or a day out — which looks plausible on screen.
+    #[test]
+    fn unix_seconds_split_into_the_right_calendar_date() {
+        // The epoch itself.
+        assert_eq!(civil_from_unix(0), [1970, 1, 1, 0, 0, 0]);
+        // 2026-08-19 21:59:07 UTC — the instant this was written.
+        assert_eq!(civil_from_unix(1_787_176_747), [2026, 8, 19, 21, 59, 7]);
+        // A leap day, which the 400-year-cycle arithmetic exists to get right.
+        assert_eq!(civil_from_unix(1_709_164_800), [2024, 2, 29, 0, 0, 0]);
+        // The last second of a year, i.e. every field rolling at once.
+        assert_eq!(civil_from_unix(1_767_225_599), [2025, 12, 31, 23, 59, 59]);
+        // Before the epoch: the floor-division has to go the right way, not truncate toward zero.
+        assert_eq!(civil_from_unix(-1), [1969, 12, 31, 23, 59, 59]);
+    }
+
+    /// The status bar shows a 12-hour clock, so midnight and noon are both "12", not "0".
+    #[test]
+    fn the_hour_shown_is_a_twelve_hour_one() {
+        let h12 = |unix: i64| {
+            let h = civil_from_unix(unix)[3];
+            match h % 12 {
+                0 => 12,
+                n => n,
+            }
+        };
+        assert_eq!(h12(0), 12, "midnight");
+        assert_eq!(h12(43_200), 12, "noon");
+        assert_eq!(h12(3_600), 1);
+        assert_eq!(h12(82_800), 11, "23:00");
+    }
+
+    /// The host's charge reaches the driver on the scale the driver actually decodes.
+    ///
+    /// Rockbox reads `mV = (adc * 6000) >> 10`, so this asserts on millivolts rather than on the
+    /// raw code — the code is an implementation detail, the voltage is the thing the firmware
+    /// makes decisions about. A full battery must land near 4200 mV, and an empty one must still
+    /// sit at 3400, which is Rockbox's danger threshold rather than below it: reporting 0% should
+    /// show an empty gauge, not trigger an emergency shutdown of the emulated machine.
+    #[test]
+    fn host_charge_is_reported_on_rockbox_s_voltage_scale() {
+        let mv = |pct: u8| {
+            let mut p = Pcf50605::default();
+            p.set_battery_percent(pct);
+            write(&mut p, 0x2f, (2 << 1) | 1);
+            let (a1, a2) = read2(&mut p, 0x30);
+            ((((a1 as u32) << 2) | (a2 as u32 & 3)) * 6000) >> 10
+        };
+        assert_eq!(mv(100), 4195, "a full battery");
+        assert_eq!(mv(0), 3398, "an empty battery, still above the 3400 danger line");
+        assert!(mv(50) > mv(20) && mv(20) > mv(0), "monotonic in charge");
+        // Over-100 input is clamped rather than trusted, so a bad reading cannot invent voltage.
+        assert_eq!(mv(200), mv(100));
+    }
+
+    /// The clock registers are BCD, seconds first — a driver reading 0x0a..0x10 gets the wall time.
+    #[test]
+    fn the_rtc_holds_local_time_in_bcd() {
+        let mut p = Pcf50605::default();
+        // 2026-08-19 is a Wednesday; 14:37:59.
+        p.set_clock([59, 37, 14, 3, 19, 8, 26]);
+        let regs: Vec<u8> = (0x0a..=0x10).map(|r| read2(&mut p, r).0).collect();
+        assert_eq!(regs, vec![0x59, 0x37, 0x14, 0x03, 0x19, 0x08, 0x26]);
+    }
+
     /// **Rockbox's exact access pattern**, which the old transfer-countdown model starved forever:
     /// start a conversion, read the result straight away, never poll the ready bit, repeat.
     ///
@@ -9361,6 +13242,128 @@ mod peek_tests {
     fn a_word_that_would_run_past_the_end_is_none() {
         let r = regions(0x1000_0000, &[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
         assert_eq!(peek_regions(&r, 0x1000_0004), None, "only two bytes remain");
+    }
+
+    /// The exact instruction sequence from Minigolf's input poll at `0x18018a10`, which is where
+    /// the hand-measured constant `0x18037a0c` came from. The `cmp` between the load and the
+    /// `bic` is not decoration — an adjacency-only matcher misses every title including this one.
+    #[test]
+    fn the_flags_word_is_recovered_from_minigolfs_own_poll() {
+        // 0x18018a10  ldr r9, [pc, #0x18]     -> the literal 0x180379f8
+        // 0x18018a14  (filler)
+        // 0x18018a18  ldr r0, [r9, #0x14]
+        // 0x18018a1c  cmp r6, #1
+        // 0x18018a20  bic r0, r0, #0x60
+        // 0x18018a24  str r0, [r9, #0x14]
+        let mut img = vec![0u8; 0x40];
+        let put = |img: &mut Vec<u8>, off: usize, w: u32| {
+            img[off..off + 4].copy_from_slice(&w.to_le_bytes());
+        };
+        put(&mut img, 0x00, 0xE59F_9018); // ldr r9, [pc, #0x18]  -> 0x00 + 8 + 0x18 = 0x20
+        put(&mut img, 0x04, 0xE1A0_0000); // nop
+        put(&mut img, 0x08, 0xE599_0014); // ldr r0, [r9, #0x14]
+        put(&mut img, 0x0c, 0xE356_0001); // cmp r6, #1
+        put(&mut img, 0x10, 0xE3C0_0060); // bic r0, r0, #0x60
+        put(&mut img, 0x14, 0xE589_0014); // str r0, [r9, #0x14]
+        put(&mut img, 0x20, 0x1803_79f8); // the literal
+        assert_eq!(find_flags_word(&img), Some(0x1803_7a0c));
+    }
+
+    /// A `bic #0x60` that is not written back is some other mask. Accepting it would hand the
+    /// viewer an address to poke inside the game's own image, which corrupts rather than fails.
+    #[test]
+    fn a_mask_with_no_store_back_is_not_the_flags_word() {
+        let mut img = vec![0u8; 0x40];
+        let put = |img: &mut Vec<u8>, off: usize, w: u32| {
+            img[off..off + 4].copy_from_slice(&w.to_le_bytes());
+        };
+        put(&mut img, 0x00, 0xE59F_9018);
+        put(&mut img, 0x08, 0xE599_0014);
+        put(&mut img, 0x10, 0xE3C0_0060);
+        put(&mut img, 0x14, 0xE1A0_0000); // no str
+        put(&mut img, 0x20, 0x1803_79f8);
+        assert_eq!(find_flags_word(&img), None);
+    }
+
+    /// A 2x1 ARGB1555 `.pix`, built to the same header shape as `battery_5551.pix`: 56-byte V3
+    /// header, `BI_BITFIELDS`, masks 0x7C00/0x03E0/0x001F/0x8000, negative height for top-down.
+    /// The point of the assertion is the CHANNEL EXPANSION — a 5-bit 0x1F has to become 0xFF, not
+    /// 0xF8, or every bright texture comes out slightly dark.
+    #[test]
+    fn a_1555_pix_expands_its_channels_to_full_range() {
+        let mut d = vec![0u8; 54 + 16 + 4];
+        d[0..2].copy_from_slice(b"BM");
+        let put = |d: &mut Vec<u8>, o: usize, v: u32| d[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        put(&mut d, 10, 70); // pixel data offset: 14 + 56
+        put(&mut d, 14, 56); // V3 header
+        put(&mut d, 18, 2); // width
+        put(&mut d, 22, (-1i32) as u32); // height, top-down
+        d[28..30].copy_from_slice(&16u16.to_le_bytes());
+        put(&mut d, 30, 3); // BI_BITFIELDS
+        put(&mut d, 54, 0x7C00);
+        put(&mut d, 58, 0x03E0);
+        put(&mut d, 62, 0x001F);
+        put(&mut d, 66, 0x8000);
+        // opaque white, then transparent black
+        d[70..72].copy_from_slice(&0xFFFFu16.to_le_bytes());
+        d[72..74].copy_from_slice(&0x0000u16.to_le_bytes());
+        let (w, h, rgba) = decode_bmp(&d).expect("a well-formed 1555 bitmap");
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(&rgba[0..4], &[255, 255, 255, 255], "0x1F must expand to 0xFF");
+        assert_eq!(&rgba[4..8], &[0, 0, 0, 0]);
+    }
+
+    /// The `_a8` case: an 8-bit image whose palette is the greyscale ramp `(i, i, i, 0)`. Read
+    /// literally that palette is fully transparent, so the index has to become the alpha and the
+    /// colour white — these are font atlases, tinted by the draw's modulate register.
+    #[test]
+    fn an_a8_pix_treats_its_palette_index_as_coverage() {
+        let (pal, px) = (54usize, 54 + 1024);
+        let mut d = vec![0u8; px + 4];
+        d[0..2].copy_from_slice(b"BM");
+        let put = |d: &mut Vec<u8>, o: usize, v: u32| d[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        put(&mut d, 10, px as u32);
+        put(&mut d, 14, 40);
+        put(&mut d, 18, 2);
+        put(&mut d, 22, (-1i32) as u32);
+        d[28..30].copy_from_slice(&8u16.to_le_bytes());
+        put(&mut d, 30, 0);
+        put(&mut d, 46, 256);
+        for i in 0..256usize {
+            d[pal + i * 4..][..4].copy_from_slice(&[i as u8, i as u8, i as u8, 0]);
+        }
+        d[px] = 0xFF;
+        d[px + 1] = 0x00;
+        let (_, _, rgba) = decode_bmp(&d).expect("a well-formed 8-bit bitmap");
+        assert_eq!(&rgba[0..4], &[255, 255, 255, 255], "index 255 is full coverage");
+        assert_eq!(&rgba[4..8], &[255, 255, 255, 0], "index 0 is transparent, not black");
+    }
+
+    /// A write must never be able to touch a file that was opened to READ.
+    ///
+    /// This is not a hypothetical: an `AsyncFileIO` op-3 handler that trusted the request's handle
+    /// overwrote five of Minigolf's asset files in place, and the hang that caused cost an hour of
+    /// bisecting changes that were never at fault. The mode recorded at open is the only thing
+    /// standing between a wrong handle and someone's game data.
+    #[test]
+    fn a_write_to_a_read_only_handle_is_refused() {
+        let dir = std::env::temp_dir().join(format!("eapp-wtest-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let asset = dir.join("asset.bin");
+        std::fs::write(&asset, b"ORIGINAL").unwrap();
+
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        m.game_dir = Some(dir.clone());
+        let h = m.open_file("asset.bin");
+        assert_ne!(h, 0, "the asset should open");
+
+        let buf = m.scratch(8);
+        for (i, b) in b"CLOBBERD".iter().enumerate() {
+            m.mem.poke8(buf + i as u32, *b);
+        }
+        assert_eq!(m.write_file(h as usize, buf, 8), 0, "the write must be refused");
+        assert_eq!(std::fs::read(&asset).unwrap(), b"ORIGINAL", "the file must be untouched");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
