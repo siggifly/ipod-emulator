@@ -19,29 +19,36 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The image at both addresses it answers to: mirrored at 0 (where RetailOS executes) and at
 /// 0x10000000 (where the ROM DMAs it, and where its literal pools point).
+///
+/// `base` moves that window. It exists so this tool can read a GAME statically as well as the
+/// firmware: an eApp links at 0x18000000, and every question about game code — what argument a
+/// call site passes, which branch a test takes — used to need a 600 M-instruction boot to answer
+/// because nothing here could address it. `--base=0x18000000` and it is the same flat file.
 struct Img {
     d: Vec<u8>,
+    base: u32,
 }
 
 impl Bus for Img {
     fn read8(&mut self, addr: u32) -> u8 {
-        let off = if addr >= 0x1000_0000 {
-            addr - 0x1000_0000
-        } else {
-            addr
-        } as usize;
-        self.d.get(off).copied().unwrap_or(0)
+        match self.off(addr) {
+            Some(o) => self.d.get(o).copied().unwrap_or(0),
+            None => 0,
+        }
     }
     fn write8(&mut self, _addr: u32, _val: u8) {}
 }
 
 impl Img {
+    /// File offset for an address, in whichever window the image was loaded into.
+    fn off(&self, addr: u32) -> Option<usize> {
+        if self.base != 0 {
+            return addr.checked_sub(self.base).map(|o| o as usize);
+        }
+        Some(if addr >= 0x1000_0000 { addr - 0x1000_0000 } else { addr } as usize)
+    }
     fn w(&self, addr: u32) -> u32 {
-        let off = if addr >= 0x1000_0000 {
-            addr - 0x1000_0000
-        } else {
-            addr
-        } as usize;
+        let Some(off) = self.off(addr) else { return 0 };
         if off + 4 > self.d.len() {
             return 0;
         }
@@ -53,20 +60,11 @@ impl Img {
         ])
     }
     fn has(&self, addr: u32) -> bool {
-        let off = if addr >= 0x1000_0000 {
-            addr - 0x1000_0000
-        } else {
-            addr
-        } as usize;
-        off + 4 <= self.d.len()
+        self.off(addr).is_some_and(|o| o + 4 <= self.d.len())
     }
     /// The NUL-terminated string at `addr`, if the bytes there look like one.
     fn cstr(&self, addr: u32) -> Option<String> {
-        let base = if addr >= 0x1000_0000 {
-            addr - 0x1000_0000
-        } else {
-            addr
-        } as usize;
+        let base = self.off(addr)?;
         if base >= self.d.len() {
             return None;
         }
@@ -159,12 +157,22 @@ fn main() {
         std::process::exit(1)
     });
     let syms = eapp_loader::extract_symbols(&d, 0);
-    let mut img = Img { d };
-    println!(
-        "image {path} ({} bytes), {} symbols",
-        img.d.len(),
-        syms.len()
-    );
+    // --base=ADDR reads the file as if loaded there instead of in the firmware's own window.
+    // For a game that is 0x18000000; `eapp` in the first four bytes says so without being told.
+    let base = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--base="))
+        .and_then(parse)
+        .unwrap_or(if d.starts_with(b"eapp") {
+            eapp_loader::EApp::parse(d.clone()).map(|a| a.load_base).unwrap_or(0)
+        } else {
+            0
+        });
+    if base != 0 {
+        println!("load base {base:#010x}");
+    }
+    let mut img = Img { d, base };
+    println!("image {path} ({} bytes), {} symbols", img.d.len(), syms.len());
 
     if args.iter().any(|a| a == "--verify") {
         verify(&mut img);
@@ -205,7 +213,8 @@ fn main() {
         println!("\n=== branches to {target:#010x} ===");
         let mut n = 0;
         for off in (0..img.d.len().saturating_sub(4)).step_by(4) {
-            let pc = off as u32;
+            // Address, not file offset — they are the same only when base is 0.
+            let pc = img.base + off as u32;
             let w = img.w(pc);
             if branch_target(w, pc) == Some(target) {
                 n += 1;
@@ -224,10 +233,11 @@ fn main() {
         println!("\n=== words equal to {target:#010x} ===");
         let mut n = 0;
         for off in (0..img.d.len().saturating_sub(4)).step_by(4) {
-            if img.w(off as u32) == target {
+            let pc = img.base + off as u32;
+            if img.w(pc) == target {
                 n += 1;
                 if n <= 40 {
-                    println!("  {:#010x}   in {}", off, label(&syms, off as u32));
+                    println!("  {pc:#010x}   in {}", label(&syms, pc));
                 }
             }
         }
@@ -259,7 +269,8 @@ fn main() {
         let mut sites = 0usize;
         let mut vocab: BTreeMap<String, Vec<u32>> = BTreeMap::new();
         for off in (0..img.d.len().saturating_sub(4)).step_by(4) {
-            let pc = off as u32;
+            // Address, not file offset — they are the same only when base is 0.
+            let pc = img.base + off as u32;
             let w = img.w(pc);
             let Some(reg) = branch_target(w, pc)
                 .filter(|_| is_bl(w))
@@ -453,9 +464,7 @@ fn dump(img: &mut Img, syms: &BTreeMap<u32, String>, addr: u32, count: u32) {
             break;
         }
         let w = img.w(at);
-        let mut bus = Img {
-            d: std::mem::take(&mut img.d),
-        };
+        let mut bus = Img { d: std::mem::take(&mut img.d), base: img.base };
         let text = disasm::arm(w, at, Some(&mut bus));
         img.d = std::mem::take(&mut bus.d);
         // A literal pool constant that points at a string is almost always a command name or a
@@ -546,9 +555,7 @@ fn verify(img: &mut Img) {
     let mut ok = true;
     for (at, want) in EXPECT {
         let w = img.w(*at);
-        let mut bus = Img {
-            d: std::mem::take(&mut img.d),
-        };
+        let mut bus = Img { d: std::mem::take(&mut img.d), base: img.base };
         let text = disasm::arm(w, *at, Some(&mut bus));
         img.d = std::mem::take(&mut bus.d);
         let got = text.split_whitespace().next().unwrap_or("");
