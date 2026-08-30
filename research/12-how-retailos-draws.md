@@ -494,3 +494,54 @@ question moves back up into stages 3–4 where the damage callback lives.
 **Do not read "0 frame updates" as "nothing was drawn"** — 75 267 pixels are lit. Whatever painted
 the menu did so by a route these counters do not count, and identifying that route is part of the
 same question.
+
+### The stage count, run — the redraw is never issued (2026-08-30)
+
+The measurement the addendum above asked for, with `--enterlog` on all six of §0's stages, control
+against input, everything else pinned. **True per-PC totals in both arms:**
+
+| | stage | PC | control | with input |
+|---|---|---|---|---|
+| 1 | Paint | `0x0021acac` | 85 | **85** |
+| 2 | Show | `0x00219284` | 2 276 | **2 276** |
+| 2 | Show | `0x0021ada8` | 56 | **56** |
+| 3 | Damage → flush | `0x001650f8` | 4 | **4** |
+| 4 | Present | `0x00164f44` | 4 | **4** |
+| 5 | Transport | `0x0028861c` | 17 | **17** |
+
+Identical at every stage, while the input arm executed **371 M more instructions** (666 368 987
+against 295 291 720) and the firmware read the wheel back. By the criterion stated above: the redraw
+is **not being issued**. Nothing is lost below stage 5, so the question is above stage 3 — the input
+is read by the driver and never becomes a UI event. Stages 1 and 2 being identical to the arrival
+says the same thing §0 says: no explanation that reaches for widget state is explaining this.
+
+**Read the per-PC `x{n}` totals, not the arrival listing.** `--enterlog`'s listing is `.take(400)`
+(`trace.rs`), so on a 2 442-arrival run it prints a boot-time *sample* — and both arms' samples are
+identical because the input lands at 6 s, long after the 400th arrival. Counting those lines gives
+428 "arrivals" and answers a question nobody asked. `census()` is the total; the `x{n}` lines above
+it are the per-address truth.
+
+**The frames are not the problem, and here they are:**
+
+```
+@294169913  0xc000001a  stream  pos 0  buttons 0x00  touched
+@294320585  0xc001001a  stream  pos 1  buttons 0x00  touched
+@294321448  0xc002001a  stream  pos 2  buttons 0x00  touched
+@294321448  0xc003001a  stream  pos 3  buttons 0x00  touched
+@294321448  0xc004001a  stream  pos 4  buttons 0x00  touched
+@294321982  0xc005001a  stream  pos 5  buttons 0x00  touched
+@444242174  0x8005001a  stream  pos 5  buttons 0x00  released
+```
+
+Position 0→5 with `touched` held and a release after, tag `0x1a`. A textbook clockwise flick.
+
+**A real defect found on the way, which is not this one.** Those seven frames span 152 000
+instructions — **about 2 ms** — and three of them share a single instruction. That is not a gesture a
+hand can make, and RetailOS **drops 2 of the 7**, reading only 4. At
+`--wheel-click-instr=1500000` (20 ms per detent, so 100 ms for the flick) it reads **all 7, 0
+dropped**. So the 20 000-instruction default loses input on a machine RetailOS is driving, and the
+window's own `click_gap` deserves the same look — this is the same shape as `MIN_BUTTON_HOLD`, where
+`diag`'s 150 ms poll made a 30 ms press invisible.
+
+**It is not the cause here.** With every frame read, the six stage counts are still identical and the
+framebuffer is still byte-identical. Timing was worth fixing and it does not explain the silence.
