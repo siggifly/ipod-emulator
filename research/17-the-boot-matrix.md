@@ -1143,3 +1143,42 @@ So the invariant to restore is the one the 5G already satisfies: **an image's re
 **Next: implement that in `build_disk` rather than in a scratch copy, and re-run the matrix.** The
 gate is the table above — 0 resets, 531 ATA, 75 267 lit, on a drive `make-disk` produced — plus the
 5G drive unchanged, since its headers are already `0x200` and normalising must be a no-op there.
+
+---
+
+## Addendum — what the 25.1.3 stall looks like from the window (2026-08-30)
+
+Recorded because the stall does not present as a boot failure. It presents as **"the clickwheel is
+dead"**, and it cost most of a session chasing the wheel.
+
+A device configured `A444` + a drive built from `iPod_25.1.3` reaches a lit-but-static panel, so the
+window looks alive. Clicking does nothing, scrolling does nothing, and the hold switch does nothing —
+and it is the *simultaneity* that identifies it. Three input paths that share no code below the
+window do not break in the same week; they were never wired to a machine that had finished starting.
+
+The readout says so directly, and the two arms differ in one line of `settings.txt`:
+
+| | `A444` + 25.1.3 | `A444` + 20.1.3 |
+|---|---|---|
+| outcome | `BudgetExhausted` at 400 M | **`Idle after 302 179 911`** |
+| ata | 22 | 547 |
+| lit pixels | 2 612 | **75 267** |
+| `0x052a` set commands | **1** | **4** |
+
+**`0x052a` is the field to read.** It counts RetailOS *arming the wheel's receiver*, and until it
+does, no injected event can land — `service_clickwheel` refuses the frame and counts it against
+`frames_unarmed`. A run reporting `CTRL 0x00000000 (receiver NEVER ARMED)` is saying "this machine
+never started", not "the wheel is not being listened to."
+
+**The wheel model itself is not implicated, and there is a positive control for it.** On a machine
+that does arm — Apple's 5G dump, whose drive family is wrong so RetailOS stops at the restore
+panel — a scripted `touch, rotate=+4, press=select, release` gives `8 of 8 steps fired`, 58 frames
+posted against 50 in the no-script arm, 50 word reads of `DATA` by the firmware, and IRQ 40 taken 54
+times. Frames reach the firmware and the firmware reads them; the restore panel simply has nothing
+to move. The window's own path is covered too — `a_press_on_the_drawn_centre_button_reaches_the_machine`,
+`a_drag_on_the_drawn_ring_turns_the_machines_wheel` and
+`the_machines_own_buttons_and_hold_switch_are_what_the_drawing_shows` all pass.
+
+So: **read `0x052a` and the idle/exhausted line before believing anything about input.** Both arms
+above were measured with `ipod-emulator --headless=400000000`, one data directory each, differing
+only in `disk =` — which, and not `device.N.disk`, is the line the headless run actually resolves.
