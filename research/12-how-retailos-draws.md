@@ -442,3 +442,55 @@ is counted on arrival and cannot saturate.
 
 **Note the widths.** `--bcm-dump`'s width and height parse as **hex**, so `0x140:0xF0` is exactly the
 320×240 panel; passing `140:F0` without the prefix reads out an 800×576 window instead.
+
+---
+
+## Addendum — a booted menu that will not redraw (2026-08-30)
+
+There is now a **reproducible arm that reaches a real menu**, which this file has not had before:
+
+```
+FLASH=<synthesised A444>  DISK=<drive built from iPod_20.1.3>  BUDGET=900000000 \
+  ipod-boot loader --bcm-registry --clickwheel --bcm-png=OUT.png
+```
+
+It boots to the **Language menu** — English highlighted, battery indicator, the full list — at
+75 267 lit pixels of 76 800, which is Addendum 10 §8's fingerprint. `ipod-boot loader` is the
+recipe because it is the high-level boot shape (`--osos-from-disk --boot-osos --sysinfo --bcm
+--pmu`), and a synthesised ROM carries no code to cold-boot.
+
+**Input reaches the firmware and the screen does not move.** With
+`--wheel='@6s:touch,@7s:rotate=+5,@9s:release'` against a no-script control, everything else pinned:
+
+| | control | with input |
+|---|---|---|
+| script steps | 0 of 0 | **7 of 7 fired** |
+| frames posted | 0 | **7** (2 dropped unread) |
+| word reads of `DATA` **by RetailOS** | 0 | **4** |
+| framebuffer md5 | `842b710e…` | **`842b710e…` — identical** |
+
+So the wheel is not the open question here: the firmware armed the receiver
+(`CTRL 0x600a1f00`, 4 `0x052a` set commands) and *read the frames back*. What does not happen is
+the redraw.
+
+**Where it stops, in this file's own terms:**
+
+```
+bcm: 0 commands kicked, 0 frame updates
+bcm: 552 752 halfwords written, 668 read, 254 862 internal words held
+bcm gencmd: 17 requests answered, 0 dropped
+```
+
+Stage 6 is answering, but only **17** requests against the 165 in §0's table, and it produces **zero
+frame updates** while holding a quarter of a million words internally. The bootloader's
+command interface is untouched too — `0 commands kicked` — so neither of the two interfaces in §0 is
+putting anything on the panel after the first paint.
+
+**The next measurement is already specified by §0** and needs no new instrument: count arrivals at
+`0x00164f44` (Present) and `0x0028861c` (Transport) in the two arms above. If they differ, the
+redraw is being issued and lost below stage 5; if they match, RetailOS is not issuing it, and the
+question moves back up into stages 3–4 where the damage callback lives.
+
+**Do not read "0 frame updates" as "nothing was drawn"** — 75 267 pixels are lit. Whatever painted
+the menu did so by a route these counters do not count, and identifying that route is part of the
+same question.
