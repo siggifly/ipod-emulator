@@ -163,6 +163,11 @@ So: say hello, say what interests you, and you will be pointed at the working re
 the guide that goes with it. Bug reports and questions are welcome as issues here without
 any of that.
 
+**If you own a click-wheel iPod, that is the most useful thing you can offer** — more useful
+than code, and it usually takes an afternoon and no soldering. [HARDWARE.md](HARDWARE.md) says
+which models help, what answering a question actually involves, and what will never be asked of
+you. Lending a device is not required; answering one question with it is the whole point.
+
 **The link above is the only copy of it in this project.** If you find it written down
 anywhere else, that copy is the one that will go stale.
 
