@@ -1185,7 +1185,7 @@ fn compose(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             // So the flags that shape the machine are hashed in too, and the snapshot is built
             // with them. A different flag set is a different cache entry rather than the same one
             // reused for a machine it does not describe.
-            let shaping: Vec<String> = user
+            let mut shaping: Vec<String> = user
                 .iter()
                 .filter(|a| {
                     MACHINE_SHAPING
@@ -1194,20 +1194,39 @@ fn compose(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
                 })
                 .cloned()
                 .collect();
+            // `--wheel=SCRIPT` implies `--clickwheel` in `trace`, and an implication this list
+            // cannot see is the same silent failure it already documents one screen down: the
+            // script would run against a restored machine with no wheel, every frame refused,
+            // no error anywhere.
+            //
+            // The script itself is deliberately *not* keyed on. It changes what is injected, not
+            // what hardware exists, and keying on it would rebuild an 80-second snapshot for every
+            // different sequence — which is the cost the comment on `MACHINE_SHAPING` is warning
+            // about. What it implies is a constant, so the constant is what goes in, and every
+            // wheel script shares one snapshot that has a wheel in it.
+            if user.iter().any(|a| a.starts_with("--wheel="))
+                && !shaping.iter().any(|a| a == "--clickwheel")
+            {
+                shaping.push("--clickwheel".into());
+            }
             let key = match std::fs::read(&trace) {
-                Ok(bytes) => {
-                    let mut h = sha256_hex(&bytes)[..16].to_string();
-                    if !shaping.is_empty() {
-                        h.push('-');
-                        h.push_str(&sha256_hex(shaping.join(" ").as_bytes())[..8]);
-                    }
-                    h
-                }
+                Ok(bytes) => sha256_hex(&bytes)[..16].to_string(),
                 Err(e) if dry => {
                     eprintln!("(no trace binary at {}: {e})", trace.display());
                     "<sha256 of the trace binary, first 16 hex>".to_string()
                 }
                 Err(e) => return Err(format!("{}: {e}", trace.display())),
+            };
+            // The shaping half is appended **outside** the match, because it does not depend on the
+            // binary and `--print` must name the snapshot the real run would use. It used to be
+            // computed only on the `Ok` arm, so a `--print` without a built `trace` showed the same
+            // path for `--clickwheel` as for no flags at all — a printed command that disagrees with
+            // what running it does, which is the failure the `--flash=` test one screen down exists
+            // to stop.
+            let key = if shaping.is_empty() {
+                key
+            } else {
+                format!("{key}-{}", &sha256_hex(shaping.join(" ").as_bytes())[..8])
             };
             let snap = cache.join(format!("idle-{key}-{snap_at}.snap"));
             let disk = cache.join(format!("idle-{key}-{snap_at}.img"));
@@ -1858,6 +1877,46 @@ mod tests {
         assert_eq!(
             sha256_hex(&vec![b'a'; 1_000_000])[..16],
             *"cdc76e5c9914fb92"
+        );
+    }
+
+    /// **A wheel script must restore a machine that has a wheel.**
+    ///
+    /// `--wheel=SCRIPT` implies `--clickwheel` inside `trace`, but `MACHINE_SHAPING` could not see
+    /// that implication, so `from-idle` keyed the snapshot as though no peripheral had been asked
+    /// for and rebuilt it without one. The script then ran against a wheel-less machine: `CTRL`
+    /// reads zero, the receiver is never armed, every frame is refused, and **nothing reports it**
+    /// — the same silent shape already recorded on `MACHINE_SHAPING` for bare `--clickwheel`.
+    ///
+    /// The assertion is on the restore path rather than the build, because the key is what decides
+    /// *which* machine comes back and it is visible in `--print`. A script and an explicit
+    /// `--clickwheel` must name the same snapshot; both must differ from asking for no wheel.
+    ///
+    /// **How to make it go red**: delete the `starts_with("--wheel=")` push from `plan` and the
+    /// first assertion fails — a scripted run names the wheel-less snapshot, which is the bug.
+    #[test]
+    fn a_wheel_script_restores_a_machine_that_has_a_wheel() {
+        let restore_of = |user: &[String]| {
+            plan(Recipe::FromIdle, user, true).unwrap().runs[0]
+                .iter()
+                .find_map(|a| a.strip_prefix("--restore="))
+                .expect("from-idle restores from a snapshot")
+                .to_string()
+        };
+
+        let scripted = restore_of(&["--wheel=@9s:touch".to_string()]);
+        let explicit = restore_of(&["--clickwheel".to_string()]);
+        let wheelless = restore_of(&[]);
+
+        assert_eq!(
+            scripted, explicit,
+            "a wheel script must restore the same machine an explicit --clickwheel does"
+        );
+        // The control that proves the key is keyed on anything at all: without this, a fix that
+        // made every recipe share one snapshot would satisfy the assertion above.
+        assert_ne!(
+            scripted, wheelless,
+            "asking for a wheel must not restore the snapshot built without one"
         );
     }
 
