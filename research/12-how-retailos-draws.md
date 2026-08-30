@@ -627,3 +627,34 @@ Apple's `diag` samples once per 150 ms, which is why the window's `MIN_BUTTON_HO
 Spelling it `down=select` … `up=select` two seconds apart makes it a real press. **It changes
 nothing here** — the frames are still dropped unread — so it is a defect in the script grammar
 rather than the cause of this, and it is recorded so the next script is honest.
+
+### IRQ 40 is pending AND enabled AND unserviced — with two causes ruled out
+
+Register state at the end of a run whose wheel script fired all four steps, read with `--dump`:
+
+| register | | value | |
+|---|---|---|---|
+| `0x60004100` | `CPU_HI_INT_STAT` | `0x00000100` | **bit 8 set — IRQ 40 asserted** |
+| `0x60004110` | `HI_INT_STAT` | `0x00000100` | bit 8 set |
+| `0x60004120` | `CPU_HI_INT_EN_STAT` | `0x80800195` | **bit 8 set — IRQ 40 ENABLED by RetailOS** |
+
+IRQ 40 is `OPTO_IRQ_HI = 8` (40 − 32), and `int_pending_hi` is the register the wheel asserts into,
+so the model and the controller agree. Meanwhile the same run reports `irqs: 41308406 asserted,
+62124 taken` — the core takes interrupts perfectly well — and `3 word reads of DATA`, all three of
+them boot-time queries. **The wheel interrupt is pending, enabled, and never serviced.**
+
+**Ruled out, each with the control that proves the arm was real:**
+
+- **The second core.** `int_pending` is shared between cores and the per-core *enable* registers
+  decide who takes each line, so an ISR living on the COP while bypass #7 holds it asleep would look
+  exactly like this. Re-run with `--cop-awake`: the report confirms the ablation landed —
+  `bypasses live: 3`, `ledger #7: COP_STATUS override NOT installed` — and the framebuffer is
+  **byte-identical**, with the same `3 dropped unread`. Not it.
+- **A press too short to sample.** `down=select` held two simulated seconds instead of
+  `press=select`'s zero-length pair: four distinct frame timestamps instead of two on one
+  instruction, and the same three dropped frames. Not it.
+
+**What is left is the handler itself** — whether RetailOS installs a vector for HI bit 8 at all, and
+what its ISR reads. That is a static question about Apple's code, and `tools/ghidra` is the tool for
+it. The runtime instruments have now said everything they can: the line is raised, the controller
+would deliver it, and the firmware does not come.
