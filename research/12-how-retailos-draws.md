@@ -733,3 +733,37 @@ The next link is what the decoder does with the frame. `NEXT.md`'s Wall-A note s
 semaphore `0x7f` and that `SerialOptoTask` has been pended on that semaphore since tick 66, so the
 question is whether that task is now scheduled. Note the decoder runs **2** times for **5** reads,
 so the relationship between a read and a decode is not one-to-one either.
+
+### The decoder scales with input, and what it gates on
+
+`rotate=+10` at 20 ms a detent instead of a four-step press:
+
+| | 4 steps | 12 steps |
+|---|---|---|
+| frames posted | 7 | 15 |
+| word reads of `DATA` | 5 | 12 |
+| decoder `0x00281350` | **x2** | **x9** |
+
+The reads reconcile exactly — **3 boot queries plus one per decode**, in both arms — so decoding is
+proportional to input rather than a fixed artefact. The wheel path is alive from the peripheral to
+Apple's own decoder and scales.
+
+**What the decoder gates on**, read out of its first six instructions:
+
+```
+0281350  ldr r1, [pc,#0xa8]     ; the wheel base, 0x7000c000
+0281358  ldr r0, [r1, #0x104]   ; STATUS
+028135c  tst r0, #0x04000000    ; RX_READY — bit 26
+0281360  beq 0x2813e0           ; nothing waiting: acknowledge and leave
+0281364  ldr r0, [r1, #0x140]   ; CLICKWHEEL_DATA
+0281374  cmp ip, #0x8000001a    ; the frame tag
+```
+
+Bit 26 is `ClickWheel::RX_READY`, write-1-to-clear, and `lib.rs` already names the acknowledging
+instruction at `0x002813e4`. The tag it compares against is the one the model posts. Nothing here
+is unmodelled, which is why the frames get through.
+
+**So the open question is now strictly downstream of the decode**: the frame is read, tag-matched
+and acknowledged, and the panel does not change. That is the decoder-to-widget hop —
+`SerialOptoTask` and the `0x7f` semaphore in `NEXT.md`'s Wall-A note — and it is the only link in
+the chain that has never been measured.
