@@ -417,6 +417,17 @@ ipod-boot — Apple's firmware, booted under the emulator
                                      window's setup screen asks the same two and writes the same
                                      file; this is for a machine with no window to open.
 
+  ipod-boot make-nor  [--model A146] [--seed N] [--from FILE] [--serial S] [--guid HEX]
+                      [--hwvr HEX] [--preview PNG] OUT.bin
+                                     build a boot ROM from a model number and a seed, for anyone
+                                     who does not own the hardware to dump one. The seed is the
+                                     whole recipe: the same model and the same seed produce the
+                                     same serial and the same FireWire GUID, every time, so the
+                                     seed is decimal here and decimal everywhere the window
+                                     prints it. This is the command the window's `Copy the command
+                                     line` row hands you. --from carries an identity off a real
+                                     NOR dump or drive image instead of generating one.
+
   ipod-boot make-disk IPSW OUT.img [SECTORS]
                                      build a bootable drive image from an IPSW. This is the way
                                      to get a disk if you do not already have one: an IPSW is
@@ -429,6 +440,9 @@ ipod-boot — Apple's firmware, booted under the emulator
                                      build a drive that boots iPodLinux — ipodloader2 in the
                                      firmware partition, ZeroSlackr's five directories on the
                                      data partition, and a loader.cfg naming what is on it.
+                                     ipodloader2 v2.8.1 is fetched and verified (56 912 B,
+                                     SHA-256 on record); IPOD_LOADER=/path/to/loader.bin uses
+                                     one you built instead, unhashed, and says so.
 
   ipod-boot install-os SRC.img OS.ipod OUT.img
                                      install another operating system into a COPY of the drive's
@@ -519,6 +533,8 @@ enum From {
     Setup,
     /// This repository's own layout. Only ever right in a source tree.
     Repo,
+    /// An explicit `--flash=` / `--disk=` on this command line.
+    Args,
 }
 
 impl From {
@@ -527,18 +543,42 @@ impl From {
             From::Env => "environment",
             From::Setup => "setup screen",
             From::Repo => "repository default",
+            From::Args => "command line",
         }
     }
 }
 
-/// `FLASH=`/`DISK=` wins, then whatever the setup screen was pointed at, then this repository's
-/// layout.
+/// An explicit `--flash=`/`--disk=` wins, then `FLASH=`/`DISK=`, then whatever the setup screen was
+/// pointed at, then this repository's layout.
 ///
-/// The middle one is the point: `ipod-gui`'s setup screen asks for these two files, validates them,
-/// and remembers them. Before this, it remembered them only for itself — you could complete setup
-/// in the window and every shell recipe would still fail. The file is `eapp_loader::settings`,
-/// which is a plain `key = value` file with no dependencies, which is why this binary can read it.
-fn resolve(env_key: &str, from_setup: Option<PathBuf>, repo_default: PathBuf) -> (PathBuf, From) {
+/// The setup-screen rung is the point of the function: `ipod-gui`'s setup screen asks for these two
+/// files, validates them, and remembers them. Before this, it remembered them only for itself — you
+/// could complete setup in the window and every shell recipe would still fail. The file is
+/// `eapp_loader::settings`, which is a plain `key = value` file with no dependencies, which is why
+/// this binary can read it.
+///
+/// **The passthrough rung is new and it closes a hole that made measurements wrong.** These two
+/// paths are the pinned inputs of every recipe here, and until 2026-08-25 the only way to pin one
+/// was the environment: an explicit `--flash=` was passed straight through to `trace`, which reads
+/// the flag with `find_map` — the FIRST match — behind the recipe's own. So
+/// `ipod-boot warm --flash=synth.bin` booted the **retail** dump and said so in its own output
+/// (`sysinfo at 0x40015898 … from MA146`) while the operator watched. Reading it here makes the
+/// flag an input rather than a passenger, and [`passthrough_wins`] stops the recipe emitting a
+/// second copy of it.
+fn resolve(
+    user: &[String],
+    env_key: &str,
+    from_setup: Option<PathBuf>,
+    repo_default: PathBuf,
+) -> (PathBuf, From) {
+    // `FLASH=`/`DISK=` name the same two inputs `--flash=`/`--disk=` do, so the flag is the key
+    // lowercased rather than a second table that has to be kept in step with the first.
+    let flag = format!("--{}=", env_key.to_ascii_lowercase());
+    // Last, not first: a command line is read left to right and the last spelling of a
+    // single-valued flag is the one a person means.
+    if let Some(p) = user.iter().rev().find_map(|a| a.strip_prefix(flag.as_str())) {
+        return (PathBuf::from(p), From::Args);
+    }
     if let Some(p) = env_path(env_key) {
         return (p, From::Env);
     }
@@ -716,7 +756,64 @@ fn run(recipe: Recipe, user: &[String], dry: bool) -> Result<i32, String> {
     Ok(code)
 }
 
+/// The recipe, with the caller's own flags allowed to beat it.
+///
+/// **`trace` reads a single-valued flag with `find_map`, which is the first match**, and every
+/// recipe appends the passthrough after its own flags. So a duplicate meant the recipe won and the
+/// caller's flag was inert — silently, with the recipe's value printed in the run's own output. See
+/// [`passthrough_wins`], which is the whole of the repair, and [`resolve`], which is why the
+/// `--print` provenance line agrees with the argv above it.
 fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
+    let mut p = compose(recipe, user, dry)?;
+    for r in &mut p.runs {
+        passthrough_wins(r, user);
+    }
+    Ok(p)
+}
+
+/// **The one flag a recipe writes that `trace` reads more than once.**
+///
+/// [`passthrough_wins`] may only take a key off the recipe when `trace` reads that key as a single
+/// value, because dropping one of a repeated pair is a fix that breaks a mirror. `trace` collects
+/// `--osos-at=` with `filter_map` — *"an additional mirror of the image at ADDR"* — and
+/// `Recipe::Warm` writes `--osos-at=0x04000000` deliberately, so a caller who adds a second mirror
+/// gets both. `every_repeatable_flag_a_recipe_writes_is_exempt` reads `trace.rs` and holds this
+/// list to exactly the ones that need to be on it.
+const REPEATABLE: &[&str] = &["--osos-at"];
+
+/// Drop the recipe's own copy of any single-valued `--key=` the caller also passed.
+///
+/// **Only keys the caller actually spelled, only in the recipe's half of the argv, and never a
+/// [`REPEATABLE`] one.** So nothing can reach the removal unless the caller wrote the key, and a
+/// caller who wrote a repeatable key twice keeps both copies beside the recipe's.
+///
+/// The recipe's half is everything before the last `user.len()` entries, because every arm of
+/// [`compose`] appends the passthrough last and `user_flags_are_appended_last` holds it there.
+fn passthrough_wins(run: &mut Vec<String>, user: &[String]) {
+    let keys: Vec<&str> = user
+        .iter()
+        .filter(|a| a.starts_with("--"))
+        .filter_map(|a| a.split_once('=').map(|(k, _)| k))
+        .filter(|k| !REPEATABLE.contains(k))
+        .collect();
+    if keys.is_empty() || run.len() < user.len() {
+        return;
+    }
+    let cut = run.len() - user.len();
+    let mut i = 0;
+    run.retain(|a| {
+        let mine = i < cut;
+        i += 1;
+        !mine
+            || !keys
+                .iter()
+                .any(|k| a.strip_prefix(*k).is_some_and(|rest| rest.starts_with('=')))
+    });
+}
+
+/// The recipe itself: every flag `ipod-boot` writes for it, with the caller's passthrough appended
+/// last. [`plan`] is what callers want — this is the half before the caller is allowed to win.
+fn compose(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
     let root = eapp_loader::settings::repo_root();
     let res = root.join("resources");
     let trace = env_path("TRACE").unwrap_or_else(default_trace);
@@ -732,8 +829,9 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         // retail-boot.sh: the retail defaults, a writable per-run clone, then cold-boot.sh
         // --disk-writable "$@" — so --disk-writable lands ahead of the caller's own flags.
         Recipe::Retail => {
-            let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
+            let (flash, flash_from) = resolve(user, "FLASH", saved.flash(), retail_flash());
             let (src, disk_from) = resolve(
+                user,
                 "DISK",
                 saved.disk.clone(),
                 res.join("drives/ipod8g-retail.img"),
@@ -772,9 +870,9 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         // trace BUDGET --osos= --boot-osos --osos-at=0x04000000 --sysinfo --flash= --disk=
         //       --bcm --pmu "$@"
         Recipe::Warm => {
-            let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
+            let (flash, flash_from) = resolve(user, "FLASH", saved.flash(), retail_flash());
             let (disk, disk_from) =
-                resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
+                resolve(user, "DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
             let osos = env_path("OSOS").unwrap_or_else(|| res.join("derived/fw/OSOS_correct.bin"));
             let budget = env_u64("BUDGET", 600_000_000);
             if !dry {
@@ -815,9 +913,9 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         // machine. See `inspect::nor_images`.
         Recipe::Flsh => {
             let img = std::env::var("IMG").unwrap_or_else(|_| "diag".into());
-            let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
+            let (flash, flash_from) = resolve(user, "FLASH", saved.flash(), retail_flash());
             let (disk, disk_from) =
-                resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
+                resolve(user, "DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
             let osos =
                 std::env::temp_dir().join(format!("ipod-flsh-{}-{img}.bin", std::process::id()));
             let budget = env_u64("BUDGET", 200_000_000);
@@ -914,9 +1012,9 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         // is per run and removed afterwards, so the source is never touched.
         Recipe::Rockbox => {
             let img = std::env::var("IMG").unwrap_or_else(|_| "rb-main.raw".into());
-            let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
+            let (flash, flash_from) = resolve(user, "FLASH", saved.flash(), retail_flash());
             let (src, disk_from) =
-                resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
+                resolve(user, "DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
             let osos = res.join("vendor/rockbox/bin").join(&img);
             let budget = env_u64("BUDGET", 200_000_000);
             let (work, cleanup) = match env_path("WORKDISK") {
@@ -979,9 +1077,9 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         // A high-level boot, deliberately: it never runs Apple's bootloader, which is what lets
         // `PP_VER1` be answered for `ipodloader2` without anything else reading it.
         Recipe::Loader => {
-            let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
+            let (flash, flash_from) = resolve(user, "FLASH", saved.flash(), retail_flash());
             let (disk, disk_from) =
-                resolve("DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
+                resolve(user, "DISK", saved.disk.clone(), res.join("drives/ipod8g.img"));
             let budget = env_u64("BUDGET", 4_000_000_000);
             if !dry {
                 require(&flash, "NOR dump (FLASH=)")?;
@@ -1010,7 +1108,7 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
         // Two boots of the same argv, against a disk whose firmware partition was written from the
         // pristine bundle. The first is the update; the second is the proof that the update took.
         Recipe::FlashUpdate => {
-            let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
+            let (flash, flash_from) = resolve(user, "FLASH", saved.flash(), retail_flash());
             let srcdisk = env_path("SRCDISK").unwrap_or_else(|| res.join("drives/ipod8g.img"));
             let fw = env_path("FW").unwrap_or_else(|| res.join("derived/fw/Firmware-20.6.3"));
             let work =
@@ -1059,8 +1157,9 @@ fn plan(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
             let budget = env_u64("BUDGET", 60_000_000);
             let cache =
                 env_path("CACHE").unwrap_or_else(|| std::env::temp_dir().join("ipod-from-idle"));
-            let (flash, flash_from) = resolve("FLASH", saved.flash(), retail_flash());
+            let (flash, flash_from) = resolve(user, "FLASH", saved.flash(), retail_flash());
             let (src, disk_from) = resolve(
+                user,
                 "DISK",
                 saved.disk.clone(),
                 res.join("drives/ipod8g-retail.img"),
@@ -1226,14 +1325,15 @@ fn setup() -> Result<(), String> {
         }
     }
 
-    s.save();
-    match Settings::path() {
-        Some(p) => println!(
-            "\nSaved to {}. Every recipe here and the window both use it.",
-            p.display()
-        ),
-        None => println!("\nSaved."),
-    }
+    // Reported rather than swallowed: a read-only home or a full disk used to leave this printing
+    // "Saved to …" about a file it had not written, and the next command would ask the same
+    // questions again with no explanation.
+    let where_to = Settings::path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "the settings file".into());
+    s.save()
+        .map_err(|e| format!("could not write {where_to}: {e}"))?;
+    println!("\nSaved to {where_to}. Every recipe here and the window both use it.");
     Ok(())
 }
 
@@ -1284,6 +1384,8 @@ fn yes() -> Result<bool, String> {
     Ok(matches!(line.trim(), "y" | "Y" | "yes"))
 }
 
+const HEADER_EXPECTED: u32 = 0x200;
+
 fn make_disk(args: &[String]) -> Result<(), String> {
     let src = args.first().ok_or(
         "usage: ipod-boot make-disk IPSW OUT.img [SECTORS]\n\
@@ -1325,11 +1427,21 @@ fn make_disk(args: &[String]) -> Result<(), String> {
              armed and reproduces the two-boot sequence."
         );
     }
+    // Before the write, not after: the drive RetailOS reads has to be in the layout RetailOS
+    // reads. See `normalise_image_headers` — on a 5G bundle this does nothing at all.
+    for (tag, header, shift) in eapp_loader::ipsw::normalise_image_headers(&mut fw) {
+        println!(
+            "  `{tag}` content sits {header:#x} into its image where RetailOS looks {HEADER_EXPECTED:#x} \
+             in; its directory offset is moved on by {shift:#x} so the two agree. Without this the \
+             5.5G's `rsrc` never mounts, its font is never found, and RetailOS resets in a loop."
+        );
+    }
     eapp_loader::ipsw::build_disk(&fw, Path::new(out), sectors)?;
     println!(
         "wrote {out} — {sectors} sectors ({} MiB), sparse. \
-         The firmware partition is Apple's, byte for byte; the FAT32 volume is empty and RetailOS \
-         populates it on first boot.",
+         The firmware partition is Apple's payload byte for byte — only the directory's offsets are \
+         corrected, and only where they disagree with where the content is; the FAT32 volume is \
+         empty and RetailOS populates it on first boot.",
         sectors / 2048
     );
     println!("  ipod-boot retail     # DISK={out}");
@@ -1768,6 +1880,106 @@ mod tests {
         assert_eq!(&p.runs[0][n - 2..], &user[..]);
     }
 
+    /// **A `--flash=` on this command line beats the recipe's, and it did not.**
+    ///
+    /// Measured 2026-08-25, before the fix: `ipod-boot warm --flash=synth.bin --print` composed
+    /// `… --sysinfo --flash=<retail dump> --disk=… --bcm --pmu --flash=synth.bin`, and `trace`
+    /// reads the flag with `args.iter().find_map(|a| a.strip_prefix("--flash="))` — the FIRST
+    /// match. The run then printed `sysinfo at 0x40015898, sdram_size 0x4000000, from MA146`: the
+    /// retail dump, named in the output of a command that had been handed a different ROM. Every
+    /// `warm` measurement anyone had taken with `--flash=` was taken on the wrong ROM, and nothing
+    /// said so.
+    ///
+    /// **How to make it go red**: delete the `passthrough_wins(r, user)` loop from `plan` and the
+    /// count below is 2. Delete the `From::Args` rung from `resolve` instead and the provenance
+    /// assertion goes, which is the half that stops `--print` disagreeing with its own argv.
+    #[test]
+    fn an_explicit_flash_beats_the_recipes_own() {
+        let user = vec!["--flash=/somewhere/synth.bin".to_string()];
+        let p = plan(Recipe::Warm, &user, true).unwrap();
+        let flashes: Vec<&String> = p.runs[0]
+            .iter()
+            .filter(|a| a.starts_with("--flash="))
+            .collect();
+        assert_eq!(
+            flashes,
+            vec![&user[0]],
+            "the composed argv carries more than one `--flash=` and `trace` takes the first"
+        );
+        assert!(
+            p.sources
+                .iter()
+                .any(|(what, path, from)| *what == "NOR dump"
+                    && path == Path::new("/somewhere/synth.bin")
+                    && *from == From::Args),
+            "`--print` names a different NOR dump from the one in the argv it just printed: {:?}",
+            p.sources
+        );
+    }
+
+    /// …and a **repeatable** flag keeps every copy, the recipe's included. `--osos-at=` is *"an
+    /// additional mirror of the image at ADDR"* and `trace` collects them with `filter_map`, so
+    /// taking one away would be a fix that broke a mirror.
+    #[test]
+    fn a_repeatable_flag_keeps_the_recipes_copy_as_well_as_the_callers() {
+        let user = vec!["--osos-at=0x08000000".to_string()];
+        let p = plan(Recipe::Warm, &user, true).unwrap();
+        let mirrors: Vec<&String> = p.runs[0]
+            .iter()
+            .filter(|a| a.starts_with("--osos-at="))
+            .collect();
+        assert_eq!(
+            mirrors,
+            vec![&"--osos-at=0x04000000".to_string(), &user[0]],
+            "a second mirror took the recipe's own away"
+        );
+    }
+
+    /// **Every `--key=` a recipe writes is one `trace` reads with `find_map` — or it is exempt.**
+    ///
+    /// `passthrough_wins` removes the recipe's copy, which is right for a flag `trace` resolves to
+    /// one value and wrong for one it collects. This reads `trace.rs` rather than trusting a list:
+    /// a flag read with `filter_map` and not named in [`REPEATABLE`] would be silently
+    /// de-duplicated the first time somebody passed it, which is the shape of the bug this whole
+    /// function exists to fix, arriving from the other direction.
+    #[test]
+    fn every_repeatable_flag_a_recipe_writes_is_exempt() {
+        let trace_src = std::fs::read_to_string(
+            eapp_loader::settings::repo_root().join("tools/eapp-loader/src/bin/trace.rs"),
+        )
+        .expect("trace.rs is beside this file in the same crate");
+
+        let mut checked = 0;
+        for recipe in [
+            Recipe::Retail,
+            Recipe::Warm,
+            Recipe::Flsh,
+            Recipe::Rockbox,
+            Recipe::FlashUpdate,
+            Recipe::FromIdle,
+        ] {
+            let p = plan(recipe, &[], true).expect("a dry plan for every recipe");
+            for a in p.runs.iter().flatten() {
+                let Some((key, _)) = a.split_once('=') else {
+                    continue;
+                };
+                if !key.starts_with("--") || REPEATABLE.contains(&key) {
+                    continue;
+                }
+                checked += 1;
+                let collected = format!("filter_map(|a| a.strip_prefix(\"{key}=\"");
+                assert!(
+                    !trace_src.contains(&collected),
+                    "`{key}` is collected by `trace` with `filter_map`, so it is repeatable, and \
+                     `passthrough_wins` would drop the recipe's copy the first time a caller \
+                     passed one. Add it to `REPEATABLE`."
+                );
+            }
+        }
+        // The control: a sweep that checked nothing would pass just as quietly.
+        assert!(checked >= 6, "only {checked} recipe flags were checked, so this proves nothing");
+    }
+
     /// A per-run temporary belongs under the platform's temp directory, wherever that is.
     /// Hardcoding `/tmp` is the bug this is here to prevent coming back.
     #[test]
@@ -1797,6 +2009,64 @@ mod tests {
             ],
         );
         assert_eq!(q, "/x/trace '/res/My Firmware Dumps/t.bin' --clock=5");
+    }
+
+    /// **The command the window copies is run here, not spelled here.**
+    ///
+    /// `Composer::command_line` used to emit `ipod-boot retail --nor-model A446 --nor-seed N` and
+    /// the composer's own test asserted the line contained `--nor-seed`. Neither flag existed in
+    /// this file — `grep -c` said 0 — and `retail` forwards a flag it does not know to `trace`
+    /// unchanged, so the copied line ran, booted whatever NOR the setup screen held, dropped both
+    /// flags and exited 0. The test agreed with the string and the string agreed with nothing.
+    ///
+    /// So this takes [`settings::reproduce_command`]'s argv, hands `[2..]` to the function `main`
+    /// dispatches for `argv[1]`, and asks the **file it wrote** who it is. A flag that does not
+    /// exist is not a failure in `make_nor_cmd` — it is silently defaulted, `--model` to `A146` and
+    /// `--seed` to `0` — so the old spelling fails here on the identity rather than on the parse,
+    /// which is exactly the way it failed in the operator's hands.
+    ///
+    /// `Recipe::parse` is asked first because the old command claimed to be a boot recipe. A
+    /// command that reproduces an iPod builds a ROM; it does not boot one.
+    #[test]
+    fn the_command_the_window_copies_rebuilds_the_ipod_it_names() {
+        use eapp_loader::identity::Identity;
+        use eapp_loader::nor;
+        use eapp_loader::settings;
+
+        // 0x123456 — a seed whose hex spelling is made only of digits, so a hex surface would not
+        // fail here either. It would build a different iPod.
+        let src = nor::Source::Synthetic {
+            model: "A446".into(),
+            seed: 1_193_046,
+            serial: None,
+            guid: None,
+            splash: None,
+        };
+        let argv = settings::reproduce_command(&src).expect("a synthesised iPod has a command");
+        assert_eq!(argv[0], "ipod-boot", "the command names another program: {argv:?}");
+        let (name, rest) = argv[1..].split_first().expect("a subcommand and its flags");
+        assert_eq!(
+            Recipe::parse(name),
+            None,
+            "`{name}` is a boot recipe; a command that reproduces an iPod mints a ROM"
+        );
+        assert_eq!(name, "make-nor", "nothing in main dispatches `{name}`");
+
+        // The output goes under the platform temp dir rather than the working directory, for the
+        // reason `the_per_run_disk_lives_under_the_platform_temp_dir` gives.
+        let dir = std::env::temp_dir().join(format!("ipod-boot-reproduce-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a temp dir");
+        let mut args = rest.to_vec();
+        let out = dir.join(args.last().expect("an output file"));
+        *args.last_mut().expect("an output file") = out.to_string_lossy().into_owned();
+
+        make_nor_cmd(&args).expect("the window's own command line did not run");
+
+        let built = Identity::from_nor(&out).expect("the command wrote no readable ROM");
+        let want = src.identity().expect("the recipe has an identity");
+        assert_eq!(built.guid, want.guid, "a different FireWire GUID came back");
+        assert_eq!(built.serial, want.serial, "a different serial came back");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -1972,8 +2242,10 @@ fn install_os(args: &[String]) -> Result<(), String> {
 /// `ipod-boot install-linux [SRC.img [OUT.img]]` — argv, then
 /// [`eapp_loader::install::install_linux`].
 ///
-/// Both paths default: the drive from settings, and `<drive>-linux.img` beside it. The loader and
-/// the distribution come from `resources/vendor/`, where they are kept with their provenance.
+/// Both paths default: the drive from settings, and `<drive>-linux.img` beside it. The loader is
+/// fetched and verified — v2.8.1, 56 912 B, SHA-256 on record — unless `IPOD_LOADER=` names one;
+/// the distribution is the unpacked ZeroSlackr tree, from `resources/vendor/` if it is there and
+/// fetched if it is not.
 fn install_linux(args: &[String]) -> Result<(), String> {
     const USAGE: &str = "usage: ipod-boot install-linux [SRC.img [OUT.img]]\n\
                          builds a drive that boots iPodLinux: ipodloader2 in the firmware \
@@ -1992,15 +2264,26 @@ fn install_linux(args: &[String]) -> Result<(), String> {
         src.with_file_name(format!("{stem}-linux.img"))
     });
     let root = eapp_loader::settings::repo_root();
-    let loader = root.join("resources/vendor/ipodloader2/loader.bin");
     let tree = root.join("resources/vendor/zeroslackr/tree");
-    if !loader.exists() {
-        return Err(format!(
-            "{}: `ipodloader2` has not been built. `make` in resources/vendor/ipodloader2 \
-             produces it.",
-            loader.display()
-        ));
-    }
+    // The loader is resolved BEFORE the 101 MB fetch below, so a failure that used to arrive after
+    // a download arrives before it.
+    let cache = eapp_loader::ipodlinux::cache_dir();
+    let (loader, from) = eapp_loader::ipodlinux::resolve_loader(&cache)?;
+    println!(
+        "{}",
+        match from {
+            eapp_loader::ipodlinux::LoaderFrom::Release => format!(
+                "  ipodloader2 — {} ({} bytes, SHA-256 verified)",
+                loader.display(),
+                eapp_loader::ipodlinux::LOADER.bytes
+            ),
+            eapp_loader::ipodlinux::LoaderFrom::Provided => format!(
+                "  ipodloader2 — {} (IPOD_LOADER; not hashed — this project holds no hash for a \
+                 build somebody made)",
+                loader.display()
+            ),
+        }
+    );
     // Not there? Fetch it, the same way Rockbox and Apple's firmware are fetched — a recorded
     // size and SHA-256, and nothing renamed into place until it verifies. It used to be a file
     // somebody had downloaded by hand, and the one time that was done only `boot/vmlinux` was kept.
@@ -2008,7 +2291,7 @@ fn install_linux(args: &[String]) -> Result<(), String> {
         tree
     } else {
         println!("  ZeroSlackr is not unpacked yet — fetching it (101 MB, verified)");
-        eapp_loader::ipodlinux::fetch(&eapp_loader::ipodlinux::cache_dir())?
+        eapp_loader::ipodlinux::fetch(&cache)?
     };
     for line in eapp_loader::install::install_linux(&src, &loader, &tree, &out)? {
         println!("{line}");
@@ -2238,7 +2521,7 @@ fn make_nor_cmd(args: &[String]) -> Result<(), String> {
     let out = args
         .iter()
         .rfind(|a| !a.starts_with("--") && !args.iter().any(|f| f.starts_with("--") && args.iter().position(|x| x == f).map(|i| args.get(i + 1) == Some(*a)).unwrap_or(false)))
-        .ok_or("usage: ipod-boot make-nor [--model A146] [--seed N] [--from FILE] [--serial S] [--guid HEX] OUT.bin")?;
+        .ok_or("usage: ipod-boot make-nor [--model A146] [--seed N] [--from FILE] [--serial S] [--guid HEX] [--hwvr HEX] OUT.bin")?;
 
     // The model decides the colour, the capacity and the generation — there is no separate colour
     // setting because no SysCfg has ever carried one.

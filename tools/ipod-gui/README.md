@@ -66,11 +66,15 @@ anything is built:
   populates itself), or a drive image you already have: MBR, partition 0 of type `0x00`, an `!ATA`
   directory at partition + `0x4200`, and an `osos` entry loading at `0x10000000`.
 
-Each slot has a native file dialog, a text field, and drag-and-drop, and the dialog is the
-platform's own tool — `osascript`, PowerShell's `OpenFileDialog`, `zenity`/`kdialog` — so that a
-dialog crate's async runtime and D-Bus stack stay out of a program whose whole dependency argument
-is "eframe and nothing else". If the dialog is unavailable the other two still work, which is what
-makes that acceptable.
+Each slot has a native file dialog and drag-and-drop. **The dialog is `rfd`, since 2026-08-25**, and
+that reverses this paragraph's own argument, so the argument is worth stating and correcting rather
+than deleting: it used to shell out to `osascript`, PowerShell's `OpenFileDialog` and
+`zenity`/`kdialog` to keep "a dialog crate's async runtime and D-Bus stack" out of a program whose
+dependency budget was "eframe and nothing else". That budget went with eframe — the window is Slint
+now and carries 352 crates — and the cost was measured rather than assumed: `rfd` is **+1 crate** on
+macOS and Windows and **+2** on Linux, against **+19** for the GTK3 backend it does *not* use by
+default. `docs/GUI.md` §17 Q3 has the table. Drag-and-drop is a winit hook rather than Slint's own
+`DropArea`, which cannot carry a file path at all; §16.4 has that one.
 
 `ipod-emulator --check-images [--flash=… --disk=…]` runs the same two checks with no window and exits
 non-zero if either fails. The validation is structure, never signatures: a table of known-good

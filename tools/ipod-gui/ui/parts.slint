@@ -1,0 +1,513 @@
+// Parts — docs/GUI.md §11.4, §11.5, §9.1, §9.4, §16.3, §16.11.
+//
+// **Six groups, fixed order, always all six present even when empty.** A page whose sections come
+// and go is a page you re-learn every visit, so an empty group keeps its heading, its count `0`, its
+// verbs and one `fg-disabled` line naming what belongs there (§9.1).
+//
+// **Two of the six are the ones the shipped window dropped entirely:**
+//
+//   - **Bootloaders** (`Resource::Bootloader`) — `resource_rows` rendered four groups and dropped
+//     the fourth kind on the floor, and a clean-looking Parts page is not evidence that no
+//     bootloader is filed. It goes in the firmware partition, which holds exactly one thing.
+//   - **Snapshots** — the parked machines. 1.6 GB per park was invisible: close the window four
+//     times across four devices and 6.4 GB exists that nobody asked for, cannot see, cannot total
+//     and cannot delete, on a machine that might have 18 GB free. Parts is where every other byte
+//     this program spends is visible; these belong in it, with sizes and with a `Discard` verb.
+//
+// **`used by N` is the reference-not-copy property made visible**, and it is the whole reason this
+// model beats a copy-everything one. An expanded row names the devices; `Remove` names them
+// **before** it acts. Removing a resource never deletes the file it points at.
+//
+// **Nothing the machine is using can be removed while it is running** — one machine rule covering
+// both the resource case and the device case, arriving as `PartRow.locked-by`.
+//
+// This page states no policy and words no sentence: every string arrives on a pushed model built in
+// `main.rs` out of `parts.rs`. Its only literals are its own page name.
+
+import { Ink, Metric } from "tokens.slint";
+import { Geometry } from "@geometry";
+import {
+    DetailRow,
+    DrawerHeader,
+    Expand,
+    FixRow,
+    GroupRow,
+    PartRow,
+    Pressable,
+    Row,
+    Scroll,
+} from "primitives.slint";
+
+// ─── One line inside an expanded row (§11.4) ────────────────────────────────────────────────────
+//
+// `parts::Detail`'s five shapes, flattened onto one struct and told apart by `has-action` and
+// `mono`. Four mutually exclusive renderings, so `if` rather than `visible`: §16.3's anti-shuffle
+// argument is about a line that comes and goes while something is working, and a detail line is
+// what it is for as long as the row is open.
+component DetailView inherits VerticalLayout {
+    in property <DetailRow> d;
+    in property <int> id;
+
+    callback act(int, int);
+    callback reveal(length, length);
+
+    spacing: 0px;
+
+    // A `Detail::Act` — `Reveal`, `Copy path`, `Check it`, `Read its identity`, `Show`. §16.5's
+    // construction, so an act this build cannot perform is drawn disabled with its reason and stays
+    // in the tab order.
+    if root.d.has-action: Pressable {
+        label: root.d.act-label;
+        enabled: root.d.enabled;
+        reason: root.d.reason;
+        escape-hatch: root.d.escape-hatch;
+        machine-rule: root.d.machine-rule;
+        presses: root.d.presses;
+        consequence: root.d.consequence;
+        pad: Geometry.page-margin;
+        activated => {
+            root.act(root.d.action, root.id);
+        }
+        gained-focus => {
+            root.reveal(self.absolute-position.y, self.height);
+        }
+
+        Text {
+            text: root.d.act-label;
+            font-size: Metric.body-size;
+            font-weight: Metric.weight-strong;
+            // The act's own answer, so this file and `devices.slint` cannot draw one struct in two
+            // colours. Nothing this page files is destructive — `Remove` is the row's own control
+            // below, not a `Detail` — so the binding changes no pixel here and is what makes the
+            // other page's `Edit…` stop being red.
+            color: !root.d.enabled
+                ? Ink.fg-disabled
+                : (root.d.destructive ? Ink.danger : Ink.accent);
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+
+    // A `Detail::Mono` — a path, a hash, a `mono` command. Copyable through
+    // `parts::copyable`, which is `Some` only for a path and `None` for every fact that came from an
+    // `Identity` or a `SysCfg`, **at every masking state**.
+    if !root.d.has-action && root.d.mono: Text {
+        text: root.d.value;
+        font-family: Metric.mono-family;
+        font-size: Metric.mono-size;
+        color: Ink.fg-dim;
+        wrap: word-wrap;
+    }
+
+    // A `Detail::Fact` — label leading, value trailing, in the rows' own column rhythm.
+    if !root.d.has-action && !root.d.mono && root.d.label != "": HorizontalLayout {
+        spacing: Metric.s2;
+
+        Text {
+            width: Geometry.field-label-w;
+            text: root.d.label;
+            font-size: Metric.label-size;
+            font-weight: Metric.weight-label;
+            color: Ink.fg-dim;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            text: root.d.value;
+            font-size: Metric.label-size;
+            font-weight: Metric.weight-label;
+            color: Ink.fg;
+            wrap: word-wrap;
+        }
+    }
+
+    // A `Detail::Paragraph`, or a `Detail::MachineRule` — the second in `fg` rather than `fg-dim`,
+    // because §9.4's machine rule is the one whose teaching is the point.
+    if !root.d.has-action && !root.d.mono && root.d.label == "": Text {
+        text: root.d.value;
+        font-size: Metric.body-size;
+        font-weight: Metric.weight-body;
+        color: root.d.machine-rule ? Ink.fg : Ink.fg-dim;
+        wrap: word-wrap;
+    }
+}
+
+// ─── One of a group's own verbs (§11.4, §9.4) ───────────────────────────────────────────────────
+//
+// **Extracted so the pair can stack.** A group's two verbs are drawn side by side at
+// `Geometry.parts-verb-w` unless one of them names §9.4's `mono` escape hatch, in which case each
+// takes the group's whole width — see the note at the use site. Two layouts want the same control,
+// and two copies of a control is how they come to draw two different things.
+component GroupVerb inherits Pressable {
+    in property <FixRow> v;
+
+    callback pressed();
+    callback reveal(length, length);
+
+    label: root.v.label;
+    enabled: root.v.enabled;
+    reason: root.v.reason;
+    escape-hatch: root.v.escape-hatch;
+    machine-rule: root.v.machine-rule;
+    presses: root.v.presses;
+    consequence: root.v.consequence;
+    activated => {
+        root.pressed();
+    }
+    gained-focus => {
+        root.reveal(self.absolute-position.y, self.height);
+    }
+
+    Text {
+        text: root.v.label;
+        font-size: Metric.body-size;
+        font-weight: Metric.weight-strong;
+        color: root.v.enabled ? Ink.accent : Ink.fg-disabled;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+}
+
+// ─── One part, and what is inside it (§11.4) ────────────────────────────────────────────────────
+component PartRowView inherits VerticalLayout {
+    in property <PartRow> r;
+    in property <[DetailRow]> detail;
+    in property <bool> open;
+    in property <image> preview;
+    in property <bool> has-preview: false;
+
+    callback expand(int, bool);
+    callback act(int, int);
+    callback reveal(length, length);
+
+    spacing: 0px;
+
+    row := Row {
+        label: root.r.name;
+        // §11.4's second line, and `Provenance::line()` is its only producer. **Nothing in this
+        // window may construct the word *verified***; a cached file nobody hashed says so.
+        //
+        // The comma is the separator sweep's answer for a joined list — ` \u{b7} ` is not in the
+        // closed glyph set this program's font is trusted for, and §6.7's rule is not widened to
+        // make a line fit.
+        sub: root.r.used-by == ""
+            ? root.r.fact
+            : (root.r.fact == "" ? root.r.used-by : root.r.fact + ", " + root.r.used-by);
+        // §11.4: the plugged-in-iPod row is **reserved, always**. Before one appears it is a line
+        // rather than a control — the group does not *grow* a row when an iPod is plugged in,
+        // because that moves every row below it on an event nobody initiated at this surface.
+        // `Kind::Mounted` is the only kind that can be that placeholder.
+        inert: root.r.kind == 0 && !root.r.expandable;
+        enabled: root.r.expandable;
+        machine-rule: false;
+        selected: root.r.selected;
+        chevron: root.r.expandable;
+        activated => {
+            root.expand(root.r.id, !root.open);
+        }
+        gained-focus => {
+            root.reveal(self.absolute-position.y, self.height);
+        }
+    }
+
+    body := Expand {
+        open: root.open;
+        body-height: detail-body.preferred-height;
+        opened => {
+            root.reveal(row.absolute-position.y, row.height + body.body-height);
+        }
+
+        detail-body := VerticalLayout {
+            padding-left: Geometry.page-margin;
+            padding-right: Geometry.page-margin;
+            padding-top: Metric.s2;
+            padding-bottom: Metric.s2;
+            spacing: Metric.s2;
+            alignment: start;
+
+            for d in root.detail: DetailView {
+                d: d;
+                id: root.r.id;
+                act(a, id) => {
+                    root.act(a, id);
+                }
+                reveal(top, h) => {
+                    root.reveal(top, h);
+                }
+            }
+
+            // §11.4: **the boot-screen preview obeys the layer rule.** `nor::Source::boot_screen`
+            // is emulator output, so it is drawn at the framebuffer's own size with the same glass
+            // treatment the drawn device's panel gets — never flowed into our layout at an
+            // arbitrary size. `Geometry.preview-glass` is §6.1's bezel at `k = 1`, written as the
+            // product of the measured ratio rather than typed.
+            if root.has-preview: Rectangle {
+                height: Geometry.preview-h + 2 * Geometry.preview-glass;
+                background: Ink.glass;
+
+                Image {
+                    x: Geometry.preview-glass;
+                    y: Geometry.preview-glass;
+                    width: Geometry.preview-w;
+                    height: Geometry.preview-h;
+                    source: root.preview;
+                    // §6.1: an exact integer scale and nearest neighbour, or it is a resampled
+                    // framebuffer presented as a screenshot.
+                    image-rendering: pixelated;
+                    accessible-role: AccessibleRole.image;
+                    accessible-label: "preview";
+                }
+            }
+
+            // §11.4's `Remove`, and it is the row's own control rather than one more `Detail`
+            // because the three things it needs — whether it may go, what goes with it, and what is
+            // holding it — are facts about the **part**, not lines inside it.
+            //
+            // Two presses, always: the first arms and the consequence is drawn before it, which is
+            // §11.3's rule for anything that detaches a reference. `locked-by` is §11.4's one
+            // machine rule, and it wins: while a device is the machine, `Remove` on that device and
+            // on every resource it references is refused with the reason that says which machine.
+            if root.r.removable: Pressable {
+                label: "Remove";
+                enabled: root.r.locked-by == "";
+                reason: root.r.locked-by;
+                machine-rule: true;
+                presses: 2;
+                consequence: root.r.remove-consequence;
+                pad: Geometry.page-margin;
+                // `RowAction::ALL`'s third entry — `Reveal`, `CopyPath`, `Remove`, … — matching
+                // `rail-next(id, 0)`'s own precedent for an ordinal crossing this boundary as an
+                // `int`. Rust's side is an exhaustive `from_i32`.
+                activated => {
+                    root.act(2, root.r.id);
+                }
+                gained-focus => {
+                    root.reveal(self.absolute-position.y, self.height);
+                }
+
+                Text {
+                    text: "Remove";
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-strong;
+                    color: root.r.locked-by == "" ? Ink.danger : Ink.fg-disabled;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+// ─── The page ───────────────────────────────────────────────────────────────────────────────────
+
+export component PartsPage inherits Rectangle {
+    // Exactly six, always, in `parts::Group::ALL`'s order — which is written into the Rust type
+    // rather than into this markup.
+    in property <[GroupRow]> groups;
+    in property <[PartRow]> rows;
+    // The one open row's detail, and nothing else's.
+    in property <[DetailRow]> detail;
+    in property <int> detail-of: -1;
+    in property <image> preview;
+    in property <bool> has-preview: false;
+
+    callback back-pressed();
+    callback expand(int, bool);
+    // `Group`, then `Action` — both ordinals, both exhaustive on the Rust side.
+    callback group-action(int, int);
+    // `RowAction`, then the row id.
+    callback row-action(int, int);
+
+    background: Ink.bg;
+    accessible-role: AccessibleRole.region;
+    accessible-label: "Parts";
+
+    VerticalLayout {
+        spacing: 0px;
+
+        DrawerHeader {
+            back: "Menu";
+            title: "Parts";
+            back-pressed => {
+                root.back-pressed();
+            }
+        }
+
+        scroll := Scroll {
+            vertical-stretch: 1;
+            min-height: 0px;
+            preferred-height: 0px;
+            // Bound explicitly: Slint computes it automatically only from direct children that are
+            // layouts and are **not** repeated (`passes/flickable.rs:181-196`), and this whole body
+            // is a `for`.
+            viewport-height: body.preferred-height;
+
+            body := VerticalLayout {
+                width: scroll.width;
+                padding-top: Metric.s3;
+                padding-bottom: Metric.s3;
+                spacing: 0px;
+                alignment: start;
+
+                for g in root.groups: VerticalLayout {
+                    spacing: 0px;
+                    accessible-role: AccessibleRole.list;
+                    // **`verb` is what this kind is FOR**, from `Resource::verb()` — §11.4's own
+                    // table column. It costs no pixel and it is the one place the answer is worth
+                    // saying to somebody who cannot see the sketch: *iPods, chosen by a device.*
+                    // Declared and pushed but bound to nothing, it would have been §20 item 4's
+                    // `parked` in a new place.
+                    accessible-label: g.heading + ", " + g.verb;
+
+                    Row {
+                        label: g.heading;
+                        value: "\{g.count}";
+                        heading: true;
+                    }
+
+                    // §9.1: never a bare "nothing here". It says what belongs in this group, and
+                    // the group's own verbs below it are the one action that fills it.
+                    if g.count == 0: Text {
+                        x: Geometry.page-margin;
+                        // **`x` alone is not an inset.** A layout sets a child's x *and* its width;
+                        // binding x overrides the first and leaves the second at the layout's full
+                        // 420, so this paragraph started at the margin and ran 24 px off the right
+                        // edge of the drawer — every line of §9.1's six sentences clipped by the
+                        // window frame, which is what `_out/gui/parts-empty.png` showed.
+                        width: parent.width - 2 * Geometry.page-margin;
+                        text: g.empty;
+                        font-size: Metric.body-size;
+                        font-weight: Metric.weight-body;
+                        color: Ink.fg-disabled;
+                        wrap: word-wrap;
+                    }
+
+                    // **The rows of THIS group.** Slint has no filter in a `for`, so the whole list
+                    // is walked once per group and the wrapper collapses to nothing where the row
+                    // belongs elsewhere. Six walks of a library's parts is cheap; a second,
+                    // per-group model pushed from Rust would be six lists that can disagree with the
+                    // one the counts were computed from.
+                    for r in root.rows: VerticalLayout {
+                        spacing: 0px;
+
+                        if r.group == g.group: PartRowView {
+                            r: r;
+                            open: root.detail-of == r.id;
+                            detail: root.detail-of == r.id ? root.detail : [];
+                            preview: root.preview;
+                            has-preview: root.has-preview && root.detail-of == r.id;
+                            expand(id, on) => {
+                                root.expand(id, on);
+                            }
+                            act(a, id) => {
+                                root.row-action(a, id);
+                            }
+                            reveal(top, h) => {
+                                scroll.ensure-visible(top, h);
+                            }
+                        }
+                    }
+
+                    // The group's own verbs. `Add a dump\u{2026}` / `Synthesise\u{2026}`, `Fetch\u{2026}` /
+                    // `Provide\u{2026}`, `Build\u{2026}`, `Discard` \u{2014} every one of them drawn, and the ones this
+                    // build has no mechanism for drawn disabled with `rail::Next`'s own reason and
+                    // escape hatch, **reused rather than reworded**, so the Rail and Parts cannot
+                    // word one refusal two ways.
+                    //
+                    // **Both halves carry `Geometry.parts-verb-w`, and without it a verb elides to
+                    // `F\u{2026}`.** Two `horizontal-stretch: 1` controls with no floor between them are
+                    // shrunk **by stretch** when the row is too narrow \u{2014} the same number of pixels
+                    // off each (`i-slint-core-1.17.1/layout.rs:190-251`). A disabled half prefers
+                    // the width of its REASON rather than of its label \u{2014} 411 px measured for
+                    // `Provide\u{2026}` \u{2014} against 52 for a live neighbour, so 463 shed into a 360 px row
+                    // took 51.5 off each and the one that had 52 hit its ellipsis floor. The
+                    // constant's own doc has every number.
+                    //
+                    // **And a floor is not enough for the line UNDER the reason.** \u{a7}9.4's `mono`
+                    // escape hatch is a command that has to be typed as written, so it cannot be
+                    // shortened at all: `ipod-boot firmware get <family>` measures **243 px** and
+                    // this half is 180. `_out/gui/parts.png` drew it as `ipod-boot firmware ge\u{2026}`,
+                    // cut mid-token, and `work-failed.png` drew two *different* commands as one
+                    // byte-identical `ipod-boot firmwar\u{2026}`. So when either half names a hatch the
+                    // row is not a row: each verb takes the group's full 372 px, where every
+                    // command this program names fits with 113 px to spare. It costs 78 px on a
+                    // group whose `Fetch\u{2026}` has nothing left to fetch \u{2014} which is the only state any
+                    // verb here still names a hatch in, the per-part fetch having landed \u{2014} and buys
+                    // back the only line on the page whose whole job is to be copied.
+                    property <bool> stacked: (g.has-a && g.a.escape-hatch != "")
+                        || (g.has-b && g.b.escape-hatch != "");
+
+                    if !stacked: HorizontalLayout {
+                        padding-left: Geometry.page-margin;
+                        padding-right: Geometry.page-margin;
+                        spacing: Metric.s3;
+
+                        if g.has-a: GroupVerb {
+                            horizontal-stretch: 1;
+                            min-width: Geometry.parts-verb-w;
+                            v: g.a;
+                            pressed => {
+                                root.group-action(g.group, g.a-action);
+                            }
+                            reveal(top, h) => {
+                                scroll.ensure-visible(top, h);
+                            }
+                        }
+
+                        if g.has-b: GroupVerb {
+                            horizontal-stretch: 1;
+                            min-width: Geometry.parts-verb-w;
+                            v: g.b;
+                            pressed => {
+                                root.group-action(g.group, g.b-action);
+                            }
+                            reveal(top, h) => {
+                                scroll.ensure-visible(top, h);
+                            }
+                        }
+                    }
+
+                    if stacked: VerticalLayout {
+                        padding-left: Geometry.page-margin;
+                        padding-right: Geometry.page-margin;
+                        spacing: Metric.s3;
+
+                        if g.has-a: GroupVerb {
+                            v: g.a;
+                            pressed => {
+                                root.group-action(g.group, g.a-action);
+                            }
+                            reveal(top, h) => {
+                                scroll.ensure-visible(top, h);
+                            }
+                        }
+
+                        if g.has-b: GroupVerb {
+                            v: g.b;
+                            pressed => {
+                                root.group-action(g.group, g.b-action);
+                            }
+                            reveal(top, h) => {
+                                scroll.ensure-visible(top, h);
+                            }
+                        }
+                    }
+
+                    // The group rule. **No shadow, ever** (§6.1) — separation is a 1 px line.
+                    Rectangle {
+                        height: Metric.s3;
+
+                        Rectangle {
+                            y: parent.height - 1px;
+                            height: 1px;
+                            background: Ink.line.with-alpha(0.3);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

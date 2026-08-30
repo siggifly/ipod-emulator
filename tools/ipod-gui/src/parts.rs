@@ -1,0 +1,3318 @@
+// Parts — docs/GUI.md §11.4, §11.5, §9.1.
+//
+// **This file is a stub, and what is in it is the vocabulary three pages share.** The producer —
+// the thing that turns a `Settings` into the six groups, their rows and one expanded row's details
+// — is not written yet. What is written is every type that crosses the boundary between Rust and
+// `ui/parts.slint`, plus the two that `devices.rs` needs, **defined once here rather than three
+// times in three files**. Two spellings of one fact is the defect this program keeps finding in
+// itself; three agents each inventing `RowAction` in parallel is that defect by construction.
+//
+// So: the enums below are the vocabulary, `Detail` is the one line inside an expanded row, and
+// `Wrote` is what every producer answers when it is asked to act. `devices.rs` imports two of them
+// and defines neither.
+//
+// ─── Which of these ordinals the markup actually pins ────────────────────────────────────────────
+//
+// An `int` crossing this boundary is only pinned where the **markup writes the number**. Measured
+// against the two files `build.rs` compiles into the binary — `ui/window.slint` imports
+// `ui/parts.slint` and `ui/devices.slint`, and nothing imports `ui/preview.slint`, which is a
+// slint-viewer root and pins nothing at all:
+//
+//   - `Kind::Mounted` is **0** — `parts.slint:203`, `inert: root.r.kind == 0 && !root.r.expandable`.
+//     §11.4's reserved plugged-in-iPod row is drawn as a line rather than a control, and that
+//     comparison is the only place the markup decides anything from a `kind`.
+//   - `RowAction::Remove` is **2** — `parts.slint:285`, `root.act(2, root.r.id)`. `Remove` is the
+//     row's own control rather than a `Detail`, so it is the one row action the markup fires by
+//     number instead of forwarding `DetailRow.action`.
+//
+// **That is all of it.** Every `Group` and every `Action` travels as `GroupRow.group` /
+// `GroupRow.a-action` and comes back through `group-action(int, int)` untouched — `parts.slint:320`
+// says so out loud: *in `parts::Group::ALL`'s order — which is written into the Rust type rather
+// than into this markup.* `ui/devices.slint` pins nothing whatever: every ordinal it fires is
+// `root.d.action`, which Rust put there. The rest of the order below is ours, and it is chosen to
+// read in the order a person meets these things rather than to match anything.
+//
+// Each enum gets `ALL` / `from_i32 -> Option` / `as_i32`, which is `composer::Field`'s trio
+// verbatim: an ordinal the markup sends that nothing here knows is a **no-op**, never a wrong
+// branch. That is the whole reason the vocabulary is in Rust and not a Slint `enum` — a Slint enum
+// cannot be swept, and an `int` with no exhaustive decoder is one renumbering away from firing
+// `Remove` for `Reveal`.
+
+use std::path::{Path, PathBuf};
+
+use eapp_loader::settings::{self, Presence, Resource, Settings};
+use eapp_loader::{firmware, identity, inspect, nor, si};
+
+use crate::composer::{FixRow, Secret};
+use crate::rail::{Caps, Next};
+use crate::work::{self, Want};
+
+/// The six sections of the Parts page, in the order they are drawn.
+///
+/// Not pinned by any markup — `parts.slint:309` takes six `groups` and defers the order to
+/// `parts::Group::ALL` by name. Six, always, and an
+/// empty one keeps its heading and its verbs (§9.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Group {
+    Ipods,
+    Firmware,
+    Bootloaders,
+    Software,
+    Disks,
+    Snapshots,
+}
+
+impl Group {
+    pub const ALL: [Group; 6] = [
+        Group::Ipods,
+        Group::Firmware,
+        Group::Bootloaders,
+        Group::Software,
+        Group::Disks,
+        Group::Snapshots,
+    ];
+
+    /// `None` for anything outside the list, so a stray `int` from the markup is a no-op rather
+    /// than a panic or, worse, a different group.
+    pub fn from_i32(n: i32) -> Option<Group> {
+        usize::try_from(n).ok().and_then(|i| Group::ALL.get(i)).copied()
+    }
+
+    /// Its index in [`Group::ALL`], which is the number the markup carries.
+    pub fn as_i32(self) -> i32 {
+        Group::ALL.iter().position(|g| *g == self).expect("ALL holds every variant") as i32
+    }
+}
+
+/// A group's own verbs — the one or two controls under an empty group that fill it.
+///
+/// Not pinned: `GroupRow.a-action` and `.b-action` carry the ordinal to the markup and
+/// `group-action(g.group, g.a-action)` hands it straight back. Which two a group offers is
+/// per-group and is the producer's answer, not this list's order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Action {
+    AddDump,
+    Synthesise,
+    Fetch,
+    Provide,
+    Build,
+    Discard,
+}
+
+impl Action {
+    pub const ALL: [Action; 6] = [
+        Action::AddDump,
+        Action::Synthesise,
+        Action::Fetch,
+        Action::Provide,
+        Action::Build,
+        Action::Discard,
+    ];
+
+    pub fn from_i32(n: i32) -> Option<Action> {
+        usize::try_from(n).ok().and_then(|i| Action::ALL.get(i)).copied()
+    }
+
+    pub fn as_i32(self) -> i32 {
+        Action::ALL.iter().position(|a| *a == self).expect("ALL holds every variant") as i32
+    }
+}
+
+/// What a part *is*, which decides how its row is drawn.
+///
+/// **`Mounted` is 0 and the markup depends on it** — `parts.slint:203` draws the reserved row
+/// inert on `root.r.kind == 0`. The rest is ours: a `kind`
+/// other than 0 reaches the markup only as a value it stores and hands back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Kind {
+    /// §11.4's reserved row: a real iPod plugged into this machine. Pinned to 0.
+    Mounted,
+    Rom,
+    Installer,
+    Bootloader,
+    Software,
+    Disk,
+    Snapshot,
+}
+
+impl Kind {
+    pub const ALL: [Kind; 7] = [
+        Kind::Mounted,
+        Kind::Rom,
+        Kind::Installer,
+        Kind::Bootloader,
+        Kind::Software,
+        Kind::Disk,
+        Kind::Snapshot,
+    ];
+
+    /// **`#[cfg(test)]` rather than `#[allow(dead_code)]`**, which is `geometry.rs`'s own answer
+    /// to the same shape and the only one available here: the sweep that reads a bare allow decides
+    /// a call **by text across files**, and `from_i32(` is called five times in `main.rs` — for
+    /// `Group`, `Action`, `RowAction`, `Row` and `Field` — so an allow on this one would be
+    /// reported as a retirement condition already met by somebody else's function.
+    ///
+    /// `Kind` is the one member of this file's vocabulary that travels **one way**. The markup
+    /// reads it — `parts.slint:203`'s `r.kind == 0` — and no callback in `ui/` carries one back, so
+    /// nothing in the shipped program has a `Kind` ordinal to decode. It is kept rather than
+    /// deleted because the round trip is what makes a renumbering a no-op instead of a wrong
+    /// branch, and `every_kind_survives_the_boundary` is the test that holds it.
+    ///
+    /// **Retired when:** a callback sends a `Kind` back and `main.rs` decodes one.
+    #[cfg(test)]
+    pub fn from_i32(n: i32) -> Option<Kind> {
+        usize::try_from(n).ok().and_then(|i| Kind::ALL.get(i)).copied()
+    }
+
+    pub fn as_i32(self) -> i32 {
+        Kind::ALL.iter().position(|k| *k == self).expect("ALL holds every variant") as i32
+    }
+}
+
+/// What a control inside a row does. **Shared with `devices.rs`**, which imports it rather than
+/// declaring a second one — the two pages draw the same `DetailRow` through the same flattener, so
+/// a second copy of this list would be two vocabularies for one `int`.
+///
+/// **`Remove` is 2 and the markup depends on it** — `parts.slint:285` fires
+/// `root.act(2, root.r.id)`. Everything else travels as
+/// `DetailRow.action`, which Rust wrote, so the rest of the order is ours: the three a part can
+/// take, then the three a device can, then the two that need something drawn.
+///
+/// **`ShowIdentity` is the one variant added after the vocabulary was frozen**, and it is added
+/// rather than borrowed because none of the eight meant it. §11.4 asks for the ROM's serial and
+/// FireWire GUID to be drawn **masked, with a `Show`** — the same boundary `composer::Secret`
+/// already holds for the identity fields — and `Reveal` is a file manager, not a mask. Appending
+/// keeps every ordinal below it where the other two producers were written against.
+///
+/// **`Rename` was the seventh of nine and it is deleted rather than built**, which is the one
+/// decision in this list that removed a word instead of adding one. It had a label and two *exhaustive* arms
+/// that refused it, and the two disagreed about whose control it was — `row_action` below called
+/// it a device's, `devices.rs` called it not a device's — because nothing on either page built
+/// the row and neither arm was ever reached to be checked. The reason nothing built it is
+/// structural rather than an omission: a row control travels as `row-action(int, int)`, **two
+/// integers and no string**, and a rename is typed text. The only thing a `Rename` row could ever
+/// have done is open a page with a field on it, and that page already has a control that opens it
+/// — `Edit…`, onto §11.2's level ③ *Name it*, where `Composer::commit` calls
+/// `Settings::rename_device`. One destination does not need two doors.
+///
+/// **`PowerOff` has no producer either and stays**, and the difference between the two is the
+/// test: §12.5 puts `Cmd::PowerOff | PowerOn | PowerCycle | Boot(BootTarget)` *on the device's
+/// drawer page and in the Machine menu*, and §11.4 names it again — *the device's drawer page
+/// carries `Power off` immediately above it*. A variant a section asks for is a control not built
+/// yet. A variant no section anywhere asks for is a control nobody wanted, and the vocabulary is
+/// where that shows. (Cited by section rather than by line: this doc outlived one GUI.md edit
+/// already, in this same commit.)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RowAction {
+    Reveal,
+    CopyPath,
+    /// Pinned to 2 by the markup's own `Remove` control.
+    Remove,
+    PowerOff,
+    Start,
+    Edit,
+    ShowBootScreen,
+    /// §11.4's masked identity. Toggles; the label says what the press will do next.
+    ShowIdentity,
+}
+
+impl RowAction {
+    pub const ALL: [RowAction; 8] = [
+        RowAction::Reveal,
+        RowAction::CopyPath,
+        RowAction::Remove,
+        RowAction::PowerOff,
+        RowAction::Start,
+        RowAction::Edit,
+        RowAction::ShowBootScreen,
+        RowAction::ShowIdentity,
+    ];
+
+    pub fn from_i32(n: i32) -> Option<RowAction> {
+        usize::try_from(n).ok().and_then(|i| RowAction::ALL.get(i)).copied()
+    }
+
+    pub fn as_i32(self) -> i32 {
+        RowAction::ALL.iter().position(|a| *a == self).expect("ALL holds every variant") as i32
+    }
+}
+
+/// One line inside an expanded row. **Shared with `devices.rs`**; `main.rs`'s `to_detail` is the
+/// one flattener onto `primitives.slint`'s `DetailRow`, for both pages.
+///
+/// Four renderings, told apart the way the markup tells them apart: an act when `action` is `Some`,
+/// a mono line when `mono`, a labelled fact when there is a label, and a paragraph when there is
+/// not.
+///
+/// **The eight properties an act needs are one field**, so they cannot disagree — `has-action`,
+/// `action`, `act-label`, `enabled`, `reason`, `escape-hatch`, `presses` and `consequence` are
+/// derived from this one `Option` and from the `FixRow` inside it. A row that is disabled therefore
+/// cannot lose its reason on the way across, which `primitives.slint:454` states as the
+/// invariant: *non-empty whenever `!enabled`*.
+///
+/// **`machine_rule` is the line's, and the `FixRow`'s copy of it is deliberately not read.**
+/// `DetailRow` has exactly one `machine-rule` and the markup binds it twice — to the `Pressable`
+/// when there is an act (`parts.slint:64`, `devices.slint:56`) and to the paragraph when there is
+/// not. One property, so one producer: this field. Reading the `FixRow`'s as well would be two
+/// spellings of one fact arriving at the same pixel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Detail {
+    /// `""` for a paragraph or a machine rule.
+    pub label: String,
+    pub value: String,
+    pub mono: bool,
+    pub machine_rule: bool,
+    /// `FixRow::label` becomes `act-label`; the rest of it becomes the act's own state.
+    pub action: Option<(RowAction, crate::composer::FixRow)>,
+}
+
+/// Whether the library moved, and therefore whether `main.rs` saves. **Shared by all three
+/// producers**, which is why it lives in the shared module rather than three times over.
+///
+/// `Settings::render` regenerates the file whole and takes any comment the operator added with it,
+/// so a save on a callback that mutated nothing is somebody's file rewritten for no reason. A
+/// refusal mutates nothing and answers `Nothing`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wrote {
+    Nothing,
+    Library,
+}
+
+/// One line of an expanded row that depends on nothing but the read that opened it.
+///
+/// **Not a [`Detail`], deliberately.** A `Detail` may carry an act, and an act's `enabled` and
+/// `reason` are answers about *this build* and *this moment* — they have to be recomputed on every
+/// push, and a line read off a file at the moment the row opened must not be. So the two are
+/// separate types and [`Parts::detail`] is the one place they meet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Line {
+    /// A label leading, a value trailing.
+    Fact(String, String),
+    /// A path, a hash, an address. `Metric.mono-family`.
+    Mono(String),
+    /// Prose, in `fg-dim`.
+    Para(String),
+    /// §9.4's machine rule — prose, in `fg`, because its teaching is the point.
+    Rule(String),
+}
+
+impl Line {
+    fn into_detail(self) -> Detail {
+        let (label, value, mono, machine_rule) = match self {
+            Line::Fact(l, v) => (l, v, false, false),
+            Line::Mono(v) => (String::new(), v, true, false),
+            Line::Para(v) => (String::new(), v, false, false),
+            Line::Rule(v) => (String::new(), v, false, true),
+        };
+        Detail {
+            label,
+            value,
+            mono,
+            machine_rule,
+            action: None,
+        }
+    }
+}
+
+/// What was read off the disk at the moment a row was opened.
+///
+/// **The read happens on the press, not on the push, and that is the whole of this type's
+/// reason.** §11.4 wants an `.ipsw` identified *by contents* — `firmware::identify` hashes the
+/// file, and the catalogue runs to 121 MB — and a ROM's `SysCfg` read out of the megabyte it sits
+/// in. Doing either inside `view` would put a hash of somebody's firmware on the UI thread at
+/// every repaint, which is §11.4's own drop rule (*hashing happens after the drop, not during it*)
+/// broken one surface along.
+///
+/// So the cost is paid once, by the press that asked for it, and what a row says is what was read
+/// when it was opened. Closing and re-opening the row re-reads. That is a record rather than a
+/// live measurement, in exactly the sense [`settings::Provenance::line`] is one, and it is worded
+/// as one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Read {
+    /// Nothing had to be read: everything this row's body says is already in the library.
+    Plain,
+    /// §11.4's ROM body. Boxed because it is much the largest of the three and `Read` is stored
+    /// inline in the page's cursor.
+    Rom(Box<Rom>),
+    /// §11.4's `.ipsw` body.
+    Ipsw(Vec<Line>),
+}
+
+/// §11.4's ROM body, as read.
+///
+/// The identity is kept apart from the rest because it is the one part that is re-worded on a
+/// press this page owns — `Show` unmasks it — and re-reading a megabyte to change a mask would be
+/// a read for a decision that has already been made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Rom {
+    /// The verdict, the image directory, the bootloader's build string.
+    head: Vec<Line>,
+    serial: Option<String>,
+    guid: Option<String>,
+    /// The model table's answer, `HwVr`, the record tags, and the raw bytes of everything
+    /// `SysCfg` decoded no meaning for.
+    tail: Vec<Line>,
+    /// §11.4's two machine rules, plus the generation disagreement.
+    rules: Vec<String>,
+    /// [`identity::TitleAuth::line`] — said where the decision is made.
+    title_auth: String,
+}
+
+/// The one open row, and what opening it cost.
+///
+/// **A part ID, never an index.** `parts.slint:209` compares `parts-detail-of` against `r.id`, and
+/// `parts-expand(id, on)` and `parts-row-action(a, id)` both carry the id — so a removal that
+/// renumbered the rows would leave an Expand open under somebody else's part.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Open {
+    id: i32,
+    read: Read,
+    /// §11.4: the identity is masked, and `Show` reveals it. Per open row, so closing a row
+    /// re-masks it — a screenshot of a page nobody is looking at must not carry an identifier.
+    identity_shown: bool,
+    /// The framebuffer `Show its boot screen` produced, or `None` while it has not been pressed.
+    preview: Option<Preview>,
+}
+
+/// One group of §11.4's six, as the markup draws it.
+///
+/// The two `Option`s are `has-a` + `a-action` + `a` as **one field each**, so the three cannot
+/// disagree about whether there is a verb — which is the shape `push_composer` lost `make_one` and
+/// `warning` through.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupView {
+    pub group: Group,
+    pub heading: String,
+    pub count: usize,
+    /// [`settings::Resource::verb`]'s own words — what this kind is *for*.
+    pub verb: String,
+    /// §9.1: what belongs here. **Never a bare *nothing here*.**
+    pub empty: String,
+    pub a: Option<(Action, FixRow)>,
+    pub b: Option<(Action, FixRow)>,
+}
+
+/// One part, as the markup draws it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartView {
+    pub id: i32,
+    pub group: Group,
+    pub kind: Kind,
+    pub name: String,
+    /// The row's second line. **[`settings::Provenance::line`] and the library's own fields**, and
+    /// nothing here may construct the word *verified* — a cached file nobody hashed says so.
+    pub fact: String,
+    /// §11.4's `used by N`, the reference-not-copy property made visible.
+    pub used_by: String,
+    pub expandable: bool,
+    pub selected: bool,
+    pub removable: bool,
+    /// What goes with it, named **before** the press — `parts.slint:279` binds
+    /// `consequence: root.r.remove-consequence`.
+    pub remove_consequence: String,
+    /// §11.4's one machine rule. `""` when nothing is holding it.
+    pub locked_by: String,
+}
+
+/// A framebuffer, in raw pixels, because `parts.rs` may not name a toolkit type.
+///
+/// `main.rs`'s `to_image` wraps it. RGB8, three bytes per pixel, `w * h * 3` long.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Preview {
+    pub w: u32,
+    pub h: u32,
+    pub rgb: Vec<u8>,
+}
+
+/// **One bundle, one field per page property**, so the flattener cannot quietly drop one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct View {
+    pub groups: Vec<GroupView>,
+    pub rows: Vec<PartView>,
+    /// The one open row's lines, and nothing else's.
+    pub detail: Vec<Detail>,
+    /// The open id, or `-1` — which is the markup's own default.
+    pub detail_of: i32,
+    pub preview: Option<Preview>,
+}
+
+/// The Parts page's whole state: **a cursor, not a copy.** Everything drawn is recomputed from
+/// `Settings` on every push, which is what stops it going stale — the same discipline `Composer`
+/// holds one `Recipe` under.
+///
+/// Not an `Option`: this page exists from startup, so there is no absent state to draw.
+pub struct Parts {
+    open: Option<Open>,
+    /// A stable id per `(group, name)`. **Assigned on first sight and never reused**, so removing
+    /// a part cannot renumber its neighbours under an open Expand.
+    ids: std::collections::BTreeMap<(Group, String), i32>,
+    /// Starts at 1. `-1` is the markup's *nothing open*, and `0` is left free so that a defaulted
+    /// `int` arriving from anywhere cannot name a row.
+    next_id: i32,
+    /// Which iPod each filed dump is, remembered. See [`Models`].
+    models: Models,
+}
+
+/// **Which model a filed iPod is, remembered per file.**
+///
+/// `nor::Source::model()` for a `Synthetic` is a table lookup on a string this program wrote down;
+/// for a `File` it is *"opened, all `inspect::NOR_LEN` of it, and its SysCfg parsed"* — one
+/// mebibyte, in that function's own words. §11.4's Apple-firmware offer is narrowed by which iPods
+/// are in the library, so it needs the answer for every one of them — and `Parts::view` is in
+/// `main.rs`'s repaint registry, **which a 10 Hz timer runs**. Asked straight through, a library
+/// with two dumps in it would have read 20 MB a second for as long as the page was open during a
+/// build.
+///
+/// **Keyed on what the filesystem says the file is, not on its path alone.** A memo keyed on the
+/// path is a memo that never notices the operator replacing a dump with a different iPod's, which
+/// is the shape of staleness this program is otherwise careful about — see `Presence`. Length and
+/// modified time cost one `stat`, which is what `Presence::exists` already spends per row.
+#[derive(Debug, Default)]
+struct Models {
+    seen: std::collections::BTreeMap<PathBuf, (Stamp, Option<&'static identity::Model>)>,
+}
+
+/// A file's identity as the filesystem reports it: how long it is, and when it last changed.
+///
+/// `None` for the modified time rather than a fabricated one — some filesystems do not report it,
+/// and a memo that invented a timestamp would key two different files to one entry.
+type Stamp = (u64, Option<std::time::SystemTime>);
+
+impl Models {
+    /// The model behind one filed iPod, read at most once per version of the file.
+    fn of(&mut self, src: &nor::Source) -> Option<&'static identity::Model> {
+        let nor::Source::File(p) = src else {
+            // A recipe carries its model number as a string; the lookup is a scan of a table this
+            // program compiled in, and memoising it would cost more than it saves.
+            return src.model();
+        };
+        let stamp: Stamp = std::fs::metadata(p)
+            .map(|m| (m.len(), m.modified().ok()))
+            .unwrap_or((0, None));
+        if let Some((was, model)) = self.seen.get(p) {
+            if *was == stamp {
+                return *model;
+            }
+        }
+        let model = src.model();
+        self.seen.insert(p.clone(), (stamp, model));
+        model
+    }
+}
+
+impl Parts {
+    pub fn new() -> Parts {
+        Parts {
+            open: None,
+            ids: std::collections::BTreeMap::new(),
+            next_id: 1,
+            models: Models::default(),
+        }
+    }
+
+    /// **What `Fetch…` would download under this group, right now** — §11.4's per-part fetch.
+    ///
+    /// Three groups fetch and three do not, and what each of the three offers is narrowed
+    /// differently:
+    ///
+    ///   - **Apple firmware is narrowed by the iPods in the library.** Every filed
+    ///     `Resource::Firmware` names a model; a model names a generation; a generation names its
+    ///     `UpdaterFamilyID`s — the one number that separates a 5G from a 5.5G, since they share
+    ///     `FamilyID` 6 — and each family offers its newest served, verifiable release. So a
+    ///     library holding one 5.5G is offered one bundle rather than seventy-one, and a library
+    ///     holding a 5G and a 5.5G is offered three: families 13, 20 and 25.
+    ///   - **Bootloaders and Software are fixed lists**, because their catalogues are two entries
+    ///     and one. `work::bootloaders` and `work::software` are the producers, and `work::software`
+    ///     carries the argument for what it leaves out.
+    ///
+    /// **Then everything the library already holds is taken out, and the test is the FILE NAME.**
+    /// Not the path: a bundle the operator provided from their own Downloads folder is the same
+    /// release as the one the cache would hold, and offering to fetch it would file a second row
+    /// for one release under two names. A catalogue entry's name is Apple's or Rockbox's own, so
+    /// two different files sharing one is not a case this can produce.
+    pub fn offer(&mut self, s: &Settings, g: Group) -> Vec<Want> {
+        let all: Vec<Want> = match g {
+            Group::Firmware => {
+                let mut families: Vec<u16> = Vec::new();
+                for it in &s.resources {
+                    let Resource::Firmware(src) = &it.what else {
+                        continue;
+                    };
+                    let Some(m) = self.models.of(src) else { continue };
+                    for f in work::families_of(m) {
+                        // De-duplicated, because two iPods of one generation are one offer. Two
+                        // 5.5Gs asking for `iPod_25.1.3.ipsw` twice would file one resource and
+                        // download it twice, and the plan would say so on two rows.
+                        if !families.contains(&f) {
+                            families.push(f);
+                        }
+                    }
+                }
+                families
+                    .iter()
+                    .filter_map(|f| work::newest_for_family(*f))
+                    .collect()
+            }
+            Group::Bootloaders => work::bootloaders(),
+            Group::Software => work::software(),
+            Group::Ipods | Group::Disks | Group::Snapshots => Vec::new(),
+        };
+        all.into_iter().filter(|w| !filed(s, w.file())).collect()
+    }
+
+    /// The whole page, recomputed.
+    ///
+    /// **It does no filesystem work beyond `seen.exists`.** One `Presence` is made per pass and
+    /// shared across every row, which is the discipline `device_rows` already holds; sizes, hashes
+    /// and `SysCfg` reads belong to the one open row and were paid for by the press that opened it
+    /// (see [`Read`]).
+    ///
+    /// `machine` is the device the emulator is running, by name, or `None`. It is an argument
+    /// rather than a question this file asks, for the reason `Composer::lock` states about
+    /// `building`: a gate wired to a phase nothing computes must not pretend to fire. `main::phase`
+    /// answers `Off` unconditionally today, so today this is always `None` and §11.4's machine rule
+    /// is drawn by this file's own tests and by nothing else.
+    pub fn view(
+        &mut self,
+        s: &Settings,
+        seen: &mut Presence,
+        caps: Caps,
+        busy: bool,
+        machine: Option<&str>,
+    ) -> View {
+        let entries = inventory(s, seen, machine);
+        let rows: Vec<PartView> = entries
+            .iter()
+            .map(|e| {
+                let id = self.id_of(e.group, &e.key);
+                PartView {
+                    id,
+                    group: e.group,
+                    kind: e.kind,
+                    name: e.name.clone(),
+                    fact: e.fact.clone(),
+                    used_by: if e.used_by.is_empty() {
+                        String::new()
+                    } else {
+                        format!("used by {}", e.used_by.len())
+                    },
+                    expandable: e.expandable,
+                    selected: self.open.as_ref().is_some_and(|o| o.id == id),
+                    removable: e.removable,
+                    remove_consequence: e.consequence.clone(),
+                    locked_by: e.locked_by.clone(),
+                }
+            })
+            .collect();
+
+        // A cursor that no longer names a row closes itself. Without this, removing the open part
+        // leaves `detail-of` pointing at an id nothing draws and the next part to take that id —
+        // there is none, ids are never reused — would inherit an open Expand.
+        if self.open.as_ref().is_some_and(|o| !rows.iter().any(|r| r.id == o.id)) {
+            self.open = None;
+        }
+
+        // **Computed before the groups are built, because building one takes `&self`.** Six offers,
+        // one walk of the library each; the Apple-firmware one is the only expensive question and
+        // [`Models`] is what keeps it to a `stat` per filed dump.
+        let offers: Vec<Vec<Want>> = Group::ALL.iter().map(|g| self.offer(s, *g)).collect();
+        let groups = Group::ALL
+            .iter()
+            .zip(offers.iter())
+            .map(|(g, offer)| self.group_view(*g, &rows, caps, busy, s, offer))
+            .collect();
+
+        let detail = self.detail(&entries, caps);
+        View {
+            groups,
+            rows,
+            detail,
+            detail_of: self.open.as_ref().map_or(-1, |o| o.id),
+            preview: self.open.as_ref().and_then(|o| o.preview.clone()),
+        }
+    }
+
+    /// Open or close one row, **and pay for what the body needs** — see [`Read`].
+    ///
+    /// `parts-expand(id, on)` is the callback this answers. It is not called `expand`, because
+    /// `nav::Stack::expand` already is and `no_dead_code_allow_sits_on_a_function_the_program_
+    /// already_calls` matches a call by text — a second `expand(` in this crate makes that sweep
+    /// report `nav.rs`'s as reconnected when it is not. Its own rule for the ambiguity list is
+    /// *never because a sweep went red*, so the name moved instead.
+    ///
+    /// `s` is an argument because the read is here: the id has to be resolved to a part before
+    /// anything can be read off it, and resolving it needs the library.
+    ///
+    /// An id nothing answers to closes whatever was open rather than opening nothing, which is the
+    /// same no-op an unknown ordinal gets.
+    pub fn open_row(&mut self, s: &Settings, id: i32, open: bool) {
+        if !open {
+            self.open = None;
+            return;
+        }
+        let mut seen = Presence::new();
+        let entries = inventory(s, &mut seen, None);
+        let Some(e) = entries.iter().find(|e| self.known_id(e.group, &e.key) == Some(id)) else {
+            self.open = None;
+            return;
+        };
+        if !e.expandable {
+            self.open = None;
+            return;
+        }
+        self.open = Some(Open {
+            id,
+            read: read_body(s, e),
+            identity_shown: false,
+            preview: None,
+        });
+    }
+
+    /// A group's own verb. §11.4's table names which two each group offers.
+    pub fn group_action(
+        &mut self,
+        s: &mut Settings,
+        g: Group,
+        a: Action,
+    ) -> Result<Wrote, String> {
+        if !g.offers(a) {
+            return Err(format!(
+                "{} is not one of {}'s verbs",
+                a.label(),
+                g.heading()
+            ));
+        }
+        match a {
+            // §11.4's Snapshots verb, and it is the only group verb this file performs on its own.
+            // Four of the other five are routed by `main.rs` before they arrive — `Synthesise…` and
+            // `Build…` to the Composer, `Add a dump…` and `Provide…` to a file picker — because
+            // opening a page and opening a dialog are both things a toolkit-free file cannot do.
+            // `Fetch…` is the one with no mechanism at all, and it is drawn disabled with a route.
+            Action::Discard => {
+                let parked: Vec<String> = s
+                    .devices
+                    .iter()
+                    .filter(|d| d.parked_at.is_some())
+                    .map(|d| d.name.clone())
+                    .collect();
+                if parked.is_empty() {
+                    return Err("there is no parked machine to discard".into());
+                }
+                let mut moved = false;
+                for name in &parked {
+                    // **The files go with the timestamp, and that is new because the files are
+                    // new.** `discard_park`'s own doc says *"deletes no files — the caller does
+                    // that, after saying what it is about to delete and how big it is"*, and until
+                    // §12.4's park ran there was nothing for a caller to delete: the window
+                    // configured no snapshot. Clearing the timestamp alone would now be a control
+                    // that looks like it did something while `Config::may_restore` — which asks the
+                    // two files and not the library — went on resuming the machine the person had
+                    // just discarded.
+                    //
+                    // The consequence sentence under this control names the count and the total
+                    // before the press, and the control takes two of them.
+                    for f in crate::restore_point_files(name) {
+                        let _ = std::fs::remove_file(f);
+                    }
+                    moved |= s.discard_park(name);
+                }
+                Ok(if moved { Wrote::Library } else { Wrote::Nothing })
+            }
+            // **`main.rs` routes these two before they arrive**, exactly as it routes the Composer's
+            // pair below. They were greyed out here wearing `Next::Provide`'s *no file picker in
+            // this build*, which was true of every build until `drops` existed; opening a modal
+            // dialog is not something a toolkit-free file can do, so the press goes to
+            // `drops::Ask::Part(group)` and comes back through `drops::provide`. Reaching this arm
+            // at all is a defect in the window rather than in the library.
+            Action::AddDump | Action::Provide => Err(format!(
+                "{} opens a file picker rather than changing the library on its own, so arriving \
+                 here means the press is not wired",
+                a.label()
+            )),
+            // **`main.rs` routes this one too, and for the same reason the four above it are
+            // routed: it is not a change to the library.** A fetch is N downloads on a worker
+            // thread, and `work::Queue` is what owns that thread — this file may not, being
+            // toolkit-free and having no queue. What arrives back here is a `Report`, applied by
+            // `Queue::apply` on the window's thread, which is the one writer of `Settings` during a
+            // run.
+            //
+            // It used to be the arm that refused, because there was nothing else it could be:
+            // `Fetch…` was drawn disabled with *no fetcher on this page yet*. Reaching it now is a
+            // defect in the window rather than in the library.
+            Action::Fetch => Err(format!(
+                "{} starts a download on the work queue rather than changing the library on its \
+                 own, so arriving here means the press is not wired",
+                a.label()
+            )),
+            // **`main.rs` routes these two before they arrive**, in the same way it routes
+            // `RowAction::Edit`: the Composer is the surface that holds a recipe — which is what
+            // [`Action::needs`] says makes both of them live — and opening a page is not something
+            // a toolkit-free file can do. So this arm is the one `Devices::row_action` writes for
+            // `Edit`: reaching it at all is a defect in the window rather than in the library.
+            Action::Synthesise | Action::Build => Err(format!(
+                "{} opens the Composer rather than changing the library, so arriving here means \
+                 the press is not wired",
+                a.label()
+            )),
+        }
+    }
+
+    /// One control inside one row.
+    ///
+    /// **A refusal mutates nothing and answers `Nothing`**, so `main.rs` does not rewrite the
+    /// settings file — which `Settings::render` regenerates whole, taking any comment the operator
+    /// added with it.
+    pub fn row_action(
+        &mut self,
+        s: &mut Settings,
+        shell: &crate::drops::Shell,
+        a: RowAction,
+        id: i32,
+        machine: Option<&str>,
+    ) -> Result<Wrote, String> {
+        let mut seen = Presence::new();
+        let entries = inventory(s, &mut seen, machine);
+        let Some(e) = entries
+            .iter()
+            .find(|e| self.known_id(e.group, &e.key) == Some(id))
+        else {
+            // An id nothing answers to is a no-op, in the same way an unknown ordinal is: the row
+            // it named has left the library between the push and the press.
+            return Ok(Wrote::Nothing);
+        };
+        let (group, key, locked) = (e.group, e.key.clone(), e.locked_by.clone());
+        // `Reveal` needs the file behind the row, and the row is dropped the moment the borrow
+        // above ends. `None` for a part that names no path — a synthesised iPod is a recipe.
+        let path = e.path.clone();
+        match a {
+            RowAction::ShowIdentity => {
+                if let Some(o) = self.open.as_mut().filter(|o| o.id == id) {
+                    o.identity_shown = !o.identity_shown;
+                }
+                Ok(Wrote::Nothing)
+            }
+            RowAction::ShowBootScreen => {
+                let source = s
+                    .resources
+                    .iter()
+                    .find(|it| it.name == key)
+                    .and_then(|it| match &it.what {
+                        Resource::Firmware(src) => Some(src.clone()),
+                        _ => None,
+                    });
+                let Some(source) = source else {
+                    return Err("this part is not an iPod, so it has no boot screen".into());
+                };
+                if let Some(o) = self.open.as_mut().filter(|o| o.id == id) {
+                    o.preview = match o.preview {
+                        Some(_) => None,
+                        None => Some(preview_of(&source)),
+                    };
+                }
+                Ok(Wrote::Nothing)
+            }
+            RowAction::Remove => {
+                // Asked again here rather than trusted from the control, because the control was
+                // drawn at the last push and the machine may have started since.
+                if !locked.is_empty() {
+                    return Err(locked);
+                }
+                let moved = match group {
+                    // Same act as the group verb's, for the same reason — see it. This row is not
+                    // `removable` today, so nothing in the window reaches here; the two are written
+                    // the same way anyway, because the day it becomes removable is not the day
+                    // somebody remembers that a discard has files behind it.
+                    Group::Snapshots => {
+                        for f in crate::restore_point_files(&key) {
+                            let _ = std::fs::remove_file(f);
+                        }
+                        s.discard_park(&key)
+                    }
+                    Group::Disks => s.remove_disk(&key),
+                    _ => s.remove_resource(&key),
+                };
+                if !moved {
+                    return Err(format!("{key} is not in the library"));
+                }
+                if self.open.as_ref().is_some_and(|o| o.id == id) {
+                    self.open = None;
+                }
+                Ok(Wrote::Library)
+            }
+            // **The one row control in this file that reaches outside the process**, and it is
+            // `drops::reveal` rather than a `Command` written here: three platforms, three
+            // arguments, and `Next::Reveal`'s capability is read from the same module — so the
+            // control that is drawn live and the act that runs cannot disagree about whether this
+            // computer has a file manager. It shipped as `Err(refused_because(&Next::Reveal))`
+            // under *no file manager here*, which was true of the build and is now true only of a
+            // computer that has none.
+            RowAction::Reveal => match path {
+                Some(p) => shell.reveal(&p),
+                None => Err(format!("{key} is a recipe, so there is no file to show")),
+            },
+            RowAction::CopyPath => Err(refused_because(&Next::CopyDetails)),
+            // **The three that belong to a device**, and the sentence says whose they are rather
+            // than what this page does with them — which is the half of the pair `devices.rs`'s
+            // own catch-all no longer duplicates. They arrive here only if `ui/devices.slint`'s
+            // ordinals ever reached this page's callback, which they do not — `devices.rs` owns
+            // them — so this is the exhaustive arm rather than a route. `PowerOff` is drawn by
+            // nothing yet (§12.5 asks for it); `Start` is the bench's; `Edit` opens §11.2.
+            RowAction::PowerOff | RowAction::Start | RowAction::Edit => {
+                Err(format!("{} is a device's control, not a part's", a.name()))
+            }
+        }
+    }
+
+    /// The id this `(group, name)` has, minting one if it has never been seen.
+    fn id_of(&mut self, g: Group, name: &str) -> i32 {
+        if let Some(id) = self.ids.get(&(g, name.to_string())) {
+            return *id;
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        self.ids.insert((g, name.to_string()), id);
+        id
+    }
+
+    /// The id this `(group, name)` already has. **Mints nothing** — a lookup that minted would
+    /// give every unknown press a fresh row.
+    fn known_id(&self, g: Group, name: &str) -> Option<i32> {
+        self.ids.get(&(g, name.to_string())).copied()
+    }
+
+    fn group_view(
+        &self,
+        g: Group,
+        rows: &[PartView],
+        caps: Caps,
+        busy: bool,
+        s: &Settings,
+        offer: &[Want],
+    ) -> GroupView {
+        let (a, b) = g.actions();
+        GroupView {
+            group: g,
+            heading: g.heading().to_string(),
+            count: rows.iter().filter(|r| r.group == g && r.kind != Kind::Mounted).count(),
+            verb: g.verb().to_string(),
+            empty: g.empty().to_string(),
+            a: a.map(|a| (a, verb_row(a, rows, g, caps, busy, s, offer))),
+            b: b.map(|b| (b, verb_row(b, rows, g, caps, busy, s, offer))),
+        }
+    }
+
+    /// The open row's lines, with its acts.
+    fn detail(&self, entries: &[Entry], caps: Caps) -> Vec<Detail> {
+        let Some(open) = self.open.as_ref() else {
+            return Vec::new();
+        };
+        let Some(e) = entries
+            .iter()
+            .find(|e| self.known_id(e.group, &e.key) == Some(open.id))
+        else {
+            return Vec::new();
+        };
+
+        let mut out: Vec<Detail> = Vec::new();
+        match &open.read {
+            Read::Plain => {}
+            Read::Ipsw(lines) => out.extend(lines.iter().cloned().map(Line::into_detail)),
+            Read::Rom(rom) => {
+                out.extend(rom.head.iter().cloned().map(Line::into_detail));
+                // §11.4: masked, with a `Show`. `composer::Secret` is the masking boundary this
+                // program already has, and there is deliberately no second one.
+                let mut any = false;
+                if let Some(v) = &rom.serial {
+                    let secret = Secret::serial(v, open.identity_shown);
+                    out.push(Line::Fact("Serial".into(), secret.text()).into_detail());
+                    any = true;
+                }
+                if let Some(v) = &rom.guid {
+                    let secret = Secret::guid(v, open.identity_shown);
+                    out.push(Line::Fact("FireWire GUID".into(), secret.text()).into_detail());
+                    any = true;
+                }
+                if any {
+                    let label = Secret::serial("", open.identity_shown).action();
+                    out.push(act(
+                        RowAction::ShowIdentity,
+                        FixRow {
+                            label: label.into(),
+                            enabled: true,
+                            reason: String::new(),
+                            escape: String::new(),
+                            machine_rule: false,
+                            presses: 1,
+                            consequence: String::new(),
+                        },
+                    ));
+                }
+                out.extend(rom.tail.iter().cloned().map(Line::into_detail));
+                out.push(Line::Para(rom.title_auth.clone()).into_detail());
+                for r in &rom.rules {
+                    out.push(Line::Rule(r.clone()).into_detail());
+                }
+                out.push(act(
+                    RowAction::ShowBootScreen,
+                    FixRow {
+                        label: if open.preview.is_some() {
+                            "Hide its boot screen".into()
+                        } else {
+                            "Show its boot screen".into()
+                        },
+                        enabled: true,
+                        reason: String::new(),
+                        escape: String::new(),
+                        machine_rule: false,
+                        presses: 1,
+                        consequence: String::new(),
+                    },
+                ));
+            }
+        }
+
+        // Who is using it, named rather than counted — the count is on the row and this is the
+        // page the count sends you to.
+        if !e.used_by.is_empty() {
+            out.push(Line::Fact("Used by".into(), e.used_by.join(", ")).into_detail());
+        }
+
+        // The path, and the two acts over it. Both are drawn disabled in this build wearing
+        // `rail::Next`'s own sentence, which is the same sentence the Rail draws for the same
+        // absent capability — one refusal, worded once.
+        if let Some(p) = &e.path {
+            out.push(Line::Mono(p.display().to_string()).into_detail());
+            out.push(act(RowAction::Reveal, next_row("Reveal", &Next::Reveal, caps)));
+            out.push(act(
+                RowAction::CopyPath,
+                next_row("Copy path", &Next::CopyDetails, caps),
+            ));
+        }
+        out
+    }
+}
+
+// ─── The vocabulary's own words ─────────────────────────────────────────────────────────────────
+
+impl Group {
+    /// §11.4's own heading for this section.
+    pub fn heading(self) -> &'static str {
+        match self {
+            Group::Ipods => "iPods",
+            Group::Firmware => "Apple firmware",
+            Group::Bootloaders => "Bootloaders",
+            Group::Software => "Software",
+            Group::Disks => "Disks",
+            Group::Snapshots => "Snapshots",
+        }
+    }
+
+    /// What this kind is **for**, in the words the model already uses for it.
+    ///
+    /// The four resource groups read it off [`Resource::verb`] rather than repeating it, which is
+    /// why a `Resource` is constructed here only to be asked: the alternative is four string
+    /// literals that agree with `settings.rs` on the day they are written. An empty group has no
+    /// row to ask, so the sample is what makes the answer available before the first part arrives.
+    ///
+    /// The last two have no `Resource` — a disk is what ingredients are combined *into*, and a
+    /// snapshot is a device's paused state — so §11.4's own table words those two.
+    pub fn verb(self) -> &'static str {
+        match self {
+            Group::Ipods => Resource::Firmware(nor::Source::File(PathBuf::new())).verb(),
+            Group::Firmware => Resource::Installer(PathBuf::new()).verb(),
+            Group::Bootloaders => Resource::Bootloader(PathBuf::new()).verb(),
+            Group::Software => Resource::Software(PathBuf::new()).verb(),
+            Group::Disks => "what a device runs",
+            Group::Snapshots => "what press the centre button to resume resumes",
+        }
+    }
+
+    /// §9.1: **never a bare *nothing here***. It says what belongs in this group, and the group's
+    /// own verbs below it are the one action that fills it.
+    pub fn empty(self) -> &'static str {
+        match self {
+            Group::Ipods => {
+                "A boot ROM — one megabyte read off a real iPod, or one synthesised from a model \
+                 number and a seed. A device names one and cannot be made without it."
+            }
+            Group::Firmware => {
+                "An Apple software bundle, an .ipsw. A drive is built from one, and the drive is \
+                 what runs."
+            }
+            Group::Bootloaders => {
+                "ipodloader2, or Rockbox's. It goes in the firmware partition, which holds exactly \
+                 one thing — so everything called dual or triple boot is one of these offering the \
+                 rest."
+            }
+            Group::Software => {
+                "Rockbox, ZeroSlackr, a Linux kernel. It is installed onto a drive rather than run \
+                 on its own."
+            }
+            Group::Disks => {
+                "A drive image — what a device runs. One is built from an Apple bundle, or \
+                 provided whole."
+            }
+            Group::Snapshots => {
+                "A paused machine: the RAM it stopped in and the drive it was paused against, so \
+                 there is something for press the centre button to resume to resume."
+            }
+        }
+    }
+
+    /// The one or two verbs this group offers, in the order §11.4's table names them.
+    pub fn actions(self) -> (Option<Action>, Option<Action>) {
+        match self {
+            Group::Ipods => (Some(Action::AddDump), Some(Action::Synthesise)),
+            Group::Firmware | Group::Bootloaders | Group::Software => {
+                (Some(Action::Fetch), Some(Action::Provide))
+            }
+            Group::Disks => (Some(Action::Build), Some(Action::Provide)),
+            Group::Snapshots => (Some(Action::Discard), None),
+        }
+    }
+
+    /// Whether this group offers that verb at all — the guard on `parts-group-action(g, a)`, whose
+    /// two ordinals travel independently and can therefore arrive paired with each other wrongly.
+    pub fn offers(self, a: Action) -> bool {
+        let (x, y) = self.actions();
+        x == Some(a) || y == Some(a)
+    }
+
+    /// **The command that fetches what this window will NOT**, from a terminal.
+    ///
+    /// It used to name what `Fetch…` could not do, on all three groups, because `Fetch…` could do
+    /// nothing. The verb works now, so the question this answers changed with it: §9.4's rule is
+    /// that a disabled control names a route that is real, and the only thing left to route to is
+    /// what the offer deliberately leaves out.
+    ///
+    ///   - **Apple firmware** keeps its command, and it is the one with the most left over.
+    ///     [`Parts::offer`] gives one release per updater family — the newest Apple still serves
+    ///     that can be checked byte for byte — and the catalogue holds seventy-one. Family 24 alone
+    ///     has six. `firmware get` takes an `UpdaterFamilyID` or a filename and lands the bundle in
+    ///     the same cache this page reads; `firmware list` prints the numbers.
+    ///   - **Software** names `install-linux`, which is the command that fetches the 101 MB
+    ///     ZeroSlackr archive [`work::software`] refuses to offer — see that function for why.
+    ///   - **Bootloaders** names none, and that is the honest answer rather than an omission: the
+    ///     window fetches both entries in that group's catalogue, so there is nothing a terminal
+    ///     can get that this page cannot. `rockbox-install` used to be named here and it does more
+    ///     than fetch — it writes a drive — which makes it the wrong thing to hand somebody who
+    ///     pressed a verb called `Fetch…`.
+    ///
+    /// `None` for the three groups that do not offer [`Action::Fetch`] at all — an unreachable
+    /// route named anyway is the phantom this page is about.
+    pub fn fetch_route(self) -> Option<&'static str> {
+        match self {
+            Group::Firmware => Some("ipod-boot firmware get <family>"),
+            Group::Software => Some("ipod-boot install-linux"),
+            Group::Bootloaders | Group::Ipods | Group::Disks | Group::Snapshots => None,
+        }
+    }
+
+    /// **Why `Fetch…` has nothing to do here**, for the control and for the press.
+    ///
+    /// One producer, two use sites — [`verb_row`] words the disabled control and `main.rs` words
+    /// the note a press files when the offer went empty between the push and the press. That
+    /// second one is reachable: the offer is a fact about the library, and pressing `Fetch…` twice
+    /// quickly is two presses against two different libraries.
+    ///
+    /// **Two sentences for Apple firmware, because they are two different facts.** An empty library
+    /// has nothing an `.ipsw` could fit, and that is the state a new user is in; a library whose
+    /// iPods are all covered is finished, and that is the state a returning one is in. Collapsing
+    /// them into *nothing left to fetch* would tell somebody with no iPod that they had everything.
+    ///
+    /// Each is written to `geometry::PARTS_VERB_W` 180 px, which the reason sweep in `main.rs`
+    /// measures — a group verb's reason elides and cannot wrap.
+    pub fn nothing_to_fetch(self, s: &Settings) -> &'static str {
+        let an_ipod = s
+            .resources
+            .iter()
+            .any(|it| matches!(it.what, Resource::Firmware(_)));
+        match self {
+            Group::Firmware if !an_ipod => "no iPod here to fit one to",
+            Group::Firmware => "nothing left to fetch",
+            Group::Bootloaders => "both bootloaders are here",
+            Group::Software => "Rockbox is already here",
+            Group::Ipods | Group::Disks | Group::Snapshots => "",
+        }
+    }
+
+    /// Whether a part filed in this group can be opened at all.
+    ///
+    /// **The four resource groups can; disks and snapshots cannot, and that is a scope decision
+    /// rather than a fact about the model.** `inspect::disk` and `inspect::drive_facts` both exist
+    /// and would fill a drive's body; §11.4's snapshot body wants an instruction count and
+    /// `Config::pair_is_whole`, and neither is reachable from `Settings` — nothing records where a
+    /// device's snapshot lives. See this file's own note above [`Entry::expandable`].
+    pub fn expandable(self) -> bool {
+        !matches!(self, Group::Disks | Group::Snapshots)
+    }
+}
+
+impl Action {
+    /// The control's label. §11.4's table words all six.
+    pub fn label(self) -> String {
+        match self {
+            Action::AddDump => "Add a dump…".into(),
+            Action::Synthesise => "Synthesise…".into(),
+            Action::Fetch => "Fetch…".into(),
+            Action::Provide => "Provide…".into(),
+            Action::Build => "Build…".into(),
+            Action::Discard => "Discard".into(),
+        }
+    }
+
+    /// **Which capability this verb needs, asked of `rail::Next` rather than answered here.**
+    ///
+    /// §9.4's refusals belong to one type, so the Rail and this page cannot word one absent
+    /// capability two ways. What each verb needs:
+    ///
+    ///   - a file has to arrive from outside — a picker or a drop — for `Add a dump…` and
+    ///     `Provide…`;
+    ///   - a surface that holds a recipe for `Synthesise…` and `Build…`, which is the Composer,
+    ///     and this build has one — so both are drawn live;
+    ///   - **`curl`, for `Fetch…`** — because every download in this program goes through it, and
+    ///     `caps.download` is `eapp_loader::tooling::can_download()` measured once per launch.
+    ///
+    /// **`Fetch…` asks `Next::Retry` again, and the argument for taking it away has expired.** It
+    /// was moved off that question because *a capability question is the wrong question when the
+    /// mechanism behind the control does not exist, and asking it draws a live control over a
+    /// hole*: `curl` was present, so the verb was blue on three groups and every press failed. The
+    /// mechanism exists now — [`Parts::offer`] names the files and `work::Queue::fetch` downloads
+    /// them on a worker — so the capability question is the right one, and the hole it used to be
+    /// drawn over is filled. What is still not a capability question is *is there anything left to
+    /// fetch*, and [`verb_row`] asks the library that separately.
+    ///
+    /// **`Discard` alone answers `None`**: the parked machines are this program's own files on this
+    /// computer, in the same way `Next::CancelWrite` needs no capability.
+    pub fn needs(self) -> Option<Next> {
+        match self {
+            Action::AddDump | Action::Provide => Some(Next::Provide),
+            Action::Synthesise | Action::Build => Some(Next::Fix {
+                label: self.label(),
+                presses: 1,
+            }),
+            Action::Fetch => Some(Next::Retry),
+            Action::Discard => None,
+        }
+    }
+}
+
+impl RowAction {
+    /// Whether this control **destroys something** — the one fact about an act the two pages that
+    /// draw a [`Detail`] were answering differently.
+    ///
+    /// `ui/parts.slint` drew every act in `Ink.accent` and `ui/devices.slint` drew every act in
+    /// `Ink.danger`: one struct, one flattener, two colours, and the disagreement only became
+    /// visible when the devices page gained a line that is not a removal — `Edit…`, drawn in the
+    /// destructive colour. The colour is a fact about the act rather than about the page, so the
+    /// act answers it here and both files bind the answer.
+    ///
+    /// **`Remove` is the only one, and `PowerOff` is deliberately not.** §12.4 parks a machine
+    /// rather than discarding it, so stopping one destroys nothing; everything else reads,
+    /// reveals, or opens a page.
+    pub fn destructive(self) -> bool {
+        matches!(self, RowAction::Remove)
+    }
+
+    /// The control's own word, for a refusal that has to name it.
+    pub fn name(self) -> &'static str {
+        match self {
+            RowAction::Reveal => "Reveal",
+            RowAction::CopyPath => "Copy path",
+            RowAction::Remove => "Remove",
+            RowAction::PowerOff => "Power off",
+            RowAction::Start => "Start",
+            RowAction::Edit => "Edit",
+            RowAction::ShowBootScreen => "Show its boot screen",
+            RowAction::ShowIdentity => "Show",
+        }
+    }
+}
+
+// ─── The library, read once per pass ────────────────────────────────────────────────────────────
+
+/// One part, as the library holds it — before anything about this build is asked.
+///
+/// It exists so the six groups, the rows, the counts and the open row's body are all built from
+/// **one** walk of the library. Two walks is two answers, and the count and the rows it counts
+/// disagreeing is what §11.4's own six-group complaint is about one level up.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Entry {
+    group: Group,
+    /// **The key the model knows it by**, which is what `remove_resource`, `remove_disk` and
+    /// `discard_park` are handed. Empty for §11.4's reserved row, which is not in any list.
+    key: String,
+    /// What is drawn. The same as `key` for everything the library holds.
+    name: String,
+    kind: Kind,
+    fact: String,
+    path: Option<PathBuf>,
+    /// Whether the row has a body to open.
+    ///
+    /// **Disks and snapshots ship `false`.** Not a stub and not an oversight: a drive's body wants
+    /// the partition table, the FAT type and an in-window FAT32 tree, and a snapshot's wants the
+    /// instruction count it was taken at and `Config::pair_is_whole`'s answer.
+    ///
+    /// **One half of that reason has expired and is corrected rather than left standing.** It read
+    /// *"`Settings` records **no path to a snapshot at all**"*, which was true until §12.4's park
+    /// ran: `Settings::restore_point` is that path now, `Config::stamp` and `Config::parked_frame`
+    /// derive the two files beside it, and the row above carries the total size because of it.
+    /// What is still unavailable is the **instruction count** the restore point was taken at —
+    /// nothing writes it anywhere, and `pair_is_whole` answers a boolean rather than a story — so
+    /// a body would still open onto one fact and two apologies, which is worse than a row that
+    /// says it does not open.
+    expandable: bool,
+    removable: bool,
+    /// Every device and every drive that names it, by name.
+    used_by: Vec<String>,
+    /// What the removal costs, named **before** the press.
+    consequence: String,
+    /// §11.4's one machine rule, or `""`.
+    locked_by: String,
+}
+
+/// The whole library, in §11.4's six groups and their order.
+///
+/// **`seen` is the pass's shared stat cache and the only filesystem work this does.** A part whose
+/// file has left the disk says so on its own row, which is the state the shipped bench used to
+/// draw as fine.
+fn inventory(s: &Settings, seen: &mut Presence, machine: Option<&str>) -> Vec<Entry> {
+    let running = machine.and_then(|m| s.devices.iter().find(|d| d.name == m));
+    // **The one resource a device references directly is its boot ROM.** Its drive is a `Disk`,
+    // in its own namespace and with its own row below, and the `.ipsw` that drive was built from
+    // is not referenced by the device at all — the drive exists, and removing the bundle's entry
+    // takes nothing away from a machine that is running. So the rule is one comparison, not a
+    // transitive walk that would refuse removals nothing is holding.
+    let holds_resource = |key: &str| running.is_some_and(|d| d.firmware == key);
+    let held = |by: bool| -> String {
+        match (by, machine) {
+            (true, Some(m)) => format!("{m} is running. Stop it first."),
+            _ => String::new(),
+        }
+    };
+
+    let mut out: Vec<Entry> = Vec::new();
+
+    // §11.4: **the plugged-in-iPod row is reserved, always**, and it is a line rather than a
+    // control until one appears — the group does not *grow* a row on an event nobody initiated at
+    // this surface. `identity::detect_mounted` is what would fill it, and it is deliberately not
+    // called: it walks /Volumes, /media and /run/media one and two levels deep, and a machine with
+    // an unresponsive SMB mount blocks its caller for as long as the mount takes to time out.
+    // §11.4 gives it a 2 s poll **off the UI thread** while Parts is open; there is no such poll,
+    // so the row says what is true — that nothing here is looking.
+    out.push(Entry {
+        group: Group::Ipods,
+        key: String::new(),
+        name: "No iPod is plugged in".into(),
+        kind: Kind::Mounted,
+        fact: "nothing is watching yet".into(),
+        path: None,
+        expandable: false,
+        removable: false,
+        used_by: Vec::new(),
+        consequence: String::new(),
+        locked_by: String::new(),
+    });
+
+    for it in &s.resources {
+        let (group, kind) = match &it.what {
+            Resource::Firmware(_) => (Group::Ipods, Kind::Rom),
+            Resource::Installer(_) => (Group::Firmware, Kind::Installer),
+            // The fourth kind the shipped window dropped on the floor. §3's own named complaint,
+            // and a clean-looking Parts page is not evidence that no bootloader is filed.
+            Resource::Bootloader(_) => (Group::Bootloaders, Kind::Bootloader),
+            Resource::Software(_) => (Group::Software, Kind::Software),
+        };
+        let path = it.what.path().map(|p| p.to_path_buf());
+        let mut used_by = s.devices_using_resource(&it.name);
+        used_by.extend(s.disks_recording_resource(&it.name));
+        let mut fact = it.from.map(|f| f.line()).unwrap_or_default();
+        // A part whose file is gone. `Presence::exists` is `false` only when the path was looked
+        // for and was not there, so a permission error does not become a claim about the file.
+        if let Some(p) = &path {
+            if !seen.exists(p) {
+                let gone = "the file is not where it was";
+                fact = if fact.is_empty() {
+                    gone.into()
+                } else {
+                    format!("{fact}, {gone}")
+                };
+            }
+        }
+        out.push(Entry {
+            group,
+            key: it.name.clone(),
+            name: it.name.clone(),
+            kind,
+            fact,
+            path,
+            expandable: group.expandable(),
+            removable: true,
+            consequence: remove_consequence(&used_by),
+            used_by,
+            locked_by: held(holds_resource(&it.name)),
+        });
+    }
+
+    for k in &s.disks {
+        let used_by = s.devices_using_disk(&k.name);
+        let mut fact = match &k.built_from {
+            Some(b) => format!("built from {b}"),
+            None => "provided".to_string(),
+        };
+        if !k.installed.is_empty() {
+            fact = format!("{fact}, with {} installed", k.installed.join(", "));
+        }
+        if !seen.exists(&k.path) {
+            fact = format!("{fact}, the image is not where it was");
+        }
+        let locked = running.is_some_and(|d| {
+            d.disk.as_deref() == Some(k.name.as_str()) || d.disk_path.as_ref() == Some(&k.path)
+        });
+        out.push(Entry {
+            group: Group::Disks,
+            key: k.name.clone(),
+            name: k.name.clone(),
+            kind: Kind::Disk,
+            fact,
+            path: Some(k.path.clone()),
+            expandable: Group::Disks.expandable(),
+            removable: false,
+            used_by,
+            consequence: String::new(),
+            locked_by: held(locked),
+        });
+    }
+
+    // §11.4's sixth group. A park per device was invisible: close the window four times across
+    // four devices and there is a restore point per device that nobody asked for and nobody could
+    // total. **Measured at 149 MB for a 5.5G**, which is the RAM this machine has — §12.4's own
+    // "~1.6 GB" is the frozen *drive* in copy mode and not this.
+    let now = settings::now_unix();
+    for d in &s.devices {
+        let Some(secs) = settings::parked_for(d, now) else {
+            continue;
+        };
+        // **The size is asked of the files, not of a constant.** §11.4's rule for a removal is that
+        // it says how big the thing is before you press; a figure quoted from the design would go
+        // stale the first time the snapshot format changed, and a park that half-wrote would report
+        // the size it *should* have been.
+        let files = crate::restore_point_files(&d.name);
+        let bytes: u64 = files
+            .iter()
+            .filter_map(|p| seen.exists(p).then(|| std::fs::metadata(p).ok()).flatten())
+            .map(|m| m.len())
+            .sum();
+        out.push(Entry {
+            group: Group::Snapshots,
+            key: d.name.clone(),
+            name: d.name.clone(),
+            kind: Kind::Snapshot,
+            // `ago` is the window's one spelling of *time since*, and the shelf already draws it.
+            // The size joins it because this row is the only place the cost of a park is visible,
+            // and a park time with no size is what made four of them invisible.
+            fact: match bytes {
+                0 => format!("parked {}", crate::ago(secs)),
+                n => format!("parked {}, {}", crate::ago(secs), eapp_loader::si(n)),
+            },
+            path: files.first().cloned(),
+            expandable: Group::Snapshots.expandable(),
+            removable: false,
+            used_by: Vec::new(),
+            consequence: String::new(),
+            locked_by: held(running.is_some_and(|r| r.name == d.name)),
+        });
+    }
+    out
+}
+
+/// §11.4: `Remove` **names what goes with it before it acts** — in `geometry::ACT_MEASURE` 324 px,
+/// which is what decided how much of it there is.
+///
+/// Never empty, because the control takes two presses and `primitives.slint` reserves the slot for
+/// whatever the second press will do — a blank there is a control that arms and says nothing.
+///
+/// ── **The seed left this sentence, and measurement is what forced it** ────────────────────────
+///
+/// §11.4 asks that removing a synthesised iPod *additionally show the seed*, and it did:
+/// `This iPod is a recipe: only seed 6182160 regenerates its identity.` The screenshots carry a
+/// seven-digit seed and every seed anybody is actually handed is a whole `u64` —
+/// `18446744073709551615` is twenty. That clause alone is 62 characters at its widest, which is
+/// **330 px in a 324 px slot**: over budget with nothing else in the sentence at all. There is no
+/// wording of it that fits, so the choice was never between two sentences.
+///
+/// **It is not lost, and it was never only here.** The `Seed` fact is inside the same `Expand`
+/// this control is in, a few rows above it, at `geometry::REFUSAL_MEASURE` 372 and whole — and
+/// that is the surface that is there **whatever the ROM is called**. When the program files a ROM
+/// itself the row is named `A446, seed 6182160` and its fact line reads
+/// `synthesised, seed 6182160, used by 1`, so the seed is drawn three more times before the row is
+/// even opened; when the operator named their own dump `From my 30 GB` it is drawn none of them.
+/// The assertion in `the_removal_consequence_names_the_dependents_before_the_press` is on the
+/// `Seed` fact for that reason, and it was written the other way round first.
+///
+/// What stays is the half that is **nowhere else on the page**: that removing the entry deletes no
+/// file, and which devices are left naming something the library no longer holds. The names go
+/// last, so what elides under a long list is the operator's own words and not this program's
+/// point — the same arrangement §9.4 settled for `My 5.5G is running`.
+fn remove_consequence(used_by: &[String]) -> String {
+    if used_by.is_empty() {
+        "The entry goes; no file is deleted.".to_string()
+    } else {
+        format!("No file is deleted. Still named by {}.", used_by.join(", "))
+    }
+}
+
+// ─── What a press pays for ──────────────────────────────────────────────────────────────────────
+
+/// Read whatever this row's body needs, once, at the moment it is opened. See [`Read`].
+fn read_body(s: &Settings, e: &Entry) -> Read {
+    match e.kind {
+        Kind::Rom => match s.resources.iter().find(|it| it.name == e.key) {
+            Some(it) => match &it.what {
+                Resource::Firmware(src) => Read::Rom(Box::new(read_rom(src))),
+                _ => Read::Plain,
+            },
+            None => Read::Plain,
+        },
+        Kind::Installer => match &e.path {
+            Some(p) => Read::Ipsw(read_ipsw(p)),
+            None => Read::Plain,
+        },
+        _ => Read::Plain,
+    }
+}
+
+/// §11.4's ROM body.
+fn read_rom(src: &nor::Source) -> Rom {
+    let mut head: Vec<Line> = Vec::new();
+    let mut tail: Vec<Line> = Vec::new();
+    let mut rules: Vec<String> = Vec::new();
+
+    match src {
+        nor::Source::File(p) => {
+            // §11.4: the verdict **with its own diagnosis**. A refusal is a machine rule — the
+            // file is what it is, and no amount of work on this program changes it — so it is
+            // drawn in `fg` rather than `fg-dim`.
+            let v = inspect::flash(p);
+            head.push(match v.ok() {
+                true => Line::Para(v.text().into()),
+                false => Line::Rule(v.text().into()),
+            });
+            if let Ok(nor) = std::fs::read(p) {
+                let images = inspect::nor_images(&nor);
+                if !images.is_empty() {
+                    let tags: Vec<&str> = images.iter().map(|e| e.tag.as_str()).collect();
+                    head.push(Line::Fact("Images".into(), tags.join(", ")));
+                }
+                if let Some(cfg) = inspect::syscfg(&nor) {
+                    match (cfg.model.as_deref(), cfg.model_info()) {
+                        (Some(m), Some(info)) => {
+                            tail.push(Line::Fact(
+                                "Model".into(),
+                                format!(
+                                    "{m} — {} GB, {}, {}",
+                                    info.capacity_gb,
+                                    info.colour().label(),
+                                    info.generation.label()
+                                ),
+                            ));
+                            // §11.4's second machine rule. The bench draws whatever ROM a device
+                            // points at with one drawing, so rendering a nano's dump as a 5.5G
+                            // with a 320x240 glass would be inventing a fact about somebody's
+                            // hardware.
+                            if info.generation.gestalt().is_none() {
+                                rules.push(format!(
+                                    "this is not a 5th-generation iPod — the table says {}",
+                                    info.generation.label()
+                                ));
+                            }
+                        }
+                        // §11.4's first machine rule, and it claims nothing it cannot look up.
+                        (Some(m), None) => {
+                            tail.push(Line::Fact("Model".into(), m.to_string()));
+                            rules.push(format!(
+                                "Mod# {m} is not in the model table. HwVr says {}. This will not \
+                                 claim a generation it cannot look up.",
+                                cfg.hw_vr
+                                    .map(|v| format!("{v:#010X}"))
+                                    .unwrap_or_else(|| "nothing".into())
+                            ));
+                        }
+                        (None, _) => {}
+                    }
+                    if let Some(v) = cfg.hw_vr {
+                        tail.push(Line::Fact("HwVr".into(), format!("{v:#010X}")));
+                    }
+                    // Two independent statements of the generation. They should agree; that they
+                    // do not is worth knowing rather than silently preferring one.
+                    if cfg.generation_agrees() == Some(false) {
+                        rules.push(
+                            "Mod# and HwVr disagree about which generation this is. Both are read \
+                             out of the dump, so one of them is not what it looks like."
+                                .into(),
+                        );
+                    }
+                    if !cfg.tags.is_empty() {
+                        tail.push(Line::Fact("Records".into(), cfg.tags.join(", ")));
+                    }
+                    // **Every record nothing here decodes, as bytes.** Rockbox names nine tags and
+                    // this project's own 5G NOR carries a tenth it does not list, so the next dump
+                    // may hold one nobody has written down. Printing the bytes is the difference
+                    // between *we do not know what this is* and quietly dropping it.
+                    for (tag, raw) in cfg.records.iter().filter(|(t, _)| !DECODED.contains(&t.as_str())) {
+                        let hex: Vec<String> = raw.iter().map(|b| format!("{b:02x}")).collect();
+                        tail.push(Line::Mono(format!("{tag}  {}", hex.join(" "))));
+                    }
+                }
+            }
+        }
+        nor::Source::Synthetic { model, seed, .. } => {
+            head.push(Line::Para(
+                "This iPod is a recipe rather than a dump: a model number, a seed, and whatever \
+                 identity was typed over them. Nothing of it is on disk, so there is nothing to go \
+                 stale and nothing to clean up."
+                    .into(),
+            ));
+            tail.push(Line::Fact(
+                "Model".into(),
+                match identity::Model::lookup(model) {
+                    Some(info) => format!(
+                        "{model} — {} GB, {}, {}",
+                        info.capacity_gb,
+                        info.colour().label(),
+                        info.generation.label()
+                    ),
+                    None => model.clone(),
+                },
+            ));
+            tail.push(Line::Fact("Seed".into(), format!("{seed}")));
+        }
+    }
+
+    // The identity, from the one resolution point rather than from a second read of `SysCfg`. It
+    // is also what answers §11.4's `TitleAuth` line, and it answers it where the decision is made.
+    let (mut serial, mut guid, mut title_auth) = (None, None, String::new());
+    match src.identity() {
+        Ok(id) => {
+            serial = id.serial.clone();
+            guid = Some(format!("{:016X}", id.guid));
+            title_auth = id.title_auth().line().to_string();
+            // The strongest evidence there is that a dump did not parse.
+            if let Some(w) = id.oui_warning() {
+                rules.push(w);
+            }
+        }
+        Err(why) => head.push(Line::Rule(why)),
+    }
+
+    Rom {
+        head,
+        serial,
+        guid,
+        tail,
+        rules,
+        title_auth,
+    }
+}
+
+/// The four `SysCfg` tags this window words. Everything else is drawn as bytes.
+const DECODED: [&str; 4] = ["SrNm", "FwId", "Mod#", "HwVr"];
+
+/// §11.4's `.ipsw` body — versions, checksums, and `firmware::identify`'s answer **by contents**.
+fn read_ipsw(path: &Path) -> Vec<Line> {
+    let mut out: Vec<Line> = Vec::new();
+    if let Ok(m) = std::fs::metadata(path) {
+        out.push(Line::Fact("On disk".into(), si(m.len())));
+    }
+    for (label, value) in inspect::ipsw_facts(path) {
+        out.push(Line::Fact(label.to_string(), value));
+    }
+    // **By contents, never by extension or by name.** People rename downloads and browsers add
+    // `(1)`; a file called `iPod_25.1.3.ipsw` is not evidence of anything, and the hash is. This
+    // is the expensive half of the read, and it is why the read is on the press.
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let p = firmware::identify(&bytes);
+            out.push(Line::Fact("Identified by contents".into(), p.line()));
+            // `Unrecognised` is explicitly allowed: modified firmware is a legitimate reason to
+            // want an emulator, and it is reported so you know rather than to stop you.
+            if let Some(w) = p.warning() {
+                out.push(Line::Para(w.into()));
+            }
+        }
+        Err(e) => out.push(Line::Rule(format!("this file could not be read: {e}"))),
+    }
+    out
+}
+
+/// §11.4's boot-screen preview, widened to the eight-bit channels the window draws.
+///
+/// The panel's own size, from `emu::FB_W` / `FB_H` — not a number typed here — because §6.1's rule
+/// is an exact integer scale and nearest neighbour, and a preview at any other size is a resampled
+/// framebuffer presented as a screenshot.
+fn preview_of(src: &nor::Source) -> Preview {
+    let (w, h) = (crate::emu::FB_W, crate::emu::FB_H);
+    let fb = src.boot_screen(w, h);
+    let mut rgb = vec![0u8; w * h * 3];
+    for (i, px) in fb.iter().enumerate() {
+        // 5- and 6-bit channels widened by bit replication, the same expansion
+        // `emu::read_framebuffer` uses — so a pixel here and a pixel in the panel are the same
+        // number.
+        let (r, g, b) = ((px >> 11) & 0x1f, (px >> 5) & 0x3f, px & 0x1f);
+        rgb[i * 3] = ((r << 3) | (r >> 2)) as u8;
+        rgb[i * 3 + 1] = ((g << 2) | (g >> 4)) as u8;
+        rgb[i * 3 + 2] = ((b << 3) | (b >> 2)) as u8;
+    }
+    Preview {
+        w: w as u32,
+        h: h as u32,
+        rgb,
+    }
+}
+
+// ─── Controls ───────────────────────────────────────────────────────────────────────────────────
+
+/// A `Detail` that is nothing but an act.
+///
+/// `DetailView` draws `act-label` for a line with an action and reads neither `label` nor `value`,
+/// so both are empty rather than carrying a second copy of the label.
+fn act(a: RowAction, mut fix: FixRow) -> Detail {
+    // **One property, one producer, and the value is MOVED rather than copied.** `DetailRow` has
+    // exactly one `machine-rule`; the markup binds it to the `Pressable` when there is an act
+    // (`parts.slint:64`) and to the paragraph when there is not, and `main.rs`'s `to_detail` reads
+    // it off the `Detail`. Leaving the `FixRow`'s copy set as well would be two fields holding one
+    // fact on their way to one pixel, which is how they come to disagree.
+    let machine_rule = std::mem::take(&mut fix.machine_rule);
+    Detail {
+        label: String::new(),
+        value: String::new(),
+        mono: false,
+        machine_rule,
+        action: Some((a, fix)),
+    }
+}
+
+/// A control whose availability is a question about **this build**, asked of `rail::Next`.
+///
+/// **Never a literal `true`**, which is the defect `copy_command_row` shipped. The reason is
+/// `Next`'s own sentence, so the Rail and this page cannot word one absent capability two ways —
+/// and it is blanked when the control is live, because a reason under a pressable control is a
+/// refusal for something that is not being refused.
+///
+/// **The escape hatch is `Next`'s only where `Next`'s is about this act.** `Next::Reveal` and
+/// `Next::CopyDetails` are worded for the Rail's failure flow — `IPOD_EMULATOR_DATA=<path>` is how
+/// you move this program's files, and `ipod-boot firmware cache --verify` prints a bundle's
+/// hashes — and neither reveals or copies the path under the finger. §9.4's rule is that a project
+/// state names a command that exists and was run to check it; naming one that does something else
+/// is worse than naming none, so these two carry none. What they have instead is the `mono` path
+/// drawn immediately above them, which is the value the act would have produced.
+fn next_row(label: &str, n: &Next, caps: Caps) -> FixRow {
+    let enabled = n.available(caps);
+    FixRow {
+        label: label.to_string(),
+        enabled,
+        reason: if enabled {
+            String::new()
+        } else {
+            n.reason().into()
+        },
+        escape: String::new(),
+        // §9.4's two kinds: `Next::Retry` is the one sentence in that function that says *your
+        // computer cannot do this*; the rest say *we have not finished this*.
+        machine_rule: matches!(n, Next::Retry),
+        presses: 1,
+        consequence: String::new(),
+    }
+}
+
+/// One of a group's verbs.
+fn verb_row(
+    a: Action,
+    rows: &[PartView],
+    g: Group,
+    caps: Caps,
+    busy: bool,
+    s: &Settings,
+    offer: &[Want],
+) -> FixRow {
+    let mut row = match a.needs() {
+        Some(n) => next_row(&a.label(), &n, caps),
+        // The one verb that needs no capability. It is still not unconditionally enabled: there
+        // has to be something to discard.
+        None => FixRow {
+            label: a.label(),
+            enabled: true,
+            reason: String::new(),
+            escape: String::new(),
+            machine_rule: false,
+            presses: 1,
+            consequence: String::new(),
+        },
+    };
+    // **§14.1 for a verb whose mechanism works and has nothing to work on.** `Fetch…` is live
+    // because `curl` is here — that is [`Action::needs`]'s question, and the machine rule it draws
+    // when the answer is no is the right refusal. This is the second question, and it is not a
+    // capability: **is there anything in this group left to fetch.**
+    //
+    // Asked in that order deliberately. On a computer with no `curl` the row is already disabled
+    // wearing *no curl on this computer*, and overwriting it with *nothing left to fetch* would
+    // replace a fact about the machine with a fact about the library, under a control that cannot
+    // download either way.
+    //
+    // The escape hatch is the group's, and it names what this window does **not** fetch — see
+    // [`Group::fetch_route`]. `Next::Retry` deliberately carries none, so a missing `curl` draws
+    // no command: every download in this program is `curl`, and naming one that is not would be
+    // the phantom route in its original shape.
+    if a == Action::Fetch && row.enabled && offer.is_empty() {
+        row.enabled = false;
+        row.reason = g.nothing_to_fetch(s).into();
+        row.escape = g.fetch_route().unwrap_or_default().into();
+        // Not a machine rule: nothing about this computer refuses.
+        row.machine_rule = false;
+    }
+    if a == Action::Discard {
+        let parked: Vec<&PartView> = rows.iter().filter(|r| r.group == g).collect();
+        if parked.is_empty() {
+            row.enabled = false;
+            row.reason = "nothing is parked".into();
+        } else {
+            // §11.3: anything that detaches a reference arms first, and the consequence is drawn
+            // before the press rather than after it.
+            row.presses = 2;
+            // **Written to `geometry::PARTS_VERB_W` 180**, which is the narrowest slot any
+            // consequence in this program is drawn in — a group verb's half-share of the row. The
+            // long form ran to 772 px and drew about a fifth of itself.
+            //
+            // **It said `Files stay, unlisted.` and that is now false**, which is the half of this
+            // pass §11.4 could not have known about: nothing wrote a snapshot when that sentence
+            // was measured, so *discard* really did only forget a timestamp. §12.4's park writes a
+            // pair and a picture per device, and a discard that left them would leave
+            // `Config::may_restore` — which asks the files, not the library — resuming a machine
+            // that had just been discarded. So the verb deletes, and the count is what a person
+            // needs before pressing. The per-row `fact` above carries each one's size.
+            row.consequence = match parked.len() {
+                1 => "Deletes 1 restore point.".into(),
+                n => format!("Deletes {n} restore points."),
+            };
+        }
+    }
+    // A build owns the drive it is writing and the bundle it is reading. A verb that would start a
+    // second one waits — **and only those**: `Discard` needs no capability and starts nothing, and
+    // `Remove` is not gated at all, because `remove_resource` and `remove_disk` touch no file.
+    if busy && row.enabled && a.needs().is_some() {
+        row.enabled = false;
+        row.reason = "a build is already running".into();
+        row.escape = String::new();
+    }
+    row
+}
+
+/// The sentence under a control this build draws **disabled**, for the arm that would run if one
+/// were pressed anyway.
+///
+/// **Only for the disabled ones**, and the doc used to say the opposite — *a control this build
+/// cannot honour is pressed anyway*, which describes a control that cannot be pressed. [`Next::
+/// reason`] is non-empty *exactly for the steps [`Next::available`] can refuse*, so reusing it for
+/// a **live** control puts a sentence about an absent capability under a press that only happened
+/// because the capability is present. That shipped: `Synthesise…` was blue because the Composer
+/// exists and refused with *there is no Composer in this build yet*, one row from the page that
+/// opens it. Every caller left is a control the window greys out.
+fn refused_because(n: &Next) -> String {
+    n.reason().into()
+}
+
+/// **Does the library already hold a part with this file name?**
+///
+/// The test [`Parts::offer`] takes things out of the offer by. A name and not a path, and that
+/// function carries the argument for it.
+///
+/// It walks `resources` rather than one group's, on purpose: a bundle the operator filed under
+/// Bootloaders because they pressed `Provide…` there is still that file, and offering to fetch a
+/// second copy of it into Apple firmware would be this window disagreeing with somebody about what
+/// they already have.
+fn filed(s: &Settings, file: &str) -> bool {
+    s.resources.iter().any(|it| {
+        it.what
+            .path()
+            .and_then(|p| p.file_name())
+            .is_some_and(|n| n == file)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drops::Shell;
+
+    /// The markup this crate actually compiles, read from disk.
+    ///
+    /// `build.rs` compiles `ui/window.slint` and only what it imports. `ui/preview.slint` is
+    /// imported by nothing, so a test that asserted against it would be measuring a file the
+    /// program does not carry.
+    fn markup(name: &str) -> String {
+        let path =
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/ui")).join(name);
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    }
+
+    /// Whitespace removed, so a reflow of the markup is not a failure and a change of *number* is.
+    fn dense(text: &str) -> String {
+        text.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    /// **`ALL` holds each variant exactly once**, which is the thing the round trip below cannot
+    /// tell you.
+    ///
+    /// Measured, by mutation, before this existed: replace `Group::Firmware` in `ALL` with a
+    /// second `Group::Ipods` and the round trip stays **green** — it walks `ALL`, so it walks
+    /// `Ipods` twice and never walks `Firmware` at all. The population and the thing under test
+    /// were the same list. `[Group; 6]` is fixed-length, so a variant that goes missing must leave
+    /// a duplicate behind, and that is what this counts.
+    ///
+    /// The one shape neither this nor the round trip can see is a variant **added** to the enum and
+    /// not to `ALL`: the array is still full and still distinct. `as_i32`'s `expect` is what
+    /// catches that, loudly, the first time anything asks for its ordinal.
+    fn each_variant_once<T: Ord + Copy + std::fmt::Debug>(all: &[T]) {
+        let mut seen: Vec<T> = all.to_vec();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            all.len(),
+            "{all:?} does not hold each variant exactly once, so one ordinal answers for two \
+             controls and one variant has no ordinal at all"
+        );
+    }
+
+    /// **Every ordinal survives the round trip, and nothing outside the list decodes.**
+    ///
+    /// This is the whole reason the vocabulary is a Rust enum rather than a Slint one: an `int`
+    /// the markup sends that no variant answers to must be a no-op. `-1` is the markup's own
+    /// "nothing" for `parts-detail-of`, and one past the end is what a renumbered markup sends.
+    #[test]
+    fn every_ordinal_round_trips_and_an_unknown_one_decodes_to_nothing() {
+        each_variant_once(&Group::ALL);
+        each_variant_once(&Action::ALL);
+        each_variant_once(&Kind::ALL);
+        each_variant_once(&RowAction::ALL);
+        for g in Group::ALL {
+            assert_eq!(Group::from_i32(g.as_i32()), Some(g), "{g:?}");
+        }
+        for a in Action::ALL {
+            assert_eq!(Action::from_i32(a.as_i32()), Some(a), "{a:?}");
+        }
+        for k in Kind::ALL {
+            assert_eq!(Kind::from_i32(k.as_i32()), Some(k), "{k:?}");
+        }
+        for a in RowAction::ALL {
+            assert_eq!(RowAction::from_i32(a.as_i32()), Some(a), "{a:?}");
+        }
+        assert_eq!(Group::from_i32(-1), None);
+        assert_eq!(Group::from_i32(Group::ALL.len() as i32), None);
+        assert_eq!(Action::from_i32(-1), None);
+        assert_eq!(Action::from_i32(Action::ALL.len() as i32), None);
+        assert_eq!(Kind::from_i32(-1), None);
+        assert_eq!(Kind::from_i32(Kind::ALL.len() as i32), None);
+        assert_eq!(RowAction::from_i32(-1), None);
+        assert_eq!(RowAction::from_i32(RowAction::ALL.len() as i32), None);
+    }
+
+    /// **The two ordinals the shipping markup writes are where it thinks they are.**
+    ///
+    /// Both halves, because either alone is half an instrument. The `assert_eq!` pins the Rust
+    /// order; the markup search proves the number in this file is the number the markup sends,
+    /// rather than a number somebody wrote down once. `ui/devices.slint` is deliberately not
+    /// searched: it writes no ordinal at all, every act it fires being `root.d.action`.
+    #[test]
+    fn the_two_pinned_ordinals_are_where_the_shipping_markup_writes_them() {
+        assert_eq!(Kind::Mounted.as_i32(), 0, "the reserved plugged-in-iPod row");
+        assert_eq!(RowAction::Remove.as_i32(), 2, "the row's own `Remove` control");
+
+        let parts = dense(&markup("parts.slint"));
+        assert!(
+            parts.contains(&format!("root.r.kind=={}&&!root.r.expandable", Kind::Mounted.as_i32())),
+            "`parts.slint` no longer tests `kind` against `Kind::Mounted`'s ordinal, so either the \
+             enum was renumbered under it or the reserved row is decided somewhere else now"
+        );
+        assert!(
+            parts.contains(&format!("root.act({},root.r.id)", RowAction::Remove.as_i32())),
+            "`parts.slint`'s `Remove` control no longer fires `RowAction::Remove`'s ordinal; a \
+             renumbering here re-aims a live control at a different act"
+        );
+
+        let devices = dense(&markup("devices.slint"));
+        assert!(
+            !devices.contains("root.act(") || devices.contains("root.act(root.d.action,"),
+            "`devices.slint` has begun writing an ordinal of its own; it pinned none, and a second \
+             place that writes one is a second vocabulary"
+        );
+    }
+
+    // ─── Fixtures ───────────────────────────────────────────────────────────────────────────────
+
+    use eapp_loader::settings::{Device, Disk, Item, Provenance, Verification};
+
+    /// Every capability on. The running build has **none** of the first four — see `main::caps` —
+    /// so this is the arm that proves a control goes live rather than being disabled for ever.
+    fn all_on() -> Caps {
+        Caps {
+            file_picker: true,
+            drop_target: true,
+            clipboard: true,
+            reveal: true,
+            devices_page: true,
+            download: true,
+            composer: true,
+        }
+    }
+
+    fn rom(name: &str, path: &str) -> Item {
+        Item {
+            name: name.into(),
+            what: Resource::Firmware(nor::Source::File(PathBuf::from(path))),
+            from: Some(Provenance::Dumped),
+        }
+    }
+
+    fn synthetic(name: &str, seed: u64) -> Item {
+        Item {
+            name: name.into(),
+            what: Resource::Firmware(nor::Source::Synthetic {
+                model: "MA146".into(),
+                seed,
+                serial: None,
+                guid: None,
+                splash: None,
+            }),
+            from: None,
+        }
+    }
+
+    fn filed(name: &str, what: Resource, from: Provenance) -> Item {
+        Item {
+            name: name.into(),
+            what,
+            from: Some(from),
+        }
+    }
+
+    fn device(name: &str, firmware: &str, disk: Option<&str>) -> Device {
+        Device {
+            name: name.into(),
+            firmware: firmware.into(),
+            disk: disk.map(str::to_string),
+            ..Device::default()
+        }
+    }
+
+    /// One of each kind, so a sweep over "everything this producer can emit" is over something.
+    fn library() -> Settings {
+        Settings {
+            resources: vec![
+                rom("Black 5.5G", "/tmp/ipod-parts-nowhere/rom.bin"),
+                synthetic("From my 30 GB", 20_266),
+                // **Filed at the name each release actually has**, and it used to be `a.ipsw` and
+                // `b.ipsw` — two files claiming `Provenance::Fetched` under names no fetch
+                // produces. `Queue::record` files a fetched bundle under `path.file_name()`, so a
+                // fetched `.ipsw` is at Apple's own name by construction; the fixture said
+                // otherwise, and `Parts::offer` — which asks *is this release already here* of the
+                // path — read the library as holding neither of them.
+                filed(
+                    "iPod_25.1.3.ipsw",
+                    Resource::Installer(PathBuf::from("/tmp/ipod-parts-nowhere/iPod_25.1.3.ipsw")),
+                    Provenance::Fetched {
+                        verified: Verification::Sha256,
+                    },
+                ),
+                filed(
+                    "iPod_20.1.3.ipsw",
+                    Resource::Installer(PathBuf::from("/tmp/ipod-parts-nowhere/iPod_20.1.3.ipsw")),
+                    Provenance::Fetched {
+                        verified: Verification::SizeOnly,
+                    },
+                ),
+                filed(
+                    "Rockbox's bootloader",
+                    Resource::Bootloader(PathBuf::from("/tmp/ipod-parts-nowhere/loader.bin")),
+                    Provenance::Fetched {
+                        verified: Verification::Sha256,
+                    },
+                ),
+                filed(
+                    "Rockbox 4.0",
+                    Resource::Software(PathBuf::from("/tmp/ipod-parts-nowhere/rockbox.zip")),
+                    Provenance::Built,
+                ),
+            ],
+            disks: vec![
+                Disk {
+                    name: "my-5.5g.img".into(),
+                    path: PathBuf::from("/tmp/ipod-parts-nowhere/my-5.5g.img"),
+                    built_from: Some("iPod_25.1.3.ipsw".into()),
+                    installed: vec!["Rockbox 4.0".into()],
+                },
+                Disk {
+                    name: "rockbox-test.img".into(),
+                    path: PathBuf::from("/tmp/ipod-parts-nowhere/rockbox-test.img"),
+                    built_from: None,
+                    installed: Vec::new(),
+                },
+            ],
+            devices: vec![
+                device("My 5.5G", "Black 5.5G", Some("my-5.5g.img")),
+                Device {
+                    parked_at: Some(settings::now_unix().saturating_sub(240)),
+                    ..device("Second", "From my 30 GB", Some("rockbox-test.img"))
+                },
+            ],
+            ..Settings::default()
+        }
+    }
+
+    /// A scratch path of this test's own. Never inside the operator's data directory.
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ipod-parts-{}-{tag}", std::process::id()));
+        let _ = std::fs::create_dir_all(&d);
+        d
+    }
+
+    /// A 1 MiB NOR that stands in for a retail dump, written where a `Source::File` can find it.
+    ///
+    /// `nor::synthesise` writes a `flsh` directory of its own now — one record, for the one image a
+    /// generated ROM can honestly carry, its own boot logo. (It wrote none at all until 2026-08-23,
+    /// and `inspect::flash` called this program's output `Wrong` for it.) A **retail** dump indexes
+    /// four, and four is what makes the Good verdict a *list*, which is the shape
+    /// `no_line_carries_a_glyph_the_window_cannot_draw` is about. So three more names go in beside
+    /// the real one, at the slots after it.
+    ///
+    /// Those three index nothing, and that is deliberate rather than lazy: `inspect::flash` reads a
+    /// record's tag and its load address, and a body for `diag` would be Apple's program, which is
+    /// not ours to invent. The `logo` record `synthesise` wrote is left exactly as it is, so the
+    /// one image this file claims to have is one it really has.
+    fn write_nor(at: &Path) {
+        let src = nor::Source::Synthetic {
+            model: "MA146".into(),
+            seed: 0x4f2a,
+            serial: None,
+            guid: None,
+            splash: None,
+        };
+        let mut nor_bytes = src.bytes().expect("a synthesised NOR");
+        assert_eq!(nor_bytes.len() as u64, inspect::NOR_LEN, "a 5G/5.5G NOR is exactly 1 MiB");
+        assert_eq!(
+            inspect::nor_images(&nor_bytes).len(),
+            1,
+            "the synthesiser stopped writing its own image directory"
+        );
+        // The record layout `inspect::nor_images` reads: `hslf`, then the tag as a little-endian
+        // u32 of four characters — so the bytes go in backwards — then `addr` at +0x14.
+        let dir = inspect::NOR_DIRECTORY as usize;
+        for (i, tag) in ["disk", "diag", "vmcs"].iter().enumerate() {
+            let rec = dir + (i + 1) * inspect::IMAGE_RECORD;
+            nor_bytes[rec..rec + 4].copy_from_slice(b"hslf");
+            let backwards: Vec<u8> = tag.bytes().rev().collect();
+            nor_bytes[rec + 4..rec + 8].copy_from_slice(&backwards);
+            nor_bytes[rec + 0x14..rec + 0x18]
+                .copy_from_slice(&inspect::LOAD_ADDR_5G.to_le_bytes());
+        }
+        std::fs::write(at, nor_bytes).expect("writing the NOR");
+        let v = inspect::flash(at);
+        assert!(
+            v.ok(),
+            "the fixture does not pass the check the body is built out of: {}",
+            v.text()
+        );
+        assert!(
+            v.text().contains("logo, disk, diag, vmcs"),
+            "the verdict is not the joined list this fixture exists to produce: {}",
+            v.text()
+        );
+    }
+
+    fn view_of(p: &mut Parts, s: &Settings, caps: Caps) -> View {
+        let mut seen = Presence::new();
+        p.view(s, &mut seen, caps, false, None)
+    }
+
+    fn row_named<'a>(v: &'a View, name: &str) -> &'a PartView {
+        v.rows
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("no row named {name}; the page drew {:?}", names(v)))
+    }
+
+    fn names(v: &View) -> Vec<&str> {
+        v.rows.iter().map(|r| r.name.as_str()).collect()
+    }
+
+    fn group(v: &View, g: Group) -> &GroupView {
+        v.groups.iter().find(|x| x.group == g).expect("six groups")
+    }
+
+    // ─── The page ───────────────────────────────────────────────────────────────────────────────
+
+    /// **Six groups, always, and an empty one keeps everything but its rows.**
+    ///
+    /// The shipped window rendered four and dropped `Resource::Bootloader` on the floor, which is
+    /// §3's own named complaint: a clean-looking Parts page is not evidence that no bootloader is
+    /// filed. It asserts the six by *drawing* them out of an empty library rather than by reading
+    /// `Group::ALL`, because `ALL` is the population the view is built from and a test over it
+    /// would be the list checking itself.
+    #[test]
+    fn all_six_groups_are_drawn_out_of_an_empty_library_and_each_says_what_belongs_in_it() {
+        let s = Settings::default();
+        let v = view_of(&mut Parts::new(), &s, Caps::default());
+        assert_eq!(v.groups.len(), 6, "{:?}", v.groups.iter().map(|g| g.group).collect::<Vec<_>>());
+        let mut headings: Vec<&str> = v.groups.iter().map(|g| g.heading.as_str()).collect();
+        let drawn = headings.len();
+        headings.sort_unstable();
+        headings.dedup();
+        assert_eq!(headings.len(), drawn, "two groups share a heading: {headings:?}");
+        for g in &v.groups {
+            assert_eq!(g.count, 0, "{} counted rows in an empty library", g.heading);
+            assert!(!g.heading.is_empty(), "{:?} has no heading", g.group);
+            assert!(!g.verb.is_empty(), "{} does not say what its kind is for", g.heading);
+            assert!(
+                g.empty.len() > 40,
+                "{}'s empty line is `{}` — §9.1 asks what belongs here, never a bare nothing-here",
+                g.heading,
+                g.empty
+            );
+            assert!(g.a.is_some(), "{} offers no verb at all", g.heading);
+        }
+        // The one group that offers a single verb, and the five that offer two. §11.4's table.
+        assert!(group(&v, Group::Snapshots).b.is_none());
+        for g in [Group::Ipods, Group::Firmware, Group::Bootloaders, Group::Software, Group::Disks] {
+            assert!(group(&v, g).b.is_some(), "{g:?} lost its second verb");
+        }
+    }
+
+    /// **A bootloader is filed in a group of its own**, which is the thing the shipped window did
+    /// not do.
+    #[test]
+    fn a_bootloader_is_its_own_group_and_is_not_swept_in_with_the_software() {
+        let v = view_of(&mut Parts::new(), &library(), Caps::default());
+        assert_eq!(row_named(&v, "Rockbox's bootloader").group, Group::Bootloaders);
+        assert_eq!(row_named(&v, "Rockbox's bootloader").kind, Kind::Bootloader);
+        assert_eq!(group(&v, Group::Bootloaders).count, 1);
+        assert_eq!(group(&v, Group::Software).count, 1, "the bootloader was counted as software");
+        // And each of the six holds what §11.4's table says it holds.
+        for (g, n) in [
+            (Group::Ipods, 2),
+            (Group::Firmware, 2),
+            (Group::Bootloaders, 1),
+            (Group::Software, 1),
+            (Group::Disks, 2),
+            (Group::Snapshots, 1),
+        ] {
+            assert_eq!(group(&v, g).count, n, "{g:?}");
+        }
+    }
+
+    /// §11.4: **the plugged-in-iPod row is reserved, always** — a line rather than a control, and
+    /// the group does not *grow* a row when one appears.
+    #[test]
+    fn the_reserved_ipod_row_is_a_line_that_no_count_includes() {
+        let v = view_of(&mut Parts::new(), &library(), Caps::default());
+        let reserved = v
+            .rows
+            .iter()
+            .find(|r| r.kind == Kind::Mounted)
+            .expect("the reserved row is drawn out of every library");
+        // `parts.slint:203` draws it inert on exactly this pair, as
+        // `inert: root.r.kind == 0 && !root.r.expandable`.
+        assert_eq!(reserved.kind.as_i32(), 0);
+        assert!(!reserved.expandable, "the reserved row would be drawn as a control");
+        assert!(!reserved.removable);
+        assert!(!reserved.fact.is_empty(), "it claims to be looking and is not");
+        assert_eq!(group(&v, Group::Ipods).count, 2, "the reserved row was counted as an iPod");
+    }
+
+    // ─── §9.4, the invariant `primitives.slint` states ──────────────────────────────────────────
+
+    /// Every control this producer can emit, in every combination of build and phase it can be
+    /// drawn in, and one rule over all of them.
+    ///
+    /// `primitives.slint:455` declares a non-empty `reason` as the invariant on a disabled
+    /// control, and the shipped Settings page draws three rows two of which are disabled with an
+    /// **empty** reason. The sweep runs over both `Caps` arms because a rule checked in one is a
+    /// rule checked where nothing is refused.
+    #[test]
+    fn every_disabled_control_states_its_reason() {
+        let s = library();
+        for caps in [Caps::default(), all_on()] {
+            for busy in [false, true] {
+                let mut p = Parts::new();
+                let mut seen = Presence::new();
+                // Every expandable row opened in turn, so the sweep sees every act as well as
+                // every verb.
+                let ids: Vec<i32> = {
+                    let v = p.view(&s, &mut seen, caps, busy, None);
+                    v.rows.iter().filter(|r| r.expandable).map(|r| r.id).collect()
+                };
+                assert!(!ids.is_empty(), "no row opens, so no act was swept");
+                for id in ids {
+                    p.open_row(&s, id, true);
+                    let v = p.view(&s, &mut seen, caps, busy, None);
+                    let mut checked = 0usize;
+                    for g in &v.groups {
+                        for (_, f) in [&g.a, &g.b].into_iter().flatten() {
+                            checked += 1;
+                            assert!(!f.label.is_empty(), "{}: a verb with no label", g.heading);
+                            assert!(
+                                f.enabled || !f.reason.is_empty(),
+                                "{}'s `{}` is disabled and says nothing",
+                                g.heading,
+                                f.label
+                            );
+                            assert!(
+                                !f.enabled || f.reason.is_empty(),
+                                "{}'s `{}` is pressable and still wears a refusal: {}",
+                                g.heading,
+                                f.label,
+                                f.reason
+                            );
+                        }
+                    }
+                    for d in &v.detail {
+                        let Some((_, f)) = &d.action else { continue };
+                        checked += 1;
+                        assert!(!f.label.is_empty(), "an act with no label");
+                        assert!(
+                            f.enabled || !f.reason.is_empty(),
+                            "the act `{}` is disabled and says nothing",
+                            f.label
+                        );
+                    }
+                    for r in v.rows.iter().filter(|r| r.removable) {
+                        // `parts.slint:275` binds `enabled` to `locked-by == ""` and `reason` to
+                        // `locked-by`, so the invariant is the same one asked of one field.
+                        checked += 1;
+                        assert!(
+                            !r.remove_consequence.is_empty(),
+                            "{}'s Remove arms and says nothing about what the second press does",
+                            r.name
+                        );
+                    }
+                    assert!(checked > 10, "only {checked} controls were swept at id {id}");
+                }
+            }
+        }
+    }
+
+    /// **`DetailRow.machine-rule` has one producer**, and it is the `Detail`'s own field.
+    ///
+    /// `to_detail` reads it there; a `FixRow` that still carried its own copy would be a second
+    /// field holding one fact on its way to one pixel. So `act` moves it rather than copying it,
+    /// and this is the assertion that the move happened.
+    #[test]
+    fn the_machine_rule_on_a_line_has_exactly_one_producer() {
+        let dir = scratch("one-producer");
+        let at = dir.join("rom.bin");
+        write_nor(&at);
+        let mut s = library();
+        s.resources.push(Item {
+            name: "the dump".into(),
+            what: Resource::Firmware(nor::Source::File(at.clone())),
+            from: Some(Provenance::Dumped),
+        });
+        let mut p = Parts::new();
+        let mut seen = Presence::new();
+        let ids: Vec<i32> = p
+            .view(&s, &mut seen, Caps::default(), false, None)
+            .rows
+            .iter()
+            .filter(|r| r.expandable)
+            .map(|r| r.id)
+            .collect();
+        let (mut acts, mut rules) = (0usize, 0usize);
+        for id in ids {
+            p.open_row(&s, id, true);
+            for d in p.view(&s, &mut seen, Caps::default(), false, None).detail {
+                if let Some((_, f)) = &d.action {
+                    acts += 1;
+                    assert!(
+                        !f.machine_rule,
+                        "an act's `FixRow` still carries a `machine_rule` the `Detail` also \
+                         carries: {f:?}"
+                    );
+                }
+                rules += usize::from(d.machine_rule);
+            }
+        }
+        assert!(acts > 5, "only {acts} acts were swept");
+        // The control: the field reaches the view at all, so `false` above means something.
+        assert!(rules > 0, "no line is a machine rule, so nothing produced the field");
+
+        // **And the half that can actually fail.** Measured: replacing the move in `act` with a
+        // copy leaves the sweep above green, because nothing on this page hands `act` a `FixRow`
+        // carrying the flag — every row act asks a capability whose refusal is a project state,
+        // and `Next::Retry`, the one machine rule in that function, is a group verb. A sweep that
+        // cannot go red is not an instrument, so the move is asserted where it happens.
+        let moved = act(
+            RowAction::Reveal,
+            FixRow {
+                machine_rule: true,
+                ..FixRow::default()
+            },
+        );
+        assert!(moved.machine_rule, "the line lost the fact on the way in");
+        assert!(
+            !moved.action.expect("an act").1.machine_rule,
+            "the `FixRow` kept a second copy of `machine-rule`, so two fields reach one pixel"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The verbs an absent **capability** refuses are refused **in `rail::Next`'s own words**, so
+    /// the Rail and this page cannot word one absent capability two ways.
+    ///
+    /// `Fetch…` is deliberately absent from this test now: no capability refuses it, and the
+    /// capability that used to be asked said yes.
+    /// `every_verb_with_no_mechanism_is_drawn_disabled_with_a_route` is where it went.
+    #[test]
+    fn a_verb_this_build_cannot_perform_wears_rails_own_sentence() {
+        let s = library();
+        let v = view_of(&mut Parts::new(), &s, Caps::default());
+        let provide = &group(&v, Group::Firmware).b.as_ref().expect("Provide…").1;
+        assert!(!provide.enabled, "a fixture with no picker and no drop target drew `Provide…` live");
+        assert_eq!(provide.reason, Next::Provide.reason());
+        // And the Composer exists, so the two verbs that need one are drawn live.
+        let synth = &group(&v, Group::Ipods).b.as_ref().expect("Synthesise…").1;
+        assert!(!synth.enabled, "the all-off fixture has no Composer either");
+        let live = view_of(&mut Parts::new(), &s, all_on());
+        let synth = &group(&live, Group::Ipods).b.as_ref().expect("Synthesise…").1;
+        assert!(synth.enabled, "a build with a Composer still refuses Synthesise…");
+        assert!(synth.reason.is_empty());
+    }
+
+    /// **`Fetch…` is LIVE where there is something to fetch**, on all three groups that offer it.
+    ///
+    /// §14.1's construction, arrived at from the other side. This test used to assert the opposite
+    /// and was right to: [`Action::needs`] answered `Some(Next::Retry)` — *is curl on this
+    /// computer* — so on every computer that has curl the verb was blue on all three groups and
+    /// every press failed, which is a live control over a hole. The hole is filled, so the
+    /// capability question is the right question again and the control it draws is the right
+    /// control.
+    ///
+    /// **Three claims.** It is blue where the offer is not empty; it does not blame the computer
+    /// for a fact about the library; and the offer it is blue for is the one the press would run,
+    /// because both come out of [`Parts::offer`].
+    #[test]
+    fn the_fetch_verb_is_live_on_every_group_that_has_something_to_fetch() {
+        let s = library();
+        assert!(all_on().download, "the fixture that proves the point has no curl in it");
+        let mut p = Parts::new();
+        let v = view_of(&mut p, &s, all_on());
+        let mut checked = 0;
+        for g in Group::ALL {
+            if !g.offers(Action::Fetch) {
+                assert_eq!(
+                    g.fetch_route(),
+                    None,
+                    "{g:?} names a route to a verb it does not offer"
+                );
+                continue;
+            }
+            let offer = p.offer(&s, g);
+            assert!(!offer.is_empty(), "{g:?} offers nothing in the fixture, so nothing is proved");
+            let row = &group(&v, g).a.as_ref().expect("Fetch… is the first of the pair").1;
+            assert_eq!(row.label, Action::Fetch.label());
+            assert!(
+                row.enabled,
+                "`Fetch…` on {g:?} is grey with {} files to fetch: {}",
+                offer.len(),
+                row.reason
+            );
+            assert!(row.reason.is_empty(), "a live control apologising: {}", row.reason);
+            assert!(row.escape.is_empty(), "a live control naming a way round itself");
+            checked += 1;
+        }
+        assert_eq!(checked, 3, "only {checked} groups offer `Fetch…`; §11.4's table says three");
+    }
+
+    /// **A group with nothing left to fetch draws the verb DISABLED and says which**, and the
+    /// sentence is a project state rather than a machine rule.
+    ///
+    /// The other half of the one above. It drives the two states Apple firmware has — a library
+    /// with no iPod in it, and one whose every iPod is already covered — because they are two
+    /// different facts and collapsing them would tell somebody with no iPod that they had
+    /// everything.
+    #[test]
+    fn a_group_with_nothing_left_to_fetch_greys_the_verb_and_says_which() {
+        let mut p = Parts::new();
+        // ── no iPod at all: nothing an `.ipsw` could fit ────────────────────────────────────────
+        let bare = Settings::default();
+        let v = view_of(&mut p, &bare, all_on());
+        let row = &group(&v, Group::Firmware).a.as_ref().expect("Fetch…").1;
+        assert!(!row.enabled, "an empty library was offered Apple firmware for an iPod it has not");
+        assert_eq!(row.reason, "no iPod here to fit one to");
+        assert!(!row.machine_rule, "a fact about the library blaming the computer");
+        assert_eq!(
+            row.escape,
+            Group::Firmware.fetch_route().expect("§9.4 wants a route under a greyed verb"),
+            "a greyed verb with no way round it"
+        );
+
+        // ── every iPod covered: the fetch is finished rather than impossible ────────────────────
+        let mut covered = library();
+        for w in p.offer(&library(), Group::Firmware) {
+            covered.file_away(
+                Resource::Installer(PathBuf::from("/tmp/ipod-parts-nowhere").join(w.file())),
+                w.file(),
+                None,
+            );
+        }
+        assert!(p.offer(&covered, Group::Firmware).is_empty(), "the fixture did not cover it");
+        let v = view_of(&mut p, &covered, all_on());
+        let row = &group(&v, Group::Firmware).a.as_ref().expect("Fetch…").1;
+        assert!(!row.enabled);
+        assert_eq!(row.reason, "nothing left to fetch");
+
+        // ── and a computer with no curl is told THAT, not this ─────────────────────────────────
+        //
+        // Order matters and this is what asserts it: on a machine that cannot download at all,
+        // replacing *no curl on this computer* with a sentence about the library would be swapping
+        // a machine rule for a project state under a control that cannot download either way.
+        let v = view_of(&mut p, &bare, Caps::default());
+        let row = &group(&v, Group::Firmware).a.as_ref().expect("Fetch…").1;
+        assert!(!row.enabled);
+        assert_eq!(row.reason, Next::Retry.reason());
+        assert!(row.machine_rule, "no curl is a fact about the computer (§9.4)");
+        assert!(
+            row.escape.is_empty(),
+            "every download in this program is curl, so naming a command is a phantom route: {}",
+            row.escape
+        );
+    }
+
+    /// **The Apple-firmware offer is the iPods in the library, not the catalogue.**
+    ///
+    /// Seventy-one releases exist and the fixture is offered one, because its one readable iPod is
+    /// a 5G — `MA146` → `Generation::Video1` → updater families 13 and 20 — and family 20's newest
+    /// is already filed. That chain is the whole narrowing, and each link is what makes `Fetch…`
+    /// something other than *download 2.7 GB of other people's iPods*.
+    #[test]
+    fn the_apple_firmware_offer_is_narrowed_to_the_ipods_in_the_library() {
+        let mut p = Parts::new();
+        let offered: Vec<&str> = p.offer(&library(), Group::Firmware).iter().map(|w| w.file()).collect();
+        assert_eq!(
+            offered,
+            vec!["iPod_13.1.3.ipsw"],
+            "the offer is not the 5G's newest un-filed release"
+        );
+        assert!(
+            firmware::CATALOGUE.len() > 60,
+            "the catalogue shrank, so this test is no longer about narrowing anything"
+        );
+
+        // A library with a 5.5G in it is offered family 25's newest instead — a different iPod, a
+        // different bundle, out of the same catalogue.
+        let mut fivefive = Settings::default();
+        fivefive.file_away(
+            Resource::Firmware(nor::Source::Synthetic {
+                model: "MA446".into(),
+                seed: 7,
+                serial: None,
+                guid: None,
+                splash: None,
+            }),
+            "a 5.5G",
+            None,
+        );
+        let offered: Vec<&str> = p.offer(&fivefive, Group::Firmware).iter().map(|w| w.file()).collect();
+        assert_eq!(offered, vec!["iPod_25.1.3.ipsw"]);
+
+        // And every one of them can be checked byte for byte before it is filed. A release Apple
+        // no longer serves, or one with no hash on record, is never offered — the window would be
+        // starting a download it already knows will fail, or filing a row that cannot say
+        // *verified*.
+        for g in [Group::Firmware, Group::Bootloaders, Group::Software] {
+            for w in p.offer(&library(), g) {
+                assert!(w.bytes() > 0, "{} is offered with no size to measure against", w.file());
+                if let Want::Firmware(r) = w {
+                    assert!(r.served, "{} is offered and Apple answers 403 for it", r.file);
+                    assert!(r.is_verifiable(), "{} is offered with no hash on record", r.file);
+                }
+            }
+        }
+    }
+
+    /// **What the library already holds is not offered again**, and the test is the file name.
+    ///
+    /// A bundle the operator provided out of their own Downloads folder is the same release as the
+    /// one the cache would hold; offering to fetch it would file a second row for one release under
+    /// two names, which is exactly the *two names for one thing* `Settings::file_away` refuses one
+    /// level down.
+    #[test]
+    fn a_part_the_library_already_holds_is_not_offered_again() {
+        let mut p = Parts::new();
+        let before = p.offer(&library(), Group::Bootloaders);
+        assert_eq!(before.len(), 2, "§11.4's Bootloaders sketch draws two, both fetchable");
+
+        let mut s = library();
+        s.file_away(
+            Resource::Bootloader(PathBuf::from("/somewhere/else").join(before[0].file())),
+            "somebody's own copy",
+            Some(Provenance::Provided),
+        );
+        let after: Vec<&str> = p.offer(&s, Group::Bootloaders).iter().map(|w| w.file()).collect();
+        assert_eq!(
+            after,
+            vec![before[1].file()],
+            "a file already in the library, under another path, was offered for download again"
+        );
+    }
+
+    /// A build owns the drive it is writing. A verb that would start a second one waits — and
+    /// `Remove`, which touches no file at all, does not.
+    #[test]
+    fn a_running_build_stops_a_verb_that_would_start_a_second_one() {
+        let s = library();
+        let mut p = Parts::new();
+        let mut seen = Presence::new();
+        let idle = p.view(&s, &mut seen, all_on(), false, None);
+        let busy = p.view(&s, &mut seen, all_on(), true, None);
+        let verb = |v: &View, g: Group| v.groups.iter().find(|x| x.group == g).unwrap().a.clone().unwrap().1;
+        assert!(verb(&idle, Group::Disks).enabled);
+        assert!(!verb(&busy, Group::Disks).enabled);
+        assert!(!verb(&busy, Group::Disks).reason.is_empty());
+        // **`Fetch…` is one of them now**, and it is the reason the gate is not only about builds:
+        // `work::Queue` owns exactly one worker thread, so a fetch started while anything else is
+        // running would answer `Press::Busy` — a live control that only refuses. It was outside the
+        // gate for as long as it needed no capability at all.
+        for g in [Group::Firmware, Group::Bootloaders, Group::Software] {
+            assert!(verb(&idle, g).enabled, "{g:?} has nothing to fetch, so nothing is proved");
+            assert!(!verb(&busy, g).enabled, "{g:?} would start a second run");
+            assert_eq!(verb(&busy, g).reason, "a build is already running");
+        }
+        assert!(
+            busy.rows.iter().filter(|r| r.removable).all(|r| r.locked_by.is_empty()),
+            "a build blocked a Remove, which deletes no file and takes nothing the build is using"
+        );
+    }
+
+    // ─── §11.4's machine rule ───────────────────────────────────────────────────────────────────
+
+    /// **Nothing the machine is using can be removed while it is running.**
+    ///
+    /// One rule covering the resource case and the device case, and it is asked again inside
+    /// `row_action` rather than trusted from the control — the control was drawn at the last push
+    /// and the machine may have started since.
+    #[test]
+    fn nothing_the_machine_is_using_can_be_removed_while_it_is_running() {
+        let mut s = library();
+        let mut p = Parts::new();
+        let mut seen = Presence::new();
+
+        let free = p.view(&s, &mut seen, Caps::default(), false, None);
+        assert!(
+            row_named(&free, "Black 5.5G").locked_by.is_empty(),
+            "a device that is not running held its ROM"
+        );
+
+        let held = p.view(&s, &mut seen, Caps::default(), false, Some("My 5.5G"));
+        let rom = row_named(&held, "Black 5.5G");
+        assert!(
+            rom.locked_by == "My 5.5G is running. Stop it first.",
+            "the ROM the machine boots is removable while it runs: {:?}",
+            rom.locked_by
+        );
+        assert!(
+            row_named(&held, "From my 30 GB").locked_by.is_empty(),
+            "a ROM the machine does not name was held too"
+        );
+
+        let id = rom.id;
+        let before = s.resources.len();
+        let refused = p.row_action(&mut s, &Shell::answering([]), RowAction::Remove, id, Some("My 5.5G"));
+        assert!(refused.is_err(), "the machine's own ROM was removed out from under it");
+        assert_eq!(s.resources.len(), before, "a refusal mutated the library");
+
+        let done = p.row_action(&mut s, &Shell::answering([]), RowAction::Remove, id, None);
+        assert_eq!(done, Ok(Wrote::Library));
+        assert_eq!(s.resources.len(), before - 1);
+    }
+
+    // ─── The cursor ─────────────────────────────────────────────────────────────────────────────
+
+    /// **Ids are minted per `(group, name)` and never reused**, so a removal cannot renumber its
+    /// neighbours under an open Expand.
+    #[test]
+    fn an_open_row_survives_its_neighbour_being_removed() {
+        let mut s = library();
+        let mut p = Parts::new();
+        let mut seen = Presence::new();
+
+        let before = p.view(&s, &mut seen, Caps::default(), false, None);
+        let watched = row_named(&before, "Rockbox 4.0").id;
+        p.open_row(&s, watched, true);
+        assert_eq!(p.view(&s, &mut seen, Caps::default(), false, None).detail_of, watched);
+
+        let first = row_named(&before, "Black 5.5G").id;
+        assert!(s.remove_resource("Black 5.5G"));
+        assert!(p.row_action(&mut s, &Shell::answering([]), RowAction::Remove, first, None).is_ok());
+
+        let after = p.view(&s, &mut seen, Caps::default(), false, None);
+        assert_eq!(
+            row_named(&after, "Rockbox 4.0").id,
+            watched,
+            "removing a part above renumbered the one below it"
+        );
+        assert_eq!(after.detail_of, watched, "the open Expand moved to another row");
+        assert!(!after.rows.iter().any(|r| r.id == first), "a removed id came back");
+    }
+
+    /// The open row leaving the library closes the cursor rather than leaving `detail-of` pointing
+    /// at nothing.
+    #[test]
+    fn removing_the_open_row_closes_it() {
+        let mut s = library();
+        let mut p = Parts::new();
+        let mut seen = Presence::new();
+        let id = row_named(&p.view(&s, &mut seen, Caps::default(), false, None), "Rockbox 4.0").id;
+        p.open_row(&s, id, true);
+        s.resources.retain(|it| it.name != "Rockbox 4.0");
+        let v = p.view(&s, &mut seen, Caps::default(), false, None);
+        assert_eq!(v.detail_of, -1);
+        assert!(v.detail.is_empty());
+    }
+
+    /// An id nothing answers to is a no-op — never a panic and never a different row's act.
+    #[test]
+    fn an_id_nothing_answers_to_acts_on_nothing() {
+        let mut s = library();
+        let mut p = Parts::new();
+        let mut seen = Presence::new();
+        let before = s.clone();
+        assert_eq!(p.row_action(&mut s, &Shell::answering([]), RowAction::Remove, 9_999, None), Ok(Wrote::Nothing));
+        assert_eq!(s, before);
+        p.open_row(&s, 9_999, true);
+        assert_eq!(p.view(&s, &mut seen, Caps::default(), false, None).detail_of, -1);
+        // …and a row with no body does not open one.
+        let disk = row_named(&p.view(&s, &mut seen, Caps::default(), false, None), "my-5.5g.img").id;
+        assert!(!row_named(&p.view(&s, &mut seen, Caps::default(), false, None), "my-5.5g.img").expandable);
+        p.open_row(&s, disk, true);
+        assert_eq!(p.view(&s, &mut seen, Caps::default(), false, None).detail_of, -1);
+    }
+
+    // ─── `used by N`, and what a removal costs ──────────────────────────────────────────────────
+
+    /// §11.4's `used by N` counts **the drives that recorded it as well as the devices that name
+    /// it** — an `.ipsw` is named by no device and by every drive built from it, so counting
+    /// devices alone reports *used by 0* about the bundle a drive came out of.
+    #[test]
+    fn used_by_counts_the_drives_that_recorded_it_and_not_only_the_devices() {
+        let v = view_of(&mut Parts::new(), &library(), Caps::default());
+        assert_eq!(row_named(&v, "iPod_25.1.3.ipsw").used_by, "used by 1");
+        assert_eq!(row_named(&v, "Rockbox 4.0").used_by, "used by 1");
+        assert_eq!(row_named(&v, "Black 5.5G").used_by, "used by 1");
+        assert_eq!(row_named(&v, "iPod_20.1.3.ipsw").used_by, "", "nothing names it");
+        assert_eq!(row_named(&v, "my-5.5g.img").used_by, "used by 1");
+    }
+
+    /// §11.4: `Remove` **names them before it acts** — and the seed it used to name with them left
+    /// the sentence, because it does not fit the slot the sentence is drawn in.
+    ///
+    /// See [`remove_consequence`] for the measurement. In one line: a whole-`u64` seed spelled out
+    /// is 20 digits, the clause carrying it is 62 characters at its widest, and that is 330 px in
+    /// a 324 px slot with nothing else in the sentence. The `Seed` fact in this row's own open
+    /// body still carries it, whole, a few rows above the control. What this asserts is that, and
+    /// the half of the sentence that is nowhere else on the page.
+    #[test]
+    fn the_removal_consequence_names_the_dependents_before_the_press() {
+        let v = view_of(&mut Parts::new(), &library(), Caps::default());
+        let used = &row_named(&v, "Black 5.5G").remove_consequence;
+        assert!(used.contains("My 5.5G"), "the consequence does not name the device: {used}");
+        assert!(used.contains("No file is deleted"), "it does not say the file survives: {used}");
+        let free = &row_named(&v, "iPod_20.1.3.ipsw").remove_consequence;
+        assert!(free.contains("no file is deleted"), "{free}");
+        // **The seed is still on the page, and this is where that is checked.** A control that
+        // stopped naming it and a page that stopped drawing it would be one deletion apart, and
+        // only the second is a lost iPod.
+        //
+        // **In the open body, not on the row** — and the difference was found by writing the
+        // assertion the other way round first. A ROM the program files itself is named
+        // `A446, seed 6182160` by `settings::suggest_nor_name`, so its row carries the seed twice
+        // before it is opened; this fixture's is called `From my 30 GB`, because the operator gets
+        // to name their own dump, and that row carries it nowhere. The `Seed` fact is the surface
+        // that is there either way, and it is inside the same `Expand` as the `Remove` control —
+        // a few rows above it, at `geometry::REFUSAL_MEASURE` 372, whole.
+        let mut p = Parts::new();
+        let s = library();
+        let id = row_named(&view_of(&mut p, &s, Caps::default()), "From my 30 GB").id;
+        p.open_row(&s, id, true);
+        let body = view_of(&mut p, &s, Caps::default());
+        let seed = body
+            .detail
+            .iter()
+            .find(|d| d.label == "Seed")
+            .expect("an open synthesised iPod draws a `Seed` fact");
+        assert_eq!(
+            seed.value, "20266",
+            "the `Seed` fact is the one surface that carries this seed whatever the operator \
+             called the ROM, and it does not"
+        );
+    }
+
+    // ─── One seed, one base ─────────────────────────────────────────────────────────────────────
+
+    /// The two seeds swept, and neither of them is a round number.
+    ///
+    /// `0x123456` is **the quiet one**: its hex spelling is made only of digits, so a surface that
+    /// printed it in hex would not fail — `123456` parses back perfectly well as decimal 123 456,
+    /// and the iPod that comes out has a different serial and a different FireWire GUID with
+    /// nothing said at all. The seed the operator screenshotted, `0x5e5510`, has letters in it and
+    /// fails to parse instead; that is the loud half, and a gate that only sees the loud half is
+    /// the wrong half.
+    ///
+    /// `u64::MAX` is **the widest one**, because [`nor::mint_seed`] returns a whole `u64` and every
+    /// seed a person actually gets is around twenty digits rather than the seven in the
+    /// screenshots. It round-trips in decimal; in hex it is `ffffffffffffffff`, which does not.
+    const SWEPT_SEEDS: [u64; 2] = [1_193_046, u64::MAX];
+
+    /// One device made of one synthesised iPod, filed the way `Create` files it.
+    ///
+    /// `remember_as` rather than a hand-built `Item`, because it is the real filing path: it names
+    /// the resource through [`settings::suggest_nor_name`] and `normalised` stamps
+    /// `Provenance::Synthesised` on it. Both of those are surfaces that print the seed, and
+    /// `library()` above can produce neither — it names its rows by hand and files them with no
+    /// provenance at all.
+    fn one_synthesised_ipod(seed: u64) -> Settings {
+        let mut s = Settings {
+            nor: nor::Source::Synthetic {
+                model: nor::DEFAULT_MODEL.into(),
+                seed,
+                serial: None,
+                guid: None,
+                splash: None,
+            },
+            ..Settings::default()
+        };
+        s.remember_as("My 5.5G");
+        s
+    }
+
+    /// Every number a drawn string offers as a seed, as a reader would take it off the screen.
+    ///
+    /// A `Seed` fact's value is the whole of it and bare; everywhere else it is the run of
+    /// characters after the word `seed` — which catches `--seed 1193046` in the copied command
+    /// line as well as `seed 1193046` in prose, both being that word followed by a space.
+    ///
+    /// **Prose is filtered by hex digits *and* at least one decimal digit.** `no seed reproduces
+    /// them` yields `reproduces`, which is not hex; `a seed, and whatever identity` is followed by
+    /// a comma and yields nothing. A word that is all hex letters and no digit — `added`, `beef` —
+    /// is not a rendering of a number and is not swept.
+    fn seeds_read_off(label: &str, text: &str) -> Vec<String> {
+        if label == "Seed" {
+            return vec![text.trim().to_string()];
+        }
+        text.match_indices("seed ")
+            .map(|(i, _)| {
+                text[i + "seed ".len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect::<String>()
+            })
+            .filter(|t| {
+                t.chars().all(|c| c.is_ascii_hexdigit()) && t.chars().any(|c| c.is_ascii_digit())
+            })
+            .collect()
+    }
+
+    /// **A seed printed in a base the program cannot read back is a lost iPod**, and until this
+    /// existed the window printed one seed in two bases on one page.
+    ///
+    /// `parts.png` drew `A446, seed 6182160` directly above `synthesised, seed 5e5510`. That is
+    /// the same number: `0x5e5510 == 6182160`. Four sites printed it in hex and two in decimal,
+    /// each grown on its own; and the one that reads a seed *back* — `Settings::parse`'s
+    /// `nor_seed` — is decimal, because decimal is what `render_nor_of` writes into the file.
+    ///
+    /// **The cosmetics were never the defect.** A hex seed containing `a`–`f` fails to parse, and
+    /// a failure is recoverable. A hex seed made only of digits parses fine, as a *different*
+    /// number, and regenerates a different iPod — different serial, different FireWire GUID, no
+    /// message. So [`SWEPT_SEEDS`] leads with the quiet kind, and the assertion is on the identity
+    /// that comes back rather than on the characters that went out.
+    ///
+    /// **It sweeps the page rather than a list of functions.** Every row, every one of its five
+    /// strings, and every expandable row's body opened — so a seventh surface added to Parts
+    /// tomorrow is covered by having been drawn, not by being remembered here. The Composer's two
+    /// are named, because a `Which` is a struct of fields rather than a list and enumerating it
+    /// here would be the list rotting instead.
+    ///
+    /// The round trip goes through [`Settings::parse`] — the loader's own door, the one that runs
+    /// when the program starts — so this is the program reading its own output and not a second
+    /// parser written beside it to agree with it.
+    #[test]
+    fn every_seed_the_parts_page_prints_reads_back_as_the_same_ipod() {
+        for seed in SWEPT_SEEDS {
+            one_seed_reads_back(seed);
+        }
+    }
+
+    /// One seed, every surface. Split out so the two in [`SWEPT_SEEDS`] are one body and not two.
+    fn one_seed_reads_back(seed: u64) {
+        let s = one_synthesised_ipod(seed);
+        let want = s.nor.identity().expect("the recipe has an identity");
+
+        let mut p = Parts::new();
+        let mut seen = Presence::new();
+        // (which surface, the `Detail` label if it has one, the drawn string)
+        let mut said: Vec<(String, String, String)> = Vec::new();
+        let v = p.view(&s, &mut seen, Caps::default(), false, None);
+        let bodies: Vec<i32> = v.rows.iter().filter(|r| r.expandable).map(|r| r.id).collect();
+        for r in &v.rows {
+            for (what, text) in [
+                ("the row's name", &r.name),
+                ("the row's fact", &r.fact),
+                ("`used by`", &r.used_by),
+                ("the removal consequence", &r.remove_consequence),
+                ("the machine rule", &r.locked_by),
+            ] {
+                said.push((format!("{what} on `{}`", r.name), String::new(), text.clone()));
+            }
+        }
+        for id in bodies {
+            p.open_row(&s, id, true);
+            for d in &p.view(&s, &mut seen, Caps::default(), false, None).detail {
+                said.push((format!("an open row's `{}` line", d.label), d.label.clone(), d.value.clone()));
+            }
+        }
+
+        // …and the two the Composer draws about the same iPod.
+        let device = s.devices.first().expect("`remember_as` made one").clone();
+        let c = crate::composer::Composer::editing(&s, &device.name, s.recipe_of(&device))
+            .expect("the device is there");
+        said.push(("`Make one`'s consequence".into(), String::new(), c.make_one_row().consequence));
+        said.push(("the copied command line".into(), String::new(), c.command_line()));
+
+        let mut swept: Vec<String> = Vec::new();
+        for (surface, label, text) in &said {
+            for token in seeds_read_off(label, text) {
+                let back = Settings::parse(&format!(
+                    "nor_model = {}\nnor_seed = {token}\n",
+                    nor::DEFAULT_MODEL
+                ));
+                let got = back.nor.identity().expect("the parsed recipe has an identity");
+                assert_eq!(
+                    (got.serial.as_deref(), got.guid),
+                    (want.serial.as_deref(), want.guid),
+                    "{surface} printed `{token}`, which reads back as another iPod — from `{text}`"
+                );
+                swept.push(format!("{surface}: {token}"));
+            }
+        }
+        // The control on the sweep: an extractor that quietly found nothing would pass every
+        // assertion above it. **Five** surfaces print this seed — the filed resource's name, its
+        // provenance line, the `Seed` fact in its open body, the Composer's `Make one`, and the
+        // copied command line's `--seed`. It was six until the removal consequence stopped
+        // printing it: twenty digits do not fit `geometry::ACT_MEASURE`, and a seed drawn half-way
+        // is worse than a seed drawn three rows up. See [`remove_consequence`].
+        assert!(
+            swept.len() >= 5,
+            "the sweep read {} seeds off a page that prints five of them, seed {seed}: {swept:#?}",
+            swept.len()
+        );
+    }
+
+    // ─── What a row is allowed to claim ─────────────────────────────────────────────────────────
+
+    /// **Nothing here may construct the word *verified***. A cached file nobody hashed says so.
+    #[test]
+    fn no_row_claims_a_verification_the_model_did_not_record() {
+        let v = view_of(&mut Parts::new(), &library(), Caps::default());
+        for r in &v.rows {
+            let claims = r.fact.contains("verified");
+            let recorded = library()
+                .resources
+                .iter()
+                .find(|it| it.name == r.name)
+                .and_then(|it| it.from)
+                .is_some_and(|f| f.is_verified());
+            assert_eq!(
+                claims, recorded,
+                "{}'s line is `{}` and the model recorded {recorded}",
+                r.name, r.fact
+            );
+        }
+        // The control: the sweep can see the claim, so its silence would mean something.
+        assert!(row_named(&v, "iPod_25.1.3.ipsw").fact.contains("verified"));
+        assert!(!row_named(&v, "iPod_20.1.3.ipsw").fact.contains("verified"));
+    }
+
+    /// A part whose file has left the disk says so on its own row. Nothing else in this window
+    /// re-stats the library, and the shipped bench drew a deleted drive as fine for an hour.
+    #[test]
+    fn a_part_whose_file_has_left_says_so_on_its_own_row() {
+        let dir = scratch("present");
+        let here = dir.join("rockbox.zip");
+        std::fs::write(&here, b"a file").unwrap();
+        let s = Settings {
+            resources: vec![
+                filed("here", Resource::Software(here.clone()), Provenance::Built),
+                filed(
+                    "gone",
+                    Resource::Software(dir.join("not-here.zip")),
+                    Provenance::Built,
+                ),
+            ],
+            ..Settings::default()
+        };
+        let v = view_of(&mut Parts::new(), &s, Caps::default());
+        assert!(!row_named(&v, "here").fact.contains("not where it was"), "{:?}", row_named(&v, "here").fact);
+        assert!(
+            row_named(&v, "gone").fact.contains("not where it was"),
+            "a part whose file is gone reads as fine: {:?}",
+            row_named(&v, "gone").fact
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ─── The bodies, and what opening one costs ─────────────────────────────────────────────────
+
+    /// **The ROM is read by the press that opens the row, not by the push that draws it.**
+    ///
+    /// Deleting the file under an open row leaves the body standing, which is what proves the read
+    /// is not happening on every push. Re-opening re-reads, and then the verdict changes.
+    #[test]
+    fn a_rom_is_read_once_by_the_press_that_opens_it() {
+        let dir = scratch("rom-read");
+        let at = dir.join("rom.bin");
+        write_nor(&at);
+        let s = Settings {
+            resources: vec![Item {
+                name: "Black 5.5G".into(),
+                what: Resource::Firmware(nor::Source::File(at.clone())),
+                from: Some(Provenance::Dumped),
+            }],
+            ..Settings::default()
+        };
+        let mut p = Parts::new();
+        let mut seen = Presence::new();
+        let id = row_named(&p.view(&s, &mut seen, Caps::default(), false, None), "Black 5.5G").id;
+        p.open_row(&s, id, true);
+        let opened = p.view(&s, &mut seen, Caps::default(), false, None);
+        let says = |v: &View, what: &str| v.detail.iter().any(|d| d.value.contains(what) || d.label.contains(what));
+        assert!(says(&opened, "Images"), "the image directory was not read: {:?}", opened.detail);
+        assert!(says(&opened, "Serial"), "the identity was not read");
+        assert!(says(&opened, "Model"), "the model table was not consulted");
+
+        std::fs::remove_file(&at).unwrap();
+        let still = p.view(&s, &mut seen, Caps::default(), false, None);
+        assert_eq!(
+            still.detail, opened.detail,
+            "the body changed when the file went away, so it is being re-read on every push"
+        );
+
+        // Presence is a per-pass cache, so a fresh one is what a fresh pass would hold.
+        let mut fresh = Presence::new();
+        p.open_row(&s, id, true);
+        let reread = p.view(&s, &mut fresh, Caps::default(), false, None);
+        assert!(
+            reread.detail.iter().any(|d| d.machine_rule && d.value.contains("cannot read")),
+            "re-opening did not re-read: {:?}",
+            reread.detail
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// §11.4: the identity is **masked**, and `Show` reveals it. Per open row, so closing it
+    /// re-masks — a screenshot of a page nobody is looking at must not carry an identifier.
+    #[test]
+    fn the_roms_identity_is_masked_until_show_is_pressed_and_re_masks_when_the_row_closes() {
+        let dir = scratch("mask");
+        let at = dir.join("rom.bin");
+        write_nor(&at);
+        let mut s = Settings {
+            resources: vec![Item {
+                name: "Black 5.5G".into(),
+                what: Resource::Firmware(nor::Source::File(at.clone())),
+                from: Some(Provenance::Dumped),
+            }],
+            ..Settings::default()
+        };
+        let mut p = Parts::new();
+        let mut seen = Presence::new();
+        let id = row_named(&p.view(&s, &mut seen, Caps::default(), false, None), "Black 5.5G").id;
+        p.open_row(&s, id, true);
+
+        let guid = |v: &View| {
+            v.detail
+                .iter()
+                .find(|d| d.label == "FireWire GUID")
+                .map(|d| d.value.clone())
+                .expect("the GUID line")
+        };
+        let masked = guid(&p.view(&s, &mut seen, Caps::default(), false, None));
+        assert!(masked.contains('•') || masked.contains('*') || masked.len() < 16, "{masked}");
+
+        assert_eq!(p.row_action(&mut s, &Shell::answering([]), RowAction::ShowIdentity, id, None), Ok(Wrote::Nothing));
+        let shown = guid(&p.view(&s, &mut seen, Caps::default(), false, None));
+        assert_ne!(shown, masked, "Show revealed nothing");
+        assert_eq!(shown.len(), 16, "a FireWire GUID is sixteen hex digits: {shown}");
+
+        p.open_row(&s, id, false);
+        p.open_row(&s, id, true);
+        assert_eq!(
+            guid(&p.view(&s, &mut seen, Caps::default(), false, None)),
+            masked,
+            "closing and re-opening the row left the identity revealed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **By contents, never by name.** People rename downloads and browsers add `(1)`, so a file
+    /// called `iPod_25.1.3.ipsw` is not evidence of anything.
+    #[test]
+    fn an_ipsw_is_identified_by_its_contents_and_never_by_what_it_is_called() {
+        let dir = scratch("ipsw");
+        let at = dir.join("iPod_25.1.3.ipsw");
+        std::fs::write(&at, b"not an Apple bundle").unwrap();
+        let s = Settings {
+            resources: vec![filed(
+                "iPod_25.1.3.ipsw",
+                Resource::Installer(at.clone()),
+                Provenance::Fetched {
+                    verified: Verification::None,
+                },
+            )],
+            ..Settings::default()
+        };
+        let mut p = Parts::new();
+        let mut seen = Presence::new();
+        let id = row_named(&p.view(&s, &mut seen, Caps::default(), false, None), "iPod_25.1.3.ipsw").id;
+        p.open_row(&s, id, true);
+        let v = p.view(&s, &mut seen, Caps::default(), false, None);
+        let line = v
+            .detail
+            .iter()
+            .find(|d| d.label == "Identified by contents")
+            .expect("§11.4's by-contents line");
+        assert_eq!(line.value, firmware::Provenance::Unrecognised.line());
+        assert!(
+            v.detail.iter().any(|d| d.value.contains("does not match any firmware Apple published")),
+            "an unrecognised bundle is allowed and says so; it did not"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// §11.4's `Show its boot screen ›`, at the panel's own size.
+    #[test]
+    fn the_boot_screen_preview_is_the_panels_own_size_and_toggles() {
+        let s = {
+            let mut s = Settings::default();
+            s.resources.push(synthetic("From my 30 GB", 0x4f2a));
+            s
+        };
+        let mut owned = s.clone();
+        let mut p = Parts::new();
+        let mut seen = Presence::new();
+        let id = row_named(&p.view(&s, &mut seen, Caps::default(), false, None), "From my 30 GB").id;
+        p.open_row(&s, id, true);
+        assert!(p.view(&s, &mut seen, Caps::default(), false, None).preview.is_none());
+
+        assert_eq!(p.row_action(&mut owned, &Shell::answering([]), RowAction::ShowBootScreen, id, None), Ok(Wrote::Nothing));
+        let v = p.view(&s, &mut seen, Caps::default(), false, None);
+        let shot = v.preview.as_ref().expect("a framebuffer");
+        assert_eq!((shot.w as usize, shot.h as usize), (crate::emu::FB_W, crate::emu::FB_H));
+        assert_eq!(shot.rgb.len(), shot.w as usize * shot.h as usize * 3);
+        assert!(shot.rgb.iter().any(|b| *b != 0), "the mark was not drawn");
+        assert!(shot.rgb.contains(&0), "every pixel is lit, so nothing was drawn on it");
+
+        assert_eq!(p.row_action(&mut owned, &Shell::answering([]), RowAction::ShowBootScreen, id, None), Ok(Wrote::Nothing));
+        assert!(p.view(&s, &mut seen, Caps::default(), false, None).preview.is_none());
+        assert_eq!(owned, s, "showing a picture wrote to the library");
+    }
+
+    // ─── The group verbs that act ───────────────────────────────────────────────────────────────
+
+    /// §11.4's Snapshots verb: **it forgets the time and deletes nothing.**
+    #[test]
+    fn discarding_the_parked_machines_forgets_the_time_and_deletes_nothing() {
+        let mut s = library();
+        s.devices[0].parked_at = Some(settings::now_unix());
+        let mut p = Parts::new();
+        assert_eq!(s.devices.iter().filter(|d| d.parked_at.is_some()).count(), 2);
+
+        assert_eq!(
+            p.group_action(&mut s, Group::Snapshots, Action::Discard),
+            Ok(Wrote::Library)
+        );
+        assert!(s.devices.iter().all(|d| d.parked_at.is_none()));
+        assert_eq!(s.devices.len(), 2, "discarding a park removed a device");
+        // Nothing left to do, and a second press says so rather than reporting a write.
+        assert!(p.group_action(&mut s, Group::Snapshots, Action::Discard).is_err());
+    }
+
+    /// The two ordinals of `parts-group-action(g, a)` travel independently, so they can arrive
+    /// paired with each other wrongly. A pair the table does not name acts on nothing.
+    #[test]
+    fn a_verb_a_group_does_not_offer_acts_on_nothing() {
+        let mut s = library();
+        let mut p = Parts::new();
+        let before = s.clone();
+        assert!(p.group_action(&mut s, Group::Snapshots, Action::Fetch).is_err());
+        assert!(p.group_action(&mut s, Group::Ipods, Action::Discard).is_err());
+        assert_eq!(s, before, "a mismatched pair mutated the library");
+        // …and the two verbs `main.rs` routes to a file picker say so, rather than wearing the
+        // sentence they wore for as long as there was no picker. `Provide…` answered
+        // `Next::Provide.reason()` — *no file picker in this build* — which was true then and is
+        // the phantom's mirror image now: a refusal naming an absence that has been filled.
+        for (g, a) in [(Group::Firmware, Action::Provide), (Group::Ipods, Action::AddDump)] {
+            let why = p.group_action(&mut s, g, a).expect_err("the picker's, not the library's");
+            assert!(why.contains("file picker"), "{why}");
+            assert!(why.contains("not wired"), "§9.4 wants the defect named: {why}");
+            assert_ne!(why, Next::Provide.reason(), "the press wears the disabled sentence");
+        }
+        // **`Fetch…` is the third routed verb now**, and it says the same kind of thing the two
+        // above it say: this file does not perform it, `main.rs` does, and reaching this arm is a
+        // defect in the window. It used to be the one arm that refused outright, because there was
+        // no per-part fetch to route to.
+        //
+        // **And it must not wear `Next::Retry`'s sentence.** The verb is blue exactly when
+        // `caps.download` is true, so a press that only happened because `curl` is there would be
+        // answering that it is not — which is the shape the old live-and-only-refusing control had.
+        let fetch = p
+            .group_action(&mut s, Group::Firmware, Action::Fetch)
+            .expect_err("this file starts no downloads");
+        assert!(
+            !fetch.contains("no curl"),
+            "a live control refuses by naming the capability that made it live: {fetch}"
+        );
+        assert!(fetch.contains("work queue"), "§9.4 wants the route named: {fetch}");
+        assert!(fetch.contains("not wired"), "§9.4 wants the defect named: {fetch}");
+        // …and the two the Composer answers say so, rather than claiming it does not exist.
+        for (g, a) in [(Group::Ipods, Action::Synthesise), (Group::Disks, Action::Build)] {
+            let why = p.group_action(&mut s, g, a).expect_err("the Composer's, not the library's");
+            assert!(
+                why.contains("opens the Composer"),
+                "{a:?} refuses with something other than its route: {why}"
+            );
+            assert!(
+                !why.contains("no Composer in this build"),
+                "{a:?} still denies the page it is about to open: {why}"
+            );
+        }
+        assert_eq!(s, before);
+    }
+
+    // ─── §6.7, over the strings that never pass through a source file ───────────────────────────
+
+    /// **The closed glyph set, applied to what the window actually draws.**
+    ///
+    /// `geometry.rs`'s sweep reads *string literals in source*; this reads the finished `View`, and
+    /// the two catch different things. A tag cut out of a `flsh` directory, a filename, an OS error
+    /// — none of those is a literal anywhere, and all three end up in a row on this page.
+    ///
+    /// **The control is a reach, not a substitution.** It used to be *"the model's verdict for this
+    /// file carries U+00B7"*, which was true because `inspect::flash` joined its image list with
+    /// one and `parts.rs` swapped it for a comma on the way past. The model words the comma itself
+    /// now and that boundary substitution is deleted, so there is nothing left to have something to
+    /// substitute — the honest control is that the sweep reaches the model's own sentence at all,
+    /// and that the predicate can say no.
+    ///
+    /// The three permitted non-ASCII characters are the same three `geometry.rs` permits; they are
+    /// written out rather than imported because that module's list is private to its own test
+    /// module, and a second copy that disagreed would be caught by the assertion below it.
+    #[test]
+    fn no_line_carries_a_glyph_the_window_cannot_draw() {
+        const DRAWN: [char; 3] = ['—', '…', '§'];
+        let dir = scratch("glyphs");
+        let at = dir.join("rom.bin");
+        write_nor(&at);
+
+        let mut s = library();
+        s.resources.push(Item {
+            name: "the dump".into(),
+            what: Resource::Firmware(nor::Source::File(at.clone())),
+            from: Some(Provenance::Dumped),
+        });
+        let mut p = Parts::new();
+        let mut seen = Presence::new();
+        let ids: Vec<i32> = p
+            .view(&s, &mut seen, Caps::default(), false, Some("My 5.5G"))
+            .rows
+            .iter()
+            .filter(|r| r.expandable)
+            .map(|r| r.id)
+            .collect();
+        let mut swept = 0usize;
+        let mut drawn: Vec<String> = Vec::new();
+        for id in ids {
+            p.open_row(&s, id, true);
+            let v = p.view(&s, &mut seen, Caps::default(), false, Some("My 5.5G"));
+            for text in every_string(&v) {
+                swept += 1;
+                for c in text.chars() {
+                    assert!(
+                        c.is_ascii() || DRAWN.contains(&c),
+                        "a line carries `{c}` (U+{:04X}), which the window's font draws as an \
+                         empty square. §6.7's answer for a symbol is a drawn Path, and this string \
+                         never passes through a source file so no source sweep can see it:\n  \
+                         {text}",
+                        c as u32
+                    );
+                }
+                drawn.push(text);
+            }
+        }
+        assert!(swept > 100, "only {swept} strings were swept, so the reach is not the page's");
+
+        // **The reach control**: the sentence this test exists for has to be among the strings it
+        // just read. `inspect::flash`'s Good verdict is the longest line the ROM body draws and the
+        // one that joined its image list with a middle dot; if the page stops drawing it, the sweep
+        // above goes on passing over whatever is left.
+        let verdict = inspect::flash(&at);
+        assert!(
+            verdict.ok() && drawn.iter().any(|t| t == verdict.text()),
+            "the model's verdict is not on the page, so this sweep is not reading the model:\n  {}",
+            verdict.text()
+        );
+        // …and the predicate can refuse, which a sweep that found nothing cannot demonstrate.
+        let planted = format!("{} \u{b7} logo", verdict.text());
+        assert!(
+            planted.chars().any(|c| !c.is_ascii() && !DRAWN.contains(&c)),
+            "the check cannot see the character it exists to refuse"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every string a `View` puts on screen, in one list.
+    fn every_string(v: &View) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for g in &v.groups {
+            out.extend([g.heading.clone(), g.verb.clone(), g.empty.clone()]);
+            for (_, f) in [&g.a, &g.b].into_iter().flatten() {
+                out.extend([
+                    f.label.clone(),
+                    f.reason.clone(),
+                    f.escape.clone(),
+                    f.consequence.clone(),
+                ]);
+            }
+        }
+        for r in &v.rows {
+            out.extend([
+                r.name.clone(),
+                r.fact.clone(),
+                r.used_by.clone(),
+                r.remove_consequence.clone(),
+                r.locked_by.clone(),
+            ]);
+        }
+        for d in &v.detail {
+            out.extend([d.label.clone(), d.value.clone()]);
+            if let Some((_, f)) = &d.action {
+                out.extend([
+                    f.label.clone(),
+                    f.reason.clone(),
+                    f.escape.clone(),
+                    f.consequence.clone(),
+                ]);
+            }
+        }
+        out.retain(|s| !s.is_empty());
+        out
+    }
+
+}

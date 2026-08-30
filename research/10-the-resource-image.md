@@ -3982,6 +3982,20 @@ The gate is the falsifiable half, and the boot supplies its own trigger: the **b
 `0x8001052a` at `@238 346` (`--storeaddr=0x7000c120`, `pc = 0x4000e654`), long before RetailOS's own
 at `@49 680 335`.
 
+> **Both instruction counts belong to a machine that no longer exists, and the second one was read
+> off a boot that stalls — Addendum 32, 2026-08-25.** The sender is right and was re-measured:
+> `pc = 0x4000e654`, the boot ROM. The counts are not. `--clock=5` is retired — every recipe now
+> runs the clock at the real part's rate — and on the current machine, same NOR dump and same
+> `PRISTINE` drive, the ROM's command lands at **`@2 211 983`**, not `@238 346`. And *"RetailOS's
+> own at `@49 680 335`"* has no successor at all in this front end: `ipod-boot retail` now reaches
+> **70 ATA commands** and Apple's own logo and stops there, and `--enterlog` on all five documented
+> RetailOS senders records zero arrivals over 1.2 G. Measured through `ipod-gui`'s own start path,
+> which does reach the language picker, RetailOS's earliest is **`@111 545 868`**. §5's *conclusion*
+> — the ROM enables reporting first, and every arm of the table below sits on one side of that or
+> the other — survives all of it. **What did not survive is a reading built on top of it a week
+> later**: `emu::boot_end` took "the first `0x8001052a`" as the end of the cold boot and was 387x
+> out. Addendum 32 is the measurement.
+
 | arm | script | frames posted | suppressed | decoder `0x00281350` |
 |---|---|---|---|---|
 | A — baseline, no wheel at all | — | — | — | 0 |
@@ -5988,3 +6002,204 @@ line will reach for a length again.
 - **Nothing here says the 165 s timeout is Apple's own number rather than an artefact of
   `--clock=5`.** The clock ratio is 15x faster than real silicon per instruction and the idle task's
   sleeps advance it further; a timeout measured in simulated seconds is only as real as that mapping.
+
+## Addendum 32: the first `0x8001052a` is the boot ROM's, the end of a cold boot is the machine going quiet, and an `--enterlog` that hid five zeros behind one non-zero
+
+*2026-08-25. Everything below was run on this machine, in one session, against
+`resources/roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin` and
+`resources/drives/ipod8g-retail.PRISTINE.img` — the same NOR dump and the same drive in every arm,
+pinned on the command line, because a comparison that lets each arm resolve its own paths is
+comparing two machines as well as two readings.*
+
+### 1. What was believed, and what it cost
+
+`emu::boot_end`'s observed arm ended `Phase::Booting` on the first `0x8001052a` written to the click
+wheel's TX register, on the reasoning that *a machine asking for input is a machine that has finished
+starting*. Driven through `ipod-gui`'s own start path — `the_bench_boots_apples_software_and_this_needs_resources` —
+that is what the window said about a real cold boot:
+
+```text
+the window leaves `Booting`     2 250 000 instr     0 ata      0 lit    0 co-proc frames
+the first pixel lights         42 999 970 instr     0 ata
+the drive first answers        57 499 970 instr
+the machine goes quiet        823 593 896 instr   765 ata   75 267 lit   2 co-proc frames
+the last work finishes        872 043 218 instr   768 ata
+```
+
+At the instant it stopped saying *booting*, the drive had answered **nothing** and the panel was
+**black**. `main::Learned::boot` writes that number to `Device::boot_instructions`, so the next
+launch of that device draws a progress bar full at **0.12 %** of the boot and pinned there for the
+remaining 870 million instructions. The operator's own settings file carried
+`device.0.boot_instructions = 2250000`.
+
+### 2. Who writes the first one — `--storeaddr`, and it is not RetailOS
+
+```sh
+FLASH=…/retail_5g_…_internal_rom_000000-0FFFFF.bin \
+DISK=…/drives/ipod8g-retail.PRISTINE.img \
+BUDGET=1200000000 \
+ipod-boot retail --clickwheel --storeaddr=0x7000c120 \
+    --enterlog=0x00283e20,0x00283e10,0x000b2ce0,0x000bbdb0,0x000b4638,0x00283fa0,0x00235df8
+```
+
+Every write to the click wheel's TX register in 1.2 G instructions, and there are four:
+
+```text
+--- stores by watched instructions: 4 ---
+  0x4000e654 -> [0x7000c120] = 0x8001052a   gap        -   @2211983
+  0x4000e654 -> [0x7000c120] = 0x8000023a   gap     +0x0   @2833953
+  0x4000e654 -> [0x7000c120] = 0x8000023a   gap     +0x0   @18107448
+  0x4000e654 -> [0x7000c120] = 0x8000023a   gap     +0x0   @57422301
+```
+
+One `0x052a`, at **`@2 211 983`**, from **`pc = 0x4000e654`** — the boot ROM's own opto bring-up
+running out of IRAM. §2 above disassembled that code from the NOR image at `0x000c9714`: *write TX,
+start, spin a fixed 10 000-iteration count, return.* It runs **55 M instructions before the drive
+first answers** and 41 M before the first pixel lights. Everything after it is `0x8000023a`, the
+button query, from the same address.
+
+The window's own `Booting` exit at 2 250 000 is that command, seen one sampling tick late.
+
+### 3. The control, and the instrument it caught
+
+Armed in the same run, the five call sites §2 named as RetailOS's `0x052a` senders, the shared
+sender they tail-branch to, and one address that had to fire:
+
+```text
+--- addresses armed with --enterlog: 7 ---
+  0x00283e20  unnamed  NEVER REACHED
+  0x00283e10  unnamed  NEVER REACHED
+  0x000b2ce0  unnamed  NEVER REACHED
+  0x000bbdb0  unnamed  NEVER REACHED
+  0x000b4638  unnamed  NEVER REACHED
+  0x00283fa0  unnamed  NEVER REACHED
+  0x00235df8  unnamed  x944984
+```
+
+**That report is not what `trace` printed when this was run.** `--enterlog`'s never-reached list was
+gated on the *whole* log being empty, so a run in which any armed address fired at all printed a
+per-caller census in which an address that never fired is simply an absent row — and the first six
+lines above did not exist. Six armed, one reached, five zeros invisible: precisely AGENTS.md §6's
+*an instrument reporting an absence it could not observe*. The gate is now per address and the tally
+is summed from the uncapped `enter_callers` map, so a saturated 65 536-entry log cannot turn a
+reached address into an unreached one either. The control at `0x00235df8` is what made the zeros
+beside it worth reading at all.
+
+### 4. And RetailOS does send one, which the control above could not have told us
+
+`0 arrivals` was written up first as *RetailOS never sends the command on a cold boot*. **That is
+wrong, and the reason is in §6.** `ipod-boot retail` and `ipod-gui` do not boot the same machine:
+the trace front end reaches **70 ATA commands** and Apple's own logo and stays there for 1.2 G,
+while the window reaches **768** and the language picker in 872 M. So the zero is a fact about a
+machine that never got to the code.
+
+The window's own boot is the only run that can answer, and it now prints its whole census — five
+`0x052a` commands over 872 M instructions, all payload 1:
+
+```text
+  every `0x052a` this boot sent, in order:
+    @2205089       payload 1        the boot ROM's
+    @111545868     payload 1        RetailOS's first
+    @823611625     payload 1        two within one sample, where the machine settles
+    @823611625     payload 1
+    @823719014     payload 1        after it has settled
+```
+
+RetailOS's earliest is **50x further on than the ROM's and still only 12.8 % of the boot**; its
+other three arrive *after* the machine has stopped working. **No arrival of this command is the end
+of a cold boot**, so the fix was never "watch a later one". The two counts at `@823 611 625` are one
+sampling tick, not one instruction — the census is read off `emu::Out` on a tick, and two commands
+inside one tick share its count.
+
+### 5. What the end of a boot actually looks like
+
+The same bench run, sampled every 2 M **steps** — `Machine::steps`, instructions executed plus
+cycles spent halted — with the fraction of each window the core spent halted:
+
+```text
+        instr    idle steps    ata    lit  fr  halted
+     44249970             0      0      5   0    0.0%
+     48249970             0      0   2916   2    0.0%      Apple's bootloader's own screen
+    120908402       1841550     90  76800   2   41.8%      RetailOS paints
+    164713086      10036866    200  76800   2   64.3%      the worst window in the whole boot
+    181546302      23203650    340  76800   2   91.7%      the worst 2 M window
+    727385077      57364875    765  76800   2    0.6%
+    823385077      57364875    765  75267   2    0.0%      the language picker is drawn
+    823597201      59152751    765  75267   2   89.4%
+    823613901      61136051    765  75267   2   99.2%
+    823618978      63130974    765  75267   2   99.7%      …and it holds 99.7 % for ever
+```
+
+A booted machine halts and a booting one does not, and that is the one thing every operating system
+this program runs has in common. Rolled over candidate window widths, the boot's own worst reading
+against the first window that clears 95 %:
+
+| window | worst window DURING the boot | first ≥ 95 % |
+|---|---|---|
+| 2 M steps | 91.7 % @181 546 302 | 823 613 901 |
+| 4 M steps | 82.3 % @181 546 302 | 823 618 978 |
+| **8 M steps** | **61.7 % @164 713 086** | **823 624 114** |
+| 16 M steps | 50.0 % @181 546 302 | 823 644 165 |
+| 32 M steps | 45.2 % @181 546 302 | 823 691 534 |
+
+Eight million steps is where the two states stop overlapping: 61.7 % against 99.7 %, thirty-three
+points of clear air, so every threshold from 70 to 95 answers the same and the number is a reading
+rather than a tuning. At 2 M there is no gap left to read.
+
+**It is not RetailOS-specific**, which is the property the denominator exists for. Rockbox:
+
+```sh
+DISK=…/drives/ipod8g-rockbox.img BUDGET=400000000 ipod-boot rockbox --clickwheel
+  -> BudgetExhausted after 77264434 instructions
+```
+
+A 400 M-**step** budget executed 77.3 M instructions — **80.7 % of the whole run halted, boot
+included** — on a machine whose boot is about 100 M. It reaches its menu and sleeps, exactly as
+RetailOS does 8x further on.
+
+**And halted is not booted on its own**: a machine waiting for an interrupt that is never coming is
+halted too. So the signal is *quiet **and** the drive has answered* — which is the number the bug
+report led with, `0 ata` — and the failure mode of requiring it is the safe one: a boot that never
+touches its drive ends on the `snap_at` fallback and teaches the denominator nothing, rather than
+teaching it something wrong.
+
+### 6. `ipod-boot retail` and `ipod-gui` do not boot the same machine — open
+
+Same NOR dump, same `PRISTINE` drive, both pinned:
+
+| | ATA commands | co-proc frames | panel | instructions |
+|---|---|---|---|---|
+| `ipod-boot retail` | **70** | 4 kicked / 2 updates | the Apple logo (a 320×240 blit then a 62×78 one) | 1.2 G, still going |
+| `ipod-boot retail --clickwheel` | 70 | 4 / 2 | the same | 1.2 G |
+| `ipod-boot retail --clickwheel --bcm-registry` | 70 | 4 / 2 | the same | 1.2 G |
+| `ipod-gui`'s own start path | **768** | 4 / 2 | the language picker, 75 267 lit | 872 M, then quiet |
+
+The two front ends build the machine in different places — `trace.rs`'s flag parsing and
+`emu::build` — and this is the first measurement that puts a number on the difference. The click
+wheel is not it and the co-processor's GENCMD registry is not it; both were tried. Not diagnosed
+here, and it matters beyond a curiosity: **every recipe in this file was measured on the front end
+that stops at the logo**, so any figure quoted from a run past ~70 ATA commands is a figure about
+that machine and not about a booted RetailOS. `KNOWN-BUGS.md` carries it.
+
+### 7. What this changes in the program
+
+- `emu::boot_end`'s observed arm is `emu::Quiet` — an 8 M-step trailing window that is 95 % halted,
+  with at least one ATA command issued. `emu::Stats::idle_steps` publishes `Machine::idle_steps`,
+  which costs an addition in the halt arm of `Machine::run` and nothing per instruction;
+  `--stop-when-idle`'s novelty bitset is 512 KB and a probe per instruction and stays a `--headless`
+  instrument.
+- Measured on the bench boot, the window now leaves `Booting` at **823 624 842** instructions with
+  **765 ATA commands and 75 267 lit pixels**, and publishes **823 593 896** — **94.4 %** of the boot,
+  against the 0.26 % it published before. The bench test asserts all three; it used to print them
+  under a `KNOWN BUG` heading.
+- `emu::Stats::wheel_sets` and `last_wheel_set` replace a bool with a census. `asked_for_frames` was
+  `set_commands > 0`, which reads the same at one command and at five, so nothing in the window could
+  have said that a whole cold boot contains five and that the first is the ROM's.
+- **The denominators already learned are dropped, once.** The settings key is now
+  `device.N.cold_boot_instructions`. A key's name is a promise about what its value measures, and
+  the value's meaning changed; `settings.txt`'s own header states the mechanism — *"keys this
+  version does not know are ignored"* — and the save path rewrites the file from the model, so the
+  stale line is read by nobody and gone at the next save. Every device that learned 2 250 000 draws
+  no fraction until its next real boot, which is that field's documented `None` state. Nothing
+  else would have reached them: `Settings::set_boot_shape` only runs when a recipe is committed, and
+  a device nobody edits is never committed.

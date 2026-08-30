@@ -39,6 +39,77 @@ pub mod ipsw;
 pub mod mount;
 pub mod rockbox;
 pub mod settings;
+/// Whether this computer can run a tool this program shells out to — asked by running it.
+pub mod tooling;
+/// What a volume will do with an 8 GiB file, measured rather than named.
+pub mod volume;
+
+/// Bytes, in the units a person reads. Decimal, because Apple's own figures are.
+///
+/// **One formatter, four surfaces**: a plan's sub-lines, the window's ledger, the shelf's cost line
+/// and the Rail's measure. Two names for one number is how they come to disagree — and this project
+/// has already paid for that once, with a plan that billed `about 300 MB`, `8 GiB sparse` and
+/// `8.02 GB needed` for one operation whose real cost is 6.5 MB down and 21 MB on disk.
+///
+/// It lives here and not in the window because [`compose::Step`] builds `21 MB` into a sub-line
+/// inside this crate and cannot reach a formatter in the window.
+pub fn si(n: u64) -> String {
+    const K: f64 = 1000.0;
+    let n = n as f64;
+    if n < K {
+        return format!("{n:.0} B");
+    }
+    for (i, unit) in ["kB", "MB", "GB", "TB"].iter().enumerate() {
+        let div = K.powi(i as i32 + 1);
+        if n < div * K || *unit == "TB" {
+            let v = n / div;
+            return if v < 10.0 {
+                format!("{v:.1} {unit}")
+            } else {
+                format!("{v:.0} {unit}")
+            };
+        }
+    }
+    unreachable!()
+}
+
+/// An exact byte count, grouped in threes so a seven-digit run can be read.
+///
+/// **Not a second [`si`].** They answer different questions and both are drawn, one under the
+/// other: `si` renders the figure a person weighs a decision against — `6.5 MB` — and this renders
+/// the number a check is made against, which has to be exact or it is not a check.
+/// `firmware::verify` refuses a bundle whose length is not `6 533 633`, and `6533633` is that same
+/// number with the reader left to count digits.
+///
+/// A plain ASCII space, because §16.6's glyph set is closed and a thin space is not in it.
+pub fn group(n: u64) -> String {
+    let d = n.to_string();
+    let mut out = String::with_capacity(d.len() + d.len() / 3);
+    for (i, c) in d.chars().enumerate() {
+        if i > 0 && (d.len() - i).is_multiple_of(3) {
+            out.push(' ');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// `a` or `an` for a figure [`si`] is about to render.
+///
+/// **The article is decided by the sound of the number, not by the unit**, which is why it cannot
+/// be written into the sentence: `8.6 GB` takes *an*, `21 MB` takes *a*, and the same `format!`
+/// produces both. The refusal read *"would not take a 8.6 GB file"* until this existed.
+pub fn article(n: u64) -> &'static str {
+    // Every rendering starts with a digit; only 8 and 11 (`11 MB`, `18 GB`) are said with a vowel
+    // sound at the front, and `1` is said "one" rather than "eleven" unless a second digit follows.
+    let s = si(n);
+    let d: Vec<char> = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+    match d.as_slice() {
+        ['8', ..] => "an",
+        ['1', '1', ..] | ['1', '8', ..] => "an",
+        _ => "a",
+    }
+}
 
 pub const EAPP_MAGIC: &[u8; 4] = b"eapp";
 /// Corrected 2026-08-11 against RetailOS 1.3's own loader — see `eapp-inspect` for the evidence.
@@ -3845,8 +3916,8 @@ impl Machine {
         self.mem.service_clickwheel();
 
         let now = self.mem.usec;
-        for i in 0..2 {
-            let cfg = self.mem.read32(TIMER_CFG[i]);
+        for (i, &cfg_addr) in TIMER_CFG.iter().enumerate() {
+            let cfg = self.mem.read32(cfg_addr);
             if cfg & 0x8000_0000 == 0 {
                 self.timer_next[i] = 0;
                 continue;
@@ -4435,7 +4506,9 @@ impl Machine {
                     let n = self.steps();
                     self.last_novel = n;
                     self.last_novel_sleeps = self.mem.sleeps;
-                    self.novelty.as_mut().unwrap().insert(pc & !0xf, n);
+                    if let Some(novelty) = self.novelty.as_mut() {
+                        novelty.insert(pc & !0xf, n);
+                    }
                 }
                 // Checked here rather than every instruction: this block already costs a bitset
                 // probe, and idleness cannot begin on an instruction that just found new code.
@@ -4560,12 +4633,9 @@ impl Machine {
                 // by distinct edges — loop back-edges included — rather than by executed
                 // instructions.
                 if target != pc.wrapping_add(4) {
-                    *self
-                        .edges
-                        .as_mut()
-                        .unwrap()
-                        .entry((pc, target))
-                        .or_insert(0) += 1;
+                    if let Some(edges) = self.edges.as_mut() {
+                        *edges.entry((pc, target)).or_insert(0) += 1;
+                    }
                 }
             }
             if indirect {
@@ -6067,7 +6137,7 @@ impl Nor {
 /// +0x1ec  SECTOR          +0x1fc  STATUS (read) / COMMAND (write)
 /// +0x3f8  CONTROL
 /// ```
-
+///
 /// The PCF50605 power-management chip, on I²C address `0x08`.
 ///
 /// Register map from Rockbox's `firmware/export/pcf5060x.h`; the power-on values below are the
@@ -6244,8 +6314,8 @@ impl Pcf50605 {
             // The first byte of a write is always the register address, so a one-byte write only
             // moves the pointer. Longer writes carry values for consecutive registers.
             self.ptr = d[0];
-            for i in 1..len {
-                self.write_reg(self.ptr.wrapping_add(i as u8 - 1), d[i]);
+            for (i, &value) in d.iter().enumerate().take(len).skip(1) {
+                self.write_reg(self.ptr.wrapping_add(i as u8 - 1), value);
             }
             self.ptr = self.ptr.wrapping_add(len as u8 - 1);
             self.writes += 1;
@@ -8439,6 +8509,77 @@ impl Machine {
 /// below. That shadowing is load-bearing history rather than an oversight — every measurement in
 /// `research/` was taken through it — so a caller that wants the boot this project has measured
 /// must build its machine with the same `ram_base`/`ram_size` and call this at the same point.
+/// Seed `PP_VER1`/`PP_VER2` — the part's own name, at `0x70000000`.
+///
+/// **Not folded into [`map_hardware`], and not because nobody got round to it.** The comment
+/// inside that function records the reason: two drivers want different answers from this one
+/// register, so which byte is right is not settled and the choice belongs where it can be argued
+/// with. What does *not* belong anywhere is **two front ends disagreeing about it in silence**,
+/// which is what this function exists to end.
+///
+/// Until 2026-08-26 `trace.rs` wrote the eight characters below and `ipod-gui`'s `emu::build`
+/// wrote `0x00360000` — the shape `research/16` calls the chip lie, one byte in the right place
+/// with zeroes around it. Neither call site named the other and neither said which was current, so
+/// the same machine answered two different part numbers depending on which program started it.
+///
+/// **The value, and why this one.** `PP_VER2` then `PP_VER1` spell an eight-character part name
+/// that Rockbox's `debug-pp.c` prints; these two words spell `PP5022C-`. Byte 16..23 of `PP_VER2`
+/// is the character both readers test:
+///
+/// - `ipodloader2`'s `ipod_is_pp5022()` tests it for `'2'` (`ipodhw.c:27`). With `'2'` the loader
+///   stops addressing a 1G iPod's registers at `0xcf00xxxx`, relocates into IRAM and issues
+///   `IDENTIFY DEVICE` — **research/16 measures 30 437 746 unmapped reads and 0 ATA commands
+///   becoming none and one.** That is the measurement this value is chosen by.
+/// - Apple's bootloader takes bits 16..23 and compares against `'6'`. It gets `'2'` here and
+///   **boots anyway**: `ipod-boot retail` hands over and RetailOS runs for the rest of the budget.
+///   So the comparison is not the gate the older comments read it as, and swapping this to `'6'`
+///   was tried on 2026-08-26 — the second core moved (315 681 -> 312 671 instructions, so the arm
+///   was live) and the boot did not, still 70 ATA and Apple's logo.
+///
+/// **What is still not settled** is whether real hardware answers `'2'` at all. research/16 §"Our
+/// reference hardware may not be a PP5022" reads `PP5021C-2` out of the reference drive's own
+/// `BoardHwName`, which would make the character `'1'` and both tests above false. The register is
+/// *supplied* here, as this emulator supplies every register, and the value is sourced from
+/// Rockbox's decoding rather than measured off a part. Deriving it from `BoardHwName` is the open
+/// end of that note.
+/// Write a boot image **into** SDRAM at `load_at`, which is what a real bootloader leaves.
+///
+/// **Not [`Machine::map_osos`], and the difference is the whole of a boot.** `map_osos` pushes the
+/// image as a *region*; [`map_hardware`] has already registered 64 MB of SDRAM at `0x10000000`,
+/// region lookup is first-match, and about `0x220` bytes into its own entry RetailOS programs the
+/// PP's remap windows at `0xf000f000` — one of which is `0x00000000..0x01ffffff -> 0x10000000`.
+/// `Memory::translate` runs ahead of the region list, so from that instruction every low address
+/// resolves into the *zeroed* SDRAM sitting behind the image, and the code the CPU is executing
+/// goes out from under it.
+///
+/// Both front ends have hit it and the arithmetic names it each time. In the window it was
+/// `Lost(0x02000000)` after 8 388 485 instructions — `8 388 485 x 4 = 33 553 940` and
+/// `0x02000000 - 33 553 940 = 0x1ec`, a NOP-slide from `0x1ec` to the top of a 32 MB window without
+/// one branch, because `0x00000000` decodes as `andeq r0, r0, r0`. In `trace` it was
+/// `Lost(0x40020000)` after 2 238 004, off the end of `iram`, **identical for two different
+/// drives** — the signature of a machine that never got far enough to tell them apart.
+///
+/// With the bytes in SDRAM there is one storage and the remap points at it, which is the
+/// arrangement the hardware has. Nothing is mirrored at 0: before RetailOS programs that window it
+/// runs from `0x1000xxxx`, and after it, address 0 *is* SDRAM. Call this **after** [`map_hardware`],
+/// because it writes through the map rather than in front of it.
+pub fn place_image(m: &mut Machine, load_at: u32, data: &[u8]) {
+    for (i, chunk) in data.chunks(4).enumerate() {
+        let mut w = [0u8; 4];
+        w[..chunk.len()].copy_from_slice(chunk);
+        m.mem.write32(load_at + (i as u32) * 4, u32::from_le_bytes(w));
+    }
+}
+
+pub fn seed_chip_id(m: &mut Machine) {
+    for (i, b) in 0x3232_432Du32.to_le_bytes().iter().enumerate() {
+        m.mem.write8(0x7000_0000 + i as u32, *b);
+    }
+    for (i, b) in 0x5050_3530u32.to_le_bytes().iter().enumerate() {
+        m.mem.write8(0x7000_0004 + i as u32, *b);
+    }
+}
+
 pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
     for (name, base, size) in [
         // SDRAM, as the hardware actually has it: one contiguous 64 MB at 0x10000000, plus the
@@ -9174,5 +9315,61 @@ mod peek_tests {
     fn a_word_that_would_run_past_the_end_is_none() {
         let r = regions(0x1000_0000, &[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
         assert_eq!(peek_regions(&r, 0x1000_0004), None, "only two bytes remain");
+    }
+}
+
+/// The three number formatters, and what each is for.
+#[cfg(test)]
+mod figure_tests {
+    use super::{article, group, si};
+
+    /// **`si` is the bill and [`group`] is the check, and they are drawn one under the other.**
+    ///
+    /// The plan's fetch row says `iPod_25.1.3.ipsw — 6 533 633 B` because that is the number
+    /// `firmware::verify` refuses against; the ledger under it says `6.5 MB to download` because
+    /// that is the figure somebody weighs a decision against. Rendering the first one through `si`
+    /// would put `6.5 MB` in both, and the exact number — the one that makes the check checkable —
+    /// would be nowhere on screen.
+    #[test]
+    fn the_exact_count_is_grouped_and_the_bill_is_not() {
+        assert_eq!(group(6_533_633), "6 533 633");
+        assert_eq!(si(6_533_633), "6.5 MB");
+        assert_eq!(group(0), "0");
+        assert_eq!(group(1), "1");
+        assert_eq!(group(999), "999");
+        assert_eq!(group(1_000), "1 000");
+        assert_eq!(group(20_987_904), "20 987 904");
+        assert_eq!(group(8_589_934_592), "8 589 934 592");
+        // §16.6: the glyph set is closed, so the separator is a plain space and not a thin one.
+        assert!(
+            group(6_533_633).is_ascii(),
+            "the separator is outside the closed glyph set"
+        );
+    }
+
+    /// **The article is a fact about the rendered figure, not about the unit.**
+    ///
+    /// `volume_refusal` reads *"would not take {article} {si} file"*, and one `format!` produces
+    /// both `a 21 MB file` and `an 8.6 GB file`. It said *"a 8.6 GB file"* until this existed, on
+    /// the one refusal a person meets when their drive is on the wrong kind of volume.
+    #[test]
+    fn the_article_matches_how_the_figure_is_said() {
+        for (n, want) in [
+            (8_589_934_592u64, "an"), // 8.6 GB
+            (20_987_904, "a"),        // 21 MB
+            (6_533_633, "a"),         // 6.5 MB
+            (11_000_000, "an"),       // 11 MB
+            (18_000_000, "an"),       // 18 MB
+            (1_000_000, "a"),         // 1.0 MB — "one", not "eleven"
+            (800, "an"),              // 800 B
+            (100, "a"),               // 100 B
+        ] {
+            assert_eq!(
+                article(n),
+                want,
+                "{} is said with {want}",
+                si(n)
+            );
+        }
     }
 }

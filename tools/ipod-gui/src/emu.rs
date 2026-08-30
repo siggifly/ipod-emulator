@@ -24,7 +24,7 @@
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -46,6 +46,32 @@ pub const FB_H: usize = 240;
 pub const FB_FRONT: u32 = 0x000e_0000;
 /// The second surface the same allocator hands out — one frame further on.
 pub const FB_BACK: u32 = 0x0010_6000;
+
+/// The instruction count `--snap-at` defaulted to, and what `Config::snap_at` still means when
+/// nothing writes a snapshot: **the fallback that ends `Phase::Booting`.**
+///
+/// The boot phase normally ends when the machine goes quiet, which is an observation — see
+/// [`Quiet`]. This is the answer for the case that never happens: firmware that spins for ever, a
+/// drive that never answers, an operating system with no idle loop. It matters that it is not
+/// zero: `Booting { target: 0 }` ends the boot phase on the first slice, so a window built on
+/// `Config::default()` would say *running* over a machine that had executed 250 000 instructions,
+/// which is the shape of instrument this project keeps deleting.
+pub const SNAP_AT: u64 = 1_600_000_000;
+
+/// **How much of a window the core has to spend halted before the machine counts as quiet**, in
+/// hundredths, and how wide that window is in [`Machine::steps`] — instructions executed plus
+/// cycles spent halted.
+///
+/// Both are readings off one boot rather than tunings, and the run that produced them is
+/// `the_bench_boots_apples_software_and_this_needs_resources` on Apple's own NOR and a real 5.5G's
+/// drive. Over an 8 M-step trailing window, the **highest** halted fraction anywhere in RetailOS's
+/// 871 M-instruction cold boot is **61.7 %** (at 164.7 M, waiting on the drive); the first window
+/// that crosses 95 % is at **823.6 M**, and from there the machine holds **99.7 %** for the rest of
+/// its life. Thirty-three points of clear air, so every threshold from 70 to 95 answers the same,
+/// and the width is what buys it: at 2 M the boot's own worst window is 91.7 % and there is no gap
+/// left to read.
+pub const QUIET_WINDOW_STEPS: u64 = 8_000_000;
+pub const QUIET_HALTED_PERCENT: u64 = 95;
 
 /// Apple's ISR frame decoder. Entering it is the evidence that a frame this GUI caused was read
 /// and parsed by RetailOS rather than merely posted into a register; see research/10 Addendum 21 §6.
@@ -75,9 +101,10 @@ pub const WATCHED: [(u32, &str); 5] = [
 /// other eighteen fields to do it.
 #[derive(Clone, Default)]
 pub struct Config {
-    /// The path a supplied dump came from. Empty when the ROM is synthesised — [`Config::nor`] is
-    /// what actually produces the bytes.
-    pub flash: PathBuf,
+    // **`flash` was here and is deleted.** It held *the path a supplied dump came from*, which is
+    // the same path `Source::File` already carries — so it was one fact in two fields, and nothing
+    // in this file ever read the second. Setting it was the shape of defect a module blanket hides:
+    // a value computed on every launch and dropped.
     /// Where the boot ROM comes from. A synthesised one is built here, in memory, from a recipe:
     /// there is no file, nothing to cache and nothing to go stale.
     pub nor: eapp_loader::nor::Source,
@@ -151,12 +178,14 @@ pub struct Config {
     pub boot: BootTarget,
     /// `--press=BUTTON@SECONDS`, repeatable — press a button through the window's own input path,
     /// at a moment measured from when the window opened.
+    #[allow(dead_code)]  // retired when: `args::FLAGS` accepts `--press=` again — it refuses it as `Gone::Window` (it drove the window that was replaced), and nothing else in this program schedules a press
     ///
     /// It exists to make the window's input testable from a command line: a screenshot of Apple's
     /// diagnostics with its menu open is otherwise something only a person with a mouse can take,
     /// and "the wheel does not reach diagnostics" is otherwise something only a person with a
     /// mouse can discover.
     pub presses: Vec<(String, f32)>,
+    #[allow(dead_code)]  // retired when: `args::FLAGS` accepts `--window-shot=` again; the window has no other route to a picture of itself
     /// `--window-shot=FILE` — write a PNG of **the whole window** and quit.
     ///
     /// Not the same picture as the `S` key, which captures the 320x240 panel. The two shipped
@@ -166,6 +195,7 @@ pub struct Config {
     pub window_shot: Option<PathBuf>,
     /// Seconds to let the machine run before the shot is taken. The window is drawing from the
     /// first frame, but the iPod on it is not: a shot at zero is a picture of a black panel.
+    #[allow(dead_code)]  // retired when: `window_shot` has a reader — this is the delay before it, and it has no second use
     pub shot_after: f32,
     /// No window: drive to the main menu at a fixed instruction anchor and watch the panel while
     /// the machine idles. See [`Probe`].
@@ -207,6 +237,7 @@ pub struct Config {
     /// that deliberately to a *cold* machine is the only way to ask whether it is what matters,
     /// short of putting the chip in the snapshot and changing every restored run to find out.
     pub ablate_pmu: bool,
+    #[allow(dead_code)]  // retired when: `args::FLAGS` accepts `--control=` again — it refuses it as `Gone::Instrument`, and §12.9 keeps the socket out on purpose: a socket that appears without being asked for is an interface nobody audited
     /// Where to open the control socket, if anywhere.
     ///
     /// Absent by default. A socket that appears without being asked for is an interface nobody
@@ -263,6 +294,7 @@ pub struct Config {
 
 /// The scripted measurements this front end can make with no window and no hand.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(dead_code)]  // retired when: `args::FLAGS` accepts `--probe=` again — it refuses it as `Gone::Instrument`, and `Menu` and `ComboControl` are two arms of one measurement, so a probe with half its arms is not a controlled one
 pub enum Probe {
     /// Press Select at the anchor — from the first-run Language list that is the main menu — and
     /// then sample the panel six times over the next 800 M instructions while nothing touches it.
@@ -298,6 +330,7 @@ enum Outcome {
 /// co-processor, the wheel, the identity out of the NOR — is the same machine, which is the point:
 /// Rockbox and Apple's diagnostics are not modes of this program, they are programs this iPod runs.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[allow(dead_code)]  // retired when: §12.5's `Start into` rows are drawn — the drawer's device page is where `Nor("diag")` and `Image(path)` are chosen, and the window boots `Os` until it exists
 pub enum BootTarget {
     /// The operating system on the drive, entered the way the machine enters it — from the reset
     /// vector on a real dump, or through the high-level boot on a synthesised one.
@@ -325,6 +358,7 @@ impl BootTarget {
     }
 
     /// One line for a person, and for the window's picker.
+    #[allow(dead_code)]  // retired when: §12.5's boot-target picker is drawn; this is the label on its rows
     pub fn label(&self) -> String {
         match self {
             BootTarget::Os => "iPod software".into(),
@@ -339,6 +373,7 @@ impl BootTarget {
     }
 
     /// `os`, a NOR tag, or a path — the one spelling the command line and the settings file share.
+    #[allow(dead_code)]  // retired when: something reads a boot target back — `args::FLAGS` refuses `--boot=` as `Gone::Device` (§12.5 puts it on the device's drawer page), and no settings key holds one
     pub fn parse(s: &str) -> BootTarget {
         match s.trim() {
             "" | "os" => BootTarget::Os,
@@ -355,6 +390,7 @@ impl BootTarget {
 /// control that claimed to be the hardware combo while actually restarting the emulator would be
 /// the UI lying about what the machine does. These restart the *emulator*, and say so.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[allow(dead_code)]  // retired when: §12.5's power rows are drawn on the drawer's device page — `PowerCycle` and `Boot` are two of the four it offers, and the bench's centre button is only ever `PowerOff` (§7.3's booting row) or `PowerOn`
 pub enum Cmd {
     PowerOff,
     /// Power on from off — always a cold boot, never a restore.
@@ -420,7 +456,149 @@ pub struct Out {
     pub fb_other_nonzero: u32,
     pub fb_other_moved: bool,
     pub fb_shown_moved: bool,
+    /// **What this cold boot cost, and only when it was OBSERVED to end.** GUI.md §12.3's
+    /// denominator, published from the one place that can tell the two endings apart.
+    ///
+    /// The boot phase ends two ways and they are not the same fact: the machine going quiet is an
+    /// **observation** ([`Quiet`]), and `executed >= snap_at` is a **fallback** for the case that
+    /// never happens. Both set [`Phase::Running`] one line apart, so a reader watching for the
+    /// phase change and taking `Stats::executed` at that moment records `snap_at` — a constant —
+    /// on every machine that never settled, and files it as *this device's own last completed
+    /// cold boot*. That is exactly the substitution `Device::cold_boot_instructions` replaced
+    /// `snap_at` to fix, re-entered through the back door. [`boot_end`] is the one function that
+    /// decides, and this field is `Some` only for its observed arm.
+    ///
+    /// `None` also for a **restored** machine, which never enters `Booting` at all: a resume is not
+    /// a cold boot and must not teach the denominator what one costs.
+    pub booted_at: Option<u64>,
     pub stats: Stats,
+}
+
+/// **Has the cold boot ended, and was its end observed?** GUI.md §12.2 and §12.3, in one place.
+///
+/// Three answers, and the middle one is the whole reason this is a function rather than a
+/// condition in the run loop:
+///
+/// - `None` — still booting.
+/// - `Some(None)` — the boot phase ends, and **nothing was measured**. `snap_at` is the fallback,
+///   *"a point chosen because it is a good place to resume from, not because it is where the boot
+///   ends"*, so the instruction count at this instant is a constant wearing a measurement's name.
+/// - `Some(Some(n))` — the machine went quiet at `n` instructions with its drive answered. It has
+///   finished starting, and `n` is what §12.3 divides by next time.
+///
+/// **`settled` is `Quiet::read`'s answer and this function does not recompute it**, deliberately:
+/// the observation needs a trailing window and therefore state, and a pure decision that owns no
+/// state cannot be tricked into disagreeing with the loop that feeds it.
+///
+/// The two arms are one line apart in the loop and produce the same phase, which is what makes the
+/// wrong one so easy to read: `a_boot_that_ended_on_the_fallback_teaches_the_denominator_nothing`
+/// carries the substitution as its own control.
+pub fn boot_end(settled: Option<u64>, executed: u64, snap_at: u64) -> Option<Option<u64>> {
+    if let Some(n) = settled {
+        return Some(Some(n));
+    }
+    (executed >= snap_at).then_some(None)
+}
+
+/// **Has the machine stopped starting?** A trailing window of its own steps, and how much of that
+/// window the core spent halted.
+///
+/// # Why this and not the thing it replaced
+///
+/// The observed arm used to be *"RetailOS wrote `0x8001052a` to ask the click wheel for frames"*,
+/// reasoned about rather than measured: *a machine asking for input is a machine that has finished
+/// starting*. Booted from Apple's own NOR it declared the cold boot over at **2 250 000**
+/// instructions of **872 043 218** — 0.26 % — with the drive not yet answered and the panel black,
+/// and taught `Device::cold_boot_instructions` a denominator that draws a bar full at 0.12 %.
+///
+/// **Because the first one is not RetailOS's command, and RetailOS's own is not the end of a boot
+/// either.** Two measurements, and the second is the one that matters:
+///
+/// - **Whose it is.** `ipod-boot retail --storeaddr=0x7000c120 --storelog-dump=`, on the same NOR
+///   dump and the same reference drive: the first `0x8001052a` is written by **`pc = 0x4000e654`**
+///   at **@2 211 983** — the boot ROM's own opto bring-up, running out of IRAM **55 M instructions
+///   before the drive answers at all**. `eapp-loader`'s snapshot note had said as much all along:
+///   *"the firmware turns it on once with opcode `0x052a` early in the boot"*.
+/// - **Whether RetailOS sends one later.** It does — and the window's own boot is the only run that
+///   can say so, because `ipod-boot retail` diverges from it (see below). Over the bench boot's
+///   872 M instructions there are **five**, all payload 1: `@2 205 089` (the ROM's),
+///   `@111 545 868`, two within one sample at `@823 611 625`, and `@823 719 014`. RetailOS's
+///   earliest is **50x further on than the ROM's and still only 12.8 % of the boot**; the other
+///   three arrive *after* the machine has already settled. So no arrival of this command is the end
+///   of a cold boot, and the fix is not "watch a later one".
+///
+/// research/10 Addendum 32 is the write-up and the retraction.
+///
+/// # What replaces it, and why it is not another guess
+///
+/// **A booted machine halts and a booting one does not.** It is the one thing every operating
+/// system this program runs has in common — it needs no detection of which one is on the drive,
+/// which is the same property `Device::cold_boot_instructions` exists for. RetailOS reaches its
+/// language picker and sleeps; Rockbox reaches its menu and sleeps (a 400 M-step budget of
+/// `ipod-boot rockbox` executes **77 264 434** instructions — 80.7 % of the whole run halted, boot
+/// included); iPodLinux takes 21.5 G and then sleeps.
+///
+/// The numbers that make it a reading rather than a threshold somebody liked are on
+/// [`QUIET_WINDOW_STEPS`]. `idle_steps` costs an addition in the halt arm of `Machine::run` and
+/// nothing per instruction, which is what makes it affordable in a window nobody is measuring —
+/// `--stop-when-idle`'s novelty bitset is 512 KB and a probe per instruction, and `emu::build` arms
+/// it for `--headless` alone.
+///
+/// # The drive has to have answered
+///
+/// Halted is not booted on its own: a machine waiting for an interrupt that is never coming is
+/// halted too, and it would teach the denominator whatever count it hung at. So [`Self::read`] also
+/// requires at least one ATA command, which is the number the bug report led with — *the window
+/// leaves `Booting` … 0 ata* — and the failure mode of requiring it is the safe one: a boot that
+/// never touches its drive ends on the `snap_at` fallback and teaches nothing, rather than teaching
+/// something wrong.
+///
+/// # `ipod-boot retail` is not this boot, and that is not fixed here
+///
+/// Pinned to the same NOR dump and the same `PRISTINE` drive, `ipod-boot retail` reaches **70 ATA
+/// commands** and stops at Apple's own logo — after 1.2 G instructions, with `--clickwheel` and
+/// with `--bcm-registry`, both tried. The window reaches **768** and the language picker in 872 M.
+/// So the trace front end's `--enterlog` reporting **0 arrivals** at all five of RetailOS's
+/// documented `0x052a` senders is a fact about a machine that never got that far, not about
+/// RetailOS — and reading it as one is exactly the mistake this whole entry is about. `KNOWN-BUGS.md`
+/// carries the divergence.
+#[derive(Default)]
+pub struct Quiet {
+    /// `(executed, idle_steps)` at the start of the open window, and `None` before the first read.
+    mark: Option<(u64, u64)>,
+    /// The answer, once given. A boot ends once.
+    settled: Option<u64>,
+}
+
+impl Quiet {
+    /// Feed the machine's own counters. Answers `Some(n)` from the first full window that was
+    /// [`QUIET_HALTED_PERCENT`] halted, where `n` is the instruction count at the **start** of that
+    /// window — the last moment the machine was doing work, which is what the boot cost.
+    ///
+    /// The window tumbles rather than slides: it is re-armed at every evaluation, so the cost is
+    /// two subtractions per slice and the answer can be at most one window late. Eight million
+    /// steps is nine thousandths of the boot it is measuring.
+    pub fn read(&mut self, executed: u64, idle_steps: u64, ata_commands: u64) -> Option<u64> {
+        if self.settled.is_some() {
+            return self.settled;
+        }
+        let steps = executed + idle_steps;
+        let Some((was_executed, was_idle)) = self.mark else {
+            self.mark = Some((executed, idle_steps));
+            return None;
+        };
+        let window = steps - (was_executed + was_idle);
+        if window < QUIET_WINDOW_STEPS {
+            return None;
+        }
+        let halted = idle_steps - was_idle;
+        if ata_commands > 0 && halted * 100 >= window * QUIET_HALTED_PERCENT {
+            self.settled = Some(was_executed);
+        } else {
+            self.mark = Some((executed, idle_steps));
+        }
+        self.settled
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -452,9 +630,23 @@ pub struct Stats {
     /// Simulated microseconds elapsed in this process. **Computed and not yet shown** — and it
     /// became worth showing the day the clock stopped inventing time: against `wall_secs` it is the
     /// honest "how fast is this iPod running compared to a real one", now that idle costs what
-    /// running costs. The readout has the instruction ratio and not this one.
-    #[allow(dead_code)]
+    /// running costs.
+    ///
+    /// **§12.8 decided this one the other way and it is drawn**: it *"earns a row — it is the
+    /// honest simulated-versus-wall ratio now that idle costs what running costs"*. What is drawn
+    /// is the number, beside the wall clock it would be divided by; the **ratio** is not, because
+    /// §12.8 could not state a divisor its own worked example agreed with. See `readout.rs`.
     pub sim_usec_here: u64,
+    /// **Loop iterations the core spent HALTED**, straight off `Machine::idle_steps`.
+    ///
+    /// The counter a booting machine barely moves and a booted one moves almost exclusively: a core
+    /// that has finished starting sits in `CPU_CTRL`'s sleep bit waiting for an interrupt, and one
+    /// that is still starting is executing. It costs an addition in the halt arm of `Machine::run`
+    /// and nothing at all anywhere else — no bitset, no per-instruction probe — which is what makes
+    /// it affordable in a window that is not being measured. `eapp-loader`'s own note on
+    /// `last_novel_sleeps` is where this was first written down: *"a machine that is genuinely
+    /// waiting asks the core to sleep, so a window with zero sleeps in it is a busy machine"*.
+    pub idle_steps: u64,
     pub hold: bool,
     pub touched: bool,
     pub position: u8,
@@ -464,22 +656,58 @@ pub struct Stats {
     /// frames also need the receiver armed; both conditions live in `eapp-loader`.
     pub reporting: bool,
     /// Whether the firmware has *sent* `0x052a` at all — a different question from whether the
-    /// stream is on, and the one that means "this machine has finished starting and wants input".
-    /// After a restore it starts false, because the click wheel is not part of a snapshot.
+    /// stream is on. After a restore it starts false, because the click wheel is not part of a
+    /// snapshot.
+    ///
+    /// **It used to mean "this machine has finished starting and wants input", and it does not.**
+    /// The command is the boot ROM's, sent 2.2 M instructions into a cold boot; see [`Quiet`].
+    /// It is a readout gauge and nothing decides anything on it.
     pub asked_for_frames: bool,
+    /// **The census behind that bool** — how many `0x052a` commands the firmware has sent, and the
+    /// instruction count and payload of the last one.
+    ///
+    /// A count where there was a flag, because the flag is what hid the defect: `set_commands > 0`
+    /// reads the same at one command and at thirty, so nothing in the window could say that a
+    /// whole 871 M cold boot contains exactly **one** of them and that it arrives at 2.2 M.
+    pub wheel_sets: u64,
+    pub last_wheel_set: Option<(u64, u8)>,
     pub frames_posted: u64,
     pub frames_dropped: u64,
     pub frames_suppressed: u64,
+    /// **The CLICK WHEEL's DATA register**, read as words, and how many of those found a frame
+    /// waiting. `--selftest` prints them as *"DATA reads N (M with a frame waiting)"*, which is
+    /// what they are.
+    ///
+    /// **They are not the drive, and §12.8's BUS group drew the first of them under the label
+    /// `ata commands`.** One field, filled from `m.mem.clickwheel`, rendered as the count of
+    /// commands issued to a disk — so every Readout ever taken reported the wheel's serial traffic
+    /// as storage traffic, and a machine whose drive had never answered at all would have shown a
+    /// healthy four-figure number there. [`Stats::ata_commands`] is the drive's own census, and
+    /// this pair keeps the name of the register it comes off.
     pub data_reads: u64,
     pub data_reads_ready: u64,
+    /// IRQ 40 assertions — the click wheel's line, and the third of that group.
     pub irqs: u64,
+    /// **Commands issued to the drive, as a census.**
+    ///
+    /// `Ata::commands` is a `Capped<_>` holding 256 rows, and a retail cold boot issues about seven
+    /// hundred — so `commands.sample().len()` is a cap wearing a census's clothes, which is
+    /// research/12's whole subject. `seen()` is the number, and it is the number `report_headless`
+    /// already prints beside `retail-boot.sh`'s.
+    ///
+    /// **It is what tells a boot from a bootloader.** research/04 row 9's A/B is 102 ATA commands
+    /// with the IDE interrupt latch modelled against **24** without it — and the 24 is Apple's
+    /// bootloader painting its own screen and never handing RetailOS the disk. A window that could
+    /// not publish this number could not tell those two apart from the outside.
+    pub ata_commands: u64,
     /// Steps refused because the drain queue was already full — always shown, never silent.
     pub input_dropped: u64,
-    /// Depth of the input drain queue. Computed and not shown; `input_dropped` above is the one
-    /// that matters, because a refused step is a lie about what the user did and a deep queue is
-    /// only ever the reason for one.
-    #[allow(dead_code)]
-    pub queued: usize,
+    // **`queued` was here and is deleted.** It was the depth of the input drain queue, computed
+    // every slice and read by nothing, under an allow whose condition was *the Readout draws queue
+    // depth*. §12.8 built the Readout and decided the opposite: *"`input_dropped` is the number
+    // that matters, because a refused step is a lie about what you did and a deep queue is only
+    // ever the reason for one."* A field whose stated retirement condition has been met with a
+    // *no* is dead rather than deferred, so it goes rather than getting a new allow.
     /// Arrivals at each of [`WATCHED`], in that order.
     pub enters: [u64; WATCHED.len()],
     /// Co-processor activity **since the machine started running in this process**. Both counters
@@ -522,6 +750,24 @@ pub struct Link {
     /// Set while the restore point is being written, so the window can say what it is waiting for
     /// rather than appearing to hang for the second or two a 1.6 GB write takes.
     pub saving: AtomicBool,
+    /// **The Unix second at which a COMPLETE restore point was written**, or 0 for never.
+    ///
+    /// A pair, not a file: `write_restore_point` sets this only after the snapshot and the half
+    /// that pairs it with the drive are both on disk, so a park whose companion could not be
+    /// written — the case that deletes the snapshot again — leaves it at 0 and `Device::parked_at`
+    /// is never claimed for a restore point that is not there.
+    ///
+    /// `AtomicU64` rather than a field of [`Out`]: the window reads it **after** the machine thread
+    /// has finished, which is exactly when nothing is publishing an `Out` any more.
+    pub parked: AtomicU64,
+    /// **What a restore point for this machine would cost, in bytes**, or 0 before one is built.
+    ///
+    /// GUI.md §12.4 wants free space checked *before* `save_on_quit` is set, and the only honest
+    /// denominator for that check is this machine's own memory. Published once per session by
+    /// [`snapshot_bytes`], which sums the regions the snapshot format actually writes rather than
+    /// quoting §12.4's "~1.6 GB" — a figure that is about the frozen **drive** and not about the
+    /// RAM half at all.
+    pub snapshot_bytes: AtomicU64,
     /// Addresses the control socket has asked about, and what they held when the run loop next
     /// looked.
     ///
@@ -565,12 +811,15 @@ impl Link {
                 fb_other_nonzero: 0,
                 fb_other_moved: false,
                 fb_shown_moved: false,
+                booted_at: None,
                 stats: Stats::default(),
             }),
             quit: AtomicBool::new(false),
             resnap: AtomicBool::new(false),
             save_on_quit: AtomicBool::new(false),
             saving: AtomicBool::new(false),
+            parked: AtomicU64::new(0),
+            snapshot_bytes: AtomicU64::new(0),
         })
     }
 
@@ -652,6 +901,19 @@ impl Config {
     /// cache happens to hold.
     pub fn stamp(&self) -> Option<PathBuf> {
         self.snapshot.as_ref().map(|s| s.with_extension("drive"))
+    }
+
+    /// §12.4's parked frame, beside the snapshot under the same stem — **the same rule as
+    /// [`Config::stamp`], written once.**
+    ///
+    /// The writer (`write_parked_frame`) and the reader (`machine::parked_frame`) both ask this,
+    /// so a park that wrote `x.parked.png` and a bench that looked for `x.png` is not a state this
+    /// program can reach. It was two `with_extension` calls in two files for exactly as long as
+    /// this method did not exist.
+    pub fn parked_frame(&self) -> Option<PathBuf> {
+        self.snapshot
+            .as_ref()
+            .map(|s| s.with_extension("parked.png"))
     }
 
     /// The drive as it stands, in the two numbers that change when anything writes to it.
@@ -763,10 +1025,21 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // which is why the same image driven from the command line always worked.
     m.mem.second_core = cfg.second_core;
     eapp_loader::map_hardware(&mut m, cfg.boot.is_os());
-    // Hardware revision probe: boot reads 0x70000000, takes bits 16..23 and compares to 0x36.
+    // The part's own name at `PP_VER1`/`PP_VER2`, from the one place that decides it.
+    //
+    // This wrote `0x00360000` until 2026-08-26 — `research/16`'s chip lie, one byte shaped to pass
+    // Apple's bootloader's single test and nothing else — while `trace.rs` had already been moved
+    // to the eight characters that spell a part number. So the same machine answered two different
+    // chips depending on which program started it, which is one half of the `ipod-boot`-versus-
+    // `ipod-gui` divergence in `KNOWN-BUGS.md`. Measured across the change on the PRISTINE drive,
+    // one core: **768 ATA / 872 147 649 instructions / 38 313 buckets** before and **769 /
+    // 872 236 211 / 38 307** after — one extra `READ DMA`, and the same 75 267 lit pixels and the
+    // same `Idle` at the language picker. Not identical, so it is a real if small change, and
+    // saying "identical" here before measuring it is the mistake this comment is now the record
+    // of. See [`eapp_loader::seed_chip_id`] for which byte and why.
+    eapp_loader::seed_chip_id(&mut m);
     {
         use arm7tdmi::Bus as _;
-        m.mem.write32(0x7000_0000, 0x0036_0000);
         // `--charger`: GPIOL bit 3 low is "mains charger attached", and it is what decides between
         // the charging screen and the UI. See research/10 Addendum 30 §1 and §6.
         if cfg.charger {
@@ -807,7 +1080,10 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
                 } else {
                     format!(
                         "this boot ROM has no `{tag}` image. It has: {}",
-                        have.join(" · ")
+                        // ASCII: this becomes a `Failure::said` and therefore UI text, and §6.7
+                        // does not trust the window's font with a middle dot — `ui/bench.slint`
+                        // draws that one as a `Path`.
+                        have.join(", ")
                     )
                 }
             })?;
@@ -845,59 +1121,48 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
                 (osos, load_at, entry)
             }
         };
-        // Apple's boot code jumps to physical 0x23c, so the image has to answer at 0 as well —
-        // the usual ARM arrangement where the vector table is mirrored low. This is also where the
-        // CPU begins, which is why no reset vector has to be synthesised for it to execute.
-        // The image also answers at 0, the usual ARM arrangement where the vector table is
-        // mirrored low, and that is where the CPU begins. **Unless the directory records an entry
-        // offset** — non-zero once a bootloader has been appended to `osos`, and mirroring low
-        // would then start the OS behind the loader rather than the loader.
+        // **The image is WRITTEN INTO SDRAM, never registered as a region beside it**, and the
+        // machine is entered where the bootloader enters it. Both halves are what Apple's own
+        // bootloader is measured doing, and this HLE exists to leave what it leaves.
+        //
+        // The measurement, off `ipod-boot retail` on a drive that boots: 58 READ DMA commands land
+        // the firmware partition at `0x10000000` and the last of them ends at `0x10736000` — a
+        // 7 561 216-byte image, exactly what `osos_from_drive` hands back — and then the console
+        // says `Running 'osos' 0 from 0x10000000`. The OS is in SDRAM and the CPU goes to the top
+        // of it.
+        //
+        // **What was here instead, and how it failed.** The OS was pushed as a region named `osos`
+        // at `0x10000000` and mirrored as a live region named `osos-low` at 0, and the CPU entered
+        // at 0. Region lookup is first-match and `map_hardware` has already registered 64 MB of
+        // `sdram` at `0x10000000`, so the `osos` region was never read by anything: SDRAM was 64 MB
+        // of zeros with a copy of the OS filed behind it. That held up only until RetailOS did what
+        // RetailOS does about 0x220 bytes into its own entry — program the PP's remap windows at
+        // `0xf000f000`, one of which is `0x00000000..0x01ffffff -> 0x10000000`. `Memory::translate`
+        // runs before the region list, so from that instruction on every low address resolved into
+        // the zeroed SDRAM and the code the CPU was executing went out from under it. It then
+        // NOP-slid — `0x00000000` decodes as `andeq r0, r0, r0` — from `0x1ec` to the top of the
+        // window and left every mapped region: **`Lost(0x02000000)` after 8 388 485 instructions**,
+        // which is `(0x02000000 - 0x1ec) / 4` to the instruction.
+        //
+        // With the bytes in SDRAM there is one storage and the remap points at it, which is the
+        // arrangement the hardware has. Nothing is mirrored at 0: before RetailOS programs that
+        // window it is running from `0x1000xxxx`, and after it, address 0 *is* SDRAM.
+        eapp_loader::place_image(&mut m, load_at, &osos);
+        // **Where the machine starts, decided here and read back by the run loop.** `Machine::new`
+        // puts the PC at the placeholder app's entry, which is 0; `session` used to re-decide the
+        // address with a second `if cfg.boot.is_os()` of its own, and two places deciding one thing
+        // is how the OS came to be entered somewhere its bootloader never enters it.
+        //
+        // `entry` is non-zero once a bootloader has been appended to `osos` — `ipodloader2` sits at
+        // `0x735a00` — and Apple's bootloader honours the directory's offset rather than the load
+        // address, printing `Running 'osos' 0 from 0x10735A00` when it does. Starting at `load_at`
+        // regardless would run the OS sitting behind the loader instead of the loader.
+        m.cpu.regs[15] = load_at + entry;
         if entry != 0 {
             println!(
                 "  entry offset {entry:#x} — starting at {:#010x}",
                 load_at + entry
             );
-        }
-        // **The low mirror is the OS's, not every image's.** RetailOS is linked to run at 0 and
-        // Apple's boot code jumps to physical 0x23c, so the OS has to answer there. A `flsh` image
-        // is linked to run at 0x10000000 and is *placed in SDRAM*, which starts there — mirroring
-        // it at 0 as well would shadow the low window it expects to be memory, and the command
-        // line's `ipod-boot flsh` does not do it either.
-        if cfg.boot.is_os() {
-            m.mem.regions.push(Region {
-                name: "osos-low",
-                base: 0,
-                data: osos.clone(),
-            });
-        }
-        // **A boot image is inserted at the front; the OS is pushed.** Region lookup is
-        // first-match and SDRAM is already registered at 0x10000000, so a pushed image sits behind
-        // it and the CPU executes zeroed memory — 1.5 M "code buckets" of it, which reads as a
-        // machine running rather than a machine lost. `trace.rs` inserts `--boot-flash`'s region at
-        // the front for this reason.
-        //
-        // It has never mattered for the OS, which executes from the low mirror at 0, and the OS
-        // keeps the old order deliberately: putting a 7.5 MB image in front of 64 MB of SDRAM
-        // changes what every address in that span reads, and that is a change to measure on its
-        // own rather than to make in passing.
-        if !cfg.boot.is_os() {
-            // **Written into memory, not registered as a region.** With the non-cold map SDRAM's
-            // storage is at 0 and 0x10000000 is an *alias* of it, resolved before the region list
-            // is consulted — so a region at 0x10000000 is never read, however early it is inserted.
-            // Copying the bytes in is also what actually happens: Apple's boot ROM copies the
-            // image it is about to run into SDRAM.
-            for (i, chunk) in osos.chunks(4).enumerate() {
-                let mut w = [0u8; 4];
-                w[..chunk.len()].copy_from_slice(chunk);
-                m.mem
-                    .write32(load_at + (i as u32) * 4, u32::from_le_bytes(w));
-            }
-        } else {
-            m.mem.regions.push(Region {
-                name: "osos",
-                base: load_at,
-                data: osos,
-            });
         }
 
         // The handoff, byte for byte as a cold boot leaves it.
@@ -1007,15 +1272,27 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         )
     });
 
-    // The co-processor, with the GENCMD registry published. Without `registry` RetailOS never gets
-    // an answer to its service lookup and never draws — the panel would be a black rectangle and
-    // the GUI would be showing a true picture of a machine configured not to work.
+    // The co-processor, with the GENCMD registry published.
+    //
+    // **What this line used to claim, and what a measurement of it says.** The claim was: *"without
+    // `registry` RetailOS never gets an answer to its service lookup and never draws — the panel
+    // would be a black rectangle."* Ablated on 2026-08-24 as a red proof for
+    // `the_bench_boots_apples_software_and_this_needs_resources` — one flag, same ROM, same drive,
+    // same start path — the boot is **indistinguishable**: 75 267 non-black pixels, 4
+    // co-processor commands, 2 frame updates, RetailOS's language picker on the glass. So the
+    // black-rectangle half is not true of *this* boot, and it is left here as what was believed
+    // rather than deleted.
+    //
+    // The line stays on, because what the flag does is separately measured and is not nothing:
+    // research/04 records `--bcm-registry` turning 4 DMA transfers into 104. That is a different
+    // claim from *the panel goes black*, and the two had been written down as one.
     let mut bcm = Bcm::new(0x3000_0000);
     bcm.registry = true;
     // The boot screen. A real NOR carries a `logo` image and Apple's bootloader blits it; a
-    // synthesised one has none, and could not carry Apple's artwork if it wanted to. So the
-    // project's own mark goes up instead, in the colours the model boots in — white iPods dark on
-    // white, black and U2 white on black.
+    // synthesised one carries the project's own mark, because it could not carry Apple's artwork
+    // if it wanted to. Either way it is white on black — every iPod with video boots the same
+    // screen whatever colour its case is, corrected 2026-08-19 by the operator, who owned a white
+    // one. `Source::boot_screen` is the one place that decides which picture it is.
     if synthetic {
         // Whatever the source says to show — the built-in mark, or an image somebody chose.
         let px = cfg.nor.boot_screen(FB_W, FB_H);
@@ -1118,7 +1395,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
 /// whole cause of the stale-pair failure documented on `Config::frozen`. Reusing a drive is only
 /// ever correct when the RAM that goes with it is reused too, and that decision belongs to the
 /// caller, which knows whether it is restoring.
-fn clone_disk(from: &Path, to: &Path) -> Result<(), String> {
+pub fn clone_disk(from: &Path, to: &Path) -> Result<(), String> {
     if from == to {
         return Ok(());
     }
@@ -1240,10 +1517,10 @@ fn schedule_at(script: &[WheelStep], ev: eapp_loader::WheelEvent, earliest: u64)
     }
 }
 
-fn drain(m: &mut Machine, inbox: &Mutex<Inbox>, next_at: &mut u64, gap: u64) -> usize {
+fn drain(m: &mut Machine, inbox: &Mutex<Inbox>, next_at: &mut u64, gap: u64) {
     let now = m.executed as u64;
     let Some(w) = m.mem.clickwheel.as_mut() else {
-        return 0;
+        return;
     };
     let mut inbox = inbox.lock().unwrap();
     while let Some(&ev) = inbox.events.front() {
@@ -1263,7 +1540,6 @@ fn drain(m: &mut Machine, inbox: &Mutex<Inbox>, next_at: &mut u64, gap: u64) -> 
         w.script.push(WheelStep::instr(at, ev));
         *next_at = at.max(*next_at) + gap;
     }
-    inbox.events.len()
 }
 
 fn collect(m: &Machine, started: Instant, base: (u64, u32)) -> Stats {
@@ -1274,6 +1550,7 @@ fn collect(m: &Machine, started: Instant, base: (u64, u32)) -> Stats {
         wall_secs: started.elapsed().as_secs_f64(),
         executed_here: m.executed as u64 - base.0,
         sim_usec_here: m.mem.usec.wrapping_sub(base.1) as u64,
+        idle_steps: m.idle_steps,
         ..Stats::default()
     };
     if let Some(w) = w {
@@ -1283,12 +1560,19 @@ fn collect(m: &Machine, started: Instant, base: (u64, u32)) -> Stats {
         s.buttons = w.buttons;
         s.reporting = w.reporting;
         s.asked_for_frames = w.set_commands > 0;
+        s.wheel_sets = w.set_commands;
+        s.last_wheel_set = w.last_set;
         s.frames_posted = w.frames_posted;
         s.frames_dropped = w.frames_dropped;
         s.frames_suppressed = w.frames_suppressed;
         s.data_reads = w.data_reads;
         s.data_reads_ready = w.data_reads_ready;
         s.irqs = w.irqs;
+    }
+    // The drive's own census, and `seen()` rather than `sample().len()` for the reason the field
+    // carries: the log holds 256 rows and a retail cold boot issues about seven hundred.
+    if let Some((_, d)) = &m.mem.ata {
+        s.ata_commands = d.commands.seen();
     }
     for (i, (pc, _)) in WATCHED.iter().enumerate() {
         s.enters[i] = m.enter_log.iter().filter(|e| e.0 == *pc).count() as u64;
@@ -1298,6 +1582,48 @@ fn collect(m: &Machine, started: Instant, base: (u64, u32)) -> Stats {
         s.bcm_commands = b.commands.len();
     }
     s
+}
+
+/// **What the log says when a machine dies, and what it says when the same one dies again.**
+///
+/// A window run leaves a log, and the log is the part a person keeps. The one this type came out
+/// of held **twenty-five identical high-level boots and not one word about why any of them
+/// ended** — because [`build`] prints two lines per machine and a machine that stops printed none.
+/// Read back afterwards that is indistinguishable from a program restarting itself in a loop, and
+/// it was read that way: the same failure, twenty-five times, filed as a retry loop.
+///
+/// **There is no retry loop, and that is the fact this replaces the guess with.** `session` parks
+/// on `wait_after_stop` when a machine stops and only a `Cmd::PowerOff` / `PowerOn` / `PowerCycle`
+/// / `Boot` moves it, every one of which is queued from one place — `on_start_device`, reached from
+/// `pressed-centre` and from the Devices page's `activated`. Both are people. Twenty-five boots is
+/// twenty-five presses, which is exactly what somebody does when a press appears to do nothing:
+/// each one died in about a third of a second and left the bench saying the same thing.
+///
+/// So the run is not bounded here — a person may start an iPod as often as they like — but the
+/// *log* now says what happened each time, and says when it has said it before.
+#[derive(Default)]
+struct Deaths {
+    last: Option<String>,
+    run: u32,
+}
+
+impl Deaths {
+    /// The line for this stop. Never empty: a death that printed nothing is the whole defect.
+    fn note(&mut self, why: &str) -> String {
+        if self.last.as_deref() == Some(why) {
+            self.run += 1;
+        } else {
+            self.last = Some(why.to_string());
+            self.run = 1;
+        }
+        match self.run {
+            1 => format!("stopped: {why}"),
+            n => format!(
+                "stopped: {why} — {n} starts in a row have ended in the same place, so \
+                 this is something about the iPod rather than about the start"
+            ),
+        }
+    }
 }
 
 /// The emulator thread. Owns the machine outright; the UI never touches it.
@@ -1315,8 +1641,10 @@ fn collect(m: &Machine, started: Instant, base: (u64, u32)) -> Stats {
 pub fn run(cfg: Config, link: Arc<Link>) {
     let mut cfg = cfg;
     let mut first = true;
+    // Across sessions, because "again" is a fact about the sequence and a session cannot see one.
+    let mut deaths = Deaths::default();
     loop {
-        match session(&cfg, &link, first) {
+        match session(&cfg, &link, first, &mut deaths) {
             Outcome::Quit => return,
             Outcome::ColdBoot => first = false,
             // Changing the boot target is a power cycle, and a session reached by one never
@@ -1363,10 +1691,13 @@ fn wait_for_power(link: &Arc<Link>) -> bool {
 }
 
 /// One power cycle: build the machine, run it, and stop when the window closes or power is cut.
-fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
+fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> Outcome {
     let mut m = match build(cfg, first) {
         Ok(m) => m,
         Err(e) => {
+            // Said, not merely shown. The window puts this on the bench; a machine that could not
+            // be built and printed nothing leaves a log with a boot line missing and no reason.
+            println!("{}", deaths.note(&e));
             link.out.lock().unwrap().phase = Phase::Stopped(e);
             return Outcome::Quit;
         }
@@ -1405,6 +1736,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                     match build(&cold, first) {
                         Ok(fresh) => m = fresh,
                         Err(e) => {
+                            println!("{}", deaths.note(&e));
                             link.out.lock().unwrap().phase = Phase::Stopped(e);
                             return Outcome::Quit;
                         }
@@ -1453,6 +1785,10 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         b.registry = true;
     }
 
+    // What a park would cost, published before anything can ask for one — see `Link::snapshot_bytes`.
+    link.snapshot_bytes
+        .store(snapshot_bytes(&m), Ordering::Relaxed);
+
     {
         let mut out = link.out.lock().unwrap();
         out.phase = if restored {
@@ -1462,6 +1798,11 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                 target: cfg.snap_at,
             }
         };
+        // Per session, not per process. A machine reached by a power cycle cold-boots again, and
+        // what the *previous* session's boot cost is not a measurement of this one — the window
+        // records the number once per boot and this is what stops the second one arriving with the
+        // first one's answer already in it.
+        out.booted_at = None;
     }
 
     let started = Instant::now();
@@ -1494,6 +1835,10 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
     let mut watched: Vec<Option<u32>> = vec![None; cfg.watch.len()];
     let mut last_executed = 0u64;
     let mut last_moved = std::time::Instant::now();
+    // The trailing window that ends the boot phase. Per session, because a boot ends once and a
+    // power cycle is a new one — `run`'s outer loop builds a fresh `Machine` and gets a fresh one
+    // of these with it.
+    let mut quiet = Quiet::default();
 
     loop {
         if link.quit.load(Ordering::Relaxed) {
@@ -1505,7 +1850,11 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
             let running = matches!(link.out.lock().unwrap().phase, Phase::Running);
             if running && link.save_on_quit.load(Ordering::Relaxed) {
                 link.saving.store(true, Ordering::Relaxed);
-                write_restore_point(cfg, &m);
+                // The frame the machine stops on is the one it last published, which is what
+                // `fb_seq` moving off zero means — see `write_parked_frame`, and `Link::parked`
+                // for why the answer is an atomic rather than another field of `Out`.
+                let at = write_restore_point(cfg, &m, (fb_seq > 0).then_some(&fb[..]));
+                link.parked.store(at.unwrap_or(0), Ordering::Relaxed);
                 link.saving.store(false, Ordering::Relaxed);
             }
             break;
@@ -1520,7 +1869,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
                 Cmd::PowerOn => {}
             }
         }
-        let queued = drain(&mut m, &link.inbox, &mut next_at, cfg.click_gap);
+        drain(&mut m, &link.inbox, &mut next_at, cfg.click_gap);
 
         // A cold boot enters at 0, where the CPU fetches out of reset, with `r0`-`r3` zeroed and
         // `lr` at the sentinel — exactly `trace.rs`'s `call_with(entry, &[0,0,0,0], …)`. A restored
@@ -1529,10 +1878,12 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
             m.run(SLICE)
         } else {
             entered = true;
-            // A boot image is entered where it is loaded — it is not mirrored low and its code
-            // addresses itself at 0x10000000. Everything else enters at 0, where the CPU fetches
-            // out of reset.
-            let pc = if cfg.boot.is_os() { 0 } else { 0x1000_0000 };
+            // **Where `build` left the PC**, and it is read rather than re-decided. A cold boot off
+            // a real dump leaves it at 0, where the CPU fetches out of reset; a high-level boot
+            // leaves it at the entry the bootloader would have jumped to. This line used to be its
+            // own `if cfg.boot.is_os() { 0 } else { 0x1000_0000 }`, which is the same decision
+            // taken twice in two files — and the OS's arm of it was the wrong answer.
+            let pc = m.cpu.regs[15];
             // The coprocessor comes out of reset running the same code and decides for itself, on
             // `PROC_ID`, that it is not the CPU — Apple's bootloader branches on it at 0x8738 and
             // parks it three instructions later.
@@ -1701,7 +2052,8 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         if reached_snap_at || asked {
             want_snapshot = false;
             if cfg.work_on_copy || asked {
-                write_restore_point(cfg, &m);
+                let at = write_restore_point(cfg, &m, (fb_seq > 0).then_some(&fb[..]));
+                link.parked.store(at.unwrap_or(0), Ordering::Relaxed);
             }
             link.out.lock().unwrap().phase = Phase::Running;
         }
@@ -1764,7 +2116,6 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         let dropped = out.stats.input_dropped;
         out.stats = Stats {
             input_dropped: dropped,
-            queued,
             ..stats
         };
         if refresh {
@@ -1792,7 +2143,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         }
         out.backlight = m.mem.backlight.level;
         out.backlight_steps = (m.mem.backlight.steps_up, m.mem.backlight.steps_down);
-        // **The boot is over when RetailOS starts listening, not at an instruction count.**
+        // **The boot is over when the machine stops working, not at an instruction count.**
         //
         // This used to flip only at `snap_at`, which is 1.6 G instructions — a point chosen because
         // it is a good place to *resume from*, not because it is where the boot ends. RetailOS
@@ -1801,27 +2152,37 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
         // nobody could observe. Reported from use, which is the only way this kind of thing is ever
         // found: *"the language screen was long there before it finished."*
         //
-        // RetailOS writing `0x8001052a` to say it wants wheel frames. A machine asking for input is
-        // a machine that has finished starting, and it is an observation rather than an assumption.
+        // It was then flipped on RetailOS asking the click wheel for frames, and that reading was
+        // **wrong by 387x**: the command it watched is the boot ROM's, written 2.2 M instructions
+        // in, and RetailOS never sends one at all. See [`Quiet`], which carries the measurement
+        // that replaced it and the one that falsified it.
         //
-        // The *sending* of the command, not the resulting flag: autonomous reporting is on at
-        // reset (the part streams unless told not to, which is how Rockbox gets input without ever
-        // sending this), so the flag is true from the first instruction and would end the boot
-        // phase immediately.
-        //
-        // `snap_at` stays as a fallback for the case the signal never comes: a boot that fails
+        // `snap_at` stays as a fallback for the case the machine never settles: a boot that fails
         // before the UI should not leave the window claiming to be booting for ever, and the old
         // behaviour is the honest thing to fall back *to*.
+        //
+        // **And the two endings are told apart rather than merged**, which is `boot_end`'s whole
+        // job: the observed one is what §12.3 divides by next time, the fallback measured nothing,
+        // and reading `executed` at this instant without asking which happened files `snap_at` as
+        // a measurement. See `Out::booted_at`.
         if out.phase
             == (Phase::Booting {
                 target: cfg.snap_at,
             })
-            && (stats.asked_for_frames || executed >= cfg.snap_at)
         {
-            out.phase = Phase::Running;
+            let settled = quiet.read(executed, stats.idle_steps, stats.ata_commands);
+            if let Some(measured) = boot_end(settled, executed, cfg.snap_at) {
+                out.phase = Phase::Running;
+                out.booted_at = measured;
+            }
         }
         if stop != Stop::BudgetExhausted && stop != Stop::Idle {
-            out.phase = Phase::Stopped(format!("{stop:?} at {executed} instructions"));
+            let why = format!("{stop:?} at {executed} instructions");
+            // **On the same stream as the boot line it ends**, so a log reads as boot/death rather
+            // than as a list of boots. See [`Deaths`], which is also what makes the second one
+            // say it is a second one.
+            println!("{}", deaths.note(&why));
+            out.phase = Phase::Stopped(why);
             drop(out);
             // A machine that has run off the rails is exactly when someone wants to power-cycle it,
             // so the thread stays alive holding the failure on screen rather than exiting and
@@ -1842,15 +2203,24 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool) -> Outcome {
 /// Safe to run while the machine holds the drive open: `Ata` seeks and `write_all`s each sector
 /// straight through, keeping no dirty buffer of its own, so what is on disk now is exactly what
 /// this RAM believes.
-fn write_restore_point(cfg: &Config, m: &Machine) {
-    let Some(path) = &cfg.snapshot else { return };
+///
+/// **`frame` is the third thing on disk and it is not part of the pair** — GUI.md §12.4 and §17 Q7,
+/// answered *"do it"*: `<snapshot>.parked.png`, 320 × 240, so a parked device's glass shows the
+/// frame it stopped on instead of reading as off. It is written last and its failure is not the
+/// pair's failure: a restore point whose picture could not be written still restores, and §12.4's
+/// own fallback for a missing PNG — *"the glass is dark"* — is the honest one. `None` means the
+/// machine never published a frame, which is a different thing from a black one.
+///
+/// Returns the Unix second the **complete** pair reached the disk, or `None` — see `Link::parked`.
+fn write_restore_point(cfg: &Config, m: &Machine, frame: Option<&[u8]>) -> Option<u64> {
+    let path = cfg.snapshot.as_ref()?;
     let img = m.snapshot();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     if let Err(e) = std::fs::write(path, &img) {
         eprintln!("snapshot {}: {e}", path.display());
-        return;
+        return None;
     }
     eprintln!("snapshot -> {} ({} bytes)", path.display(), img.len());
     match cfg.pair_with_drive() {
@@ -1860,9 +2230,70 @@ fn write_restore_point(cfg: &Config, m: &Machine) {
         Err(e) => {
             eprintln!("{e} — this snapshot will not be restored");
             let _ = std::fs::remove_file(path);
+            return None;
         }
     }
+    write_parked_frame(cfg, frame);
+    Some(eapp_loader::settings::now_unix())
 }
+
+/// §12.4's parked frame: `<snapshot>.parked.png`, at exactly 320 × 240.
+///
+/// **`png::encode` gets its first production caller here**, which is what retires that module's
+/// dead-code allow — the condition §17 Q7 named. Beside the snapshot and under the same stem, the
+/// rule `Config::stamp` already follows for the drive's fingerprint and for the same reason: a
+/// hand-given `--snapshot=` brings its own companions rather than pairing with whatever the cache
+/// happens to hold.
+fn write_parked_frame(cfg: &Config, frame: Option<&[u8]>) {
+    let Some(path) = cfg.parked_frame() else { return };
+    let Some(rgb) = frame else {
+        // Nothing was ever read out of the co-processor, so there is no frame this machine stopped
+        // on. A stale PNG from an earlier park would be a picture of a different session, so it
+        // goes with the snapshot it no longer belongs to.
+        let _ = std::fs::remove_file(&path);
+        return;
+    };
+    if rgb.len() != FB_W * FB_H * 3 {
+        eprintln!(
+            "parked frame: {} bytes is not {}x{} RGB, so no picture was written",
+            rgb.len(),
+            FB_W,
+            FB_H
+        );
+        return;
+    }
+    match std::fs::write(&path, crate::png::encode(rgb, FB_W, FB_H)) {
+        Ok(()) => eprintln!("parked frame -> {}", path.display()),
+        Err(e) => eprintln!("parked frame {}: {e}", path.display()),
+    }
+}
+
+/// **What a restore point for this machine would cost**, summed off the format that writes it.
+///
+/// `Machine::snapshot` walks `mem.regions` and then the co-processor's sparse map as
+/// address/value pairs, and those two are the whole of the size — everything else it writes is
+/// scalars. So this is the same walk without the allocation, which is what makes it answerable
+/// *before* a park rather than by doing one.
+///
+/// **[`SNAPSHOT_SLACK`] is measured, not guessed** — see
+/// `a_park_and_a_restore_are_a_round_trip_and_the_frame_comes_back`, which builds a real machine,
+/// takes a real snapshot and asserts this over-estimates it and by how little. An estimate that
+/// came out *under* would be a free-space check that passed and a write that filled the volume.
+fn snapshot_bytes(m: &Machine) -> u64 {
+    let regions: u64 = m
+        .mem
+        .regions
+        .iter()
+        .map(|r| (r.data.len() + r.name.len() + 12) as u64)
+        .sum();
+    let bcm = m.mem.bcm.as_ref().map_or(0, |b| b.mem.len() as u64 * 8);
+    regions + bcm + SNAPSHOT_SLACK
+}
+
+/// Everything `Machine::snapshot` writes that is not a region or a co-processor pair: the register
+/// file, the clock, the alias table, the MMAP window registers, the read overrides, the drive's
+/// saved state, the click wheel and the backlight.
+const SNAPSHOT_SLACK: u64 = 256 * 1024;
 
 /// The machine stopped on its own. Keep the reason on screen and wait for a power command.
 fn wait_after_stop(link: &Arc<Link>) -> Outcome {
@@ -2436,6 +2867,12 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
         "  unmapped: {reads} reads, {writes} writes across {} pages",
         m.mem.unmapped.len()
     );
+    // A total with no address is a number nobody can act on. The window's readout has always named
+    // the pages; the headless summary printed the count alone, so the one run you can do over SSH
+    // was the one that could not say *what* the firmware reached for. Same report `trace` prints.
+    for line in m.mem.unmapped_report() {
+        println!("    {line}");
+    }
     // Printed unconditionally when a range was asked for, including when it is empty. "Nothing was
     // recorded" and "nothing was asked" must not look the same, because an instrument that stays
     // silent when it found nothing is indistinguishable from one that is not running.
@@ -2751,7 +3188,6 @@ mod tests {
         std::fs::write(&snap, b"snapshot").unwrap();
 
         let mut cfg = Config {
-            flash: dir.join("f.bin"),
             disk: dir.join("d.img"),
             workdisk: dir.join("w.img"),
             frozen: frozen.clone(),
@@ -2809,7 +3245,6 @@ mod tests {
         // Direct mode: the working drive IS the user's image, which is the condition that makes
         // the stamp necessary in the first place.
         let cfg = Config {
-            flash: dir.join("f.bin"),
             disk: drive.clone(),
             workdisk: drive.clone(),
             frozen: dir.join("b.frozen"),
@@ -2894,4 +3329,645 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// **A boot that ended on the fallback teaches §12.3's denominator nothing** — and the
+    /// substitution is this test's own control.
+    ///
+    /// The two endings sit one line apart in the run loop and produce the same phase. A reader that
+    /// watched for the phase change and took `Stats::executed` would file `snap_at` — a constant
+    /// tuned to RetailOS's 1.6 G — as *this device's own last completed cold boot*, on every
+    /// machine that never settled. That is the exact defect `Device::cold_boot_instructions`
+    /// replaced `snap_at` to fix, re-entered from the other end.
+    ///
+    /// The control is the substitution written out: `Some(Some(executed))` for both arms is what a
+    /// phase-watcher computes, and the assertion below is what tells it apart from the truth.
+    #[test]
+    fn a_boot_that_ended_on_the_fallback_teaches_the_denominator_nothing() {
+        const SNAP: u64 = SNAP_AT;
+
+        // Still booting: the machine has not settled and the fallback is not due.
+        assert_eq!(boot_end(None, 1_000, SNAP), None);
+        assert_eq!(boot_end(None, SNAP - 1, SNAP), None);
+
+        // The fallback. The boot phase ends — a window that says *booting* for ever over a machine
+        // that failed before the UI is the twenty-one-minute hostage §7.3 added a stop control for
+        // — and **nothing is learned**.
+        assert_eq!(
+            boot_end(None, SNAP, SNAP),
+            Some(None),
+            "the fallback ended the boot and this reported a measurement"
+        );
+        assert_eq!(boot_end(None, SNAP * 3, SNAP), Some(None));
+
+        // The observation. The machine went quiet with its drive answered, and the count at the
+        // moment it stopped working is what the next boot divides by.
+        assert_eq!(
+            boot_end(Some(871_685_000), 871_712_000, SNAP),
+            Some(Some(871_685_000)),
+            "the observed arm published the count it noticed at, not the one it settled at"
+        );
+        // …at any count, including one before the fallback would ever have been due, which is the
+        // case Rockbox is: it reaches its menu at about 100 M.
+        assert_eq!(
+            boot_end(Some(100_000_000), 108_000_000, SNAP),
+            Some(Some(100_000_000))
+        );
+
+        // **The control.** A reader keyed on the phase change alone cannot tell the two apart: it
+        // computes the same non-`None` answer for both, and the number it takes on the fallback arm
+        // is `snap_at` itself.
+        let phase_watcher =
+            |settled: Option<u64>, executed: u64| (settled.is_some() || executed >= SNAP).then_some(executed);
+        assert_eq!(phase_watcher(None, SNAP), Some(SNAP));
+        assert_eq!(
+            boot_end(None, SNAP, SNAP).flatten(),
+            None,
+            "and this is the whole difference between the two readings"
+        );
+        assert!(
+            phase_watcher(Some(871_685_000), 871_712_000)
+                != boot_end(Some(871_685_000), 871_712_000, SNAP).flatten(),
+            "the phase-watcher reads the count at the moment of NOTICING; the observation is the \
+             count at the moment the machine stopped working, and one window separates them"
+        );
+    }
+
+    /// **The end of a cold boot is the machine going quiet, and this is the run that measured it —
+    /// beside the reading it replaced, which was wrong by 387x.**
+    ///
+    /// # What was believed
+    ///
+    /// [`boot_end`]'s observed arm was *"RetailOS asking for wheel frames … a machine asking for
+    /// input is a machine that has finished starting"*. Driven against Apple's own NOR dump and a
+    /// real 5.5G's drive through the window's own start path — `ipod-gui`'s
+    /// `the_bench_boots_apples_software_and_this_needs_resources`, which is `#[ignore]`d because it
+    /// needs `resources/` — that is false, and not marginally:
+    ///
+    /// ```text
+    /// the window USED to leave `Booting`    2 250 000 instr    0 ata      0 lit   0 co-proc frames
+    /// the first pixel lights               42 999 970 instr    0 ata
+    /// the drive first answers              57 499 970 instr
+    /// the machine goes quiet              823 593 896 instr  765 ata  75 267 lit   2 co-proc frames
+    /// the last work finishes              872 147 527 instr  768 ata
+    /// ```
+    ///
+    /// At the instant the window declared the boot over the drive had answered **nothing** and the
+    /// panel was **black** — the first of each is nineteen and twenty-five times further on.
+    ///
+    /// The last two rows carry a few hundred thousand instructions of run-to-run jitter, because
+    /// they are read off `Out` on a tick and the ticks do not land in the same places twice. The
+    /// first three do not: they are the machine's own arithmetic and reproduce exactly.
+    ///
+    /// # Which sender it actually was, measured rather than reasoned
+    ///
+    /// `ipod-boot retail --storeaddr=0x7000c120 --storelog-dump=`, pinned to the same NOR dump and
+    /// the same `PRISTINE` drive, over a 1.2 G budget. Every write to the click wheel's TX register
+    /// in the whole run, and there are four:
+    ///
+    /// ```text
+    /// 0x4000e654 -> [0x7000c120] = 0x8001052a   @2211983
+    /// 0x4000e654 -> [0x7000c120] = 0x8000023a   @2833953
+    /// 0x4000e654 -> [0x7000c120] = 0x8000023a   @18107448
+    /// 0x4000e654 -> [0x7000c120] = 0x8000023a   @57422301
+    /// ```
+    ///
+    /// One `0x052a`, at **@2 211 983**, from **`0x4000e654`** — the boot ROM's own opto bring-up
+    /// running out of IRAM, 55 M instructions before the drive answers and 41 M before the first
+    /// pixel. `--enterlog` on all five of RetailOS's documented senders — `0x00283e20`,
+    /// `0x00283e10`, `0x000b2ce0`, `0x000bbdb0`, `0x000b4638` — records **0 arrivals** in that run,
+    /// against **944 984** at a control address armed in the same report, which is what makes the
+    /// zero a reading.
+    ///
+    /// # And a later one exists after all, which is the half a control caught
+    ///
+    /// That `0 arrivals` was first written up here as *RetailOS never sends the command on a cold
+    /// boot*, and it is not true: it is true of the machine `ipod-boot retail` builds, which stops
+    /// at Apple's logo with 70 ATA commands and never reaches the code. The window's own boot is
+    /// the run that can answer, and the bench prints its whole census — **five** `0x052a`
+    /// commands, all payload 1:
+    ///
+    /// ```text
+    /// @2 205 089     the boot ROM's, `pc = 0x4000e654`
+    /// @111 545 868   RetailOS's first — 50x further on, and still 12.8 % of the boot
+    /// @823 611 625   two within one sample, at the instant the machine settles
+    /// @823 719 014   after it has settled
+    /// ```
+    ///
+    /// So the answer to *does RetailOS send one of its own later* is **yes**, and it makes no
+    /// difference: its earliest is a ninth of the way through a boot, and its other three arrive
+    /// after the machine has already stopped working. No arrival of this command is the end of a
+    /// cold boot. research/10 Addendum 32 is the write-up and the retraction.
+    ///
+    /// # What replaces it
+    ///
+    /// [`Quiet`]: a trailing window of the machine's own steps that is [`QUIET_HALTED_PERCENT`]
+    /// halted, with the drive answered. Over the 8 M-step window the whole 872 M boot never exceeds
+    /// **61.7 %**, and the machine holds **99.7 %** from 823.6 M onward.
+    ///
+    /// # How to make it go red, both measured
+    ///
+    /// - **The observation**: set [`QUIET_HALTED_PERCENT`] to `100` — a bar no window with a single
+    ///   executed instruction in it can clear — and nothing ever settles: *the machine went quiet
+    ///   and this never noticed*. (`101` does not compile, because `slack` below derives itself
+    ///   from the same constant and the subtraction underflows. That is the constant's range
+    ///   asserted at build time, and it is worth more than the ablation would have been.)
+    /// - **The drive half**: delete `ata_commands > 0 &&` from [`Quiet::read`] and the hung machine
+    ///   at the end is called booted at 6 000 instructions.
+    #[test]
+    fn the_first_ask_for_frames_is_not_the_end_of_a_cold_boot() {
+        /// The boot ROM's `0x8001052a`, which the window used to read as the end of the boot.
+        /// `@2 211 983` at the bus; 2 250 000 is where the window's own sampling notices it.
+        const OLD_SIGNAL_AT: u64 = 2_250_000;
+        /// The same machine, when it stopped executing new work.
+        const QUIET_AT: u64 = 872_147_527;
+
+        // **What the old signal was worth as a denominator**, kept as arithmetic rather than as
+        // prose. `Progress::read` divides by it, so a bar drawn against this reads full while the
+        // machine still has 99.7 % of its boot to do.
+        let fraction = OLD_SIGNAL_AT as f64 / QUIET_AT as f64;
+        assert!(
+            fraction < 0.01,
+            "the measurement this test was written to pin has moved: the boot ROM's command is now \
+             {:.1} % of the boot rather than 0.26 %. Re-run \
+             `the_bench_boots_apples_software_and_this_needs_resources` and re-state it",
+            fraction * 100.0
+        );
+        // And the control that made the point: the fallback — a constant nobody claims is a
+        // measurement — lands within 1.9x of where the machine actually finished, and the arm that
+        // called itself an observation was 387x out. The signal was worse than the thing it was
+        // introduced to replace.
+        assert!(
+            SNAP_AT.abs_diff(QUIET_AT) < QUIET_AT.abs_diff(OLD_SIGNAL_AT),
+            "the fallback is now further from the truth than the old observation, which would make \
+             this test's own point backwards"
+        );
+
+        // ── And what the machine that replaced it answers, driven on the measured shape ─────────
+        //
+        // A boot: 75 instructions per simulated microsecond with the core barely halting, the
+        // drive answering from 57.5 M. Fed a step at a time, `Quiet` must stay silent through all
+        // of it — including the worst window the real boot has, which is 61.7 % halted.
+        let mut q = Quiet::default();
+        let mut executed = 0u64;
+        let mut idle = 0u64;
+        for slice in 0..600u64 {
+            executed += 2_000_000;
+            // 61.7 % halted for one 8 M-step stretch in the middle, as measured at 164.7 M.
+            idle += if (80..84).contains(&slice) { 3_220_000 } else { 40_000 };
+            let ata = u64::from(executed > 57_500_000) * 700;
+            assert_eq!(
+                q.read(executed, idle, ata),
+                None,
+                "the boot settled at {executed}, and the real boot's own worst window is 61.7 % \
+                 halted with nothing finished"
+            );
+        }
+        // Then it stops working: 99.7 % of every window halted. The count it publishes is where
+        // the machine last did work, not where the window noticed — and the window that straddles
+        // the transition is mixed, so it re-arms once and the answer lands one window later. That
+        // costs nothing readable, and the bound is derived rather than picked: the most a window
+        // this program will accept as quiet can have executed is the fraction of it that was not
+        // halted.
+        let stopped_at = executed;
+        let mut answer = None;
+        for _ in 0..16 {
+            executed += 6_000;
+            idle += 2_000_000;
+            answer = answer.or(q.read(executed, idle, 768));
+        }
+        let settled = answer.expect("the machine went quiet and this never noticed");
+        let slack = QUIET_WINDOW_STEPS * (100 - QUIET_HALTED_PERCENT) / 100;
+        assert!(
+            settled >= stopped_at && settled - stopped_at <= slack,
+            "the boot cost was published as {settled}; the machine stopped working at \
+             {stopped_at}, and one quiet window can account for at most {slack} instructions"
+        );
+        // **The drive is half the condition.** The identical trace with a drive that never answered
+        // is a machine halted on an interrupt that is not coming, and it must teach nothing.
+        let mut hung = Quiet::default();
+        let (mut n, mut i) = (0u64, 0u64);
+        for _ in 0..64 {
+            n += 6_000;
+            i += 2_000_000;
+            assert_eq!(
+                hung.read(n, i, 0),
+                None,
+                "a machine halted with a drive that never answered was called booted"
+            );
+        }
+    }
+
+    /// **A park and a restore are a round trip, and §12.4's frame comes back with them.**
+    ///
+    /// It builds a real machine off a synthesised ROM and a scratch drive, parks it through the
+    /// shipped writer, and then asks the questions the *next launch* asks: is the pair whole, may
+    /// this restore, and is there a picture of the frame it stopped on.
+    ///
+    /// **How to make it go red**, in one line each:
+    ///
+    /// - Drop the frame write — delete the `write_parked_frame(cfg, frame)` call in
+    ///   `write_restore_point` — and the three assertions about the PNG fail: `Config::parked_frame`
+    ///   is not on disk, `machine::parked_frame` answers `None`, and the glass §12.4 promises has
+    ///   nothing on it. Nothing else in the suite notices, which is the point of asserting it here.
+    /// - Return `Some(now)` before `pair_with_drive` and `may_restore` goes false on the next
+    ///   launch while `Device::parked_at` says the machine was parked four minutes ago.
+    /// - Take [`SNAPSHOT_SLACK`] out of `snapshot_bytes` and the estimate goes **under** the real
+    ///   snapshot, which is a free-space check that passes and a write that fills the volume.
+    #[test]
+    fn a_park_and_a_restore_are_a_round_trip_and_the_frame_comes_back() {
+        let dir = std::env::temp_dir().join(format!("ipod-park-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let disk = dir.join("d.img");
+        std::fs::write(&disk, b"not really a drive").unwrap();
+
+        // **A boot image rather than a drive with an OS on it**, and the difference is what makes
+        // this test runnable at all: a synthesised ROM does a high-level boot, which reads the
+        // `!ATA` firmware directory out of the drive — several megabytes of RetailOS that no test
+        // fixture can carry. `BootTarget::Image` enters a raw ARM image at `0x10000000` instead,
+        // which is `rb-main.raw`'s route (§12.5), and sixteen words of `b .` is a program by every
+        // test `build` applies to one. What is under test is the **park**, and a parked machine is
+        // a `Machine` with regions in it whatever it was executing.
+        let boot = dir.join("tiny.raw");
+        std::fs::write(&boot, [0xfeu8, 0xff, 0xff, 0xea].repeat(16)).unwrap();
+
+        let cfg = Config {
+            nor: eapp_loader::nor::Source::Synthetic {
+                model: eapp_loader::nor::DEFAULT_MODEL.into(),
+                seed: 1,
+                serial: None,
+                guid: None,
+                splash: None,
+            },
+            disk: disk.clone(),
+            // Direct mode, which is the window's default: the working drive IS the user's image
+            // and the pair's other half is the stamp beside the snapshot.
+            workdisk: disk.clone(),
+            frozen: dir.join("m.frozen"),
+            snapshot: Some(dir.join("m.snap")),
+            snap_at: SNAP_AT,
+            clock: eapp_loader::CLOCK,
+            boot: BootTarget::Image(boot),
+            ..Default::default()
+        };
+        let m = build(&cfg, true).expect("a machine off a synthesised ROM and a raw boot image");
+
+        // Before: nothing on disk, so nothing to resume. This is what every device in a fresh
+        // library answers, and it is the control for every assertion below it.
+        assert!(!cfg.may_restore(true), "there is no snapshot yet");
+        assert_eq!(crate::machine::Restore::of(&cfg), crate::machine::Restore::Never);
+
+        // §12.4's frame: a diagnostic picture rather than a pretty one, so a channel swap or a
+        // stride error shows up in the comparison rather than passing as "some bytes came back".
+        let mut frame = vec![0u8; FB_W * FB_H * 3];
+        for y in 0..FB_H {
+            for x in 0..FB_W {
+                let p = (y * FB_W + x) * 3;
+                frame[p] = (x % 256) as u8;
+                frame[p + 1] = (y % 256) as u8;
+                frame[p + 2] = if x < y { 0xff } else { 0x11 };
+            }
+        }
+
+        let estimate = snapshot_bytes(&m);
+        let at = write_restore_point(&cfg, &m, Some(&frame)).expect("the park writes a pair");
+        assert!(at > 1_700_000_000, "the park time is not a Unix second: {at}");
+
+        // ── The next launch's questions ─────────────────────────────────────────────────────────
+        let snap = cfg.snapshot.clone().unwrap();
+        let actual = std::fs::metadata(&snap).expect("the snapshot").len();
+        assert!(
+            estimate >= actual,
+            "`snapshot_bytes` predicted {estimate} and the snapshot is {actual}: a free-space \
+             check against an under-estimate passes and then fills the volume"
+        );
+        assert!(
+            estimate <= actual + SNAPSHOT_SLACK * 4,
+            "the estimate is {estimate} against {actual}, which is loose enough to refuse a park \
+             that would have fitted"
+        );
+        assert!(
+            cfg.stamp().is_some_and(|p| p.exists()),
+            "the half that pairs the RAM with the drive is not on disk"
+        );
+        assert!(cfg.may_restore(true), "the pair is whole and this refuses to restore it");
+        assert_eq!(crate::machine::Restore::of(&cfg), crate::machine::Restore::Whole);
+
+        // ── §12.4 and §17 Q7: the frame it stopped on ───────────────────────────────────────────
+        let png = cfg.parked_frame().expect("a snapshot has a parked frame path");
+        assert_eq!(png, dir.join("m.parked.png"), "beside the snapshot, under its own stem");
+        assert!(png.exists(), "the park wrote no picture, so a parked glass is dark");
+        let mut seen = eapp_loader::settings::Presence::new();
+        assert_eq!(
+            crate::machine::parked_frame(&cfg, &mut seen),
+            Some(png.clone()),
+            "the writer and the reader disagree about where the frame is"
+        );
+        // It is a PNG a decoder reads — asserted against the shipped header rather than against
+        // `png::encode` calling itself correct.
+        let bytes = std::fs::read(&png).unwrap();
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "that is not a PNG");
+        assert!(
+            bytes.len() > FB_W * FB_H * 3,
+            "a stored-deflate PNG of a full frame cannot be {} bytes",
+            bytes.len()
+        );
+
+        // ── And a machine that had never drawn leaves no picture at all ─────────────────────────
+        //
+        // A black PNG and no PNG are different claims: §12.4's fallback for the second is *the
+        // glass is dark*, and writing a black frame instead would be the bench asserting that this
+        // is what the machine had on screen.
+        assert!(write_restore_point(&cfg, &m, None).is_some(), "the pair is still written");
+        assert!(
+            !png.exists(),
+            "a park with no frame left the PREVIOUS park's picture beside a new snapshot"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A synthesised ROM boots Apple's software as far as a real dump does — measured, on the
+    /// reference drive.**
+    ///
+    /// `#[ignore]`, and the name says which kind: it needs `resources/drives/`, which is not in git.
+    /// Run it by name from a release build, because a debug interpreter takes about twenty times as
+    /// long to do the same 400 M instructions:
+    ///
+    /// ```text
+    /// cargo test --release -p ipod-gui --bin ipod-emulator \
+    ///     a_synthesised_rom_boots_the_os_and_this_needs_resources -- --ignored --nocapture
+    /// ```
+    ///
+    /// The floor is `research/04` row 9's discriminator rather than a round number: **102** ATA
+    /// commands for a retail cold boot against **24** for the same boot with the IDE interrupt latch
+    /// ablated, where the 24 is Apple's bootloader painting its own screen and never handing
+    /// RetailOS the disk. Anything in the hundreds is RetailOS working the volume.
+    ///
+    /// **What it measured, 2026-08-25**, `--headless=400000000` at the real clock on
+    /// `ipod8g-retail.PRISTINE.img` with a synthesised `A146`:
+    ///
+    /// ```text
+    /// BudgetExhausted after 400 044 725 instructions
+    /// ata commands: 484   —  387 READ DMA · 91 WRITE DMA · 1 IDENTIFY · 5 SET FEATURES
+    /// 28 105 code buckets      unmapped: 0 reads, 0 writes
+    /// ```
+    ///
+    /// **How to make it go red**: put the OS back in a region beside SDRAM instead of writing it
+    /// into SDRAM — see `a_high_level_boot_survives_the_os_remapping_low_memory_onto_sdram`, which
+    /// is the same defect in twenty-one instructions and no `resources/` — and this run ends
+    /// `Lost(0x02000000)` after 8 388 485 instructions with **0** ATA commands and 2 097 122 code
+    /// buckets, every one of them a NOP slide.
+    #[test]
+    #[ignore = "needs resources/: a real drive image, which is not in git"]
+    fn a_synthesised_rom_boots_the_os_and_this_needs_resources() {
+        let pristine = eapp_loader::settings::repo_root()
+            .join("resources/drives/ipod8g-retail.PRISTINE.img");
+        assert!(
+            pristine.is_file(),
+            "this test was asked for by name and {} is not on this machine. See \
+             tools/ipod-boot/DISK-IMAGES.md.",
+            pristine.display()
+        );
+
+        let dir = std::env::temp_dir().join(format!("ipod-synth-boot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Never the source: RetailOS bootstraps its own volume during boot, and the reference image
+        // is `chmod 444` on purpose. `cp -c` carries the mode across, so the clone is made writable.
+        let work = dir.join("work.img");
+        clone_disk(&pristine, &work).expect("a writable clone of the reference drive");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&work, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        let cfg = Config {
+            // A synthesised ROM, which is the whole point: no Apple code anywhere in this machine
+            // except what comes off the drive.
+            nor: eapp_loader::nor::Source::Synthetic {
+                model: "A146".into(),
+                seed: 1,
+                serial: None,
+                guid: None,
+                splash: None,
+            },
+            disk: work.clone(),
+            workdisk: work.clone(),
+            frozen: dir.join("m.frozen"),
+            clock: eapp_loader::CLOCK,
+            boot: BootTarget::Os,
+            ..Default::default()
+        };
+        let mut m = build(&cfg, true).expect("a machine off a synthesised ROM and the reference drive");
+
+        // The run loop's own two calls: `call_with` for the first slice, `run` for the rest, and
+        // the entry is the PC `build` left rather than a second decision about where an OS starts.
+        const BUDGET: u64 = 400_000_000;
+        let pc = m.cpu.regs[15];
+        let mut stop = m.call_with(pc, &[0, 0, 0, 0], SLICE);
+        while stop == eapp_loader::Stop::BudgetExhausted && (m.executed as u64) < BUDGET {
+            stop = m.run(SLICE);
+        }
+
+        let ata = m.mem.ata.as_ref().map_or(0, |(_, a)| a.commands.seen());
+        assert!(
+            !matches!(stop, eapp_loader::Stop::Lost(_)),
+            "the machine left every mapped region after {} instructions with {ata} ATA commands: \
+             {stop:?}",
+            m.executed
+        );
+        assert!(
+            ata > 100,
+            "{ata} ATA commands in {} instructions. research/04 row 9: a retail cold boot is 102 \
+             and a bootloader that never hands over the disk is 24, so this is not a boot",
+            m.executed
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A machine that dies says so, and a machine that dies the same way again says that.**
+    ///
+    /// The log this came out of — a real first run, 2026-08-25 — is fifty lines of
+    ///
+    /// ```text
+    ///   high-level boot: 7561216 bytes of OS from …/my-5.5g.img -> 0x10000000
+    ///   identity: JQ652FQUX3N · 000A27CB851F81B9
+    /// ```
+    ///
+    /// twenty-five times over, and **nothing else**: no reason, no ending, no difference between
+    /// the first boot and the twenty-fifth. It was read as a retry loop, which is the only thing
+    /// that log can be read as, and it was twenty-five presses on a bench whose iPod died in a
+    /// third of a second each time.
+    ///
+    /// **How to make it go red**: delete the `println!("{}", deaths.note(&why))` from `session` and
+    /// the program is back to printing two lines per machine and none per death.
+    #[test]
+    fn a_machine_that_dies_the_same_way_twice_says_it_is_the_same_way() {
+        let mut d = Deaths::default();
+        let why = "Lost(33554432) at 8388485 instructions";
+        assert_eq!(d.note(why), format!("stopped: {why}"));
+        // The second one is not the first one repeated: it says *again*, with a count, because a
+        // person looking at two identical lines cannot tell a second failure from a second copy.
+        let again = d.note(why);
+        assert!(again.contains(why), "the reason went missing on the second death: {again}");
+        assert!(again.contains('2'), "the second death does not say it is the second: {again}");
+        assert!(d.note(why).contains('3'), "the count is not advancing past two");
+        // A different ending starts the count over — two failures are not one failure twice.
+        let other = d.note("Returned at 12 instructions");
+        assert_eq!(other, "stopped: Returned at 12 instructions");
+    }
+
+    /// **An OS that remaps low memory onto SDRAM and carries on running there** — the thing
+    /// RetailOS does 0x220 bytes into its own entry, in twenty-one instructions.
+    ///
+    /// This is what a high-level boot has to survive, and it is the whole of the failure the
+    /// window shipped with. Apple's bootloader is measured — `ipod-boot retail`, 58 READ DMA
+    /// commands ending at `0x10736000`, then `Running 'osos' 0 from 0x10000000` — putting the OS
+    /// **into SDRAM** and entering it there. RetailOS then programs the PP's remap windows at
+    /// `0xf000f000`, one of which is `0x00000000..0x01ffffff -> 0x10000000`, and from that
+    /// instruction on it executes from low addresses. `Memory::translate` runs ahead of the region
+    /// list, so after the remap *only what is really in SDRAM answers*.
+    ///
+    /// **How to make it go red**, and this is the bug it was written for: put the image back in a
+    /// region beside SDRAM —
+    ///
+    /// ```text
+    ///     m.mem.regions.push(Region { name: "osos-low", base: 0, data: osos.clone() });
+    ///     m.mem.regions.push(Region { name: "osos", base: load_at, data: osos });
+    ///     …and enter at 0 instead of `load_at + entry`
+    /// ```
+    ///
+    /// — and the sentinel below is never written. Region lookup is first-match and `map_hardware`
+    /// has already registered 64 MB of `sdram` at `0x10000000`, so the `osos` region is read by
+    /// nothing and SDRAM is zeros with a copy of the OS filed behind it. The remap then points the
+    /// low window at those zeros, the code goes out from under the PC, and the CPU NOP-slides
+    /// (`0x00000000` decodes as `andeq r0, r0, r0`) to the top of the window: on the real thing,
+    /// `Lost(0x02000000)` after 8 388 485 instructions, which is `(0x02000000 - 0x1ec) / 4`.
+    ///
+    /// The image here is twenty-one words rather than 7.5 MB of RetailOS, so this runs in the
+    /// ordinary suite with nothing out of `resources/` — but it is the same twenty-one
+    /// instructions and the same window.
+    #[test]
+    fn a_high_level_boot_survives_the_os_remapping_low_memory_onto_sdram() {
+        use arm7tdmi::Bus as _;
+
+        // Hand-assembled, because what is under test is where the bytes are rather than what they
+        // say, and a 21-word program that can be read in place beats a fixture nobody can check.
+        //
+        //   0x00  b 0x20                     the two branches `ipsw::image_header` looks for
+        //   0x04  b 0x20
+        //   0x08  b .                        the rest of the vector table
+        //   0x20  mov r0, #0xf0000000        MMAP window 0
+        //         orr r0, r0, #0xf000
+        //         mov r1, #0x3e00            logical: mask 0x3e000000 -> a 32 MB window at 0
+        //         mov r2, #0x10000000        physical: SDRAM
+        //         str r1, [r0]
+        //         str r2, [r0, #4]           the window is live from here
+        //         mov pc, #0x40              …so jump into the LOW view of this same image
+        //   0x40  mov r3, #0x10000000        the sentinel address, 0x10010000
+        //         orr r3, r3, #0x10000
+        //         mov r4, #0xa5
+        //         str r4, [r3]               "the low half ran"
+        //   0x50  b .
+        const OS: [u32; 21] = [
+            0xea00_0006, 0xea00_0005, 0xeaff_fffe, 0xeaff_fffe, 0xeaff_fffe, 0xeaff_fffe,
+            0xeaff_fffe, 0xeaff_fffe, 0xe3a0_04f0, 0xe380_0cf0, 0xe3a0_1c3e, 0xe3a0_2410,
+            0xe580_1000, 0xe580_2004, 0xe3a0_f040, 0xeaff_fffe, 0xe3a0_3410, 0xe383_3801,
+            0xe3a0_40a5, 0xe583_4000, 0xeaff_fffe,
+        ];
+        const SENTINEL_AT: u32 = 0x1001_0000;
+        const SPINNING_AT: u32 = 0x50;
+
+        let dir = std::env::temp_dir().join(format!("ipod-remap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let disk = dir.join("d.img");
+
+        // A drive is a file with a firmware partition at LBA 63 and an `!ATA` directory in it.
+        // Nothing else here reads the volume, so nothing else is written.
+        let image: Vec<u8> = OS.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let base = eapp_loader::ipsw::FIRMWARE_LBA as u64 * 512;
+        const DEV_OFFSET: u32 = 0x4400;
+        let mut entry = [0u8; 40];
+        entry[..4].copy_from_slice(b"!ATA");
+        // The tag is a little-endian u32 of four characters, so `osos` is stored backwards.
+        entry[4..8].copy_from_slice(b"soso");
+        entry[8..12].copy_from_slice(&0u32.to_le_bytes());
+        entry[0x0c..0x10].copy_from_slice(&DEV_OFFSET.to_le_bytes());
+        entry[0x10..0x14].copy_from_slice(&(image.len() as u32).to_le_bytes());
+        entry[0x14..0x18].copy_from_slice(&eapp_loader::ipsw::LOAD_ADDR_5G.to_le_bytes());
+        entry[0x18..0x1c].copy_from_slice(&0u32.to_le_bytes());
+        {
+            use std::io::{Seek, SeekFrom, Write};
+            let mut f = std::fs::File::create(&disk).unwrap();
+            f.set_len(1 << 20).unwrap();
+            f.seek(SeekFrom::Start(base + eapp_loader::ipsw::DIRECTORY_AT as u64))
+                .unwrap();
+            f.write_all(&entry).unwrap();
+            f.seek(SeekFrom::Start(base + DEV_OFFSET as u64)).unwrap();
+            f.write_all(&image).unwrap();
+        }
+
+        let cfg = Config {
+            nor: eapp_loader::nor::Source::Synthetic {
+                model: eapp_loader::nor::DEFAULT_MODEL.into(),
+                seed: 1,
+                serial: None,
+                guid: None,
+                splash: None,
+            },
+            disk: disk.clone(),
+            // Direct mode: the working drive IS this file, so `clone_disk` is a no-op and the
+            // machine reads what was just written.
+            workdisk: disk.clone(),
+            frozen: dir.join("m.frozen"),
+            clock: eapp_loader::CLOCK,
+            boot: BootTarget::Os,
+            ..Default::default()
+        };
+        let mut m = build(&cfg, true).expect("a machine off a synthesised ROM and a drive with an OS");
+
+        // **The OS is in SDRAM, before a single instruction runs.** This is the state Apple's
+        // bootloader leaves and the reason the rest of the test can pass: a region filed behind
+        // `sdram` reads as zero here.
+        assert_eq!(
+            m.mem.read32(eapp_loader::ipsw::LOAD_ADDR_5G),
+            OS[0],
+            "SDRAM does not hold the OS at its load address, so the remap below has nothing to \
+             point at"
+        );
+        // And the machine starts where the bootloader's console says it starts.
+        assert_eq!(
+            m.cpu.regs[15],
+            eapp_loader::ipsw::LOAD_ADDR_5G,
+            "the CPU was not left at the entry `Running 'osos' 0 from 0x10000000` names"
+        );
+
+        // The run loop's own entry: `session` reads the PC `build` left rather than deciding again.
+        let pc = m.cpu.regs[15];
+        let stop = m.call_with(pc, &[0, 0, 0, 0], 100_000);
+
+        assert_eq!(
+            stop,
+            eapp_loader::Stop::BudgetExhausted,
+            "the machine left every mapped region after remapping low memory onto SDRAM"
+        );
+        assert_eq!(
+            m.mem.read32(SENTINEL_AT),
+            0xa5,
+            "the half of the OS that runs from the LOW view never executed: after the remap, \
+             address 0 is SDRAM and SDRAM did not have the OS in it"
+        );
+        assert_eq!(
+            m.cpu.regs[15], SPINNING_AT,
+            "the CPU is not spinning where the image says it should be, so it reached the \
+             sentinel by some route this test does not describe"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

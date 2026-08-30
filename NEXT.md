@@ -200,6 +200,67 @@ the GUI was broken on `main` for an hour because a merge verified only one crate
 > handoff dump — and the Rockbox oracle's whole run log is byte-identical across the change. Those
 > are the things to check a run against; the instruction count is what to check the model against.
 
+## 0v — ~~Press Start on a synthesised iPod and it dies at 8.4 M instructions~~ · **FIXED 2026-08-25 — the OS was never in SDRAM**
+
+A clean first run, one press, and the bench said `stopped: lost 33554432 at 8388485 instructions`.
+`33554432` is `0x02000000` and it is a **PC**, not a size: `Stop::Lost(pc)`. The arithmetic names
+it — `8 388 485 × 4 = 33 553 940` and `0x02000000 − 33 553 940 = 0x1ec`, so the CPU walked from
+`0x1ec` to the top of a 32 MB window without taking a branch. A NOP slide; `0x00000000` decodes as
+`andeq r0, r0, r0`.
+
+**`emu::build` filed the OS behind SDRAM instead of putting it in.** The image was pushed as a
+region at `0x10000000` — where `map_hardware` has already registered 64 MB of `sdram`, and region
+lookup is first-match — so nothing ever read it, and a second live copy at 0 was what the CPU
+actually executed. About `0x220` bytes into its own entry RetailOS programs the PP's remap windows
+at `0xf000f000`, one of which is `0x00000000..0x01ffffff -> 0x10000000`. `Memory::translate` runs
+ahead of the region list, so from that instruction every low address resolved into the zeroed
+SDRAM and the code went out from under the program counter.
+
+The oracle is Apple's own bootloader, in `ipod-boot retail`: 58 `READ DMA` land the firmware
+partition at `0x10000000..0x10736000` and the console says `Running 'osos' 0 from 0x10000000`. So
+the high-level boot now writes the bytes **into** SDRAM and starts the CPU at `load_at + entry`,
+which is one storage with the remap pointing at it.
+
+| `ipod-emulator --headless=200000000`, same ROM and drive | before | after |
+|---|---|---|
+| ending | **`Lost(33554432)` @ 8 388 485** | `BudgetExhausted` @ 200 149 075 |
+| ata commands | **0** | **290** (264 of them `WRITE DMA` — RetailOS bootstrapping its volume) |
+| code buckets | 2 097 122, all of them the slide | 20 196 |
+| wheel | 0 `0x052a` | 1 |
+
+**Two things came with it, and both are the kind this file exists for.**
+
+1. **`ipod-boot warm --flash=X` ignored `--flash=X`.** Every recipe appends the caller's flags after
+   its own and `trace` reads a single-valued flag with `find_map` — the *first* match — so the argv
+   carried two `--flash=` and the recipe's won. The run printed the retail dump's model in its own
+   `sysinfo at …, from MA146` line while a synthetic ROM sat unused on the command line. Ninth
+   instrument. `resolve` now reads `--flash=`/`--disk=` as inputs (so `--print` says
+   `command line`) and `passthrough_wins` drops the recipe's duplicate.
+2. **A machine that stopped printed nothing.** `build` prints two lines per machine and the stop
+   path printed none, so the log of that first run is twenty-five identical boots and no reason for
+   any of them — which reads as a program restarting itself in a loop, and was reported as one.
+   **There is no retry loop**: `session` parks on `wait_after_stop` and only a power command moves
+   it, and every one of those is queued from `on_start_device`, reached from `pressed-centre` and
+   the Devices page's `activated`. Both are people. Twenty-five boots is twenty-five presses, which
+   is what somebody does when each press dies in a third of a second and the bench says the same
+   thing every time. The log says it now — `stopped: <reason>`, on the same stream as the boot line,
+   and the second one in a row says it is the second.
+
+**And the record it corrects.** `research/17`'s *RetailOS, high-level* row is ✅ on both synthetic
+columns and always was — for `ipod-boot warm`, which is a **different machine**. The remap this bug
+turns on is modelled only on the cold map (`map_hardware` sets `mmap_base` inside `if cold_boot`),
+so no warm recipe can reach it. Counted, with a control, on the same drive:
+
+| run | map | MMAP window rebuilds |
+|---|---|---|
+| the window's high-level boot, 200 M | cold | **408** |
+| `ipod-boot retail`, 600 M | cold | **56** |
+| `ipod-boot warm --flash=<synthetic>`, 600 M | warm | **0** |
+| `ipod-boot rockbox`, 200 M — the control, because Rockbox demonstrably runs here | warm | **0** |
+
+The retraction sits beside the claim in `research/17`. **§0y's table below is untouched by this**:
+those are Rockbox and iPodLinux warm boots on the warm map, and nothing in this fix moves them.
+
 ## 0 — ~~The Apple logo is missing from the boot~~ · **DONE 2026-08-14 — it was never missing, it was never placed**
 
 The 2 922-pixel frame this project has carried since research/03 as "the handoff frame" **is the
@@ -1065,7 +1126,7 @@ for a measurement by someone reading in a hurry, which is what R6 was written ab
 | `--storelog=PC` | every store *this instruction* makes — enumerates every object a constructor built | `store_pc_log` caps at **2 000 000**, and the header now prints the uncapped census with `SAMPLE, NOT A CENSUS` when it bites. Strides are computed over the kept rows only, deliberately — a gap straddling the cap boundary is an artefact of the log, not of the heap |
 | `--storeaddr=ADDR\|FILE` | every store that *lands here*, whatever made it — hundreds of disjoint words at once | — |
 | `--readlog=ADDR\|FILE` | who *consumed* this — the only way to trace a value that arrived by DMA | caps at **2 000 000**, and the ordered log still does. **The header is now the uncapped census and the per-reader table is counted on the read**, so the failure this row was written about — a control read 9 588 012 times returning a clean zero for four fifths of a run — can no longer be read as a measurement. Watching a hot address alongside a quiet one still fills the *sample* with the hot one, so R6's judgement half still applies |
-| `--enterlog=PC` | `r0`–`r3` and `lr` on **arrival**, so tail calls and virtual dispatch are not missed | the log caps at **65 536** entries and the detail print at **400 rows**. The `callers:` histogram at the bottom is **uncapped, and as of 2026-08-14 that is actually true** — it used to be tallied *from* the capped log, so this row's advice was only sound below 65 536 arrivals. It is now counted on arrival. **Read the histogram, not the rows**, and note that the arrivals header carries the census while the rows say when they are a sample |
+| `--enterlog=PC` | `r0`–`r3` and `lr` on **arrival**, so tail calls and virtual dispatch are not missed | the log caps at **65 536** entries and the detail print at **400 rows**. The `callers:` histogram at the bottom is **uncapped, and as of 2026-08-14 that is actually true** — it used to be tallied *from* the capped log, so this row's advice was only sound below 65 536 arrivals. It is now counted on arrival. **Read the histogram, not the rows**, and note that the arrivals header carries the census while the rows say when they are a sample. **And it reported an absence it could not observe until 2026-08-25**: the `NEVER REACHED` list was printed only when the WHOLE log was empty, so arming six addresses and having one of them fire 944 984 times made the other five vanish — a never-reached address is simply an absent row in the `callers:` histogram, indistinguishable from having forgotten the flag. It now prints every armed address with its tally, summed from the uncapped histogram, whether that tally is zero or not. Found by arming five candidate senders alongside a control that had to fire, which is the only reason the zeros beside it were believable |
 | `--watch-range=B:N` | writes to a span, distinguishing "wrote 0" from "never wrote" | `watch_range_log` caps at **4 096**, and the report prints only the **first** PC per word — so on a busy span it is an attribution instrument that cannot attribute. **2026-08-14: this cap, already documented in this row, produced "RetailOS never touches the VideoCore" (research/10 Addendum 25).** The bootloader's own firmware upload fills all 4 096 slots before RetailOS runs an instruction; `writes into the watched range: 4096` is a saturation flag, not a count. Retracted in Addendum 26 by arrival counters on the three functions that carry the `0x3000xxxx` literals. **Was blind to word-sized writes into a mapped region until 2026-08-13** — it only ever saw byte writes, because `read32`/`write32` hoist the `count()` call behind a list of consumers `watch_range` was not on. That produced "the engine at `0x60009000` is never programmed". Fixed; everything that concluded *absence* from it was re-run (Addendum 8b). **Both remaining defects fixed 2026-08-14**: the per-word table is counted on the store rather than tallied from the log, and it names **every** writing PC instead of the first. On the same command that produced the retracted claim it now reports **423 450 byte-writes across 5 words** (was `4096` across 4), with RetailOS's `0x00287ca8` / `0x00287c28` / `0x002879a4` beside the bootloader's `0x4000exxx` — so the instrument refutes its own claim |
 | `--input-regs=B:N` | which addresses the firmware reads that nothing ever wrote — hardware *inputs* | same 2026-08-13 bug and worse: `input_probe` was missing from the `read32` hoist too, so it undercounted reads as well as missing writes. It produced [research/09](research/09-what-the-hardware-must-supply.md)'s register table, which is superseded; the conclusion under that table survived re-measurement |
 | `i2c: N transfers` in the run report | which chips the firmware drives and which of their registers | **was a capped log length**: `i2c_log` stops at 4 096 and the 4 G baseline printed exactly that, so every histogram under it — by device, by register, by CTRL — was a picture of the first 4 096 transfers. `NEXT.md` §5 was about to fit a WM8758 model to a number out of it. **Fixed 2026-08-14**: the census is **4 933**, the tallies are kept on the bus, and the ordered log is labelled as the sample it is. At 600 M the log never fills (3 749), which is why the defect survived so long |
@@ -1090,6 +1151,11 @@ for a measurement by someone reading in a hurry, which is what R6 was written ab
 | snapshot / restore | 17 s to re-reach a 400 M state instead of 70 s | — |
 | `tcb SDRAM.bin` | **the whole scheduler out of a `--save-region=sdram` file, in 40 ms and no run.** Every TCB: name, priority, state, entry, tick, which RTXC primitive it is blocked in and on which semaphore/mailbox/resource — the frame walk of research/10 Addendum 7 §1 as a *census* rather than the one-task sample it had been three times. `--walk` adds the BL-preceded stack walk (and the `mov lr,pc; bx` form, which is how the thread trampoline at `0x000e1b10` calls a body handed to it at runtime, so pooled tasks get named). `--free` shows terminated slots — that is how "`APPLEBOOT` finished" became a field read. `--irq=OBJ` prints the interrupt controller's handler tables; `--findobj=OFF:LO:HI`, repeated, locates an object by several fields at once. Its control is that it reproduces Addendum 7 §2's five mailbox/semaphore numbers without being told them | — |
 | `dis --iscan=W[:MASK][:FOLLOW]` | every word-aligned instruction matching `W` under `MASK`, disassembled — register-wildcard search (`--iscan=0xe58000a0:0xfff00fff` = `str rN,[rM,#0xa0]`). **It exists because `grep -abo $'\xa0\x00\x84\xe5'` cannot work**: command substitution strips the NUL, the pattern shrinks to three bytes, and it silently reports zero for an instruction that occurs 114 times. Caught only by re-running it for an offset whose answer was already on screen | — |
+| `IPOD_LAYOUT=1` on the window | the work area this build can read, the display's usable height, **three window sizes**, the fit, the threshold, and every constant in `geometry::ALL` once | **it printed two of those three sizes as one for two revisions, and that produced a bug report for a defect that does not exist** — `window` is Slint's cache, which the winit event filter runs one event ahead of, and printing it beside a fit computed from a different source read as *"the window collapses to 880 × 400"*. It never did; an external accessibility read says 1180 × 878 outer, unchanging. There is a `platform` line now (`winit::Window::inner_size()`, asked now) and `measured` is compared against **it**, so a printed difference means a defect rather than a lag. **Still gated on the fit CHANGING** (`main.rs`: `if changed`), and the only term a resize moves is the too-short boolean — so a window that resizes without crossing that threshold prints nothing at all, and an absence of blocks is not an absence of events. **The dump kept that gate when the PUSH stopped sharing it**: §9.5's pane draws a sentence naming the height the window is standing in, so `push_fit` now runs on `changed \|\| fit.too_short` while the dump stays on `changed` alone — the two are deliberately different and the wider one is not the one that prints |
+| `tests/startup_fit.rs` | the only test in the workspace that **launches the window**; it drives a resize from outside the process and checks the program noticed | **desktop-only, and the Linux CI leg declares it cannot run it** (`IPOD_GUI_NO_DISPLAY=1` in `.github/workflows/ci.yml`) — so that leg's green says nothing about this file. The declaration is deliberate: the test used to *infer* a missing window server from the child exiting, and a real backend regression ("Could not initialize backend.", on a machine with a window server) was reported as a headless runner and passed green. Two more gaps, both stated in the file's header with retirement conditions: `ScaleFactorChanged` is unobserved, and the external resize is macOS-only |
+| `ipod-gui`'s `the_bench_boots_apples_software_and_this_needs_resources` | **the only thing that boots Apple's software from the window's own start path** — `invoke_start_device` against a real ROM dump and a copy-on-write clone of the reference drive, run to quiet, then §16.8's arrow key into the running machine | `#[ignore]`d, because it needs `resources/`: **no CI leg runs it and none can**. It is also the only instrument here that reads the drive's ATA census, the panel and `PC_DECODER` together — every other `Running` in that crate is a fabricated `Out` with no thread behind it. Measured 2026-08-24: **768 ATA commands, 75 267 non-black pixels, 4 co-processor commands / 2 frame updates**, which is research/10 Addendum 10 §8's fingerprint for this machine to the pixel, and **1 arrival at Apple's frame decoder `0x00281350`** from a key the window dispatched. Proved red four ways: the IDE-latch ablation (research/04 row 9 arm B — 2 916 lit pixels, exactly, held for 28.5 G), the key path's push to `Link` cut, and two model-level cuts. **And it fails under CPU contention, which looks exactly like a broken boot — ninth instrument, 2026-08-25.** Its stop condition is `moved < 4 000 000` instructions in a 5 s **wall** window, so a machine that is merely starved is declared quiet. Run inside `-- --ignored --test-threads=1` with a `cargo test --workspace`, a `cargo clippy` and the page shooter competing for the machine, it broke out at **163 265 477** instructions with 162 ATA commands, `76 800` lit pixels — every pixel, an early fill and not the 75 267-pixel menu — and panicked on `Booting { target: 1600000000 }`. The same binary run **alone**: 823 624 842 instructions, 765 ATA, 75 267 lit, 440.8 s, passes; identical to the same test on the commit before it, so the tree was never the variable. **Run it alone** |
+| `Phase::Booting` -> `Running` on the bench, and `Out::booted_at` behind it | when the cold boot ended, and what it cost — §12.3's progress denominator | **it ended the boot at 2 250 000 instructions of an 872 043 218-instruction boot**, with the drive unread and the panel black: `emu::boot_end`'s observed arm took the **first** `0x8001052a`, and on a cold boot from Apple's own NOR that one is the **boot ROM's** — `@2 211 983`, `pc = 0x4000e654`, measured with `--storeaddr=0x7000c120`. The constant it replaced was 1.9x out; that was 387x. **Fixed 2026-08-25**: the arm is now `emu::Quiet` — an 8 M-step window of `Machine::steps` that is 95 % **halted**, with at least one ATA command issued — and the bench leaves `Booting` at 823 624 842 with 765 ATA commands and 75 267 lit pixels, publishing 94.4 % of the boot instead of 0.26 %. **Two things this instrument still cannot see**: it is `#[ignore]`d like the row above, so no CI leg reads it; and `Quiet` answers one window late by construction, so the published count can trail the machine's last work by up to `QUIET_WINDOW_STEPS * (100 - QUIET_HALTED_PERCENT) / 100` instructions. research/10 Addendum 32; KNOWN-BUGS.md |
+| `ata commands` on the window's Readout (§12.8, BUS) | how many commands the running machine has issued to its drive | **was `Stats::data_reads` — the CLICK WHEEL's DATA register**, with `data_reads_ready` beside it as `ready`, so a machine whose drive had never answered showed a healthy four-figure count and research/04 row 9's whole A/B was unreadable from the window. The tell was in §12.8's own sketch: two rows claiming different things and carrying **611** twice. Fixed 2026-08-24 — `Stats::ata_commands` is `Ata::commands.seen()`, a census and not the 256-row `sample()`, and the wheel's three rows are named for the register they come off |
 
 
 *(This section carried a **second, near-duplicate** copy of the table until 2026-08-14 — same

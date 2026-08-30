@@ -279,8 +279,15 @@ fn main() {
         .find_map(|a| a.strip_prefix("--pp-dma-irq="))
         .and_then(|v| v.parse().ok());
     // Implies --novelty: the idle test is "no bucket was new", and only novelty tracking knows.
+    // LAST wins, not first. `ipod-film` prepends its own `--stop-when-idle=` (env `IDLE`, default
+    // 400 M) before the caller's passthrough flags, so `find_map` — first match — silently ignored
+    // an explicit `--stop-when-idle=` given after `--`. A film of a 30 G boot then ended at 511 M
+    // with the heuristic's own "BUSY, not blocked: raise --stop-when-idle" warning printed, which
+    // is the tool telling you to raise a value it will not let you raise. Shell convention is that
+    // the later flag wins; so is this now.
     if let Some(v) = args
         .iter()
+        .rev()
         .find_map(|a| a.strip_prefix("--stop-when-idle="))
     {
         m.stop_when_idle = v.replace('_', "").parse::<u64>().ok();
@@ -398,6 +405,13 @@ fn main() {
     // separate file. This is what a high-level boot does, and it is the difference between
     // "supply three files" and "supply one" -- the drive already carries the OS.
     let mut osos_entry: Option<u32> = None;
+    // **The image, held back until `map_hardware` has run.** On the `--boot-osos` path it is
+    // written INTO SDRAM rather than pushed in front of it — see [`eapp_loader::place_image`] for
+    // why, and for the two `Lost(…)` addresses that are what getting this wrong looks like.
+    let mut pending_osos: Option<(Vec<u8>, u32)> = None;
+    // Set once an image has actually been written into SDRAM, which is the fact the `--boot-osos`
+    // guard below needs and cannot get by looking at an address.
+    let mut image_placed = false;
     // `--osos-from-disk[=TAG]` — TAG defaults to `osos`. The one worth naming is **`aupd`**, Apple's
     // flash updater: it is the program that writes the NOR, and entering it directly is the only way
     // to ask what it would do on a machine whose ROM cannot launch it.
@@ -420,10 +434,20 @@ fn main() {
                     Ok((d, at, entry)) => {
                         let n = d.len();
                         m.symbols = eapp_loader::extract_symbols(&d, 0);
-                        match m.map_osos(d) {
+                        // A boot places the image in SDRAM after the map is built; everything else
+                        // keeps the region, which is what the eApp and `--native` paths read.
+                        let booting = args.iter().any(|a| a == "--boot-osos");
+                        let placed = if booting {
+                            pending_osos = Some((d, at));
+                            Ok(())
+                        } else {
+                            m.map_osos(d)
+                        };
+                        match placed {
                             Ok(()) => {
                                 println!(
-                                    "mapped `{fw_tag}` from the drive: {n} bytes at {at:#010x}"
+                                    "{} `{fw_tag}` from the drive: {n} bytes at {at:#010x}",
+                                    if booting { "loading" } else { "mapped" }
                                 );
                                 // **Honour the entry offset.** Zero for a stock image, non-zero once a
                                 // bootloader has been appended -- and ignoring it boots the OS sitting
@@ -623,28 +647,39 @@ fn main() {
                 });
             }
         }
-        map_hardware(&mut m, args.iter().any(|a| a == "--cold-boot"));
-        // **The part's own name, at the register Rockbox calls `PP_VER1`/`PP_VER2`.**
+        // **This argument is not "was `--cold-boot` given". It is "is this an OS boot".**
         //
-        // This used to be `0x00360000` — one byte in the right place and zeroes around it, shaped to
-        // pass Apple's bootloader's single test (it takes bits 16..23 of `0x70000000` and compares
-        // to `0x36`) and nothing else. That is not a chip id, and it is why the second reader of
-        // this register could not work: `debug-pp.c` spells an eight-character part name out of
-        // `PP_VER2` then `PP_VER1`, and out of `0x00360000` it spells `"\0\0\0\0\0006\0\0"`.
+        // `ipod-gui`'s `emu::build` calls the same function with `cfg.boot.is_os()`, and the two
+        // are different questions that happened to have the same answer on the recipe everybody
+        // ran. `map_hardware`'s flag decides where SDRAM's *storage* lives: true puts it at
+        // `0x10000000` with address 0 belonging to the NOR, which is the map a machine has out of
+        // reset; false puts the storage at 0 with `0x10000000` an alias.
         //
-        // The full string keeps Apple's byte exactly where Apple looks — `'6'` is the third
-        // character of `PP5026C-` — so the boot is unmoved, and everything else about the register
-        // stops being a hole. **The generation is inferred from Apple's own comparison, not from a
-        // datasheet**: the ROM's name table at `0x10ae4` lists `PP5020`, `PP5022` and `PP5026` and
-        // no `PP5021`, and its bootloader tests for `'6'`.
-        for (i, b) in 0x3232_432Du32.to_le_bytes().iter().enumerate() {
-            // PROBE
-            m.mem.write8(0x7000_0000 + i as u32, *b);
+        // A high-level boot — the OS lifted out of the drive's own firmware partition, which is
+        // what a synthesised ROM needs since it has no bootloader to do it — passes no
+        // `--cold-boot`, so it got the second map and RetailOS ran off the end of IRAM:
+        // **`Lost(0x40020000)` after 2 238 004 instructions, identical for two different drives**,
+        // which is the signature of a machine that never got far enough to tell them apart. With
+        // the right map, the same two runs are 531 ATA and 75 267 lit pixels against 290 and a
+        // stall — the window's own numbers, and the first time `trace` has been able to see the
+        // difference between them.
+        //
+        // **Not simply `true` here, and `ipod-boot flsh` is why.** `flsh` boots one of the NOR's
+        // own images and also comes through `--boot-osos`; the window passes `is_os() == false`
+        // for it deliberately, because that image is entered at `0x10000000` with the CPU already
+        // running and the first interrupt vectors to `0x18`, which has to be memory it can install
+        // a handler into. `emu.rs` records what forcing the other map does to it: `Lost(24)` the
+        // instant a button is pressed. So the test is whether the OS came off the **drive**, which
+        // is exactly the distinction `is_os()` draws.
+        let os_boot = args.iter().any(|a| a == "--cold-boot") || pending_osos.is_some();
+        map_hardware(&mut m, os_boot);
+        if let Some((data, at)) = pending_osos.take() {
+            eapp_loader::place_image(&mut m, at, &data);
+            image_placed = true;
         }
-        for (i, b) in 0x5050_3530u32.to_le_bytes().iter().enumerate() {
-            // 'P','P','5','0'
-            m.mem.write8(0x7000_0004 + i as u32, *b);
-        }
+        // The part's own name at `PP_VER1`/`PP_VER2`, from the one place that decides it —
+        // which byte, and why that one, is [`eapp_loader::seed_chip_id`].
+        eapp_loader::seed_chip_id(&mut m);
         for (base, size) in &maps {
             m.mem.regions.push(eapp_loader::Region {
                 name: "extra",
@@ -782,10 +817,32 @@ fn main() {
         // --bcm : model the video co-processor's host protocol instead of leaving it as memory.
         if args.iter().any(|a| a == "--bcm") {
             let mut b = eapp_loader::Bcm::new(0x3000_0000);
-            // --bcm-registry : publish the GENCMD service directory RetailOS reads at internal
-            // 0x1f0, and answer the ring RPC behind it. Off by default — every baseline number in
-            // research/20 was measured with the co-processor as a memory and a protocol.
-            b.registry = args.iter().any(|a| a == "--bcm-registry");
+            // --no-bcm-registry : do NOT publish the GENCMD service directory RetailOS reads at
+            // internal 0x1f0, nor answer the ring RPC behind it.
+            //
+            // **On by default since 2026-08-26, because the window has always had it on and the
+            // two disagreeing in silence is what `KNOWN-BUGS.md` was recording.** It was off here,
+            // with the reason *"every baseline number in research/20 was measured with the
+            // co-processor as a memory and a protocol"* — true, and those numbers were all taken
+            // on the machine that stopped at Apple's logo, so the baseline was not what it said.
+            //
+            // Measured the day it flipped, same NOR dump, same `PRISTINE` drive, one core,
+            // `BUDGET=1500000000`, panel read with `--bcm-dump=e0000:140:f0:`:
+            //
+            // ```text
+            //   without the registry   769 ata    2 916 lit   Apple's logo
+            //   with the registry      705 ata   75 267 lit   the language picker
+            // ```
+            //
+            // 75 267 is the window's own number, to the pixel. The panel is the whole difference —
+            // this decides whether RetailOS ever draws anything but the boot logo, and `--bcm` on
+            // its own is not enough to get there.
+            //
+            // The ablation recorded in `ipod-gui`'s `emu::build` — *"one flag, same ROM, same
+            // drive, same start path, the boot is indistinguishable"* — is a measurement of the
+            // WINDOW, which reaches 75 267 either way. That the two front ends need different
+            // things here is a real residual and is not closed by this line.
+            b.registry = !args.iter().any(|a| a == "--no-bcm-registry");
             if b.registry {
                 println!("  bcm gencmd registry: publishing a tag-2 display service");
             }
@@ -801,8 +858,19 @@ fn main() {
         //
         // The script is expanded and PRINTED before the run, so the schedule in the log is the
         // schedule that executed and a run is reproducible from its own output.
+        // **The wheel is modelled by default since 2026-08-26.** A real iPod always has one, the
+        // window has always built one unconditionally, and this required `--clickwheel` — which
+        // made it the last of the three knobs the two front ends disagreed about in silence.
+        // Measured, same NOR dump, same `PRISTINE` drive, one core, registry on: **705 ATA
+        // commands without the wheel and 769 with**, and 769 is the window's own number. That gap
+        // was the whole ATA residual left after the second-core and registry defaults were fixed.
+        //
+        // `--no-clickwheel` answers the four registers with zero again, which is a smaller machine
+        // than the part and an honest thing to be able to ask for — the same standing as
+        // `--no-second-core`. `--wheel-no-irq` is the narrower ablation and still means what it
+        // said: model the registers, never raise IRQ 40.
         let wheel_spec = args.iter().find_map(|a| a.strip_prefix("--wheel="));
-        if args.iter().any(|a| a == "--clickwheel") || wheel_spec.is_some() {
+        if !args.iter().any(|a| a == "--no-clickwheel") {
             let mut w = eapp_loader::ClickWheel::new(0x7000_c000);
             w.irq_enabled = !args.iter().any(|a| a == "--wheel-no-irq");
             let gap = args
@@ -894,16 +962,38 @@ fn main() {
         // single-core one. A wake ends the running core's turn, which is what makes Apple's
         // two-instruction hand-off through the entry vector at `0x40000050` observable.
         //
-        // **The default was flipped on evidence, not on principle**: at the moment of flipping,
-        // every recipe measured here is identical with one core and two — retail 599 ATA commands
-        // and 2 916 non-black pixels, cold-booted Rockbox 10 304 and 74 057, in **both** arms. So
-        // the flip re-baselines nothing, and `research/`'s existing numbers stand unchanged.
+        // **It was defaulted ON on 2026-08-19 on evidence, and the evidence expired.** The
+        // argument, kept verbatim because it was a good one: *at the moment of flipping, every
+        // recipe measured here is identical with one core and two — retail 599 ATA commands and
+        // 2 916 non-black pixels, cold-booted Rockbox 10 304 and 74 057, in both arms. So the flip
+        // re-baselines nothing.* `research/04` ledger row 7 carries the same sentence.
         //
-        // `--no-second-core` is arm B and is why this can still be A/B'd. It is not a bypass — it
-        // is a smaller machine than the part, which is a different and honest thing to be able to
-        // ask for. Note that asking for it puts ledger #7's `COP_STATUS` override back, because a
-        // machine with no coprocessor has to answer that register somehow.
-        if !args.iter().any(|a| a == "--no-second-core") {
+        // **Measured 2026-08-26, same NOR dump, same `PRISTINE` drive, `BUDGET=900000000`:**
+        //
+        // ```text
+        //                                 ata   lit      where
+        //   ipod-boot retail --no-second-core   766   —        past the logo, still going
+        //   ipod-boot retail (two cores)         70   —        Apple's logo
+        //   ipod-emulator --headless            769   75 267   the language picker, then Idle
+        //   ipod-emulator --headless --second-core  70    2 916   Apple's logo
+        // ```
+        //
+        // The arms are no longer identical; they differ by a factor of eleven, and they differ the
+        // same way in **both front ends**, so it is the coprocessor and not a harness. The one-core
+        // boot has moved a long way since the flip — 599 ATA and 2 916 pixels then, 769 and 75 267
+        // now, which is the Apple logo replaced by RetailOS's first interactive screen — and the
+        // two-core boot has not come with it. Whatever fixed the one-core path did not carry.
+        //
+        // So the default goes back to one core, on the same kind of evidence that moved it: a
+        // default that stalls RetailOS at the logo silently re-baselines every measurement taken
+        // through this program, and `KNOWN-BUGS.md`'s *"`ipod-boot retail` and `ipod-gui` do not
+        // boot the same machine"* is exactly that happening. `--second-core` asks for the bigger
+        // machine and is where the defect now lives; `--no-second-core` still says what it says.
+        //
+        // Note that one core puts ledger #7's `COP_STATUS` override back, because a machine with
+        // no coprocessor has to answer that register somehow. That is the cost of this, and it is
+        // written into the ledger rather than left here.
+        if args.iter().any(|a| a == "--second-core") {
             m.mem.second_core = true;
             if let Some(q) = args.iter().find_map(|a| a.strip_prefix("--quantum=")) {
                 m.mem.quantum = q.parse().unwrap_or(eapp_loader::Machine::QUANTUM).max(1);
@@ -1161,7 +1251,20 @@ fn main() {
         // in the cold-boot recipe (ledger #14). A cold boot enters the NOR at 0 and the ROM loads
         // the image itself; only a warm boot, which starts at 0x10000000 with SDRAM freshly zeroed,
         // has nothing to execute. Say so, rather than running 200M instructions of zeros.
-        if !cold && !restored && flash_entry.is_none() && m.mem.region_named("osos").is_none() {
+        //
+        // **Two ways an image can be present, and the region list only knows one of them.** This
+        // tested `region_named("osos")` alone, which was complete while every image was *pushed as
+        // a region*. A boot image is now written INTO SDRAM instead (see
+        // [`eapp_loader::place_image`]), and against that the region test refused a machine that
+        // was in fact loaded and ready at its entry.
+        //
+        // Probing the address directly was tried first and is not reliable here: SDRAM's storage
+        // is at 0 with `0x10000000` an alias, or the other way round, depending on `--cold-boot`,
+        // and `peek32(entry)` came back empty on a machine whose image was demonstrably there. So
+        // the guard asks the code that did the placing, and keeps the region test for the paths
+        // that still use one.
+        let have_image = image_placed || m.mem.region_named("osos").is_some();
+        if !cold && !restored && flash_entry.is_none() && !have_image {
             eprintln!(
                 "--boot-osos enters {entry:#010x}, where a warm boot has only zeroed SDRAM.\n\
                  Give it an image: --osos=FILE, or --cold-boot so the ROM loads one off --disk."
@@ -1647,14 +1750,19 @@ fn main() {
                             _ => 0,
                         };
                         let mut j = i + 1;
-                        while stride != 0 {
-                            match (run_of(&rs[j - 1]), rs.get(j).and_then(run_of)) {
-                                (Some((pb, _)), Some((nb, nl)))
-                                    if nl == halfwords && nb as i64 - pb as i64 == stride =>
-                                {
-                                    j += 1
+                        // `stride` is decided above and never moves, so this is a guard rather than
+                        // a loop condition — written as `while` it reads as one, and under
+                        // rustc 1.95 `clippy::while_immutable_condition` is a deny-level error.
+                        if stride != 0 {
+                            loop {
+                                match (run_of(&rs[j - 1]), rs.get(j).and_then(run_of)) {
+                                    (Some((pb, _)), Some((nb, nl)))
+                                        if nl == halfwords && nb as i64 - pb as i64 == stride =>
+                                    {
+                                        j += 1
+                                    }
+                                    _ => break,
                                 }
-                                _ => break,
                             }
                         }
                         let n = j - i;
@@ -2286,8 +2394,9 @@ fn main() {
             );
             for (lr, p) in m.print_sites.iter() {
                 let mut txt = String::new();
-                let mut a = *p;
-                for _ in 0..48 {
+                // The address IS the counter, so it says so: `0..48` counted nothing and `a` was
+                // walked by hand beside it.
+                for a in (*p..).take(48) {
                     let c = m.mem.read8(a);
                     if c == 0 {
                         break;
@@ -2297,7 +2406,6 @@ fn main() {
                     } else {
                         '.'
                     });
-                    a += 1;
                 }
                 println!("  from {lr:#010x}  str {p:#010x}  {txt:?}");
             }
@@ -2339,6 +2447,7 @@ fn main() {
         // this call --break, --watch and --dump are accepted, do fire, and print nothing — which
         // reads as "breakpoints do not work on the boot path" and cost a long detour to diagnose.
         report_break_watch(&mut m);
+        report_ppm(&args, &m);
         return;
     }
 
@@ -2400,6 +2509,7 @@ fn main() {
             println!("    {addr:08x}  {}", disasm::arm(w, *addr, None));
         }
         report_unmapped(&mut m);
+        report_ppm(&args, &m);
         return;
     }
 
@@ -2477,16 +2587,7 @@ fn main() {
         "frames presented: {}  clears: {}  quads drawn: {}",
         m.frames_presented, m.clears, m.quads_drawn
     );
-    if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--ppm=")) {
-        match fs::write(path, m.framebuffer_ppm()) {
-            Ok(()) => println!(
-                "wrote {path} ({}x{})",
-                eapp_loader::FB_WIDTH,
-                eapp_loader::FB_HEIGHT
-            ),
-            Err(e) => eprintln!("{path}: {e}"),
-        }
-    }
+    report_ppm(&args, &m);
     if !m.output.is_empty() {
         println!(
             "\n--- the game's own debug output ---\n{}",
@@ -3040,6 +3141,28 @@ fn report_unmapped(m: &mut eapp_loader::Machine) {
     }
 }
 
+/// Write the panel to a PPM if `--ppm=` asked for one.
+///
+/// Shared for the same reason as [`report_break_watch`], and found the same way: `--boot-osos`
+/// returns from `main` early, so while this lived at the bottom of `main` the flag was **accepted,
+/// silent and did nothing** on the one recipe anybody points it at. Asked for the panel of a
+/// 766-ATA retail boot on 2026-08-26 and got "no such file" — the run had already exited through
+/// the early return. An instrument that writes no file and reports no error is indistinguishable
+/// from a boot that drew nothing, which is the question it was being asked.
+fn report_ppm(args: &[String], m: &eapp_loader::Machine) {
+    let Some(path) = args.iter().find_map(|a| a.strip_prefix("--ppm=")) else {
+        return;
+    };
+    match fs::write(path, m.framebuffer_ppm()) {
+        Ok(()) => println!(
+            "wrote {path} ({}x{})",
+            eapp_loader::FB_WIDTH,
+            eapp_loader::FB_HEIGHT
+        ),
+        Err(e) => eprintln!("{path}: {e}"),
+    }
+}
+
 /// Print whatever `--break` and `--watch` collected.
 ///
 /// Shared because `--boot-osos` returns from `main` early; when this only existed at the bottom
@@ -3068,7 +3191,14 @@ fn report_break_watch(m: &mut eapp_loader::Machine) {
                 r[0], r[1], r[2], r[3], r[14]
             );
         }
-        for (pc, regs) in m.break_log.iter().take(0) {
+        // **The whole register file, for the last few hits.** This loop was `.take(0)` — disabled
+        // by neutering it rather than deleting it, so it read as a feature and emitted nothing.
+        // The comment above is right that a 16-register dump of the *first* 64 hits answers
+        // nothing; the answer is in the last ones, and `r4` is where these objects live, which
+        // `r0..r3` above cannot show. Four is enough to see an object and not enough to bury the
+        // tally.
+        let full = m.break_log.len().saturating_sub(4);
+        for (pc, regs) in m.break_log.iter().skip(full) {
             println!("  at {pc:#010x}");
             for row in 0..4 {
                 let cells: Vec<String> = (0..4)
@@ -3200,11 +3330,31 @@ fn report_break_watch(m: &mut eapp_loader::Machine) {
     // Armed and never reached is a RESULT, and it used to print nothing at all — indistinguishable
     // from having forgotten the flag, which is the difference between "the task never ran" and
     // "you did not ask". Say it.
-    if !m.enter_pcs.is_empty() && m.enter_log.is_empty() {
-        println!("\n--- arrivals at watched addresses: 0 ---");
+    //
+    // **And say it per address, not only when the whole log is empty**, which is the half this
+    // instrument was missing until 2026-08-25 and which cost a measurement its control. Arm six
+    // addresses, have one of them reached 944 984 times, and the other five vanished from the
+    // report entirely: the `if` below used to be `m.enter_log.is_empty()`, so a run with any
+    // arrival at all printed a caller census in which a never-reached address is simply an absent
+    // row — the exact shape of AGENTS.md §6's *an instrument reporting an absence it could not
+    // observe*. It was found by arming the five senders of `0x052a` alongside a control that had
+    // to fire, which is the only reason the zero beside it was believable.
+    //
+    // The tally is summed from `enter_callers`, which is uncapped, so a saturated 65 536-entry log
+    // cannot turn a reached address into an unreached one.
+    if !m.enter_pcs.is_empty() {
+        use std::collections::BTreeMap;
+        let mut hits: BTreeMap<u32, u64> = BTreeMap::new();
+        for ((pc, _), n) in &m.enter_callers {
+            *hits.entry(*pc).or_insert(0) += n;
+        }
+        println!("\n--- addresses armed with --enterlog: {} ---", m.enter_pcs.len());
         for pc in &m.enter_pcs {
             let name = m.symbolise(*pc).unwrap_or_else(|| "unnamed".into());
-            println!("  {pc:#010x}  {name}  NEVER REACHED");
+            match hits.get(pc) {
+                Some(n) => println!("  {pc:#010x}  {name}  x{n}"),
+                None => println!("  {pc:#010x}  {name}  NEVER REACHED"),
+            }
         }
     }
     if !m.enter_log.is_empty() {

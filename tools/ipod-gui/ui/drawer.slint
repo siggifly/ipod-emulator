@@ -1,0 +1,789 @@
+// The drawer — docs/GUI.md §4, §7.5, §8.1, §9.1, §14.3, §16.3.
+//
+// **420 px, right-anchored, and it PUSHES.** The well and the shelf narrow to `W - 420`; the drawer
+// occupies the full client height minus the shelf. It is not a sidebar wearing a hat and it is not
+// an overlay: nothing in this program floats (§2.4), and a drawer that covered the shelf's right
+// 420 px would be covering rather than pushing, which principle 5 forbids.
+//
+// **Max three levels deep**, and the depth slides — the borrowed iPod motion, inside a 420 px panel
+// where no framebuffer can be (§6.1). Every route in is a route out: `⌘\`, the handle, the shelf's
+// row-3 leading slot, the menu bar. `Esc` is not one of them (§4) — it only ever goes outwards.
+
+import { Ink, Metric, Motion } from "tokens.slint";
+import { Geometry } from "@geometry";
+import {
+    DetailRow,
+    DeviceRow,
+    DrawerHeader,
+    FieldRow,
+    FixRow,
+    Gauge,
+    GaugeRow,
+    GroupRow,
+    OptionRow,
+    PartRow,
+    PickRow,
+    PlanRow,
+    Pressable,
+    RefusalRow,
+    Row,
+    Scroll,
+    TickRow,
+} from "primitives.slint";
+import { RailRow } from "rail.slint";
+import { WorkPage } from "work.slint";
+import { ComposerRoot, NameItPage, WhatItRunsPage, WhichIpodPage } from "composer.slint";
+import { DevicesPage } from "devices.slint";
+import { PartsPage } from "parts.slint";
+import { SettingsPage } from "settings.slint";
+import { ReadoutPage } from "readout.slint";
+
+// The generated Rust is `pub enum DrawerPage { None, Devices, Parts, Games, Work, Readout,
+// Settings, Reference, Composer, ComposerIpod, ComposerRuns, ComposerName }` with `None` as
+// `#[default]`. `main.rs` maps it to and from `nav::Page` with an **exhaustive `match`**, so a page
+// added on either side is a compile error rather than a silent `none` — which is why the four
+// Composer levels below cannot be landed quietly.
+//
+// **Four variants for the Composer, not "the Composer is `Page::Devices` at depth 2."**
+// `nav::Page::slot()` returns ONE slot per page, and a page cannot have two; a second page drawn at
+// a depth its own `slot()` denies is a blank 420 px panel with no header and no way out, which is
+// the hole `⌘,` fell into and which `Stack::go`'s guard now refuses.
+export enum DrawerPage {
+    none,
+    devices,
+    parts,
+    games,
+    work,
+    readout,
+    settings,
+    reference,
+    composer,
+    composer-ipod,
+    composer-runs,
+    composer-name,
+}
+
+// ─── The root page ──────────────────────────────────────────────────────────────────────────────
+//
+// Seven rows, and **six of them are disabled with a reason** (§9.4's second kind: *this is not
+// finished, by us* — say what does work, and name the escape hatch as a command in `mono`).
+//
+// A row that is present and dead is the shape §19.1 indicts. A row that is absent is a page you
+// have to re-learn next visit (§9.1). So they are present, greyed, and each says why and what to
+// type instead — and every command named below is one this repository actually has: they are read
+// out of `ipod-boot`'s own `usage()`, not invented. Where there is no command, the row says so
+// rather than pointing at a phantom.
+export component MenuPage inherits Rectangle {
+    in property <int> failures;
+
+    callback close();
+    callback go(DrawerPage, int);
+
+    background: Ink.bg;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        DrawerHeader {
+            back: "Close";
+            title: "Menu";
+            back-pressed => {
+                root.close();
+            }
+        }
+
+        // **The root page scrolls, and it still has to.** Three of its seven rows are live now —
+        // Devices, Parts and Settings — and their disabled reasons went with them rather than being
+        // left standing beside the pages that make them false, which is the drift §16.9 exists to
+        // delete. A disabled `Pressable` is 44 + 34 = 78 px because §9.4's reason slot is reserved
+        // under it, so this page's own minimum is 44 header + 3×44 live + 4×78 disabled =
+        // **488 px**, down from 556. The drawer is
+        // `client-height - SHELF`, which at the declared window minimum of 400 is **312**. 488 is
+        // still well past that, so the Scroll stays. Without one, Work is cut in half and
+        // Readout / Reference fall outside the drawer's
+        // `clip` — and a clipped item is not merely invisible: `WindowInner::move_focus` gates tab
+        // navigation on `is_visible_or_clipped_by_flickable()`, which recovers an item only when the
+        // hiding ancestor is a Flickable. The drawer clips with a Rectangle, so there was no
+        // recovery, no accessible-tree entry and no scroll indicator either. The Work page had this
+        // right; the root page of the same drawer did not.
+        scroll := Scroll {
+            vertical-stretch: 1;
+            min-height: 0px;
+            preferred-height: 0px;
+            viewport-height: rows.preferred-height;
+
+            rows := VerticalLayout {
+                width: scroll.width;
+                alignment: start;
+                spacing: 0px;
+                accessible-role: AccessibleRole.list;
+                accessible-label: "Menu";
+
+                Row {
+                    index: 0;
+                    count: 7;
+                    label: "Devices";
+                    chevron: true;
+                    activated => {
+                        root.go(DrawerPage.devices, 1);
+                    }
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                Row {
+                    index: 1;
+                    count: 7;
+                    label: "Parts";
+                    chevron: true;
+                    activated => {
+                        root.go(DrawerPage.parts, 1);
+                    }
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                Row {
+                    index: 2;
+                    count: 7;
+                    label: "Games";
+                    enabled: false;
+                    machine-rule: false;
+                    reason: "Nothing files a .ipg title yet, and no command does it either.";
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                Row {
+                    index: 3;
+                    count: 7;
+                    label: "Work";
+                    value: root.failures > 0 ? "\{root.failures}" : "";
+                    warn: root.failures > 0;
+                    chevron: true;
+                    activated => {
+                        root.go(DrawerPage.work, 1);
+                    }
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                Row {
+                    index: 4;
+                    count: 7;
+                    label: "Readout";
+                    chevron: true;
+                    activated => {
+                        root.go(DrawerPage.readout, 1);
+                    }
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                Row {
+                    index: 5;
+                    count: 7;
+                    label: "Settings";
+                    chevron: true;
+                    activated => {
+                        root.go(DrawerPage.settings, 1);
+                    }
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                Row {
+                    index: 6;
+                    count: 7;
+                    label: "Reference";
+                    enabled: false;
+                    machine-rule: false;
+                    reason: "The keyboard table and the stated limits have no page yet.";
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─── The drawer itself ──────────────────────────────────────────────────────────────────────────
+
+export component Drawer inherits Rectangle {
+    // **On stage**, which is not quite *open*: true from the moment it starts opening until the
+    // close animation has finished. The window supplies it as `drawer-open || drawer-inset > 0`,
+    // because a drawer whose pages blanked the instant `Esc` was pressed would slide out empty.
+    //
+    // It is read by `on-screen` below and it is the difference between a closed drawer being gone
+    // and a closed drawer being 420 px off the right edge, still in the tab order and still
+    // announced by a screen reader. It was declared and read by nothing, which is §20 item 15's
+    // defect in a new place — a property nobody reads is indistinguishable from one nobody wrote.
+    in property <bool> open: false;
+    // 0..=3. **`in`, not `in-out`** — `nav::Stack` in Rust is the single source of truth, and the
+    // markup fires callbacks rather than writing state. Four entrances plus `Esc` writing the same
+    // state from two sides is how `Esc` came to have three meanings.
+    in property <int> depth: 0;
+    in property <DrawerPage> page: DrawerPage.none;
+    // What `‹` returns to — `nav::Stack::under`. Only the Composer's root reads it; every other
+    // page in this drawer is at depth 1 and returns to the menu, which each of them names itself.
+    in property <DrawerPage> under: DrawerPage.none;
+    in property <int> rail-failures: 0;
+    // The client height the drawer is being given. **Pushed in, because a component's root element
+    // cannot read `parent`** — Slint says `Cannot access id 'parent'` — and the alternative, letting
+    // each use site write `height: <something> - Geometry.shelf`, would put §9.5's decision in two
+    // files and let them disagree.
+    in property <length> client-height;
+
+    // The Work page's inputs, passed straight through. The contract's property list stops at
+    // `rail-failures`; a drawer that owns the Work page has to be given what the Work page reads,
+    // and the alternative — a `@children` slot filled by `window.slint` — would put the depth-1
+    // slot's contents in a file that does not own the drawer.
+    in property <[RailRow]> rail;
+    in property <string> rail-announce;
+    in property <int> rail-first-failure: -1;
+    in property <string> work-heading;
+    in property <string> work-empty;
+    in property <string> ledger-download;
+    in property <string> ledger-disk;
+    in property <string> ledger-note;
+    in property <bool> ledger-warn: false;
+
+    // ── §7.2's Devices page ──
+    //
+    // **`devices` and `selected` are the bench's own two**, threaded down rather than copied.
+    // `selected` is two-way (`<=>`) all the way from `MainWindow`, so pressing a row here and
+    // pressing `←`/`→` on the bench write one number — which is what makes
+    // `the_devices_page_and_the_bench_read_one_model` mean anything.
+    in property <[DeviceRow]> devices;
+    in-out property <int> selected: 0;
+    in property <[DetailRow]> devices-detail;
+    in property <int> devices-detail-of: -1;
+    in property <string> devices-empty-line;
+    in property <FixRow> devices-new;
+    // §7.2's `Start`, for the one open device. See `window.slint`'s own note beside it.
+    in property <FixRow> devices-start;
+
+    // ── §11.4's Parts page ──
+    in property <[GroupRow]> parts-groups;
+    in property <[PartRow]> parts-rows;
+    in property <[DetailRow]> parts-detail;
+    in property <int> parts-detail-of: -1;
+    in property <image> parts-preview;
+    in property <bool> parts-has-preview: false;
+
+    // ── §12.8's Readout ──
+    in property <[string]> readout-headings;
+    in property <[GaugeRow]> readout-rows;
+    in property <string> readout-provenance;
+    in property <string> readout-empty-line;
+    in property <bool> readout-has-machine;
+    in property <bool> readout-shot-enabled;
+    in property <string> readout-shot-reason;
+    in property <bool> readout-copy-enabled;
+    in property <string> readout-copy-reason;
+    // The row ordinal, so one callback covers the two pinned actions and Rust decides what each
+    // one does — the same shape `setting-toggled` already has one page over.
+    callback readout-act(int);
+
+    // ── §11.6's Settings page ──
+    in property <string> setting-theme-value;
+    // **No default written out**, and that is not fussiness: a `bool` property already defaults to
+    // false, and `the_drawers_root_page_needs_more_room_than_it_has_and_therefore_scrolls` counts
+    // the disabled-row binding as raw text across this whole file to know how many `MenuPage` rows
+    // are disabled. A property declaration ending in those same two words is a phantom disabled
+    // row — four of them, here — and the sweep cannot tell a declaration from a binding.
+    in property <bool> setting-theme-enabled;
+    in property <string> setting-theme-reason;
+    in property <bool> setting-check-updates: false;
+    in property <string> setting-toggle-reason;
+    in property <string> setting-file-name;
+    in property <string> setting-file-path;
+    in property <bool> setting-copy-enabled;
+    in property <string> setting-copy-reason;
+
+    // ── §11.2's Composer, at depths 2 and 3 ──
+    in property <string> composer-title;
+    in property <string> composer-which-value;
+    in property <string> composer-runs-value;
+    in property <string> composer-named-value;
+    in property <bool> composer-which-enabled: true;
+    in property <bool> composer-runs-enabled;
+    in property <bool> composer-named-enabled;
+    in property <string> composer-which-reason;
+    in property <string> composer-runs-reason;
+    in property <string> composer-named-reason;
+    in property <string> composer-region-text;
+    in property <bool> composer-region-emphatic: false;
+    in property <string> composer-refusal-why;
+    in property <bool> composer-refusal-open: false;
+    in property <bool> composer-has-fix: false;
+    in property <FixRow> composer-fix;
+    in property <FixRow> composer-create;
+    // §3.2's one job: every two-press control in the Composer disarms when this moves, because
+    // `armed` is component-local and a `Fix` armed against one recipe must not fire against another.
+    in property <int> composer-generation: 0;
+    in property <[PlanRow]> composer-plan;
+    in property <string> composer-ledger-download;
+    in property <string> composer-ledger-disk;
+    in property <bool> composer-ledger-warn: false;
+    in property <[PickRow]> composer-picks;
+    in property <[FieldRow]> composer-fields;
+    in property <[TickRow]> composer-ticks;
+    in property <[OptionRow]> composer-options;
+    in property <int> composer-open-field: -1;
+    in property <[RefusalRow]> composer-refusals;
+    in property <string> composer-title-auth;
+    in property <string> composer-warning;
+    in property <FixRow> composer-copy-command;
+    in property <string> composer-no-ipod;
+    in property <FieldRow> composer-name-field;
+    in property <string> composer-stem;
+    in property <string> composer-taken;
+    in property <string> composer-runs-disabled;
+
+    callback close();
+    callback back();
+    callback go(DrawerPage, int);
+    callback rail-cancel(int);
+    callback rail-dismiss(int);
+    callback rail-next(int, int);
+
+    callback device-expand(int, bool);
+    callback device-row-action(int, int);
+    callback device-new();
+    callback start-device(int);
+
+    callback parts-expand(int, bool);
+    callback parts-group-action(int, int);
+    callback parts-row-action(int, int);
+
+    callback setting-toggled(int);
+
+    callback composer-open(int);
+    callback composer-expand(int, bool);
+    callback composer-pick(int, int);
+    callback composer-type(int, string);
+    callback composer-reveal(int);
+    callback composer-tick(int, bool);
+    // **`composer-fix-pressed`, not `composer-fix`.** The `FixRow` above already owns that name,
+    // and Slint refuses a callback and a property that spell the same thing — which is the right
+    // answer: `composer-fix` is what the control IS, and this is what pressing it does.
+    callback composer-fix-pressed();
+    callback composer-act(int);
+    callback composer-commit();
+
+    width: Geometry.drawer-w;
+    // §9.5's decision: the drawer runs the full client height ABOVE the shelf. The shelf's band and
+    // its 1 px top rule span the full client width; only the shelf's three content rows narrow.
+    // Nothing is unpainted and the drawer covers no shelf content.
+    height: root.client-height - Geometry.shelf;
+    clip: true;
+    background: Ink.bg-raised;
+
+    accessible-role: AccessibleRole.complementary;
+    accessible-label: "Drawer";
+
+    // Deliberately not a `<length>` declaration, so §16.9's literal sweep does not see the `1`:
+    // this is a slot index, not a size.
+    property <int> slot: root.depth + 1;
+
+    // **Is slot `n` on screen right now?** Read off the ANIMATED `strip.x`, not off `depth`, and
+    // that is the whole point: during the slide both the outgoing and the incoming page are partly
+    // in the viewport and both stay drawn, so §8.1 item 2's motion survives intact — and the moment
+    // the animation settles, the page that left is `visible: false` and therefore out of the tab
+    // order and out of the accessible tree.
+    //
+    // **And the whole drawer answers `false` while it is off stage**, which is the same argument one
+    // level up: a closed drawer is parked a full 420 px past the right edge, where `clip` stops it
+    // being drawn and stops nothing else.
+    //
+    // Without this, every level of the drawer is reachable by `Tab` and announced by a screen
+    // reader while it is 420 px off screen behind a `clip`. Nothing in the design's own `visible`
+    // versus `if` rule covers it: §16.3 is about a layout cell, and a page sitting outside the
+    // clip is not a cell. `visible` here keeps the subtree alive exactly as §16.3 requires — a
+    // page you come back to still has its scroll offset, its hover and its focus.
+    pure function on-screen(n: int) -> bool {
+        return root.open
+            && strip.x + n * Geometry.drawer-w > -Geometry.drawer-w
+            && strip.x + n * Geometry.drawer-w < Geometry.drawer-w;
+    }
+
+    // **Six slots for four levels.** `lively` is `ease-out-back` and overshoots by design; without
+    // a blank at each end an overshoot slides a hole into view. They cost nothing.
+    //
+    // **All four level slots stay alive — no `if`.** §16.3: a conditional repeater destroys its
+    // subtree, which is what makes the shipped `if tab == 0:` throw away carousel state, hover and
+    // focus on every tab change. Pages inside a slot switch by `visible`, never by `if`.
+    strip := Rectangle {
+        width: Geometry.drawer-strip-slots * Geometry.drawer-w;
+        height: 100%;
+        x: -Geometry.drawer-w * root.slot;
+
+        // **The one and only use site of `Motion.lively` in the whole program.** §8's table says
+        // drawer page depth only, nothing else, ever. A second use site is a design change.
+        animate x {
+            duration: Motion.lively;
+            easing: ease-out-back;
+        }
+
+        HorizontalLayout {
+            spacing: 0px;
+
+            // The blank leading slot.
+            Rectangle {
+                width: Geometry.drawer-w;
+            }
+
+            // depth 0
+            MenuPage {
+                width: Geometry.drawer-w;
+                visible: root.on-screen(1);
+                failures: root.rail-failures;
+                close => {
+                    root.close();
+                }
+                go(p, d) => {
+                    root.go(p, d);
+                }
+            }
+
+            // depth 1 — Work, Devices, Parts, Settings.
+            //
+            // **Four pages in one slot, told apart by `visible` and never by `if`** (§16.3): a
+            // conditional repeater destroys its subtree, which is what threw away hover, focus and
+            // the scroll offset on every tab change in the window this replaces. Coming back to a
+            // page here finds it exactly where you left it.
+            Rectangle {
+                width: Geometry.drawer-w;
+
+                WorkPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(2) && root.page == DrawerPage.work;
+                    entries: root.rail;
+                    announce: root.rail-announce;
+                    first-failure: root.rail-first-failure;
+                    heading: root.work-heading;
+                    empty-text: root.work-empty;
+                    ledger-download: root.ledger-download;
+                    ledger-disk: root.ledger-disk;
+                    ledger-note: root.ledger-note;
+                    ledger-warn: root.ledger-warn;
+                    back-pressed => {
+                        root.back();
+                    }
+                    cancel(id) => {
+                        root.rail-cancel(id);
+                    }
+                    dismiss(id) => {
+                        root.rail-dismiss(id);
+                    }
+                    next-step(id, n) => {
+                        root.rail-next(id, n);
+                    }
+                }
+
+                DevicesPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(2) && root.page == DrawerPage.devices;
+                    devices: root.devices;
+                    selected <=> root.selected;
+                    detail: root.devices-detail;
+                    detail-of: root.devices-detail-of;
+                    empty-line: root.devices-empty-line;
+                    new-device: root.devices-new;
+                    start-row: root.devices-start;
+                    back-pressed => {
+                        root.back();
+                    }
+                    expand(i, on) => {
+                        root.device-expand(i, on);
+                    }
+                    start-device(i) => {
+                        root.start-device(i);
+                    }
+                    row-action(a, i) => {
+                        root.device-row-action(a, i);
+                    }
+                    new-pressed => {
+                        root.device-new();
+                    }
+                }
+
+                PartsPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(2) && root.page == DrawerPage.parts;
+                    groups: root.parts-groups;
+                    rows: root.parts-rows;
+                    detail: root.parts-detail;
+                    detail-of: root.parts-detail-of;
+                    preview: root.parts-preview;
+                    has-preview: root.parts-has-preview;
+                    back-pressed => {
+                        root.back();
+                    }
+                    expand(id, on) => {
+                        root.parts-expand(id, on);
+                    }
+                    group-action(g, a) => {
+                        root.parts-group-action(g, a);
+                    }
+                    row-action(a, id) => {
+                        root.parts-row-action(a, id);
+                    }
+                }
+
+                SettingsPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(2) && root.page == DrawerPage.settings;
+                    theme-value: root.setting-theme-value;
+                    theme-enabled: root.setting-theme-enabled;
+                    theme-reason: root.setting-theme-reason;
+                    check-updates: root.setting-check-updates;
+                    toggle-reason: root.setting-toggle-reason;
+                    file-name: root.setting-file-name;
+                    file-path: root.setting-file-path;
+                    copy-enabled: root.setting-copy-enabled;
+                    copy-reason: root.setting-copy-reason;
+                    back-pressed => {
+                        root.back();
+                    }
+                    // The row index, so one handler covers three rows and Rust decides what each
+                    // one writes. `Settings::save()` runs immediately: a preference that does not
+                    // survive the launch it was set in is not a preference.
+                    toggle-updates => {
+                        root.setting-toggled(1);
+                    }
+                    copy-path => {
+                        root.setting-toggled(2);
+                    }
+                }
+
+                // §12.8's Readout, at the same depth as the other four. It was a `MenuPage` row
+                // that was disabled and said *Nothing draws the counters a running machine
+                // publishes.* — a sentence that named its own retirement condition, and this is it.
+                ReadoutPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(2) && root.page == DrawerPage.readout;
+                    headings: root.readout-headings;
+                    rows: root.readout-rows;
+                    provenance: root.readout-provenance;
+                    empty-line: root.readout-empty-line;
+                    has-machine: root.readout-has-machine;
+                    shot-enabled: root.readout-shot-enabled;
+                    shot-reason: root.readout-shot-reason;
+                    copy-enabled: root.readout-copy-enabled;
+                    copy-reason: root.readout-copy-reason;
+                    back-pressed => {
+                        root.back();
+                    }
+                    shoot-panel => {
+                        root.readout-act(0);
+                    }
+                    copy-readout => {
+                        root.readout-act(1);
+                    }
+                }
+            }
+
+            // depth 2 — the Composer's root.
+            Rectangle {
+                width: Geometry.drawer-w;
+
+                ComposerRoot {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(3) && root.page == DrawerPage.composer;
+                    // What `‹` returns to. Worded here because `DrawerPage` is declared in this
+                    // file and this file imports `composer.slint`, so the enum cannot travel the
+                    // other way — and because the two words are already this file's, on the menu
+                    // rows at `:122` and `:135`.
+                    back-to: root.under == DrawerPage.parts ? "Parts" : "Devices";
+                    device-title: root.composer-title;
+                    which-value: root.composer-which-value;
+                    runs-value: root.composer-runs-value;
+                    named-value: root.composer-named-value;
+                    which-enabled: root.composer-which-enabled;
+                    runs-enabled: root.composer-runs-enabled;
+                    named-enabled: root.composer-named-enabled;
+                    which-reason: root.composer-which-reason;
+                    runs-reason: root.composer-runs-reason;
+                    named-reason: root.composer-named-reason;
+                    region-text: root.composer-region-text;
+                    region-emphatic: root.composer-region-emphatic;
+                    refusal-why: root.composer-refusal-why;
+                    refusal-open: root.composer-refusal-open;
+                    has-fix: root.composer-has-fix;
+                    fix: root.composer-fix;
+                    generation: root.composer-generation;
+                    plan: root.composer-plan;
+                    ledger-download: root.composer-ledger-download;
+                    ledger-disk: root.composer-ledger-disk;
+                    ledger-warn: root.composer-ledger-warn;
+                    create: root.composer-create;
+                    open(f) => {
+                        root.composer-open(f);
+                    }
+                    fix-pressed => {
+                        root.composer-fix-pressed();
+                    }
+                    commit => {
+                        root.composer-commit();
+                    }
+                    back-pressed => {
+                        root.back();
+                    }
+                }
+            }
+
+            // depth 3 — the Composer's three levels.
+            Rectangle {
+                width: Geometry.drawer-w;
+
+                WhichIpodPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(4) && root.page == DrawerPage.composer-ipod;
+                    device-title: root.composer-title;
+                    picks: root.composer-picks;
+                    fields: root.composer-fields;
+                    options: root.composer-options;
+                    open-field: root.composer-open-field;
+                    title-auth: root.composer-title-auth;
+                    warning: root.composer-warning;
+                    copy-command: root.composer-copy-command;
+                    no-ipod: root.composer-no-ipod;
+                    back-pressed => {
+                        root.back();
+                    }
+                    expand(f, on) => {
+                        root.composer-expand(f, on);
+                    }
+                    pick(f, id) => {
+                        root.composer-pick(f, id);
+                    }
+                    typed(f, t) => {
+                        root.composer-type(f, t);
+                    }
+                    reveal(f) => {
+                        root.composer-reveal(f);
+                    }
+                    act(f) => {
+                        root.composer-act(f);
+                    }
+                }
+
+                WhatItRunsPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(4) && root.page == DrawerPage.composer-runs;
+                    device-title: root.composer-title;
+                    picks: root.composer-picks;
+                    ticks: root.composer-ticks;
+                    options: root.composer-options;
+                    open-field: root.composer-open-field;
+                    refusals: root.composer-refusals;
+                    generation: root.composer-generation;
+                    disabled-reason: root.composer-runs-disabled;
+                    back-pressed => {
+                        root.back();
+                    }
+                    expand(f, on) => {
+                        root.composer-expand(f, on);
+                    }
+                    pick(f, id) => {
+                        root.composer-pick(f, id);
+                    }
+                    ticked(os, on) => {
+                        root.composer-tick(os, on);
+                    }
+                    // `Recipe::check()` yields one verdict carrying one `Fix`, so the index is the
+                    // refusal's position and not a choice of fix. It is passed rather than dropped
+                    // so that the day `check()` returns two, this callback does not have to change.
+                    fix(i) => {
+                        root.composer-fix-pressed();
+                    }
+                }
+
+                NameItPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(4) && root.page == DrawerPage.composer-name;
+                    device-title: root.composer-title;
+                    name: root.composer-name-field;
+                    stem: root.composer-stem;
+                    taken: root.composer-taken;
+                    back-pressed => {
+                        root.back();
+                    }
+                    // `Field::Name` is `Field::ALL`'s tenth entry.
+                    typed(t) => {
+                        root.composer-type(9, t);
+                    }
+                }
+            }
+
+            // The blank trailing slot.
+            Rectangle {
+                width: Geometry.drawer-w;
+            }
+        }
+    }
+
+    // The leading edge. **No shadow, ever** (§6.1): a shadow is the visual grammar of floating, and
+    // nothing here floats. Separation is a 1 px `line` rule. Drawn after the strip so the strip
+    // cannot slide over it.
+    Rectangle {
+        x: 0;
+        width: 1px;
+        height: 100%;
+        background: Ink.line;
+    }
+}
+
+// ─── The handle (§7.5) ──────────────────────────────────────────────────────────────────────────
+//
+// 12 x 96, on the well's trailing edge, so it rides the push rather than the window edge — which is
+// the window's job to position. **Never disabled**: it is one of the four routes in, and the
+// program's discoverability does not get to be conditional.
+export component DrawerHandle inherits Rectangle {
+    in property <bool> open: false;
+    callback toggled();
+
+    width: Geometry.handle-w;
+    height: Geometry.handle-h;
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        background: Ink.line.with-alpha(0.4);
+        border-radius: 1px;
+    }
+
+    // The `Pressable` carries the hit region, the focus ring and the announcement. Its own height
+    // is a row's; the handle is 96, so the instance overrides it.
+    Pressable {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        label: root.open ? "Close the drawer" : "Open the drawer";
+        accessible-description: "420 pixels, right; the well and the shelf narrow to make room.";
+        activated => {
+            root.toggled();
+        }
+    }
+}

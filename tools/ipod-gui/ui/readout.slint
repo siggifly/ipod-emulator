@@ -1,0 +1,179 @@
+// The Readout — docs/GUI.md §12.8, §5, §16.11.
+//
+// **A drawer page built from Gauges, and it pushes the device aside rather than covering it**
+// (principle 5, and the specific complaint filed against OpenEmu's HUD). Every number on it is a
+// counter the emulator thread publishes; `readout.rs` decides what each one is worth saying and
+// this file draws that decision and words nothing.
+//
+// **Its body is a Scroll and it has to be.** §12.8 counted it before anything was built: thirty-six
+// Row-shaped items at 44 px is 1 584 px of rows alone against a drawer body of roughly 715–800, and
+// §16.2's finding is that a Slint layout smaller than the sum of its children neither shrinks a
+// child pinned by an explicit height nor clips the surplus — the trailing children are positioned
+// past the bottom edge and drawn there. Without a Scroll the last four of the seven groups are
+// simply not reachable, silently, and a clipped item is out of the tab order as well: Slint's
+// `move_focus` recovers an item only when the hiding ancestor **is** a Flickable.
+//
+// **The header is fixed above it and the two actions are pinned below it**, so the two things you
+// reach for are always in the same place and never scroll away.
+//
+// **The group headings are `Row { heading: true }` and not Gauges.** §12.8 says the page is built
+// from Gauges *and nothing else*, and a heading is not a measured number — it is the same heading
+// primitive §11.4's six groups already use, so the two pages that carry groups carry them the same
+// way.
+
+import { Ink, Metric } from "tokens.slint";
+import { Geometry } from "@geometry";
+import { DrawerHeader, Gauge, GaugeRow, Row, Scroll } from "primitives.slint";
+
+export component ReadoutPage inherits Rectangle {
+    // §12.8's seven headings, in its order, **already carrying their freshness** — `MACHINE`, or
+    // `MACHINE — stale`. `readout::Group::line` is what appends it, so the word that says how old
+    // this page is exists in one place and reaches the clipboard copy as well as the screen.
+    in property <[string]> headings;
+    in property <[GaugeRow]> rows;
+    // §12.8's PROVENANCE paragraph: what a restore carried in, and the legend for the marker five
+    // other groups use on their labels.
+    in property <string> provenance;
+    // §9.1: a page with no machine to report on is a state with something to say, not a blank.
+    in property <string> empty-line;
+    in property <bool> has-machine: false;
+    // The two pinned actions, and both of them state their own refusal (§9.4).
+    in property <bool> shot-enabled: false;
+    in property <string> shot-reason;
+    in property <bool> copy-enabled: false;
+    in property <string> copy-reason;
+
+    callback back-pressed();
+    callback shoot-panel();
+    callback copy-readout();
+
+    background: Ink.bg;
+    // §12.8: `Region` + `accessible-live-region: polite`. The page is a stream of numbers that
+    // change under a reader rather than a list they walk, and `polite` is what stops an assistive
+    // technology interrupting on every 8 Hz sample.
+    accessible-role: AccessibleRole.region;
+    accessible-label: "Readout";
+    accessible-live-region: AccessibleLiveness.polite;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        DrawerHeader {
+            back: "Menu";
+            title: "Readout";
+            back-pressed => {
+                root.back-pressed();
+            }
+        }
+
+        scroll := Scroll {
+            vertical-stretch: 1;
+            min-height: 0px;
+            preferred-height: 0px;
+            viewport-height: body.preferred-height;
+
+            body := VerticalLayout {
+                width: scroll.width;
+                padding-top: Metric.s3;
+                padding-bottom: Metric.s3;
+                spacing: 0px;
+                alignment: start;
+
+                // §9.1 again: **always present**, and it says what would be here rather than that
+                // nothing is. It is not a substitute for the groups — those are drawn under it in
+                // every state, because §12.8's own rule is *seven groups, fixed order, all present
+                // always*, and a page that hid them when the machine was off would be a page whose
+                // shape changed under a reader.
+                if !root.has-machine: Text {
+                    x: Geometry.page-margin;
+                    // `x` alone is not an inset: a layout sets a child's x *and* its width, so
+                    // binding one without the other draws the paragraph off the right edge. That
+                    // shipped once on §11.4's empty groups and was found in a photograph.
+                    width: parent.width - 2 * Geometry.page-margin;
+                    text: root.empty-line;
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-body;
+                    color: Ink.fg-disabled;
+                    wrap: word-wrap;
+                    height: self.preferred-height + Metric.s3;
+                }
+
+                for h[i] in root.headings: VerticalLayout {
+                    spacing: 0px;
+                    accessible-role: AccessibleRole.list;
+                    accessible-label: h;
+
+                    Row {
+                        label: h;
+                        heading: true;
+                    }
+
+                    // **The rows of THIS group.** Slint has no filter in a `for`, so the whole list
+                    // is walked once per group and the wrapper collapses to nothing where the row
+                    // belongs elsewhere — the same shape §11.4's Parts page uses, and for the same
+                    // reason: a per-group model pushed from Rust would be seven lists that can
+                    // disagree with the one the headings were computed from.
+                    for r in root.rows: VerticalLayout {
+                        spacing: 0px;
+
+                        if r.group == i: Gauge {
+                            label: r.label;
+                            value: r.value;
+                            fresh: r.fresh;
+                            warn: r.warn;
+                        }
+                    }
+
+                    // §12.8's PROVENANCE paragraph, under the last heading and only there. It is
+                    // prose rather than a Gauge because §5's Gauge is *one measured number*, and a
+                    // three-line sentence in a 124 px value column elides to nothing useful.
+                    if i == root.headings.length - 1: Text {
+                        x: Geometry.page-margin;
+                        width: parent.width - 2 * Geometry.page-margin;
+                        text: root.provenance;
+                        font-size: Metric.label-size;
+                        font-weight: Metric.weight-body;
+                        color: Ink.fg-dim;
+                        wrap: word-wrap;
+                        height: self.preferred-height + Metric.s3;
+                    }
+                }
+            }
+        }
+
+        // ── The two pinned actions ──────────────────────────────────────────────────────────────
+        //
+        // Outside the Scroll, so they are in the same place whether the page is at the top or at
+        // the bottom of 1 700 px of counters. Both are drawn whatever this build can do and both
+        // carry their own reason when it cannot (§14.1, §9.4) — a control that is hidden when it
+        // cannot act teaches nothing about why.
+        Row {
+            index: 0;
+            count: 2;
+            label: "Screenshot the panel";
+            value: "320x240";
+            enabled: root.shot-enabled;
+            reason: root.shot-reason;
+            // §9.4's second kind for the disabled case: what is missing is a thing this program has
+            // not written, not a fact about the computer.
+            machine-rule: false;
+            chevron: root.shot-enabled;
+            activated => {
+                root.shoot-panel();
+            }
+        }
+
+        Row {
+            index: 1;
+            count: 2;
+            label: "Copy this readout";
+            enabled: root.copy-enabled;
+            reason: root.copy-reason;
+            machine-rule: false;
+            chevron: root.copy-enabled;
+            activated => {
+                root.copy-readout();
+            }
+        }
+    }
+}

@@ -1,0 +1,984 @@
+// The Composer — docs/GUI.md §11.1, §11.2, §11.3, §5, §9.4, §16.5, §16.11.
+//
+// **Three depth levels, not three groups.** The previous revision drew all three groups open on one
+// page and counted about 1 090 px inside a drawer that is at most 803 on the operator's own machine
+// and 722 at the minimum. Now that `Scroll` exists it *could* scroll; §16.11's own 2026-08-21
+// correction retires the 100 ms press-latency argument (`interactive: false` never reaches
+// `DelayForwarding`), so what the re-cut still stands on is the arithmetic: 1 090 does not fit in
+// 722, and `Geometry.composer-root-h` — 590 against 634 — is what does.
+//
+// So the root is three rows, a verdict, a plan and `Create`; each `›` slides one level deeper and
+// comes straight back; and the verdict and the plan are live at the root and update as you return.
+//
+// **`Create` is pinned OUTSIDE the Scroll** (§16.11): a primary action that scrolls away is a
+// primary action you hunt for. The body scrolls only when §11.3's refusal `Expand` opens, which is
+// exactly when there is more than a page of it.
+//
+// ── Two rules this file keeps, and each has a test ──────────────────────────────────────────────
+//
+//   - **It states no policy and words no sentence.** Every string below arrives on a pushed model,
+//     built in `main.rs` out of `composer.rs` out of `compose.rs`. The only literals are this
+//     surface's own furniture — the four page names and the two section captions — and
+//     `every_composer_sentence_comes_from_the_model_or_composer_rs` is what holds that line.
+//   - **The verdict is never computed in a binding.** A binding is re-evaluated on the toolkit's
+//     schedule; the one region the design forbids to be stale is written on a schedule the program
+//     controls, by `Composer::recompute`. `the_verdict_is_never_computed_in_a_binding` is the sweep.
+//
+// **`absolute-position` is read only inside callbacks.** The compiler ships
+// `tests/syntax/analysis/binding_loop_mappointtowindow.slint` for the shape where it is read in a
+// binding, and every read below is in a `gained-focus` or an `opened` handler.
+
+import { Ink, Metric } from "tokens.slint";
+import { Geometry } from "@geometry";
+import {
+    Check,
+    DrawerHeader,
+    Expand,
+    Field,
+    FieldRow,
+    FixRow,
+    OptionRow,
+    PickRow,
+    PlanRow,
+    Pressable,
+    RefusalRow,
+    Row,
+    Scroll,
+    TickRow,
+} from "primitives.slint";
+
+// ─── One picker, and the options that belong to it (§11.2, §11.3) ───────────────────────────────
+//
+// **A locked picker stays a picker** (§11.1). `locked` greys the `Row` and puts the lock's own
+// sentence in the reserved slot; the `Expand` under it never opens. It does not collapse to a line
+// of text, because a control that changes shape is what makes the page jump when you switch between
+// a retail dump and a synthesised ROM — which is the one thing §11.1 exists to stop.
+//
+// Slint 1.17 has no `Combobox` in the widget set this crate compiles (`std-widgets` is imported
+// nowhere), so §5's aspirational `TextInput / Combobox` accessibility for a picker is a `ListItem`
+// with an `Expand` under it. Same control, same position, same height, still a tab stop, still
+// stating its reason.
+component PickerRow inherits VerticalLayout {
+    in property <PickRow> p;
+    in property <[OptionRow]> options;
+
+    callback expand(int, bool);
+    callback pick(int, int);
+    callback reveal(length, length);
+
+    spacing: 0px;
+
+    row := Row {
+        label: root.p.label;
+        value: root.p.value;
+        // §11.1's lock is a *disabled* control with its reason, never an absent one.
+        enabled: !root.p.locked && root.p.enabled;
+        reason: root.p.reason;
+        escape-hatch: root.p.escape-hatch;
+        machine-rule: root.p.machine-rule;
+        // §10 unresolved 5: the Colour picker changes the serial and the FireWire GUID, so it says
+        // so **before** it is pressed. That is what `note` carries, and it is why an unlocked
+        // picker is the same 78 px a locked one is.
+        consequence: root.p.note;
+        // **`composer::Lock::presses`, and it reached nothing until now.** A `Lock::Shared` says
+        // *N devices are made of this iPod and will change with it* in the line above and then
+        // acted on the first press, which is a warning wearing the shape of a confirmation.
+        // `Lock::locked` is false for `Shared` on purpose — the model's rule is that the named
+        // resource wins, so this is a consequence and not a wall — and a consequence is exactly
+        // what two presses are for.
+        presses: root.p.presses;
+        chevron: root.p.chevron;
+
+        activated => {
+            root.expand(root.p.field, !root.p.open);
+        }
+        gained-focus => {
+            root.reveal(self.absolute-position.y, self.height);
+        }
+    }
+
+    body := Expand {
+        open: root.p.open;
+        body-height: options-body.preferred-height;
+
+        // §8.1 item 3 / §16.11: an `Expand` that opens below the fold brings its own top edge into
+        // view, rather than letting the rows below it travel under a stationary cursor. Read in a
+        // callback, never in a binding.
+        opened => {
+            root.reveal(row.absolute-position.y, row.height + body.body-height);
+        }
+
+        options-body := VerticalLayout {
+            alignment: start;
+            spacing: 0px;
+
+            // §11.3: **every box ticks.** A refused option stays, in place, at its own height, in
+            // `fg-disabled`, and says why — it is never absent, because a value you cannot choose
+            // is a question you cannot ask.
+            for o[i] in root.options: Row {
+                index: i;
+                count: root.options.length;
+                label: o.label;
+                sub: o.sub;
+                enabled: o.enabled;
+                reason: o.reason;
+                escape-hatch: o.escape-hatch;
+                machine-rule: o.machine-rule;
+                selected: o.chosen;
+                // §11.2's one irreversible act. `Make one` over an existing iPod is two presses and
+                // names the seed it is about to spend, because a seed is the whole of what makes an
+                // identity come back and the one on screen is not recoverable from anything else on
+                // this page. `Composer::make_one_row` answers both; this draws what it answered.
+                presses: o.presses;
+                consequence: o.consequence;
+                activated => {
+                    root.pick(root.p.field, o.id);
+                }
+                gained-focus => {
+                    root.reveal(self.absolute-position.y, self.height);
+                }
+            }
+        }
+    }
+}
+
+// ─── One refusal and its `Fix` (§11.3) ──────────────────────────────────────────────────────────
+//
+// Three things, all permanent, all in the flow: the value stays; the reason is a paragraph under it,
+// reserved via an `Expand`; and at most one `Fix` row wearing a 60 %-opacity material — offered
+// rather than urged.
+//
+// **The four rules a `Fix` obeys are all data.** One press for `UseLoader` / `AddOs` / `RemoveOs`;
+// two for `BuildFromIpsw`, which changes which resource the device points at and says so in its own
+// reason line **before** it is pressed; and none at all — disabled, with the same project-state
+// reason and the same `mono` escape hatch — for a `Fix` naming a value the picker four rows above
+// refuses. None of that is decided here: `Fix::presses`, `Fix::consequence` and `Fix::offered` are
+// the model's, and this draws what they answer.
+component RefusalView inherits VerticalLayout {
+    in property <RefusalRow> r;
+    in property <int> generation;
+
+    callback fix();
+    callback reveal(length, length);
+
+    spacing: 0px;
+
+    // §9 item 5, and it is the reason this is an `Expand` and not a reason slot: rule (2b) is 228
+    // characters, about six lines at `REFUSAL_MEASURE`. A builder who renders `Verdict::No.why`
+    // into a 34 px slot has satisfied a lint and shown the reader forty characters of a sentence
+    // whose point is in the last twenty.
+    Rectangle {
+        height: root.r.why == "" ? 0px : Geometry.refusal-max-h;
+        clip: true;
+        visible: root.r.why != "";
+
+        Text {
+            x: 0;
+            y: 0;
+            width: Geometry.refusal-measure;
+            text: root.r.why;
+            font-size: Metric.body-size;
+            font-weight: Metric.weight-body;
+            color: Ink.fg;
+            wrap: word-wrap;
+        }
+    }
+
+    // **`if`, not `visible`**, and this is `ui/rail.slint`'s own carve-out: a `Fix` is fixed for the
+    // life of a refusal, so it is not a line that comes and goes while something is working, and
+    // `visible: false` would reserve 78 px of nothing under every refusal that has no fix — which
+    // §11.3 explicitly allows (nothing-chosen is a refusal with no fix, and the picker one row above
+    // is what resolves it).
+    if root.r.has-fix: Pressable {
+        label: root.r.fix.label;
+        enabled: root.r.fix.enabled;
+        reason: root.r.fix.reason;
+        escape-hatch: root.r.fix.escape-hatch;
+        machine-rule: root.r.fix.machine-rule;
+        presses: root.r.fix.presses;
+        consequence: root.r.fix.consequence;
+        primary: true;
+        // §11.3 item 3: *a 60 %-opacity material*. It is a design constant and lives in
+        // `Geometry`, never as a typed 0.6 — `no_opacity_literal_outside_the_cosmetic_set` is what
+        // keeps it there.
+        material-opacity: Geometry.fix-opacity;
+        pad: Geometry.page-margin;
+
+        // §11.3: `armed` is component-local state, and a `Fix` armed against one recipe must not
+        // fire against another. `ui/rail.slint:337-340` solves the identical problem for repeater
+        // reuse with `for-entry: root.e.id`; this is the same mechanism against the recipe's own
+        // generation, which `Composer::recompute` bumps on every edit.
+        property <int> for-recipe: root.generation;
+        changed for-recipe => {
+            self.disarm();
+        }
+
+        activated => {
+            root.fix();
+        }
+        gained-focus => {
+            root.reveal(self.absolute-position.y, self.height);
+        }
+
+        Text {
+            text: root.r.fix.label;
+            font-size: Metric.body-size;
+            font-weight: Metric.weight-strong;
+            color: root.r.fix.enabled ? #ffffff : Ink.fg-disabled;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// ─── The root (§11.2) ───────────────────────────────────────────────────────────────────────────
+
+export component ComposerRoot inherits Rectangle {
+    // Which page `‹` returns to, worded by `drawer.slint` out of `nav::Stack::under`. `"Devices"`
+    // is the default because that was the only entrance until Parts gained two verbs that open
+    // this page, and a default that is one of the two real answers cannot draw a page that is not
+    // there.
+    in property <string> back-to: "Devices";
+    in property <string> device-title;
+
+    in property <string> which-value;
+    in property <string> runs-value;
+    in property <string> named-value;
+    in property <bool> which-enabled: true;
+    in property <bool> runs-enabled: false;
+    in property <bool> named-enabled: false;
+    in property <string> which-reason;
+    in property <string> runs-reason;
+    in property <string> named-reason;
+
+    // §11.3's four renderings, in 54 px that is always reserved. `emphatic` is `Verdict::No`; the
+    // other three — nothing chosen, still reading, and `Recipe::describe()` — are `fg-dim`. The
+    // window picks the colour from `composer::Region`'s **variant**; `Verdict` gains none.
+    in property <string> region-text;
+    in property <bool> region-emphatic: false;
+
+    in property <string> refusal-why;
+    in property <bool> refusal-open: false;
+    in property <bool> has-fix: false;
+    in property <FixRow> fix;
+    in property <int> generation;
+
+    in property <[PlanRow]> plan;
+    in property <string> ledger-download;
+    in property <string> ledger-disk;
+    in property <bool> ledger-warn: false;
+
+    in property <FixRow> create;
+
+    // `Field::ALL`'s ordinals — `Ipod` 0, `Disk` 5, `Name` 9 — because that is what
+    // `Composer::set_level` is keyed on and `rail-next(id, 0)` set the precedent for an ordinal
+    // crossing this boundary as an `int`. Rust's side is an exhaustive `Field::from_i32`.
+    //
+    // **There is no `expand` callback here.** §11.3's refusal paragraph is *reserved*, not toggled:
+    // it is open exactly when the verdict is a refusal, which `Composer::recompute` already knows,
+    // and a control that toggled it would be a second writer for a state the model decides.
+    callback open(int);
+    callback fix-pressed();
+    callback commit();
+    callback back-pressed();
+
+    background: Ink.bg;
+    accessible-role: AccessibleRole.region;
+    accessible-label: root.device-title;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        DrawerHeader {
+            // **Not a literal.** This page is reachable from two depth-1 pages — the Devices row's
+            // `Edit…` and Parts' `Synthesise…` / `Build…` — so `back: "Devices"` drew a `‹` naming
+            // a page the press would not return to. `nav::Stack::under` is the one thing that
+            // knows, and `drawer.slint` words it: `DrawerPage` is declared there and that file
+            // imports this one, so an import the other way is a cycle.
+            back: root.back-to;
+            title: root.device-title;
+            back-pressed => {
+                root.back-pressed();
+            }
+        }
+
+        scroll := Scroll {
+            vertical-stretch: 1;
+            min-height: 0px;
+            preferred-height: 0px;
+            // Bound explicitly, and it is not optional: Slint computes `viewport-height`
+            // automatically only from direct children that are layouts and are **not repeated**
+            // (`passes/flickable.rs:181-196`), and the plan is a `for`.
+            viewport-height: body.preferred-height;
+
+            body := VerticalLayout {
+                width: scroll.width;
+                padding: Geometry.page-margin;
+                spacing: Metric.s3;
+                alignment: start;
+
+                // ① ② ③ — three rows, one row deep from the root. Until an iPod is chosen, ② and
+                // ③ are disabled with §11.1's sentence, which arrives as `runs-reason` /
+                // `named-reason` rather than being worded here.
+                VerticalLayout {
+                    spacing: 0px;
+
+                    which := Row {
+                        index: 0;
+                        count: 3;
+                        label: "Which iPod";
+                        value: root.which-value;
+                        enabled: root.which-enabled;
+                        reason: root.which-reason;
+                        machine-rule: false;
+                        chevron: true;
+                        activated => {
+                            root.open(0);
+                        }
+                        gained-focus => {
+                            scroll.ensure-visible(self.absolute-position.y, self.height);
+                        }
+                    }
+
+                    runs := Row {
+                        index: 1;
+                        count: 3;
+                        label: "What it runs";
+                        value: root.runs-value;
+                        enabled: root.runs-enabled;
+                        reason: root.runs-reason;
+                        machine-rule: false;
+                        chevron: true;
+                        activated => {
+                            root.open(5);
+                        }
+                        gained-focus => {
+                            scroll.ensure-visible(self.absolute-position.y, self.height);
+                        }
+                    }
+
+                    named := Row {
+                        index: 2;
+                        count: 3;
+                        label: "Name it";
+                        value: root.named-value;
+                        enabled: root.named-enabled;
+                        reason: root.named-reason;
+                        machine-rule: false;
+                        chevron: true;
+                        activated => {
+                            root.open(9);
+                        }
+                        gained-focus => {
+                            scroll.ensure-visible(self.absolute-position.y, self.height);
+                        }
+                    }
+                }
+
+                // ── The verdict, 54 px, always reserved (§11.3) ──
+                //
+                // Four renderings and not three: `Verdict::Ok`, `Verdict::No`, **nothing chosen
+                // yet** and **still reading**. The last two are the correction — both were false
+                // claims in this region, one before anything had been chosen and one flipping
+                // several seconds after a pick — and the reserved 54 px absorbs both at no layout
+                // cost.
+                Rectangle {
+                    height: Geometry.verdict-h;
+                    clip: true;
+
+                    Text {
+                        x: 0;
+                        y: 0;
+                        width: Geometry.refusal-measure;
+                        height: 100%;
+                        text: root.region-text;
+                        font-size: Metric.body-size;
+                        font-weight: Metric.weight-body;
+                        color: root.region-emphatic ? Ink.fg : Ink.fg-dim;
+                        wrap: word-wrap;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // The whole paragraph and its `Fix`, one level up from the 34 px slot that would
+                // have elided it. Closed by default; opening it is what makes this page scroll, and
+                // the only thing that does.
+                refusal := Expand {
+                    open: root.refusal-open;
+                    body-height: refusal-body.preferred-height;
+                    opened => {
+                        scroll.ensure-visible(self.absolute-position.y, refusal.body-height);
+                    }
+
+                    refusal-body := RefusalView {
+                        width: refusal.width;
+                        generation: root.generation;
+                        r: {
+                            why: root.refusal-why,
+                            has-fix: root.has-fix,
+                            fix: root.fix,
+                            open: root.refusal-open,
+                        };
+                        fix => {
+                            root.fix-pressed();
+                        }
+                        reveal(top, h) => {
+                            scroll.ensure-visible(top, h);
+                        }
+                    }
+                }
+
+                // ── The plan (§11.2) ──
+                //
+                // **Reserved at `PLAN_MAX_ROWS` always**, so the ledger and `Create` never move
+                // while you decide. Eight is the most `Recipe::steps` can produce over every one of
+                // the 72 recipes, and `a_plan_is_never_more_than_eight_lines` enumerates them
+                // rather than asserting it.
+                VerticalLayout {
+                    spacing: 0px;
+
+                    Text {
+                        height: Geometry.line-label;
+                        text: "Will do, in order";
+                        font-size: Metric.label-size;
+                        font-weight: Metric.weight-label;
+                        color: Ink.fg-dim;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        height: Geometry.plan-max-rows * Geometry.plan-row-h;
+                        clip: true;
+
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 0px;
+
+                            for step in root.plan: Rectangle {
+                                height: Geometry.plan-row-h;
+
+                                // §4.2: one list rendered twice at two levels of detail. The step's
+                                // `sub` is the Work page's line while the step runs; here it is the
+                                // accessible description, so it reaches somebody who cannot see the
+                                // column and is not drawn twice for somebody who can.
+                                accessible-role: AccessibleRole.text;
+                                accessible-label: step.verb + " " + step.what;
+                                accessible-description: step.sub;
+
+                                HorizontalLayout {
+                                    spacing: Metric.s2;
+
+                                    Text {
+                                        width: Geometry.rail-verb-w;
+                                        text: step.verb;
+                                        font-size: Metric.label-size;
+                                        font-weight: Metric.weight-label;
+                                        color: Ink.fg-dim;
+                                        overflow: elide;
+                                        vertical-alignment: center;
+                                    }
+
+                                    Text {
+                                        horizontal-stretch: 1;
+                                        min-width: 0px;
+                                        text: step.what;
+                                        font-size: Metric.label-size;
+                                        font-weight: Metric.weight-label;
+                                        color: Ink.fg;
+                                        overflow: elide;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── The ledger: one number per axis, from one source ──
+                //
+                // `main::ledger_lines` is the same function the Work page's footer calls, so the
+                // Composer's root and the Work page cannot print two bills for one press.
+                VerticalLayout {
+                    spacing: 0px;
+
+                    Text {
+                        height: Geometry.line-label;
+                        text: root.ledger-download;
+                        font-size: Metric.label-size;
+                        font-weight: Metric.weight-label;
+                        color: Ink.fg;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        height: Geometry.line-label;
+                        text: root.ledger-disk;
+                        font-size: Metric.label-size;
+                        font-weight: Metric.weight-label;
+                        color: root.ledger-warn ? Ink.warn : Ink.fg;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // ── `Create`, pinned (§11.2, §16.11) ──
+        //
+        // The one material row on this page, always in the same place. Its reason is the verdict's
+        // own `why` when the recipe does not check out, so the control and the region above it
+        // cannot say two different things.
+        //
+        // **`PRIMARY_FOOTER_H` is the enabled case and it is a floor, not a ceiling.** A disabled
+        // `Create` reserves §9.4's 34 px reason slot like every other disabled control in this
+        // program, so the footer is `max(the constant, what the control actually is)` — which is 68
+        // whenever the recipe checks out and 102 when it does not, and never a control clipped by
+        // its own furniture.
+        Rectangle {
+            height: max(Geometry.primary-footer-h, create.height + 2 * Geometry.footer-pad);
+            background: Ink.bg-raised;
+
+            Rectangle {
+                y: 0;
+                height: 1px;
+                background: Ink.line.with-alpha(0.3);
+            }
+
+            create := Pressable {
+                x: Geometry.page-margin;
+                y: Geometry.footer-pad;
+                width: parent.width - 2 * Geometry.page-margin;
+                label: root.create.label;
+                enabled: root.create.enabled;
+                reason: root.create.reason;
+                escape-hatch: root.create.escape-hatch;
+                machine-rule: root.create.machine-rule;
+                presses: root.create.presses;
+                consequence: root.create.consequence;
+                primary: true;
+                pad: Geometry.page-margin;
+
+                property <int> for-recipe: root.generation;
+                changed for-recipe => {
+                    self.disarm();
+                }
+
+                activated => {
+                    root.commit();
+                }
+
+                Text {
+                    text: root.create.label;
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-strong;
+                    color: root.create.enabled ? #ffffff : Ink.fg-disabled;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+// ─── Level ① — Which iPod (§11.1, §11.2) ────────────────────────────────────────────────────────
+//
+// **The ROM comes first, and that is not a layout preference.** On real hardware the NOR flash *is*
+// the iPod: model, capacity, serial, GUID and colour live in its SysCfg, and the drive is swappable.
+// So an iPod *states* five facts, and those five decide which firmware bundle can follow, which
+// bootloader can carry which systems, and whether a purchased title could ever be authorised.
+//
+// **Existing and new look identical.** A retail dump fills Model / Colour / Serial / GUID and locks
+// them with a reason; a synthesised ROM leaves them editable. Both are `ROW_H + FIELD_REASON`, and
+// that reservation is the whole of why the surface does not jump between them.
+//
+// **Masked by default, with `Show`** — a screenshot of this page must not carry somebody's
+// identifiers. The mask is `identity::mask_serial` / `mask_guid_hex`, done in Rust; `FieldRow.raw`
+// is `""` while masked, so while a field is masked this markup holds no identifier at all.
+export component WhichIpodPage inherits Rectangle {
+    in property <string> device-title;
+    in property <[PickRow]> picks;
+    in property <[FieldRow]> fields;
+    in property <[OptionRow]> options;
+    // -1 when no picker is open. One at a time, always.
+    in property <int> open-field: -1;
+    in property <string> title-auth;
+    // §11.2's OUI warning — `Identity::oui_warning`, by way of `Which::warning`. Empty unless the
+    // identity was READ out of a file and does not start with Apple's FireWire OUI.
+    in property <string> warning;
+    in property <FixRow> copy-command;
+    in property <string> no-ipod;
+
+    callback expand(int, bool);
+    callback pick(int, int);
+    callback typed(int, string);
+    // §11.2's `Show`. Per-field, cleared whenever this level is left and whenever the drawer closes,
+    // and **never persisted** — a `Show` that survived a relaunch would defeat the mask on the next
+    // screenshot. All of that is `Composer::set_reveal`'s; this only says which field was pressed.
+    callback reveal(int);
+    callback act(int);
+    callback back-pressed();
+
+    background: Ink.bg;
+    accessible-role: AccessibleRole.region;
+    accessible-label: "Which iPod";
+
+    VerticalLayout {
+        spacing: 0px;
+
+        DrawerHeader {
+            back: root.device-title;
+            title: "Which iPod";
+            back-pressed => {
+                root.back-pressed();
+            }
+        }
+
+        scroll := Scroll {
+            vertical-stretch: 1;
+            min-height: 0px;
+            preferred-height: 0px;
+            viewport-height: body.preferred-height;
+
+            body := VerticalLayout {
+                width: scroll.width;
+                padding: Geometry.page-margin;
+                spacing: 0px;
+                alignment: start;
+
+                for p in root.picks: PickerRow {
+                    p: p;
+                    // The one open picker gets the option list; every other picker's `Expand` is
+                    // closed AND empty, so four pickers do not instantiate four copies of a
+                    // seventy-one-entry catalogue.
+                    options: root.open-field == p.field ? root.options : [];
+                    expand(f, on) => {
+                        root.expand(f, on);
+                    }
+                    pick(f, id) => {
+                        root.pick(f, id);
+                    }
+                    reveal(top, h) => {
+                        scroll.ensure-visible(top, h);
+                    }
+                }
+
+                for f in root.fields: Field {
+                    label: f.label;
+                    value: f.value;
+                    raw: f.raw;
+                    masked: f.masked;
+                    locked: f.locked;
+                    mono: f.mono;
+                    note: f.note;
+                    reason: f.reason;
+                    action: f.action;
+                    edited(t) => {
+                        root.typed(f.field, t);
+                    }
+                    act => {
+                        root.reveal(f.field);
+                    }
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                // §11.2: **three behaviours in `identity.rs` differ and the UI must not flatten
+                // them.** A typed non-Apple OUI is *refused* — `Identity::check_guid`, before it is
+                // ever an `Identity`. One READ out of a real file *warns*, because a dump is
+                // evidence and a typed field is a claim, and the strongest evidence there is that a
+                // parse went wrong is worth more beside the value than on a stderr this window
+                // cannot see. It was computed on every frame and drawn by nothing.
+                //
+                // **Under the two identity Fields and above `TitleAuth`**, because it is a fact
+                // about the GUID two rows up rather than about what may be authorised.
+                //
+                // `if`, not `visible` (§16.3): what makes this appear or vanish is choosing a
+                // different iPod, and that rewrites every row on this page anyway — so there is
+                // nothing above it holding still for 34 px of reserved nothing to protect.
+                // **A bare `Text`, and a wrapper was tried and measured wrong.** Wrapping this in
+                // a `VerticalLayout { padding-top: Metric.s2; padding-bottom: Metric.s3 }` — the
+                // pair `parts.slint:226` and `devices.slint:285` use to set a paragraph apart,
+                // `padding-top: Metric.s2` — put
+                // the warning's third line straight through `TitleAuth`'s sentence in
+                // `composer-ipod-dumped.png`: a `wrap: word-wrap` `Text` inside a nested layout
+                // reports one line's `preferred-height` to the layout above it, so the box was
+                // sized for one line and three were drawn. The parent measures a bare child
+                // correctly, which is why every other paragraph on these pages is one.
+                //
+                // What separates the two paragraphs is therefore `Ink.warn` against `Ink.fg-dim`,
+                // which is the difference that matters anyway: one is evidence about the value two
+                // rows up, the other is what may be authorised against it.
+                if root.warning != "": Text {
+                    text: root.warning;
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-body;
+                    color: Ink.warn;
+                    wrap: word-wrap;
+                }
+
+                // §11.2: **`TitleAuth` is said where the decision is made, not in a footnote.** A
+                // synthesised identity can never authorise a purchased title, because invented
+                // values match no purchase ever made on any machine — and `Identity::title_auth()`
+                // has computed that since before anything showed it.
+                Text {
+                    text: root.title-auth;
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-body;
+                    color: Ink.fg-dim;
+                    wrap: word-wrap;
+                }
+
+                // §11.2 / §7: **it copies a recipe, never a value.** `ipod-boot retail --nor-model
+                // … --nor-seed …` reproduces the machine exactly and carries no identifier, because
+                // `Identity::generate` is a pure function of `(model, seed)`. Where the identity was
+                // typed rather than generated, no seed reproduces it and the control is disabled
+                // with that as its reason. A clipboard outlives the screen, so `Show` does not
+                // unlock it. And on a build that has no pasteboard it is disabled before any of
+                // that, because there is nowhere for the command to go — `copy_command_row` asks
+                // the capability first, since that answer is the same for every iPod.
+                Pressable {
+                    label: root.copy-command.label;
+                    enabled: root.copy-command.enabled;
+                    reason: root.copy-command.reason;
+                    escape-hatch: root.copy-command.escape-hatch;
+                    machine-rule: root.copy-command.machine-rule;
+                    presses: root.copy-command.presses;
+                    consequence: root.copy-command.consequence;
+                    pad: Geometry.page-margin;
+                    activated => {
+                        // `Field::Serial` — ordinal 3 in `composer.rs`'s `Field::ALL`, which is the
+                        // array `Field::from_i32` indexes. That is the arm of `on_composer_act`
+                        // that builds the command line and hands it to `copy_text`. **It shipped
+                        // sending zero**, which is `Field::Ipod`, so this button minted a new iPod
+                        // and discarded the seed it was showing. Nothing in the compiler checks an
+                        // `int` against the vocabulary it stands for; `markup_discipline.rs`'s
+                        // `the_copy_command_control_does_not_mint_a_new_ipod` reads the ordinal out
+                        // of `Field::ALL` and compares it with this line, and is the only thing
+                        // that can.
+                        root.act(3);
+                    }
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+
+                    Text {
+                        text: root.copy-command.label;
+                        font-size: Metric.body-size;
+                        font-weight: Metric.weight-strong;
+                        color: root.copy-command.enabled ? Ink.accent : Ink.fg-disabled;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // §9.1: never a bare "nothing here". `if`, not `visible` — it is mutually exclusive
+                // with an iPod having been chosen, and it is the last thing on the page, so nothing
+                // above it moves when it goes.
+                if root.no-ipod != "": Text {
+                    text: root.no-ipod;
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-body;
+                    color: Ink.fg-dim;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}
+
+// ─── Level ② — What it runs (§11.2, §11.3) ──────────────────────────────────────────────────────
+//
+// **The one level that is long, and the one that may scroll**: the disk and firmware pickers, the
+// systems list, the bootloader picker, and up to two refusal paragraphs with their `Fix` rows.
+export component WhatItRunsPage inherits Rectangle {
+    in property <string> device-title;
+    in property <[PickRow]> picks;
+    in property <[TickRow]> ticks;
+    in property <[OptionRow]> options;
+    in property <int> open-field: -1;
+    in property <[RefusalRow]> refusals;
+    in property <int> generation;
+    // §11.1: until an iPod is chosen this whole level is disabled, with the ROM's own sentence.
+    in property <string> disabled-reason;
+
+    callback expand(int, bool);
+    callback pick(int, int);
+    callback ticked(int, bool);
+    callback fix(int);
+    callback back-pressed();
+
+    background: Ink.bg;
+    accessible-role: AccessibleRole.region;
+    accessible-label: "What it runs";
+
+    VerticalLayout {
+        spacing: 0px;
+
+        DrawerHeader {
+            back: root.device-title;
+            title: "What it runs";
+            back-pressed => {
+                root.back-pressed();
+            }
+        }
+
+        scroll := Scroll {
+            vertical-stretch: 1;
+            min-height: 0px;
+            preferred-height: 0px;
+            viewport-height: body.preferred-height;
+
+            body := VerticalLayout {
+                width: scroll.width;
+                padding: Geometry.page-margin;
+                spacing: 0px;
+                alignment: start;
+
+                if root.disabled-reason != "": Text {
+                    text: root.disabled-reason;
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-body;
+                    color: Ink.fg-dim;
+                    wrap: word-wrap;
+                }
+
+                for p in root.picks: PickerRow {
+                    p: p;
+                    // The one open picker gets the option list; every other picker's `Expand` is
+                    // closed AND empty, so four pickers do not instantiate four copies of a
+                    // seventy-one-entry catalogue.
+                    options: root.open-field == p.field ? root.options : [];
+                    expand(f, on) => {
+                        root.expand(f, on);
+                    }
+                    pick(f, id) => {
+                        root.pick(f, id);
+                    }
+                    reveal(top, h) => {
+                        scroll.ensure-visible(top, h);
+                    }
+                }
+
+                // §11.3: `Os::ALL` is three and all three are offered. The two that are not in
+                // `OFFERED` are drawn disabled with a **project-state** reason and their `mono`
+                // escape hatch — never absent. And `best_loader()` runs before the verdict, so
+                // ticking iPodLinux **moves** the bootloader rather than refusing it.
+                Row {
+                    label: "Systems";
+                    heading: true;
+                }
+
+                for t in root.ticks: Check {
+                    label: t.label;
+                    on: t.on;
+                    enabled: t.enabled;
+                    reason: t.reason;
+                    escape-hatch: t.escape-hatch;
+                    // §9.4's two kinds: a system this project has not finished is a project state,
+                    // and a project state names a command that works today.
+                    machine-rule: false;
+                    activated => {
+                        root.ticked(t.os, !t.on);
+                    }
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                for r[i] in root.refusals: RefusalView {
+                    r: r;
+                    generation: root.generation;
+                    fix => {
+                        root.fix(i);
+                    }
+                    reveal(top, h) => {
+                        scroll.ensure-visible(top, h);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─── Level ③ — Name it (§11.2) ──────────────────────────────────────────────────────────────────
+//
+// One `Field`, and two facts under it: the filename this name will produce, and whether a device
+// already holds it. The name is what `Create` writes into the settings file, so the page states the
+// consequence rather than discovering it at the press.
+export component NameItPage inherits Rectangle {
+    in property <string> device-title;
+    in property <FieldRow> name;
+    in property <string> stem;
+    in property <string> taken;
+
+    callback typed(string);
+    callback back-pressed();
+
+    background: Ink.bg;
+    accessible-role: AccessibleRole.region;
+    accessible-label: "Name it";
+
+    VerticalLayout {
+        spacing: 0px;
+
+        DrawerHeader {
+            back: root.device-title;
+            title: "Name it";
+            back-pressed => {
+                root.back-pressed();
+            }
+        }
+
+        scroll := Scroll {
+            vertical-stretch: 1;
+            min-height: 0px;
+            preferred-height: 0px;
+            viewport-height: body.preferred-height;
+
+            body := VerticalLayout {
+                width: scroll.width;
+                padding: Geometry.page-margin;
+                spacing: Metric.s3;
+                alignment: start;
+
+                Field {
+                    label: root.name.label;
+                    value: root.name.value;
+                    raw: root.name.raw;
+                    masked: root.name.masked;
+                    locked: root.name.locked;
+                    mono: root.name.mono;
+                    note: root.name.note;
+                    reason: root.name.reason;
+                    action: root.name.action;
+                    edited(t) => {
+                        root.typed(t);
+                    }
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                Text {
+                    text: root.stem;
+                    font-family: Metric.mono-family;
+                    font-size: Metric.mono-size;
+                    color: Ink.fg-dim;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: root.taken;
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-body;
+                    color: Ink.warn;
+                    wrap: word-wrap;
+                    visible: root.taken != "";
+                }
+            }
+        }
+    }
+}

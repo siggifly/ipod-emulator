@@ -39,7 +39,29 @@ because an unexplained difference that nobody wrote down is one that gets redisc
 
 ## `ipodloader2` — the row this file did not have
 
-**Measured 2026-08-19**, `ipod-boot loader` against the same drive on all three ROMs:
+**Measured 2026-08-19**, `ipod-boot loader` against the same drive on all three ROMs.
+
+**Which `ipodloader2`, recorded late.** These numbers are **`iPL 2.9.0d`**, built from upstream
+`master` at `a41ec49` into `resources/vendor/ipodloader2/loader.bin` (57 676 B) — which is what
+`ipod-boot install-linux` used to put in the firmware partition. It no longer does: since
+2026-08-21 the command fetches the **v2.8.1 release** (56 912 B, SHA-256 on record), because the
+vendored path is inside a gitignored directory and so worked only in this checkout. Nobody has run
+this table against 2.8.1.
+
+**Reproducing the rows is two steps, not a flag.** `IPOD_LOADER=` is **not** a pinned input in the
+shape `FLASH=` and `DISK=` are — the run that produced these numbers was `ipod-boot loader`, which
+is `--osos-from-disk`: it boots whatever bootloader is already in the drive's firmware partition and
+never reads the variable. Only `install-linux` does. So the loader is pinned by rebuilding the
+drive with it and then booting that drive:
+
+```sh
+IPOD_LOADER=resources/vendor/ipodloader2/loader.bin ipod-boot install-linux   # writes the drive
+ipod-boot loader                                                              # boots what is on it
+```
+
+Setting the variable and re-running `ipod-boot loader` alone changes nothing, silently — which is
+the shape §*The instruments lie* is about. (`install-linux` currently refuses on every drive tried;
+see `KNOWN-BUGS.md`.)
 
 | boot ROM | ATA commands | unmapped |
 |---|---|---|
@@ -67,13 +89,20 @@ re-run says.
 | | real 5G dump | synthetic 5G | synthetic 5.5G |
 |---|---|---|---|
 | **RetailOS**, cold | ✅ boots — 611 READ DMA, 4 WRITE DMA | — *needs Apple's bootloader* | — |
-| **RetailOS**, high-level | ✅ | ✅ | ✅ |
+| **RetailOS**, high-level | ✅ | ✅ | ✅ *(the command line's high-level boot — see §2026-08-25)* |
 | **Rockbox**, warm | ✅ **main menu, 74 057 lit pixels** | ✅ **74 057** | ✅ **74 057** |
 | **ipodloader2** | ✅ its own console, `Found 1 valid partitions` | ✅ *(reached, via the loader recipe)* | ✅ |
 | **iPodLinux** | ✅ **boots to ZeroSlackr's userland** | ✅ **same dmesg** | ✅ **same dmesg** |
 | **diag** (service diagnostics) | ✅ **draws, and is drivable** | ⛔ **impossible** | ⛔ |
 | **disk** (target disk mode) | ⚠️ faults — USB unmodelled | ⛔ | ⛔ |
 | **aupd** (`flash-update`) | ✅ | ⛔ | ⛔ |
+
+> **Corrected 2026-08-25, and the correction is about the word "high-level" rather than about the
+> three ticks.** There are **two** high-level boots in this project and this row measures one of
+> them. The command line's — `ipod-boot warm`, `trace --boot-osos` without `--cold-boot` — and the
+> window's, `ipod-gui`'s `emu::build` when the ROM is synthetic. They are different machines, and
+> the window's was ❌ on every column of this row until the day of this note. See
+> §*2026-08-25: the high-level row was two boots, and only one of them was ever measured* below.
 
 **Read the three columns as two questions, not one.** A synthesised NOR carries an identity block
 and a reset vector and **none of Apple's code**. So:
@@ -157,6 +186,136 @@ No valid paritions found!
 
 A real 5G with a `0x0C` volume would fail identically on real hardware. `install-linux` refuses
 those drives now rather than writing 1 776 files onto a disk that cannot boot.
+
+## 2026-08-25: the high-level row was two boots, and only one of them was ever measured
+
+**A first run on a synthesised 5.5G, pressed Start, died in a third of a second.**
+
+```
+stopped: lost 33554432 at 8388485 instructions
+```
+
+`33554432` is `0x02000000` and it is a **program counter**, not a size — `Stop::Lost(pc)`, the CPU
+having left every mapped region. Reproduced from the command line, deterministically, on the
+identity the window minted:
+
+```sh
+ipod-boot make-nor --model A446 --seed 1904983579699507775 repro.bin   # JQ652FQUX3N
+IPOD_EMULATOR_DATA=<scratch> ipod-emulator --headless=10000000
+```
+```
+  high-level boot: 7561216 bytes of OS from …/my-5.5g.img -> 0x10000000
+  identity: JQ652FQUX3N · 000A27CB851F81B9
+headless: Lost(33554432) after 8388485 instructions
+  ata commands: 0        2097122 code buckets executed        bcm: 0 kicked, 0 frame updates
+```
+
+**The arithmetic names the failure before anything is opened.** `8 388 485 × 4 = 33 553 940`, and
+`0x02000000 − 33 553 940 = 0x1ec`. The CPU executed a straight line from `0x1ec` to the top of a
+32 MB window without taking one branch — a NOP slide, because `0x00000000` decodes as
+`andeq r0, r0, r0`. `2 097 122` code buckets at 16 bytes each is the same 32 MB counted the other
+way. Nothing was faulting; the code had gone out from under the program counter.
+
+### What the oracle does, and what we were doing instead
+
+`ipod-boot retail` on a drive that boots — Apple's own bootloader, in the emulator, doing the thing
+the high-level boot exists to imitate:
+
+```
+  lba 14692  -> 0x10720000  90112 bytes
+  last: lba 14692 -> 0x10720000 + 90112 = 0x10736000
+…
+Running 'osos' 0 from 0x10000000
+```
+
+58 `READ DMA` commands put the firmware partition **into SDRAM** at `0x10000000..0x10736000` — a
+7 561 216-byte image, exactly what `ipsw::osos_from_drive` hands back — and the console then names
+`0x10000000` as where it goes. Instrumented, RetailOS's first act at `pc 0x10000220` is to program
+the PP's remap windows at `0xf000f000`, one of which is `0x00000000..0x01ffffff -> 0x10000000`;
+after that it runs from low addresses (`0x000a601c`, `0x00289e98`, …), which are that window.
+
+`emu::build` did neither. It **pushed** the image as a region at `0x10000000` and mirrored it as a
+second live region at 0, and entered the CPU at 0. Region lookup is first-match and `map_hardware`
+had already registered 64 MB of `sdram` at `0x10000000`, so the `osos` region was read by nothing:
+SDRAM was 64 MB of zeros with a copy of the OS filed behind it. That held up exactly as long as it
+took RetailOS to program its own window — `Memory::translate` runs ahead of the region list — and
+then every low address resolved into the zeros.
+
+**Fixed by doing what the bootloader is measured doing**: write the bytes into SDRAM, and start the
+CPU at `load_at + entry`. One storage, and the remap points at it. Same drive, same ROM, same seed:
+
+| `ipod-emulator --headless=200000000` | before | after |
+|---|---|---|
+| ending | **`Lost(33554432)` @ 8 388 485** | `BudgetExhausted` @ 200 149 075 |
+| ata commands | **0** | **290** — 20 READ DMA, 264 WRITE DMA, IDENTIFY, 5 SET FEATURES |
+| code buckets | 2 097 122 *(all of them the slide)* | 20 196 |
+| backlight | 16 / 32, never moved | 17 / 32, **1 step up** |
+| wheel | 0 `0x052a` commands | **1** |
+
+The 264 `WRITE DMA` is RetailOS bootstrapping its own volume, which is what it does on a drive it
+has not seen before.
+
+### Why no recipe in `ipod-boot` could have caught it
+
+**The remap is modelled only on the cold map.** `map_hardware` sets `mmap_base = Some(0xf000f000)`
+inside `if cold_boot`; `trace` passes `--cold-boot` on the cold recipe alone, and `emu::build`
+passes `cfg.boot.is_os()`, which is true for the window's OS boot. So a warm run's writes to
+`0xf000f000` land in the `cache` region as plain memory and nothing happens.
+
+Counted, with a control, by printing one line per `rebuild_mmap_aliases` — all four on the same
+`PRISTINE` drive at `--clock=5`:
+
+| run | map | MMAP window rebuilds |
+|---|---|---|
+| `ipod-emulator --headless=200000000` (the window's high-level boot) | cold | **408** |
+| `ipod-boot retail`, 600 M | cold | **56** |
+| `ipod-boot warm --flash=<synthetic>`, 600 M | warm | **0** |
+| `ipod-boot rockbox`, 200 M — **the control**, because Rockbox demonstrably runs on this path | warm | **0** |
+
+The Rockbox row is what makes the two zeros mean something: a zero from a run where nothing
+executed would prove nothing at all.
+
+So the ✅ in this file's *RetailOS, high-level* row is a true statement about `ipod-boot warm`, and
+`ipod-boot warm` is a different machine from the one the window builds — **different memory map**
+(warm has SDRAM's storage at 0 and no remap at all), **different entry** (`0x10000000` either way,
+but the window's used to be 0), **different source for the OS** (`--osos=` reads a file;
+`emu::build` reads the drive's own firmware partition), and one extra mirror at `0x04000000` that
+the window does not make. The row was never a measurement of the window's boot, and no flag on the
+command line would have made it one.
+
+**The corrected cell**, measured today:
+
+| **RetailOS**, high-level — *the window's* (`emu::build`) | real 5G dump | synthetic 5G | synthetic 5.5G |
+|---|---|---|---|
+| before 2026-08-25 | n/a — a real dump cold-boots | ❌ `Lost(0x02000000)`, 0 ATA | ❌ `Lost(0x02000000)`, 0 ATA |
+| after | n/a | ✅ | ✅ |
+
+### And the instrument that hid the ROM under test
+
+`ipod-boot warm --flash=synth.bin` **ignored the flag**. Every recipe appends the caller's
+passthrough after its own flags, and `trace` reads a single-valued flag with
+`args.iter().find_map(|a| a.strip_prefix("--flash="))` — the *first* match. So the composed argv
+carried two `--flash=` and the recipe's won:
+
+```
+trace 600000000 --osos=… --boot-osos --osos-at=0x04000000 --sysinfo \
+      --flash=…/retail_5g_MA146_… --disk=… --bcm --pmu --flash=…/repro.bin
+  sysinfo at 0x40015898, sdram_size 0x4000000, from MA146      <- the RETAIL dump
+```
+
+The run named the retail dump in its own output while the operator watched, so this is the ninth
+instrument in this project to report something it could not have observed. Fixed twice over: the
+caller's `--flash=`/`--disk=` is now an *input* (`resolve` reads it ahead of `FLASH=`, and `--print`
+says `command line`), and `passthrough_wins` drops the recipe's copy of any single-valued `--key=`
+the caller spelled. `--osos-at=` is exempt by name — `trace` collects it with `filter_map` and
+`ipod-boot warm` writes one on purpose — and a test reads `trace.rs` to keep that list honest.
+
+**`sdram_size 0x4000000` is not a fact about the ROM.** It is `trace`'s `--sysinfo` default
+(`trace.rs`, `spec.and_then(parse_addr).unwrap_or(0x0400_0000)`) and the same constant
+`emu::build` writes as `MEASURED_SDRAM_WORD` on both the synthetic and the real path. A synthesised
+ROM does not tell RetailOS it has 32 MB — it says nothing about memory at all — and the 32 MB in
+`0x02000000` is the size of the remap window, not of anybody's SDRAM. This paragraph exists because
+that was the first hypothesis and it was wrong.
 
 ## Superseded: the whole matrix, measured 2026-08-19
 
@@ -371,3 +530,616 @@ through `--osos=`, and burned its whole 200 M budget with **zero** ATA commands 
 That is not evidence about the bootloader: it expects to be *installed in the firmware partition and
 entered by Apple's bootloader*, which is a cold boot. The run says nothing until it is redone that
 way — and redoing it needs `install-os`, which is blocked above.
+
+
+---
+
+## Addendum — the 5.5G does not boot, and it is the FIRMWARE, not the ROM (2026-08-26)
+
+Measured with `ipod-emulator --headless=400000000`, one data directory per arm, every path pinned.
+**The control is the identity line**: each synthesised arm prints its own serial, so an arm that did
+not change is visible rather than assumed.
+
+| ROM | drive | ata | lit pixels | |
+|---|---|---|---|---|
+| Apple's 5G dump | built from `iPod_20.1.3` | **617** | **75 267** | boots |
+| synthesised **5G** (`MA146`) | built from `iPod_20.1.3` | **264** | **75 267** | boots |
+| synthesised **5.5G** (`A444`) | built from `iPod_20.1.3` | **280** | **75 267** | boots |
+| synthesised **5G** (`MA146`) | built from `iPod_25.1.3` | **22** | **2 612** | **stops** |
+| synthesised **5.5G** (`A444`) | built from `iPod_25.1.3` | **22** | **2 612** | **stops** |
+
+75 267 is Addendum 10 §8's own fingerprint, to the pixel. **The ROM is not the variable and the
+generation of the ROM is not the variable.** Every ROM boots a 5G drive; no ROM boots a 5.5G one.
+What does not boot is **RetailOS 25.1.3**.
+
+### The prime suspect is dead, with a control
+
+`nor.rs`'s `Spec::hw_vr` exists for exactly this — *"the 5.5G's `0x000B0010` is the one value in this
+whole system that came from a comment rather than from hardware, and the 5.5G does not boot"* — and
+line 436 above says the same. `ipod-boot make-nor --hwvr` reaches it and is absent from the usage
+text, which is why it had never been turned.
+
+Turned, over the failing drive, nothing else moving:
+
+```
+HwVr 0x000B0010   22 ata   2 612 lit   19 754 code buckets
+HwVr 0x000B0011   22 ata   2 612 lit   19 754 code buckets
+```
+
+Identical, including the bucket count — which is §6's signature of a change that did not take
+effect, so the control was run: `cmp -l` reports the two ROMs differ in **exactly one byte**, at
+`0x405D`, `0x10` -> `0x11`, which is the `HwVr` record's value word. The arms were real. **`HwVr` is
+not the cause.**
+
+### And it is not the header, which this file has blamed before
+
+`image_from_drive` finds the header rather than assuming it, and both drives come back correct:
+
+```
+5G   7 559 680 bytes  addr=0x10000000 entry=0x0  first8=[7a 00 00 ea 67 00 00 ea]
+5.5G 7 561 216 bytes  addr=0x10000000 entry=0x0  first8=[7a 00 00 ea 67 00 00 ea]
+```
+
+Same vector table at the base of both. The 0x200-versus-0x800 defect recorded in `ipsw.rs` is fixed
+and is not this.
+
+### Also ruled out
+
+- **`aupd`.** Removing the directory entry entirely leaves the boot byte-for-byte identical.
+- **A regression from the window rebuild.** `ipod-boot retail`, pinned identically, at `e127849`
+  (before the first Slint commit) and at HEAD 53 commits later: **599 999 952 instructions, second
+  core 315 681 at pc `0x000dee20`, 70 ata** in both. The machine did not move.
+
+### What a mismatch is supposed to look like, and does not
+
+`make-disk` warns that a family mismatch *"does not fail loudly: RetailOS boots and then asks you to
+restore it from iTunes, after roughly 70 ATA commands instead of 600."* A synthesised **5.5G** ROM on
+a **5G** drive is that mismatch, and it reached **280 ata and a full panel** instead. So either the
+synthesised NOR does not carry what RetailOS tests the family against, or the test is somewhere this
+machine does not reach. That is a second open question and it is not the same as this one.
+
+**Next:** trace `iPod_25.1.3` against `iPod_20.1.3` from the handoff and find the first divergence.
+Bisection by file-swapping is finished — it has taken this as far as it goes.
+
+---
+
+## Addendum, same day: RetailOS 25.1.3 is not broken, and half of what is above is now wrong
+
+Written after the section above, from the handoff-comparison it said to do next. Two of its
+conclusions survive, two do not, and the one that matters most reverses.
+
+### The instrument, corrected first
+
+Everything above was measured through `ipod-boot retail`, which runs **Apple's shipping 5G
+bootloader out of a real NOR dump**. A synthesised ROM has no bootloader in it — `ipod-boot facts`
+reports `Images: logo` and nothing else — so `retail` on a synthesised ROM is not a boot at all.
+Run anyway, three different synthesised ROM/drive pairs give:
+
+```
+second core: 238000 instructions, pc 0xffcc2fe4, awake
+ata commands: 0
+```
+
+The *same numbers for all three*, which is §6's signature of an arm that did not vary. The
+synthesised paths above were measuring the harness. They are re-run here through
+`ipod-emulator --headless`, which is what the window uses and what a synthesised ROM needs: one
+`IPOD_EMULATOR_DATA` per arm, its own clone of the drive, `work_on_copy = false`, and the printed
+`identity:` line as the control that the arms differ.
+
+### The matrix, on the harness that fits
+
+```
+ROM                          drive        ata   lit      buckets  stopped
+Apple's retail 5G dump       20.1.3       617   75 267    31 480  budget
+Apple's retail 5G dump       25.1.3        70   71 695     1 812  budget
+synthesised 5G   (MA146)     25.1.3       290    2 612    20 196  budget
+synthesised 5.5G (A444)      25.1.3       290    2 612    20 196  budget
+synthesised 5.5G (A444)      20.1.3       547   75 267    29 964  idle
+```
+
+**Read the second row.** 71 695 lit pixels of 76 800, four blits ending in a `320x176` band at
+`(0,32)-(319,207)`, and 70 ATA commands after 58 DMA transfers have landed all 7 561 216 bytes of
+the image. That is `make-disk`'s own documented mismatch screen — *"RetailOS boots and then asks
+you to restore it from iTunes, after roughly 70 ATA commands instead of 600."*
+
+Where it goes afterwards is worth naming, because "stuck" and "waiting" look identical from
+outside. The profile is 100 % in IRAM, and the hot address disassembles to a delay loop:
+
+```
+40009cec  mov r1, r3            ; a duration
+40009cf0  mov r0, r4            ; r4 = [0x60005010], captured on entry
+40009cf4  bl  0x4000e744        ; (now - start) >= duration ?
+40009cf8  cmp r0, #0
+40009cfc  beq 0x40009cec
+```
+
+`0x60005010` is the PP502x microsecond timer. It drew the screen and is waiting. **RetailOS 25.1.3
+loads, executes, drives the display and reaches its own idle. It is not broken, and a drive built
+from `iPod_25.1.3` is a working drive.** The section above concluded *"what does not boot is
+RetailOS 25.1.3"* and that is withdrawn.
+
+### `HwVr` is dead twice over now
+
+The bisect above varied the *synthesised* ROM's Gestalt. This varies **Apple's**, which is the
+stronger arm — same real bootloader, same everything, one byte:
+
+```
+$ printf '\x10' | dd of=<copy of the retail dump> bs=1 seek=$((0x405C)) count=1 conv=notrunc
+$ cmp -l <Apple's dump> <the copy>
+16477 5 20            # one byte, offset 0x405c, 0x05 -> 0x10
+```
+
+`0x4054` is the `rVwH` record — the tag stored byte-reversed, value word at `+0x08`. Exactly one of
+the three `rVwH` occurrences in the dump is the SysCfg record; the other two are at `0xf160` and
+`0xc90c8` and were left alone. Booted:
+
+```
+Apple's ROM, HwVr 0x000B0005 (untouched)  x 25.1.3   70 ata  71 695 lit   1 812 buckets
+Apple's ROM, HwVr 0x000B0010 (patched)    x 25.1.3   70 ata  71 695 lit   1 812 buckets
+Apple's ROM, HwVr 0x000B0010 (patched)    x 20.1.3  617 ata  75 267 lit  31 480 buckets
+```
+
+The Gestalt moved and nothing else did. **Whatever RetailOS pairs a drive against, it is not
+`HwVr`** — so the doc on `Spec::hw_vr` that put *"came from a comment"* and *"and the 5.5G does not
+boot"* in one sentence was asserting a link nothing ever supported. Corrected in place.
+
+### And it is not `rsrc` either, which is a retraction of this session's other fix
+
+`mark_aupd_applied` was changed earlier today to rewrite `rsrc`'s load address and entry as well as
+marking the updater applied, and `KNOWN-BUGS.md` recorded that as taking a boot from 22 ATA and
+2 612 lit pixels to 70 ATA and 71 695. Three drives built here — Apple's shipped values, the
+forced values, and the armed updater — differ in exactly the three bytes the diff names and in
+nothing else:
+
+```
+abs 49215   0x10 -> 0x00     rsrc addr, high byte
+abs 49217   0x00 -> 0x06     rsrc entry
+abs 49240   0x01 -> 0x00     aupd applied
+```
+
+```
+ROM                 rsrc                        ata   lit      buckets
+synthesised 5.5G    forced 0x10000000 / 0       290   2 612    20 196
+synthesised 5.5G    Apple's 0x00000000 / 0x600  290   2 612    20 196
+Apple's retail 5G   forced 0x10000000 / 0        70   71 695    1 812
+Apple's retail 5G   Apple's 0x00000000 / 0x600   70   71 695    1 812
+```
+
+`70 / 71 695` is Apple's ROM either way; `2 612` is a synthesised ROM either way. **The original
+comparison moved the ROM as well as the drive** and read the difference as the drive's — §6's fifth
+shape, in a session that had already quoted §6 twice. The write stays, because a built drive
+carrying a real drive's values is still the drive to build; the boot-effect claim does not.
+
+### What is actually left, stated narrowly
+
+Only the **high-level boot** — the path a synthesised ROM takes, where the ROM's *effects* are
+produced instead of its instructions being run. On it, 25.1.3 stops after 20 `READ DMA` where
+20.1.3 does 277, and `2 612` lit pixels is the synthesised bootloader's own logo and nothing after.
+
+The strongest single clue is that the two synthesised arms are **identical to the code bucket**:
+`MA146` and `A444`, different serials, different GUIDs, different Gestalts, same 290 / 2 612 /
+20 196. On this path the OS's fate does not depend on the NOR's contents at all, so the divergence
+is machine state at OS entry, not identity — which is the same conclusion the ROM arms reach from
+the other side.
+
+Ruled out inside that, each with its control:
+
+- **The warm-path tag scaffolding.** `emu.rs` copies `trace`'s `install_sysinfo` records —
+  `Flsh` / `Sdrm` / `Frwr` / `Iram` at `+0x60` / `+0x74` / `+0x88` / `+0x9c` — onto this path.
+  Apple's real cold boot leaves all four **zero** (dumped at `0x40015898`), and `Frwr` at `+0x88`
+  additionally overwrites the measured `"1.00    "`. Removed: the 25.1.3 arm is unchanged to the
+  instruction, 290 / 2 612 / 20 196; the 20.1.3 arm shifts by 26 786 instructions and still idles
+  at 547 / 75 267, so the edit was live and the control holds. Not it.
+- **`0xea000078`.** The failing arm's only unmapped page, 144 reads, and it is a **known-benign
+  artifact** — research/07 §"`0xea000078` was never a real address", research/02 §372, and
+  research/10's own healthy 600 M baseline where it is the *only* unmapped page. It is RetailOS
+  dereferencing a null object and reading its own reset vector. Nearly filed as the cause; the
+  grep that NEXT.md R3 asks for is what stopped it.
+
+`trace` cannot currently reproduce this arm: `--osos-from-disk` uses `Machine::map_osos`, which
+pushes `osos` as a **region** at `0x10000000`, and the window's HLE deliberately does not — its own
+comment records that arrangement producing `Lost(0x02000000)` after 8 388 485 instructions, which
+is the failure the operator reported at the start of this session. So the CLI instrument and the
+shipped machine disagree about how a high-level boot is arranged, and the profile, register-file
+and watch instruments are all on the side that does not match. **That is the next thing to fix**,
+and it is a prerequisite for the trace this section keeps saying to run.
+
+Meanwhile `--headless` names its unmapped pages now, with PCs, the way the window's readout and
+`trace` always have. A total with no address is a number nobody can act on, and the one run that
+works over SSH was the one that could not say what the firmware reached for.
+
+### Two more things, and one of them changes the shape of the question
+
+**It is not running out of budget. It goes to sleep.** Fresh drive, five times the budget:
+
+```
+25.1.3   Idle after 494 749 605   290 ata (20 READ DMA, 264 WRITE DMA)   2 612 lit
+20.1.3   Idle after 302 191 833   547 ata (277 READ DMA, 264 WRITE DMA)  75 267 lit
+```
+
+Both reach `Idle`, which is `emu::Quiet` — a trailing window that is 95 % halted. So RetailOS 25.1.3
+is not spinning on anything and is not being cut off: it initialises, **writes the same 264 sectors
+the working boot writes** — it bootstraps the volume, so it is doing real work and the drive is not
+being rejected — reads 20 sectors where the other reads 277, and then halts waiting for an interrupt
+that never arrives. The 2 612 lit pixels are the synthesised bootloader's logo, never overwritten.
+
+That is a different question from the one this file has been asking. Not *"why does it die"* —
+**"which interrupt does 25.1.3 wait for that 20.1.3 does not?"**
+
+**And the 22-versus-290 discrepancy between this file's two matrices is the drive, not the run.**
+`work_on_copy = false` means a second boot in the same data directory starts on the drive the first
+boot wrote. First boot: 290 ata, 264 of them writes. Second boot on that same drive: 22 ata, 4
+writes — it finds the volume already bootstrapped. The earlier matrix was measuring second boots.
+Every number in this addendum is a fresh clone per arm, and an arm re-run for a second measurement
+gets a fresh clone first.
+
+Worth stating plainly because it is the same trap in a new place: an emulator arm is not fresh
+because the *settings* are fresh. The drive is state, and it is 8 GiB of it.
+
+### The harness split, which is the finding under all of the others
+
+Same ROM, same drive, both pinned, both built by `ipod-boot make-disk` from `iPod_20.1.3`:
+
+```
+ipod-emulator --headless   617 ata   75 267 lit   31 480 buckets   full panel
+ipod-boot retail            70 ata    2 blits                      Apple logo, then nothing
+```
+
+`retail` does not get further with more budget. At `BUDGET=2000000000`, and again through
+`from-idle`'s 1.6 G snapshot — the recipe that exists *because* a run needs 1.6 G to reach the menu
+— it is still 70 ata, still the two blits, still `usec 21333333` of a machine sitting at the Apple
+logo. The `70` that `ipsw.rs` records as *"where `ipod-boot retail` also stops and is a different,
+older defect"* is real, and it is **not** on the drive: the same drive boots to the language picker
+under the window's own machine.
+
+So the CLI recipe and the shipped emulator disagree about the same two files, and the instruments
+are all on the losing side. `--profile`, `--disasm`, `--watch`, `--break`, the register file at a
+fault and the wheel script are `trace` flags; `--headless` has none of them. Everything this file
+concluded from `ipod-boot retail` was measured on a machine that stops at the Apple logo.
+
+**The wheel bears this out.** Driven on `retail`, anchored in simulated time the way
+`parse_wheel_script`'s own doc insists:
+
+```
+--wheel='@8s:touch,@8500ms:rotate=+6,@10s:rotate=+6,@11s:press=select,@13s:release'
+  wheel script: 16 steps        script: 16 of 16 steps fired
+  clickwheel: 19 frames posted (15 dropped unread), 3 word reads of DATA
+```
+
+16 of 16 is the control §6 asks for, so the injector works and the anchor is right. But 15 frames
+dropped unread and 3 reads of DATA is a firmware that is not listening — because it is at the Apple
+logo, not at a menu. **There is currently no way to drive the wheel on a configuration that boots.**
+
+That is the next thing to fix, ahead of everything else in this file. `Machine::map_osos` pushing
+`osos` as a region at `0x10000000` is one half of it and is named above; the `70` is the other half
+and is not yet explained. Until the two harnesses agree, a trace of 25.1.3 against 20.1.3 would be
+a trace of the wrong machine.
+
+---
+
+## The 25.1.3 stall, root-caused: an I²C device that never answers what it is asked
+
+Written once `trace` could reproduce the arm (see `KNOWN-BUGS.md` on the two front ends, and the
+`--boot-osos` map argument). Everything below is the same command on two drives, one variable:
+
+```
+trace 400000000 --boot-osos --osos-from-disk --disk=<drive> --flash=<synth 5.5G NOR> \
+      --sysinfo --bcm --pmu --disk-writable
+```
+
+```
+drive from iPod_20.1.3   531 ata   75 267 lit   the language picker
+drive from iPod_25.1.3   290 ata        0 lit   stalled
+```
+
+290 and 75 267 are the window's own numbers for the same two arms, so this is the shipped machine.
+
+### It is not waiting for an interrupt. It is retrying, for ever
+
+`--profile` on the failing arm puts **60 %** of the budget in three addresses, and they are one
+function — a `udelay` on the PP502x microsecond timer at `0x60005010`:
+
+```
+002828b8  stmdb sp!, {r4, lr}
+002828bc  mov   r4, r0          ; the duration
+002828c4  ldr   r3, [r0, #0x10] ; the timer, read ONCE — the loop re-enters below this
+002828c8  mov   r1, r4
+002828d0  bl    0x002840b8      ; (now - start) >= duration ?
+002828d8  beq   0x002828c8
+```
+
+`--enterlog=0x002828b8` gives 84 arrivals and the tail is the finding. From 256 M instructions to
+the end of the budget the *same* call repeats every **9 992 960 instructions**, from **one** caller,
+with the same arguments every time:
+
+```
+lr=0x0015d360  r0=0x000186a0  r2=0x1087198c  @256949483
+lr=0x0015d360  r0=0x000186a0  r2=0x1087198c  @266942443
+lr=0x0015d360  r0=0x000186a0  r2=0x1087198c  @276934891
+…
+```
+
+`r0 = 0x000186a0` is **100 000 µs**. At 75 instructions per simulated microsecond that is 7.5 M
+instructions of delay inside a ~10 M instruction period, or one attempt every **133 ms**. So #39's
+framing — *"which interrupt does 25.1.3 wait for"* — is wrong, and pleasantly so: nothing is
+waiting on an interrupt. **A device initialisation is failing and being retried for ever.**
+
+### What it is retrying
+
+`0x0015d360` is the return address, so the call sits inside a straight-line init sequence: a run of
+`bl 0x0015c1cc`, each with a byte out of a table at `r4+0x32`, `+0x33`, `+0x37`, `+0x38`, each
+error-checked with `cmp r0,#0 / bne 0x0015d400`, and the 100 ms settle in the middle of them.
+
+`0x0015c1cc` builds a **two-byte packet on the stack** and pushes it through a vtable:
+
+```
+0015c1d4  mov  r0, r1, lsl #1        ; register address << 1
+0015c1dc  and  r1, r2, #0x100
+0015c1e0  orr  r0, r0, r1, lsr #8    ; …with bit 8 of the value as its LSB
+0015c1e4  strb r0, [sp, #0x0]
+0015c1e8  strb r2, [sp, #0x1]        ; value bits 7..0
+0015c1fc  ldr  r12, [r1, #0x10]      ; driver->write
+0015c210  bx   r12                   ; (driver, sp, 2, 0)
+```
+
+A 7-bit register address with 9 bits of data, packed into two bytes. On failure it calls
+`[vtable+0x1c]` and goes round again.
+
+### And `--i2c` names the device
+
+```
+                      dev 0x10   dev 0x11   dev 0x34   total
+drive from 20.1.3          156        164         52     372
+drive from 25.1.3           56         83      1 264   1 403
+```
+
+`0x10`/`0x11` are the PCF50605 the machine already models (7-bit `0x08`, write and read). **`0x34`
+is a fourth-and-a-half times as busy on the arm that stalls and 24× busier than on the arm that
+boots** — 1 264 transfers against 52 — and its hottest register pair is `reg 0x54`, 149 times.
+
+Address `0x34` is 7-bit `0x1a`. **Inference, not measurement, and flagged as such:** `0x1a` with a
+9-bit-data-in-two-bytes register format is the Wolfson codec convention, and a WM8758 is what a 5G
+and 5.5G carry. That would make this the **audio codec**, not the display — which is worth saying
+because "it never draws" reads like a display fault and the panel is downstream of this, not the
+cause of it.
+
+**So: RetailOS 25.1.3 asks I²C device `0x34` something during init, does not get the answer it
+needs, waits 100 ms, and asks again — 1 264 times in 400 M instructions, never getting past it.**
+20.1.3 asks 52 times and goes on to the language picker. Whatever the difference between the two
+sequences is, it is on that bus and not in the NOR — which is what the earlier finding that the two
+synthesised arms are *identical to the code bucket across different identities* already said, from
+the other side.
+
+**Next:** log the actual bytes of the `0x34` exchange on both arms, and find the first transfer
+where 25.1.3 asks something 20.1.3 does not — or gets an answer our model invents. The retry is
+deterministic and 133 ms apart, so a single `--watch-range` over the driver object at `0x1087198c`
+should show what it is testing.
+
+### Corrected, an hour later: it is a reset loop, and `0xea000078` is the fault after all
+
+The section above is right about the measurements and **wrong about what they mean**. Climbing the
+stack settles it, and the answer retro-fits the very first thing this investigation looked at.
+
+`--enterlog` on the codec init's caller gives `lr=0x000002d4`, and `0x2d0` sits in a **straight-line
+boot sequence** in low memory — a run of `bl`s ending `b 0x000af468` into the main loop. A straight
+line does not loop. So if the audio init runs 30 times, the boot runs 30 times. Armed:
+
+```
+                        iPod_25.1.3   iPod_20.1.3
+0x00000290  boot sequence      x30            x1
+0x00000000  the reset vector   x29     NEVER REACHED
+0x000002e0  b to the main loop x29            x1
+```
+
+**RetailOS 25.1.3 completes its boot, enters its main loop, and jumps to address 0 — twenty-nine
+times.** 20.1.3 goes round once and stays. The codec was never retrying; the *machine* was
+restarting, and the 1 264 I²C transfers are one init sequence run thirty times.
+
+`--enterlog=0x00000000` names where from. Twenty-eight of the twenty-nine arrive with
+**`lr=0x00183e90`**, which is this:
+
+```
+00183e64  ldr r0, [r4, #0x440]
+00183e6c  ldr r0, [r0, #0x1c]     ; <- null
+00183e74  ldr r1, [r0, #0x0]      ; <- reads the image's own reset-vector word
+00183e7c  ldr r12, [r1, #0x5c]    ; <- reads unmapped 0xea0000d4, which answers 0
+00183e88  mov lr, pc              ; lr = 0x00183e90
+00183e8c  bx  r12                 ; bx 0  ->  the reset vector
+```
+
+`lr = 0x00183e90` can only be written by the `mov lr, pc` at `0x00183e88`, and the only instruction
+after it is `bx r12`. **Arriving at `0x00000000` with that `lr` is itself the proof that `r12` was
+zero**, so no extra run is needed to confirm it. (The remaining one of the twenty-nine comes from
+`lr=0x000fb8ec` and is the first reset; the other twenty-eight are the steady loop.)
+
+**And that is the `0xea000078` this file dismissed on day one.** It was dismissed correctly *for
+the runs that had been measured*: research/07 §"`0xea000078` was never a real address", research/02
+§372 and research/10's healthy 600 M baseline all record it as a null-object dereference RetailOS
+does harmlessly, the only unmapped page in a boot that works. Every one of those is a **20.1.3**
+measurement. On 25.1.3 the same dereference goes one field further, into `+0x5c`, and what it finds
+there is used as a **function pointer**. Benign in one build, fatal in the other. NEXT.md R3's grep
+is what stopped it being filed as the cause on day one, and it was the cause all along — which is
+the more useful lesson: *a prior "known benign" is scoped to the runs that measured it.*
+
+The 20.1.3 arm reports `unmapped: 0 reads, 0 writes across 0 pages` on this same high-level boot,
+so it does not take this path at all.
+
+**Where the emulator is wrong is upstream of the `bx`.** `[[r4+0x440]+0x1c]` should not be null;
+something earlier failed to fill it, and the null dispatch is the consequence. Reading unmapped
+memory as `0` is a second-order question — a real bus might answer something else, and the firmware
+would then jump somewhere else and still be wrong. **Next: find what writes `+0x1c` on that object
+in the 20.1.3 arm, and what it is waiting on in 25.1.3.** `--storeaddr` over the object is the
+instrument, and research/10 §2 used exactly that to settle the last argument about an unwritten
+field on this same shape.
+
+### The loop is self-sustaining, and the first reset is the one that matters
+
+`--storeaddr` on the two fields in the dispatch chain, both arms, same command:
+
+```
+[0x10874224]   ( = r4+0x440 )
+  20.1.3   0x000843a8 -> 0            @482293      bss clear
+           0x00183f84 -> 0x10873958   @9937707     set, and stays
+  25.1.3   the same two, then zeroed and re-set on every pass — 59 stores
+
+[0x10873974]   ( = the +0x1c that dispatches through null )
+  20.1.3   0x000843a8 -> 0            @480069      bss clear
+           0x14936ce4 -> 0x1086cc7c   @9941435     set, and stays
+  25.1.3   the same two on the FIRST pass, then ONLY
+           0x000843a8 -> 0            @85220211, @95212013, @105204717, @115196269 …
+```
+
+**The initialiser at `0x14936ce4` runs once and never again.** So the first pass sets the field
+correctly; the first reset zeroes it with the bss clear; and every pass after that dispatches
+through null, resets, and zeroes it again. The loop feeds itself.
+
+Which means **the first reset is the cause and the other twenty-eight are aftermath**. It arrives
+at `@84740143` with `lr=0x000fb8ec`, and that site is the same shape as the other:
+
+```
+000fb8c4  tst   r6, #0x1          ; the Itanium-ABI member-pointer test
+000fb8cc  ldrne r1, [r0, #0x0]    ; vtable, from an object that is null
+000fb8d4  ldrne r2, [r7, r1]      ; the entry — unmapped, answers 0
+000fb8e4  mov   lr, pc            ; lr = 0x000fb8ec
+000fb8e8  bx    r2                ; bx 0
+```
+
+A C++ pointer-to-member call on a **null `this`**, exactly like `0x00183e7c`. Two sites, one bug
+class. (`research/04` ledger row at §687 records a third of the same family — four reads at
+`0xea000078` from `0x000a0bd0` — which is more evidence that this shape is normal *and survivable*
+on 20.1.3 and lethal here.)
+
+### Ruled out, each with the instrument that can now see a reset
+
+- **`rsrc`'s load address.** The one thing that genuinely differs between the two bundles — 20.1.3
+  ships `rsrc` at `0x10000000/0`, 25.1.3 at `0x00000000/0x600`. Two drives differing in exactly
+  those two words: **29 resets either way**, 290 ata, 0 lit. Yesterday's retraction of the `rsrc`
+  boot-effect claim stands, and now on evidence that could have shown a difference.
+- **A missing peripheral.** The register-block census is the **same twelve blocks** on both arms.
+- **Simulated time.** At `--clock=5`, fifteen times more per instruction, 25.1.3 is still 290 ata
+  and 0 lit while 20.1.3 reaches the picker. The 100 ms delay is not slowness.
+- **NOR identity.** Already known from the two synthesised arms being identical to the code bucket.
+
+**Next: why does the first reset happen at 84 740 143?** That is one event, deterministic, with a
+named site — and it is the whole bug, because nothing downstream of it can recover.
+
+### The first reset, as far as it has been traced
+
+`--stop-at=0x00000000:1` stops the machine *at* the first reset, and the fault register file is
+now printed (the break log's 16-register dump had been disabled with `.take(0)`):
+
+```
+at 0x000fb8d4  ldrne r2, [r7, r1]
+   r0 =00000000   <- the `this` pointer, null
+   r1 =ea00007a   <- [r0], the image's own reset-vector word
+   r7 =0000001c   <- the member offset
+   r14=0011e1cc   <- the caller
+   r7=7777772d  r8=8888882d  r9=9999992d  r12=cccccc2d
+```
+
+Those last four are a **poison fill** — `0x77777777`, `0x88888888`, `0x99999999`, `0xcccccccc`
+with a low byte written over — so this runs on memory nobody initialised.
+
+The caller at `0x0011e1a8`..`0x0011e1c8` loads a **member-function pointer from a global at
+`0x004f3fb4`** and invokes it through `0x000fb8a4`. That pointer is not the problem:
+
+```
+                       [0x004f3fb4]  [0x004f3fb8]
+  static, 20.1.3         0x0000001c    0x00000001
+  static, 25.1.3         0x0000001c    0x00000001
+  runtime, both arms     1c 00 00 00   01 00 00 00
+```
+
+Offset `0x1c`, virtual bit set — which is exactly `r7` and the `tst r6,#1` above. **And the two
+images are byte-identical over this whole call site**, so the difference is data, not code. Inside
+`0x000fb8a4` the object arrives as `ldmia r1,{r0,r1}` from the caller's `r5`, so the null is
+`[r5]`, a field of a structure passed down the chain.
+
+Another difference worth recording rather than acting on yet: **25.1.3 puts its stack near the top
+of 64 MB** (`r13=0x13edaca4`) where 20.1.3's sits about 9 MB in (`r13=0x108c6e04`).
+
+### Ruled out, with the reset count as the discriminator
+
+| tried | 25.1.3 resets |
+|---|---|
+| baseline | 29 |
+| `rsrc` at Apple's `0x00000000/0x600` instead of `0x10000000/0` | 29 |
+| handoff SDRAM word `0x02000000` (32 MB) instead of `0x04000000` | 29 |
+| `--clock=5`, fifteen times the simulated time | still 290 ata / 0 lit |
+| the same twelve register blocks as 20.1.3 | no missing peripheral |
+
+The SDRAM word is worth calling out because `emu.rs` flags it as unverified — *"whether it varies
+by model is NOT established"* — and the stack placement above made it look like a live suspect. It
+is not this bug.
+
+**Where it stands:** one deterministic event, at 84 740 143 instructions, in code that is byte-for-
+byte the same in a build that boots. Not fixed.
+
+---
+
+## SOLVED: the 5.5G's `rsrc` is 0xc00 further in than RetailOS looks
+
+The stack-climbing above ends here, and `research/10`'s first paragraph called it two weeks early:
+*"RetailOS's boot loop is a missing font… the lookup returns a null delegate, that null is bound
+into 400 objects, and the first call through one of them lands on `bx 0`."* That is the reset loop,
+exactly, and the reason the font is missing is now measured.
+
+### The reads say where it gives up
+
+The ATA command logs are identical through drive init — `IDENTIFY`, five `SET FEATURES`, then
+`READ DMA` at LBA 0 — and diverge on one command:
+
+```
+20.1.3   … lba 0, 32768, 0, 64, 14864, 22429, 14870, 22645, 22646, 22772, …   walks on
+25.1.3   … lba 0, 32768, 0, 64, 14872, 32768, 40974, then only repeats        gives up
+```
+
+Each of `14864` and `14872` is that build's `rsrc` **+ 0x200**. Read the firmware directory instead
+of guessing, and locate each volume's FAT12 boot sector by its `eb ?? 90` jump:
+
+| | `rsrc` devOffset | drive LBA | FAT boot sector | OEM | signature |
+|---|---|---|---|---|---|
+| 20.1.3 | `0x73a000` | 14863 | **+0x200** | `MTOOL399` | `55aa` |
+| 25.1.3 | `0x73b000` | 14871 | **+0xe00** | `MTOOL399` | `55aa` |
+
+**RetailOS reads `rsrc + 0x200` in both.** On the 5G that is the boot sector. On the 5.5G the boot
+sector is `0xc00` further in, so the mount fails, `/Resources/Fonts/PodiumSans18.ttf` is never
+opened, the font registry answers null the way it is designed to, and the first call through that
+null is `bx 0`.
+
+**Both volumes are genuine and identical in kind** — same OEM string, same `0x55aa`. And a control,
+because "it looks like garbage" was very nearly written up as "Apple encrypted the 5.5G's
+resources": over the whole 5 MB image, **entropy 5.614 bits/byte and 34.4 % zeros for 20.1.3
+against 5.615 and 34.4 % for 25.1.3**. Statistically the same file. It is a layout difference and
+nothing more; the encryption reading came from staring at sixteen bytes.
+
+### The proof
+
+One 8 GiB copy of the 25.1.3 drive, with `rsrc`'s payload moved so the boot sector lands at
+`devOffset + 0x200` and nothing else touched:
+
+```
+                              resets   ata   lit pixels
+25.1.3, as built                 29    290        0
+25.1.3, rsrc shifted 0xc00        0    531    75 267
+20.1.3, for comparison            0    531    75 267
+```
+
+**`0x00000000` NEVER REACHED, 531 ATA commands, and 75 267 lit — the same count as the working
+build, to the pixel.** RetailOS 25.1.3 boots to its language picker.
+
+### What the fix is, and what it is not
+
+It is **not** a 0xc00 constant. The header before an image's payload varies by image *and* by
+family — `osos` is `0x200` on the 5G bundle and `0x800` on the 5.5G's, and `rsrc` is `0x200` and
+`0xe00`. `image_from_drive` already finds `osos`'s header rather than assuming it, which is why the
+OS loads; **nothing does the same for the drive `build_disk` hands to RetailOS**, and RetailOS reads
+that drive itself.
+
+So the invariant to restore is the one the 5G already satisfies: **an image's real content begins
+`0x200` after the offset its directory entry declares.** `build_disk` writes the extracted
+`Firmware-*` file verbatim, which is true to the file and not to the layout a device has.
+
+**Next: implement that in `build_disk` rather than in a scratch copy, and re-run the matrix.** The
+gate is the table above — 0 resets, 531 ATA, 75 267 lit, on a drive `make-disk` produced — plus the
+5G drive unchanged, since its headers are already `0x200` and normalising must be a no-op there.

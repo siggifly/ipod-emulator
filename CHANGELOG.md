@@ -33,8 +33,10 @@ like the real thing because it is assembled the way Apple assembled them (factor
 week, a production code from the range that model actually shipped in).
 
 **And the case colour is not a switch.** It is read out of the model number, the way the iPod itself
-reads it, so a `MA146` is white and a `MA446` is black and a U2 special edition is black with a red
+reads it, so a `MA444` is white and a `MA446` is black and a U2 special edition is black with a red
 wheel — because that is what those part numbers *are*. Nothing to set, and nothing to get wrong.
+
+**The one the button makes is a white 30 GB 5.5G**, `A444` — a real Late-2006 configuration.
 
 If you *do* have a dump, nothing changes: it is still the more faithful machine, and pointing at one
 still wins. If you have a real iPod's **drive**, the identity found on it is used in preference to
@@ -57,9 +59,10 @@ large it is, and clearing it is one button.
 ### It boots without a dump, on all three revisions
 
 A synthesised ROM is not a copy of Apple's bootloader — nobody can distribute that — so it does not
-run one. It reproduces the **effects** of the boot: the handoff block Apple's bootloader leaves for
-the OS, measured out of a real cold boot rather than guessed, with this iPod's identity in it, and
-then hands control to the operating system on the drive.
+run one. It reproduces the **effects** of the boot, measured off a real one rather than guessed:
+Apple's bootloader reads the operating system off the drive into memory at `0x10000000` and jumps to
+the top of it, leaving a handoff block with this iPod's identity in it, and that is what the
+synthesised boot leaves too.
 
 All three firmware revisions boot this way — 5G Initial, 5G Rev A and the 5.5G — each with the
 firmware bundle that belongs to it, and each reaching the same place the real ROM does.
@@ -275,7 +278,19 @@ there**. On a drive that already carries Apple's software and Rockbox, that come
 three-entry menu — *ZeroSlackr, Apple OS, Rockbox*. There is a button for it in the window.
 
 ZeroSlackr is fetched and verified like everything else here — URL, size, SHA-256, and nothing
-renamed into place until it verifies.
+renamed into place until it verifies. **So is the bootloader.** `ipodloader2` v2.8.1 — 56 912 B,
+SHA-256 on record — is downloaded and checked the same way, and it is resolved *before* the 101 MB
+distribution rather than after it, so a failure arrives before the download instead of at the end of
+one. Until now the loader was built from `resources/vendor/ipodloader2`, which is not in the
+repository: iPodLinux could be installed only by somebody working inside a checkout of this project.
+
+**This changes which bootloader you get.** The vendored build is `iPL 2.9.0d`, from upstream's
+`master` and newer than any release; the fetched one is v2.8.1, the newest thing upstream publishes a
+binary for. Every number in `research/17` was measured on 2.9.0d, so until the same run is made
+against 2.8.1 those figures describe a loader most people will not be running.
+`IPOD_LOADER=/path/to/loader.bin` installs one you built instead — including 2.9.0d — and the report
+says which of the two ran, marking a supplied one `not hashed`, because this project holds no hash
+for a build somebody made.
 
 **It refuses drives it cannot boot rather than building them.** `ipodloader2` reads FAT32 partition
 type `0x0B` and has no case for `0x0C`; every drive image taken off real hardware here is `0x0C`.
@@ -380,6 +395,30 @@ Settings → About carries the repository link.
 
 ### Fixed
 
+- **Press Start on an iPod you had just made, and it died before the drive answered.** The
+  operating system was read off the drive and then filed *beside* memory instead of into it, so the
+  moment Apple's software remapped its own address space — about a fifth of a millisecond in — the
+  code went out from under it and the machine walked off the end of memory. `stopped: lost 33554432
+  at 8388485 instructions`, every time, with the drive untouched. It is put where Apple's own
+  bootloader is measured putting it now, and the same iPod reaches **484 disk commands** and a lit
+  panel in the same run that used to reach none.
+- **A download said the same thing before, during and after.** The plan promises
+  `iPod_25.1.3.ipsw — 6 533 633 B — from Apple, SHA-256 checked`, and the finished step reported
+  that identical sentence — so a real 6.5 MB fetch left nothing on screen to distinguish it from a
+  file that was already on the disk, and got reported as *"seems to have had the ipod ipsw file, at
+  least it didn't show it downloading"*. It did download; it took 0.44 s, which at 10 Hz is four
+  frames. A step that downloaded now says so in the past tense and says how long it took; one that
+  found the bytes already cached — including one skipped by a resume — says *already here*.
+- **A first-run iPod was drawn in the wrong case.** The colour a device is drawn in is read out of
+  its own model number, and the one route that never did it was the press that makes an iPod out of
+  nothing — so the plan said one colour and the drawing was black regardless.
+- **A machine that stopped said nothing to the log.** Starting one prints two lines; stopping one
+  printed nothing at all, so a session where the same iPod died five times read as five identical
+  boots with no endings — which is indistinguishable from a program restarting itself. It says
+  `stopped:` and why, now, and the second one in a row says it is the second.
+- **`ipod-boot warm --flash=…` ignored the file you named** and ran the configured ROM instead,
+  printing the configured ROM's model in its own output. The same held for `--disk=` and for every
+  recipe. Your flag wins now, and `--print` says so.
 - **`--headless`, `--selftest`, `--probe` and `--power-cycle-at` could not open a drive.** Which
   drive the machine writes to was decided inside the window, so every path without a window pointed
   at a working copy nothing had made.
