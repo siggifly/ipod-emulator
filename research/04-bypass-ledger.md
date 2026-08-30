@@ -927,3 +927,37 @@ on the *read* path too, and retracted two further published conclusions in
 written by "nobody", and a sibling record's non-zero field written off as uninitialised heap. Both
 were fully written. Nothing in this ledger changes — no bypass was justified by either — but the
 count of wrong conclusions traceable to this one hoist is now **three**. Addendum 8b.
+
+---
+
+## Caveat on the interrupt-wake fix (2026-08-31) — it stops the machine idling
+
+`eb058d7` made a pending, enabled interrupt wake a halted core, which it should: the wake list was
+deadlines only, so the core slept through every line a peripheral raised. It is not a bypass and it
+is not faked. **But it has a measured side effect, and this is where it is written down.**
+
+Real retail NOR, 20.1.3 drive, 3 G budget, identical but for a wheel script:
+
+| | instructions | halts | simulated time HALTED | sim time reached |
+|---|---|---|---|---|
+| no input | 762 M | 495 297 | **448 s** | 600 s |
+| with input | **2.68 G** | 65 902 | **60 s** | 596 s |
+
+With input the core is awake for all but a minute of a ten-minute run and retires 3.5x the
+instructions — and **draws less for it**: 21 presents without input against 6 with.
+
+**Why.** IRQ 40 is a level, not a pulse — `service_clickwheel` holds it while a frame is waiting and
+drops it when the frame is read. The run ends with frames unread (`dropped unread` is non-zero), so
+`RX_READY` stays high, the line stays asserted, and a core that now wakes on a pending interrupt can
+never halt again. The old behaviour hid this by never waking at all.
+
+**This is arguably what the hardware does** — a level interrupt does persist until serviced, and a
+real ISR always services it. So the question is not whether to keep the wake, but why Apple's ISR
+leaves a frame unread when it runs. The decoder acknowledges `RX_READY` on both its paths
+(`0x002813e4`), which makes the persistence harder to explain, not easier.
+
+**Retirement condition for this note**: a run whose `dropped unread` is zero and whose halted time
+with input is comparable to the control's. Until then, treat instruction counts and draw counts from
+any run carrying a wheel script as **not comparable** to one without — they cover different amounts
+of simulated work, and that is what makes the "input draws less" reading in research/12 an artefact
+of the budget rather than a fact about drawing.
