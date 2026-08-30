@@ -158,6 +158,20 @@ jobs:
                      f"no-secrets: `{secrets}`. Pushed by **{actor}**.")
           print(json.dumps({"content": f"{msg}\n`{sha[:8]}`"}))
           PY
-          # `--fail` so a rejected post fails the step instead of passing quietly.
-          curl -sS --fail -X POST "$HOOK" -H 'Content-Type: application/json' \
-            --data @/tmp/payload.json
+          # **This host may have no egress to discord.com.** A server-side
+          # Forgejo hook accepted its test with HTTP 204 and delivered nothing,
+          # while the same webhook URL posts fine from a laptop — so the URL is
+          # good and the network is the problem. Until that is opened, a failed
+          # post must not turn a green build red: the gates are the signal, the
+          # notification is a convenience.
+          #
+          # But it does not fail SILENTLY either. It says which of the two cases
+          # it hit, so nobody reads a quiet step as a delivered message.
+          if curl -sS --fail --max-time 20 -X POST "$HOOK" \
+               -H 'Content-Type: application/json' --data @/tmp/payload.json; then
+            echo "posted to Discord"
+          else
+            echo "::warning::could not reach discord.com from this runner —" \
+                 "the gates above are still authoritative. Open egress from the" \
+                 "Forgejo host, or run the notifier somewhere with network access."
+          fi
