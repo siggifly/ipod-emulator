@@ -545,3 +545,33 @@ window's own `click_gap` deserves the same look — this is the same shape as `M
 
 **It is not the cause here.** With every frame read, the six stage counts are still identical and the
 framebuffer is still byte-identical. Timing was worth fixing and it does not explain the silence.
+
+### Three instruments that do not answer this, and why (2026-08-31)
+
+An attempt to find *where* the input stops, above stage 3. It did not find it, and the three
+dead ends are worth more than the attempt: each one produced a confident wrong answer first.
+
+**1. `--profile` is a 16-byte-bucketed SAMPLER, and its tail is noise.** Diffing the full census
+(`--profile=20000`, since the default prints 15 rows of 11 217) gives "94 addresses only the input
+arm executed", including `SerialOptoTask+0x24`, `EventManager+0x58` and an address inside the
+`InputEvents` region — which reads exactly like the input path lighting up. **It is not.** Eighty of
+those carry a *single sample*, and a one-sample difference between two 4.6 M-sample runs is
+sampling noise. `--enterlog` on the same addresses says `NEVER REACHED` in **both** arms, and
+`SerialOptoTask+0x24` is reached `x1` in **both**. Every profile address ends in `0` because it is a
+bucket base, not a PC, so arming a counter on one misses by construction.
+
+**2. The symbol names are string literals, not function entries.** `extract_symbols` recovers RTOS
+task-name strings out of loaded SDRAM, so `EventManager+0x58` means *0x58 past where that string
+sits*, not *inside that function*. The labels read like a call graph and are not one.
+
+**3. `--callers=` on either stage address reports `none`, correctly.** `0x001650f8` and `0x00164f44`
+are **mid-function observation points** picked for §0's arrival table, not call targets, so a scan
+for branches to them finds nothing. The flag is fine; the question was wrong.
+
+**What still stands**, because it is deterministic rather than sampled: the six per-PC `x{n}`
+totals are identical with and without input, so the redraw is not issued. That result does not
+depend on any of the three above.
+
+**Next, and not with these tools.** The runtime samplers cannot give function boundaries. Getting
+the *entry* of whatever owns `0x001650f8` is a static job — `tools/ghidra`, or `dis` over the OSOS
+image — and until there is an entry address, there is nothing correct to arm a counter on.
