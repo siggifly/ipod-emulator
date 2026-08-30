@@ -14,10 +14,26 @@ document disagree, this document is what gets argued with first.
 
 **The iPod is not a picture inside the program. It is the program.**
 
-One well, one device drawn at its own true size, one fixture holding it, one shelf under it that
-speaks, and one drawer beside it that holds everything else. Pressing the device's own centre button
-is what starts it. There is no chrome bar, no tab strip, no Start button, and no settings screen —
-because every one of those is a thing standing between a person and the object they came to look at.
+One well, one device drawn at its own true size, one fixture holding it, and one drawer beside it
+that holds everything else. Pressing the device's own centre button is what starts it. There is no
+chrome bar, no tab strip, no Start button, and no settings screen — because every one of those is a
+thing standing between a person and the object they came to look at.
+
+> **Amended 2026-08-30 — the shelf is gone, and one sentence of it survives.** This read *"one shelf
+> under it that speaks"*, and the shelf was an 88 px band across the full client width. It is replaced
+> by a **hamburger that opens and closes the drawer**, with the device's state as a compact label
+> beside it.
+>
+> The reason for the amendment is the same reason the paragraph above gives for having no chrome bar:
+> a band that is always there is a thing standing between a person and the object. The well grows by
+> 88 px and the iPod is the larger for it.
+>
+> **What the shelf was right about, and what is kept.** It answered *"what is this thing doing"*
+> without being asked. Losing that entirely would be a regression, not a simplification — a person
+> who has to open a drawer to learn whether the machine is running has been given a worse window, not
+> a cleaner one. So the state survives as a label next to the hamburger: name, and `running` /
+> `parked · 4 min ago` / `off`. What does **not** survive is the cradle line and the second and third
+> rows; those belong on the device's drawer page, which is where a person goes to act on them.
 
 The 320 × 240 rectangle on that device's face is the only part of the window we are forbidden to
 draw in. Everything else is ours.
@@ -368,14 +384,21 @@ Two more fields, both cheap and both currently unrepresentable:
 **The bench is not a place you can leave**, because there is nowhere above it. The drawer is a set of
 pages you visit. Fullscreen is a surface the machine has, not a mode the window is in.
 
-**The bottom-right 420 × 88, decided 2026-08-21.** *The drawer is full client height above the
-shelf* **and** *the shelf narrows to W − 420* cannot both be true of the same rectangle: between them
-they leave the corner where the drawer's height stops and the shelf's width stops belonging to
-nothing. §11.2's own arithmetic — 803 px on the operator's machine, 722 at the window minimum — is
-computed as `client − SHELF`, so the drawer's height is not the negotiable half. **The shelf's band
-background and its 1 px top rule span the full client width; only the shelf's three content rows
-narrow to `W − 420`.** Nothing is unpainted, the drawer covers no shelf content, row 3 keeps the
-narrowed measure §7.5 asks for, and the bottom band stays continuous as §7's own drawing shows it.
+**The bottom-right 420 × 88 — resolved 2026-08-21, and dissolved 2026-08-30.**
+
+The conflict was real while it lasted: *the drawer is full client height above the shelf* **and** *the
+shelf narrows to W − 420* could not both be true of the same rectangle, because between them they left
+the corner where the drawer's height stopped and the shelf's width stopped belonging to nothing. The
+resolution was that §11.2's arithmetic is computed as `client − SHELF`, so the drawer's height was not
+the negotiable half.
+
+**Removing the shelf removes the term that resolution was written in**, which is why this section is
+amended rather than deleted — a reader arriving at `client − SHELF` in an old commit needs to find out
+where it went.
+
+With no shelf, the well is full client height and the drawer is full client height beside it. There is
+no corner to argue over. `Geometry.primary-footer-h` and the `client − SHELF` computation both go, and
+§11.2's numbers gain 88 px: **891 px on the operator's machine, 810 at the window minimum.**
 
 **And the drawer has to be *told* that height.** A component's root element cannot read `parent` —
 Slint says `Cannot access id 'parent'` — and it must not read the window's own height either (§16.1),
