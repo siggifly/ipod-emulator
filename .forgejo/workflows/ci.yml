@@ -163,10 +163,17 @@ jobs:
           fi
           printf '{"content":"%s"}' "$text" > /tmp/payload.json
 
-          # A blocked post must not redden a good build — the gates are the
-          # signal and this is a convenience. It does not fail silently either:
-          # it says which case it hit, so a quiet step is never mistaken for a
-          # delivered message.
+          # **The runner CAN reach discord.com** — proved by a delivered message
+          # at 382465d9, after the python3 removal. Worth recording because it
+          # was briefly believed otherwise: the Forgejo SERVER has no egress (a
+          # server-side hook accepted its test with HTTP 204 and delivered
+          # nothing), and that got wrongly generalised to the runner while the
+          # real fault was a missing interpreter aborting the step before curl.
+          #
+          # The tolerant branch stays anyway. Egress can be withdrawn, and a
+          # convenience that cannot post must not redden a good build. It does
+          # not fail silently either: it says which case it hit, so a quiet step
+          # is never mistaken for a delivered message.
           if curl -sS --fail --max-time 20 -X POST "$HOOK" \
                -H 'Content-Type: application/json' --data @/tmp/payload.json; then
             echo "posted to Discord"
