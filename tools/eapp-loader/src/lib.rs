@@ -7863,7 +7863,14 @@ impl Bcm {
     ///
     /// Layout is `FUN_00288058`'s + `FUN_00286aa8`'s + `FUN_002882c0`'s, in that order: the
     /// `0x1f0` header, the eight `u16` slots, and one 0x50-byte record for the tag-2 service.
-    fn publish_registry(&mut self) {
+    /// Publish the channel directory the host reads at internal `0x1f0`.
+    ///
+    /// `pub` because a **warm entry has to call it directly**. It normally runs from
+    /// `on_write(0x10000400)`, the last write of the bootstrap sequence — Apple's bootloader
+    /// bringing the co-processor up. A boot that starts at `0x10000000` is after that sequence,
+    /// so the trigger never fires, the directory is never published, and RetailOS finds no
+    /// channel to send a display RPC over. That is why a warm boot draws nothing.
+    pub fn publish_registry(&mut self) {
         self.set32(BCMA_COMMAND, 1); // "firmware up" — FUN_00288058 requires exactly 1
         self.set32(BCMA_STATUS, REG_BASE); // the directory pointer; non-zero, 4-aligned
         for i in 0..8u32 {

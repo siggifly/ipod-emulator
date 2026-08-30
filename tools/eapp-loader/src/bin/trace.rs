@@ -903,6 +903,33 @@ fn main() {
             if b.registry {
                 println!("  bcm gencmd registry: publishing a tag-2 display service");
             }
+            // **A warm entry has to be handed the channel directory**, because nothing will
+            // write the trigger that publishes it.
+            //
+            // `publish_registry` normally runs from `on_write(0x10000400)` — the last write of
+            // the bootstrap sequence, which is Apple's bootloader bringing the co-processor up.
+            // A boot entering at 0x10000000 starts after that, so the trigger never fires, the
+            // directory at internal 0x1f0 is never published, `FUN_00288058` finds no channel,
+            // and RetailOS never sends a display RPC. That is why a warm boot draws nothing —
+            // measured, same disk: warm `0 frame updates, 0 halfwords`, cold 384 260 halfwords.
+            //
+            // research/12 §0 names the two interfaces this rests on: the bootloader reaches the
+            // panel through a fixed-function command interface, RetailOS through framed RPC over
+            // a ring pair. Only the second needs the directory, and only the warm path lacks it.
+            //
+            // **This lives here and not in `install_sysinfo`**, where it was written first, for
+            // a reason worth recording: that function runs at line 739 and the co-processor is
+            // installed at 906, so `m.mem.bcm` was still `None`, `if let Some` matched nothing,
+            // and the whole compensation silently did not happen — while the run printed the
+            // same "0 frame updates" it printed before, which reads as "the fix did not help".
+            // A `--boot-osos` run WITHOUT `--cold-boot` is the warm entry: the OS is lifted
+            // out of the drive's firmware partition and entered directly, with no bootloader.
+            let warm_entry = args.iter().any(|a| a == "--boot-osos")
+                && !args.iter().any(|a| a == "--cold-boot");
+            if warm_entry && b.registry {
+                b.publish_registry();
+                println!("  bcm registry published for a warm entry (no bootloader wrote the trigger)");
+            }
             m.mem.bcm = Some(b);
             println!("  bcm model at 0x30000000");
         }
@@ -2950,6 +2977,7 @@ fn install_sysinfo(m: &mut eapp_loader::Machine, base: u32, sdram_size: u32, fla
     // machine state a bootloader leaves behind, which is what this whole function is for.
     let gpo32 = m.mem.read32(0x7000_0080) | 0x4000;
     m.mem.write32(0x7000_0080, gpo32);
+
 
     // Everything the block says about *which iPod this is* comes from the NOR, when there is one.
     // The constants this used to carry were measured on the PROTOTYPE dump, before the retail one
