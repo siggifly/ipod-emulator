@@ -1,0 +1,74 @@
+// Games — docs/GUI.md §13, §13.4, §9.1.
+//
+// **The page exists because the shelf and the drawer both point at it.** §7.3 designs all five
+// menu-strip words to call `open-page(<its page>, 1)`, and
+// `every_word_of_the_menu_strip_opens_the_drawer_at_the_page_it_names` enforces it — so `Games` is
+// navigable by design. It had no body: every other page in `ui/drawer.slint` carries a
+// `visible: … && root.page == DrawerPage.<name>` block and this one did not, so pressing the word
+// opened a blank drawer and nothing said why.
+//
+// **It is a project state, not a stub**, per §13.4: *"Before 0.6, the `Games` root row is a project
+// state"*. §13 designs the real page — a title on the bench, a binding matrix, `61 of 98` in `warn`
+// — and schedules it for 0.6 because *"the framework work is not done and the keystore is in a
+// private repository."* Saying that plainly is the whole content until then. What must NOT appear
+// here is a title list this program cannot open, or a control that files a `.ipg` nothing reads.
+//
+// **The sentence is §13.4's, verbatim**, and it is two facts rather than an apology: what already
+// works (`bind_native`, `eapp-inspect`) and what does not (the surface that runs one). §9.4's
+// second kind — *this is not finished, by us* — so `machine-rule: false`, and no escape hatch,
+// because there is no command that runs a title either.
+
+import { Ink, Metric } from "tokens.slint";
+import { DrawerHeader, Row, Scroll } from "primitives.slint";
+
+export component GamesPage inherits Rectangle {
+    callback back-pressed();
+
+    background: Ink.bg;
+    accessible-role: AccessibleRole.region;
+    accessible-label: "Games";
+
+    VerticalLayout {
+        spacing: 0px;
+
+        DrawerHeader {
+            back: "Menu";
+            title: "Games";
+            back-pressed => {
+                root.back-pressed();
+            }
+        }
+
+        // One row today, and a `Scroll` regardless — for `SettingsPage`'s reason: the row is
+        // disabled and therefore `ROW_H + FIELD_REASON` tall, and §16.2's finding is that a layout
+        // shorter than its children neither shrinks nor clips them, it draws them off the bottom.
+        scroll := Scroll {
+            vertical-stretch: 1;
+            min-height: 0px;
+            preferred-height: 0px;
+            viewport-height: body.preferred-height;
+
+            body := VerticalLayout {
+                width: scroll.width;
+                alignment: start;
+                spacing: 0px;
+                accessible-role: AccessibleRole.list;
+                accessible-label: "Games";
+
+                Row {
+                    index: 0;
+                    count: 1;
+                    label: "Titles";
+                    enabled: false;
+                    // §9.4's second kind: not finished, by us. No escape hatch, because no command
+                    // runs a title either — §9.4's rule is to name a real one or none.
+                    machine-rule: false;
+                    reason: "0.6. bind_native() resolves a title's imports against RetailOS's eight frameworks today; the surface that runs one is not built. eapp-inspect reads a title's import table now.";
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+            }
+        }
+    }
+}

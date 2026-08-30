@@ -331,6 +331,7 @@ fn no_touch_area_or_focus_scope_is_ever_disabled() {
         "composer.slint",
         "devices.slint",
         "drawer.slint",
+        "games.slint",
         "ipod.slint",
         "parts.slint",
         "preview.slint",
@@ -904,4 +905,64 @@ fn the_copy_command_control_does_not_mint_a_new_ipod() {
          `on_composer_act` builds and copies the command line under `Field::Serial`, which is \
          ordinal {copy} in `Field::ALL`"
     );
+}
+
+/// **Every `DrawerPage` anything navigates to has a page body.**
+///
+/// The failure this exists for: `ui/bench.slint`'s shelf routed `Games` to `DrawerPage.games`, and
+/// `ui/drawer.slint` has no `visible: … && root.page == DrawerPage.games` block — every other page
+/// has one. Pressing it opened a blank drawer, and nothing anywhere said so.
+///
+/// **An audit of callbacks and properties cannot see this**, which is why it is a test rather than
+/// a sweep. `go-to-page` *is* wired, its Rust handler *is* present, and `nav::Page::Games` maps to
+/// `DrawerPage::Games` in both directions. Every declared thing is connected. The missing tier is
+/// the page **body**, and a green suite is exactly as green without it.
+///
+/// The rule is one-directional on purpose: a variant with a body and no navigation is fine (§13
+/// designs Games for 0.6, so the variant is allowed to exist ahead of its shelf word). A variant
+/// that is navigated to and has no body is a dead end.
+///
+/// **How to make it go red**: restore `go => { root.go-to-page(DrawerPage.games); }` on the shelf's
+/// `Games` word.
+#[test]
+fn every_navigable_drawer_page_has_a_body() {
+    let drawer = code(&ui("drawer.slint"));
+    let bodies: Vec<String> = drawer
+        .iter()
+        .filter(|l| l.contains("root.page == DrawerPage."))
+        .filter_map(|l| l.split_once("root.page == DrawerPage."))
+        .map(|(_, rest)| {
+            rest.chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .collect()
+        })
+        .collect();
+    assert!(
+        bodies.len() >= 5,
+        "found only {} page bodies in ui/drawer.slint — the scan is broken, not the markup: {bodies:?}",
+        bodies.len()
+    );
+
+    for name in ["bench.slint", "drawer.slint", "window.slint"] {
+        for (n, line) in code(&ui(name)).iter().enumerate() {
+            let Some((_, rest)) = line.split_once("go-to-page(DrawerPage.") else {
+                continue;
+            };
+            let page: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
+            // `none` is the closed drawer, not a page, and owns no body by construction.
+            if page == "none" {
+                continue;
+            }
+            assert!(
+                bodies.contains(&page),
+                "ui/{name}:{}: navigates to `DrawerPage.{page}`, which has no \
+                 `visible: … && root.page == DrawerPage.{page}` body in ui/drawer.slint. \
+                 Pressing it opens a blank drawer. Bodies present: {bodies:?}",
+                n + 1
+            );
+        }
+    }
 }

@@ -31,6 +31,7 @@ import {
     TickRow,
 } from "primitives.slint";
 import { RailRow } from "rail.slint";
+import { GamesPage } from "games.slint";
 import { WorkPage } from "work.slint";
 import { ComposerRoot, NameItPage, WhatItRunsPage, WhichIpodPage } from "composer.slint";
 import { DevicesPage } from "devices.slint";
@@ -487,6 +488,15 @@ export component Drawer inherits Rectangle {
                     }
                     next-step(id, n) => {
                         root.rail-next(id, n);
+                    }
+                }
+
+                GamesPage {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.on-screen(2) && root.page == DrawerPage.games;
+                    back-pressed => {
+                        root.back();
                     }
                 }
 

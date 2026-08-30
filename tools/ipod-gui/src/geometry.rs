@@ -891,6 +891,8 @@ mod tests {
         // §7.2's Devices page — device selection lives here, not on the bench.
         "devices.slint",
         "drawer.slint",
+        // §13.4's project state. Declared the day the file landed, per this list's own rule.
+        "games.slint",
         "ipod.slint",
         // §11.4's six groups.
         "parts.slint",

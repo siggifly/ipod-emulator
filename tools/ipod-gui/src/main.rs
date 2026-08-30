@@ -16463,7 +16463,7 @@ pub(crate) mod tests {
         assert!(!w.get_setting_copy_enabled());
         assert!(!w.get_setting_copy_reason().is_empty(), "`Copy path` is disabled and says nothing");
 
-        // The one live control. `drawer.slint:565` fires this ordinal as
+        // The one live control. `drawer.slint:575` fires this ordinal as
         // `root.setting-toggled(1)`; `Row::CheckUpdates` is 1.
         let before = settings.borrow().check_updates_on_start;
         assert_eq!(w.get_setting_check_updates(), before, "the box does not reflect the library");
