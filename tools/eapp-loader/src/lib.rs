@@ -7421,6 +7421,15 @@ pub struct Bcm {
     /// Next handle to hand out, and the bump pointer surfaces are allocated from.
     next_handle: u32,
     next_surface: u32,
+    /// Where that bump pointer started, for `--surface-base=`.
+    ///
+    /// **This exists to run one experiment**, the first step research/04 names for retiring
+    /// ledger #6: *"move the allocator's base and see whether the drawn frame follows it. If
+    /// it does, the pixels are ours and the address is arbitrary; if the panel goes blank,
+    /// the address is load-bearing and must be sourced."* `0xE0000` is a **known-wrong**
+    /// choice still in place — it is the co-processor's command-parameter buffer, and a real
+    /// co-processor would not hand that out as a free resource.
+    pub surface_base: u32,
     /// Internal addresses the host reads, and how often — which is how you find the word it is
     /// waiting on without disassembling the poll loop.
     pub read_hist: BTreeMap<u32, u64>,
@@ -7530,6 +7539,18 @@ const GENCMD_MAGIC: u32 = 0xf1a5_5a1f;
 const REG_SURFACE_BASE: u32 = 0x000e_0000;
 
 /// Bytes between `rd` and `wr` in a ring `[lo, hi)` — RetailOS's own `FUN_000f5834`.
+impl Bcm {
+    /// Move the surface allocator, for the ledger #6 step-1 ablation.
+    ///
+    /// Sets both the recorded base and the live bump pointer. Setting only one would make the
+    /// flag report a move it had not performed — the shape of a switch that is not wired up,
+    /// which this repository has already shipped once with `--cop-awake`.
+    pub fn set_surface_base(&mut self, base: u32) {
+        self.surface_base = base;
+        self.next_surface = base;
+    }
+}
+
 fn ring_used(lo: u32, hi: u32, rd: u32, wr: u32) -> u32 {
     if wr < rd {
         (hi - rd) + (wr - lo)
@@ -7578,6 +7599,7 @@ impl Bcm {
             gencmd_dropped: 0,
             next_handle: 1,
             next_surface: REG_SURFACE_BASE,
+            surface_base: REG_SURFACE_BASE,
             read_hist: BTreeMap::new(),
             latch_log: Capped::new(24),
             timeline: Capped::new(4096),

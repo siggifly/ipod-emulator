@@ -283,6 +283,19 @@ fn main() {
     // depends on the second core could be A/B'd, because there was no arm B" — and there was
     // not one, where it mattered.
     m.mem.cop_awake = args.iter().any(|a| a == "--cop-awake");
+    // --surface-base=ADDR : the ablation research/04 names as step 1 of retiring ledger #6.
+    // Moving it answers whether `0xE0000` is load-bearing or arbitrary, which nothing else can.
+    if let Some(v) = args.iter().find_map(|a| a.strip_prefix("--surface-base=")) {
+        let base = u32::from_str_radix(v.trim_start_matches("0x"), 16).unwrap_or_else(|_| {
+            eprintln!("--surface-base= wants hex, e.g. --surface-base=0x200000");
+            std::process::exit(2);
+        });
+        if let Some(b) = m.mem.bcm.as_mut() {
+            b.surface_base = base;
+            b.set_surface_base(base);
+        }
+        eprintln!("surface allocator base moved to {base:#010x} (ledger #6 step 1 ablation)");
+    }
 
     // **Say which bypasses are live, every run, without being asked.**
     //
