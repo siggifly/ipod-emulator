@@ -11,7 +11,7 @@ static reference, of type `DATA`, and reads as "unreachable" right up until you 
 | | |
 |---|---|
 **The three shell scripts this table used to list — `serve.sh`, `bridge.sh`, `q.sh` — no longer
-exist; they were rewritten into `arfi`-style subcommands and the table was not updated.** A document
+exist; they were rewritten as `ipod-boot` subcommands and the table was not updated.** A document
 naming a file that is in no commit is the same defect class as a flag with no mechanism behind it,
 so it is spelled out rather than quietly corrected.
 
