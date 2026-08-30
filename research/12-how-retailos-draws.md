@@ -658,3 +658,38 @@ them boot-time queries. **The wheel interrupt is pending, enabled, and never ser
 what its ISR reads. That is a static question about Apple's code, and `tools/ghidra` is the tool for
 it. The runtime instruments have now said everything they can: the line is raised, the controller
 would deliver it, and the firmware does not come.
+
+### The exact instruction it stops at, and it is one gate short of Wall B's fix
+
+Apple's installed ISR is reached and its hi-bank arm is reached. Armed on the three instructions
+that matter, real retail NOR, 20.1.3 drive, wheel script firing all four steps:
+
+| address | | arrivals |
+|---|---|---|
+| `0x00277128` | the CPU dispatcher body | **62 124** — every interrupt taken |
+| `0x002771dc` | `tst r5, #0x100` — *is IRQ 40 pending?* | **539** |
+| `0x002771e4` | `bl 0x281350` — the wheel decoder | **NEVER REACHED** |
+| `0x00281350` | the decoder itself | **NEVER REACHED** |
+
+So Wall B's fix works as far as it goes: bit 30 of the low bank is raised, the `tst r4, #0x40000000`
+gate passes, and the hi-bank block is entered 539 times. **What never happens is `r5` bit 8 being
+set on any pass the ISR makes.**
+
+**And it is set at the end of the run.** Dumped after the same run:
+
+```
+0x60004000  CPU_INT_STAT        0x40000001   bit 30 — hi aggregate raised
+0x60004020  CPU_INT_EN_STAT     0xcc802017
+0x60004100  CPU_HI_INT_STAT     0x00000100   bit 8 — IRQ 40 pending
+0x60004120  CPU_HI_INT_EN_STAT  0x80800195   bit 8 — enabled
+```
+
+A frame is waiting, the line is asserted, the mask allows it — and the 539 ISR passes all read zero
+there. The 539 are the drive: `ide irq raised 946 times` is `IDE_DMA_IRQ_HI = 23`, in the same bank.
+
+**The next question is therefore about time, not wiring.** The wheel's frames post at ~369 M
+instructions, the run ends at ~395 M, and in between `cpu sleep: 514697 halts, 520976 ms of
+simulated time spent halted`. Either the ISR does not run again in that window, or a halted core is
+not being woken by an assertion on the hi bank. `Machine::service_interrupts_inner` wakes the **COP**
+explicitly (`if self.mem.cop_asleep { … self.cop.irq() }`) and there is no matching wake for the CPU
+— worth checking before anything else, and it is a question about our model rather than Apple's.
