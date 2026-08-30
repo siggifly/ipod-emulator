@@ -25,6 +25,13 @@ jobs:
   test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    # **Skip when this file is read by Forgejo.** Forgejo Actions also discovers
+    # `.github/workflows/`, and these steps assume GitHub's containerised runners:
+    # `apt-get` for the GL headers needs root, which a host executor is not, and
+    # `actions/cache@v4` is not mirrored on data.forgejo.org. Run there it fails for
+    # reasons that say nothing about the code, and a permanent red teaches people to
+    # ignore reds. The Forgejo-native gates live in `.forgejo/workflows/ci.yml`.
+    if: github.server_url == 'https://github.com'
     strategy:
       # Every platform reports, always. A Windows failure must not hide a Linux one.
       fail-fast: false
