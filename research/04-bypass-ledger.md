@@ -77,8 +77,21 @@ exactly four live bypasses:**
 | **#8** PLL locked | `trace.rs:2106`, no flag | no |
 | **#9** `IDE0_CFG` bit 3 | `Ata::read`, no flag | no |
 
-Three of the four cannot be turned off from a recipe at all, which is worth stating plainly: a reader
-who greps the recipe for "which bypasses am I running" finds one of the four.
+**Corrected 2026-08-30.** This said *"three of the four cannot be turned off from a recipe at all…
+a reader who greps the recipe for 'which bypasses am I running' finds one of the four."* Both
+halves have changed:
+
+**It is now one of four, not three.** `--bcm` (#6) and `--no-ide-irq-latch` (#9) were already
+switchable. **#7 was not** — `lib.rs` printed *"COP_STATUS override NOT installed (--cop-awake)"*,
+naming a flag only the window parsed, while every recipe runs `trace`. So on the path that
+produces every number in this directory, #7 advertised an arm B that did not exist. `trace` now
+accepts `--cop-awake`. #8 remains unswitchable, and is an OR-mask rather than a whole-word
+override.
+
+**And grepping the recipe is no longer the way to find out.** `trace` prints `bypasses live: N`
+followed by each one, on stderr, every run. Three of these are defaults in code rather than flags
+in a recipe, so the recipe was never going to be the answer — a number measured under a bypass
+nobody knew was on is a number that gets trusted and should not be.
 
 **#4 `--sysinfo` is not on the retail path at all.** It is easy to assume it is, because it is the
 only bypass in the table whose row does not say "retired" — but `cold-boot.sh`, `retail-boot.sh` and

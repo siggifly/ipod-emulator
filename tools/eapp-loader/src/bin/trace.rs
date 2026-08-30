@@ -273,6 +273,43 @@ fn main() {
     }
     m.mem.ide_cfg_ack_off = args.iter().any(|a| a == "--no-cfg-ack");
     m.mem.ide_irq_latch_off = args.iter().any(|a| a == "--no-ide-irq-latch");
+    // Ledger #7's arm B, and until now it did not exist here.
+    //
+    // `lib.rs` prints "COP_STATUS override NOT installed (--cop-awake)" when it declines to
+    // force the second core asleep — naming a flag that only the window parsed. Every recipe
+    // in `tools/ipod-boot/` runs THIS binary, so on the path that produces every number in
+    // `research/` the bypass could not be switched off at all, while advertising that it
+    // could. The ledger's own justification for making it switchable was that "nothing that
+    // depends on the second core could be A/B'd, because there was no arm B" — and there was
+    // not one, where it mattered.
+    m.mem.cop_awake = args.iter().any(|a| a == "--cop-awake");
+
+    // **Say which bypasses are live, every run, without being asked.**
+    //
+    // `research/04-bypass-ledger.md` names the failure mode exactly: "a reader who greps the
+    // recipe for 'which bypasses am I running' finds one of the four." Three of them are not
+    // in any recipe — they are defaults in code — so the recipe is not the answer and never
+    // was. A number measured under a bypass nobody knew was on is a number that will be
+    // trusted and should not be.
+    //
+    // Printed to stderr so it cannot corrupt a fingerprint being diffed on stdout.
+    {
+        let mut live: Vec<&str> = Vec::new();
+        if args.iter().any(|a| a == "--bcm") {
+            live.push("#6 BCM replies synthesised (--bcm)");
+        }
+        if !m.mem.cop_awake && !m.mem.second_core {
+            live.push("#7 COP forced asleep (--cop-awake turns it off)");
+        }
+        live.push("#8 PLL reported locked (no flag — an OR-mask in lib.rs)");
+        if !m.mem.ide_irq_latch_off {
+            live.push("#9 IDE0_CFG bit 3 latch (--no-ide-irq-latch turns it off)");
+        }
+        eprintln!("bypasses live: {}", live.len());
+        for b in &live {
+            eprintln!("  {b}");
+        }
+    }
     // --pp-dma-irq=N : which interrupt line the 0x60008000 DMA controller's completion drives.
     m.mem.pp_dma_irq = args
         .iter()
