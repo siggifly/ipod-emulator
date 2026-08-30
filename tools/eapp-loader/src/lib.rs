@@ -6493,7 +6493,28 @@ impl Machine {
                         due = true;
                     }
                 }
-                if !armed {
+                // **An asserted, enabled interrupt is a wake reason — that is what an interrupt
+                // is for.** The list above is deadlines we hold: the two timers and the drive. A
+                // line raised by a peripheral was not among them, so a core halted with nothing
+                // else armed slept straight through it.
+                //
+                // Measured, on the real retail NOR with a 20.1.3 drive: the wheel posts its frames
+                // at ~369 M instructions, `CPU_HI_INT_STAT` reads `0x00000100` and
+                // `CPU_HI_INT_EN_STAT` `0x80800195` — pending and enabled — and Apple's own
+                // `tst r5, #0x100` at `0x002771dc` is reached **539 times, all of them earlier**,
+                // while the drive was still busy enough to keep waking the core. The `bl` to the
+                // wheel decoder at `0x00281350` beside it was NEVER REACHED, so no click, scroll or
+                // hold ever reached the firmware once the menu was up and the disk went quiet.
+                //
+                // The enable state is read from the registers rather than tracked separately
+                // because `service_interrupts_inner` already keeps `EN_STAT` as the one true copy;
+                // a second one here is how the two come to disagree.
+                let irq_wake = {
+                    let en = self.mem.read32(0x6000_4020);
+                    let en_hi = self.mem.read32(0x6000_4120);
+                    self.mem.int_pending & en != 0 || self.mem.int_pending_hi & en_hi != 0
+                };
+                if !armed || irq_wake {
                     self.mem.cpu_sleep = false;
                 } else if due {
                     self.mem.cpu_sleep = false;
@@ -13351,6 +13372,55 @@ mod peek_tests {
     /// overwrote five of Minigolf's asset files in place, and the hang that caused cost an hour of
     /// bisecting changes that were never at fault. The mode recorded at open is the only thing
     /// standing between a wrong handle and someone's game data.
+    /// **A pending, enabled interrupt wakes a halted core.**
+    ///
+    /// The wake list used to be deadlines only — the two timers and the drive — so a core that had
+    /// written `CPU_CTRL`'s sleep bit slept through any line a peripheral raised. Measured on the
+    /// real retail NOR: the wheel posts at ~369 M instructions into an enabled, asserted
+    /// `CPU_HI_INT_STAT` bit 8, and Apple's decoder at `0x00281350` was **never reached**, so no
+    /// click, scroll or hold arrived once the menu was up and the disk went quiet.
+    ///
+    /// The arrangement here is the one that used to fail and is the only one that tests the fix: a
+    /// deadline **armed but not due**, so the old code took its `else` branch and stayed asleep.
+    /// With nothing armed it would wake anyway, and with a deadline due it would wake for that —
+    /// neither says anything about interrupts.
+    ///
+    /// **How to make it go red**: drop `|| irq_wake` from the wake condition in `run`.
+    #[test]
+    fn a_pending_enabled_interrupt_wakes_a_halted_core() {
+        const CPU_HI_INT_EN_STAT: u32 = 0x6000_4120;
+
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        map_hardware(&mut m, false);
+
+        // A deadline exists and is far away: `armed` true, `due` false. The timer has to be
+        // ENABLED to stay armed — `service_interrupts_inner` resets `timer_next[i]` to 0 for any
+        // timer whose config lacks bit 31, so setting the deadline alone disarms on the first tick
+        // and the core wakes through the `!armed` door instead. Bit 31 is enable, bit 30 repeat,
+        // and the low 29 bits are the period.
+        m.mem.write32(0x6000_5000, 0x8000_0000 | 0x0fff_ffff);
+        m.mem.cpu_sleep = true;
+        m.run(64);
+        m.mem.cpu_sleep = true;
+
+        // Nothing pending yet — the core must stay down, or the test proves nothing about why it
+        // comes up in the second half.
+        m.run(64);
+        assert!(
+            m.mem.cpu_sleep,
+            "a halted core with a far-off deadline and no interrupt must stay halted"
+        );
+
+        // The wheel's line: asserted, and enabled by the firmware.
+        m.mem.int_pending_hi |= 1 << OPTO_IRQ_HI;
+        m.mem.write32(CPU_HI_INT_EN_STAT, 1 << OPTO_IRQ_HI);
+        m.run(64);
+        assert!(
+            !m.mem.cpu_sleep,
+            "a pending, enabled IRQ 40 must wake the core — it is what an interrupt is for"
+        );
+    }
+
     #[test]
     fn a_write_to_a_read_only_handle_is_refused() {
         let dir = std::env::temp_dir().join(format!("eapp-wtest-{}", std::process::id()));
