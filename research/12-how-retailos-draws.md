@@ -693,3 +693,43 @@ simulated time spent halted`. Either the ISR does not run again in that window, 
 not being woken by an assertion on the hi bank. `Machine::service_interrupts_inner` wakes the **COP**
 explicitly (`if self.mem.cop_asleep { … self.cop.irq() }`) and there is no matching wake for the CPU
 — worth checking before anything else, and it is a question about our model rather than Apple's.
+
+### After the wake fix: the decoder runs, and the second core is not involved
+
+With `a pending, enabled interrupt wakes a halted core` in place, on the real retail NOR and a
+20.1.3 drive:
+
+| | before | after |
+|---|---|---|
+| `0x00281350` — Apple's wheel decoder | **NEVER REACHED** | **x2** |
+| `0x002771e4` — the `bl` to it | **NEVER REACHED** | **x2** |
+| word reads of `CLICKWHEEL_DATA` | 3 | **5** |
+| frames dropped unread | 3 | **1** |
+| instructions retired on a 3 G budget | 395 M | **2.69 G** |
+
+The last row is the fix in one number: the core used to sleep through 85 % of its own budget.
+
+**The second core is not in this path, and costs nothing today.** `--no-second-core` against the
+two-core arm gives an identical decoder count, identical reads, and an identical framebuffer —
+2 689 807 074 instructions against 2 689 784 301, a difference of 23 k in 2.7 G. That is expected
+rather than surprising: **bypass #7 forces the COP asleep in both**, so the choice is between a
+parked model and no model. The accuracy is free until something wakes it (`--cop-awake`), and that
+arm is separately known not to change this result.
+
+**Also ruled out, with a control**: the capture happening 445 simulated seconds after the input.
+Moving the script to `@560s`, four seconds before the 600 s dump, gives the same `x2`, the same five
+reads and the same framebuffer. Neither an idle timeout nor a revert is hiding a change.
+
+**Where the chain now stands**, each link measured rather than assumed:
+
+```
+wheel posts frame -> IRQ 40 asserted -> hi-bank aggregate bit 30 raised
+  -> ISR 0x00277128 entered -> tst r4,#0x40000000 passes
+  -> tst r5,#0x100 passes -> bl 0x00281350 TAKEN -> decoder runs
+  -> ??? -> widget -> damage -> present -> panel
+```
+
+The next link is what the decoder does with the frame. `NEXT.md`'s Wall-A note says it returns
+semaphore `0x7f` and that `SerialOptoTask` has been pended on that semaphore since tick 66, so the
+question is whether that task is now scheduled. Note the decoder runs **2** times for **5** reads,
+so the relationship between a read and a decode is not one-to-one either.
