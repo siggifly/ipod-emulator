@@ -7863,6 +7863,23 @@ impl Bcm {
     ///
     /// Layout is `FUN_00288058`'s + `FUN_00286aa8`'s + `FUN_002882c0`'s, in that order: the
     /// `0x1f0` header, the eight `u16` slots, and one 0x50-byte record for the tag-2 service.
+    /// Stand in for the whole bootstrap a warm entry skips, not merely its directory.
+    ///
+    /// `on_write(0x10000400)` does **three** things: acknowledges the co-processor's firmware by
+    /// setting `BCMA_COMMAND` and `BCMA_STATUS`, and publishes the channel directory. Replicating
+    /// only the third is what the first attempt at this did, and it left RetailOS with a
+    /// directory it could find and a co-processor that had never said it was running.
+    ///
+    /// Named for what it stands in for rather than what it writes, because the next thing found
+    /// missing belongs in here too.
+    pub fn bootstrap_for_warm_entry(&mut self) {
+        self.mem.insert(BCMA_COMMAND, 1);
+        self.mem.insert(BCMA_STATUS, 1);
+        if self.registry {
+            self.publish_registry();
+        }
+    }
+
     /// Publish the channel directory the host reads at internal `0x1f0`.
     ///
     /// `pub` because a **warm entry has to call it directly**. It normally runs from

@@ -926,9 +926,12 @@ fn main() {
             // out of the drive's firmware partition and entered directly, with no bootloader.
             let warm_entry = args.iter().any(|a| a == "--boot-osos")
                 && !args.iter().any(|a| a == "--cold-boot");
-            if warm_entry && b.registry {
-                b.publish_registry();
-                println!("  bcm registry published for a warm entry (no bootloader wrote the trigger)");
+            if warm_entry {
+                b.bootstrap_for_warm_entry();
+                println!(
+                    "  bcm bootstrap synthesised for a warm entry: COMMAND+STATUS acknowledged{}",
+                    if b.registry { ", channel directory published" } else { "" }
+                );
             }
             m.mem.bcm = Some(b);
             println!("  bcm model at 0x30000000");
