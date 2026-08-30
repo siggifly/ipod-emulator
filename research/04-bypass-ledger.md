@@ -179,6 +179,41 @@ it are chosen is worse than an admitted gap. From Addendum 29 §6, verbatim in s
    map, but the reply format says the co-processor returns *an* address, not *which* — **so if this
    is wrong, the frame lands somewhere else and the 76 607-pixel claim is about the wrong buffer.**
    ~~This is the largest of the four and the one to attack first.~~
+
+     > ### ✅ Ablated 2026-08-30 — and assumption 4 splits in two
+     >
+     > `--surface-base=ADDR` moves the bump pointer. Run against `retail` with `--bcm-registry`,
+     > real 5G ROM and a 20.1.3 disk, control versus `0x200000`:
+     >
+     > | write | control | ablated |
+     > |---|---|---|
+     > | 76 816 halfwords (frame + 32-byte header) | `0x000e0000` | **unchanged** |
+     > | 4 852 halfwords | `0x000e0000` | **unchanged** |
+     > | **76 800 halfwords** (320x240 RGB565, exactly one frame) | `0x000e0000` | **`0x00200000` — followed** |
+     >
+     > ATA commands 102 in both, `bcm gencmd` 2 answered / 0 dropped in both. **The panel did not
+     > go blank**, which is the outcome this step was defined to distinguish.
+     >
+     > **So the allocated surface is ours and its address is arbitrary** — the 76 800-halfword
+     > write is the one the allocator hands out, and it goes wherever the allocator points.
+     >
+     > **And the `0xE0000` writes are not ours at all.** They do not move, so RetailOS writes
+     > them at an address it already holds — from the bootloader's fill, or the published map —
+     > rather than one the co-processor handed it. That is a different and weaker claim than
+     > assumption 4 makes: we are not choosing that address, we are observing it.
+     >
+     > ⚠️ **What this does not establish.** Only two GENCMD requests are answered on this path,
+     > so the allocator is barely exercised; a boot allocating many surfaces could still expose
+     > an ordering or aliasing assumption this one cannot reach. It says nothing about
+     > assumption 5, the absent timing model, which remains the largest gap.
+     >
+     > ⚠️ **The first run was worthless and nearly reported as a result.** The flag was parsed
+     > 600 lines before `Bcm` was constructed, so it set nothing and the later `Bcm::new`
+     > restored the default — while printing that it had moved the base. Both arms came back
+     > byte-identical, which reads exactly like "the address is arbitrary" and was in fact the
+     > same run twice. The flag now reads the value back off the object rather than echoing its
+     > argument.
+
    **Attacked 2026-08-14 and it is now a *known-wrong* choice, still in place.** `0xE0000` is the
    co-processor's **command-parameter buffer** — the staging area for the command interface, whose
    `LCD_UPDATERECT` reads an 8-word header there and places the rectangle behind it

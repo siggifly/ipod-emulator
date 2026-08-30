@@ -283,19 +283,6 @@ fn main() {
     // depends on the second core could be A/B'd, because there was no arm B" — and there was
     // not one, where it mattered.
     m.mem.cop_awake = args.iter().any(|a| a == "--cop-awake");
-    // --surface-base=ADDR : the ablation research/04 names as step 1 of retiring ledger #6.
-    // Moving it answers whether `0xE0000` is load-bearing or arbitrary, which nothing else can.
-    if let Some(v) = args.iter().find_map(|a| a.strip_prefix("--surface-base=")) {
-        let base = u32::from_str_radix(v.trim_start_matches("0x"), 16).unwrap_or_else(|_| {
-            eprintln!("--surface-base= wants hex, e.g. --surface-base=0x200000");
-            std::process::exit(2);
-        });
-        if let Some(b) = m.mem.bcm.as_mut() {
-            b.surface_base = base;
-            b.set_surface_base(base);
-        }
-        eprintln!("surface allocator base moved to {base:#010x} (ledger #6 step 1 ablation)");
-    }
 
     // **Say which bypasses are live, every run, without being asked.**
     //
@@ -893,6 +880,26 @@ fn main() {
             // WINDOW, which reaches 75 267 either way. That the two front ends need different
             // things here is a real residual and is not closed by this line.
             b.registry = !args.iter().any(|a| a == "--no-bcm-registry");
+            // --surface-base=ADDR : step 1 of retiring ledger #6, per research/04 — "move the
+            // allocator's base and see whether the drawn frame follows it."
+            //
+            // **This must live here, not with the other flag parsing 600 lines above.** It was
+            // written there first, where `m.mem.bcm` is still `None`, so `if let Some(b)` did
+            // nothing and this `Bcm::new` then overwrote the default back in. The flag printed
+            // that it had moved the base and had moved nothing — which is precisely the switch-
+            // that-is-not-wired-up shape this file warns about elsewhere, and the ablation it
+            // fed read as "no difference" when it was the same run twice.
+            if let Some(v) = args.iter().find_map(|a| a.strip_prefix("--surface-base=")) {
+                let base = u32::from_str_radix(v.trim_start_matches("0x"), 16)
+                    .unwrap_or_else(|_| {
+                        eprintln!("--surface-base= wants hex, e.g. --surface-base=0x200000");
+                        std::process::exit(2);
+                    });
+                b.set_surface_base(base);
+                // Read back from the object rather than echoing the argument, so the line is
+                // evidence the write landed instead of evidence it was attempted.
+                println!("  bcm surface base {:#010x} (ledger #6 step-1 ablation)", b.surface_base);
+            }
             if b.registry {
                 println!("  bcm gencmd registry: publishing a tag-2 display service");
             }
