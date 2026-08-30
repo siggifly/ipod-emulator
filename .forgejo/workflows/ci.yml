@@ -109,3 +109,39 @@ jobs:
             fail=1
           fi
           exit $fail
+
+  # ── Telling people ────────────────────────────────────────────────────────
+  #
+  # **Runs on red as well as green, and that is the whole point.** A bot that
+  # only speaks when things pass trains everyone to read silence as success,
+  # which is exactly how this project lost nine conclusions to instruments that
+  # failed quietly. `if: always()` is load-bearing.
+  #
+  # The webhook is a repo secret rather than a literal: anyone holding that URL
+  # can post into the channel as us. It posts from the RUNNER, not the Forgejo
+  # server — the server has no egress to discord.com, which a hook test proved
+  # (HTTP 204 accepted, nothing delivered).
+  notify:
+    runs-on: ubuntu-latest
+    needs: [build-check, no-secrets]
+    if: always()
+    timeout-minutes: 5
+    steps:
+      - name: Post the result to Discord
+        env:
+          HOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          [ -n "$HOOK" ] || { echo "no webhook configured; nothing to post"; exit 0; }
+          build='${{ needs.build-check.result }}'
+          secrets='${{ needs.no-secrets.result }}'
+          if [ "$build" = "success" ] && [ "$secrets" = "success" ]; then
+            msg="✅ **gates green** on \`${{ github.ref_name }}\` — build-check and no-secrets both passed."
+          else
+            msg="🔴 **gates failed** on \`${{ github.ref_name }}\` — build-check: \`$build\`, no-secrets: \`$secrets\`. Pushed by **${{ github.actor }}**."
+          fi
+          body=$(printf '%s\n%s' "$msg" "\`${{ github.sha }}\`")
+          # `--fail` so a rejected post is a failed step rather than a silent no-op.
+          curl -sS --fail -X POST "$HOOK" -H 'Content-Type: application/json' \
+            --data "$(python3 -c '
+import json,sys
+print(json.dumps({"content": sys.argv[1]}))' "$body")"
