@@ -575,3 +575,55 @@ depend on any of the three above.
 **Next, and not with these tools.** The runtime samplers cannot give function boundaries. Getting
 the *entry* of whatever owns `0x001650f8` is a static job — `tools/ghidra`, or `dis` over the OSOS
 image — and until there is an entry address, there is nothing correct to arm a counter on.
+
+### The firmware stops reading the wheel after boot — and v0.4.0 does the same (2026-08-31)
+
+**Not a regression.** `v0.4.0`'s `ipod-boot`, built from the tag and run with an identical recipe,
+produces a **byte-identical** framebuffer, the same `4 of 4` steps fired and the same `3 dropped
+unread`. Whatever this is, it predates the Slint rebuild and every commit since. The hypothesis that
+the window rewrite broke input is dead.
+
+**What the frame log says, and it is not about drawing at all:**
+
+```
+@826047      query   buttons 0x00      <- read
+@2092671     query   buttons 0x00      <- read
+@8179135     query   buttons 0x00      <- read
+@369108897   stream  pos 0  buttons 0x00  touched     <- dropped unread
+@369166481   stream  pos 0  buttons 0x01  touched     <- the SELECT press, dropped
+@369281708   stream  pos 0  buttons 0x00  touched     <- dropped
+@369396935   stream  pos 0  buttons 0x00  released    <- dropped
+```
+
+RetailOS reads `CLICKWHEEL_DATA` **three times, all during boot**, at 0.8 M / 2 M / 8 M
+instructions — and never again across the remaining 390 M. `irq 40 asserted 4 times`, `CTRL
+0x600a1f00 (receiver armed)`, `0 frames refused for reporting-off, 0 for an unarmed receiver`. The
+frames reach an armed receiver, the interrupt is raised, and nothing consumes it.
+
+So the six-stage draw pipeline being idle is a **consequence, not the fault**: no redraw is issued
+because no input is ever taken. The question moves off §0's table entirely and onto *why the firmware
+stops servicing IRQ 40 once it has finished starting*.
+
+**§0's own `--bcm-registry` arms are unaffected** — those measured a boot, not an input.
+
+### The recipe in NEXT.md cannot fire as written
+
+`NEXT.md`'s Wall-A block records the click wheel reaching the MAIN MENU with:
+
+```
+--wheel=@1500M:touch,+2M:press=select,+2M:release   BUDGET=3000000000
+```
+
+**Instruction anchors on a machine that halts.** With `--clock=5` this run reports
+`usec 599999990` — the full 600 simulated seconds — after retiring only **395 118 540**
+instructions, because `cpu sleep: 514697 halts, 520976 ms of simulated time spent halted`. The
+`@1500M` anchor is never reached and the report reads `script: 0 of 4 steps fired`. That is
+AGENTS.md §6's headline trap by name, and the recipe predates the rule. **Anchor in simulated time**
+(`@150s:`) and all four steps fire.
+
+**`press=<btn>` emits a zero-length press.** Its down and up land on the *same instruction*
+(`@369306040` twice, above), which `emu.rs` already explains is invisible to firmware that polls —
+Apple's `diag` samples once per 150 ms, which is why the window's `MIN_BUTTON_HOLD` is 300 ms.
+Spelling it `down=select` … `up=select` two seconds apart makes it a real press. **It changes
+nothing here** — the frames are still dropped unread — so it is a defect in the script grammar
+rather than the cause of this, and it is recorded so the next script is honest.
