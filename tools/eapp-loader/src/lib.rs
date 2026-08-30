@@ -6787,7 +6787,7 @@ impl Ata {
         w[1] = 16383; // logical cylinders (legacy CHS, ignored once LBA is on)
         w[3] = 16; // heads
         w[6] = 63; // sectors per track
-        put_ata_str(&mut w[10..20], "VELDI0000000000000001"); // serial
+        put_ata_str(&mut w[10..20], "IPODEMU0000000000001"); // serial
         put_ata_str(&mut w[23..27], "1.00");
         put_ata_str(&mut w[27..47], "Emulated iPod Disk");
         w[47] = 0x8001; // max sectors per READ MULTIPLE

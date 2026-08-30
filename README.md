@@ -146,6 +146,26 @@ One document per question, and none of them answers another's.
 `research/` keeps what was believed and why it was wrong, in place, rather than tidying it away.
 Several conclusions in it are retracted by later ones and the retraction sits next to the claim.
 
+## Contributing
+
+Development happens in a small group, and **it starts on Discord** rather than with a pull
+request:
+
+> **https://discord.gg/MSqmeWy2nX**
+
+That is deliberate and not gatekeeping for its own sake. Much of the work needs Apple's
+firmware, ROM dumps and multi-gigabyte disk images that cannot be published — so a
+contributor needs the files, the context for what has already been tried, and somewhere to
+ask before spending a weekend re-deriving something. A pull request arriving cold has none
+of that, and the reviewer cannot supply it in a comment thread.
+
+So: say hello, say what interests you, and you will be pointed at the working repository and
+the guide that goes with it. Bug reports and questions are welcome as issues here without
+any of that.
+
+**The link above is the only copy of it in this project.** If you find it written down
+anywhere else, that copy is the one that will go stale.
+
 ## Credit
 
 Other people's work made this possible, and some of it saved months. In rough order of debt:
