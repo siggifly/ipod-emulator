@@ -767,3 +767,41 @@ is unmodelled, which is why the frames get through.
 and acknowledged, and the panel does not change. That is the decoder-to-widget hop —
 `SerialOptoTask` and the `0x7f` semaphore in `NEXT.md`'s Wall-A note — and it is the only link in
 the chain that has never been measured.
+
+### The whole input chain now runs, the draw pipeline woke up, and the panel is still identical
+
+**§0's table, re-measured after the interrupt-wake fix.** The earlier reading of it was taken on a
+machine that slept through 85 % of its budget, so it measured a stalled machine rather than a
+stalled pipeline:
+
+| | stage | before (both arms) | control | with input |
+|---|---|---|---|---|
+| 1 | Paint | 85 | 221 | 101 |
+| 2 | Show | 2 276 · 56 | 2 276 · 56 | 2 276 · 56 |
+| 3 | Damage → flush | 4 | **21** | **6** |
+| 4 | Present | 4 | **21** | **6** |
+| 5 | Transport | 17 | **85** | **25** |
+
+**Presents went 4 -> 21.** The pipeline was never severed; the core was asleep.
+
+**And the chain above it runs end to end.** `--watch-range=0x1081d998:0x30` over the wheel's state
+block — the address is the third literal in the decoder's own pool at `0x00281408` — shows it
+written by the decoder *and* by everything downstream:
+
+```
+0x1081d9b8  <- 0x0028138c  x44   the decoder's  str ip, [r3,#0x20]
+0x1081d9bc  <- 0x002813ac  x44   the decoder's  str r0, [r3,#0x24]
+0x1081d9a0  <- 0x0028563c  x44   SerialOptoTask's region, matching count
+0x1081d9ac  <- 0x00118224  x4    the InputEvents region
+```
+
+Eleven words written by the decoder, eleven consumed by the task. So: interrupt taken, decoder run,
+state written, task scheduled, input layer reached, and the display pipeline live at 21 presents.
+
+**The panel is still byte-identical.** Post-fix control against post-fix input, `cmp -l` reports
+**0 differing bytes** — and that comparison is against a fresh baseline, not the pre-fix capture
+every earlier md5 in this file was taken against.
+
+**One new signal, unexplained**: input *reduces* the draw counts — 21 presents without it, 6 with.
+Input is not being ignored; it is making RetailOS do something that draws less. That is the next
+thread, and it is a different question from the one this file has been asking.
