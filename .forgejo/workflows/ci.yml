@@ -1,0 +1,96 @@
+name: ci
+
+# Forgejo Actions — the gates that actually run.
+#
+# WHY THIS FILE EXISTS, and it is not "a second CI":
+#
+#   `.github/workflows/ci.yml` has NEVER EXECUTED. `gh api
+#   repos/siggifly/ipod-emulator/actions/runs` answered `total_count: 0` on
+#   2026-08-30 — after a 206-commit push to master, which should have fired
+#   it — and a manual dispatch answers `HTTP 422: Actions has been disabled
+#   for this user`. That is account-level and not something this repository
+#   can fix; the repo API still cheerfully reports `enabled: true`.
+#
+#   So every gate this project believed it had was theatre. This file is the
+#   same gates pointed at the forge that can run them.
+#
+# WHAT THIS DOES NOT COVER. The GitHub matrix builds Linux, macOS and
+# Windows. This runner is Linux only, so a macOS- or Windows-specific break
+# still gets through. That is a known hole, stated rather than papered over:
+# when GitHub Actions is unblocked, keep BOTH and let this one be the fast
+# gate. Do not delete `.github/workflows/ci.yml` for it.
+#
+# The toolchain is host-provided — data.forgejo.org carries no dtolnay
+# mirror, the same constraint the umbrella's build-check.yml documents.
+
+on:
+  push:
+    branches: [dev, master]
+  pull_request:
+    branches: [dev, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          cargo --version
+          rustc --version
+
+      - name: Build the workspace
+        run: cargo build --workspace --all-targets
+
+      # **The count AND the clock.** This repository has been burned by a
+      # suite that reported "275 passed" in 0.26 s without compiling
+      # anything. A pass that arrives impossibly fast is not a pass, so the
+      # gate reads both numbers and refuses a suspicious one.
+      - name: Test, and read the count and the clock
+        run: |
+          set -o pipefail
+          start=$(date +%s)
+          cargo test --workspace 2>&1 | tee /tmp/test.log
+          elapsed=$(( $(date +%s) - start ))
+          passed=$(grep -oE 'test result: ok\. [0-9]+ passed' /tmp/test.log \
+                   | awk '{s+=$4} END {print s+0}')
+          echo "passed=$passed elapsed=${elapsed}s"
+          if [ "$passed" -lt 100 ]; then
+            echo "::error::only $passed tests ran; this suite has far more than that"
+            exit 1
+          fi
+          if [ "$elapsed" -lt 5 ]; then
+            echo "::error::suite finished in ${elapsed}s — it did not compile or did not run"
+            exit 1
+          fi
+
+  no-secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # AGENTS.md §2: nothing under `resources/` is ever committed, and no
+      # real serial, GUID, name or Apple ID enters a tracked file. This gate
+      # is cheap and the failure it prevents is not reversible — once a
+      # identifier is pushed to a public repository it stays reachable.
+      - name: Nothing from resources/, and no credentials
+        run: |
+          fail=0
+          if git ls-files | grep -q '^resources/'; then
+            echo "::error::files under resources/ are tracked; AGENTS.md §2 forbids it"
+            fail=1
+          fi
+          if git grep -nIE 'BEGIN [A-Z ]*PRIVATE KEY|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}' \
+               -- . ':(exclude).forgejo' >/dev/null 2>&1; then
+            echo "::error::a credential-shaped string is tracked"
+            fail=1
+          fi
+          exit $fail
