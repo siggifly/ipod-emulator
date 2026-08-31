@@ -3,7 +3,7 @@
 // **The producer for the one page whose rows could not open.** `ui/devices.slint` declares
 // `devices-detail` and `devices-detail-of`; nothing set either, and `detail-of` defaults to `-1`,
 // so `Expand.open: root.detail-of == i` was false for every row for ever. The five `Made of` lines
-// were undrawn — and so was the `Start` button, whose `Pressable` (`devices.slint:31`)
+// were undrawn — and so was the `Start` button, whose `Pressable` (`devices.slint:32`)
 // lives **inside** that Expand. A page whose only control was unreachable is what this file ends.
 //
 // **What this file does not produce.** `refresh_devices` in `main.rs` already pushes `devices`,
@@ -14,7 +14,7 @@
 // row which `DeviceRow` also carries is `Start`, and note 3 below is why that is not an exception
 // to this paragraph but the sharpest instance of it.
 //
-// **The cursor is the device's NAME and never its index.** `devices.slint:177` fires
+// **The cursor is the device's NAME and never its index.** `devices.slint:178` fires
 // `expand(i, ...)` with the repeater's index and `detail-of` is compared against that same index,
 // so the number crossing the boundary is an index in both directions — but a device inserted or
 // removed above the open one moves every index below it, and a cursor that held one would then be
@@ -26,13 +26,13 @@
 // **And `open_row` is the only place in this file that reads one.** The draft this grew out of
 // took an index in `row_action` and in `editor` as well, and that is where an index costs more
 // than a body drawn about the wrong device: every act is rendered *inside* the open row —
-// `devices.slint:276` hands a `MadeOfLine` the detail only where `detail-of == i` — so the number
+// `devices.slint:310` hands a `MadeOfLine` the detail only where `detail-of == i` — so the number
 // a press carries is always the open device's, computed at the last push. Resolve it again
 // against a list that gained a device in between and `Remove` forgets the row above the one that
 // was pressed, silently, having been handed a valid index for a device nobody asked about. The
 // name is already held and it is the answer, so the acts read it and take no index at all.
 //
-// **This page pins no ordinal.** `devices.slint:299` fires `root.row-action(a, n)` where `a` is
+// **This page pins no ordinal.** `devices.slint:333` fires `root.row-action(a, n)` where `a` is
 // `root.d.action` — a number Rust put on the line — and nothing else. The one ordinal that is
 // pinned anywhere, `RowAction::Remove == 2`, is pinned by `ui/parts.slint`'s own `Remove` control
 // and is written down in `parts.rs` beside the enum.
@@ -270,7 +270,7 @@ impl Devices {
                 a.name()
             )),
             // §7.2's `Start` is `start-device(i)` — the same callback the bench's own centre
-            // button presses (`devices.slint:338`), which that page's header calls REUSED —
+            // button presses (`devices.slint:303`), which that page's header calls REUSED —
             // so it does not arrive here and this arm is exhaustiveness rather than a route.
             RowAction::Start => {
                 Err("Start is the bench's own control and does not act on the library".into())
@@ -313,7 +313,7 @@ impl Devices {
 /// §7.2's `Made of` lines, its machine rules, and the two acts.
 ///
 /// **It must not call `nor::Source::describe`.** That interpolates `id.serial` into its sentence,
-/// and this page is drawn beside a device somebody may be screenshotting; `devices.slint:39` names
+/// and this page is drawn beside a device somebody may be screenshotting; `devices.slint:40` names
 /// the function by name for that reason. `settings::suggest_ipod_name` is the answer — the colour
 /// and the generation, which is what a person calls an iPod — and it reads no identity at all.
 ///
@@ -420,7 +420,7 @@ fn made_of(
     out
 }
 
-/// A labelled fact — `devices.slint:106`'s two-column `Rectangle`.
+/// A labelled fact — `devices.slint:107`'s two-column `Rectangle`.
 fn device_fact(label: &str, value: String) -> Detail {
     Detail {
         label: label.to_string(),
@@ -432,7 +432,7 @@ fn device_fact(label: &str, value: String) -> Detail {
 }
 
 /// §9.4's machine rule: prose, in `fg` rather than `fg-dim`, because its teaching is the point.
-/// `devices.slint:161` is the branch that draws it — `root.d.label == ""` is what tells the two
+/// `devices.slint:162` is the branch that draws it — `root.d.label == ""` is what tells the two
 /// renderings apart, and `:126` is the colour that draws the difference.
 fn device_rule(value: String) -> Detail {
     Detail {
@@ -447,8 +447,8 @@ fn device_rule(value: String) -> Detail {
 /// A `Detail` that is nothing but an act.
 ///
 /// **One property, one producer, and the value is MOVED rather than copied.** `DetailRow` has
-/// exactly one `machine-rule`; `devices.slint:56` binds it to the `Pressable` when there is an act
-/// and `devices.slint:56` to the paragraph when there is not, and `main.rs`'s `to_detail` reads it
+/// exactly one `machine-rule`; `devices.slint:57` binds it to the `Pressable` when there is an act
+/// and `devices.slint:57` to the paragraph when there is not, and `main.rs`'s `to_detail` reads it
 /// off the `Detail`. Leaving the `FixRow`'s copy set as well would be two fields holding one fact
 /// on their way to one pixel. `parts::act` is the same three lines for the same reason.
 fn device_act(a: RowAction, mut fix: FixRow) -> Detail {
@@ -603,14 +603,14 @@ fn removal_consequence(s: &Settings, d: &Device) -> String {
 ///
 /// 3. **And `reason` is empty when the control is live**, which `blocked_label` is not — every one
 ///    of its arms is a refusal, and `Pressable.reason` is the
-///    refusal slot: `primitives.slint:639` is `text: root.enabled ? root.consequence : root.reason`,
+///    refusal slot: `primitives.slint:658` is `text: root.enabled ? root.consequence : root.reason`,
 ///    so a live control draws its consequence there and its reason nowhere. (Not `:534`, which this
 ///    used to cite — that is `tells`, and it reserves the slot for **three** reasons: disabled, two
 ///    presses, or a consequence. The reservation is not the binding.) Handing a live control a
 ///    reason it will never draw is the kind of field that is true for a while and then quietly
 ///    becomes a second producer.
 ///
-/// `machine_rule` is computed rather than assumed, and `devices.slint:321` binds it as
+/// `machine_rule` is computed rather than assumed, and `devices.slint:355` binds it as
 /// `machine-rule: root.start-row.machine-rule`. It used to be a literal `machine-rule: true` in the markup, which is wrong for the
 /// composed-and-unbuilt arm — *building a composed device is not wired yet* is §9.4's other kind,
 /// a project state, and drawing it in `fg` as a law of physics tells the reader this program will
@@ -1123,7 +1123,7 @@ mod tests {
     /// **No line names the identity the ROM carries.**
     ///
     /// `nor::Source::describe` interpolates `id.serial` into its sentence and is one call away from
-    /// every line here; `devices.slint:39` names it as the thing this file must not reach for.
+    /// every line here; `devices.slint:40` names it as the thing this file must not reach for.
     /// Proved red by wording the iPod line with `describe()` instead — the serial then appears in
     /// a body a screenshot would carry.
     #[test]

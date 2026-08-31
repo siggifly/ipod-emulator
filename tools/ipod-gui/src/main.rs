@@ -4562,6 +4562,17 @@ fn resolve_for_start(
 ///
 /// `life` is `Life::Off` for every row but the one machine on the bench — §7.2, and the reason
 /// this takes it rather than asking: a list of eight devices has one machine in it at most.
+/// What the row's own start control is called, for an assistive technology and for nothing else.
+///
+/// **A sentence, so it is written here** rather than assembled in the markup out of a verb and a
+/// name — `every_composer_sentence_comes_from_the_model_or_composer_rs` caught the first draft
+/// doing exactly that. It is the only description that control carries, so it names the device: a
+/// list of eight iPods otherwise announces eight identical buttons called `Start`.
+fn run_label(d: &Device, running: bool) -> String {
+    let verb = if running { "Stop" } else { "Start" };
+    format!("{verb} {}", d.name)
+}
+
 fn shelf_state(d: &Device, life: &machine::Life) -> String {
     let word = life.shelf();
     let now = std::time::SystemTime::now()
@@ -4861,7 +4872,11 @@ fn empty_cradle_label(press: Press, caps: rail::Caps) -> String {
 /// nobody checked.
 fn empty_device(first: bool, caps: rail::Caps, cost: compose::Cost) -> DeviceRow {
     let si = eapp_loader::si;
-    DeviceRow {
+        DeviceRow {
+            // Nothing is running on a bench with no device on it, and there is no device to
+            // name — the row is a placeholder and its control is never drawn enabled.
+            running: false,
+            run_label: String::new().into(),
         name: if first { "No iPod yet".into() } else { "No devices yet".into() },
         summary: if first {
             // §10.1, and the clause naming the machine is not decoration: the two facts a person
@@ -6071,7 +6086,13 @@ fn device_rows(settings: &Settings, live: Option<&Live>) -> Vec<DeviceRow> {
             let cradle = cradle_of(Press::Centre, settings, d, &gone, mine);
             // §12.3's two properties, decided together — see [`boot_rule`].
             let rule = boot_rule(&life);
-            DeviceRow {
+                DeviceRow {
+                    // **The same `Option` the caption is worded from**, so the glyph
+                    // and the sentence cannot disagree about whether this row is the
+                    // machine. `Live::index` is `NO_LIBRARY_ROW` for a title, so no
+                    // device row draws a stop while a game is on the bench.
+                    running: mine.is_some(),
+                    run_label: run_label(d, mine.is_some()).into(),
                 name: d.name.clone().into(),
                 summary: summary(settings, d, &mut seen).into(),
                 // **The label's own boolean**, so a cradle that refuses is not also drawn
@@ -13648,6 +13669,61 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **Every iPod in the library has its own start control, one press from the list.**
+    ///
+    /// §7.2's `Start` used to live inside the row's `Expand`, so starting an iPod was five
+    /// interactions — open the drawer, open the page, find the row, expand it, press. That is what
+    /// the operator meant by needing a manual, and the control beside the row is the answer.
+    ///
+    /// **It reads the accessible tree rather than the markup**, because what has to be true is
+    /// that the button is DRAWN and describable, not that a file mentions it. A control an
+    /// assistive technology cannot see is one a keyboard cannot reach either.
+    ///
+    /// The label is asserted per device, and that is the point of `run_label` being a sentence
+    /// from the model: a library of eight iPods otherwise announces eight buttons all called
+    /// `Start`, which is a list nobody can navigate.
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "reads the drawn accessible tree, which needs SLINT_EMIT_DEBUG_INFO — build.rs \
+                  emits it in debug only"
+    )]
+    #[test]
+    fn every_ipod_in_the_list_has_its_own_start_control() {
+        let dir = temp_dir("row-start");
+        let (mut s, d) = a_composed_device(&dir);
+        let name = d.name.clone();
+        s.devices.push(d);
+        let settings = Rc::new(RefCell::new(s));
+        let w = a_window();
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
+        w.show().expect("the headless backend shows a window");
+        w.window().set_size(slint::LogicalSize::new(
+            geometry::PREF_WIDTH as f32,
+            geometry::PREF_HEIGHT as f32,
+        ));
+        w.invoke_open_page(DrawerPage::Devices, 1);
+        let_the_drawer_settle();
+
+        let buttons = elements_by_role(&w, i_slint_backend_testing::AccessibleRole::Button);
+        let labels: Vec<String> = buttons
+            .iter()
+            .filter_map(|b| b.accessible_label().map(|l| l.to_string()))
+            .collect();
+        // The control: this page draws buttons at all, so an empty tree cannot pass for "the one
+        // I want is missing" — the two look identical from an assertion that only greps.
+        assert!(
+            !buttons.is_empty(),
+            "the iPods page drew no buttons whatsoever, so the search below proves nothing"
+        );
+        assert!(
+            labels.iter().any(|l| l == &format!("Start {name}")),
+            "no control on the iPods page is called `Start {name}`. It is drawn beside the row so \
+             that starting an iPod is ONE press; inside the row's Expand it was five. Drawn: \
+             {labels:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// **A page the markup draws must have a nav slot, and one with a slot must be drawn.**
     ///
     /// The gate that would have caught the whole of the `Games` bug, and the reason it is separate
@@ -17236,7 +17312,7 @@ pub(crate) mod tests {
     /// **§7.2's `Start` is reachable at last, and it is this page's own answer.**
     ///
     /// The button lives *inside* the row's `Expand`, whose `open: root.detail-of == i`
-    /// (`devices.slint:276`) and `devices-detail-of`
+    /// (`devices.slint:310`) and `devices-detail-of`
     /// defaulted to `-1` with no setter, so `Expand.open` was false for every row for ever: the
     /// five `Made of` lines were undrawn and so was the one control §7.2 puts on this page.
     ///
@@ -18117,7 +18193,7 @@ pub(crate) mod tests {
     /// `Action::unwired` is asked of all six verbs whether or not a group offers them.
     ///
     /// **`consequence` is in it now, and it is the half that was missing.**
-    /// `primitives.slint:639` is `text: root.enabled ? root.consequence : root.reason` — one slot,
+    /// `primitives.slint:658` is `text: root.enabled ? root.consequence : root.reason` — one slot,
     /// two producers — and only one of them was ever measured. So `removal_consequence` shipped at
     /// **880 px** in a 324 px slot and `devices.png` drew *The entry goes. Its iPod A446, seed
     /// 6182160 and its drive …*, cut off before the clause that says nothing is deleted, which is

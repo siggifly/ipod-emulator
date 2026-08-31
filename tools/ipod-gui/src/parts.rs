@@ -247,12 +247,12 @@ impl RowAction {
 /// **The eight properties an act needs are one field**, so they cannot disagree — `has-action`,
 /// `action`, `act-label`, `enabled`, `reason`, `escape-hatch`, `presses` and `consequence` are
 /// derived from this one `Option` and from the `FixRow` inside it. A row that is disabled therefore
-/// cannot lose its reason on the way across, which `primitives.slint:462` states as the
+/// cannot lose its reason on the way across, which `primitives.slint:481` states as the
 /// invariant: *non-empty whenever `!enabled`*.
 ///
 /// **`machine_rule` is the line's, and the `FixRow`'s copy of it is deliberately not read.**
 /// `DetailRow` has exactly one `machine-rule` and the markup binds it twice — to the `Pressable`
-/// when there is an act (`parts.slint:64`, `devices.slint:56`) and to the paragraph when there is
+/// when there is an act (`parts.slint:64`, `devices.slint:57`) and to the paragraph when there is
 /// not. One property, so one producer: this field. Reading the `FixRow`'s as well would be two
 /// spellings of one fact arriving at the same pixel.
 #[derive(Clone, Debug, PartialEq, Eq)]

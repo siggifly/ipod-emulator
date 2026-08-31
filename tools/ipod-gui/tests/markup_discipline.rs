@@ -565,6 +565,10 @@ fn every_composer_sentence_comes_from_the_model_or_composer_rs() {
         "Parts",
         "Remove",
         "preview",
+        // `Icon::kind` values, not words anybody reads. They name a glyph the way `preview` names
+        // a mode; the SENTENCE beside them is `DeviceRow::run_label` and comes from `devices.rs`.
+        "play",
+        "stop",
         "Settings",
         "Theme",
         "Check for updates on launch",

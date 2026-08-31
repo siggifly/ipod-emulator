@@ -218,6 +218,17 @@ export struct DeviceRow {
     // §7.3: can the cradle hold this one? False where a part of it has left the library, which is
     // the refusal §20 item 1 already produces and §20 item 12 requires somewhere to show.
     startable: bool,
+    // **This row IS the machine.** From `Live::index`, so at most one row in the library can carry
+    // it — and none does while a title is on the bench, because a title takes the well with
+    // `NO_LIBRARY_ROW` and no device row is the machine then. It decides which way the row's `Act`
+    // points; `state` is the sentence, this is the fact.
+    running: bool,
+    // What the row's `Act` is called, from `devices::run_label`. **A sentence, so Rust writes it**
+    // — the markup had `d.running ? "Stop " + d.name : "Start " + d.name`, which builds one out of
+    // two fragments and a name, and is exactly what
+    // `every_composer_sentence_comes_from_the_model_or_composer_rs` exists to catch. It is the
+    // only thing an assistive technology is told about that control, so it is not decoration.
+    run-label: string,
     // §7.3's label: what pressing will cost, or why it cannot be pressed. The model's sentence,
     // verbatim.
     cradle-label: string,
@@ -322,8 +333,9 @@ export component Material inherits Rectangle {
 // Never `visible: false` on this component's own root — §16.3, and the compiler only warns
 // (`passes/visible.rs:28-33`). Set it at the use site, as `Row` and `Scroll` below do.
 export component Icon inherits Path {
-    // This phase: "back" | "close" | "expand" | "collapse" | "check" | "warning". The full set is
-    // sixteen (§6.7); the other ten arrive with their use sites.
+    // This phase: "back" | "close" | "expand" | "collapse" | "check" | "play" | "stop" |
+    // "warning". The full set is sixteen (§6.7); the rest arrive with their use sites, and `play`
+    // and `stop` arrive with §7.2's start control moving onto the device row.
     in property <string> kind;
     in property <color> ink;
     // Horizontally mirrored, for the trailing chevron of a Row.
@@ -347,6 +359,13 @@ export component Icon inherits Path {
         ? "M 3.6 15 L 5.6 17 L 12 10.6 L 18.4 17 L 20.4 15 L 12 6.6 Z"
         : root.kind == "check"
         ? "M 9.4 18.6 L 3.4 12.6 L 5.4 10.6 L 9.4 14.6 L 18.6 5.4 L 20.6 7.4 Z"
+        // A triangle and a square, both optically centred in the 24-unit box rather than
+        // geometrically: a right-pointing triangle whose bounding box is centred reads as sitting
+        // too far right, which is why the play glyph starts at 8 and not at 7.
+        : root.kind == "play"
+        ? "M 8 4.8 L 19.2 12 L 8 19.2 Z"
+        : root.kind == "stop"
+        ? "M 6.8 6.8 L 17.2 6.8 L 17.2 17.2 L 6.8 17.2 Z"
         : "M 12 3 L 22.5 21 L 1.5 21 Z M 10.9 9 L 13.1 9 L 13.1 15 L 10.9 15 Z M 10.9 16.8 L 13.1 16.8 L 13.1 19 L 10.9 19 Z";
 }
 
@@ -699,6 +718,86 @@ export component Pressable inherits Rectangle {
                     return;
                 }
                 root.armed = false;
+            }
+            root.activated();
+        }
+    }
+}
+
+// ─── Act (§7.2) ─────────────────────────────────────────────────────────────────────────────────
+//
+// **One square control, beside a row rather than inside it.** §7.2's `Start` lived in the row's
+// `Expand`, so starting a device was five interactions — open the drawer, the page, find the row,
+// expand it, press. That is the shape the operator described as needing a manual, and one press is
+// the answer.
+//
+// It is not a `Pressable`: that component is a ROW — full width, a label cell, a value column at
+// 232 px and a 34 px reason slot reserved under it. None of those is what a 28 px square wants, and
+// inheriting it to switch them all off would be a row pretending to be a button.
+//
+// **It carries its own `TouchArea` and `FocusScope`, and neither is ever `enabled: false`** — the
+// same lock `Pressable` documents at §16.5: a disabled `TouchArea` forcibly clears `has_hover`, so
+// the gate is a boolean inside the handler and the element stays alive to be hovered, focused and
+// described. A control that cannot be focused cannot say why it is refusing.
+export component Act inherits Rectangle {
+    in property <string> icon;
+    in property <bool> enabled: true;
+    // §9.4 — non-empty whenever `!enabled`, and it is what an assistive technology is told.
+    in property <string> reason;
+    in property <string> label;
+    callback activated();
+
+    width: Metric.s5;
+    height: Metric.s5;
+    border-radius: self.height / 2;
+    border-width: 1px;
+    border-color: root.enabled ? Ink.line : Ink.fg-disabled;
+    background: touch.has-hover && root.enabled ? Ink.bg-raised : Ink.bg;
+
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.label;
+    accessible-description: root.reason;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.activated();
+    }
+
+    Icon {
+        kind: root.icon;
+        ink: root.enabled ? Ink.accent : Ink.fg-disabled;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: Metric.s3;
+        height: Metric.s3;
+    }
+
+    focus := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                touch.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    // §8.1 item 9: the focus ring is instant, always. **Inset, exactly like `Pressable`'s** —
+    // this drew itself 2 px outside the control at first, which is both a geometry literal
+    // (`no_geometry_literal_survives_in_the_markup` said so) and a second way of drawing one
+    // thing. `Geometry.focus-ring-w` is the one width.
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        border-radius: self.height / 2;
+        border-width: Geometry.focus-ring-w;
+        border-color: Ink.accent;
+        visible: focus.has-focus;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            if (!root.enabled) {
+                return;
             }
             root.activated();
         }

@@ -23,6 +23,7 @@
 import { Ink, Metric } from "tokens.slint";
 import { Geometry } from "@geometry";
 import {
+    Act,
     DetailRow,
     DeviceRow,
     DrawerHeader,
@@ -188,7 +189,7 @@ export component DevicesPage inherits Rectangle {
     // One field, two surfaces, and only one of them is asking this page's question.
     //
     // One row is enough for a page of nine devices because a closed `Expand` has
-    // `visible: root.shown > 0px` (`primitives.slint:1073`), so the control exists on screen for
+    // `visible: root.shown > 0px` (`primitives.slint:1172`), so the control exists on screen for
     // the open row and no other.
     //
     // **`start-row`, not `start`** — the same trap `start-device` was named around, four lines
@@ -253,22 +254,55 @@ export component DevicesPage inherits Rectangle {
                 for d[i] in root.devices: VerticalLayout {
                     spacing: 0px;
 
-                    row := Row {
-                        index: i;
-                        count: root.devices.length;
-                        label: d.name;
-                        // §7.5's row-1 trailing slot, on the page as on the shelf: the state, and
-                        // the time since. One producer, `devices::shelf_state`.
-                        value: d.state;
-                        sub: d.summary;
-                        selected: i == root.selected;
-                        chevron: true;
-                        activated => {
-                            root.select(i);
-                            root.expand(i, root.detail-of != i);
+                    // **The row opens the device; the control beside it runs the device.** Two
+                    // verbs, so two controls — §7.2's `Start` used to live inside the `Expand`
+                    // below, which made starting an iPod five interactions: drawer, page, row,
+                    // expand, press. The row still opens onto everything this iPod is; what moved
+                    // out is the one thing you came to do.
+                    HorizontalLayout {
+                        spacing: 0px;
+                        alignment: stretch;
+
+                        row := Row {
+                            horizontal-stretch: 1;
+                            index: i;
+                            count: root.devices.length;
+                            label: d.name;
+                            // §7.5's row-1 trailing slot, on the page as on the shelf: the state,
+                            // and the time since. One producer, `devices::shelf_state`.
+                            value: d.state;
+                            sub: d.summary;
+                            selected: i == root.selected;
+                            chevron: true;
+                            activated => {
+                                root.select(i);
+                                root.expand(i, root.detail-of != i);
+                            }
+                            gained-focus => {
+                                scroll.ensure-visible(self.absolute-position.y, self.height);
+                            }
                         }
-                        gained-focus => {
-                            scroll.ensure-visible(self.absolute-position.y, self.height);
+
+                        // **Running is the machine's answer, not the row's.** `d.running` comes
+                        // from `Live::index`, so exactly one row can ever draw a stop — and a
+                        // title on the bench takes the well with no library row at all, which is
+                        // why no row draws one then either.
+                        Rectangle {
+                            width: Metric.s6;
+                            Act {
+                                x: 0;
+                                y: (parent.height - self.height) / 2;
+                                icon: d.running ? "stop" : "play";
+                                label: d.run-label;
+                                // §7.3's own sentence for why this one cannot be pressed, verbatim
+                                // — the same string the cradle draws, so a refusal cannot be
+                                // worded twice and come out differently.
+                                enabled: d.running || d.startable;
+                                reason: d.cradle-label;
+                                activated => {
+                                    root.start-device(i);
+                                }
+                            }
                         }
                     }
 

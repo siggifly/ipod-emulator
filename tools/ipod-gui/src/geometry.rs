@@ -687,7 +687,7 @@ pub const PAGE_REASON_MEASURE: f64 = REFUSAL_MEASURE;
 ///
 /// Six controls in three files carry `pad: Geometry.page-margin` — Parts' `Remove` and its
 /// `Detail` acts (`parts.slint:67`, `:243`), Devices' `Edit…` / `Remove` / `Start` and the
-/// `New device` footer (`devices.slint:59`, `:284`, `:338`), and the Composer's picker rows
+/// `New device` footer (`devices.slint:60`, `:284`, `:338`), and the Composer's picker rows
 /// (`composer.slint:205`). It is where every `consequence`
 /// in this program that is not a Rail next-step lands, which is why it is the number
 /// `removal_consequence` and `remove_consequence` are written to.
