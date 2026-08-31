@@ -1635,13 +1635,7 @@ fn main() {
         // Calling the callbacks ourselves is a different channel, and a game that drains the list
         // never sees anything through it.
         if completion_list {
-            for pair in due.windows(2) {
-                m.mem.poke32(pair[0], pair[1]);
-            }
-            if let Some(&last) = due.last() {
-                m.mem.poke32(last, 0);
-            }
-            m.mem.poke32(ctx_base + 0x2c, due.first().copied().unwrap_or(0));
+            session.deliver_completions(&mut m, &due);
             if !due.is_empty() {
                 m.file_log.push(format!("completion list: {} request(s)", due.len()));
             }

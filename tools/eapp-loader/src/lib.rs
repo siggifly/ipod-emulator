@@ -1044,6 +1044,34 @@ pub struct TitleSession {
 }
 
 impl TitleSession {
+    /// Hand the title its finished requests as a LINKED LIST, which is what RetailOS's pump does.
+    ///
+    /// The pump fills `ctx+0x2c` from `0x001e3c14`, which walks the manager's finished-job list
+    /// under a lock, chains the requests through `[req+0x00]` and returns the head. Sims Bowling's
+    /// very first act on its initialised path is `0x180456fc: ldr r0,[r5,#0x2c] / bl 0x1803ec70`,
+    /// and that routine is the matching walk — `[r0+0]` for next, store zero to unlink, dispatch,
+    /// repeat.
+    ///
+    /// **Calling each request's callback directly is a DIFFERENT CHANNEL**, and a title that drains
+    /// the list never sees anything through it. That is why this exists rather than a loop over
+    /// callbacks: the two are not two implementations of one thing.
+    ///
+    /// **Known gap, carried over rather than invented here: RetailOS also CLEARS `ctx+0x2c` after
+    /// the frame** (`0x0024db10`), and nothing does. A head left in place is walked again next
+    /// frame, over requests that have already been unlinked and may have been reused. It has not
+    /// been changed because the fix is unverified — the channel is off by default, and proving it
+    /// wants Sims Bowling driven to its initialised path. See `written/28`-style discipline: the
+    /// gap is written down where the code is, not fixed on a guess.
+    pub fn deliver_completions(&self, m: &mut Machine, due: &[u32]) {
+        for pair in due.windows(2) {
+            m.mem.poke32(pair[0], pair[1]);
+        }
+        if let Some(&last) = due.last() {
+            m.mem.poke32(last, 0);
+        }
+        m.mem.poke32(self.ctx_base + 0x2c, due.first().copied().unwrap_or(0));
+    }
+
     /// Tell the title why this frame is happening, then run it.
     ///
     /// The order matters and is Apple's: the mark is seeded, the reason byte is written, and only
@@ -13788,6 +13816,51 @@ mod peek_tests {
     /// The `_a8` case: an 8-bit image whose palette is the greyscale ramp `(i, i, i, 0)`. Read
     /// literally that palette is fully transparent, so the index has to become the alpha and the
     /// colour white — these are font atlases, tinted by the draw's modulate register.
+    /// **The completion list is a chain, and the last link has to be NULL.**
+    ///
+    /// A title walks it as `[req+0]` for next, store zero to unlink, dispatch, repeat. If the tail
+    /// does not terminate, that walk runs off into whatever the last request happened to hold —
+    /// inside the title's own image — which reads as a rendering or logic fault rather than a
+    /// completion one. If the head is not published at `ctx+0x2c`, the walk never starts and the
+    /// title simply never learns its file arrived.
+    #[test]
+    fn a_completion_list_is_chained_and_terminated() {
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        map_hardware(&mut m, false);
+        let ctx = m.scratch(0x400);
+        let session = TitleSession {
+            ctx_base: ctx,
+            ctx: vec![ctx, ctx + 0x100, 0, 0],
+            frame_vector: 0,
+        };
+
+        let due = [m.scratch(0x40), m.scratch(0x40), m.scratch(0x40)];
+        // **Poisoned first, or this test proves nothing.** `scratch` hands back zeroed memory, so
+        // "the tail is NULL" is true before `deliver_completions` runs — the assertion below passed
+        // with the terminating store deleted until these three lines existed. AGENTS.md §6: prove
+        // the test fails without the code.
+        for r in due {
+            m.mem.poke32(r, 0xdead_beef);
+        }
+        m.mem.poke32(ctx + 0x2c, 0xdead_beef);
+        session.deliver_completions(&mut m, &due);
+
+        assert_eq!(
+            m.mem.read32(ctx + 0x2c),
+            due[0],
+            "the head is published where the pump puts it"
+        );
+        assert_eq!(m.mem.read32(due[0]), due[1], "each request points at the next");
+        assert_eq!(m.mem.read32(due[1]), due[2]);
+        assert_eq!(m.mem.read32(due[2]), 0, "the tail terminates, or the walk runs off the end");
+
+        // Nothing owed means an empty list, not a stale head — a title handed last frame's head
+        // walks requests that have already been unlinked.
+        m.mem.poke32(ctx + 0x2c, 0xdead_beef);
+        session.deliver_completions(&mut m, &[]);
+        assert_eq!(m.mem.read32(ctx + 0x2c), 0, "no completions means no list");
+    }
+
     /// **The three reason modes, each doing the thing that breaks a title when it does not.**
     ///
     /// This exists because the alternative was a baseline number from one title on one afternoon.
