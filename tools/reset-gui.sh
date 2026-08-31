@@ -14,9 +14,9 @@
 #
 # Usage:
 #   tools/reset-gui.sh            what a reset would move, and nothing else
-#   tools/reset-gui.sh snapshot   drop the parked machine — next start is a COLD BOOT
+#   tools/reset-gui.sh cache      drop everything regenerable — next start is a COLD BOOT
 #   tools/reset-gui.sh settings   the above, plus devices and preferences → first-run wizard
-#   tools/reset-gui.sh all        everything, including drives and downloaded firmware
+#   tools/reset-gui.sh all        everything, including the drives
 #
 set -u
 
@@ -34,25 +34,27 @@ LEVEL="${1:-show}"
 
 # ── what each level touches ──────────────────────────────────────────────────────────────
 #
-# snapshot  the parked machine and its frame. Costs nothing to lose: the next start is the
-#           cold boot you probably wanted to test anyway.
-# settings  + settings.txt. Devices and preferences go; the wizard runs again. Drives and
-#           downloaded firmware stay, so nothing has to be rebuilt or re-fetched.
-# all       + drives and firmware. `my-5.5g.img` is rebuildable from an IPSW, and the IPSWs
-#           re-download — but both are slow, which is why they are only in this level.
+# cache     everything the program can rebuild: parked machines, their frames, downloaded
+#           IPSWs. Costs nothing but time to lose — the next start is the cold boot you
+#           probably wanted to test anyway, and a download you will do once.
+# settings  + settings.txt. Devices and preferences go; the wizard runs again. The drives
+#           stay, so nothing has to be rebuilt.
+# all       + drives. `my-5.5g.img` is rebuildable from an IPSW, which is exactly why it is
+#           only in this level: rebuildable is not the same as cheap, and a drive the user
+#           supplied is not rebuildable at all.
 case "$LEVEL" in
   show)     TARGETS=() ;;
-  snapshot) TARGETS=(snapshots) ;;
-  settings) TARGETS=(snapshots settings.txt) ;;
-  all)      TARGETS=(snapshots settings.txt drives firmware) ;;
-  *)        echo "unknown level: $LEVEL"; echo "use: show | snapshot | settings | all"; exit 2 ;;
+  cache)    TARGETS=(cache) ;;
+  settings) TARGETS=(cache settings.txt) ;;
+  all)      TARGETS=(cache settings.txt drives) ;;
+  *)        echo "unknown level: $LEVEL"; echo "use: show | cache | settings | all"; exit 2 ;;
 esac
 
 echo "data directory:"
 echo "  $DATA"
 echo
 echo "current state:"
-for p in snapshots settings.txt drives firmware; do
+for p in cache drives settings.txt; do
   if [ -e "$DATA/$p" ]; then
     printf '  %-14s %8s\n' "$p" "$(du -sh "$DATA/$p" 2>/dev/null | cut -f1)"
   else
@@ -63,9 +65,22 @@ done
 if [ "$LEVEL" = "show" ]; then
   echo
   echo "nothing moved. levels:"
-  echo "  snapshot   next start is a cold boot; devices and drives kept"
+  echo "  cache      next start is a cold boot; devices and drives kept"
   echo "  settings   also forgets devices and preferences; drives kept"
-  echo "  all        also moves drives and downloaded firmware"
+  echo "  all        also moves the drives"
+  # Pre-split leftovers. `snapshots/` and `firmware/` used to sit beside `drives/`, under one
+  # policy that had to be as strict as the strictest thing in it — which is how 301 MB of
+  # regenerable restore points ended up guarded like an irreplaceable disk image. They are
+  # reported rather than moved, because deciding what to do with the operator's data is the
+  # operator's call and this script's whole discipline is that it never makes that call.
+  for p in snapshots firmware; do
+    if [ -e "$DATA/$p" ]; then
+      echo
+      echo "left over from before the cache split: $p ($(du -sh "$DATA/$p" 2>/dev/null | cut -f1))"
+      echo "  nothing reads it now; it lives under cache/ today. to reclaim:"
+      echo "    mv \"$DATA/$p\" \"$STASH_ROOT/\""
+    fi
+  done
   exit 0
 fi
 

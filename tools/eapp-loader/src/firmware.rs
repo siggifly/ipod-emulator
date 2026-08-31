@@ -788,7 +788,7 @@ pub fn cache_dir() -> std::path::PathBuf {
             return d;
         }
     }
-    crate::settings::data_dir().join("firmware")
+    crate::settings::cache_dir().join("firmware")
 }
 
 /// What a cached file turned out to be.

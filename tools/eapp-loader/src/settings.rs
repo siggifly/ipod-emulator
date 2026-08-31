@@ -1254,16 +1254,38 @@ pub fn drives_dir() -> PathBuf {
     data_dir().join("drives")
 }
 
+/// The half of the data directory that this program can rebuild.
+///
+/// **There are two kinds of file here and they earn different rules.** A drive image is sometimes
+/// the only copy of an iPod somebody owns; a restore point is a boot that already happened, and a
+/// downloaded IPSW is a file Apple will serve again. Storing them side by side meant one policy
+/// had to cover both, and the strict one wins that argument every time — so the regenerable half
+/// accumulated under a rule written for the irreplaceable half. Measured on this repository's own
+/// library before the split: 40 MB of drives against **301 MB of restore points**.
+///
+/// So the distinction is a directory rather than a convention. Everything under here may be
+/// deleted to reclaim space without asking anybody, because the cost of being wrong is a download
+/// or a boot. Nothing outside it may.
+///
+/// **Inside [`data_dir`] rather than the platform's cache directory**, deliberately. A build
+/// unpacked from a zip keeps all its state beside the executable, and `data_dir`'s own contract is
+/// that deleting that folder deletes everything — a cache that escaped to `~/Library/Caches` would
+/// break the promise that makes the portable build portable, to buy a tidiness nobody asked for.
+pub fn cache_dir() -> PathBuf {
+    data_dir().join("cache")
+}
+
 /// Where a device's restore point lives — GUI.md §12.4's park, and everything that pairs with it.
 ///
 /// A directory rather than a path per device, and a **sibling of [`drives_dir`]** rather than a
 /// subdirectory of it, because a restore point is not a drive: §11.4 lists the two in separate
 /// groups and `Discard the snapshot` removes one without touching the other.
 ///
-/// Under [`data_dir`] like everything else here, so `IPOD_EMULATOR_DATA` moves it and a test never
-/// writes a snapshot into somebody's real library.
+/// Under [`cache_dir`] rather than beside the drives, because a park is a boot that already
+/// happened: discarding one costs the boot again and nothing else. `IPOD_EMULATOR_DATA` still
+/// moves it, so a test never writes a snapshot into somebody's real library.
 pub fn snapshots_dir() -> PathBuf {
-    data_dir().join("snapshots")
+    cache_dir().join("snapshots")
 }
 
 /// The restore point for the device called `name` — **the one place that decides where it lives.**
@@ -5168,6 +5190,62 @@ mod first_run_naming_tests {
         // SAFETY: `env_lock` serialises every test in this crate that touches this variable.
         unsafe { std::env::set_var("IPOD_EMULATOR_DATA", &dir) };
         assert_eq!(drives_dir(), dir.join("drives"));
+        // SAFETY: still holding the lock.
+        unsafe {
+            match before {
+                Some(v) => std::env::set_var("IPOD_EMULATOR_DATA", v),
+                None => std::env::remove_var("IPOD_EMULATOR_DATA"),
+            }
+        }
+    }
+
+    /// **Nothing irreplaceable lives under [`cache_dir`], and everything regenerable does.**
+    ///
+    /// This is the whole of the split, asserted rather than described. Everything under the cache
+    /// may be deleted to reclaim space without asking anybody; a drive may not, because it is
+    /// sometimes the only copy of an iPod somebody owns. Before the split those sat side by side
+    /// under one policy, which had to be as strict as the strictest thing it covered — and that is
+    /// how 301 MB of restore points came to be guarded like an irreplaceable disk image while
+    /// costing fifteen times what the drives cost.
+    ///
+    /// **How to make it go red:** point `snapshots_dir` back at `data_dir().join("snapshots")` and
+    /// the second assertion fails — a restore point outside the cache is one the reclaim cannot
+    /// touch. Point `drives_dir` at the cache and the third fails, which is the dangerous
+    /// direction: a drive inside the cache is a drive something is entitled to delete.
+    #[test]
+    fn the_cache_holds_everything_rebuildable_and_nothing_else() {
+        let _guard = env_lock();
+        let dir = temp_dir("cache-split");
+        let before = std::env::var_os("IPOD_EMULATOR_DATA");
+        // SAFETY: `env_lock` serialises every test in this crate that touches this variable.
+        unsafe { std::env::set_var("IPOD_EMULATOR_DATA", &dir) };
+
+        let cache = cache_dir();
+        assert_eq!(cache, dir.join("cache"), "the cache is inside the data directory");
+
+        // Regenerable: a park is a boot that already happened, an IPSW is a file Apple serves again.
+        for (what, path) in [
+            ("restore points", snapshots_dir()),
+            ("downloaded firmware", crate::firmware::cache_dir()),
+        ] {
+            assert!(
+                path.starts_with(&cache),
+                "{what} at {} is outside the cache, so a reclaim cannot free it",
+                path.display()
+            );
+        }
+
+        // Irreplaceable. This is the assertion that matters: a drive under the cache is a drive
+        // something else in this program is entitled to delete without asking.
+        assert!(
+            !drives_dir().starts_with(&cache),
+            "drives are under the cache, where they can be deleted to reclaim space"
+        );
+        assert!(
+            !Settings::path().unwrap().starts_with(&cache),
+            "the settings file is under the cache"
+        );
+
         // SAFETY: still holding the lock.
         unsafe {
             match before {

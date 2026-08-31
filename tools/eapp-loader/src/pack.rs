@@ -188,7 +188,7 @@ mod tests {
         // Zeros at both ends, which is where an off-by-one in the literal walk shows up.
         let mut v = vec![0u8; 100];
         v.extend_from_slice(b"middle");
-        v.extend(std::iter::repeat(0).take(100));
+        v.extend(std::iter::repeat_n(0, 100));
         roundtrip(&v);
     }
 
