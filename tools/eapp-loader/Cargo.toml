@@ -6,14 +6,3 @@ description = "Load an iPod eApp binary, resolve its framework imports to traps,
 
 [dependencies]
 arm7tdmi = { path = "../arm7tdmi" }
-
-[dependencies.minifb]
-version = "0.27"
-optional = true
-
-[features]
-viewer = ["minifb"]
-
-[[bin]]
-name = "play"
-required-features = ["viewer"]

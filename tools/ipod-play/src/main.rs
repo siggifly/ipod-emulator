@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use arm7tdmi::Bus;
-use eapp_loader::{defaults_for, EApp, Machine, Stop, Stub, FB_HEIGHT, FB_WIDTH};
+use eapp_loader::{defaults_for, EApp, Machine, Stop, FB_HEIGHT, FB_WIDTH};
 use minifb::{Key, MouseButton, Scale, ScaleMode, Window, WindowOptions};
 
 /// Post one button event, the way RetailOS does.
@@ -292,7 +292,9 @@ mod reaper {
         unsafe {
             atexit(reap_all);
             for sig in [SIGINT, SIGTERM, SIGHUP] {
-                signal(sig, on_signal as usize);
+                // Through a pointer, not straight to an integer: a function *item* is a
+                // zero-sized type and casting it to `usize` is not the address of anything.
+                signal(sig, on_signal as *const () as usize);
             }
         }
     }
@@ -820,10 +822,10 @@ fn main() {
     // Select is event type 2 — MEASURED: it commits a letter on the name-entry screen. `[` and
     // `]` still walk the candidate, for mapping the buttons that are not yet known.
     let mut select_idx: usize = 1;
-    let mut select_byte: u8 = 2;
+    // Assigned before every read; an initial value here is one nothing looks at.
+    let mut select_byte: u8;
     let mut mouse_was_down = false;
     let mut event_hold: i32 = 0;
-    let mut last_node: u32 = 0;
     let mut held_bits: u32 = 0;
     // Frames left to withhold the idle contact refill, so a tap ends with the finger lifted.
     let mut tap_release: u32 = 0;
@@ -836,8 +838,8 @@ fn main() {
     // zero-length delta to the game. Raised after every frame call; see `hold_clock_above`.
     let mut frame_clock_floor: u32 = 0;
     // --frame-reason=auto state: whether we still own the byte, and what we last put there.
-    let mut reason_ours = true;
-    let mut reason_last: u8 = 0;
+    let reason_ours = true;
+    let mut reason_last: u8;
     // --frame-reason keeps the pump's reason byte refreshed each frame. `auto` runs the
     // handshake RetailOS actually runs; see `reason_auto` below.
     let reason_spec = args
@@ -1374,7 +1376,6 @@ fn main() {
             println!("event type 1 (QUIT)");
             post_event(&mut m, ctx_base, event_node, 1, 1, 0, wheel_byte(wheel_raw));
             event_hold = 2;
-            last_node = event_node;
         }
 
         // P — write the panel to a PNG, so a rendering problem can be looked at without

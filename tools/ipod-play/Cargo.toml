@@ -1,0 +1,18 @@
+[package]
+name = "ipod-play"
+version.workspace = true
+edition = "2021"
+description = "Run one iPod title in a window, against the same machine the emulator uses"
+
+# **The toolkit lives here, not in the model.** `minifb` was a feature of `eapp-loader`, which is
+# the machine — and a UI toolkit inside the model is what `AGENTS.md` §9 exists to prevent: the
+# window is replaceable precisely because the model does not know one. Behind an optional feature
+# it was also invisible to `cargo clippy --workspace`, so this binary's warnings never counted.
+[dependencies]
+eapp-loader = { path = "../eapp-loader" }
+arm7tdmi = { path = "../arm7tdmi" }
+minifb = "0.27"
+
+[[bin]]
+name = "play"
+path = "src/main.rs"

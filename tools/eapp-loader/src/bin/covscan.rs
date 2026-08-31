@@ -236,7 +236,7 @@ fn main() {
         .cloned()
         .unwrap_or_else(|| {
             eprintln!(
-                "usage: covscan <Games_RO dir> [--impl=<play.rs>] [--verify] [--per-title]\n\
+                "usage: covscan <Games_RO dir> [--impl=FILE] [--verify] [--per-title]\n\
                  \n\
                  Scans every */Executables/*.bin under the directory."
             );
@@ -269,18 +269,22 @@ fn main() {
         std::process::exit(if verify(&titles) { 0 } else { 1 });
     }
 
-    // Stubs live in two places — the viewer's own table and the shared `install_audit_stubs` in
-    // the library — so both are read. Compiling them in means the default answer is right
-    // without the caller having to know where the sources are.
+    // **Stubs live in ONE place now, and this used to read two.** The viewer had its own table and
+    // the library had `install_audit_stubs`, so both were compiled in. The table moved into the
+    // library — `install_game_stubs` — when the window needed to wire a title the same way, and
+    // `play` has no `set_stub` call left in it. Reading its source as well would now scan a file
+    // that says nothing about coverage, and after it moved to its own crate it would not even be
+    // there: this is where the build broke, which is a better outcome than reading it and
+    // silently finding nothing.
+    //
+    // Compiling the library in means the default answer is right without the caller having to know
+    // where the sources are; `--impl=` still overrides for scanning something else entirely.
     let mut impl_src: String = args
         .iter()
         .filter_map(|a| a.strip_prefix("--impl="))
         .map(|p| std::fs::read_to_string(p).expect("cannot read --impl file"))
         .collect::<Vec<_>>()
         .join("\n");
-    if impl_src.is_empty() {
-        impl_src = include_str!("play.rs").to_string();
-    }
     impl_src.push_str(include_str!("../lib.rs"));
     let done = implemented(&impl_src);
 
