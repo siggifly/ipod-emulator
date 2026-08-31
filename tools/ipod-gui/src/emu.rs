@@ -348,6 +348,18 @@ pub enum BootTarget {
     /// `rb-main.raw`, its bootloader, `ipodloader2`. The same contract Apple's own `flsh` images
     /// have, which is why one code path serves both.
     Image(PathBuf),
+    /// A title, played on the iPod's own screen and driven by its own wheel.
+    ///
+    /// **Not an `Image`, and the difference is the whole machine.** An `Image` is raw ARM entered at
+    /// `0x10000000` on a machine that still has a NOR, a drive, a co-processor and a click wheel; a
+    /// title is an `EApp` on a machine that has **none of those**. `play` has never called
+    /// `map_hardware` — a game is bare RAM, the image, and the sixty stubs its imports trap into.
+    /// So this branches before the peripheral map rather than through it.
+    ///
+    /// `dir` is the title's resource directory — the `<Game>/` two levels above `<Game>/Executables/
+    /// <name>.bin`, which is the layout every title ships as, and where its `.pix` textures and
+    /// `Manifest.plist` live.
+    Game { exe: PathBuf, dir: PathBuf },
 }
 
 impl BootTarget {
@@ -369,6 +381,16 @@ impl BootTarget {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
+            // The title's own name from its manifest, which is what a person calls it. The
+            // directory it lives in is named by an opaque id — 50513, 88888, 1500C — so a label
+            // taken from the path shows a number nobody recognises.
+            BootTarget::Game { exe, dir } => eapp_loader::manifest_name(dir)
+                .or_else(|| {
+                    exe.file_stem()
+                        .map(|n| n.to_string_lossy().split("_1_1_").next().unwrap_or("").to_string())
+                        .filter(|n| !n.is_empty())
+                })
+                .unwrap_or_else(|| "Title".into()),
         }
     }
 
@@ -998,7 +1020,42 @@ impl Config {
     }
 }
 
+/// A machine that runs one title, and nothing else.
+///
+/// **Bare RAM, the image, and the sixty stubs its imports trap into.** No NOR, no drive, no
+/// co-processor, no click-wheel peripheral — `play` has never mapped any of them, and a title never
+/// looks for them: it reaches the host through its framework imports, not through registers. So
+/// this is not `build` with pieces switched off, it is a different machine, and pretending
+/// otherwise would mean carrying an iPod's hardware behind a game that cannot address it.
+///
+/// The wiring itself is [`eapp_loader::Machine::install_game_stubs`], shared with `play` so the two
+/// front ends cannot disagree about what a title needs.
+fn build_game(exe: &std::path::Path, dir: &std::path::Path) -> Result<Machine, String> {
+    let bytes = std::fs::read(exe).map_err(|e| format!("{}: {e}", exe.display()))?;
+    let app = EApp::parse(bytes).map_err(|e| format!("{}: {e:?}", exe.display()))?;
+    let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
+
+    // Where the title's `.pix` textures and `Manifest.plist` live. Set before the stubs, because
+    // the file stubs resolve against it.
+    m.game_dir = Some(dir.to_path_buf());
+
+    let stem = exe
+        .file_stem()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // The defaults are the measured per-title table's, not the command line's — the window has no
+    // flags to override them with, which is the point of them being defaults.
+    m.install_game_stubs(&stem, eapp_loader::GameStubs::default());
+    m.preload_textures();
+    Ok(m)
+}
+
 pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
+    // A title is a different machine, decided here rather than by threading a flag through every
+    // peripheral below. See `build_game`.
+    if let BootTarget::Game { exe, dir } = &cfg.boot {
+        return build_game(exe, dir);
+    }
     let app = placeholder_app();
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
 
@@ -1068,6 +1125,11 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // synthesised ROM takes: place the image, leave the handoff block a real boot ROM would have
     // left, and start. See `ipod-boot flsh`, which is the same boot on the command line.
     let boot_image = match &cfg.boot {
+        // `build` hands a title to `build_game` and returns before here, so this is answered rather
+        // than left to `unreachable!`: a panic in the window is a crash, and `None` is already what
+        // "this boot has no NOR image" means. `a_game_machine_has_no_ipod_hardware` is the test
+        // that keeps the early return honest.
+        BootTarget::Game { .. } => None,
         BootTarget::Os => None,
         BootTarget::Nor(tag) => {
             let img = eapp_loader::inspect::nor_image(&flash, tag).ok_or_else(|| {
@@ -3114,6 +3176,58 @@ mod tests {
     /// RetailOS's own poll rate made feel right. Apple's `diag` reads its buttons once per 150 ms
     /// and saw none of them. Nothing failed: the interrupt handler recorded every press and the
     /// poll read the release that had overwritten it.
+    /// **A title is built as a game, not as an iPod with pieces switched off.**
+    ///
+    /// `build` returns `build_game` before it touches the peripheral map, because a game machine
+    /// shares almost nothing with a boot: no NOR, no drive, no co-processor, no click-wheel
+    /// peripheral. `play` has never mapped any of them and a title never addresses them — it
+    /// reaches the host through its framework imports.
+    ///
+    /// The check is on **which failure comes back**. Pointed at a path that does not exist, the
+    /// game path complains about that path; the iPod path would have complained about a NOR dump or
+    /// a drive long before it looked at a title, because `Config::default()` names neither. So the
+    /// error text is a witness for which branch ran, and it needs no gitignored resource to be one.
+    ///
+    /// **How to make it go red**: delete the `if let BootTarget::Game` early return from `build`.
+    #[test]
+    fn a_title_is_built_as_a_game_and_not_as_an_ipod() {
+        let missing = std::path::PathBuf::from("/nonexistent/Title/Executables/Title.bin");
+        let cfg = Config {
+            boot: BootTarget::Game {
+                exe: missing.clone(),
+                dir: std::path::PathBuf::from("/nonexistent/Title"),
+            },
+            ..Config::default()
+        };
+        // `Machine` is not `Debug`, so `expect_err` cannot report the Ok side; match instead.
+        let err = match build(&cfg, true) {
+            Err(e) => e,
+            Ok(_) => panic!("a title that is not there cannot be built"),
+        };
+        assert!(
+            err.contains("/nonexistent/Title/Executables/Title.bin"),
+            "the game path names the file it could not read; got {err:?}"
+        );
+        let lower = err.to_ascii_lowercase();
+        assert!(
+            !lower.contains("nor") && !lower.contains("drive") && !lower.contains("disk"),
+            "this failed as an iPod, so the early return did not run; got {err:?}"
+        );
+    }
+
+    /// A title is never the ordinary boot, whatever else changes about it.
+    #[test]
+    fn a_title_is_not_the_os_boot() {
+        let g = BootTarget::Game {
+            exe: "/x/Game/Executables/Sudoku_1_1_1.bin".into(),
+            dir: "/x/Game".into(),
+        };
+        assert!(!g.is_os(), "is_os drives the memory map and a game does not want the boot one");
+        // With no manifest to read, the label falls back to the executable's name with the version
+        // stripped — never the directory id, which is an opaque number like 50513.
+        assert_eq!(g.label(), "Sudoku");
+    }
+
     #[test]
     fn a_button_is_held_long_enough_for_a_polling_reader() {
         // Worked out by hand, so that the conversion is checked against something other than
