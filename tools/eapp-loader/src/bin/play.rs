@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use arm7tdmi::Bus;
-use eapp_loader::{EApp, Machine, Stop, Stub, FB_HEIGHT, FB_WIDTH};
+use eapp_loader::{defaults_for, EApp, Machine, Stop, Stub, FB_HEIGHT, FB_WIDTH};
 use minifb::{Key, MouseButton, Scale, ScaleMode, Window, WindowOptions};
 
 /// Post one button event, the way RetailOS does.
@@ -110,117 +110,6 @@ impl HoldTimers {
 }
 
 
-/// Per-title defaults, keyed on the executable name.
-///
-/// Every one of these was measured, and the sweep that produced them is §21.3 of the ABI notes.
-/// They are DEFAULTS: an explicit flag on the command line always wins, so this only removes the
-/// need to remember four different combinations. `find_flags_word` already works this way.
-///
-/// The fields are: load whole files at open, the frame-reason mode, the pump mark, a
-/// per-call instruction budget, and the reason byte the one-time init call sees.
-struct TitleDefaults {
-    load_on_open: bool,
-    frame_reason: Option<&'static str>,
-    pump_mark: Option<u8>,
-    budget: Option<u64>,
-    ctx_seed: u8,
-    async_files: bool,
-    /// Frames per second to pace at, when the title cannot take the usual 60.
-    fps: Option<usize>,
-}
-
-fn defaults_for(exe: &str) -> TitleDefaults {
-    let d = |load_on_open, frame_reason, pump_mark, budget| TitleDefaults {
-        load_on_open,
-        frame_reason,
-        pump_mark,
-        budget,
-        ctx_seed: 5,
-        async_files: false,
-        fps: None,
-    };
-    // Same, but naming the init-call reason byte and the async-file model explicitly.
-    let ds = |load_on_open, frame_reason, pump_mark, budget, ctx_seed, async_files| TitleDefaults {
-        load_on_open,
-        frame_reason,
-        pump_mark,
-        budget,
-        ctx_seed,
-        async_files,
-        fps: None,
-    };
-    match exe {
-        // The dispatcher-gate engine: the reason table is unreachable until `ctx+0x100` is held
-        // above 1, and the reason itself has to be 0 once and 1 after. See §21.
-        e if e.starts_with("Sudoku") || e.starts_with("mspacman") => {
-            d(true, Some("first0:1"), Some(2), None)
-        }
-        // The same, plus a raised ceiling: one of its frames genuinely runs 10.5 M instructions
-        // and the default 8 M cuts it off at frame 5.
-        e if e.starts_with("Solitaire") => d(true, Some("first0:1"), Some(2), Some(200_000_000)),
-        // These answer in `ctx+0x100`, so "ask for init until it answers" works. See §20.
-        // SAT Prep parses its whole question bank in a handful of frames — 540 543 bytes of text
-        // for the Reading build — and the default 8 M instructions per frame cuts it off mid-parse
-        // at frame ~110, inside the line splitter at `0x1800df88`. That looked exactly like an
-        // infinite loop and is why §26 blamed the partial load. It is simply a title that needs a
-        // bigger frame budget: with one, all three builds leave the splash and reach their content
-        // screen (2 quads/frame -> 11).
-        e if e.starts_with("testprep") => d(true, Some("auto"), None, Some(200_000_000)),
-        e if e.starts_with("SimsBowling") || e.starts_with("SimsPool") => {
-            d(true, Some("auto"), None, None)
-        }
-        // Both drive the reason byte themselves and lose their renderers if it is forced.
-        // LOST needs a frame REASON of 1. Its frame loop at `0x1803d6ac` reads the reason byte
-        // from `ctx+0x00` and branches:
-        //
-        //   ldrb r0,[r5,#0] / cmp r0,#1 / bne 0x1803d7a0   ; 1 = run a normal frame
-        //   0x1803d7a0: cmp r0,#5 / bne 0x1803d864         ; 5 = (re)initialise
-        //   0x1803d864: mov r0,#1 / bl 0x180062a4          ; anything else = SHUT DOWN
-        //
-        // The pump seeds the byte with 5 and nothing moved it, so LOST re-ran its init path every
-        // frame and tore the level down again through `0x1801f87c` — 336 release-all calls in
-        // 9 000 frames — which is what kept "SAVING…" on screen after the save itself had
-        // completed. With reason 1 it renders four times as much (12 935 -> 52 503 quads).
-        e if e.starts_with("Lost") => d(true, Some("first0:1"), None, None),
-        // Texas Hold'em keys everything off `ctx+0x00`, and it uses the same byte for two jobs.
-        // Its tick at `0x18008dec` dispatches on it through a 7-way table at `0x18008e3c`
-        // (0 = one-time boot, 1 = run a frame, 2/6 = idle, 3/4/5 = lifecycle), but it only
-        // *registers* the context as its state object while the byte reads 0 — `0x18004988`:
-        // `ldrb r0,[r0,#0] / cmp r0,#0 / bleq 0x180057f8`. Seeded to the usual 5 the registration
-        // never happens, so `[0x180595d4]` stays null, every later tick reads its dispatch value
-        // from address 0, and the game re-runs its boot case forever. The second boot finds the
-        // screen state already advanced and builds the table sprites before their textures are
-        // loaded, which is the `Divide By Zero` (see §33).
-        //
-        // Seeding 0 lets the init call both register and boot; steady reason 1 then runs frames.
-        //
-        // It also needs the async file model. Hold'em issues `AsyncFileIO #3` and never calls the
-        // read import at all — it expects RetailOS to park the request and call back. Against the
-        // synchronous `FileOpen` binding it gets a handle it never uses, so `Data/textures.txt` is
-        // opened and never read, its texture table stays zeroed, and the loader walks off the end
-        // of an unterminated descriptor list opening NULL names ~700 times before a slot is
-        // registered twice and the runtime aborts (`0x1800839c`, "Abnormal termination").
-        e if e.starts_with("HoldEm") => ds(true, Some("1"), None, None, 0, true),
-        // Vortex divides by its own frame delta and cannot take 60 fps.
-        //
-        // Its tick at `0x1801a314` stores `now - last` in microseconds, converts it to 16.16
-        // seconds, and `0x18010aa4` then divides by that value `asr #10` — i.e. by the frame time
-        // in 64ths of a second. Any frame shorter than 1/64 s truncates the divisor to zero and
-        // the runtime aborts with "Arithmetic exception: Divide By Zero". At `--fps=60` the
-        // nominal 16.7 ms leaves 1 ms of headroom and the pacing jitter eats it: the abort landed
-        // at frame 69, 402 and 1502 across three runs of the same binary. The device ran these
-        // titles at 30 fps, which is also 2x the margin.
-        // Vortex also needs the async file model — it opens through `AsyncFileIO #3` and waits
-        // for the completion callback rather than calling the read import, exactly like Hold'em.
-        e if e.starts_with("vortex") => {
-            TitleDefaults { fps: Some(30), ..ds(true, None, None, None, 5, true) }
-        }
-        // Pre-loading its 512 KB `.tga` at open time sends its loader into a loop it never
-        // leaves — the one title the whole-file rule does not fit.
-        e if e.starts_with("Pacman") => d(false, None, None, None),
-        _ => d(true, None, None, None),
-    }
-}
 
 fn post_event(m: &mut Machine, ctx_base: u32, node: u32, ty: u8, state: u8, payload: u32, wheel: u8) {
     // The real mechanism, from Apple's `postEvent` at `0x0024d918`: a 12-byte node —
