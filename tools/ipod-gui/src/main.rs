@@ -13724,6 +13724,50 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **The drawer has a drawn way in that is not the shelf.**
+    ///
+    /// Written before the shelf was deleted, and that order is the point. The drawer had exactly
+    /// three routes — `MENU ›`, the write-target row, and `Control + \` — and the first two were
+    /// both ON the shelf. Deleting it without this control first would have left the drawer
+    /// reachable by keyboard alone: a surface you can see and cannot get to, which is the same
+    /// defect as the Games row drawn live over a page with no slot.
+    ///
+    /// **A keyboard binding is not a route for this purpose.** `Control + \` is real and stays,
+    /// but a control nobody can find is not discoverable, and every other page in this window is
+    /// reached by pressing something.
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "reads the drawn accessible tree, which needs SLINT_EMIT_DEBUG_INFO — build.rs \
+                  emits it in debug only"
+    )]
+    #[test]
+    fn the_bench_has_a_drawn_control_that_opens_the_drawer() {
+        let dir = temp_dir("bench-menu");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d);
+        let settings = Rc::new(RefCell::new(s));
+        let w = a_window();
+        let _wiring = wire(&w, settings, args::Machine::default(), Rc::new(drops::Shell::Native));
+        w.show().expect("the headless backend shows a window");
+        w.window().set_size(slint::LogicalSize::new(
+            geometry::PREF_WIDTH as f32,
+            geometry::PREF_HEIGHT as f32,
+        ));
+        let_the_drawer_settle();
+
+        assert!(!w.get_drawer_open(), "the drawer starts closed");
+        let buttons = elements_by_role(&w, i_slint_backend_testing::AccessibleRole::Button);
+        let labels: Vec<String> = buttons
+            .iter()
+            .filter_map(|b| b.accessible_label().map(|l| l.to_string()))
+            .collect();
+        assert!(
+            labels.iter().any(|l| l == "Menu"),
+            "nothing on the bench is called `Menu`, so the drawer is keyboard-only. Drawn: {labels:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// **A page the markup draws must have a nav slot, and one with a slot must be drawn.**
     ///
     /// The gate that would have caught the whole of the `Games` bug, and the reason it is separate
@@ -13924,85 +13968,16 @@ pub(crate) mod tests {
         );
     }
 
-    /// **The menu strip's five words are five controls, and each one goes where it says.**
-    ///
-    /// It used to be ONE `ShelfControl` labelled *menu* with five `Text` children painted inside
-    /// it: the strip drew five destinations and behaved as one button, so pressing `Parts` opened
-    /// the menu rather than Parts. The operator found it by pressing it. That is the same shape as
-    /// a `Start` live over an iPod with no drive — a control naming something it will not do — and
-    /// it is the third time this window has been caught at it.
-    ///
-    /// §4 is why they open the DRAWER rather than becoming a fourth surface: the navigation model
-    /// is three surfaces and a menu bar, and these are a shortcut into the menu bar's own rows, not
-    /// a tab strip beside it. One press instead of two, landing where `MENU` would have landed.
-    #[cfg_attr(
-        not(debug_assertions),
-        ignore = "reads the drawn accessible tree, which needs SLINT_EMIT_DEBUG_INFO — build.rs \
-                  emits it in debug only"
-    )]
-    #[test]
-    fn every_word_of_the_menu_strip_opens_the_drawer_at_the_page_it_names() {
-        let w = a_window();
-        w.show().expect("the headless backend shows a window");
-        w.window().set_size(slint::LogicalSize::new(
-            geometry::PREF_WIDTH as f32,
-            geometry::PREF_HEIGHT as f32,
-        ));
-        // The strip is drawn only while the drawer is CLOSED (§7.5: it is a route into a drawer you
-        // are not already inside), so this walks the default stack rather than toggling one open.
-        let stack = nav::Stack::new();
-        push_nav(&w, &stack);
-        let_the_drawer_settle();
+    // `every_word_of_the_menu_strip_opens_the_drawer_at_the_page_it_names` stood here, and it went
+    // with the strip it was about. It had caught a real defect — five destinations drawn as one
+    // button, so pressing `Parts` opened the menu — and the operator found that one by pressing it.
+    //
+    // **A test whose subject is deleted is deleted, not weakened.** What survives the strip is the
+    // claim underneath it, and that has its own gates now:
+    // `every_drawer_row_that_names_a_page_can_open_it` and `every_built_page_is_reachable_from_its
+    // _row` hold "a word that names a page opens that page", and
+    // `the_bench_has_a_drawn_control_that_opens_the_drawer` holds the route the strip used to be.
 
-        let asked: Rc<RefCell<Vec<(DrawerPage, i32)>>> = Rc::new(RefCell::new(Vec::new()));
-        {
-            let asked = asked.clone();
-            w.on_open_page(move |page, depth| asked.borrow_mut().push((page, depth)));
-        }
-
-        let want = [
-            ("iPods", DrawerPage::Devices),
-            ("Parts", DrawerPage::Parts),
-            ("Games", DrawerPage::Games),
-            ("Work", DrawerPage::Work),
-            ("Readout", DrawerPage::Readout),
-        ];
-
-        for (label, page) in want {
-            let mut hit = i_slint_backend_testing::ElementQuery::from_root(&w)
-                .match_descendants()
-                .match_accessible_role(i_slint_backend_testing::AccessibleRole::Button)
-                .find_all()
-                .into_iter()
-                .filter(|e| e.accessible_label().is_some_and(|l| l == label))
-                .collect::<Vec<_>>();
-            // A chain optimised into one `ItemRc` reports once per element index, so the query is
-            // deduplicated by position exactly as `drawer_rows` does.
-            hit.dedup_by_key(|e| {
-                let at = e.absolute_position();
-                (at.x.to_bits(), at.y.to_bits())
-            });
-            assert_eq!(
-                hit.len(),
-                1,
-                "the menu strip draws {} control(s) labelled {label:?}; it must draw exactly one, \
-                 and it drew none for as long as the five words were `Text` inside a single button",
-                hit.len()
-            );
-            hit[0].invoke_accessible_default_action();
-            assert_eq!(
-                asked.borrow().last().copied(),
-                Some((page, 1)),
-                "pressing {label:?} did not ask for its own page at depth 1"
-            );
-        }
-
-        assert_eq!(
-            asked.borrow().len(),
-            want.len(),
-            "five presses did not produce five requests"
-        );
-    }
 
 
     // **Ignored in a release profile rather than failing there.** `build.rs` emits Slint's debug
@@ -16484,7 +16459,7 @@ pub(crate) mod tests {
     /// forwarded down through `drawer.slint` into a page, bound to a `Text` — and never written.
     /// It draws. It draws the type's default: an empty string, a `false`, an empty model. So
     /// `ui/settings.slint` shipped three rows with **empty labels**, two of them disabled carrying
-    /// an **empty** `reason` — the construction `primitives.slint:463` declares against — and
+    /// an **empty** `reason` — the construction `primitives.slint:42` declares against — and
     /// `ui/parts.slint` shipped a header over blank space. Eighteen properties and six callbacks
     /// were in that state when this was written; a control that fires nothing is §19.1's first
     /// fatal finding, and a control that draws nothing is the same fault one layer quieter.
@@ -17400,7 +17375,7 @@ pub(crate) mod tests {
     /// **§11.6's three rows say what they are and why two of them are disabled.**
     ///
     /// Nine `setting-*` properties had no setter, so the page drew three rows with **empty labels**,
-    /// two of them disabled carrying an **empty** `reason` — the construction `primitives.slint:463`
+    /// two of them disabled carrying an **empty** `reason` — the construction `primitives.slint:42`
     /// declares against — and one live toggle that wrote nothing and reflected nothing.
     #[test]
     fn the_settings_page_states_every_refusal_and_the_toggle_sticks() {
@@ -18193,7 +18168,7 @@ pub(crate) mod tests {
     /// `Action::unwired` is asked of all six verbs whether or not a group offers them.
     ///
     /// **`consequence` is in it now, and it is the half that was missing.**
-    /// `primitives.slint:658` is `text: root.enabled ? root.consequence : root.reason` — one slot,
+    /// `primitives.slint:663` is `text: root.enabled ? root.consequence : root.reason` — one slot,
     /// two producers — and only one of them was ever measured. So `removal_consequence` shipped at
     /// **880 px** in a 324 px slot and `devices.png` drew *The entry goes. Its iPod A446, seed
     /// 6182160 and its drive …*, cut off before the clause that says nothing is deleted, which is

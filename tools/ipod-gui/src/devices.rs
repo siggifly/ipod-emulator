@@ -603,7 +603,7 @@ fn removal_consequence(s: &Settings, d: &Device) -> String {
 ///
 /// 3. **And `reason` is empty when the control is live**, which `blocked_label` is not — every one
 ///    of its arms is a refusal, and `Pressable.reason` is the
-///    refusal slot: `primitives.slint:658` is `text: root.enabled ? root.consequence : root.reason`,
+///    refusal slot: `primitives.slint:663` is `text: root.enabled ? root.consequence : root.reason`,
 ///    so a live control draws its consequence there and its reason nowhere. (Not `:534`, which this
 ///    used to cite — that is `tells`, and it reserves the slot for **three** reasons: disabled, two
 ///    presses, or a consequence. The reservation is not the binding.) Handing a live control a

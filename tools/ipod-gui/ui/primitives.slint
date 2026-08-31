@@ -334,8 +334,9 @@ export component Material inherits Rectangle {
 // (`passes/visible.rs:28-33`). Set it at the use site, as `Row` and `Scroll` below do.
 export component Icon inherits Path {
     // This phase: "back" | "close" | "expand" | "collapse" | "check" | "play" | "stop" |
-    // "warning". The full set is sixteen (§6.7); the rest arrive with their use sites, and `play`
-    // and `stop` arrive with §7.2's start control moving onto the device row.
+    // "menu" | "warning". The full set is sixteen (§6.7); the rest arrive with their use sites —
+    // `play` and `stop` with §7.2's start control moving onto the device row, `menu` with the
+    // drawer gaining a control of its own on the bench.
     in property <string> kind;
     in property <color> ink;
     // Horizontally mirrored, for the trailing chevron of a Row.
@@ -366,6 +367,10 @@ export component Icon inherits Path {
         ? "M 8 4.8 L 19.2 12 L 8 19.2 Z"
         : root.kind == "stop"
         ? "M 6.8 6.8 L 17.2 6.8 L 17.2 17.2 L 6.8 17.2 Z"
+        // Three bars. Evenly spaced about the centre rather than about the box, so the glyph
+        // reads level next to a circular control's own centre line.
+        : root.kind == "menu"
+        ? "M 4 6 L 20 6 L 20 8 L 4 8 Z M 4 11 L 20 11 L 20 13 L 4 13 Z M 4 16 L 20 16 L 20 18 L 4 18 Z"
         : "M 12 3 L 22.5 21 L 1.5 21 Z M 10.9 9 L 13.1 9 L 13.1 15 L 10.9 15 Z M 10.9 16.8 L 13.1 16.8 L 13.1 19 L 10.9 19 Z";
 }
 

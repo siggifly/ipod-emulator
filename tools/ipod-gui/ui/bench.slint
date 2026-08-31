@@ -45,7 +45,7 @@ import { IPod } from "ipod.slint";
 // Rust — `machine::cradle` returns it — so it has to be a field of `DeviceRow`, and `DeviceRow`
 // lives in `primitives.slint`, which this file imports. Declaring the enum here and the struct
 // there would be a cycle. Re-exported so every existing importer still names one place.
-import { Pressable, CradleRing } from "primitives.slint";
+import { Act, Pressable, CradleRing } from "primitives.slint";
 import { DrawerPage } from "drawer.slint";
 export { CradleRing } from "primitives.slint";
 
@@ -70,17 +70,6 @@ component Chevron inherits Rectangle {
     }
 }
 
-component Dot inherits Rectangle {
-    width: Geometry.focus-ring-w;
-    Rectangle {
-        x: 0;
-        y: (parent.height - self.height) / 2;
-        width: 100%;
-        height: Geometry.focus-ring-w;
-        border-radius: 1px;
-        background: Ink.fg-dim;
-    }
-}
 
 // ─── §9.5's replacement pane ────────────────────────────────────────────────────────────────────
 //
@@ -266,67 +255,6 @@ component ShelfControl inherits Rectangle {
     accessible-action-default => { root.activated(); }
 }
 
-// **Each word of the menu strip is its own route into the drawer, and the departure is worth
-// stating.** §4's model is three surfaces and a menu bar, and this does not add a fourth: every one
-// of these opens the DRAWER, at the page it names. One press instead of two, landing exactly where
-// `MENU` would have taken you in two.
-//
-// It exists because the strip drew five destinations and behaved as one button — a control naming
-// places it would not take you to. That is the same defect as a `Start` live over an iPod with no
-// drive and a fetch row whose words did not change while it downloaded 6.5 MB, and it is the one
-// the operator noticed first.
-//
-// **`Ink.fg` on hover, `Ink.fg-dim` at rest**, so the strip reads as five things you can press
-// rather than five words painted on one.
-component ShelfWord inherits Rectangle {
-    in property <string> label;
-    callback go();
-
-    // §8.1 item 9: instant, always. A focus ring that animates is a focus ring you lose.
-    Rectangle {
-        x: 0;
-        y: 0;
-        width: 100%;
-        height: 100%;
-        border-width: Geometry.focus-ring-w;
-        border-color: Ink.accent;
-        border-radius: Metric.s1;
-        visible: focus.has-focus;
-    }
-
-    HorizontalLayout {
-        Text {
-            text: root.label;
-            font-size: Metric.label-size;
-            color: touch.has-hover ? Ink.fg : Ink.fg-dim;
-            vertical-alignment: center;
-        }
-    }
-
-    focus := FocusScope {
-        key-pressed(e) => {
-            if (e.text == " " || e.text == Key.Return) {
-                root.go();
-                return accept;
-            }
-            return reject;
-        }
-    }
-
-    touch := TouchArea {
-        mouse-cursor: MouseCursor.pointer;
-        clicked => {
-            focus.focus();
-            root.go();
-        }
-    }
-
-    accessible-role: AccessibleRole.button;
-    accessible-label: root.label;
-    accessible-description: "opens the drawer at " + root.label;
-    accessible-enabled: true;
-    accessible-action-default => { root.go(); }
-}
 
 // ─── The bench ──────────────────────────────────────────────────────────────────────────────────
 
@@ -449,8 +377,6 @@ export component Bench inherits Rectangle {
     callback hold-pressed();
     callback hold-released();
     callback open-drawer();
-    // §4: not a fourth surface — each word opens the DRAWER at the page it names.
-    callback go-to-page(DrawerPage);
     callback why();
 
     // §7.3: **the cradle is the Button**, so it is what a window hands focus to when it opens. The
@@ -531,6 +457,27 @@ export component Bench inherits Rectangle {
     //
     // Full bleed, `bg-sunken`. It is a recess in both schemes, which is the rule that generates the
     // dark value rather than a taste. It holds one device and nothing else, ever.
+    // ── The way in (§4) ──────────────────────────────────────────────────────────────────────
+    //
+    // **The drawer needs a control on the bench, and until now it had two — both on the shelf.**
+    // `MENU ›` and the whole write-target row opened it; `Control + \` was the only other route.
+    // So deleting the shelf without this first would have left the drawer reachable by keyboard
+    // alone, which is the same defect as a row drawn live over a page with no slot: a surface you
+    // can see and cannot get to.
+    //
+    // Top-trailing, over the well rather than inside it, so it survives the well being hidden at a
+    // window too short to draw the device — the one state where you most need a way out.
+    Act {
+        x: parent.width - root.drawer-inset - self.width - Metric.s3;
+        y: Metric.s3;
+        icon: "menu";
+        label: "Menu";
+        visible: !root.drawer-open;
+        activated => {
+            root.open-drawer();
+        }
+    }
+
     well := Rectangle {
         x: 0;
         y: 0;
@@ -1018,60 +965,13 @@ export component Bench inherits Rectangle {
                     }
                 }
 
-                // §7.5: **gone while the drawer is open**, because the menu list is a route into a
-                // drawer you are already inside.
+                // §7.5's menu strip stood here: `MENU ›  iPods · Parts · Games · Work ·
+                // Readout`, five words duplicating the drawer's own root menu one press away.
+                // It is gone, and the drawer's control lives on the bench instead — see the `Act`
+                // at the top of this component.
                 //
-                // **`if`, not `visible`, and the first cut had this wrong.** `visible: false` still
-                // reserves the cell (§16.3), so opening the drawer did not give the space back: five
-                // `label` words, a drawn chevron and four dots stayed allocated — roughly 300 px of
-                // a 388 px row — and `write_target()`, the one line standing between an afternoon and
-                // somebody's only image of an iPod they own, was squeezed to about 88 px at the
-                // window minimum. The first words survive an elide, so the *safety* held; the
-                // filename did not. §16.3's anti-shuffle argument does not apply here either: the
-                // leading slot is `horizontal-stretch: 1` and grows into whatever is left.
-                if !root.drawer-open: HorizontalLayout {
-                    spacing: Metric.s1;
-
-                    ShelfControl {
-                        a11y-label: "menu";
-                        a11y-description: "Devices, Parts, Games, Work, Readout";
-                        activated => { root.open-drawer(); }
-
-                        Text {
-                            text: "MENU";
-                            font-size: Metric.label-size;
-                            font-weight: Metric.weight-label;
-                            color: Ink.fg-dim;
-                            vertical-alignment: center;
-                        }
-                        Chevron { ink: Ink.fg-dim; }
-                    }
-
-                    ShelfWord {
-                        label: "iPods";
-                        go => { root.go-to-page(DrawerPage.devices); }
-                    }
-                    Dot { }
-                    ShelfWord {
-                        label: "Parts";
-                        go => { root.go-to-page(DrawerPage.parts); }
-                    }
-                    Dot { }
-                    ShelfWord {
-                        label: "Games";
-                        go => { root.go-to-page(DrawerPage.games); }
-                    }
-                    Dot { }
-                    ShelfWord {
-                        label: "Work";
-                        go => { root.go-to-page(DrawerPage.work); }
-                    }
-                    Dot { }
-                    ShelfWord {
-                        label: "Readout";
-                        go => { root.go-to-page(DrawerPage.readout); }
-                    }
-                }
+                // **Two of the drawer's three routes were on this shelf**, which is why the
+                // control came first and this deletion second.
             }
         }
     }
