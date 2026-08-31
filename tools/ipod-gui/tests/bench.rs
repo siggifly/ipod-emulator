@@ -660,10 +660,15 @@ fn no_string_the_bench_draws_carries_a_glyph_the_font_is_not_proven_to_have() {
 
 /// **U-1, measured rather than argued.**
 ///
-/// §7.5 declares an 88 px shelf with 12 px of padding top and bottom and rows of 26, 20 and 16 —
-/// which sums to **86**, or 87 with the 1 px top rule. The design's own decomposition does not sum
-/// to its own total, and `SHELF` is load-bearing: `CHROME_MIN` (154) and `CHROME_PREF` (190) are
-/// both built on it.
+/// §7.5 declared an 88 px shelf with 12 px of padding top and bottom and rows of 26, 20 and 16 —
+/// which summed to **86**, or 87 with the 1 px top rule. The design's own decomposition did not sum
+/// to its own total, and `SHELF` is load-bearing: `CHROME_MIN` and `CHROME_PREF` are both built on
+/// it.
+///
+/// **Two of those three rows are gone and the shelf is 44 px.** The machine's name and state now
+/// sit above the cradle and the write target below the caption, beside the thing each describes
+/// rather than 88 px of chrome away — so what is left here is one 20 px row, the fidelity fact,
+/// and the padding. The arithmetic this test does is unchanged; only how many rows it adds up is.
 ///
 /// So this measures the leftover from the markup's own derivations rather than asserting it away,
 /// and it fails in **both** directions — an overflow, which would draw a row past the bottom edge,
@@ -686,9 +691,39 @@ fn the_shelf_rows_and_its_padding_fit_the_declared_shelf() {
         names[constant]
     };
 
-    let row1 = row("first", "Geometry.line-title");
-    let row2 = row("second", "Geometry.line-body");
-    let row3 = row("third", "Geometry.line-label");
+    let row2 = row("only", "Geometry.line-body");
+    // The other two are no longer on the shelf, and that is asserted rather than assumed: a row
+    // that came back would be a fact drawn in two places, which is what this change removed.
+    //
+    // **Scoped to the shelf, and the first draft was not.** Both line boxes are still in this file
+    // — `line-title` above the cradle, `line-label` under the caption — because that is exactly
+    // where they moved to. Searching the whole file for them therefore found the relocated rows
+    // and reported them as never having left.
+    let shelf_block = {
+        let at = text.find("shelf := Rectangle").expect("bench.slint declares the shelf");
+        let mut depth = 0i32;
+        let mut end = at;
+        for (i, c) in text[at..].char_indices() {
+            if c == '{' {
+                depth += 1;
+            } else if c == '}' {
+                depth -= 1;
+                if depth == 0 {
+                    end = at + i;
+                    break;
+                }
+            }
+        }
+        &text[at..=end]
+    };
+    for (what, constant) in [("name and state", "Geometry.line-title"),
+                             ("write-target", "Geometry.line-label")] {
+        assert!(
+            !shelf_block.contains(&format!("height: {constant};")),
+            "the shelf has a {what} row again ({constant}); it moved beside the cradle and \
+             drawing it here as well would be one fact in two places"
+        );
+    }
 
     let pad = |head: &str| {
         let stmt = statement(&text, head);
@@ -697,19 +732,19 @@ fn the_shelf_rows_and_its_padding_fit_the_declared_shelf() {
     let padding = pad("padding-top: Metric.") + pad("padding-bottom: Metric.");
 
     let shelf = names["Geometry.shelf"];
-    let used = padding + row1 + row2 + row3;
+    let used = padding + row2;
     let spare = shelf - used;
 
     assert!(
         spare >= 0.0,
         "the shelf's own parts need {used:.0} px and it declares {shelf:.0}: \
-         padding {padding:.0} + rows {row1:.0} / {row2:.0} / {row3:.0}. \
+         padding {padding:.0} + row {row2:.0}. \
          A row is being drawn past the bottom edge of the window."
     );
     assert!(
         spare < names["Metric.s1"],
         "{spare:.0} px of the {shelf:.0} px shelf is unaccounted for — padding {padding:.0} + \
-         rows {row1:.0} / {row2:.0} / {row3:.0} = {used:.0}. That is a missing term rather than a \
+         row {row2:.0} = {used:.0}. That is a missing term rather than a \
          rounding, and U-1 says do NOT invent a spare one to absorb it: the decomposition and the \
          total have to be made to agree in src/geometry.rs."
     );

@@ -122,12 +122,12 @@ geometry! {
     GAP_2:            Px = 16.0;
     GAP_2_MIN:        Px = 8.0;
     /// Flush to the bottom edge, three rows.
-    SHELF:            Px = 88.0;
+    SHELF:            Px = 44.0;
     /// Everything in the column that is not the body, at minimum. Declared, then derived from the
     /// terms by `the_column_terms_sum_to_the_declared_chrome`.
-    CHROME_MIN:       Px = 154.0;
+    CHROME_MIN:       Px = 152.0;
     /// Everything in the column that is not the body, preferred.
-    CHROME_PREF:      Px = 190.0;
+    CHROME_PREF:      Px = 188.0;
 
     // ── §9.6 the horizontal budget, logical px ──
 
@@ -496,7 +496,7 @@ geometry! {
     MIN_HEIGHT:       Px = 400.0;
     PREF_WIDTH:       Px = 1180.0;
     /// The k = 1, sf = 1 case of body + [`CHROME_PREF`], rounded up. Not a round number.
-    PREF_HEIGHT:      Px = 846.0;
+    PREF_HEIGHT:      Px = 844.0;
 
     // ── The two small drawings (§6.6) ──
     //
@@ -701,7 +701,7 @@ pub const ACT_MEASURE: f64 = REFUSAL_MEASURE - 2.0 * PAGE_MARGIN;
 ///
 /// **Written as the expression rather than as 48**, so a re-measured [`BODY_ADVANCE`] or a
 /// re-measured body moves every sentence that has to fit rather than leaving a stale number here.
-/// The label is `width: frame.width` (`ui/bench.slint:747`), and the frame is the body plus one
+/// The label is `width: frame.width` (`ui/bench.slint:784`), and the frame is the body plus one
 /// [`CRADLE_BAND`] on each side:
 ///
 /// ```text
@@ -1051,11 +1051,18 @@ mod tests {
     /// well as below it**, and that is asserted here exactly.
     #[test]
     fn the_column_terms_sum_to_the_declared_chrome() {
+        // **Two terms joined this sum and the shelf halved, in the same change.** §7.5's row 1
+        // (the machine's name and state) now sits ABOVE the cradle and row 3's write target
+        // BELOW the caption, beside the thing each describes rather than 88 px of chrome away.
+        // Both take column height where they stand, so both are terms here — a line drawn
+        // outside the declared column is a line that clips at the window minimum, silently.
         let min = MARGIN_TOP_MIN
+            + LINE_TITLE
             + CRADLE_BAND
             + CRADLE_BAND
             + GAP_1_MIN
             + CRADLE_LABEL
+            + LINE_LABEL
             + GAP_2_MIN
             + SHELF;
         assert_eq!(
@@ -1063,8 +1070,15 @@ mod tests {
             "the minimum column sums to {min} and CHROME_MIN declares {CHROME_MIN}"
         );
 
-        let pref =
-            MARGIN_TOP + CRADLE_BAND + CRADLE_BAND + GAP_1 + CRADLE_LABEL + GAP_2 + SHELF;
+        let pref = MARGIN_TOP
+            + LINE_TITLE
+            + CRADLE_BAND
+            + CRADLE_BAND
+            + GAP_1
+            + CRADLE_LABEL
+            + LINE_LABEL
+            + GAP_2
+            + SHELF;
         assert_eq!(
             pref, CHROME_PREF,
             "the preferred column sums to {pref} and CHROME_PREF declares {CHROME_PREF}"

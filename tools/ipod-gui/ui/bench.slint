@@ -499,6 +499,43 @@ export component Bench inherits Rectangle {
 
         // The frame holds the device and its cradle together, so the one animated property on this
         // surface moves both and they cannot come apart. §8.1 item 1: **only `x` animates.**
+        // ── What is on the bench, above it (§7.5 row 1, relocated) ──────────────────────────
+        //
+        // **The shelf's first row said this, 88 px of chrome away from the thing it describes.**
+        // The name of the machine and what it is doing belong beside the machine: a person
+        // looking at a booting iPod should not have to look at the bottom of the window to find
+        // out that it is booting.
+        //
+        // Drawn only when there is something to say. `shelf-name` is empty on an empty bench, and
+        // §9.1 forbids a bare *nothing here* — the well's own empty state is the sentence there.
+        HorizontalLayout {
+            x: root.body-x;
+            y: root.body-y - Geometry.cradle-band - Geometry.line-title;
+            width: root.body-w;
+            height: Geometry.line-title;
+            spacing: Metric.s2;
+            visible: root.shelf-name != "";
+
+            Text {
+                text: root.shelf-name;
+                font-size: Metric.title-size;
+                font-weight: Metric.weight-title;
+                color: Ink.fg;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            Text {
+                text: root.shelf-state;
+                font-size: Metric.label-size;
+                font-weight: Metric.weight-label;
+                color: Ink.fg-dim;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
         frame := Rectangle {
             x: root.body-x - Geometry.cradle-band;
             y: root.body-y - Geometry.cradle-band;
@@ -757,6 +794,32 @@ export component Bench inherits Rectangle {
             // binding would chase an already-moving target and the label would trail the device it
             // belongs to. One animated property on this surface, and this reads it.
         }
+
+        // ── What just happened, and what it is writing to (§7.5 row 2 and row 3, relocated) ──
+        //
+        // Two facts under one line, and the priority is which one is NEWS. The Rail's sentence is
+        // transient — *titles — 20 titles*, *the settings could not be written* — and while there
+        // is one it is what a person is waiting to read. The write target is permanent and is the
+        // more important of the two: it is the line standing between an afternoon and somebody's
+        // only image of an iPod they own, so it is what this says whenever there is no news.
+        //
+        // **This is the one row of the shelf that could not simply be deleted.** The other four
+        // are drawn elsewhere or are diagnostics; `write_target` is drawn nowhere else in the
+        // program, and deleting the bar without giving it a home would have removed a safety
+        // sentence rather than a piece of chrome.
+        Text {
+            x: frame.x;
+            y: frame.y + frame.height + Geometry.gap-1 + Geometry.cradle-label;
+            width: frame.width;
+            height: Geometry.line-label;
+            text: root.shelf-rail-line != "" ? root.shelf-rail-line : root.shelf-write-target;
+            font-size: Metric.label-size;
+            font-weight: Metric.weight-label;
+            color: root.shelf-write-warn && root.shelf-rail-line == "" ? Ink.warn : Ink.fg-dim;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
     }
 
     // ── §9.5 The replacement pane ──
@@ -859,30 +922,6 @@ export component Bench inherits Rectangle {
             spacing: 0;
             alignment: start;
 
-            // Row 1 — the name of the thing on the bench, and the state with time since.
-            HorizontalLayout {
-                height: Geometry.line-title;
-                spacing: Metric.s5;
-
-                Text {
-                    text: root.shelf-name;
-                    font-size: Metric.title-size;
-                    font-weight: Metric.weight-title;
-                    color: Ink.fg;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    horizontal-stretch: 1;
-                }
-                Text {
-                    text: root.shelf-state;
-                    font-size: Metric.label-size;
-                    font-weight: Metric.weight-label;
-                    color: Ink.fg-dim;
-                    vertical-alignment: center;
-                    horizontal-alignment: right;
-                    overflow: elide;
-                }
-            }
 
             // Row 2 — the facts, **or the reason**, or the current Rail line; and the one number a
             // bug report can quote.
@@ -938,41 +977,6 @@ export component Bench inherits Rectangle {
                 }
             }
 
-            // Row 3 — the write target, permanently, and the program's entire discoverability.
-            //
-            // **Row 3 never goes away.** It is `write_target()` and it is the one line standing
-            // between an afternoon and somebody's only image of an iPod they own. `works on a copy
-            // of` and `writes to` are the first words on the line, so even a hard truncation
-            // preserves the dangerous one.
-            HorizontalLayout {
-                height: Geometry.line-label;
-                spacing: Metric.s5;
-
-                ShelfControl {
-                    horizontal-stretch: 1;
-                    a11y-label: root.shelf-write-target;
-                    a11y-description: "opens the drawer";
-                    activated => { root.open-drawer(); }
-
-                    Text {
-                        text: root.shelf-write-target;
-                        font-size: Metric.label-size;
-                        font-weight: Metric.weight-label;
-                        color: root.shelf-write-warn ? Ink.warn : Ink.fg-dim;
-                        vertical-alignment: center;
-                        overflow: elide;
-                        horizontal-stretch: 1;
-                    }
-                }
-
-                // §7.5's menu strip stood here: `MENU ›  iPods · Parts · Games · Work ·
-                // Readout`, five words duplicating the drawer's own root menu one press away.
-                // It is gone, and the drawer's control lives on the bench instead — see the `Act`
-                // at the top of this component.
-                //
-                // **Two of the drawer's three routes were on this shelf**, which is why the
-                // control came first and this deletion second.
-            }
         }
     }
 }
