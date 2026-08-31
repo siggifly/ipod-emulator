@@ -2091,9 +2091,42 @@ fn wire(
         let repaint_all = repaint_all.clone();
         let live = live.clone();
         let weak = window.as_weak();
-        window.on_device_row_action(move |a, _index| {
+        let ticking = ticking.clone();
+        window.on_device_row_action(move |a, index| {
             let Some(w) = weak.upgrade() else { return };
             let Some(action) = parts::RowAction::from_i32(a) else { return };
+
+            // ── §11.4's `Install…`, and it is here because it needs the `Queue` ──────────────
+            //
+            // Two downloads and two writes to a drive, on the worker's thread. Every other row
+            // action is a change to the library and belongs in `devices.rs`, which owns no thread;
+            // this one owns a plan, so it is answered where the plan lives.
+            //
+            // `Queue::install` refuses before spawning where it cannot finish — no `curl`, no such
+            // iPod, no drive to install onto, or a drive that still carries Apple's updater. Every
+            // one of those is a sentence rather than an arithmetic failure two downloads later.
+            if action == parts::RowAction::InstallRockbox {
+                let name = settings.borrow().devices.get(index as usize).map(|d| d.name.clone());
+                let Some(name) = name else { return };
+                let press = {
+                    let mut s = settings.borrow_mut();
+                    let mut r = rail.borrow_mut();
+                    work.borrow_mut()
+                        .install(&mut s, &mut r, &name, work::Software::Rockbox, caps.download)
+                };
+                match press {
+                    work::Press::Refused(f) => {
+                        rail.borrow_mut().failed("install", "Rockbox", f);
+                    }
+                    // `Busy` has already said so on the Rail — `install` notes it itself.
+                    work::Press::Busy => {}
+                    _ => ticking(),
+                }
+                save(&settings.borrow(), &mut rail.borrow_mut());
+                sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+                repaint_all();
+                return;
+            }
             // **§11.2's *existing and new look identical*, given its route at last.**
             // `Composer::editing` is the only constructor that opens the Composer on a device that
             // exists, and until this press nothing outside `devices.rs` reached it — so the

@@ -252,6 +252,18 @@ impl Devices {
             return Ok(Wrote::Nothing);
         };
         match a {
+            // **Drawn by this page and performed by `main.rs`, which is the same split `Edit`
+            // has.** The row and its refusals are `install_row`'s, because they are facts about a
+            // device; the press needs the `Queue`, which owns a thread and a plan, and this file
+            // is toolkit-free model code that has neither.
+            //
+            // It REFUSES rather than answering `Wrote::Nothing`, and
+            // `an_act_this_page_does_not_draw_changes_nothing` is why: silently accepting an act
+            // it does not perform is indistinguishable from performing it.
+            RowAction::InstallRockbox => Err(format!(
+                "{} is drawn by this page and pressed in `main.rs`, which owns the queue",
+                a.name()
+            )),
             RowAction::Remove => {
                 // Asked again here rather than trusted from the control, because the control was
                 // drawn at the last push and the machine may have started since.
@@ -415,9 +427,60 @@ fn made_of(
         out.push(device_rule(crate::gone_sentence(d, std::slice::from_ref(a))));
     }
 
+    out.push(device_act(RowAction::InstallRockbox, install_row(s, d, caps, machine)));
     out.push(device_act(RowAction::Edit, edit_row(s, d, caps, machine)));
     out.push(device_act(RowAction::Remove, remove_row(s, d, machine)));
     out
+}
+
+/// §11.4's `Install…` — Rockbox onto this iPod's drive.
+///
+/// **Every refusal it can draw is one `work::Queue::install` would also give**, worded here so the
+/// row is disabled with the reason under it rather than accepting a press and failing on the Rail
+/// two downloads later. The order is the order they bite: a running machine first, because that is
+/// about this moment; then the drive, because there has to be something to install onto; then the
+/// updater, which is the one that surprises people.
+fn install_row(s: &Settings, d: &Device, caps: Caps, machine: Option<&str>) -> FixRow {
+    let refuse = |why: String, machine_rule: bool| FixRow {
+        label: "Install Rockbox".to_string(),
+        enabled: false,
+        reason: why,
+        escape: String::new(),
+        machine_rule,
+        presses: 1,
+        consequence: String::new(),
+    };
+    if let Some(m) = machine.filter(|m| *m == d.name) {
+        return refuse(running_rule(m), true);
+    }
+    let Some(Ok(disk)) = s.disk_of(d) else {
+        return refuse(format!("{} has no drive to install onto.", d.name), true);
+    };
+    // **The one that surprises people, and it is not a defect.** A drive straight out of
+    // `Make me one` still carries Apple's updater, and the room a bootloader needs is the room the
+    // updater is in — `ipsw::build_volume` sizes the firmware partition to Apple's firmware
+    // exactly, because that is what a real iPod has. Starting it once consumes the updater.
+    if eapp_loader::ipsw::firmware_state(&disk)
+        .map(|f| f.tags.iter().any(|t| t == "aupd"))
+        .unwrap_or(false)
+    {
+        return refuse(
+            format!("Start {} once — Apple's updater is using the room.", d.name),
+            true,
+        );
+    }
+    if !caps.download {
+        return refuse("this build has no `curl` to download Rockbox with".into(), true);
+    }
+    FixRow {
+        label: "Install Rockbox".to_string(),
+        enabled: true,
+        reason: String::new(),
+        escape: String::new(),
+        machine_rule: false,
+        presses: 1,
+        consequence: "downloads 9 MB and writes a new drive beside this one".to_string(),
+    }
 }
 
 /// A labelled fact — `devices.slint:107`'s two-column `Rectangle`.
@@ -1182,7 +1245,10 @@ mod tests {
                     p.open_row(&s, i, true);
                     let v = p.view(&s, &mut seen, caps, machine);
                     let acts = v.detail.iter().filter(|d| d.action.is_some()).count();
-                    assert_eq!(acts, 2, "device {i} draws {acts} acts");
+                    // **Three, and it was two.** §11.4's `Install…` joined `Edit` and `Remove`
+                    // — and it is swept with them, which is the point of counting: a control
+                    // that draws a refusal has to have a reason under it whatever the caps.
+                    assert_eq!(acts, 3, "device {i} draws {acts} acts");
                     // **`Start` is swept with the other two.** It is the third control in the same
                     // body and the only one whose refusal `primitives.slint` would have drawn from
                     // a field this page does not own — see [`start_row`].
@@ -1217,10 +1283,11 @@ mod tests {
                 }
             }
         }
-        // Two capability arms, two machine states, four devices, three controls. The floor sits
-        // **on** the population rather than under it, so a control that stops being emitted turns
-        // this red instead of quietly shrinking what the sweep reads.
-        assert_eq!(checked, 48, "the sweep read {checked} controls");
+        // Two capability arms, two machine states, four devices, FOUR controls — `Install…`
+        // joined `Edit`, `Remove` and `Start`. The floor sits **on** the population rather than
+        // under it, so a control that stops being emitted turns this red instead of quietly
+        // shrinking what the sweep reads. 2 x 2 x 4 x 4 = 64.
+        assert_eq!(checked, 64, "the sweep read {checked} controls");
         assert!(
             refused > 0,
             "nothing was ever refused, so the disabled half of the sweep read nothing"

@@ -712,6 +712,19 @@ impl Worker {
     /// through a second copy of the channel-and-handle dance — the `.ok()` defect that made a
     /// failed spawn read as *already finished* was in that dance, and one copy of it is one place
     /// for that to be true.
+    /// §11.4's `Install…`, on a thread of its own — two downloads and two writes to a drive.
+    pub fn spawn_install(
+        src: PathBuf,
+        out: PathBuf,
+        what: Software,
+        cache: PathBuf,
+        cancel: Arc<Cancel>,
+    ) -> Result<Worker, std::io::Error> {
+        Worker::start("ipod-install", cancel, move |tx, flag| {
+            install_run(src, out, what, cache, tx, flag)
+        })
+    }
+
     pub fn spawn_fetch(
         wants: Vec<Want>,
         cache: PathBuf,
@@ -1155,6 +1168,107 @@ fn install(
 ///
 /// `cancel` is observed at two places: the top of each want, and inside each download's own watcher
 /// once per [`firmware::WATCH_TICK`]. Between those the work is one `curl` and one `rename`.
+/// Put `what` on a copy of `src`, landing at `out`.
+///
+/// **Four steps and the last two are the same two acts `ipod-boot rockbox-install` performs**, in
+/// the same order and through the same two library calls — the bootloader into the drive's
+/// firmware partition where Apple's boot ROM looks, then the release onto the volume. The window
+/// being a second spelling of that command is exactly what
+/// `every_ipod_boot_capability_is_reachable_in_the_window_or_listed_as_a_gap` exists to stop.
+///
+/// **`src` is never written to.** `install::install_os` writes a new image and says so; the drive
+/// this iPod had before the press is on disk afterwards, untouched, which is what makes this
+/// undoable by pointing the device back at it.
+fn install_run(
+    src: PathBuf,
+    out: PathBuf,
+    what: Software,
+    cache: PathBuf,
+    tx: &mpsc::Sender<Report>,
+    cancel: &Cancel,
+) {
+    let wants = what.wants();
+    let mut got: Vec<PathBuf> = Vec::new();
+    for (i, want) in wants.iter().enumerate() {
+        if cancel.asked() {
+            let _ = tx.send(Report::Cancelled { i, removed: None });
+            return;
+        }
+        let _ = tx.send(Report::Started { i });
+        let _ = tx.send(Report::Writing {
+            i,
+            path: want.part_path(&cache),
+            meter: Meter::Apparent,
+        });
+        // The same reporter the fetch run uses, so a download's bytes reach the Rail identically
+        // whichever press asked for them.
+        let mut w = Reporter { i, tx, cancel };
+        match want.download(&cache, &mut w) {
+            Ok(path) => {
+                got.push(path.clone());
+                let _ = tx.send(Report::Done {
+                    i,
+                    outcome: Outcome::Fetched {
+                        path,
+                        verified: Verification::Sha256,
+                        filed_as: want.filing(),
+                    },
+                });
+            }
+            Err((Trouble::Stopped, _)) => {
+                let _ = tx.send(Report::Cancelled { i, removed: None });
+                return;
+            }
+            Err((t, said)) => {
+                let _ = tx.send(Report::Failed {
+                    i,
+                    fault: Fault { class: class_of(t), said },
+                });
+                return;
+            }
+        }
+    }
+
+    // The two writes. `n` keeps the step index in step with the plan the Rail is showing.
+    let n = wants.len();
+    if cancel.asked() {
+        let _ = tx.send(Report::Cancelled { i: n, removed: None });
+        return;
+    }
+    let _ = tx.send(Report::Started { i: n });
+    let _ = tx.send(Report::Writing { i: n, path: out.clone(), meter: Meter::OnDisk });
+    if let Err(said) = eapp_loader::install::install_os(&src, &got[0], &out) {
+        // **A write that failed part way, and the honest two reasons.** `Permission` is the one a
+        // person can act on — `Next::Reveal` opens the folder — and it is the right class for a
+        // drive that could not be written where it was asked to go.
+        let _ = tx.send(Report::Failed {
+            i: n,
+            fault: Fault { class: Class::Permission, said },
+        });
+        return;
+    }
+    let _ = tx.send(Report::Done { i: n, outcome: Outcome::Nothing });
+
+    let _ = tx.send(Report::Started { i: n + 1 });
+    if let Err(said) = eapp_loader::install::put_zip(&out, &got[1]) {
+        // Past this point the new drive exists and has a bootloader on it, so a failure here is
+        // `SpaceMidWrite`'s shape — a partial thing on disk that somebody has to decide about —
+        // rather than a permission problem, which would have stopped the write above.
+        let _ = tx.send(Report::Failed {
+            i: n + 1,
+            fault: Fault { class: Class::SpaceMidWrite, said },
+        });
+        return;
+    }
+    let allocated = std::fs::metadata(&out)
+        .map(|m| settings::on_disk_size(&m))
+        .unwrap_or(0);
+    let _ = tx.send(Report::Done {
+        i: n + 1,
+        outcome: Outcome::Installed { path: out, allocated },
+    });
+}
+
 fn fetch_run(wants: Vec<Want>, cache: PathBuf, tx: &mpsc::Sender<Report>, cancel: &Cancel) {
     for (i, want) in wants.iter().enumerate() {
         if cancel.asked() {
@@ -1451,6 +1565,63 @@ enum Run {
     First,
     /// §11.4's `Fetch…`: N downloads and nothing else. No identity, no drive, no handoff.
     Fetch,
+    /// Put another operating system on an iPod's drive: fetch what it is made of, then write it.
+    ///
+    /// **Not a first run and not a fetch**, and the difference that matters is the last two steps:
+    /// this one writes to a drive. It mints nothing — the iPod already exists and already has its
+    /// identity — and it hands nothing over to be started, because installing is not booting.
+    Install,
+}
+
+/// What `Install…` can put on a drive.
+///
+/// **Two, and both are real installs rather than a copy.** Each needs its bootloader written into
+/// the drive's firmware partition — where Apple's boot ROM looks — and its own files unpacked onto
+/// the volume. `ipod-boot rockbox-install` and `ipod-boot install-linux` are the same two acts on
+/// the command line, and this exists so the window is not a third spelling of them.
+/// **One variant, and iPodLinux is deliberately not the second one yet.**
+///
+/// Rockbox is two pieces applied in a fixed order — a bootloader through
+/// [`eapp_loader::install::install_os`] and a release zip through
+/// [`eapp_loader::install::put_zip`] — and `rockbox::FULL_INSTALL` states both the pieces and the
+/// order. iPodLinux is a different shape: `install::install_linux` takes a loader AND a
+/// ZeroSlackr tree, from two separate constants, and the tree is 101 MB. Writing one enum whose
+/// second variant answered `wants()` with the wrong two files would be a landmine dressed as
+/// symmetry.
+///
+/// So it is one variant, and the day iPodLinux lands it is an added one — every `match` on this
+/// is exhaustive, so the compiler names each site that has to learn about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Software {
+    Rockbox,
+}
+
+impl Software {
+    /// The label that lands in `Disk::installed`, so the window's software list and the library
+    /// agree by construction. `compose::Os` is where these names are spelled.
+    pub fn label(self) -> &'static str {
+        match self {
+            Software::Rockbox => Os::Rockbox.label(),
+        }
+    }
+
+    /// The two pieces, in the order they are applied. **The bootloader first**, and
+    /// `rockbox::FULL_INSTALL` says why: `install::install_os` writes a NEW drive, so unpacking the
+    /// release before it would put 9 MB onto an image that is about to be superseded.
+    pub fn wants(self) -> Vec<Want> {
+        match self {
+            Software::Rockbox => rockbox::FULL_INSTALL.iter().map(|p| Want::Rockbox(p)).collect(),
+        }
+    }
+
+    /// What the finished drive is called, beside the one it was made from. The source is never
+    /// written to — `install_os` says so — so both images exist afterwards and this is what tells
+    /// them apart.
+    pub fn image_stem(self) -> &'static str {
+        match self {
+            Software::Rockbox => "rockbox",
+        }
+    }
 }
 
 /// One first run: its plan, its identity, its thread.
@@ -1479,6 +1650,14 @@ pub struct Queue {
     holes: Option<Holes>,
     /// What the fetched bundle was filed under, so the drive can say what it was built from.
     installer: Option<String>,
+    /// What this run is putting on a drive, so `apply` can name it in `Disk::installed` when the
+    /// last step finishes. `None` for a first run and a fetch — neither installs anything.
+    installing: Option<Software>,
+    /// What the drive being installed ONTO already carried, so the new one inherits it.
+    ///
+    /// Read at the press rather than at the finish: the source drive is still the device's at that
+    /// moment, and by the time the last step lands the device has been pointed at the new one.
+    source_installed: Option<Vec<String>>,
     /// **Which release this queue fetches.** [`release`]'s answer in every build; a fixture's in
     /// the tests that drive a press without a third party.
     ///
@@ -1518,6 +1697,8 @@ impl Queue {
             device: None,
             holes: None,
             installer: None,
+            installing: None,
+            source_installed: None,
             release: release(),
         }
     }
@@ -1820,6 +2001,136 @@ impl Queue {
     /// this act's — the disk cost is the download's own bytes and `Cost::down` on each step carries
     /// it. What a full disk produces here is the fetcher's own `Trouble::Io`, which
     /// `class_of` files as `Class::Permission` with the operating system's sentence.
+    /// §11.4's `Install…`: put `what` on `device`'s drive.
+    ///
+    /// **The source drive is never written to.** `install::install_os` writes a new image beside
+    /// it, and the device is pointed at the new one when the run finishes — so the drive this iPod
+    /// had before the press survives, and undoing this is pointing it back.
+    ///
+    /// Refuses rather than starting where it cannot finish: no `curl` is the same
+    /// `ToolMissing(Curl)` a first run answers, and a device with no drive has nothing to install
+    /// ONTO, which is a different sentence and gets one.
+    pub fn install(
+        &mut self,
+        settings: &mut Settings,
+        rail: &mut Rail,
+        device: &str,
+        what: Software,
+        can_download: bool,
+    ) -> Press {
+        if self.busy() {
+            rail.note(&self.already_running());
+            return Press::Busy;
+        }
+        if !can_download {
+            return Press::Refused(Failure::new(
+                Class::ToolMissing(Tool::Curl),
+                "installing on an iPod",
+            ));
+        }
+        let Some(d) = settings.devices.iter().find(|d| d.name == device) else {
+            return Press::Refused(Failure::saying(
+                Class::Missing,
+                "installing on an iPod",
+                format!("there is no iPod called {device} in the library"),
+            ));
+        };
+        let src = match settings.disk_of(d) {
+            Some(Ok(p)) => p,
+            Some(Err(_)) | None => {
+                return Press::Refused(Failure::saying(
+                    Class::Missing,
+                    "installing on an iPod",
+                    format!(
+                        "{device} has no drive to install onto. {} goes into a drive's firmware \
+                         partition and onto its volume, so there has to be one first.",
+                        what.label()
+                    ),
+                ))
+            }
+        };
+        // ── The updater has to be consumed first, and this is where that is said ─────────────
+        //
+        // **A freshly built drive has no room for a bootloader, and that is correct.**
+        // `ipsw::build_volume` sizes the firmware partition to Apple's firmware exactly, because
+        // that is what a real iPod has — measured on the reference drive at 27 140 sectors. The
+        // partition briefly grew so a bootloader would fit and that was reverted as the wrong fix:
+        // it made our drives differ from hardware to work around something that is not a defect.
+        //
+        // What actually makes room is the updater being consumed. A drive straight out of
+        // `Make me one` carries `aupd` unmarked, so Apple's boot ROM runs the FLASH UPDATER rather
+        // than the OS on the first boot — a genuinely different boot that takes two — and the
+        // megabyte the updater occupies is exactly where a bootloader goes.
+        //
+        // So this refuses with the remedy rather than letting `install_os` fail forty seconds and
+        // two downloads later with *no room: moving the later images by 50688 bytes needs 13954560
+        // of a 13905920-byte partition*, which is true and tells nobody what to do about it.
+        // **`tags`, not `aupd_armed`, and the difference is what the first draft got wrong.**
+        // `aupd_armed` means the updater will RUN on the next boot — present and unmarked. What
+        // blocks an install is the updater being THERE at all: a marked-applied `aupd` no longer
+        // runs and still occupies its megabyte. The first draft asked the narrower question,
+        // returned false on a drive whose updater was already marked, and let the install go on to
+        // fail two downloads later with the arithmetic instead of the remedy.
+        if ipsw::firmware_state(&src)
+            .map(|f| f.tags.iter().any(|t| t == "aupd"))
+            .unwrap_or(false)
+        {
+            return Press::Refused(Failure::saying(
+                Class::Missing,
+                "installing on an iPod",
+                format!(
+                    "{device} still carries Apple's flash updater, and the room {} needs is where \
+                     the updater is. Start it once — the first boot runs the updater rather than \
+                     the OS, which is what a real iPod does too — and then this will fit.",
+                    what.label()
+                ),
+            ));
+        }
+        let out = src.with_file_name(format!("{}.img", what.image_stem()));
+        self.source_installed = settings
+            .disks
+            .iter()
+            .find(|k| k.path == src)
+            .map(|k| k.installed.clone());
+
+        // Two fetches and two writes, as one plan. The Rail shows all four before any of them runs,
+        // which is §10.1's rule: a person agrees to the whole thing or to none of it.
+        let mut steps: Vec<Step> = what.wants().iter().map(|w| w.step()).collect();
+        steps.push(Step {
+            kind: Verb::Install,
+            what: format!("{}'s bootloader", what.label()),
+            sub: "into a new drive's firmware partition, where Apple's boot ROM looks".into(),
+            cost: Cost::default(),
+        });
+        steps.push(Step {
+            kind: Verb::Copy,
+            what: format!("{} itself", what.label()),
+            sub: "onto the new drive's volume".into(),
+            cost: Cost::default(),
+        });
+
+        self.run = Run::Install;
+        self.device = Some(device.to_string());
+        self.installing = Some(what);
+        self.ids = rail.plan(&steps);
+        self.done = vec![false; steps.len()];
+        self.steps = steps;
+        let cancel = Cancel::new();
+        match Worker::spawn_install(src, out, what, self.cache.clone(), Arc::clone(&cancel)) {
+            Ok(w) => {
+                self.worker = Some(w);
+                self.cancel = Some(cancel);
+                // Nothing is embodied: the identity already exists and this press did not mint it.
+                Press::Running { from: 0, embodied: false }
+            }
+            Err(e) => Press::Refused(Failure::saying(
+                Class::Permission,
+                "installing on an iPod",
+                format!("the install thread could not be started: {e}"),
+            )),
+        }
+    }
+
     pub fn fetch(&mut self, rail: &mut Rail, wants: &[Want], nothing_to_fetch: &str) -> Press {
         if self.busy() {
             rail.note(&self.already_running());
@@ -2138,10 +2449,22 @@ impl Queue {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| device.clone());
                 let name = settings.file_disk(path.clone(), &stem);
+                // **What this drive was made from, and what is now on it.** A first run installs
+                // Apple's software; an `Install…` adds whatever it was asked for ON TOP of what
+                // the source drive already carried, which is why the labels are copied across
+                // rather than replaced — a Rockbox drive still boots Apple's software when you
+                // hold MENU, and a list that had forgotten so would be wrong.
+                let carried: Vec<String> = self
+                    .source_installed
+                    .clone()
+                    .unwrap_or_else(|| vec![Os::Apple.label().to_string()]);
+                let adding = self.installing.map(|w| w.label().to_string());
                 if let Some(d) = settings.disks.iter_mut().find(|d| d.name == name) {
                     d.built_from = self.installer.clone();
-                    if !d.installed.iter().any(|s| s == Os::Apple.label()) {
-                        d.installed.push(Os::Apple.label().to_string());
+                    for label in carried.into_iter().chain(adding) {
+                        if !d.installed.contains(&label) {
+                            d.installed.push(label);
+                        }
                     }
                 }
                 settings.remember_as(&device);
@@ -2744,6 +3067,175 @@ mod tests {
             eapp_loader::si(settings::on_disk_size(&meta))
         );
         assert!(meta.len() > 1 << 30, "the drive is {} — too small to be a volume", meta.len());
+    }
+
+    /// **Rockbox, onto an iPod this test builds first, to completion.**
+    ///
+    /// `#[ignore]` for the reason the first-run one is: it reaches Apple and rockbox.org, and
+    /// AGENTS.md §8 keeps the network out of a plain run. Run both with:
+    ///
+    /// ```text
+    /// cargo test -p ipod-gui -- --ignored --nocapture
+    /// ```
+    ///
+    /// **It chains rather than fabricating a drive**, because what is being proved is that the two
+    /// presses compose: `Make me one` produces an iPod, and `Install…` puts Rockbox on the drive
+    /// that press made. A hand-built image would prove `install_os` works, which its own tests
+    /// already do.
+    ///
+    /// **It stops at a refusal, and that refusal is the point.** Composing the two presses found
+    /// something neither alone could: a drive straight out of `Make me one` still carries Apple's
+    /// flash updater, and the megabyte the updater occupies is exactly where a bootloader goes. So
+    /// this run ends by asserting the sentence that says so — naming the updater AND the remedy —
+    /// rather than by widening the firmware partition, which `ipsw::build_volume` records as a
+    /// fix already tried and reverted for making our drives differ from real hardware.
+    ///
+    /// The half beyond it — start the iPod once, let the updater run, then install — needs the
+    /// emulator to boot a full flash-update, which is `ipod-boot flash-update`'s own recipe and a
+    /// different test's job. What is proved here is that the two window presses compose into a
+    /// sentence a person can act on instead of a forty-second failure two downloads deep.
+    #[test]
+    #[ignore = "downloads from Apple and rockbox.org; AGENTS.md §8 keeps the network out of a plain run"]
+    fn installing_rockbox_puts_it_on_an_ipod_this_test_built() {
+        let data = DataDir::new("install-rockbox");
+        let mut settings = Settings::default();
+        let mut rail = Rail::new();
+        let mut q = Queue::at(data.at.join("drives"), data.at.join("firmware"));
+
+        // ── Build one, exactly as `Make me one` does ──────────────────────────────────────────
+        assert!(
+            !matches!(q.press(&mut settings, &mut rail, true), Press::Refused(_)),
+            "the first run refused"
+        );
+        let device = pump_until_ready(&mut q, &mut settings, &mut rail);
+        let before = settings
+            .disk_of(settings.devices.iter().find(|d| d.name == device).unwrap())
+            .and_then(Result::ok)
+            .expect("the built iPod has no drive");
+        println!("  built {device} on {}", before.display());
+
+        // ── And a fresh one refuses, because the updater is still on it ──────────────────────
+        //
+        // **This is the finding, not an obstacle to route around.** The drive `Make me one` builds
+        // has its firmware partition sized to Apple's firmware exactly, as a real iPod's is, and
+        // the room a bootloader needs is the room the updater occupies. So installing onto a
+        // never-started iPod cannot work, and the honest answer is to say what would make it work.
+        match q.install(&mut settings, &mut rail, &device, Software::Rockbox, true) {
+            Press::Refused(f) => {
+                assert!(
+                    f.said.contains("flash updater") && f.said.contains("Start it once"),
+                    "the refusal does not name the updater or the remedy: {}",
+                    f.said
+                );
+                println!("  refused, correctly: {}", f.said);
+                return;
+            }
+            Press::Busy => panic!("the queue was still busy after the first run finished"),
+            _ => {}
+        }
+        let started = std::time::Instant::now();
+        while started.elapsed() < std::time::Duration::from_secs(600) {
+            q.pump(&mut settings, &mut rail);
+            if !q.busy() {
+                q.pump(&mut settings, &mut rail);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        assert_eq!(rail.failures(), 0, "the install failed: {:?}", rail.line());
+
+        // ── What a person would look for ──────────────────────────────────────────────────────
+        let d = settings.devices.iter().find(|k| k.name == device).expect("the iPod");
+        let now = settings.disk_of(d).and_then(Result::ok).expect("it names no drive now");
+        assert_ne!(now, before, "the iPod still points at the drive it had before the install");
+        assert!(now.exists(), "the new drive is not on disk: {}", now.display());
+        assert!(
+            before.exists(),
+            "**the source drive was destroyed.** `install_os` writes a new image and never touches \
+             the one it read, which is what makes this undoable by pointing the iPod back at it"
+        );
+
+        let disk = settings.disks.iter().find(|k| k.path == now).expect("the new drive is unfiled");
+        for want in [Os::Apple.label(), Os::Rockbox.label()] {
+            assert!(
+                disk.installed.iter().any(|s| s == want),
+                "the new drive does not list `{want}`: {:?}. Holding MENU hands back to Apple's \
+                 software, so a Rockbox drive that had forgotten Apple would be wrong",
+                disk.installed
+            );
+        }
+        println!("  {} now carries {:?}", now.display(), disk.installed);
+    }
+
+    /// Poll a first run to its handover, the way the window's timer does. Panics rather than
+    /// returning an `Option`: every caller is a test that cannot continue without the device.
+    fn pump_until_ready(q: &mut Queue, settings: &mut Settings, rail: &mut Rail) -> String {
+        let started = std::time::Instant::now();
+        while started.elapsed() < std::time::Duration::from_secs(600) {
+            if let Some(name) = q.pump(settings, rail).ready {
+                return name;
+            }
+            assert_eq!(rail.failures(), 0, "the first run failed: {:?}", rail.line());
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        panic!("the first run never handed a device over");
+    }
+
+    /// **An install refuses where it cannot finish, and each refusal is its own sentence.**
+    ///
+    /// Three ways to be unable to install, and they are not the same problem: this build has no
+    /// `curl`, the iPod is not in the library, or the iPod has no drive to install ONTO. The last
+    /// is the one worth wording carefully — Rockbox goes into a drive's firmware partition and
+    /// onto its volume, so "there has to be one first" is a fact about the act rather than an
+    /// apology.
+    ///
+    /// No network: every one of these refuses before a thread is spawned.
+    #[test]
+    fn an_install_refuses_where_it_cannot_finish() {
+        let data = DataDir::new("install-refusals");
+        let mut settings = Settings::default();
+        let mut rail = Rail::new();
+        let mut q = Queue::at(data.at.join("drives"), data.at.join("firmware"));
+
+        // 1. No curl.
+        match q.install(&mut settings, &mut rail, "anything", Software::Rockbox, false) {
+            Press::Refused(f) => assert_eq!(f.class, Class::ToolMissing(Tool::Curl)),
+            other => panic!("a build with no curl started an install anyway: {other:?}"),
+        }
+
+        // 2. No such iPod.
+        match q.install(&mut settings, &mut rail, "not here", Software::Rockbox, true) {
+            Press::Refused(f) => assert!(
+                f.said.contains("not here"),
+                "the refusal does not name the iPod it could not find: {}",
+                f.said
+            ),
+            other => panic!("an install started for an iPod that does not exist: {other:?}"),
+        }
+
+        // 3. An iPod with no drive. **This is the one the sentence is for.**
+        settings.devices.push(Device {
+            name: "Driveless".into(),
+            firmware: "rom".into(),
+            ..Device::default()
+        });
+        match q.install(&mut settings, &mut rail, "Driveless", Software::Rockbox, true) {
+            Press::Refused(f) => {
+                let said = f.said;
+                assert!(said.contains("Driveless"), "the refusal does not name it: {said}");
+                assert!(
+                    said.contains("Rockbox"),
+                    "the refusal does not say what could not be installed: {said}"
+                );
+                assert!(
+                    said.contains("firmware partition"),
+                    "the refusal does not say WHY a drive is needed, which is the half that makes \
+                     it actionable: {said}"
+                );
+            }
+            other => panic!("an install started onto an iPod with no drive: {other:?}"),
+        }
+        assert!(!q.busy(), "a refused install left a thread running");
     }
 
     #[test]

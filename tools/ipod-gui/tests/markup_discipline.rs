@@ -1001,12 +1001,7 @@ fn every_ipod_boot_capability_is_reachable_in_the_window_or_listed_as_a_gap() {
         ("make-disk", "`Make me one` builds the drive from the firmware it fetched"),
         ("firmware", "the fetch step inside `Make me one`, and Parts' own `Fetch…`"),
         ("facts", "the iPod's expanded row — `Made of`, its identity, and `Show identity`"),
-        ("retail", "`Start` on an iPod, which is the default recipe"),
-        ("warm", "Developer's `Start as…`"),
-        ("flsh", "Developer's `Start as…`"),
-        ("rockbox", "`Start as…`, once Rockbox is on the drive"),
-        ("loader", "`Start as…`, once iPodLinux is on the drive"),
-        ("flash-update", "Developer's `Start as…`"),
+        ("retail", "`Start` on an iPod — `BootTarget::Os`, which is the default recipe"),
         ("from-idle", "`Start` resumes a parked machine — §12.4's restore point"),
     ];
 
@@ -1016,6 +1011,34 @@ fn every_ipod_boot_capability_is_reachable_in_the_window_or_listed_as_a_gap() {
     // putting software on a drive — and every one of them exists in `eapp_loader::install` with a
     // CLI caller and no window caller at all.
     const GAPS: &[(&str, &str)] = &[
+        // **Five of these were listed as routed through `Start as…`, and that control does not
+        // exist.** Its only occurrence in the program is the sentence describing what the
+        // developer switch reveals — which I wrote — so the gate was asserting a route into a
+        // thing nobody had built. That is the exact defect this test is for, introduced by the
+        // person writing the test, and it is why a claim gets checked rather than believed.
+        ("warm",
+         "2026-09-01. RetailOS entered directly at 0x10000000 with the handoff faked. Retired \
+          when Developer's `Start as…` exists and offers it; until then this is a recipe the \
+          window cannot ask for."),
+        ("flsh",
+         "2026-09-01. Boots one of the NOR's own images — `IMG=diag|disk|logo|vmcs`. Diagnostics \
+          and Disk Mode are modes a person knows their iPod has, so this is a gap rather than a \
+          developer shortcut. Retired with `Start as…`, which has to name the images the \
+          configured ROM actually carries rather than a fixed four."),
+        ("flash-update",
+         "2026-09-01. Runs Apple's `aupd` updater and then the boot that proves it took. Retired \
+          with `Start as…`."),
+        ("rockbox",
+         "2026-09-01. Boots Rockbox directly, without installing it. Partly retired the day \
+          `Install…` lands — pressing `Start` on an iPod with Rockbox on its drive boots Rockbox, \
+          because Apple's boot ROM runs what is in the firmware partition — but the RECIPE, which \
+          boots it without an install, still needs `Start as…`."),
+        ("loader",
+         "2026-09-01. Boots iPodLinux out of the drive's own firmware partition. Two halves like \
+          `rockbox`: pressing `Start` on an iPod with ipodloader2 installed boots it, and the \
+          RECIPE needs `Start as…`. Retired when both exist — and the install half is harder than \
+          Rockbox's, because `install::install_linux` wants a loader AND ZeroSlackr's 101 MB tree \
+          from two separate catalogues."),
         ("rockbox-install",
          "2026-09-01. `work::Want::Rockbox` already FETCHES it and files the pieces; nothing \
           installs them onto a drive. Retired when the iPod's row has an `Install…` that calls \
@@ -1030,8 +1053,10 @@ fn every_ipod_boot_capability_is_reachable_in_the_window_or_listed_as_a_gap() {
          "2026-09-01. `install::put_zip` unpacks an archive into the drive's FAT32 volume. \
           Retired when the iPod's row has `Add files…` and a drop onto a stopped iPod reaches it."),
         ("put-files",
-         "2026-09-01. `install::put_files`, the same control as `put-zip` with a directory \
-          instead of an archive."),
+         "2026-09-01. `install::put_files` — the same control as `put-zip` with a directory \
+          instead of an archive, so one picker that accepts either answers both. Retired when \
+          `Add files…` exists on an iPod's row and a drop of a folder onto a stopped iPod \
+          reaches it."),
         ("open-drive",
          "2026-09-01. `mount::available()` already answers whether this platform can, and \
           `Next::Reveal` draws the machine rule where it cannot. Retired when the iPod's row has \
@@ -1104,9 +1129,15 @@ fn every_ipod_boot_capability_is_reachable_in_the_window_or_listed_as_a_gap() {
     );
 
     // Every gap carries a date and a retirement condition, so it cannot become a permanent excuse.
+    //
+    // **Case-insensitive, and with no `|| contains("same")` escape hatch.** The first draft had
+    // both faults: it demanded a capital `Retired`, so a sentence saying *partly retired the day…*
+    // failed for its spelling, and it accepted the word `same` as a substitute for a condition —
+    // which would let "the same as the one above" stand in for saying what would end it.
     for (name, why) in GAPS {
+        let lower = why.to_ascii_lowercase();
         assert!(
-            why.contains("2026-") && why.contains("Retired") || why.contains("same"),
+            why.contains("2026-") && lower.contains("retire"),
             "the gap for `{name}` carries no date or no retirement condition"
         );
     }

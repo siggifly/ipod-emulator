@@ -214,10 +214,17 @@ pub enum RowAction {
     ShowBootScreen,
     /// §11.4's masked identity. Toggles; the label says what the press will do next.
     ShowIdentity,
+    /// Put Rockbox on this iPod's drive — `work::Queue::install`.
+    ///
+    /// **Handled in `main.rs` rather than in `devices::row_action`**, and that is not where the
+    /// others are by accident: this one needs the `Queue`, which owns a thread and a plan, and
+    /// `devices.rs` is toolkit-free model code that has neither. Every other action is a change to
+    /// the library and belongs where the library is.
+    InstallRockbox,
 }
 
 impl RowAction {
-    pub const ALL: [RowAction; 8] = [
+    pub const ALL: [RowAction; 9] = [
         RowAction::Reveal,
         RowAction::CopyPath,
         RowAction::Remove,
@@ -226,6 +233,10 @@ impl RowAction {
         RowAction::Edit,
         RowAction::ShowBootScreen,
         RowAction::ShowIdentity,
+        // **Appended, never inserted.** The index IS the ordinal the markup fires, so putting a
+        // new action anywhere but the end renumbers every one after it and a row starts sending a
+        // different action than it draws.
+        RowAction::InstallRockbox,
     ];
 
     pub fn from_i32(n: i32) -> Option<RowAction> {
@@ -785,6 +796,10 @@ impl Parts {
         // above ends. `None` for a part that names no path — a synthesised iPod is a recipe.
         let path = e.path.clone();
         match a {
+            // A Parts row is a FILE, and installing is something you do to an iPod. The Parts page
+            // never offers this; answering rather than panicking keeps a stray ordinal a no-op,
+            // which is the rule the `from_i32` above already follows.
+            RowAction::InstallRockbox => Ok(Wrote::Nothing),
             RowAction::ShowIdentity => {
                 if let Some(o) = self.open.as_mut().filter(|o| o.id == id) {
                     o.identity_shown = !o.identity_shown;
@@ -1225,6 +1240,7 @@ impl RowAction {
             RowAction::Edit => "Edit",
             RowAction::ShowBootScreen => "Show its boot screen",
             RowAction::ShowIdentity => "Show",
+            RowAction::InstallRockbox => "Install Rockbox",
         }
     }
 }
