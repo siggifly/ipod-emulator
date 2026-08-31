@@ -530,12 +530,16 @@ fn main() -> Result<(), slint::PlatformError> {
 /// `read_dir` and twenty manifests, which is nothing beside a boot.
 ///
 /// Mutates in place so focus, hover and the scroll position survive.
-fn refresh_titles(model: &Rc<VecModel<TitleRow>>, settings: &Settings) {
-    let found = settings
-        .games
-        .as_deref()
-        .map(eapp_loader::titles_under)
-        .unwrap_or_default();
+///
+/// **Answers whether the shelf is still there**, which is a different question from whether it
+/// holds anything. The library references the operator's files where they are rather than copying
+/// them in — deliberately, because a disk image is sometimes the only copy of somebody's iPod and
+/// the place for it is not inside an application-support directory. The cost of that choice is
+/// exactly one failure: the folder moves and the list empties. Returning the distinction is what
+/// lets §13's empty state say *that folder is not there any more* instead of blaming its contents.
+fn refresh_titles(model: &Rc<VecModel<TitleRow>>, settings: &Settings) -> bool {
+    let named = settings.games.as_deref();
+    let found = named.map(eapp_loader::titles_under).unwrap_or_default();
     let rows: Vec<TitleRow> = found
         .into_iter()
         .map(|(name, path)| TitleRow {
@@ -544,6 +548,9 @@ fn refresh_titles(model: &Rc<VecModel<TitleRow>>, settings: &Settings) {
         })
         .collect();
     model.set_vec(rows);
+    // `is_dir` rather than `exists`: a shelf replaced by a *file* of the same name is gone as far
+    // as this page is concerned, and saying so is more use than reporting it as empty.
+    named.is_some_and(|p| !p.is_dir())
 }
 
 /// variant is `#[cfg(test)]` — so this is a seam in the wiring, not a switch in the program.
@@ -587,7 +594,7 @@ fn wire(
     // handing the window a fresh `VecModel` tears down every row and takes focus and hover with it.
     let titles: Rc<VecModel<TitleRow>> = Rc::new(VecModel::default());
     window.set_titles(ModelRc::from(titles.clone()));
-    refresh_titles(&titles, &settings.borrow());
+    window.set_games_folder_gone(refresh_titles(&titles, &settings.borrow()));
     window.set_games_folder(
         settings
             .borrow()
@@ -2610,8 +2617,9 @@ fn wire(
                         rail.borrow_mut().note(&format!("the settings could not be written: {e}"));
                     }
                     let s = settings.borrow();
-                    refresh_titles(&titles, &s);
+                    let gone = refresh_titles(&titles, &s);
                     if let Some(w) = weak.upgrade() {
+                        w.set_games_folder_gone(gone);
                         w.set_games_folder(
                             s.games.as_ref().map(|p| p.display().to_string()).unwrap_or_default().into(),
                         );
@@ -16545,6 +16553,59 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **A shelf that has moved says so, rather than reporting itself as empty.**
+    ///
+    /// The one failure the library's reference-not-copy rule has, and the reason it is worth a test
+    /// of its own: `titles_under` answers an empty list for a folder that is missing and for a
+    /// folder that holds nothing, and those are the same list. Only one of them is the operator's
+    /// to fix, and the sentence §13 draws for it is chosen from this boolean.
+    ///
+    /// **Deleted after it was accepted**, not merely never created — a path that was never a shelf
+    /// would also be refused by `provide_games`, which is a different route and would prove nothing
+    /// about the one a person actually hits.
+    #[test]
+    fn a_shelf_that_has_moved_is_named_as_gone_rather_than_as_empty() {
+        let dir = temp_dir("games-moved");
+        let shelf = dir.join("shelf");
+        std::fs::create_dir_all(shelf.join("Alpha").join("Executables")).unwrap();
+        std::fs::write(shelf.join("Alpha").join("Executables").join("game.bin"), [0u8; 32]).unwrap();
+
+        let settings = Rc::new(RefCell::new(Settings::default()));
+        let w = a_window();
+        let shell = Rc::new(drops::Shell::answering([shelf.clone()]));
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), shell);
+        w.invoke_games_choose();
+        assert_eq!(w.get_titles().row_count(), 1, "the shelf was not taken in the first place");
+        assert!(!w.get_games_folder_gone(), "a shelf that is right there was called gone");
+
+        // The move. `refresh_titles` reads the disk on every push for exactly this reason: the
+        // folder belongs to the operator and can change while the window is open.
+        std::fs::remove_dir_all(&shelf).unwrap();
+        let w2 = a_window();
+        let _w2 = wire(&w2, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
+
+        assert!(
+            w2.get_games_folder_gone(),
+            "a shelf that is no longer on disk is drawn as one holding no titles, so the sentence \
+             blames the folder\u{2019}s contents for a folder that is not there"
+        );
+        assert_eq!(w2.get_titles().row_count(), 0, "titles were listed from a folder that is gone");
+        // **The library still names it**, which is the half that makes the message actionable: the
+        // path is what the person needs to recognise what moved.
+        assert_eq!(
+            w2.get_games_folder().to_string(),
+            shelf.display().to_string(),
+            "the window forgot which folder it was pointed at, so it cannot say which one moved"
+        );
+        assert!(
+            settings.borrow().games.is_some(),
+            "a missing folder was silently dropped from the library, which is the program deciding \
+             the operator did not mean it"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// **A shelf with no titles in it is refused, by name, and changes nothing.**
     ///
     /// The other half of `provide_games`, and the control for the test above: without it, a
@@ -16583,7 +16644,7 @@ pub(crate) mod tests {
     /// five `Made of` lines were undrawn and so was the one control §7.2 puts on this page.
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
-    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:831` and
+    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:832` and
     /// `:858` read for the drawn iPod, and `machine-rule` was a literal `true`.
     #[test]
     fn the_devices_page_opens_a_row_and_reaches_its_start() {
@@ -16684,7 +16745,7 @@ pub(crate) mod tests {
         assert!(!w.get_setting_copy_enabled());
         assert!(!w.get_setting_copy_reason().is_empty(), "`Copy path` is disabled and says nothing");
 
-        // The one live control. `drawer.slint:588` fires this ordinal as
+        // The one live control. `drawer.slint:590` fires this ordinal as
         // `root.setting-toggled(1)`; `Row::CheckUpdates` is 1.
         let before = settings.borrow().check_updates_on_start;
         assert_eq!(w.get_setting_check_updates(), before, "the box does not reflect the library");

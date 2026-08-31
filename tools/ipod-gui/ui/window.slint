@@ -93,6 +93,7 @@ export component MainWindow inherits Window {
     /// §13's Games page: the titles found where `Settings::games` points, and where that is.
     in property <[TitleRow]> titles;
     in property <string> games-folder;
+    in property <bool> games-folder-gone;
     callback games-choose();
     callback games-play(int);
     in property <[DeviceRow]> devices;
@@ -966,6 +967,7 @@ export component MainWindow inherits Window {
 
                 titles: root.titles;
                 games-folder: root.games-folder;
+                games-folder-gone: root.games-folder-gone;
                 games-choose => {
                     root.games-choose();
                 }

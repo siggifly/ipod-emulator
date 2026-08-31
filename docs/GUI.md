@@ -2631,6 +2631,32 @@ these belong in it, with sizes, with the device each pairs with, and with a `Dis
  └──────────────────────────────────────┘
 ```
 
+**The rule, stated once: this program owns what it MAKES and references what it is GIVEN.**
+
+Asked directly — should the library copy `.ipg` titles in, and should that be what happens for
+IPSWs, disk images, ROM dumps, Rockbox builds, everything? No, and the split is not a compromise
+between two half-answers; the two categories have different owners.
+
+- **Made here** — downloaded firmware, built drives, synthesised ROMs, snapshots — lives in the
+  data directory because nothing else has a claim on it. `reset-gui.sh all` moves it aside and it
+  is all rebuildable or re-downloadable.
+- **Given here** — the operator's IPSWs, their disk images, their ROM dumps, their titles — is
+  referenced where it sits. Three reasons, in order of weight: a disk image is sometimes the only
+  copy of an iPod somebody owns and an application-support directory is not where that belongs;
+  the images are multi-gigabyte and a copy doubles them for no gain; and the operator's own
+  filing is theirs, not something this program improves on by duplicating.
+
+**The cost of the choice is exactly one failure, and it is paid rather than hidden.** A referenced
+file can move. `Settings::missing` finds it for a device and `resolve_for_start` refuses before a
+machine starts; §13's shelf reports it with `games-folder-gone`, which is why that page has three
+empty states and not two — *nothing chosen*, *nothing in it*, and *that folder is not there any
+more*. The third says plainly that nothing was deleted by this program, because a person whose
+list just emptied deserves to know which of those happened.
+
+**What would change this** is a copy that a person asks for by name — an *Import a copy* control
+beside `Provide…`, so the choice is theirs at the moment they know whether the file is precious.
+Nothing here forecloses that; what it forecloses is copying by default.
+
 **`used by N` is the reference-not-copy property made visible**, and it is the whole reason this
 model beats UTM's. An expanded row names the devices; `Remove` names them before it acts and offers
 `Remove anyway` in `danger` or `Cancel`. Removing a resource never deletes the file it points at;

@@ -27,6 +27,11 @@ export component GamesPage inherits Rectangle {
     in property <[TitleRow]> titles;
     /// Where that is, drawn on the row that changes it. Empty when nothing has been chosen.
     in property <string> folder;
+    /// **A shelf was chosen and it is not there any more** — moved, renamed, or on a drive that is
+    /// not plugged in. The library references files rather than copying them, so this is the one
+    /// failure that model has, and it is the operator's to fix rather than ours to hide. Without
+    /// it the row below blames the folder's *contents* for a folder that is gone.
+    in property <bool> folder-gone;
     /// Ask for a folder of titles. §13's own words: a title is a thing that stands on the bench,
     /// so this is how one gets onto it.
     callback choose();
@@ -95,6 +100,8 @@ export component GamesPage inherits Rectangle {
                     machine-rule: false;
                     reason: root.folder == ""
                         ? "A title is a folder holding Executables/<name>.bin. Choose the one that holds yours, or the shelf they all sit in."
+                        : root.folder-gone
+                        ? "That folder is not there any more. Nothing was deleted by this program — it points at your files where they are, so a move or an unplugged drive reads like this. Choose it again where it is now."
                         : "Nothing in that folder holds Executables/<name>.bin, as itself or one level down.";
                 }
 

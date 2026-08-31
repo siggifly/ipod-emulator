@@ -265,6 +265,7 @@ export component Drawer inherits Rectangle {
     // `the_devices_page_and_the_bench_read_one_model` mean anything.
     in property <[TitleRow]> titles;
     in property <string> games-folder;
+    in property <bool> games-folder-gone;
     callback games-choose();
     callback games-play(int);
     in property <[DeviceRow]> devices;
@@ -502,6 +503,7 @@ export component Drawer inherits Rectangle {
                     visible: root.on-screen(2) && root.page == DrawerPage.games;
                     titles: root.titles;
                     folder: root.games-folder;
+                    folder-gone: root.games-folder-gone;
                     back-pressed => {
                         root.back();
                     }
