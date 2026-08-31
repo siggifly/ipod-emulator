@@ -2662,6 +2662,90 @@ mod tests {
     }
 
     /// A press with no `curl` refuses, names the command, and **mints nothing**.
+    /// **The whole first run, to completion, against Apple's real servers.**
+    ///
+    /// `#[ignore]` for the reason every network test here is: a release build must not depend on a
+    /// third party being up, and AGENTS.md §8 says to run these when touching a fetcher. This one
+    /// exists because the claim it settles was made without evidence — the window grew a
+    /// `Make me one` control and every test around it stopped the worker on purpose, so what had
+    /// actually been proved was that a press MINTS, not that a press BUILDS.
+    ///
+    /// Run it with:
+    ///
+    /// ```text
+    /// cargo test -p ipod-gui the_whole_first_run -- --ignored --nocapture
+    /// ```
+    ///
+    /// Everything it writes is inside its own `DataDir`. The drive is sparse — the apparent size is
+    /// 8 GiB and the allocated size is a few megabytes — so this costs a download and not a disk.
+    #[test]
+    #[ignore = "downloads Apple's firmware; AGENTS.md §8 keeps the network out of a plain run"]
+    fn the_whole_first_run_builds_an_ipod_from_nothing() {
+        let data = DataDir::new("first-run-real");
+        let mut settings = Settings::default();
+        let mut rail = Rail::new();
+        let mut q = Queue::at(data.at.join("drives"), data.at.join("firmware"));
+
+        match q.press(&mut settings, &mut rail, true) {
+            Press::Refused(f) => panic!("the press refused: {f:?}"),
+            Press::Busy => panic!("a queue that has never run reported itself busy"),
+            _ => {}
+        }
+        let minted = minted(&settings).expect("the press minted no identity").name.clone();
+        println!("  minted {minted}");
+
+        // Poll the way the window's timer does. The bound is wall clock and generous: this
+        // downloads ~14 MB and writes a sparse 8 GiB volume, and what it is guarding against is a
+        // hang, not slowness.
+        let started = std::time::Instant::now();
+        let mut ready = None;
+        let mut last = String::new();
+        while started.elapsed() < std::time::Duration::from_secs(600) {
+            let t = q.pump(&mut settings, &mut rail);
+            if let Some(name) = t.ready {
+                ready = Some(name);
+                break;
+            }
+            if let Some(line) = rail.line() {
+                if line != last {
+                    println!("  {line}");
+                    last = line;
+                }
+            }
+            if !q.busy() && q.pump(&mut settings, &mut rail).ready.is_none() && rail.failures() > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+
+        assert_eq!(rail.failures(), 0, "the run failed: {:?}", rail.line());
+        let name = ready.expect("the run never handed a device over to be started");
+        println!("  ready: {name}");
+
+        let d = settings
+            .devices
+            .iter()
+            .find(|d| d.name == name)
+            .expect("the finished device is not in the library");
+        assert!(d.names_a_disk(), "{name} finished without naming a drive");
+        // `Option<Result<_, Absent>>`: `None` means the device names no drive at all, `Err` means
+        // it names one that has left the library. Both are failures here and they are different
+        // sentences, so both are said.
+        let disk = match settings.disk_of(d) {
+            Some(Ok(p)) => p,
+            Some(Err(e)) => panic!("{name} names a drive that does not resolve: {e:?}"),
+            None => panic!("{name} finished without naming a drive at all"),
+        };
+        let meta = std::fs::metadata(&disk).expect("the drive is not on disk");
+        println!(
+            "  drive {} — {} apparent, {} allocated",
+            disk.display(),
+            eapp_loader::si(meta.len()),
+            eapp_loader::si(settings::on_disk_size(&meta))
+        );
+        assert!(meta.len() > 1 << 30, "the drive is {} — too small to be a volume", meta.len());
+    }
+
     #[test]
     fn a_press_this_build_cannot_run_mints_nothing() {
         let data = DataDir::new("no-curl");
