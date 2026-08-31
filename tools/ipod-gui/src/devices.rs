@@ -440,6 +440,20 @@ fn made_of(
     // limit on two MODES, and saying which is the difference between a useful sentence and one
     // that reads as *your iPod is fake*.
     //
+    // **And it is two, not three — `vmcs` is on the drive.** The NOR's four images are not four
+    // modes: `logo_and_vmcs_are_data_and_diag_and_disk_are_programs` is this program's own test
+    // for it, and `ipod-boot`'s `flsh` refuses to enter the two payloads because "running them
+    // reported `executes to budget, no fault` for years". The co-processor's firmware ships in the
+    // FIRMWARE PARTITION, inside `rsrc`, and this is it on an IPSW-built drive:
+    //
+    //   ipod-boot rsrc <drive> --list
+    //     RESOUR~1/VIDEOC~1/BOOT/VMCS.BIN            201376
+    //     RESOUR~1/VIDEOC~1/BOOT/RENDER~1.BIN        104540
+    //     RESOUR~1/VIDEOC~1/LIBRARY/H264DEC.VLL      106960   (…and five more codecs)
+    //
+    // So video decoding is not gated on a dump either. Only the two bootable images are, which is
+    // exactly the two a person would call a mode.
+    //
     // **A fact, not a `device_rule`.** The first draft used one, and `device_rule` is how a part
     // that has LEFT the library is worded — so `a_part_that_has_left_is_named_in_the_body` saw its
     // fixture as already broken and said the test was measuring nothing.

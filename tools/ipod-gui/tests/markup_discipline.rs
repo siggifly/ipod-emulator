@@ -1024,11 +1024,14 @@ fn every_ipod_boot_capability_is_reachable_in_the_window_or_listed_as_a_gap() {
          "2026-09-01. Boots one of the NOR's own images — `IMG=diag|disk|logo|vmcs`. Diagnostics \
           and Disk Mode are modes a person knows their iPod has, so this is a gap rather than a \
           developer shortcut. Retired with `Start as…`, which has to name the images the \
-          CONFIGURED ROM carries rather than a fixed four: measured 2026-09-01, a generated ROM \
-          answers `Images  logo` and nothing else, so on most iPods this window makes, three of \
-          the four are not there to offer. That is a limit on two modes and not on the emulator — \
-          `osos` lives on the DRIVE and comes out of the IPSW, which is why RetailOS, Rockbox and \
-          iPodLinux all run on a generated ROM."),
+          CONFIGURED ROM carries rather than a fixed four — and only TWO of the four are modes \
+          at all. `logo_and_vmcs_are_data_and_diag_and_disk_are_programs` is this program's own \
+          test: `diag` and `disk` are bootable, `logo` and `vmcs` are payloads, and `flsh` refuses \
+          to enter the payloads because running them reported `executes to budget, no fault` for \
+          years. Measured 2026-09-01: a generated ROM answers `Images  logo`; an IPSW-built drive \
+          carries `osos, rsrc, aupd`, and `rsrc` holds `VIDEOC~1/BOOT/VMCS.BIN` (201,376 B) with \
+          the whole codec library beside it. So the co-processor's firmware and every operating \
+          system come out of the firmware DOWNLOAD; only Diagnostics and Disk Mode need a dump."),
         ("flash-update",
          "2026-09-01. Runs Apple's `aupd` updater and then the boot that proves it took. Retired \
           with `Start as…`."),
