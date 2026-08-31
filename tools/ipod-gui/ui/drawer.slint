@@ -77,6 +77,10 @@ export enum DrawerPage {
 // rather than pointing at a phantom.
 export component MenuPage inherits Rectangle {
     in property <int> failures;
+    /// How many titles the shelf holds, for the `Games` row's badge. An `int` rather than the
+    /// model itself: `MenuPage` draws a number and has no use for the rows, and handing it the
+    /// model would make every title's name a dependency of the root menu.
+    in property <int> title-count;
 
     callback close();
     callback go(DrawerPage, int);
@@ -147,13 +151,26 @@ export component MenuPage inherits Rectangle {
                     }
                 }
 
+                // **This row was disabled with a reason that had stopped being true.** Its sentence —
+                // *"Nothing files a .ipg title yet, and no command does it either"* — was written when
+                // §13 was a project state, and it outlived that by a whole page: `games-choose` files a
+                // shelf, `games-play` starts a title on the bench, and both are pressed by tests. The
+                // page was reachable from the menu strip and from nowhere else, so the drawer's own
+                // menu named a thing it would not open, and the one surface a person actually uses to
+                // find it said the feature did not exist.
+                //
+                // **A refusal is a claim about the program and it goes stale exactly like a line
+                // citation does.** `every_drawer_row_that_names_a_page_can_open_it` is what stops the
+                // next one lasting this long.
                 Row {
                     index: 2;
                     count: 7;
                     label: "Games";
-                    enabled: false;
-                    machine-rule: false;
-                    reason: "Nothing files a .ipg title yet, and no command does it either.";
+                    value: root.title-count > 0 ? "\{root.title-count}" : "";
+                    chevron: true;
+                    activated => {
+                        root.go(DrawerPage.games, 1);
+                    }
                     gained-focus => {
                         scroll.ensure-visible(self.absolute-position.y, self.height);
                     }
@@ -453,6 +470,7 @@ export component Drawer inherits Rectangle {
                 width: Geometry.drawer-w;
                 visible: root.on-screen(1);
                 failures: root.rail-failures;
+                title-count: root.titles.length;
                 close => {
                     root.close();
                 }

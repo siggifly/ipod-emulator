@@ -13583,6 +13583,114 @@ pub(crate) mod tests {
             "the update toggle does not read what the library says"
         );
     }
+
+    /// **A row in the drawer's own menu that names a page which EXISTS must be able to open it.**
+    ///
+    /// Written because the `Games` row shipped disabled for the whole life of the feature it named.
+    /// Its refusal — *"Nothing files a .ipg title yet, and no command does it either"* — was true
+    /// when §13 was a project state and outlived that by an entire working page: the shelf picker,
+    /// the title list and the bench launch were all built, tested and pressed, and the one surface
+    /// a person uses to FIND them still said the feature did not exist. The operator found it by
+    /// looking, which is the same way the menu strip's dead words were found, and it is the fourth
+    /// time this window has been caught drawing a control that names something it will not do.
+    ///
+    /// **A refusal is a claim about the program, and it rots exactly like a line citation.** That
+    /// is the general lesson and this is the general guard: `every_comment_that_names_a_line_still
+    /// _describes_it` catches a comment that has stopped describing its line, and this catches a
+    /// `reason` that has stopped describing the program. Neither is caught by anything else,
+    /// because both compile and both read as deliberate.
+    ///
+    /// **A row is allowed to be disabled only when the page it names is not there.** `Reference`
+    /// is the honest case: `ReferencePage` does not exist in any markup file, so a row that
+    /// refuses to open it is telling the truth. `Games` was not — `GamesPage` was right there,
+    /// composed into the drawer, with every callback registered.
+    #[test]
+    fn every_drawer_row_that_names_a_page_can_open_it() {
+        let drawer = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/ui/drawer.slint"
+        ))
+        .expect("ui/drawer.slint");
+
+        // ── The rows of the root menu, and whether each navigates ────────────────────────────
+        //
+        // Parsed by walking `MenuPage`'s body: a `label:` opens a row, and the next `root.go(`
+        // before the following `label:` belongs to it. Crude, and that is why the controls below
+        // assert what it found rather than trusting it.
+        let menu = {
+            let at = drawer.find("component MenuPage").expect("MenuPage");
+            let end = drawer[at..].find("\n// ").map(|e| at + e).unwrap_or(drawer.len());
+            &drawer[at..end]
+        };
+        // **Line-based, and the line must START with `label:`.** Splitting on the substring also
+        // matched `accessible-label: "Menu"`, which reported the region's own name as a row and
+        // then failed it for not opening `MenuPage`. A property is a line, not a substring.
+        let mut rows: Vec<(String, bool)> = Vec::new();
+        let mut pending: Option<(String, bool)> = None;
+        for line in menu.lines() {
+            let t = line.trim();
+            if let Some(rest) = t.strip_prefix("label: \"") {
+                if let Some(prev) = pending.take() {
+                    rows.push(prev);
+                }
+                if let Some(name) = rest.split('"').next() {
+                    pending = Some((name.to_string(), false));
+                }
+            } else if t.contains("root.go(DrawerPage.") {
+                if let Some(row) = pending.as_mut() {
+                    row.1 = true;
+                }
+            }
+        }
+        if let Some(prev) = pending {
+            rows.push(prev);
+        }
+
+        // Which pages actually have a body composed into the drawer.
+        let has_page = |label: &str| drawer.contains(&format!("{label}Page {{"));
+
+        // ── Controls, before any verdict ─────────────────────────────────────────────────────
+        assert!(
+            rows.len() >= 6,
+            "the menu parser read {} rows, which is not this menu",
+            rows.len()
+        );
+        assert!(
+            rows.iter().any(|(n, go)| n == "Devices" && *go),
+            "the parser cannot see a row that certainly navigates, so every verdict below is `false`"
+        );
+        assert!(
+            has_page("Games") && !has_page("Nonexistent"),
+            "the page-body matcher answers the same for a page that is there and one that is not"
+        );
+
+        let dead: Vec<&str> = rows
+            .iter()
+            .filter(|(name, goes)| !goes && has_page(name))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert!(
+            dead.is_empty(),
+            "{dead:?}: the drawer's menu names {} page(s) that exist and that this row will not \
+             open. A row with a page behind it and no `activated` is a refusal that has outlived \
+             what it refused — which is how `Games` shipped disabled over a working page",
+            dead.len()
+        );
+
+        // And the converse, so the rule stays a rule: a row that DOES navigate must have somewhere
+        // to go. Without this the fix for the above is to add `root.go` to everything.
+        let nowhere: Vec<&str> = rows
+            .iter()
+            .filter(|(name, goes)| *goes && !has_page(name))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert!(
+            nowhere.is_empty(),
+            "{nowhere:?}: this row navigates to a page with no body, so pressing it opens a blank \
+             drawer — the defect the Games page itself was fixed for"
+        );
+    }
+
     /// **The menu strip's five words are five controls, and each one goes where it says.**
     ///
     /// It used to be ONE `ShelfControl` labelled *menu* with five `Text` children painted inside
@@ -13699,26 +13807,33 @@ pub(crate) mod tests {
                 .unwrap_or_else(|| panic!("no drawer row labelled {want:?}"))
         };
 
-        // **`Devices` came off this test and `Games` took its place**, which is three deliberate
-        // lines rather than a slip: `ui/drawer.slint`'s depth-1 slot draws Devices, Parts and
-        // Settings now, and a row that goes on saying *the page behind it is not built* beside a
-        // page that exists is the stale claim §16.9 deletes. The three that remain are exactly the
-        // three `Page::slot` still answers `None` for.
-        let unbuilt = by_label("Games");
+        // **`Games` came off this test and `Reference` took its place, for the third time.** The
+        // rule the comment here has always stated is the one that keeps moving it: *a row that
+        // goes on saying "the page behind it is not built" beside a page that exists is the stale
+        // claim §16.9 deletes.* `Devices` left this arm when its page landed, and `Games` has now
+        // left it for the same reason — `GamesPage` is composed into the drawer, files a shelf and
+        // starts a title on the bench.
+        //
+        // **It stayed here for the whole life of the page it names**, which is why
+        // `every_drawer_row_that_names_a_page_can_open_it` now exists: this test asserts the
+        // ACCESSIBLE READING of a refusal and is perfectly happy for that refusal to be false, so
+        // it was holding the bug in place rather than catching it. The operator found it by
+        // looking. `Reference` is the honest occupant: `ReferencePage` exists in no markup file.
+        let unbuilt = by_label("Reference");
         assert_eq!(
             unbuilt.accessible_enabled(),
             Some(false),
-            "the `Games` row claims to work; the page behind it is not built"
+            "the `Reference` row claims to work; the page behind it is not built"
         );
         assert!(
             !unbuilt.accessible_description().unwrap_or_default().is_empty(),
-            "the `Games` row is disabled and says nothing about why, which is §19.1's finding \
+            "the `Reference` row is disabled and says nothing about why, which is §19.1's finding \
              with the label changed"
         );
 
         // The control: the pages that ARE built have to read differently, or `accessible-enabled`
         // is not being set from anything and every answer above is the same answer.
-        for built in ["Work", "Devices", "Parts", "Settings"] {
+        for built in ["Work", "Devices", "Parts", "Settings", "Games"] {
             assert_eq!(
                 by_label(built).accessible_enabled(),
                 Some(true),
@@ -13726,7 +13841,7 @@ pub(crate) mod tests {
             );
         }
         // …and no row states a gap that has been closed.
-        for live in ["Devices", "Parts", "Settings"] {
+        for live in ["Devices", "Parts", "Settings", "Games"] {
             assert_eq!(
                 by_label(live).accessible_description().unwrap_or_default().to_string(),
                 "",
@@ -17056,7 +17171,7 @@ pub(crate) mod tests {
         assert!(!w.get_setting_copy_enabled());
         assert!(!w.get_setting_copy_reason().is_empty(), "`Copy path` is disabled and says nothing");
 
-        // The one live control. `drawer.slint:590` fires this ordinal as
+        // The one live control. `drawer.slint:608` fires this ordinal as
         // `root.setting-toggled(1)`; `Row::CheckUpdates` is 1.
         let before = settings.borrow().check_updates_on_start;
         assert_eq!(w.get_setting_check_updates(), before, "the box does not reflect the library");

@@ -2735,12 +2735,20 @@ mod tests {
         let rows = text.matches("count: 7;").count();
         assert_eq!(rows, 7, "`MenuPage` no longer declares seven rows of seven: {rows}");
         let disabled = text.matches("enabled: false;").count();
-        // **Two, and it was three, and before that six.** Devices, Parts, Settings and now the
-        // Readout became live as `ui/drawer.slint` gained a child for each; `Page::slot` answers
-        // `None` for exactly Games and Reference. The count is read out of the markup and the
-        // arithmetic below is derived from it, so the next page to land moves both — and the page
-        // still needs more room than it has, which is the claim this test is actually about.
-        assert_eq!(disabled, 2, "`MenuPage` no longer has two disabled rows: {disabled}");
+        // **One, and it was two, and three, and before that six.** Devices, Parts, Settings, the
+        // Readout and now Games became live as `ui/drawer.slint` gained a child for each;
+        // `Reference` is the only row left with no page behind it.
+        //
+        // **Games was the slow one, and not because the page was slow to arrive.** The page had
+        // been composed into this drawer, with its callbacks registered and pressed by tests, for
+        // the whole time this count said two — the row above it simply went on refusing. That is
+        // what `every_drawer_row_that_names_a_page_can_open_it` is for; this number is a
+        // consequence of the fix rather than a check on it.
+        //
+        // The count is read out of the markup and the arithmetic below is derived from it, so the
+        // next page to land moves both — and the page still needs more room than it has, which is
+        // the claim this test is actually about.
+        assert_eq!(disabled, 1, "`MenuPage` no longer has one disabled row: {disabled}");
 
         let needed = DRAWER_HEADER_H
             + disabled as f64 * (ROW_H + FIELD_REASON)
