@@ -322,6 +322,8 @@ export component Drawer inherits Rectangle {
     in property <int> devices-detail-of: -1;
     in property <string> devices-empty-line;
     in property <FixRow> devices-new;
+    in property <FixRow> devices-make;
+    callback device-make();
     // §7.2's `Start`, for the one open device. See `window.slint`'s own note beside it.
     in property <FixRow> devices-start;
 
@@ -576,6 +578,7 @@ export component Drawer inherits Rectangle {
                     detail-of: root.devices-detail-of;
                     empty-line: root.devices-empty-line;
                     new-device: root.devices-new;
+                    make-one: root.devices-make;
                     start-row: root.devices-start;
                     back-pressed => {
                         root.back();
@@ -591,6 +594,9 @@ export component Drawer inherits Rectangle {
                     }
                     new-pressed => {
                         root.device-new();
+                    }
+                    make-pressed => {
+                        root.device-make();
                     }
                 }
 

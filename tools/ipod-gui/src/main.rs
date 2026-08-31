@@ -1434,6 +1434,49 @@ fn wire(
         });
     }
 
+    // ── §10's first run, pressed from the page rather than from a corner ─────────────────────────
+    //
+    // **The same `Queue::press` the empty bench has always called**, and deliberately not a second
+    // route into the same work: `press` is idempotent about a run already going, resumes a minted
+    // identity rather than re-minting one, and names the new device with `free_device_name`, so
+    // pressing this with three iPods already on the shelf makes a fourth rather than refusing.
+    //
+    // Every failure it can have is the Rail's — `Press::Refused` carries a `Failure` with a class —
+    // which is why nothing here words one.
+    {
+        let settings = settings.clone();
+        let rail = rail.clone();
+        let work = work.clone();
+        let rows = rows.clone();
+        let ticking = ticking.clone();
+        let repaint_all = repaint_all.clone();
+        let weak = window.as_weak();
+        window.on_device_make(move || {
+            let press = {
+                let mut s = settings.borrow_mut();
+                let mut r = rail.borrow_mut();
+                work.borrow_mut().press(&mut s, &mut r, caps.download)
+            };
+            match press {
+                work::Press::Refused(f) => {
+                    rail.borrow_mut().failed("make", "an iPod", f);
+                }
+                // `Busy` has already said so on the Rail — `press` notes it itself — and a second
+                // sentence here would be the same fact twice.
+                work::Press::Busy => {}
+                _ => ticking(),
+            }
+            // **A press that mints an identity has moved the library even when it then refuses**,
+            // which is §10.3's corner: the seed IS the iPod, `press` stores it before anything that
+            // can fail, and a retry must find the same machine rather than a second GUID.
+            save(&settings.borrow(), &mut rail.borrow_mut());
+            if let Some(w) = weak.upgrade() {
+                sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+            }
+            repaint_all();
+        });
+    }
+
     // Each `›` slides one level deeper. **`push`, never `go`** — the level a page is drawn at is
     // `Page::slot`'s answer and not the caller's, so there is no arithmetic here to get wrong.
     {
@@ -6255,6 +6298,35 @@ fn refresh_devices(
     // **always present** — pinned outside the Scroll, at the same place whether there are no
     // devices or nine.
     window.set_devices_empty_line("No devices yet.".into());
+    // ── §10's first run, as a control rather than a corner ──────────────────────────────────
+    //
+    // **This capability was written, tested, and reachable by one gesture nobody would guess.**
+    // `work::Queue::press` synthesises a boot ROM, downloads Apple's firmware, builds a drive from
+    // it and installs Apple's software onto it — its own words: *"Nobody has to have an iPod, a
+    // NOR dump, or any file at all."* The only way to reach it was to press the placeholder row on
+    // an empty bench, which is a route that exists once and is never seen again.
+    //
+    // So it is a control, on the page where iPods live, above the Composer rather than instead of
+    // it: this is the answer for somebody with no files, and the Composer is the answer for
+    // somebody who has them.
+    //
+    // `caps.download` is the same gate `press` itself checks, asked here so the row can refuse in
+    // §9.4's own shape instead of accepting a press and failing on the Rail.
+    window.set_devices_make(FixRow {
+        label: "Make me one".into(),
+        enabled: caps.download,
+        reason: if caps.download {
+            "".into()
+        } else {
+            // A machine rule: the tool is not here, and no amount of asking changes that.
+            "this build has no `curl`, and Apple's firmware has to be downloaded".into()
+        },
+        escape_hatch: "".into(),
+        machine_rule: true,
+        presses: 1,
+        // What it will do, before it is pressed. The figures are the plan's own.
+        consequence: "downloads Apple's firmware and builds an 8 GB drive — about a minute".into(),
+    });
     // **Derived from the page's own slot**, exactly like `caps.devices_page`: `Page::Composer`
     // answers `Some` on the day `ui/drawer.slint` gains a child that draws it, which is the day
     // this control can do what it says. Written as a literal it is a second answer to the same
@@ -13768,6 +13840,66 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **`Make me one` presses §10's builder, and it mints the identity before anything else.**
+    ///
+    /// The capability was written, tested and reachable by one gesture nobody would guess: press
+    /// the placeholder row on an empty bench. `work::Queue::press` synthesises a boot ROM,
+    /// downloads Apple's firmware, builds a drive from it and installs Apple's software onto it —
+    /// *"Nobody has to have an iPod, a NOR dump, or any file at all."* This is the control that
+    /// makes it findable, and this is the test that presses it.
+    ///
+    /// **What is asserted is the mint, and that is the one irreversible thing here.**
+    /// `nor::mint_seed` is the only call in this program that cannot be undone: `Identity::generate`
+    /// is a pure function of a model and that number, so the seed IS the iPod and the 8-byte
+    /// FireWire GUID it produces is what iTunes binds DRM to. `press` stores it before anything
+    /// that can fail, so three failed first runs leave ONE iPod with ONE GUID — and a press that
+    /// minted nothing would be a press that did not happen.
+    ///
+    /// **The worker is stopped immediately**, because `press` spawns a thread that fetches from
+    /// Apple. The mint is synchronous and has already happened when `press` returns; the download
+    /// is what is being cut short, and every path it writes to is inside this test's own data
+    /// directory.
+    #[test]
+    fn make_me_one_presses_the_builder_and_mints_an_identity() {
+        let dir = temp_dir("make-one");
+        let settings = Rc::new(RefCell::new(Settings::default()));
+        let w = a_window();
+        let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
+
+        assert!(
+            work::minted(&settings.borrow()).is_none(),
+            "an identity existed before anything was pressed"
+        );
+
+        w.invoke_device_make();
+
+        // Either it minted, or this build cannot download and said so — both are real answers, and
+        // which one depends on whether the machine running the suite has `curl`. What is NOT
+        // allowed is neither.
+        let minted = work::minted(&settings.borrow()).is_some();
+        let refused = (0..w.get_rail().row_count())
+            .filter_map(|i| w.get_rail().row_data(i))
+            .any(|r| r.what.contains("iPod"));
+        assert!(
+            minted || refused,
+            "pressing `Make me one` neither minted an identity nor said why it could not — which \
+             is a control that took a press and did nothing"
+        );
+        if minted {
+            let s = settings.borrow();
+            let d = work::minted(&s).expect("just checked");
+            assert!(!d.name.is_empty(), "the minted iPod has no name");
+        }
+
+        // Cut the fetch short. `Queue::stop` is what the window's own close handler calls.
+        {
+            let mut s = settings.borrow_mut();
+            let mut r = rail::Rail::new();
+            wiring.work.borrow_mut().stop(&mut s, &mut r);
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// **A page the markup draws must have a nav slot, and one with a slot must be drawn.**
     ///
     /// The gate that would have caught the whole of the `Games` bug, and the reason it is separate
@@ -17287,7 +17419,7 @@ pub(crate) mod tests {
     /// **§7.2's `Start` is reachable at last, and it is this page's own answer.**
     ///
     /// The button lives *inside* the row's `Expand`, whose `open: root.detail-of == i`
-    /// (`devices.slint:310`) and `devices-detail-of`
+    /// (`devices.slint:313`) and `devices-detail-of`
     /// defaulted to `-1` with no setter, so `Expand.open` was false for every row for ever: the
     /// five `Made of` lines were undrawn and so was the one control §7.2 puts on this page.
     ///
@@ -17393,7 +17525,7 @@ pub(crate) mod tests {
         assert!(!w.get_setting_copy_enabled());
         assert!(!w.get_setting_copy_reason().is_empty(), "`Copy path` is disabled and says nothing");
 
-        // The one live control. `drawer.slint:643` fires this ordinal as
+        // The one live control. `drawer.slint:649` fires this ordinal as
         // `root.setting-toggled(1)`; `Row::CheckUpdates` is 1.
         let before = settings.borrow().check_updates_on_start;
         assert_eq!(w.get_setting_check_updates(), before, "the box does not reflect the library");

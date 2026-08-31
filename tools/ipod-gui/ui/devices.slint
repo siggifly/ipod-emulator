@@ -180,10 +180,13 @@ export component DevicesPage inherits Rectangle {
     // `+ New device ›`. The sentence is the model's, not this file's.
     in property <string> empty-line;
     in property <FixRow> new-device;
+    /// §10's first run: build an iPod from nothing. See `work::Queue::press`.
+    in property <FixRow> make-one;
+    callback make-pressed();
     // §7.2's `Start`, for the **one open device**, from `devices::start_row`.
     //
     // **Not `d.startable` and `d.cradle-label`.** Those two are the bench's cradle as well —
-    // `window.slint:835` reads `root.current.cradle-label` and `:858` `root.current.startable`,
+    // `window.slint:837` reads `root.current.cradle-label` and `:858` `root.current.startable`,
     // for the drawn iPod — so §7.2's refusal, *a machine
     // exists, stop it first*, would be printed under the machine telling the operator to stop it.
     // One field, two surfaces, and only one of them is asking this page's question.
@@ -399,8 +402,12 @@ export component DevicesPage inherits Rectangle {
         // Devices page whose only action had scrolled away is §9.1's *bare "nothing here"* wearing a
         // list. Its label and its refusal are the model's: the Composer is a page this build has, so
         // it is enabled; the day it is not, `rail::Caps` withdraws it and the reason returns with it.
+        // **Two controls, and the order is the answer to *who is standing here*.** Somebody who
+        // has never run this has no NOR dump and no drive image and is not going to acquire one to
+        // look at an iPod; `Make me one` is their whole first run. Somebody who owns files wants
+        // the Composer, and it is directly below.
         Rectangle {
-            height: max(Geometry.primary-footer-h, new.height + 2 * Geometry.footer-pad);
+            height: max(Geometry.primary-footer-h, make.height + 2 * Geometry.footer-pad);
             background: Ink.bg-raised;
 
             Rectangle {
@@ -408,6 +415,39 @@ export component DevicesPage inherits Rectangle {
                 height: 1px;
                 background: Ink.line.with-alpha(0.3);
             }
+
+            make := Pressable {
+                x: Geometry.page-margin;
+                y: Geometry.footer-pad;
+                width: parent.width - 2 * Geometry.page-margin;
+                label: root.make-one.label;
+                enabled: root.make-one.enabled;
+                reason: root.make-one.reason;
+                escape-hatch: root.make-one.escape-hatch;
+                machine-rule: root.make-one.machine-rule;
+                presses: root.make-one.presses;
+                consequence: root.make-one.consequence;
+                primary: true;
+                pad: Geometry.page-margin;
+                activated => {
+                    root.make-pressed();
+                }
+
+                Text {
+                    text: root.make-one.label;
+                    font-size: Metric.body-size;
+                    font-weight: Metric.weight-strong;
+                    color: root.make-one.enabled ? #ffffff : Ink.fg-disabled;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        Rectangle {
+            height: max(Geometry.primary-footer-h, new.height + 2 * Geometry.footer-pad);
+            background: Ink.bg-raised;
 
             new := Pressable {
                 x: Geometry.page-margin;
@@ -420,7 +460,12 @@ export component DevicesPage inherits Rectangle {
                 machine-rule: root.new-device.machine-rule;
                 presses: root.new-device.presses;
                 consequence: root.new-device.consequence;
-                primary: true;
+                // **Not primary, and §6.5 is why there can only be one.** `Make me one` is the
+                // page's primary now: it is the answer for somebody with no files, which is most
+                // people opening this for the first time. The Composer is the answer for somebody
+                // who has them, and two filled buttons side by side is two things claiming to be
+                // the thing to do.
+                primary: false;
                 pad: Geometry.page-margin;
                 activated => {
                     root.new-pressed();
@@ -430,7 +475,7 @@ export component DevicesPage inherits Rectangle {
                     text: root.new-device.label;
                     font-size: Metric.body-size;
                     font-weight: Metric.weight-strong;
-                    color: root.new-device.enabled ? #ffffff : Ink.fg-disabled;
+                    color: root.new-device.enabled ? Ink.fg : Ink.fg-disabled;
                     horizontal-alignment: center;
                     overflow: elide;
                     vertical-alignment: center;

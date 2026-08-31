@@ -26,13 +26,13 @@
 // **And `open_row` is the only place in this file that reads one.** The draft this grew out of
 // took an index in `row_action` and in `editor` as well, and that is where an index costs more
 // than a body drawn about the wrong device: every act is rendered *inside* the open row —
-// `devices.slint:310` hands a `MadeOfLine` the detail only where `detail-of == i` — so the number
+// `devices.slint:313` hands a `MadeOfLine` the detail only where `detail-of == i` — so the number
 // a press carries is always the open device's, computed at the last push. Resolve it again
 // against a list that gained a device in between and `Remove` forgets the row above the one that
 // was pressed, silently, having been handed a valid index for a device nobody asked about. The
 // name is already held and it is the answer, so the acts read it and take no index at all.
 //
-// **This page pins no ordinal.** `devices.slint:333` fires `root.row-action(a, n)` where `a` is
+// **This page pins no ordinal.** `devices.slint:336` fires `root.row-action(a, n)` where `a` is
 // `root.d.action` — a number Rust put on the line — and nothing else. The one ordinal that is
 // pinned anywhere, `RowAction::Remove == 2`, is pinned by `ui/parts.slint`'s own `Remove` control
 // and is written down in `parts.rs` beside the enum.
@@ -91,8 +91,8 @@
 // beside a running ARM7 draws a live `Start` on every other device in the library.
 //
 // The obvious repair is to teach `device_rows` the machine, and it is wrong: **those two fields
-// are the bench's cradle as well.** `window.slint:835` reads `root.current.cradle-label` and
-// `window.slint:835` reads `root.current.startable`, so the sentence that refuses this page's
+// are the bench's cradle as well.** `window.slint:837` reads `root.current.cradle-label` and
+// `window.slint:837` reads `root.current.startable`, so the sentence that refuses this page's
 // `Start` would be printed under the drawn iPod — the machine's own cradle telling the operator
 // that the machine is running and to stop it first. One field, two surfaces, and only one of them
 // is asking §7.2's question.
@@ -270,7 +270,7 @@ impl Devices {
                 a.name()
             )),
             // §7.2's `Start` is `start-device(i)` — the same callback the bench's own centre
-            // button presses (`devices.slint:303`), which that page's header calls REUSED —
+            // button presses (`devices.slint:306`), which that page's header calls REUSED —
             // so it does not arrive here and this arm is exhaustiveness rather than a route.
             RowAction::Start => {
                 Err("Start is the bench's own control and does not act on the library".into())
@@ -610,7 +610,7 @@ fn removal_consequence(s: &Settings, d: &Device) -> String {
 ///    reason it will never draw is the kind of field that is true for a while and then quietly
 ///    becomes a second producer.
 ///
-/// `machine_rule` is computed rather than assumed, and `devices.slint:355` binds it as
+/// `machine_rule` is computed rather than assumed, and `devices.slint:358` binds it as
 /// `machine-rule: root.start-row.machine-rule`. It used to be a literal `machine-rule: true` in the markup, which is wrong for the
 /// composed-and-unbuilt arm — *building a composed device is not wired yet* is §9.4's other kind,
 /// a project state, and drawing it in `fg` as a law of physics tells the reader this program will

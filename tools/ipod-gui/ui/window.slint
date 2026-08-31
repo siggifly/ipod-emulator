@@ -337,6 +337,7 @@ export component MainWindow inherits Window {
     in property <int> devices-detail-of: -1;
     in property <string> devices-empty-line;
     in property <FixRow> devices-new;
+    in property <FixRow> devices-make;
     // §7.2's `Start`, for the **one open device** — the control lives inside that row's `Expand`
     // and nowhere else, so one pushed row describes every one that can be on screen. It is not
     // `DeviceRow.startable` and `DeviceRow.cradle-label`: those two are the **bench's** cradle as
@@ -482,6 +483,7 @@ export component MainWindow inherits Window {
     // nothing.
     callback device-row-action(int, int);
     callback device-new();
+    callback device-make();
 
     callback parts-expand(int, bool);
     callback parts-group-action(int, int);
@@ -982,6 +984,7 @@ export component MainWindow inherits Window {
                 devices-detail-of: root.devices-detail-of;
                 devices-empty-line: root.devices-empty-line;
                 devices-new: root.devices-new;
+                devices-make: root.devices-make;
                 devices-start: root.devices-start;
 
                 parts-groups: root.parts-groups;
@@ -1059,6 +1062,9 @@ export component MainWindow inherits Window {
                 }
                 device-new => {
                     root.device-new();
+                }
+                device-make => {
+                    root.device-make();
                 }
                 start-device(i) => {
                     root.start-device(i);
