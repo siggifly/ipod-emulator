@@ -2063,7 +2063,11 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
     if cfg.may_restore(first) {
         if let Some(path) = &cfg.snapshot {
             if let Ok(b) = std::fs::read(path) {
-                if m.restore(&b) {
+                // An unreadable *or* unpackable file lands in the same place, and that is the
+                // point: a restore point written by an older build is refused rather than
+                // migrated, because regenerating one costs a boot and carrying two readers
+                // costs forever. The else-branch below is already right for both.
+                if eapp_loader::pack::unpack(&b).is_some_and(|raw| m.restore(&raw)) {
                     restored = true;
                 } else {
                     // Two things are wrong at once here, and patching either alone leaves the
@@ -2575,7 +2579,12 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
 /// Returns the Unix second the **complete** pair reached the disk, or `None` — see `Link::parked`.
 fn write_restore_point(cfg: &Config, m: &Machine, frame: Option<&[u8]>) -> Option<u64> {
     let path = cfg.snapshot.as_ref()?;
-    let img = m.snapshot();
+    // Packed on the way out. A restore point is 97% zeros — the format writes the whole address
+    // space and a booted iPod has touched a fraction of it — and stored raw it cost fifteen times
+    // what the *drive* cost, which is backwards: the drive is the half that cannot be regenerated.
+    // See `pack`, which measures 17:1 on a real parked 5.5G.
+    let raw = m.snapshot();
+    let img = eapp_loader::pack::pack(&raw);
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -2583,7 +2592,13 @@ fn write_restore_point(cfg: &Config, m: &Machine, frame: Option<&[u8]>) -> Optio
         eprintln!("snapshot {}: {e}", path.display());
         return None;
     }
-    eprintln!("snapshot -> {} ({} bytes)", path.display(), img.len());
+    eprintln!(
+        "snapshot -> {} ({} bytes, packed from {} — {:.0}:1)",
+        path.display(),
+        img.len(),
+        raw.len(),
+        raw.len() as f64 / img.len() as f64
+    );
     match cfg.pair_with_drive() {
         Ok(line) => eprintln!("{line}"),
         // Not fatal, and deliberately not silent: without its other half the snapshot must not be
@@ -2645,7 +2660,7 @@ fn snapshot_bytes(m: &Machine) -> u64 {
         .mem
         .regions
         .iter()
-        .map(|r| (r.data.len() + r.name.len() + 12) as u64)
+        .map(|r| (eapp_loader::pack::packed_len(&r.data) + r.name.len() + 12) as u64)
         .sum();
     let bcm = m.mem.bcm.as_ref().map_or(0, |b| b.mem.len() as u64 * 8);
     regions + bcm + SNAPSHOT_SLACK

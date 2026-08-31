@@ -35,6 +35,7 @@ pub mod ghidra;
 pub mod identity;
 pub mod models;
 pub mod nor;
+pub mod pack;
 pub mod png;
 pub mod rsrc;
 pub mod splash;

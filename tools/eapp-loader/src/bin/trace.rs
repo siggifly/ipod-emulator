@@ -1285,7 +1285,7 @@ fn main() {
         }
         if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--restore=")) {
             match std::fs::read(path) {
-                Ok(b) if m.restore(&b) => {
+                Ok(b) if eapp_loader::pack::unpack(&b).is_some_and(|raw| m.restore(&raw)) => {
                     println!(
                         "  restored {path} — {} instructions already executed, pc {:#010x}",
                         m.executed, m.cpu.regs[15]
@@ -1498,9 +1498,15 @@ fn main() {
         };
         if let Some(spec) = snap_spec {
             if let Some((_, path)) = spec.split_once(':') {
-                let img = m.snapshot();
+                let raw = m.snapshot();
+                let img = eapp_loader::pack::pack(&raw);
                 match std::fs::write(path, &img) {
-                    Ok(()) => println!("  snapshot -> {path} ({} bytes)", img.len()),
+                    Ok(()) => println!(
+                        "  snapshot -> {path} ({} bytes, packed from {} — {:.0}:1)",
+                        img.len(),
+                        raw.len(),
+                        raw.len() as f64 / img.len() as f64
+                    ),
                     Err(e) => println!("  snapshot {path}: {e}"),
                 }
             }
