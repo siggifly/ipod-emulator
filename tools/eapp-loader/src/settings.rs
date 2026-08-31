@@ -586,6 +586,18 @@ pub struct Settings {
     /// recipes want, because they pass a path to a subprocess.
     pub nor: crate::nor::Source,
     pub disk: Option<PathBuf>,
+    /// Where titles are kept: one `.ipg` title, or a folder of them.
+    ///
+    /// **One path, not a list, because [`crate::titles_under`] already accepts either.** A
+    /// directory holding `Executables/*.bin` is a title and answers for itself; anything else is
+    /// searched one level down. Dropping one game and dropping a shelf of them is the same gesture
+    /// to a person, so it is the same setting here.
+    ///
+    /// Deliberately NOT a [`Resource`]: §11.4 fixes Parts at six groups and §13 says "a title is
+    /// another thing that stands on the bench" — a title is not an ingredient a device is built
+    /// from, it is a thing the device runs. Filing it with the boot ROMs would put it in the one
+    /// list that is about assembling an iPod.
+    pub games: Option<PathBuf>,
     /// Which iPod this is, cosmetically. Not an instrument — it is which iPod you had, so it lives
     /// in user mode and is remembered like the rest of the setup.
     ///
@@ -780,6 +792,7 @@ impl Settings {
                     }
                 }
                 "disk" if !v.is_empty() => s.disk = Some(PathBuf::from(v)),
+                "games" if !v.is_empty() => s.games = Some(PathBuf::from(v)),
                 // `auto` — and anything unrecognised — leaves it `None`, which is "ask the ROM".
                 "chassis" => s.chassis = crate::identity::Colour::parse(v),
                 // The key this replaced. Honoured so that anyone who had already chosen black does
@@ -1324,6 +1337,11 @@ impl Settings {
              chassis = {}\n\
 {}\
              disk = {}\n\
+             # One `.ipg` title, or a folder of them. A directory holding `Executables/*.bin` is\n\
+             # itself a title; anything else is searched one level down. Absent means the Games\n\
+             # page has nothing to list, which is not an error — it is a program nobody has given\n\
+             # a game to yet.\n\
+{}\
              # An HTTPS GET of the GitHub releases API and a version comparison, on launch.\n\
              # Off by default on purpose. The menu item works whatever this says.\n\
              check_updates_on_start = {}\n\
@@ -1339,6 +1357,12 @@ impl Settings {
             self.chassis.map(|c| c.as_str()).unwrap_or("auto"),
             self.render_nor(),
             p(&self.disk),
+            // Omitted entirely when unset, rather than written as an empty value: `games = ` with
+            // nothing after it reads as a path somebody meant to fill in.
+            match &self.games {
+                Some(g) => format!("games = {}\n", g.display()),
+                None => String::new(),
+            },
             self.check_updates_on_start,
             self.welcomed,
             match self.work_on_copy {
@@ -2790,6 +2814,7 @@ mod tests {
             chassis: Some(crate::identity::Colour::Black),
             nor: crate::nor::Source::File(PathBuf::from("/a/b/rom.bin")),
             disk: Some(PathBuf::from("/a/b/disk.img")),
+            games: Some(PathBuf::from("/a/b/Games")),
             check_updates_on_start: true,
             welcomed: true,
             work_on_copy: Some(true),
@@ -4812,6 +4837,31 @@ device.0.parked_at = 1787607434
 
     /// **Nothing in this program reads a settings mode any more**, and a file that carries one is
     /// read exactly as it was before the field went.
+    #[test]
+    fn the_games_folder_survives_a_save_and_is_absent_when_unset() {
+        // A setting that renders but does not read back is the landmine shape: it looks filed, the
+        // file even shows it, and the next launch has forgotten. So this asserts the ROUND TRIP,
+        // not that `render` mentions the key.
+        let s = Settings {
+            games: Some(PathBuf::from("/somewhere/Cracked Games")),
+            ..Default::default()
+        };
+        assert_eq!(
+            Settings::parse(&s.render()).games,
+            s.games,
+            "the games folder comes back off disk"
+        );
+
+        // Unset writes NOTHING, rather than `games = ` with an empty value — which reads as a path
+        // somebody meant to fill in, and which `parse` would then have to decide about.
+        let empty = Settings::default().render();
+        assert!(
+            !empty.contains("games ="),
+            "an unset games folder is absent from the file, not blank in it:\n{empty}"
+        );
+        assert_eq!(Settings::parse(&empty).games, None);
+    }
+
     #[test]
     fn no_settings_key_called_mode_survives_a_render() {
         let text = Settings::default().render();
