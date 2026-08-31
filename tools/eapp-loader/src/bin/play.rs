@@ -609,21 +609,14 @@ fn main() {
     //
     // `--call-terminate-vector` restores the old behaviour for comparison.
     let call_terminate = args.iter().any(|a| a == "--call-terminate-vector");
-    const TERMINATE_VECTOR: usize = 1;
-    let mut frame_vector = None;
-    for (i, &v) in app.vectors.iter().enumerate() {
-        if v == 0 {
-            continue;
+    // The walk itself is the library's now, so the window starts a title the same way — including
+    // the part that matters, which is NOT calling vector[1].
+    let (frame_vector, ran) = m.enter_title(&app.vectors, &ctx, budget, call_terminate);
+    for (i, v, stop) in ran {
+        match stop {
+            Some(s) => println!("vector[{i}] {v:#010x} -> {s:?}"),
+            None => println!("vector[{i}] {v:#010x} -> skipped (terminate entry)"),
         }
-        // Still the frame vector if it is the last non-zero one — we skip CALLING it, not
-        // knowing it exists.
-        frame_vector = Some(v);
-        if i == TERMINATE_VECTOR && !call_terminate {
-            println!("vector[{i}] {v:#010x} -> skipped (terminate entry)");
-            continue;
-        }
-        let stop = m.call_with(v, &ctx, budget);
-        println!("vector[{i}] {v:#010x} -> {stop:?}");
     }
     let Some(frame_vector) = frame_vector else {
         eprintln!("no entry vector");

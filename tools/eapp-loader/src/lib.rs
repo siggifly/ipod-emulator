@@ -4420,6 +4420,47 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
         async_files
     }
 
+    /// Run a title's entry vectors and hand back the one that draws a frame.
+    ///
+    /// **`vectors[1]` is the TERMINATE entry, not a second init**, and calling it is not harmless.
+    /// Measured on Sims Bowling, whose `vectors[1]` at `0x18045504` ends in a `bl` to a registered
+    /// destructor: one of them is the resource manager's, which frees the pending-load queue and
+    /// nulls its pointer. The title then builds resource requests perfectly well and pushes them
+    /// into a NULL queue, so the queue stays empty for ever, the loader is skipped every frame, and
+    /// `gameLib.rlb` is never opened. Nothing errors — the game simply never loads anything.
+    ///
+    /// It is still the frame vector if it is the last non-zero one: what is skipped is CALLING it,
+    /// not knowing it is there.
+    ///
+    /// Returns the frame vector and what each entry did, so a caller that reports its own setup can
+    /// say so. `None` in the outcome slot means that entry was skipped rather than run.
+    #[allow(clippy::type_complexity)]
+    pub fn enter_title(
+        &mut self,
+        vectors: &[u32],
+        ctx: &[u32],
+        budget: usize,
+        call_terminate: bool,
+    ) -> (Option<u32>, Vec<(usize, u32, Option<Stop>)>) {
+        /// The entry a title is shut down through, and the one an init walk must not call.
+        const TERMINATE_VECTOR: usize = 1;
+        let mut frame_vector = None;
+        let mut ran = Vec::new();
+        for (i, &v) in vectors.iter().enumerate() {
+            if v == 0 {
+                continue;
+            }
+            frame_vector = Some(v);
+            if i == TERMINATE_VECTOR && !call_terminate {
+                ran.push((i, v, None));
+                continue;
+            }
+            let stop = self.call_with(v, ctx, budget);
+            ran.push((i, v, Some(stop)));
+        }
+        (frame_vector, ran)
+    }
+
     pub fn install_audit_stubs(&mut self) {
         // `EAPP_AUDIT_SKIP=audio,misc,gl` leaves a group unimplemented. This exists because a
         // batch of stubs that lands together cannot be bisected afterwards, and the first one
