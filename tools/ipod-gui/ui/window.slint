@@ -37,6 +37,7 @@ import {
     CradleRing,
     DetailRow,
     DeviceRow,
+    TitleRow,
     Field,
     FieldRow,
     FixRow,
@@ -89,6 +90,11 @@ export component MainWindow inherits Window {
     forward-focus: keys;
 
     // ── The library ──
+    /// §13's Games page: the titles found where `Settings::games` points, and where that is.
+    in property <[TitleRow]> titles;
+    in property <string> games-folder;
+    callback games-choose();
+    callback games-play(int);
     in property <[DeviceRow]> devices;
     // §9.1: an empty library is a state with something to say, not an absent one. The sentence is
     // the model's — pushed as a whole row from `main.rs` — rather than a struct literal written
@@ -958,6 +964,14 @@ export component MainWindow inherits Window {
                 ledger-note: root.ledger-note;
                 ledger-warn: root.ledger-warn;
 
+                titles: root.titles;
+                games-folder: root.games-folder;
+                games-choose => {
+                    root.games-choose();
+                }
+                games-play(i) => {
+                    root.games-play(i);
+                }
                 devices: root.devices;
                 // §7.2: **one number**, written from the bench's `←`/`→` and from a Devices row,
                 // read by both. `<=>` rather than two properties and a callback, because two

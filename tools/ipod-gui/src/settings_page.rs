@@ -3,7 +3,7 @@
 // **One page, three rows, and it is not a settings app.** `ui/settings.slint` draws the three and
 // this file answers every question they ask. Until it did, `window.slint`'s nine `setting-*`
 // properties were never written by anything: the page drew three rows with empty labels, two of
-// them disabled carrying an **empty** `reason` — the construction `primitives.slint:454` declares
+// them disabled carrying an **empty** `reason` — the construction `primitives.slint:462` declares
 // against (*"§9.4 — non-empty whenever `!enabled`"*) — and one live toggle that wrote nothing and
 // reflected nothing.
 //
@@ -14,8 +14,8 @@
 // it by number, so a renumbering here silently re-aims a live control — `Copy path` writing the
 // update preference, say. Measured in the file `build.rs` compiles:
 //
-//   - `Row::CheckUpdates` is **1** — `drawer.slint:575`, `root.setting-toggled(1)`.
-//   - `Row::CopyPath` is **2** — `drawer.slint:578`, `root.setting-toggled(2)`.
+//   - `Row::CheckUpdates` is **1** — `drawer.slint:588`, `root.setting-toggled(1)`.
+//   - `Row::CopyPath` is **2** — `drawer.slint:591`, `root.setting-toggled(2)`.
 //
 // `Row::Theme` is **0** and is ours: the theme row is drawn from `setting-theme-*` and fires
 // nothing yet. It is in the list because the page has three rows and a vocabulary with a hole in it
@@ -119,7 +119,7 @@ const NO_THEME: &str = "one palette in this build";
 /// a surprise: `Settings::path()` is `Some(data_dir().join(FILE))` and `data_dir` always answers, so
 /// the `None` arm below has no input that produces it. It is kept because the arm is a `match` on an
 /// `Option` and an arm with no sentence is a disabled row with an empty reason — the exact shape
-/// `primitives.slint:454` forbids (*non-empty whenever `!enabled`*) — the day `path` learns to
+/// `primitives.slint:462` forbids (*non-empty whenever `!enabled`*) — the day `path` learns to
 /// answer `None`. It is also why
 /// `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` names this constant instead of
 /// sweeping it: no fixture can make a page draw it.
@@ -502,7 +502,7 @@ mod tests {
 
     // ── §9.4, the invariant the page was breaking ───────────────────────────────────────────────
 
-    /// **No disabled row carries an empty reason** — `primitives.slint:454`'s own words,
+    /// **No disabled row carries an empty reason** — `primitives.slint:462`'s own words,
     /// *non-empty whenever `!enabled`*.
     ///
     /// This is the state the page shipped in and the worst-looking thing in the window: two rows

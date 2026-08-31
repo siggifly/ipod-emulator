@@ -1699,6 +1699,18 @@ mod build_split_tests {
         //
         // The allocated-size equality is what covers "and nothing else was written": a byte written
         // anywhere outside these three regions allocates a block, and the two files would differ.
+        // **`st_blocks` is not settled until the writes are**, and this test read it while they
+        // were not. Nothing above calls `sync_all`, so on APFS — which allocates lazily — the two
+        // images can report different allocated sizes purely because one had been flushed and the
+        // other had not. It went red exactly once, inside a `--workspace` run where the machine was
+        // busy, and passed alone and in its own crate every time after. That is an instrument
+        // reporting the filesystem's schedule as a difference in what was written.
+        //
+        // Flushed here rather than in `build_disk`: the shipped path has no reason to pay for an
+        // fsync, and the quantity only has to be stable for the one reader that asks about blocks.
+        for p in [&whole, &halves] {
+            std::fs::File::open(p).and_then(|f| f.sync_all()).expect("the image, flushed");
+        }
         let apparent = std::fs::metadata(&whole).unwrap().len();
         assert_eq!(apparent, std::fs::metadata(&halves).unwrap().len());
         assert_eq!(

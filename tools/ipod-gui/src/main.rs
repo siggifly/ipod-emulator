@@ -522,6 +522,30 @@ fn main() -> Result<(), slint::PlatformError> {
 /// **`shell` is the one argument that exists for the suite**, and it is here rather than reached for
 /// inside a callback because the alternative is a test that opens `NSOpenPanel`. `main` passes
 /// `drops::Shell::Native` and it is the only thing a release build can construct — the other
+/// Fill the Games page's list from wherever `Settings::games` points.
+///
+/// **Reads the disk every time rather than caching**, which is the same decision `refresh_devices`
+/// made and for the same reason: a shelf is a folder somebody else can change while this window is
+/// open, and a list that was true at startup is a list that quietly lies. Twenty titles is one
+/// `read_dir` and twenty manifests, which is nothing beside a boot.
+///
+/// Mutates in place so focus, hover and the scroll position survive.
+fn refresh_titles(model: &Rc<VecModel<TitleRow>>, settings: &Settings) {
+    let found = settings
+        .games
+        .as_deref()
+        .map(eapp_loader::titles_under)
+        .unwrap_or_default();
+    let rows: Vec<TitleRow> = found
+        .into_iter()
+        .map(|(name, path)| TitleRow {
+            name: name.into(),
+            path: path.display().to_string().into(),
+        })
+        .collect();
+    model.set_vec(rows);
+}
+
 /// variant is `#[cfg(test)]` — so this is a seam in the wiring, not a switch in the program.
 fn wire(
     window: &MainWindow,
@@ -558,6 +582,21 @@ fn wire(
     // which is what §16.9 asks for and what keeps focus, hover and the selection through a refresh.
     let devices: Rc<VecModel<DeviceRow>> = Rc::new(VecModel::default());
     window.set_devices(ModelRc::from(devices.clone()));
+
+    // §13's Games page. Retained and mutated in place for the same reason the devices model is:
+    // handing the window a fresh `VecModel` tears down every row and takes focus and hover with it.
+    let titles: Rc<VecModel<TitleRow>> = Rc::new(VecModel::default());
+    window.set_titles(ModelRc::from(titles.clone()));
+    refresh_titles(&titles, &settings.borrow());
+    window.set_games_folder(
+        settings
+            .borrow()
+            .games
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default()
+            .into(),
+    );
     window.set_screen_source(dark_screen());
     window.set_panel_description(panel_description(&machine::Glass::Dark).into());
     // §12.2's `Off`: nothing is executing and the glass is dark. Pushed rather than left to the
@@ -2545,6 +2584,78 @@ fn wire(
                 );
             }
             slint::CloseRequestResponse::HideWindow
+        });
+    }
+
+    // ── §13's Games page: point it at a shelf, and run what is on it ────────────────────────────
+    {
+        let settings = settings.clone();
+        let shell = shell.clone();
+        let titles = titles.clone();
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let work = work.clone();
+        let weak = window.as_weak();
+        window.on_games_choose(move || {
+            // A cancelled dialog is `None`, and a cancel is not a refusal — nothing is filed,
+            // nothing saved, nothing said. The same reading `Provide…` gives it.
+            let Some(chosen) = shell.pick(drops::Ask::Games) else {
+                return;
+            };
+            let outcome = drops::provide_games(&mut settings.borrow_mut(), &chosen);
+            match outcome {
+                Ok((_, said)) => {
+                    rail.borrow_mut().note(&format!("titles{said}"));
+                    if let Err(e) = settings.borrow().save() {
+                        rail.borrow_mut().note(&format!("the settings could not be written: {e}"));
+                    }
+                    let s = settings.borrow();
+                    refresh_titles(&titles, &s);
+                    if let Some(w) = weak.upgrade() {
+                        w.set_games_folder(
+                            s.games.as_ref().map(|p| p.display().to_string()).unwrap_or_default().into(),
+                        );
+                        // **Filing a note is not showing one**, and this is the line that was
+                        // missing: `Rail::note` writes into the model, and `sync_rail` is what puts
+                        // it on the screen. Every other callback in this file that notes calls it
+                        // on the next line; these two did not, so a person pressing `Provide…`
+                        // watched a folder be accepted in silence.
+                        sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+                    }
+                }
+                // A refusal names the folder and why it is not a shelf. It changed nothing, so
+                // there is nothing to save and nothing to refresh.
+                Err(why) => {
+                    rail.borrow_mut().note(&why);
+                    if let Some(w) = weak.upgrade() {
+                        sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+                    }
+                }
+            }
+        });
+    }
+    {
+        let titles = titles.clone();
+        let rail = rail.clone();
+        let rows = rows.clone();
+        let work = work.clone();
+        let weak = window.as_weak();
+        window.on_games_play(move |i| {
+            let Some(t) = titles.row_data(i as usize) else {
+                return;
+            };
+            // **Not wired to the bench yet, and it says so rather than doing nothing.** The
+            // machine this needs is `BootTarget::Game`, which `emu::build_game` already makes; what
+            // is missing is the frame pump in the window's own run loop. A row that silently did
+            // nothing would read as a broken title rather than an unfinished program.
+            rail.borrow_mut().note(&format!(
+                "{} is not runnable from this window yet — the machine builds, the frame pump does \
+                 not run here. `ipg-player {}` plays it now.",
+                t.name, t.path
+            ));
+            if let Some(w) = weak.upgrade() {
+                sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+            }
         });
     }
 
@@ -15894,7 +16005,7 @@ pub(crate) mod tests {
     /// forwarded down through `drawer.slint` into a page, bound to a `Text` — and never written.
     /// It draws. It draws the type's default: an empty string, a `false`, an empty model. So
     /// `ui/settings.slint` shipped three rows with **empty labels**, two of them disabled carrying
-    /// an **empty** `reason` — the construction `primitives.slint:455` declares against — and
+    /// an **empty** `reason` — the construction `primitives.slint:463` declares against — and
     /// `ui/parts.slint` shipped a header over blank space. Eighteen properties and six callbacks
     /// were in that state when this was written; a control that fires nothing is §19.1's first
     /// fatal finding, and a control that draws nothing is the same fault one layer quieter.
@@ -16354,6 +16465,116 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+
+    /// **§13's two controls, pressed, and each one's effect read back.**
+    ///
+    /// Written because `every_window_property_is_pushed_and_every_callback_registered` failed the
+    /// moment `games-choose` and `games-play` were declared: both were registered and neither was
+    /// pressed by anything, which is that test's own definition of a handler whose body could be
+    /// deleted with the suite staying green. The exemption list was not the fix — the whole point of
+    /// the sweep is that a `Provide…` nobody has ever pressed is indistinguishable from one that
+    /// does nothing.
+    ///
+    /// **And pressing them found a real defect**, which is the reason to write this rather than to
+    /// exempt: both callbacks filed their note with `Rail::note` and neither called [`sync_rail`],
+    /// so a person who pointed the window at a shelf watched it be accepted in silence. Every other
+    /// note-filing callback in `wire` syncs on the next line; these two did not. The two
+    /// `rail` assertions below are what hold that shut.
+    #[test]
+    fn the_games_page_takes_a_shelf_and_presses_a_title() {
+        let dir = temp_dir("games-shelf");
+        // Two titles, so the note is the plural one and the ordering is `titles_under`'s sort
+        // rather than the filesystem's. `Executables/<name>.bin` is the whole shape `title_exe`
+        // asks for — no manifest, so each falls back to its directory name.
+        let shelf = dir.join("shelf");
+        for t in ["Alpha", "Beta"] {
+            std::fs::create_dir_all(shelf.join(t).join("Executables")).unwrap();
+            std::fs::write(shelf.join(t).join("Executables").join("game.bin"), [0u8; 32]).unwrap();
+        }
+
+        let settings = Rc::new(RefCell::new(Settings::default()));
+        let w = a_window();
+        let shell = Rc::new(drops::Shell::answering([shelf.clone()]));
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), shell);
+
+        assert_eq!(w.get_titles().row_count(), 0, "titles were listed before a shelf was given");
+        assert!(w.get_games_folder().is_empty(), "a folder was named before one was chosen");
+        let before = w.get_rail().row_count();
+
+        w.invoke_games_choose();
+
+        // ── The library learned it, the page draws it, and the settings hold it ──────────────
+        assert_eq!(
+            settings.borrow().games.as_deref(),
+            Some(shelf.as_path()),
+            "the accepted shelf did not reach the model, so the next launch forgets it"
+        );
+        assert_eq!(
+            w.get_games_folder().to_string(),
+            shelf.display().to_string(),
+            "the page does not name the folder it is showing"
+        );
+        assert_eq!(w.get_titles().row_count(), 2, "both titles under the shelf were not listed");
+        let first = w.get_titles().row_data(0).expect("a first title");
+        assert_eq!(first.name.to_string(), "Alpha", "`titles_under` did not sort");
+        assert!(!first.path.to_string().is_empty(), "a row carries no path, so it cannot be played");
+
+        // **The note reached the screen**, which is the half that was missing.
+        let after = w.get_rail().row_count();
+        assert!(
+            after > before,
+            "`games-choose` filed a note and never synced it, so the shelf was accepted in silence"
+        );
+        let said = (0..after)
+            .filter_map(|i| w.get_rail().row_data(i))
+            .any(|r| r.what.contains("2 titles"));
+        assert!(said, "the note does not say what was found");
+
+        // ── §13's row action ────────────────────────────────────────────────────────────────
+        //
+        // Its effect today is a sentence: the machine `emu::build_game` makes has nowhere to run in
+        // this window yet, and the row says so rather than going dead. **When that lands, this
+        // assertion is the one that has to change** — which is the point of asserting on what the
+        // press produced rather than on the fact that it returned.
+        w.invoke_games_play(0);
+        let named = (0..w.get_rail().row_count())
+            .filter_map(|i| w.get_rail().row_data(i))
+            .any(|r| r.what.contains("Alpha"));
+        assert!(named, "pressing a title produced nothing a person could see");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A shelf with no titles in it is refused, by name, and changes nothing.**
+    ///
+    /// The other half of `provide_games`, and the control for the test above: without it, a
+    /// `provide_games` that accepted everything would pass every assertion there.
+    #[test]
+    fn a_folder_holding_no_titles_is_refused_and_the_library_is_untouched() {
+        let dir = temp_dir("games-empty");
+        let empty = dir.join("not-a-shelf");
+        std::fs::create_dir_all(&empty).unwrap();
+
+        let settings = Rc::new(RefCell::new(Settings::default()));
+        let w = a_window();
+        let shell = Rc::new(drops::Shell::answering([empty.clone()]));
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), shell);
+
+        w.invoke_games_choose();
+
+        assert!(
+            settings.borrow().games.is_none(),
+            "a folder with no titles in it was accepted as a shelf"
+        );
+        assert_eq!(w.get_titles().row_count(), 0, "titles were listed from a folder holding none");
+        let refused = (0..w.get_rail().row_count())
+            .filter_map(|i| w.get_rail().row_data(i))
+            .any(|r| r.what.contains("no titles in"));
+        assert!(refused, "the refusal was not shown, so the press looks like it did nothing");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// **§7.2's `Start` is reachable at last, and it is this page's own answer.**
     ///
     /// The button lives *inside* the row's `Expand`, whose `open: root.detail-of == i`
@@ -16362,7 +16583,7 @@ pub(crate) mod tests {
     /// five `Made of` lines were undrawn and so was the one control §7.2 puts on this page.
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
-    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:825` and
+    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:831` and
     /// `:858` read for the drawn iPod, and `machine-rule` was a literal `true`.
     #[test]
     fn the_devices_page_opens_a_row_and_reaches_its_start() {
@@ -16445,7 +16666,7 @@ pub(crate) mod tests {
     /// **§11.6's three rows say what they are and why two of them are disabled.**
     ///
     /// Nine `setting-*` properties had no setter, so the page drew three rows with **empty labels**,
-    /// two of them disabled carrying an **empty** `reason` — the construction `primitives.slint:455`
+    /// two of them disabled carrying an **empty** `reason` — the construction `primitives.slint:463`
     /// declares against — and one live toggle that wrote nothing and reflected nothing.
     #[test]
     fn the_settings_page_states_every_refusal_and_the_toggle_sticks() {
@@ -16463,7 +16684,7 @@ pub(crate) mod tests {
         assert!(!w.get_setting_copy_enabled());
         assert!(!w.get_setting_copy_reason().is_empty(), "`Copy path` is disabled and says nothing");
 
-        // The one live control. `drawer.slint:575` fires this ordinal as
+        // The one live control. `drawer.slint:588` fires this ordinal as
         // `root.setting-toggled(1)`; `Row::CheckUpdates` is 1.
         let before = settings.borrow().check_updates_on_start;
         assert_eq!(w.get_setting_check_updates(), before, "the box does not reflect the library");
@@ -17238,7 +17459,7 @@ pub(crate) mod tests {
     /// `Action::unwired` is asked of all six verbs whether or not a group offers them.
     ///
     /// **`consequence` is in it now, and it is the half that was missing.**
-    /// `primitives.slint:631` is `text: root.enabled ? root.consequence : root.reason` — one slot,
+    /// `primitives.slint:639` is `text: root.enabled ? root.consequence : root.reason` — one slot,
     /// two producers — and only one of them was ever measured. So `removal_consequence` shipped at
     /// **880 px** in a 324 px slot and `devices.png` drew *The entry goes. Its iPod A446, seed
     /// 6182160 and its drive …*, cut off before the clause that says nothing is deleted, which is

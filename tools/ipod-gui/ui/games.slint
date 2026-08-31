@@ -19,10 +19,20 @@
 // because there is no command that runs a title either.
 
 import { Ink, Metric } from "tokens.slint";
-import { DrawerHeader, Row, Scroll } from "primitives.slint";
+import { DrawerHeader, Row, Scroll, TitleRow } from "primitives.slint";
 
 export component GamesPage inherits Rectangle {
     callback back-pressed();
+    /// The titles found where [`Settings::games`] points, by name.
+    in property <[TitleRow]> titles;
+    /// Where that is, drawn on the row that changes it. Empty when nothing has been chosen.
+    in property <string> folder;
+    /// Ask for a folder of titles. §13's own words: a title is a thing that stands on the bench,
+    /// so this is how one gets onto it.
+    callback choose();
+    /// Run this title. The index is into `titles`, because a name is not a key: two shelves can
+    /// hold the same game.
+    callback play(int);
 
     background: Ink.bg;
     accessible-role: AccessibleRole.region;
@@ -55,15 +65,49 @@ export component GamesPage inherits Rectangle {
                 accessible-role: AccessibleRole.list;
                 accessible-label: "Games";
 
+                // Always first, and always enabled: a page whose only control is disabled when the
+                // list is empty is a page you cannot get out of. This is the way in.
                 Row {
                     index: 0;
-                    count: 1;
-                    label: "Titles";
+                    count: root.titles.length + 1;
+                    label: root.folder == "" ? "Choose where your titles are…" : "Titles are in";
+                    value: root.folder == "" ? "" : root.folder;
+                    // §6.2 gives paths, hashes, serials and addresses to `mono`.
+                    sub-mono: true;
+                    chevron: true;
+                    activated => {
+                        root.choose();
+                    }
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                // §9.1's empty state for this page, and it is a sentence rather than a blank list:
+                // an empty page and a page that has not been pointed anywhere look identical, and
+                // only one of them is the operator's to fix.
+                Row {
+                    index: 1;
+                    count: 2;
+                    visible: root.titles.length == 0;
+                    label: "No titles";
                     enabled: false;
-                    // §9.4's second kind: not finished, by us. No escape hatch, because no command
-                    // runs a title either — §9.4's rule is to name a real one or none.
                     machine-rule: false;
-                    reason: "0.6. bind_native() resolves a title's imports against RetailOS's eight frameworks today; the surface that runs one is not built. eapp-inspect reads a title's import table now.";
+                    reason: root.folder == ""
+                        ? "A title is a folder holding Executables/<name>.bin. Choose the one that holds yours, or the shelf they all sit in."
+                        : "Nothing in that folder holds Executables/<name>.bin, as itself or one level down.";
+                }
+
+                for t[i] in root.titles: Row {
+                    index: i + 1;
+                    count: root.titles.length + 1;
+                    label: t.name;
+                    sub: t.path;
+                    sub-mono: true;
+                    chevron: true;
+                    activated => {
+                        root.play(i);
+                    }
                     gained-focus => {
                         scroll.ensure-visible(self.absolute-position.y, self.height);
                     }

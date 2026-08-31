@@ -14,6 +14,7 @@ import { Geometry } from "@geometry";
 import {
     DetailRow,
     DeviceRow,
+    TitleRow,
     DrawerHeader,
     FieldRow,
     FixRow,
@@ -262,6 +263,10 @@ export component Drawer inherits Rectangle {
     // `selected` is two-way (`<=>`) all the way from `MainWindow`, so pressing a row here and
     // pressing `←`/`→` on the bench write one number — which is what makes
     // `the_devices_page_and_the_bench_read_one_model` mean anything.
+    in property <[TitleRow]> titles;
+    in property <string> games-folder;
+    callback games-choose();
+    callback games-play(int);
     in property <[DeviceRow]> devices;
     in-out property <int> selected: 0;
     in property <[DetailRow]> devices-detail;
@@ -495,8 +500,16 @@ export component Drawer inherits Rectangle {
                     width: 100%;
                     height: 100%;
                     visible: root.on-screen(2) && root.page == DrawerPage.games;
+                    titles: root.titles;
+                    folder: root.games-folder;
                     back-pressed => {
                         root.back();
+                    }
+                    choose => {
+                        root.games-choose();
+                    }
+                    play(i) => {
+                        root.games-play(i);
                     }
                 }
 

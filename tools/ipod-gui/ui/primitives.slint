@@ -199,6 +199,14 @@ export struct PartRow {
 // so it is a field of `DeviceRow` below, and `bench.slint` imports this file.
 export enum CradleRing { accent, dim, danger }
 
+export struct TitleRow {
+    // The title's own name, from its manifest. The directory is often an opaque id — 50513, 88888,
+    // 1500C — so a row named from the path shows a number nobody recognises.
+    name: string,
+    // Where it lives, for the fact line. §6.2 gives paths to `mono`.
+    path: string,
+}
+
 export struct DeviceRow {
     name: string,
     summary: string,

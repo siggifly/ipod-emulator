@@ -247,7 +247,7 @@ impl RowAction {
 /// **The eight properties an act needs are one field**, so they cannot disagree — `has-action`,
 /// `action`, `act-label`, `enabled`, `reason`, `escape-hatch`, `presses` and `consequence` are
 /// derived from this one `Option` and from the `FixRow` inside it. A row that is disabled therefore
-/// cannot lose its reason on the way across, which `primitives.slint:454` states as the
+/// cannot lose its reason on the way across, which `primitives.slint:462` states as the
 /// invariant: *non-empty whenever `!enabled`*.
 ///
 /// **`machine_rule` is the line's, and the `FixRow`'s copy of it is deliberately not read.**
@@ -2233,7 +2233,7 @@ mod tests {
     /// Every control this producer can emit, in every combination of build and phase it can be
     /// drawn in, and one rule over all of them.
     ///
-    /// `primitives.slint:455` declares a non-empty `reason` as the invariant on a disabled
+    /// `primitives.slint:463` declares a non-empty `reason` as the invariant on a disabled
     /// control, and the shipped Settings page draws three rows two of which are disabled with an
     /// **empty** reason. The sweep runs over both `Caps` arms because a rule checked in one is a
     /// rule checked where nothing is refused.
