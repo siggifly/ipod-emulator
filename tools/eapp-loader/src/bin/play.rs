@@ -1,6 +1,6 @@
 //! Run an iPod game in a window.
 //!
-//!   play <game.bin> [--gamedir=DIR] [--scale=N] [--fps=N]
+//!   play <game.bin> [--gamedir=DIR] [--scale=1|2|4|8] [--fps=N]
 //!
 //! Everything the offline `trace` tool established is wired up here: context arguments to the
 //! frame vectors, the manifest texture pre-load, the allocator, the clock, and file I/O. The
@@ -901,12 +901,23 @@ fn main() {
     }
     flush_call_log(&mut call_log, &m.trace, 0);
 
-    let scale = match opt("--scale=", 3) {
+    // **minifb scales by powers of two — there is no X3** (`Scale` is X1/X2/X4/X8/X16/X32), and
+    // the default used to be 3 with a `_ => Scale::X4` catch-all under it. So the DEFAULT silently
+    // opened at four times the panel: 1280x960 for a 320x240 screen, which on a laptop is a window
+    // the size of the display and reads as "it starts fullscreen". Asking for 3 got 4 as well.
+    //
+    // Refused rather than rounded, because this file already rejects an unknown flag instead of
+    // ignoring it, and a scale that is quietly upgraded is the same defect one layer down. The
+    // default is 2 — 640x480, a window rather than a takeover.
+    let scale = match opt("--scale=", 2) {
         1 => Scale::X1,
         2 => Scale::X2,
         4 => Scale::X4,
         8 => Scale::X8,
-        _ => Scale::X4,
+        n => {
+            eprintln!("--scale={n}: this window scales by 1, 2, 4 or 8 — there is no {n}x.");
+            std::process::exit(2);
+        }
     };
     // The game's real name, from its manifest. The directory it lives in is named by an opaque
     // id — 50513, 88888, 1500C — which is what a window titled from the path used to show.
