@@ -972,6 +972,27 @@ fn manifest_paths(path: &std::path::Path) -> Option<Vec<String>> {
     (!out.is_empty()).then_some(out)
 }
 
+/// What an entry-vector walk reports: which vector, where it was, and what it did.
+///
+/// `None` in the last slot means the vector was SKIPPED rather than run — which is not an absence
+/// of news, it is the news: `vectors[1]` is the terminate entry and skipping it is deliberate.
+pub type VectorRun = Vec<(usize, u32, Option<Stop>)>;
+
+/// What a running title needs on every frame, built once by [`Machine::start_title`].
+///
+/// Held together rather than as three locals because they are not independent: `ctx` is derived
+/// from `ctx_base`, and getting that relationship wrong is the defect `start_title` documents.
+#[derive(Clone, Debug)]
+pub struct TitleSession {
+    /// The eApp manager object. The frame vector's first argument, and the base every field the
+    /// pump fills is an offset from.
+    pub ctx_base: u32,
+    /// The argument list, exactly as Apple's pump builds it: `[ctx_base, ctx_base + 0x100, 0, 0]`.
+    pub ctx: Vec<u32>,
+    /// The entry that draws one frame — the last non-zero vector.
+    pub frame_vector: u32,
+}
+
 /// The two command-line facts [`Machine::install_game_stubs`] needs.
 ///
 /// A struct rather than two bools, because they are opposites of each other's default and a call
@@ -989,7 +1010,7 @@ pub struct GameStubs {
 
 /// **Measured per-title behaviour, and it belongs to the machine rather than to a front end.**
 ///
-/// This lived in `bin/play.rs` while `play` was the only thing that ran a title. The window runs
+/// This lived in the player while the player was the only thing that ran a title. The window runs
 /// one now, and a second copy of a table whose every row was measured is how the two come to
 /// disagree about what a title needs — the same reason `install_audit_stubs` is here rather than
 /// in the binary that first wrote it.
@@ -4270,7 +4291,7 @@ impl Machine {
     /// measure it. Everything the audit adds goes here instead.
 /// Wire a title's imports to this machine — the 60 entry points a game actually calls.
 ///
-/// **Lifted out of `bin/play.rs` so the window can run a title too.** Every one of these was
+/// **Lifted out of the player so the window can run a title too.** Every one of these was
 /// identified against Apple's own implementations, and several carry the symptom that found them:
 /// `glTexImage2D` is why the golf course rendered as a white field, `InputEvents #0` writes the
 /// event word to `[r1]` rather than `[r0+4]` and writing it to the wrong one meant Sims Bowling
@@ -4420,6 +4441,43 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
         async_files
     }
 
+    /// Prepare this machine to run a title, and hand back what a frame needs.
+    ///
+    /// **The two arguments the frame vector takes are ONE object and a pointer `0x100` into it.**
+    /// Apple's own pump says so at `0x0024dafc`:
+    ///
+    /// ```asm
+    /// 0024dafc  add r1, r4, #0x100   ; second argument
+    /// 0024db00  mov r0, r4           ; first argument = the eApp manager itself
+    /// 0024db08  bx  r5               ; r5 = [r4+0x260], the frame vector
+    /// ```
+    ///
+    /// Handing it two independent scratch buffers instead — the obvious reading of "two
+    /// arguments" — broke every field a title reaches through both, which is a corruption that
+    /// looks like a logic bug rather than a setup one. That is why this is a constructor and not a
+    /// note in a front end.
+    ///
+    /// `seed` is the reason byte the one-time init call sees. 5 is what the sweep was built on;
+    /// [`defaults_for`] carries the titles that need otherwise (Hold'em needs 0).
+    pub fn start_title(
+        &mut self,
+        vectors: &[u32],
+        seed: u8,
+        budget: usize,
+        call_terminate: bool,
+    ) -> (Option<TitleSession>, VectorRun) {
+        let ctx_base = self.scratch(0x400);
+        self.mem.poke8(ctx_base, seed);
+        let ctx = vec![ctx_base, ctx_base + 0x100, 0, 0];
+        let (frame_vector, ran) = self.enter_title(vectors, &ctx, budget, call_terminate);
+        let session = frame_vector.map(|frame_vector| TitleSession {
+            ctx_base,
+            ctx,
+            frame_vector,
+        });
+        (session, ran)
+    }
+
     /// Run a title's entry vectors and hand back the one that draws a frame.
     ///
     /// **`vectors[1]` is the TERMINATE entry, not a second init**, and calling it is not harmless.
@@ -4434,14 +4492,13 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
     ///
     /// Returns the frame vector and what each entry did, so a caller that reports its own setup can
     /// say so. `None` in the outcome slot means that entry was skipped rather than run.
-    #[allow(clippy::type_complexity)]
     pub fn enter_title(
         &mut self,
         vectors: &[u32],
         ctx: &[u32],
         budget: usize,
         call_terminate: bool,
-    ) -> (Option<u32>, Vec<(usize, u32, Option<Stop>)>) {
+    ) -> (Option<u32>, VectorRun) {
         /// The entry a title is shut down through, and the one an init walk must not call.
         const TERMINATE_VECTOR: usize = 1;
         let mut frame_vector = None;
@@ -13712,7 +13769,7 @@ mod peek_tests {
     /// neither says anything about interrupts.
     ///
     /// **How to make it go red**: drop `|| irq_wake` from the wake condition in `run`.
-    /// **The per-title table survived the move out of `bin/play.rs`.**
+    /// **The per-title table survived the move out of the player.**
     ///
     /// Every row of it was measured (§21.3 of the ABI notes) and it now has two consumers, so a
     /// silent change to it would be wrong in two places at once. These three rows are the ones

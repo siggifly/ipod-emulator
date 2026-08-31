@@ -587,7 +587,6 @@ fn main() {
     //   [ctx+0x00] = 5 or 4, a state byte
     //   [ctx+0x2c] = a query on the AsyncFileIO subsystem (0x001e3c14)
     //   [ctx+0x30] = [manager+0x26c]
-    let ctx_base = m.scratch(0x400);
     // The reason byte the one-time init call sees. 5 for everything the sweep was built on;
     // `--ctx-seed=` and the per-title default override it (Hold'em needs 0 — see `defaults_for`).
     let ctx_seed: u8 = args
@@ -595,8 +594,6 @@ fn main() {
         .find_map(|a| a.strip_prefix("--ctx-seed="))
         .and_then(|v| v.parse().ok())
         .unwrap_or(td.ctx_seed);
-    m.mem.poke8(ctx_base, ctx_seed);
-    let ctx = vec![ctx_base, ctx_base + 0x100, 0, 0];
 
     // Init vectors run once; the last non-zero vector is the per-frame callback.
     //
@@ -611,19 +608,28 @@ fn main() {
     //
     // `--call-terminate-vector` restores the old behaviour for comparison.
     let call_terminate = args.iter().any(|a| a == "--call-terminate-vector");
-    // The walk itself is the library's now, so the window starts a title the same way — including
-    // the part that matters, which is NOT calling vector[1].
-    let (frame_vector, ran) = m.enter_title(&app.vectors, &ctx, budget, call_terminate);
+    // The context and the walk are both the library's now, so the window starts a title the same
+    // way — including the two parts that are easy to get wrong by writing them twice: the argument
+    // pair is one object and a pointer into it, and vector[1] must not be called.
+    let (session, ran) = m.start_title(&app.vectors, ctx_seed, budget, call_terminate);
     for (i, v, stop) in ran {
         match stop {
             Some(s) => println!("vector[{i}] {v:#010x} -> {s:?}"),
             None => println!("vector[{i}] {v:#010x} -> skipped (terminate entry)"),
         }
     }
-    let Some(frame_vector) = frame_vector else {
+    let Some(session) = session else {
         eprintln!("no entry vector");
         std::process::exit(1);
     };
+    // Taken apart into the three names the rest of this file already uses. They come from ONE
+    // place now, which is the point: `ctx` is derived from `ctx_base` and rebuilding it by hand is
+    // the defect `start_title` exists to prevent.
+    let eapp_loader::TitleSession {
+        ctx_base,
+        ctx,
+        frame_vector,
+    } = session;
     // --call-log=FILE writes every framework call as one line, `FRAME Framework#ord r0 r1 r2 r3
     // sp0 sp1 sp2 sp3 from LR`, so a static recompilation of the same title can be diffed against
     // this emulator call for call (recomps/Mini Golf/tests/diff.sh). Calls made by the init

@@ -1,8 +1,8 @@
 [package]
-name = "ipod-play"
+name = "ipg-player"
 version.workspace = true
 edition = "2021"
-description = "Run one iPod title in a window, against the same machine the emulator uses"
+description = "Play one .ipg title in a window, against the same machine the emulator uses"
 
 # **The toolkit lives here, not in the model.** `minifb` was a feature of `eapp-loader`, which is
 # the machine — and a UI toolkit inside the model is what `AGENTS.md` §9 exists to prevent: the
@@ -13,6 +13,8 @@ eapp-loader = { path = "../eapp-loader" }
 arm7tdmi = { path = "../arm7tdmi" }
 minifb = "0.27"
 
+# Named for what it plays. A title ships as a `.ipg` archive, and `ipg-player` is the name
+# this project already used for it before there was a crate to put it in.
 [[bin]]
-name = "play"
+name = "ipg-player"
 path = "src/main.rs"

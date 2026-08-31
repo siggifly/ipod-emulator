@@ -14,7 +14,7 @@ members = [
     "tools/eapp-loader", # the machine: peripherals, the boot path, `trace` and `ipod-boot`
     "tools/eapp-inspect",# static inspection of eApp binaries
     "tools/ipod-gui",    # the window: a drawn iPod over the emulator
-    "tools/ipod-play",   # one title in a window — the model with a toolkit on top, never inside
+    "tools/ipg-player",  # one .ipg title in a window — the model with a toolkit on top, never inside
 ]
 
 # ONE version for the four crates, so a release cannot ship a window reporting 0.2.0 beside a
