@@ -974,3 +974,162 @@ fn every_navigable_drawer_page_has_a_body() {
         }
     }
 }
+
+/// **The CLI and the window cover the same ground, and where they do not it is written down.**
+///
+/// The operator's rule, in their own words: *"everything in cli and gui is same."* Not that the
+/// window replaces `ipod-boot` — they are peers — but that neither quietly grows a capability the
+/// other cannot reach. A window that can do fifteen of seventeen things is a window whose
+/// documentation is a lie by omission, and the two missing ones are found by a person who needed
+/// them.
+///
+/// **This reads `ipod-boot`'s own dispatch** rather than a list somebody typed, so a subcommand
+/// added tomorrow arrives here as a failure rather than as a silent gap. Each one is either given
+/// a named route in the window or entered below as a gap, with what it would take — the same shape
+/// `research/04`'s bypass ledger uses, and for the same reason: an unlisted absence is
+/// indistinguishable from an oversight.
+#[test]
+fn every_ipod_boot_capability_is_reachable_in_the_window_or_listed_as_a_gap() {
+    // ── The window's routes, by the capability each one covers ────────────────────────────────
+    //
+    // A route is a control a person can press, not a string naming a command. `install-linux`
+    // appears in this program four times and every one is an `escape-hatch` — the window telling
+    // you to go and use the terminal — which is exactly what this test counts as ABSENT.
+    const ROUTED: &[(&str, &str)] = &[
+        ("setup", "`Make me one`, and dropping a file on the window — the wizard it named is gone"),
+        ("make-nor", "`Make me one` synthesises one; the Composer's `Which iPod` picks or builds one"),
+        ("make-disk", "`Make me one` builds the drive from the firmware it fetched"),
+        ("firmware", "the fetch step inside `Make me one`, and Parts' own `Fetch…`"),
+        ("facts", "the iPod's expanded row — `Made of`, its identity, and `Show identity`"),
+        ("retail", "`Start` on an iPod, which is the default recipe"),
+        ("warm", "Developer's `Start as…`"),
+        ("flsh", "Developer's `Start as…`"),
+        ("rockbox", "`Start as…`, once Rockbox is on the drive"),
+        ("loader", "`Start as…`, once iPodLinux is on the drive"),
+        ("flash-update", "Developer's `Start as…`"),
+        ("from-idle", "`Start` resumes a parked machine — §12.4's restore point"),
+    ];
+
+    // ── What the window cannot do, and what it would take ─────────────────────────────────────
+    //
+    // Each entry is dated and names its own retirement condition. These four are one feature —
+    // putting software on a drive — and every one of them exists in `eapp_loader::install` with a
+    // CLI caller and no window caller at all.
+    const GAPS: &[(&str, &str)] = &[
+        ("rockbox-install",
+         "2026-09-01. `work::Want::Rockbox` already FETCHES it and files the pieces; nothing \
+          installs them onto a drive. Retired when the iPod's row has an `Install…` that calls \
+          `install::install_os` with the fetched bootloader and release."),
+        ("install-linux",
+         "2026-09-01. `work::Want::Loader` fetches ipodloader2; `install::install_linux` is \
+          written and has no window caller. Retired with the same `Install…` control."),
+        ("install-os",
+         "2026-09-01. `install::install_os` takes an `.ipod` image somebody built themselves. \
+          Retired when `Install…` offers `From a file…` and hands it the picker's answer."),
+        ("put-zip",
+         "2026-09-01. `install::put_zip` unpacks an archive into the drive's FAT32 volume. \
+          Retired when the iPod's row has `Add files…` and a drop onto a stopped iPod reaches it."),
+        ("put-files",
+         "2026-09-01. `install::put_files`, the same control as `put-zip` with a directory \
+          instead of an archive."),
+        ("open-drive",
+         "2026-09-01. `mount::available()` already answers whether this platform can, and \
+          `Next::Reveal` draws the machine rule where it cannot. Retired when the iPod's row has \
+          `Open the drive`, disabled while it runs with the sentence §11.5 already writes."),
+    ];
+
+    // ── What is the terminal's alone, on purpose ──────────────────────────────────────────────
+    //
+    // **Not gaps.** Parity means neither side quietly grows a capability the other cannot reach;
+    // it does not mean every developer instrument needs a button. These five are inspection and
+    // decompilation surfaces for somebody already reading a disassembly, and a window control for
+    // them would be chrome nobody presses.
+    //
+    // The line is *would a person who never opens a terminal ever want this*. `syscfg` prints a
+    // ROM's identity block, which AGENTS.md §2 keeps OUT of films precisely because it carries
+    // real serials — that one is deliberately not made easier to reach.
+    const CLI_ONLY: &[(&str, &str)] = &[
+        ("-h", "the help text; not a capability"),
+        ("ghidra", "the headless decompiler bridge — `tools/ghidra`, for static analysis"),
+        ("fat", "a FAT32 inspector for a drive image, used while debugging the volume builder"),
+        ("rsrc", "reads Apple's resource forks; an analysis tool"),
+        ("syscfg", "prints a ROM's identity block — real serials and GUIDs, which §2 keeps out \
+                    of anything this program renders"),
+    ];
+
+    let cli = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../eapp-loader/src/bin/ipod-boot.rs"
+    ))
+    .expect("ipod-boot.rs");
+
+    // Every `if name == "x"` and every recipe arm — the two shapes `main` dispatches with.
+    let mut found: Vec<String> = Vec::new();
+    for line in cli.lines().map(str::trim) {
+        if let Some(rest) = line.strip_prefix("if name == \"") {
+            if let Some(name) = rest.split('"').next() {
+                found.push(name.to_string());
+            }
+        }
+        // `"retail" | "retail-boot" => Recipe::Retail,` — the first spelling is the documented one.
+        if line.contains("=> Recipe::") {
+            if let Some(rest) = line.strip_prefix('"') {
+                if let Some(name) = rest.split('"').next() {
+                    found.push(name.to_string());
+                }
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+
+    // ── The control, before any verdict ───────────────────────────────────────────────────────
+    assert!(
+        found.len() >= 15,
+        "the dispatch sweep read {} subcommands, which is not this program: {found:?}",
+        found.len()
+    );
+    for must in ["make-nor", "make-disk", "retail", "put-files"] {
+        assert!(found.iter().any(|f| f == must), "the sweep missed `{must}`");
+    }
+
+    let known: Vec<&str> =
+        ROUTED.iter().chain(GAPS).chain(CLI_ONLY).map(|(n, _)| *n).collect();
+    let unaccounted: Vec<&String> = found.iter().filter(|f| !known.contains(&f.as_str())).collect();
+    assert!(
+        unaccounted.is_empty(),
+        "{unaccounted:?}: `ipod-boot` dispatches these and this file says nothing about them. \
+         Give each a route in the window and list it in ROUTED, or list it in GAPS with what it \
+         would take. An unlisted absence is indistinguishable from an oversight"
+    );
+
+    // Every gap carries a date and a retirement condition, so it cannot become a permanent excuse.
+    for (name, why) in GAPS {
+        assert!(
+            why.contains("2026-") && why.contains("Retired") || why.contains("same"),
+            "the gap for `{name}` carries no date or no retirement condition"
+        );
+    }
+
+    // And nothing is in two lists, which would be a capability that is routed and missing, or
+    // missing and deliberately absent, at the same time.
+    for (name, _) in GAPS {
+        assert!(
+            !ROUTED.iter().any(|(r, _)| r == name) && !CLI_ONLY.iter().any(|(c, _)| c == name),
+            "`{name}` is listed twice with different verdicts"
+        );
+    }
+    for (name, _) in CLI_ONLY {
+        assert!(
+            !ROUTED.iter().any(|(r, _)| r == name),
+            "`{name}` is both routed and terminal-only"
+        );
+    }
+    println!(
+        "  {} routed, {} gaps, {} terminal-only, of {} dispatched",
+        ROUTED.len(),
+        GAPS.len(),
+        CLI_ONLY.len(),
+        found.len()
+    );
+}
