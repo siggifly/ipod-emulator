@@ -61,18 +61,30 @@ impl Page {
             // The depth-1 slot's four children. `ui/drawer.slint` draws each of them at
             // `on-screen(2)`, which is that slot — the strip carries a blank at each end, so the
             // markup's `n` is one more than the depth.
-            // **Five now, and the Readout is the fifth.** Its `MenuPage` row was disabled with
-            // *Nothing draws the counters a running machine publishes* — a sentence naming its own
-            // retirement condition, met by §12.8's page.
-            Page::Devices | Page::Parts | Page::Work | Page::Settings | Page::Readout => Some(1),
+            // **Six now, and Games is the sixth.** Its `MenuPage` row was disabled with *Nothing
+            // files a .ipg title yet, and no command does it either* — a sentence naming its own
+            // retirement condition, met by §13's page: `GamesPage` files a shelf, lists what is on
+            // it, and starts a title on the bench.
+            //
+            // **This line is why enabling the row was not the fix.** `Stack::go` reads `slot()`
+            // first and clears the stack when it is `None`, so a press on an enabled `Games`
+            // landed straight back on the menu — the control was live, drew a chevron, and did
+            // nothing. Two independent statements of *this page does not exist*, in two files, and
+            // fixing the loud one made the quiet one the whole bug.
+            Page::Devices
+            | Page::Parts
+            | Page::Work
+            | Page::Settings
+            | Page::Readout
+            | Page::Games => Some(1),
             // §11.2's root, one level deeper than the Devices page it is entered from.
             Page::Composer => Some(2),
             // …and its three levels, one deeper again. Each `›` slides one level and comes straight
             // back; §4's three-level maximum is exactly reached here and nowhere else.
             Page::ComposerIpod | Page::ComposerRuns | Page::ComposerName => Some(3),
-            // Not built. Each of these has a `MenuPage` row that is disabled and names its escape
-            // hatch, which is where a person is told about them.
-            Page::Games | Page::Reference => None,
+            // Not built. Its `MenuPage` row is disabled and names its escape hatch, which is where
+            // a person is told about it.
+            Page::Reference => None,
         }
     }
 }
@@ -536,13 +548,20 @@ mod tests {
     /// limits have no page yet."* Every other unbuilt page in this program is unreachable and says
     /// why; that was the one hole in the policy.
     ///
-    /// **Devices, Parts, Settings and the Readout came off this list**, and that is four
-    /// deliberate lines rather than a slip: `ui/drawer.slint`'s depth-1 slot draws each of them
-    /// now. The list shrinks as pages land, one row at a time, exactly as `Page::slot`'s own doc
-    /// says — and Games and Reference are what is left.
+    /// **Devices, Parts, Settings, the Readout and now Games came off this list**, and that is
+    /// five deliberate lines rather than a slip: `ui/drawer.slint`'s depth-1 slot draws each of
+    /// them now. The list shrinks as pages land, one row at a time, exactly as `Page::slot`'s own
+    /// doc says — and `Reference` is what is left.
+    ///
+    /// **Games leaving this list is the second half of a fix whose first half was not enough.**
+    /// Its `MenuPage` row had been disabled over a working page; enabling it produced a control
+    /// that drew a chevron and did nothing, because this list is a second, quieter statement of
+    /// *nothing draws it* and `Stack::go` reads this one. A page needs both to be reachable, and
+    /// nothing checked that the two agreed — `every_built_page_is_reachable_from_its_row` does
+    /// now.
     #[test]
     fn a_page_nothing_draws_lands_on_the_menu() {
-        for p in [Page::Games, Page::Reference] {
+        for p in [Page::Reference] {
             assert_eq!(p.slot(), None, "{p:?} claims a depth slot; which child draws it?");
             for depth in 0..=4 {
                 let mut s = Stack::new();

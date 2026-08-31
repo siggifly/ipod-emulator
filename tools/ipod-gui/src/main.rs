@@ -13584,6 +13584,125 @@ pub(crate) mod tests {
         );
     }
 
+    /// **Pressing `Games` lands on the Games page, driven through the window.**
+    ///
+    /// The behavioural half. The two gates beside this one read files and agree with each other;
+    /// this one takes a press and reads where the drawer ended up, which is the only thing the
+    /// operator was ever able to check — and the only check that failed for them twice.
+    ///
+    /// Every depth-1 page is driven, not just Games: the defect was never about Games in
+    /// particular, it was about a page landing with one of its two "this exists" statements left
+    /// behind, and any of these can acquire that.
+    #[test]
+    fn pressing_a_menu_row_lands_on_the_page_it_names() {
+        let dir = temp_dir("menu-lands");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d);
+        let settings = Rc::new(RefCell::new(s));
+        let w = a_window();
+        let _wiring = wire(&w, settings, args::Machine::default(), Rc::new(drops::Shell::Native));
+
+        for page in [
+            DrawerPage::Devices,
+            DrawerPage::Parts,
+            DrawerPage::Games,
+            DrawerPage::Work,
+            DrawerPage::Readout,
+            DrawerPage::Settings,
+        ] {
+            // Back to the menu first, so a page that fails to open cannot pass by leaving the
+            // previous one on screen — which is exactly what landing-on-the-menu looks like from
+            // the next row's point of view.
+            w.invoke_open_page(DrawerPage::None, 0);
+            w.invoke_open_page(page, 1);
+            assert!(w.get_drawer_open(), "{page:?} did not even open the drawer");
+            assert_eq!(
+                w.get_drawer_page(),
+                page,
+                "pressing {page:?} left the drawer showing {:?}. `Stack::go` clears the stack when \
+                 `nav::Page::slot` answers `None`, so a row that is drawn live over a page with no \
+                 slot takes the press and lands back on the menu",
+                w.get_drawer_page()
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A page the markup draws must have a nav slot, and one with a slot must be drawn.**
+    ///
+    /// The gate that would have caught the whole of the `Games` bug, and the reason it is separate
+    /// from `every_drawer_row_that_names_a_page_can_open_it`: *"this page does not exist"* was
+    /// stated **twice, in two files**, and nothing checked the two agreed.
+    ///
+    ///   * `ui/drawer.slint` said it by drawing the row `enabled: false` with a reason.
+    ///   * `nav.rs` said it by answering `None` from [`nav::Page::slot`].
+    ///
+    /// Both were written when §13 was a project state and both outlived it. Fixing only the loud
+    /// one — the row a person can see — made the quiet one the entire bug: the control drew a
+    /// chevron, took a press, and `Stack::go` cleared the stack and landed back on the menu,
+    /// because `go` reads `slot()` before anything else. **A control that is live and does nothing
+    /// is worse than one that refuses**, and it is what shipped between one commit and the next.
+    ///
+    /// So this asserts the agreement rather than either side: every `<Name>Page` composed into the
+    /// drawer has a slot, and every page with a depth-1 slot has a body to draw. Neither half is
+    /// checkable from inside one file, which is why nothing was checking it.
+    #[test]
+    fn every_built_page_is_reachable_from_its_row() {
+        let drawer = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/ui/drawer.slint"
+        ))
+        .expect("ui/drawer.slint");
+
+        // The pages the drawer actually composes, by the `DrawerPage` each one gates on. Read from
+        // the `visible:` line rather than the component name, because that is the binding that
+        // decides whether it is ever on screen — a `GamesPage` composed and gated on the wrong
+        // page would pass a name check and draw nothing.
+        let drawn = |page: &str| drawer.contains(&format!("root.page == DrawerPage.{page}"));
+
+        // Every page in the enum, paired with the markup name it gates on. Exhaustive by hand
+        // because `DrawerPage` is generated and cannot be iterated; `from_markup`'s own match is
+        // the compile-time guard that this list is not missing a variant.
+        let all = [
+            ("devices", DrawerPage::Devices),
+            ("parts", DrawerPage::Parts),
+            ("games", DrawerPage::Games),
+            ("work", DrawerPage::Work),
+            ("readout", DrawerPage::Readout),
+            ("settings", DrawerPage::Settings),
+            ("reference", DrawerPage::Reference),
+        ];
+
+        // ── The control, before any verdict ──────────────────────────────────────────────────
+        assert!(
+            drawn("devices") && !drawn("nowhere"),
+            "the markup matcher answers the same for a page that is drawn and one that is not"
+        );
+
+        let mut disagree: Vec<String> = Vec::new();
+        for (name, page) in all {
+            let has_body = drawn(name);
+            let has_slot = from_markup(page).slot().is_some();
+            if has_body && !has_slot {
+                disagree.push(format!(
+                    "`{name}` is composed into the drawer and `Page::slot` answers `None`, so \
+                     pressing its row clears the stack and lands on the menu"
+                ));
+            }
+            if has_slot && !has_body {
+                disagree.push(format!(
+                    "`{name}` has a depth slot and nothing in the drawer draws it, so arriving \
+                     there is a blank panel with no header and no way out but `Esc`"
+                ));
+            }
+        }
+        assert!(
+            disagree.is_empty(),
+            "the markup and `nav::Page::slot` disagree about which pages exist:\n  {}",
+            disagree.join("\n  ")
+        );
+    }
+
     /// **A row in the drawer's own menu that names a page which EXISTS must be able to open it.**
     ///
     /// Written because the `Games` row shipped disabled for the whole life of the feature it named.
