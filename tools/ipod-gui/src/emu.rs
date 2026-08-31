@@ -3202,6 +3202,44 @@ mod tests {
     /// error text is a witness for which branch ran, and it needs no gitignored resource to be one.
     ///
     /// **How to make it go red**: delete the `if let BootTarget::Game` early return from `build`.
+    /// **A real title builds into a real machine** — the four pieces, together, once.
+    ///
+    /// `build_game` reads the image, `EApp::parse` accepts it, `install_game_stubs` traps its
+    /// imports, and `preload_textures` finds its `.pix` files beside it. Each is checked on its own
+    /// elsewhere; this is the one that fails if they stop composing.
+    ///
+    /// Skips when the corpus is not here, the way `nor.rs`'s dump tests do — the titles are
+    /// gitignored, and a test that silently passed without them would be worth nothing. It asserts
+    /// the SHAPE rather than any pixel: a panel allocated at full size, and the resource directory
+    /// pointed where the `.pix` files and `Manifest.plist` actually live.
+    #[test]
+    fn a_real_title_builds_into_a_real_machine() {
+        let dir = std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../resources/games/plaintext/Cracked Games/Mini Golf"
+        ));
+        let Ok(entries) = std::fs::read_dir(dir.join("Executables")) else {
+            println!("SKIPPED: {} is not here (gitignored)", dir.display());
+            return;
+        };
+        let Some(exe) = entries
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "bin"))
+        else {
+            println!("SKIPPED: no .bin under {}", dir.display());
+            return;
+        };
+
+        let m = build_game(&exe, &dir).expect("a title that is here builds");
+        assert_eq!(m.framebuffer.len(), FB_W * FB_H * 3, "the panel is allocated");
+        assert_eq!(
+            m.game_dir.as_deref(),
+            Some(dir.as_path()),
+            "the resource directory is where the .pix files and Manifest.plist live"
+        );
+    }
+
     /// **The two panels are the same size, and the copy that joins them must not be hiding it.**
     ///
     /// A boot's frame arrives through `read_framebuffer`, which expands the co-processor's RGB565
