@@ -206,6 +206,14 @@ pub enum Ask {
     /// §9.3's `Provide a file…`, which hangs off a **failure** and so knows no group. What arrives
     /// is filed by its contents.
     Any,
+    /// §13's Games page: where titles are kept.
+    ///
+    /// **The only ask that wants a FOLDER**, and the reason is the layout rather than a preference:
+    /// a title is a directory — `<Title>/Executables/<name>.bin` with its textures and manifest
+    /// beside it — so there is no single file to point at. `titles_under` then accepts one title or
+    /// a shelf of them, which is why one ask covers both.
+    #[allow(dead_code)]  // retired when: §13's Games page draws the row that asks this
+    Games,
 }
 
 impl Ask {
@@ -216,6 +224,7 @@ impl Ask {
             Ask::Part(Group::Ipods) => "Add a boot ROM dump".into(),
             Ask::Part(g) => format!("Provide {}", g.heading().to_lowercase()),
             Ask::Any => "Provide a file".into(),
+            Ask::Games => "Choose where your titles are".into(),
         }
     }
 }
@@ -292,7 +301,14 @@ impl Shell {
 /// It is separated from [`Shell::pick`] so that everything above and below it is testable and this
 /// is not: there is no logic here to get wrong, which is the point of keeping it this thin.
 fn ask_native(ask: Ask) -> Option<PathBuf> {
-    rfd::FileDialog::new().set_title(ask.title()).pick_file()
+    let d = rfd::FileDialog::new().set_title(ask.title());
+    // A title is a directory, so this is the one ask that opens a folder chooser. Asking for a file
+    // and then walking up to its parent would work on `<Title>/Executables/x.bin` and silently do
+    // the wrong thing on anything else somebody happened to click.
+    match ask {
+        Ask::Games => d.pick_folder(),
+        _ => d.pick_file(),
+    }
 }
 
 // ── Filing, which is what both routes end in ─────────────────────────────────────────────────────
@@ -348,6 +364,46 @@ fn suggest(p: &Path) -> String {
 /// the next boot.
 ///
 /// **Nothing is copied.** `file_away` and `file_disk` record the path; §11.4's `used by N` is the
+/// File a folder of titles, from the picker or from a drop.
+///
+/// **The refusal is the useful half.** A folder with no title in it is the likely mistake — the
+/// `Executables` directory itself, or a parent one level too high — and both look right to a person
+/// standing in a file browser. So this counts what it found and says so, and files nothing when the
+/// answer is none: a setting pointing at an empty shelf is a Games page that is silently empty for
+/// a reason nobody can see.
+///
+/// Accepts a single title as readily as a shelf, because `titles_under` does.
+#[allow(dead_code)]  // retired when: §13's Games page has a row that files a shelf — the picker
+                     // (`Ask::Games`) and the drop route both end here, and neither is drawn yet
+pub fn provide_games(s: &mut Settings, p: &Path) -> Result<(Wrote, String), String> {
+    let meta = std::fs::metadata(p).map_err(|e| format!("{}: {e}", p.display()))?;
+    if !meta.is_dir() {
+        return Err(format!(
+            "{} is a file. A title is a folder — `<Title>/Executables/<name>.bin` with its \
+             textures and manifest beside it — so point at the folder, or at the one holding \
+             several.",
+            p.display()
+        ));
+    }
+    let found = eapp_loader::titles_under(p);
+    if found.is_empty() {
+        return Err(format!(
+            "no titles in {}. A title is a folder holding `Executables/<name>.bin`; this has \
+             none, one level down or as itself.",
+            p.display()
+        ));
+    }
+    s.games = Some(p.to_path_buf());
+    let said = match found.len() {
+        1 => format!(" — {}", found[0].0),
+        n => format!(" — {n} titles"),
+    };
+    // `Library`, so `main.rs` saves. A refusal above mutates nothing and never reaches here, which
+    // is the contract `Wrote` exists for: a save on a callback that changed nothing is somebody's
+    // settings file rewritten, comments and all, for no reason.
+    Ok((Wrote::Library, said))
+}
+
 /// reference-not-copy property, and `Remove` never deletes the file behind a part.
 pub fn provide(s: &mut Settings, g: Group, p: &Path) -> Result<(Wrote, String), String> {
     let meta = std::fs::metadata(p).map_err(|e| format!("{}: {e}", p.display()))?;
@@ -839,6 +895,57 @@ fn device_name(s: &Settings, src: &nor::Source, p: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// **Filing a shelf of titles, and both ways it goes wrong.**
+    ///
+    /// The refusals are the point. A folder with no title in it is the likely mistake — the
+    /// `Executables` directory itself, or a parent one level too high — and both look right to a
+    /// person standing in a file browser. A setting pointed at an empty shelf gives a Games page
+    /// that is silently empty for a reason nobody can see, so nothing is filed unless a title was
+    /// actually found.
+    ///
+    /// Skips without the corpus, and says so.
+    #[test]
+    fn a_shelf_of_titles_files_and_an_empty_folder_refuses() {
+        let shelf = std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../resources/games/plaintext/Cracked Games"
+        ));
+        if !shelf.is_dir() {
+            println!("SKIPPED: {} is not here (gitignored)", shelf.display());
+            return;
+        }
+
+        let mut s = Settings::default();
+        let (wrote, said) = provide_games(&mut s, &shelf).expect("a shelf of titles files");
+        assert_eq!(wrote, Wrote::Library, "the settings moved, so main.rs saves");
+        assert_eq!(s.games.as_deref(), Some(shelf.as_path()));
+        assert!(said.contains("20 titles"), "it says how many it found: {said:?}");
+
+        // One title files as itself and is named, not counted.
+        let one = eapp_loader::titles_under(&shelf)[0].1.clone();
+        let mut s1 = Settings::default();
+        let (_, said1) = provide_games(&mut s1, &one).expect("one title files");
+        assert!(!said1.contains("titles"), "a single title is named: {said1:?}");
+
+        // A folder with nothing in it refuses AND leaves the setting alone.
+        let empty = std::env::temp_dir().join(format!("ipod-games-empty-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&empty);
+        let mut s2 = Settings {
+            games: Some(shelf.clone()),
+            ..Default::default()
+        };
+        let err = provide_games(&mut s2, &empty).expect_err("an empty folder is not a shelf");
+        assert!(err.contains("no titles"), "{err}");
+        assert_eq!(s2.games.as_deref(), Some(shelf.as_path()), "a refusal changes nothing");
+        let _ = std::fs::remove_dir_all(&empty);
+
+        // A file is refused with the reason, because a title is a directory.
+        let exe = eapp_loader::title_exe(&one).expect("the title has an executable");
+        let err = provide_games(&mut Settings::default(), &exe).expect_err("a file is not a folder");
+        assert!(err.contains("is a file"), "{err}");
+    }
+
     use super::*;
 
     /// A file of exactly `len` bytes whose first four are `head`, in a directory of this test's own.
