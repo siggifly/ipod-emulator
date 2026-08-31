@@ -423,6 +423,45 @@ fn made_of(
     // §9.4's machine rule, one per part that has gone, worded by the function the cradle and the
     // Rail both call. A one-element slice, so each line names one part — `gone_sentence` joins a
     // pair with `and`, which is right for the cradle's single row and wrong for a list.
+    // **What a generated ROM cannot do — and it is two modes, not the operating system.**
+    //
+    // The distinction is easy to get backwards, so it is measured three ways (2026-09-01):
+    //
+    //   `ipod-boot facts` on a generated ROM      -> `Images  logo`
+    //   `ipod-boot facts` on an IPSW-built drive  -> `Firmware images  osos, rsrc, aupd`
+    //   `ipod-boot flsh`'s own help               -> `IMG=diag|disk|logo|vmcs`, out of the NOR
+    //
+    // **`osos` is on the DRIVE and comes out of Apple's IPSW**, which is why RetailOS boots
+    // perfectly well on a generated ROM, and why Rockbox and iPodLinux do once installed. None of
+    // that needs a dump.
+    //
+    // What a dump carries and no seed or IPSW produces is `diag` and `disk`: Apple shipped
+    // Diagnostics and Disk Mode in the part rather than in the firmware download. So this is a
+    // limit on two MODES, and saying which is the difference between a useful sentence and one
+    // that reads as *your iPod is fake*.
+    //
+    // **A fact, not a `device_rule`.** The first draft used one, and `device_rule` is how a part
+    // that has LEFT the library is worded — so `a_part_that_has_left_is_named_in_the_body` saw its
+    // fixture as already broken and said the test was measuring nothing.
+    //
+    // **Always drawn, both ways.** The first draft appeared only on a generated ROM, which made
+    // the fact list six rows on one iPod and five on another — §16.3's anti-shuffle argument, and
+    // `every_device_draws_all_five_facts` said so. A row that is present either way is also the
+    // better reading: *what can this one boot* is a question about every iPod, not a warning
+    // attached to some.
+    //
+    // Worded from the SOURCE KIND rather than by opening the file. `made_of` is rebuilt on every
+    // push, and reading a megabyte off disk to name two modes would put I/O on the draw path.
+    out.push(device_fact(
+        "Modes",
+        match s.nor_of(d) {
+            Some(eapp_loader::nor::Source::Synthetic { .. }) => {
+                "everything on its drive; Diagnostics and Disk Mode need a real dump".into()
+            }
+            _ => "everything on its drive, and the modes its own ROM carries".into(),
+        },
+    ));
+
     for a in &s.missing_with(d, seen) {
         out.push(device_rule(crate::gone_sentence(d, std::slice::from_ref(a))));
     }
@@ -1079,7 +1118,7 @@ mod tests {
     /// device in the fixture has no drive at all, and its body is the same five rows as the
     /// finished one's with different words in them.
     #[test]
-    fn every_device_draws_all_five_facts_including_the_one_that_is_half_made() {
+    fn every_device_draws_all_six_facts_including_the_one_that_is_half_made() {
         let dir = scratch("five");
         let s = library(&dir);
         let mut p = Devices::new();
@@ -1094,7 +1133,7 @@ mod tests {
                 .collect();
             assert_eq!(
                 labels,
-                ["iPod", "Drive", "Built from", "Installed", "Writes to"],
+                ["iPod", "Drive", "Built from", "Installed", "Writes to", "Modes"],
                 "device {i} draws a different set of facts"
             );
             for d in &v.detail {
