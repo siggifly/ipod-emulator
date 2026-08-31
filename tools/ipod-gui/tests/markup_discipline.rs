@@ -472,7 +472,7 @@ fn every_drawer_page_is_hidden_by_visible_and_never_by_if() {
 #[test]
 fn no_menu_row_states_a_gap_that_has_been_closed() {
     let lines = code(&ui("drawer.slint"));
-    for label in ["Devices", "Parts", "Settings"] {
+    for label in ["iPods", "Parts", "Settings"] {
         let at = lines
             .iter()
             .position(|l| l == &format!("label: \"{label}\";"))
@@ -555,7 +555,7 @@ fn every_composer_sentence_comes_from_the_model_or_composer_rs() {
         "",
         " ",
         ", ",
-        "Devices",
+        "iPods",
         "Which iPod",
         "What it runs",
         "Name it",
@@ -568,6 +568,10 @@ fn every_composer_sentence_comes_from_the_model_or_composer_rs() {
         "Settings",
         "Theme",
         "Check for updates on launch",
+        // A row label, like the two above it. The SENTENCE under it — what the switch reveals —
+        // is `settings_page::DEVELOPER_SHOWS` and reaches the markup through `developer-shows`,
+        // which is this rule working: the label is furniture, the claim is the model's.
+        "Developer",
         "Settings file",
         "Start",
     ];

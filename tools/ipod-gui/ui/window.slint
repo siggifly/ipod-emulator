@@ -97,6 +97,9 @@ export component MainWindow inherits Window {
     callback games-choose();
     callback games-play(int);
     in property <[DeviceRow]> devices;
+    /// `Settings::developer` — the switch that reveals Parts, the Readout and Work.
+    in property <bool> developer;
+    in property <string> setting-developer-shows;
     // §9.1: an empty library is a state with something to say, not an absent one. The sentence is
     // the model's — pushed as a whole row from `main.rs` — rather than a struct literal written
     // here, which is how the previous revision came to invent `chassis: #e4e4e2` in markup.
@@ -967,6 +970,8 @@ export component MainWindow inherits Window {
 
                 titles: root.titles;
                 games-folder: root.games-folder;
+                developer: root.developer;
+                setting-developer-shows: root.setting-developer-shows;
                 games-folder-gone: root.games-folder-gone;
                 games-choose => {
                     root.games-choose();

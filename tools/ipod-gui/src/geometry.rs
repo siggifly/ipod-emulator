@@ -2732,12 +2732,18 @@ mod tests {
     #[test]
     fn the_drawers_root_page_needs_more_room_than_it_has_and_therefore_scrolls() {
         let text = read("drawer.slint");
-        let rows = text.matches("count: 7;").count();
+        // **Seven rows, of which four are hidden unless `Settings::developer` is on** — so the
+        // count is a conditional now rather than a literal, and this measures the page at its
+        // LARGEST. That is the state the claim is about: three rows fit comfortably, and the
+        // question this test asks is whether the page can outgrow the drawer at all.
+        let rows = text.matches("count: root.developer ? 7 : 3;").count();
         assert_eq!(rows, 7, "`MenuPage` no longer declares seven rows of seven: {rows}");
         let disabled = text.matches("enabled: false;").count();
-        // **One, and it was two, and three, and before that six.** Devices, Parts, Settings, the
-        // Readout and now Games became live as `ui/drawer.slint` gained a child for each;
-        // `Reference` is the only row left with no page behind it.
+        // **One, and it was two, and three, and before that six.** iPods, Parts, Settings, the
+        // Readout and Games became live as `ui/drawer.slint` gained a child for each;
+        // `Reference` is the only row left with no page behind it, and it is now behind the
+        // developer switch as well, because a row that says *not built* is noise to somebody who
+        // came here to run a game.
         //
         // **Games was the slow one, and not because the page was slow to arrive.** The page had
         // been composed into this drawer, with its callbacks registered and pressed by tests, for

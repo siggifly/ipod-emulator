@@ -81,6 +81,10 @@ export component MenuPage inherits Rectangle {
     /// model itself: `MenuPage` draws a number and has no use for the rows, and handing it the
     /// model would make every title's name a dependency of the root menu.
     in property <int> title-count;
+    /// How many iPods are in the library, for the `iPods` row's badge.
+    in property <int> device-count;
+    /// §Settings' developer switch. Off, this menu is three rows.
+    in property <bool> developer;
 
     callback close();
     callback go(DrawerPage, int);
@@ -118,117 +122,139 @@ export component MenuPage inherits Rectangle {
             preferred-height: 0px;
             viewport-height: rows.preferred-height;
 
-            rows := VerticalLayout {
-                width: scroll.width;
-                alignment: start;
-                spacing: 0px;
-                accessible-role: AccessibleRole.list;
-                accessible-label: "Menu";
+                rows := VerticalLayout {
+                    width: scroll.width;
+                    alignment: start;
+                    spacing: 0px;
+                    accessible-role: AccessibleRole.list;
+                    accessible-label: "Menu";
 
-                Row {
-                    index: 0;
-                    count: 7;
-                    label: "Devices";
-                    chevron: true;
-                    activated => {
-                        root.go(DrawerPage.devices, 1);
+                    // ── Three rows, and that is the whole menu ──────────────────────────────
+                    //
+                    // **The window's first job is to be an iPod.** Version 0.4 said so in its own
+                    // source — *"user mode is the iPod and nothing else… what somebody who just
+                    // cloned this should meet"* — and this menu had grown to seven permanent
+                    // destinations, four of which are instruments. A person who wants to run a
+                    // game met a parts library, a job inbox and a counter readout on the way.
+                    //
+                    // Nothing moved out of reach. Parts' job — repairing a device that is missing
+                    // a file — belongs on that device, where the problem is; the Work rail's job
+                    // is progress, which belongs on the thing being built. What is hidden here is
+                    // the DESTINATION, and only for the audience that does not want it.
+                    Row {
+                        index: 0;
+                        count: root.developer ? 7 : 3;
+                        label: "iPods";
+                        value: root.device-count > 0 ? "\{root.device-count}" : "";
+                        chevron: true;
+                        activated => {
+                            root.go(DrawerPage.devices, 1);
+                        }
+                        gained-focus => {
+                            scroll.ensure-visible(self.absolute-position.y, self.height);
+                        }
                     }
-                    gained-focus => {
-                        scroll.ensure-visible(self.absolute-position.y, self.height);
+
+                    Row {
+                        index: 1;
+                        count: root.developer ? 7 : 3;
+                        label: "Games";
+                        value: root.title-count > 0 ? "\{root.title-count}" : "";
+                        chevron: true;
+                        activated => {
+                            root.go(DrawerPage.games, 1);
+                        }
+                        gained-focus => {
+                            scroll.ensure-visible(self.absolute-position.y, self.height);
+                        }
+                    }
+
+                    Row {
+                        index: 2;
+                        count: root.developer ? 7 : 3;
+                        label: "Settings";
+                        chevron: true;
+                        activated => {
+                            root.go(DrawerPage.settings, 1);
+                        }
+                        gained-focus => {
+                            scroll.ensure-visible(self.absolute-position.y, self.height);
+                        }
+                    }
+
+                    // ── The instruments, when asked for ────────────────────────────────────
+                    //
+                    // `Settings::developer`, a stored switch rather than a launch flag: a flag is
+                    // invisible to somebody who already has the window open and does not survive
+                    // it. Everything below is a page for the third audience — firmware work — and
+                    // each one is a view, never the only route to a capability.
+                    Rectangle {
+                        visible: root.developer;
+                        height: root.developer ? 1px : 0px;
+                        background: Ink.line;
+                    }
+
+                    Row {
+                        index: 3;
+                        count: root.developer ? 7 : 3;
+                        label: "Parts";
+                        visible: root.developer;
+                        chevron: true;
+                        activated => {
+                            root.go(DrawerPage.parts, 1);
+                        }
+                        gained-focus => {
+                            scroll.ensure-visible(self.absolute-position.y, self.height);
+                        }
+                    }
+
+                    Row {
+                        index: 4;
+                        count: root.developer ? 7 : 3;
+                        label: "Readout";
+                        visible: root.developer;
+                        chevron: true;
+                        activated => {
+                            root.go(DrawerPage.readout, 1);
+                        }
+                        gained-focus => {
+                            scroll.ensure-visible(self.absolute-position.y, self.height);
+                        }
+                    }
+
+                    Row {
+                        index: 5;
+                        count: root.developer ? 7 : 3;
+                        label: "Work";
+                        visible: root.developer;
+                        value: root.failures > 0 ? "\{root.failures}" : "";
+                        warn: root.failures > 0;
+                        chevron: true;
+                        activated => {
+                            root.go(DrawerPage.work, 1);
+                        }
+                        gained-focus => {
+                            scroll.ensure-visible(self.absolute-position.y, self.height);
+                        }
+                    }
+
+                    // The one row with nothing behind it. `ReferencePage` exists in no markup
+                    // file, so its refusal is true — which is what
+                    // `every_drawer_row_that_names_a_page_can_open_it` checks, and what the Games
+                    // row's refusal had stopped being.
+                    Row {
+                        index: 6;
+                        count: root.developer ? 7 : 3;
+                        visible: root.developer;
+                        label: "Reference";
+                        enabled: false;
+                        machine-rule: false;
+                        reason: "The keyboard table and the stated limits have no page yet.";
+                        gained-focus => {
+                            scroll.ensure-visible(self.absolute-position.y, self.height);
+                        }
                     }
                 }
-
-                Row {
-                    index: 1;
-                    count: 7;
-                    label: "Parts";
-                    chevron: true;
-                    activated => {
-                        root.go(DrawerPage.parts, 1);
-                    }
-                    gained-focus => {
-                        scroll.ensure-visible(self.absolute-position.y, self.height);
-                    }
-                }
-
-                // **This row was disabled with a reason that had stopped being true.** Its sentence —
-                // *"Nothing files a .ipg title yet, and no command does it either"* — was written when
-                // §13 was a project state, and it outlived that by a whole page: `games-choose` files a
-                // shelf, `games-play` starts a title on the bench, and both are pressed by tests. The
-                // page was reachable from the menu strip and from nowhere else, so the drawer's own
-                // menu named a thing it would not open, and the one surface a person actually uses to
-                // find it said the feature did not exist.
-                //
-                // **A refusal is a claim about the program and it goes stale exactly like a line
-                // citation does.** `every_drawer_row_that_names_a_page_can_open_it` is what stops the
-                // next one lasting this long.
-                Row {
-                    index: 2;
-                    count: 7;
-                    label: "Games";
-                    value: root.title-count > 0 ? "\{root.title-count}" : "";
-                    chevron: true;
-                    activated => {
-                        root.go(DrawerPage.games, 1);
-                    }
-                    gained-focus => {
-                        scroll.ensure-visible(self.absolute-position.y, self.height);
-                    }
-                }
-
-                Row {
-                    index: 3;
-                    count: 7;
-                    label: "Work";
-                    value: root.failures > 0 ? "\{root.failures}" : "";
-                    warn: root.failures > 0;
-                    chevron: true;
-                    activated => {
-                        root.go(DrawerPage.work, 1);
-                    }
-                    gained-focus => {
-                        scroll.ensure-visible(self.absolute-position.y, self.height);
-                    }
-                }
-
-                Row {
-                    index: 4;
-                    count: 7;
-                    label: "Readout";
-                    chevron: true;
-                    activated => {
-                        root.go(DrawerPage.readout, 1);
-                    }
-                    gained-focus => {
-                        scroll.ensure-visible(self.absolute-position.y, self.height);
-                    }
-                }
-
-                Row {
-                    index: 5;
-                    count: 7;
-                    label: "Settings";
-                    chevron: true;
-                    activated => {
-                        root.go(DrawerPage.settings, 1);
-                    }
-                    gained-focus => {
-                        scroll.ensure-visible(self.absolute-position.y, self.height);
-                    }
-                }
-
-                Row {
-                    index: 6;
-                    count: 7;
-                    label: "Reference";
-                    enabled: false;
-                    machine-rule: false;
-                    reason: "The keyboard table and the stated limits have no page yet.";
-                    gained-focus => {
-                        scroll.ensure-visible(self.absolute-position.y, self.height);
-                    }
-                }
-            }
         }
     }
 }
@@ -286,6 +312,11 @@ export component Drawer inherits Rectangle {
     callback games-choose();
     callback games-play(int);
     in property <[DeviceRow]> devices;
+    /// `Settings::developer`. Off, the root menu is three rows — see `MenuPage`.
+    in property <bool> developer;
+    /// What that switch reveals, from `settings_page::DEVELOPER_SHOWS`. A sentence,
+    /// so it comes from the model rather than living here.
+    in property <string> setting-developer-shows;
     in-out property <int> selected: 0;
     in property <[DetailRow]> devices-detail;
     in property <int> devices-detail-of: -1;
@@ -471,6 +502,8 @@ export component Drawer inherits Rectangle {
                 visible: root.on-screen(1);
                 failures: root.rail-failures;
                 title-count: root.titles.length;
+                device-count: root.devices.length;
+                developer: root.developer;
                 close => {
                     root.close();
                 }
@@ -598,6 +631,8 @@ export component Drawer inherits Rectangle {
                     file-path: root.setting-file-path;
                     copy-enabled: root.setting-copy-enabled;
                     copy-reason: root.setting-copy-reason;
+                    developer: root.developer;
+                    developer-shows: root.setting-developer-shows;
                     back-pressed => {
                         root.back();
                     }
@@ -609,6 +644,12 @@ export component Drawer inherits Rectangle {
                     }
                     copy-path => {
                         root.setting-toggled(2);
+                    }
+                    // Ordinal 3 — `Row::Developer`. The page raises a named callback and the
+                    // ordinal is assigned HERE, which is the split the other two already use: the
+                    // page knows what its rows are, this knows what number each one is.
+                    toggle-developer => {
+                        root.setting-toggled(3);
                     }
                 }
 
@@ -652,7 +693,7 @@ export component Drawer inherits Rectangle {
                     // file and this file imports `composer.slint`, so the enum cannot travel the
                     // other way — and because the two words are already this file's, on the menu
                     // rows at `:122` and `:135`.
-                    back-to: root.under == DrawerPage.parts ? "Parts" : "Devices";
+                    back-to: root.under == DrawerPage.parts ? "Parts" : "iPods";
                     device-title: root.composer-title;
                     which-value: root.composer-which-value;
                     runs-value: root.composer-runs-value;

@@ -614,6 +614,21 @@ pub struct Settings {
     /// for no benefit, and this audience notices. The menu item works either way — this only
     /// decides whether the check happens on its own.
     pub check_updates_on_start: bool,
+    /// **The window is three rows until this is on.**
+    ///
+    /// iPods, Games and Settings are what this program's first two audiences need;
+    /// Parts, the Readout and the Work rail serve the third. Version 0.4 drew the same
+    /// line with `--user` and `--debug`, and said why: *"user mode is the iPod and
+    /// nothing else… it is what somebody who just cloned this should meet."* The window
+    /// then grew seven permanent destinations and lost it.
+    ///
+    /// **A stored switch rather than a launch flag**, by operator decision: a flag is
+    /// invisible to somebody who already has the window open, and it does not survive
+    /// the launch. Off by default.
+    ///
+    /// This hides DESTINATIONS, never capability. Every `ipod-boot` subcommand stays
+    /// reachable with it off, on the iPod it concerns.
+    pub developer: bool,
     /// Whether the first-run screen has ever been drawn for this installation.
     ///
     /// **The old window inferred *offer me* from *the device list is empty*, and a cancelled or
@@ -799,6 +814,7 @@ impl Settings {
                 // not silently get a white iPod back on the next launch.
                 "black_device" if v == "true" => s.chassis = Some(crate::identity::Colour::Black),
                 "check_updates_on_start" => s.check_updates_on_start = v == "true",
+                "developer" => s.developer = v == "true",
                 // Anything but the literal `true` is false, matching `check_updates_on_start` — a
                 // half-written file must not suppress the one screen that explains the program.
                 "welcomed" => s.welcomed = v == "true",
@@ -1345,6 +1361,11 @@ impl Settings {
              # An HTTPS GET of the GitHub releases API and a version comparison, on launch.\n\
              # Off by default on purpose. The menu item works whatever this says.\n\
              check_updates_on_start = {}\n\
+             # Show Parts, the Readout and the Work rail, and offer the seven boot\n\
+             # recipes under `Start as…`. Off by default: those are instruments, and\n\
+             # this program's first job is to be an iPod. Nothing is UNREACHABLE with\n\
+             # it off — every capability is on the iPod it belongs to.\n\
+             developer = {}\n\
              # Whether the first-run screen has been shown. Once true it never goes back: a\n\
              # cancelled or failed build empties the device list, and a program that read\n\
              # emptiness as \"offer the welcome again\" returns you to step one for ever. Set\n\
@@ -1364,6 +1385,7 @@ impl Settings {
                 None => String::new(),
             },
             self.check_updates_on_start,
+            self.developer,
             self.welcomed,
             match self.work_on_copy {
                 Some(v) => format!("work_on_copy = {v}\n"),
@@ -2816,6 +2838,9 @@ mod tests {
             disk: Some(PathBuf::from("/a/b/disk.img")),
             games: Some(PathBuf::from("/a/b/Games")),
             check_updates_on_start: true,
+            // `true` rather than the default, so the round trip actually exercises the key: a
+            // field left at its default round-trips through a renderer that never wrote it.
+            developer: true,
             welcomed: true,
             work_on_copy: Some(true),
             devices: Vec::new(),

@@ -594,6 +594,9 @@ fn wire(
     // handing the window a fresh `VecModel` tears down every row and takes focus and hover with it.
     let titles: Rc<VecModel<TitleRow>> = Rc::new(VecModel::default());
     window.set_titles(ModelRc::from(titles.clone()));
+    // §Settings' developer switch, pushed once here and again whenever it is toggled. Three rows
+    // until it is on; see `MenuPage`.
+    window.set_developer(settings.borrow().developer);
     window.set_games_folder_gone(refresh_titles(&titles, &settings.borrow()));
     window.set_games_folder(
         settings
@@ -2163,7 +2166,7 @@ fn wire(
             };
             match outcome {
                 // **This is the one producer that saves for itself**, so every arm answers
-                // `Wrote::Nothing` and there is no `save` here. `settings.slint:104` binds the
+                // `Wrote::Nothing` and there is no `save` here. `settings.slint:107` binds the
                 // failure to the toggle's own `consequence`, so the page has to *observe* the write
                 // to word the sentence; a save on top of it would regenerate the operator's file a
                 // second time, comments and all, for no change.
@@ -2175,6 +2178,14 @@ fn wire(
                     if row == Some(settings_page::Row::CopyPath) {
                         let at = prefs.borrow().view(&settings.borrow(), caps).file_path;
                         w.invoke_copy_text(at.into());
+                    }
+                    // **The switch that changes how many rows the menu has must push the menu.**
+                    // `toggled` wrote the setting and saved it; nothing else re-reads it, so
+                    // without this line the four pages appear on the NEXT launch and the press
+                    // looks like it did nothing — the same shape as the Games row that was drawn
+                    // live over a page with no slot.
+                    if row == Some(settings_page::Row::Developer) {
+                        w.set_developer(settings.borrow().developer);
                     }
                 }
                 Err(why) => drop(rail.borrow_mut().note(&why)),
@@ -6884,6 +6895,7 @@ fn freshness(f: machine::Freshness) -> i32 {
 fn push_settings(window: &MainWindow, page: &settings_page::Prefs, settings: &Settings, caps: rail::Caps) {
     let v = page.view(settings, caps);
     window.set_setting_theme_value(v.theme_value.into());
+    window.set_setting_developer_shows(v.developer_consequence.clone().into());
     window.set_setting_theme_enabled(v.theme_enabled);
     window.set_setting_theme_reason(v.theme_reason.into());
     window.set_setting_check_updates(v.check_updates);
@@ -13574,13 +13586,21 @@ pub(crate) mod tests {
                 "the Settings page's {what} is {value:?} and no `Text` on the screen says it"
             );
         }
-        // The third row's value is a box rather than a string, and it is a value all the same.
+        // Two rows whose value is a box rather than a string, and both are values all the same:
+        // the update check, and the developer switch that turns the root menu's three rows into
+        // seven. In markup order, which is the order they are drawn in.
         let boxes = elements_by_role(&w, AccessibleRole::Checkbox);
-        assert_eq!(boxes.len(), 1, "the Settings page drew {} check boxes", boxes.len());
+        assert_eq!(boxes.len(), 2, "the Settings page drew {} check boxes", boxes.len());
         assert_eq!(
             boxes[0].accessible_checked(),
             Some(v.check_updates),
             "the update toggle does not read what the library says"
+        );
+        assert_eq!(
+            boxes[1].accessible_checked(),
+            Some(w.get_developer()),
+            "the developer switch does not read what the library says — a control that draws one \
+             state and stores another is worse than one that refuses"
         );
     }
 
@@ -13765,8 +13785,25 @@ pub(crate) mod tests {
             rows.push(prev);
         }
 
-        // Which pages actually have a body composed into the drawer.
-        let has_page = |label: &str| drawer.contains(&format!("{label}Page {{"));
+        // **The label is a human word; the page is an identifier, and they are not the same
+        // string.** This used to concatenate — `format!("{label}Page")` — which was true only for
+        // as long as every row happened to be named after its component. Renaming `Devices` to
+        // `iPods` broke it into asking whether `iPodsPage` exists, which nothing does, and the
+        // control below is what said so instead of the gate quietly passing everything.
+        let page_of = |label: &str| match label {
+            "iPods" => Some("Devices"),
+            "Games" => Some("Games"),
+            "Settings" => Some("Settings"),
+            "Parts" => Some("Parts"),
+            "Readout" => Some("Readout"),
+            "Work" => Some("Work"),
+            // Named by no component. That is the honest disabled row this gate allows.
+            "Reference" => None,
+            _ => None,
+        };
+        let has_page = |label: &str| {
+            page_of(label).is_some_and(|c| drawer.contains(&format!("{c}Page {{")))
+        };
 
         // ── Controls, before any verdict ─────────────────────────────────────────────────────
         assert!(
@@ -13775,12 +13812,13 @@ pub(crate) mod tests {
             rows.len()
         );
         assert!(
-            rows.iter().any(|(n, go)| n == "Devices" && *go),
+            rows.iter().any(|(n, go)| n == "iPods" && *go),
             "the parser cannot see a row that certainly navigates, so every verdict below is `false`"
         );
         assert!(
-            has_page("Games") && !has_page("Nonexistent"),
-            "the page-body matcher answers the same for a page that is there and one that is not"
+            has_page("Games") && !has_page("Nonexistent") && !has_page("Reference"),
+            "the page-body matcher answers the same for a page that is there, one that is not, and \
+             the row this gate exists to permit"
         );
 
         let dead: Vec<&str> = rows
@@ -13847,7 +13885,7 @@ pub(crate) mod tests {
         }
 
         let want = [
-            ("Devices", DrawerPage::Devices),
+            ("iPods", DrawerPage::Devices),
             ("Parts", DrawerPage::Parts),
             ("Games", DrawerPage::Games),
             ("Work", DrawerPage::Work),
@@ -13912,12 +13950,26 @@ pub(crate) mod tests {
         push_nav(&w, &stack);
         let_the_drawer_settle();
 
+        // **Three rows by default, and this test needs the other four.** The menu is iPods /
+        // Games / Settings until `Settings::developer` is on; Parts, the Readout, Work and
+        // Reference appear with it. Everything below is about how a DISABLED row reads to an
+        // assistive technology, and the only disabled row left lives behind that switch — so the
+        // switch is part of the fixture rather than something to work around.
+        assert_eq!(
+            drawer_rows(&w).len(),
+            3,
+            "the default menu is not three rows. §13's whole point is that the window is an iPod \
+             first: iPods, Games, Settings, and the instruments only when asked for"
+        );
+        w.set_developer(true);
+        let_the_drawer_settle();
+
         let rows = drawer_rows(&w);
         assert_eq!(
             rows.len(),
             7,
-            "the drawer's menu is not seven rows; §9.1 keeps a page you cannot open present and \
-             greyed rather than absent, so that count is the design"
+            "with the developer switch on, the menu is not seven rows; §9.1 keeps a page you \
+             cannot open present and greyed rather than absent, so that count is the design"
         );
 
         let by_label = |want: &str| {
@@ -13952,7 +14004,7 @@ pub(crate) mod tests {
 
         // The control: the pages that ARE built have to read differently, or `accessible-enabled`
         // is not being set from anything and every answer above is the same answer.
-        for built in ["Work", "Devices", "Parts", "Settings", "Games"] {
+        for built in ["Work", "iPods", "Parts", "Settings", "Games"] {
             assert_eq!(
                 by_label(built).accessible_enabled(),
                 Some(true),
@@ -13960,7 +14012,7 @@ pub(crate) mod tests {
             );
         }
         // …and no row states a gap that has been closed.
-        for live in ["Devices", "Parts", "Settings", "Games"] {
+        for live in ["iPods", "Parts", "Settings", "Games"] {
             assert_eq!(
                 by_label(live).accessible_description().unwrap_or_default().to_string(),
                 "",
@@ -17189,7 +17241,7 @@ pub(crate) mod tests {
     /// five `Made of` lines were undrawn and so was the one control §7.2 puts on this page.
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
-    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:832` and
+    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:837` and
     /// `:858` read for the drawn iPod, and `machine-rule` was a literal `true`.
     #[test]
     fn the_devices_page_opens_a_row_and_reaches_its_start() {
@@ -17290,7 +17342,7 @@ pub(crate) mod tests {
         assert!(!w.get_setting_copy_enabled());
         assert!(!w.get_setting_copy_reason().is_empty(), "`Copy path` is disabled and says nothing");
 
-        // The one live control. `drawer.slint:608` fires this ordinal as
+        // The one live control. `drawer.slint:643` fires this ordinal as
         // `root.setting-toggled(1)`; `Row::CheckUpdates` is 1.
         let before = settings.borrow().check_updates_on_start;
         assert_eq!(w.get_setting_check_updates(), before, "the box does not reflect the library");
@@ -18347,7 +18399,7 @@ pub(crate) mod tests {
                 &v.copy_reason,
             );
             // **The failed-save sentence, and only the half this program wrote.**
-            // `settings.slint:104` binds it to the ToggleRow's `consequence`, so it is drawn in
+            // `settings.slint:107` binds it to the ToggleRow's `consequence`, so it is drawn in
             // this slot — but `Prefs::toggled` only produces it when `Settings::save` fails, which
             // needs a read-only home that this sweep has no business making. So the constant is
             // swept by name, exactly as `NO_PATH` is, and **without** its `{e}`: an `io::Error`'s

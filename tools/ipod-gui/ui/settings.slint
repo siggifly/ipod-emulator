@@ -44,6 +44,9 @@ export component SettingsPage inherits Rectangle {
 
     callback back-pressed();
     callback toggle-updates();
+    in property <bool> developer;
+    in property <string> developer-shows;
+    callback toggle-developer();
     callback copy-path();
 
     background: Ink.bg;
@@ -104,6 +107,28 @@ export component SettingsPage inherits Rectangle {
                     consequence: root.toggle-reason;
                     activated => {
                         root.toggle-updates();
+                    }
+                    gained-focus => {
+                        scroll.ensure-visible(self.absolute-position.y, self.height);
+                    }
+                }
+
+                // ── The switch that turns three rows into seven ────────────────────────────
+                //
+                // Version 0.4 had this as `--user` / `--debug` and its own doc says what the two
+                // meant: *"user mode is the iPod and nothing else… it is what somebody who just
+                // cloned this should meet."* A launch flag is invisible to anyone who already has
+                // the window open and does not survive it, which is why this is stored.
+                //
+                // **It reveals pages, never capabilities.** Everything `ipod-boot` can do stays
+                // reachable with this off, on the iPod it concerns — so a person who never finds
+                // this switch is not missing a feature, only a place to look at one.
+                ToggleRow {
+                    label: "Developer";
+                    checked: root.developer;
+                    consequence: root.developer-shows;
+                    activated => {
+                        root.toggle-developer();
                     }
                     gained-focus => {
                         scroll.ensure-visible(self.absolute-position.y, self.height);

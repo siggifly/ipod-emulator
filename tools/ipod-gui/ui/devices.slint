@@ -182,7 +182,7 @@ export component DevicesPage inherits Rectangle {
     // §7.2's `Start`, for the **one open device**, from `devices::start_row`.
     //
     // **Not `d.startable` and `d.cradle-label`.** Those two are the bench's cradle as well —
-    // `window.slint:832` reads `root.current.cradle-label` and `:858` `root.current.startable`,
+    // `window.slint:835` reads `root.current.cradle-label` and `:858` `root.current.startable`,
     // for the drawn iPod — so §7.2's refusal, *a machine
     // exists, stop it first*, would be printed under the machine telling the operator to stop it.
     // One field, two surfaces, and only one of them is asking this page's question.
@@ -209,14 +209,14 @@ export component DevicesPage inherits Rectangle {
 
     background: Ink.bg;
     accessible-role: AccessibleRole.region;
-    accessible-label: "Devices";
+    accessible-label: "iPods";
 
     VerticalLayout {
         spacing: 0px;
 
         DrawerHeader {
             back: "Menu";
-            title: "Devices";
+            title: "iPods";
             back-pressed => {
                 root.back-pressed();
             }
@@ -235,7 +235,7 @@ export component DevicesPage inherits Rectangle {
                 spacing: 0px;
                 alignment: start;
                 accessible-role: AccessibleRole.list;
-                accessible-label: "Devices";
+                accessible-label: "iPods";
 
                 if root.devices.length == 0: Text {
                     x: Geometry.page-margin;

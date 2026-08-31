@@ -14,8 +14,8 @@
 // it by number, so a renumbering here silently re-aims a live control — `Copy path` writing the
 // update preference, say. Measured in the file `build.rs` compiles:
 //
-//   - `Row::CheckUpdates` is **1** — `drawer.slint:608`, `root.setting-toggled(1)`.
-//   - `Row::CopyPath` is **2** — `drawer.slint:611`, `root.setting-toggled(2)`.
+//   - `Row::CheckUpdates` is **1** — `drawer.slint:643`, `root.setting-toggled(1)`.
+//   - `Row::CopyPath` is **2** — `drawer.slint:646`, `root.setting-toggled(2)`.
 //
 // `Row::Theme` is **0** and is ours: the theme row is drawn from `setting-theme-*` and fires
 // nothing yet. It is in the list because the page has three rows and a vocabulary with a hole in it
@@ -36,7 +36,7 @@
 // a global override for a per-device fact is how one setting comes to mean two things.
 //
 // **This is the one producer that saves for itself**, and [`Prefs::toggled`] returns `Wrote::Nothing`
-// from every arm because of it. `settings.slint:104` binds the failure to the toggle's own
+// from every arm because of it. `settings.slint:107` binds the failure to the toggle's own
 // `consequence` rather than to the Rail, so the page has to *observe* the write to word the
 // sentence — and a `Wrote::Library` on top of that would have `main.rs` write the file a second
 // time, which `Settings::render` regenerates whole, taking any comment the operator added with it.
@@ -59,10 +59,14 @@ pub enum Row {
     CheckUpdates,
     /// Pinned to 2 by `drawer.slint`'s `copy-path`.
     CopyPath,
+    /// Pinned to 3 by `settings.slint`. The switch that turns the root menu's three rows into
+    /// seven — see `Settings::developer`.
+    Developer,
 }
 
 impl Row {
-    pub const ALL: [Row; 3] = [Row::Theme, Row::CheckUpdates, Row::CopyPath];
+    pub const ALL: [Row; 4] =
+        [Row::Theme, Row::CheckUpdates, Row::CopyPath, Row::Developer];
 
     /// `None` for anything outside the list, so a stray `int` from the markup is a no-op rather
     /// than a different preference.
@@ -129,7 +133,7 @@ pub const NO_PATH: &str = "nowhere to keep one";
 /// follows it.
 ///
 /// A constant rather than a literal inside [`Prefs::toggled`] for the same reason [`NO_PATH`] is
-/// one: `settings.slint:104` binds it as the toggle's `consequence`, drawn in a `ReasonSlot`, and
+/// one: `settings.slint:107` binds it as the toggle's `consequence`, drawn in a `ReasonSlot`, and
 /// `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` cannot sweep a sentence that only
 /// exists after `Settings::save` has failed — which needs a read-only home that the sweep has no
 /// business making. Named here, it is measured without being provoked.
@@ -171,7 +175,29 @@ pub struct View {
     pub copy_enabled: bool,
     /// §9.4 — non-empty whenever `!copy_enabled`.
     pub copy_reason: String,
+    /// What the developer switch reveals, under it.
+    ///
+    /// **There is no `developer` field beside this one, deliberately.** The switch's box binds to
+    /// the window's own `developer` property — the same one the root menu reads to decide how many
+    /// rows it has — so a copy here would be one fact in two places, free to disagree about
+    /// whether four pages exist. Only the SENTENCE belongs to this page. **A sentence, so it lives here** — the markup draws
+    /// this page's words and owns none of them, which is what
+    /// `every_composer_sentence_comes_from_the_model_or_composer_rs` holds shut. It named this
+    /// one the moment it was typed into `settings.slint`.
+    pub developer_consequence: String,
 }
+
+/// What the developer switch reveals, drawn under it.
+///
+/// **A sentence, and this file is where this page's sentences live.** The markup draws words and
+/// owns none of them — `every_composer_sentence_comes_from_the_model_or_composer_rs` reads every
+/// string literal out of `ui/*.slint` and fails on any that is not furniture, which is how it
+/// caught this one the moment it was typed there instead of here.
+///
+/// It names pages rather than powers deliberately: nothing becomes possible when this is on. Every
+/// `ipod-boot` capability is reachable with it off, on the iPod it concerns.
+const DEVELOPER_SHOWS: &str =
+    "Parts, the Readout and the Work rail, and the boot recipes under Start as\u{2026}";
 
 /// The Settings page's whole state.
 ///
@@ -232,6 +258,7 @@ impl Prefs {
                 Some(_) if !clipboard => Next::CopyDetails.reason().to_string(),
                 Some(_) => String::new(),
             },
+            developer_consequence: DEVELOPER_SHOWS.into(),
         }
     }
 
@@ -262,6 +289,19 @@ impl Prefs {
                 // Reverting the field on a failed write would be the other design and is worse: the
                 // control would spring back with no explanation, which is the silent-non-stick this
                 // page exists to cure.
+                self.save_failed = match s.save() {
+                    Ok(()) => String::new(),
+                    Err(e) => format!("{SAVE_FAILED}{e}"),
+                };
+                Ok(Wrote::Nothing)
+            }
+            // **The same shape as `CheckUpdates`, deliberately.** The switch moves either way
+            // and a failed write is a sentence rather than a control that springs back — which is
+            // the silent-non-stick this page exists to cure, and it matters more here than for
+            // the update check: this one changes how many rows the root menu has, so a toggle
+            // that appeared to work and did not would leave four pages that vanish on relaunch.
+            Row::Developer => {
+                s.developer = !s.developer;
                 self.save_failed = match s.save() {
                     Ok(()) => String::new(),
                     Err(e) => format!("{SAVE_FAILED}{e}"),
@@ -385,21 +425,22 @@ mod tests {
 
     // ── the vocabulary ──────────────────────────────────────────────────────────────────────────
 
-    /// **The two ordinals `ui/drawer.slint` writes are where it thinks they are.**
+    /// **The three ordinals `ui/drawer.slint` writes are where it thinks they are.**
     ///
     /// Both halves: the `assert_eq!` pins the Rust order, and the markup search proves the numbers
     /// in this file are the numbers the markup sends. `drawer.slint` is read rather than
     /// `preview.slint` because `build.rs` compiles `ui/window.slint`, which imports the first and
     /// not the second.
     #[test]
-    fn the_two_pinned_setting_rows_are_where_the_shipping_markup_writes_them() {
+    fn the_pinned_setting_rows_are_where_the_shipping_markup_writes_them() {
         assert_eq!(Row::CheckUpdates.as_i32(), 1, "`drawer.slint`'s `toggle-updates`");
         assert_eq!(Row::CopyPath.as_i32(), 2, "`drawer.slint`'s `copy-path`");
+        assert_eq!(Row::Developer.as_i32(), 3, "`drawer.slint`'s `toggle-developer`");
 
         let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/drawer.slint"));
         let text = std::fs::read_to_string(path).expect("ui/drawer.slint");
         let dense: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-        for row in [Row::CheckUpdates, Row::CopyPath] {
+        for row in [Row::CheckUpdates, Row::CopyPath, Row::Developer] {
             let fires = format!("root.setting-toggled({})", row.as_i32());
             assert!(
                 dense.contains(&fires),
@@ -409,7 +450,7 @@ mod tests {
         }
         assert_eq!(
             dense.matches("root.setting-toggled(").count(),
-            2,
+            3,
             "`drawer.slint` fires a number of `setting-toggled` calls this vocabulary has not been \
              measured against"
         );
@@ -469,8 +510,8 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            9,
-            "`window.slint` declares {} `setting-*` properties and `View` has nine fields: {declared:?}",
+            10,
+            "`window.slint` declares {} `setting-*` properties and `View` has ten fields: {declared:?}",
             declared.len()
         );
 
@@ -488,6 +529,7 @@ mod tests {
             file_path,
             copy_enabled,
             copy_reason,
+            developer_consequence,
         } = Prefs::new().view(&s, all_on());
         assert_eq!(theme_value, THEME);
         assert!(!theme_enabled);
@@ -498,6 +540,10 @@ mod tests {
         assert!(file_path.ends_with("settings.txt"), "{file_path}");
         assert!(copy_enabled, "every capability is on and there is a path");
         assert!(copy_reason.is_empty());
+        assert!(
+            developer_consequence.contains("Readout"),
+            "the developer switch's sentence does not name what it reveals: {developer_consequence}"
+        );
     }
 
     // ── §9.4, the invariant the page was breaking ───────────────────────────────────────────────
@@ -612,7 +658,7 @@ mod tests {
     /// **A failed save is a sentence on the toggle's own row, and it clears when the save works.**
     ///
     /// §20 item 13: a read-only home, a full disk or a second process holding the file used to be
-    /// swallowed, and the control moved on screen with nothing written. `settings.slint:104` binds
+    /// swallowed, and the control moved on screen with nothing written. `settings.slint:107` binds
     /// this to the ToggleRow's `consequence` for exactly that.
     ///
     /// Proved red twice: by discarding the `io::Error` (the sentence goes empty) and by leaving
@@ -692,13 +738,17 @@ mod tests {
 
     /// **An ordinal this vocabulary does not know writes nothing at all.**
     ///
-    /// `setting-toggled(int)` is one callback for three rows, so an unknown number falling through
+    /// `setting-toggled(int)` is one callback for every row, so an unknown number falling through
     /// to a `match` arm is a different preference written. Proved red by decoding out of range.
+    ///
+    /// **3 came off this list when `Row::Developer` took it**, which is the list working rather
+    /// than a weakening: an ordinal stops being unknown the moment a row claims it, and leaving it
+    /// here would have asserted that pressing Developer does nothing. `4` is the first free one.
     #[test]
     fn an_unknown_setting_ordinal_is_a_no_op() {
         let _guard = DataDir::new("stray");
         let before = Settings::default();
-        for stray in [-1, 3, 99, i32::MIN, i32::MAX] {
+        for stray in [-1, 4, 99, i32::MIN, i32::MAX] {
             let mut s = before.clone();
             let mut p = Prefs::new();
             assert_eq!(p.toggled(&mut s, stray, all_on()), Ok(Wrote::Nothing), "{stray}");
