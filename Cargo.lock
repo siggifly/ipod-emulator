@@ -1149,7 +1149,6 @@ name = "eapp-loader"
 version = "0.5.0"
 dependencies = [
  "arm7tdmi",
- "minifb",
 ]
 
 [[package]]
@@ -2406,6 +2405,15 @@ dependencies = [
  "slint",
  "slint-build",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ipod-play"
+version = "0.5.0"
+dependencies = [
+ "arm7tdmi",
+ "eapp-loader",
+ "minifb",
 ]
 
 [[package]]
