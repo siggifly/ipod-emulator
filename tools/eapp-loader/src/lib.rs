@@ -3855,6 +3855,13 @@ pub struct Machine {
     /// alternative — parsing the executable twice — reads the file again to learn what was already
     /// known. Empty for every machine that is not a title.
     pub game_vectors: Vec<u32>,
+    /// The title's button-flags word, if one was found. Kept for the same reason the vectors are:
+    /// it is derived from the executable's image, which does not survive the build.
+    ///
+    /// `None` means the flags-word path is not available for this title and the event list is the
+    /// only way a press can reach it — which is a real state, not a failure. See
+    /// [`find_flags_word`].
+    pub game_flags: Option<u32>,
     /// Contents and read position of each opened file, indexed by handle - 1.
     open_files: Vec<(Vec<u8>, usize)>,
     /// The file behind each open handle, parallel to `open_files`.
@@ -4342,6 +4349,7 @@ impl Machine {
             watch_log: Capped::new(4096),
             game_dir: None,
             game_vectors: Vec::new(),
+            game_flags: None,
             open_files: Vec::new(),
             open_paths: Vec::new(),
             rewind_after_load: true,

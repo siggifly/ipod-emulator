@@ -1065,6 +1065,11 @@ fn build_game(exe: &std::path::Path, dir: &std::path::Path) -> Result<Machine, S
     // Kept on the machine because the `EApp` does not survive this function and the run loop needs
     // them a frame later. See `Machine::game_vectors`.
     m.game_vectors = app.vectors.clone();
+    // Found from the image's own signature rather than named per title: `find_flags_word`
+    // reproduces Minigolf's hand-measured `0x18037a0c` exactly, and gives nine further titles a
+    // button path they otherwise would not have. `None` is a real answer — those titles take
+    // presses through the event list instead.
+    m.game_flags = eapp_loader::find_flags_word(&app.image);
     Ok(m)
 }
 
@@ -1760,6 +1765,31 @@ pub fn run(cfg: Config, link: Arc<Link>) {
     }
 }
 
+/// The five bits a title tests one by one, at `0x18008304` onward. Not the window's own
+/// `WHEEL_*` masks — those are the streaming frame's bit order, and the two orders differ.
+const BTN_SELECT: u32 = 0x01;
+const BTN_MENU: u32 = 0x02;
+const BTN_PLAY: u32 = 0x04;
+const BTN_NEXT: u32 = 0x08;
+const BTN_PREV: u32 = 0x10;
+
+/// The event-list node's type byte for a button. Measured on Bejeweled's decoder at `0x18013ebc`,
+/// which switches on the type to reach the same five bits the flags-word path sets.
+fn event_type_for(bit: u32) -> u8 {
+    match bit {
+        BTN_SELECT => 2,
+        BTN_MENU => 3,
+        BTN_PLAY => 4,
+        BTN_NEXT => 5,
+        _ => 1,
+    }
+}
+
+/// A raw wheel position as the byte a title's poll reports.
+fn wheel_byte(raw: i32) -> u8 {
+    ((((0x77 - raw) * 8) / 3) & 0xff) as u8
+}
+
 /// **Run a title, frame by frame, until the window asks it to stop.**
 ///
 /// The sibling of [`session`], and separate from it for the reason `build` returns early for a
@@ -1825,6 +1855,11 @@ fn title_session(cfg: &Config, link: &Arc<Link>, mut m: Machine) -> Outcome {
 
     link.out.lock().unwrap().phase = Phase::Running;
     let mut frames = 0u64;
+    // The wheel's absolute position, in the raw units `wheel_byte` converts. Its own state,
+    // because a title is told where the finger IS rather than that it moved.
+    let mut wheel_raw: i32 = 0;
+    // Frames left before the published event node is retired.
+    let mut event_hold: u8 = 0;
     let mut fb = vec![0u8; FB_W * FB_H * 3];
     let mut fb_seq = 0u64;
     let mut frame_clock_floor: u32 = 0;
@@ -1851,6 +1886,69 @@ fn title_session(cfg: &Config, link: &Arc<Link>, mut m: Machine) -> Outcome {
             m.hold_clock_above(frame_clock_floor);
             frame_clock_floor = m.clock_now().wrapping_add(1_000_000 / fps as u32);
         }
+        // ── §7.4's drawn wheel, delivered to the title ──────────────────────────────────────
+        //
+        // **The same events the boot's click-wheel peripheral receives, translated.** A title has
+        // no click-wheel peripheral at all — it reaches the host through framework imports — so
+        // the window's `WheelEvent`s cannot simply be queued the way a boot's are. What a title
+        // reads is a wheel SAMPLE (an absolute position byte, not a delta) and either a bit in its
+        // own flags word or a node on the event list.
+        //
+        // The two button paths are not alternatives to choose between: a title with a flags word
+        // reads bits (Minigolf), one without can only be reached through the list (Sims Bowling,
+        // LOST), and `game_flags` being `None` is what says which. Both are sent when the word is
+        // known, because a title that reads bits ignores the node and vice versa.
+        {
+            let drained: Vec<WheelEvent> =
+                link.inbox.lock().unwrap().events.drain(..).collect();
+            for e in drained {
+                match e {
+                    // The wheel is an absolute position, so a step MOVES it rather than being
+                    // one. 3 raw units per click is `ipg-player`'s own step: `wheel_byte`
+                    // multiplies by 8/3, so three units is exactly eight byte-positions.
+                    WheelEvent::Step(d) => {
+                        wheel_raw = (wheel_raw + d as i32 * 3).rem_euclid(0x60);
+                    }
+                    WheelEvent::Button(mask, true) => {
+                        let bit = match mask {
+                            eapp_loader::WHEEL_SELECT => BTN_SELECT,
+                            eapp_loader::WHEEL_MENU => BTN_MENU,
+                            eapp_loader::WHEEL_PLAY => BTN_PLAY,
+                            eapp_loader::WHEEL_RIGHT => BTN_NEXT,
+                            _ => BTN_PREV,
+                        };
+                        session.post_event(&mut m, event_type_for(bit), 1, 0, wheel_byte(wheel_raw));
+                        event_hold = 2;
+                        if let Some(addr) = m.game_flags {
+                            let cur = m.mem.peek32(addr).unwrap_or(0);
+                            m.mem.poke32(addr, cur | bit);
+                        }
+                    }
+                    // A release, the hold switch and the finger's own contact have no title-side
+                    // meaning: a game reads presses and a wheel position, and the pump below keeps
+                    // a sample in flight whether or not a finger is down.
+                    WheelEvent::Button(_, false)
+                    | WheelEvent::Touch
+                    | WheelEvent::Release
+                    | WheelEvent::Hold(_) => {}
+                }
+            }
+        }
+        // **Keep a wheel sample in flight every frame.** A title only dispatches input on frames
+        // whose flags are non-zero, and only a poll that reports an event sets them — so sending
+        // one solely on a press means any screen the game opens has no way to receive the next.
+        // Real hardware reports continuously while a finger rests on the wheel, and an unchanged
+        // position reads as contact rather than as rotation.
+        m.queue_input(wheel_byte(wheel_raw));
+        // Retire the event node after two frames — an empty list is a null head, and a node left
+        // published for ever is a button the game believes is still down.
+        if event_hold > 0 {
+            event_hold -= 1;
+            if event_hold == 0 {
+                m.mem.poke32(session.ctx_base + 0x30, 0);
+            }
+        }
+
         // ── What the host owes the game, before the next frame ──────────────────────────────
         //
         // **Without this a title runs forever and never progresses.** Measured against

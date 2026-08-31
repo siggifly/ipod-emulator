@@ -16774,6 +16774,96 @@ pub(crate) mod tests {
         assert!(l.cfg.snapshot.is_none(), "a title was given a restore point it can never resume");
     }
 
+    /// **The drawn wheel reaches a running title.**
+    ///
+    /// §7.4 gives every drawn control to the machine while one is running, and a title is now one
+    /// of the things that can be running. The boot's route is a click-wheel peripheral; a title
+    /// has none, so `title_session` translates instead — a `Step` moves an absolute position, a
+    /// `Button` becomes an event node and, when the title has a flags word, a bit in it.
+    ///
+    /// **What this proves and what it does not.** It proves the events leave the window, cross the
+    /// `Link`, and are consumed by the title's pump — the wiring, which is what breaks silently.
+    /// It does NOT prove the title acted on them: the game-side effect lives on the emulator
+    /// thread, where this test cannot read it, and the measurement that settles it is
+    /// `ipg-player`'s own — two identical runs one press apart, which is a sweep rather than a
+    /// unit test. A press that reaches a title and is ignored by it is a finding about that
+    /// title's input model, and it is not what this is guarding.
+    #[test]
+    fn the_drawn_wheel_reaches_a_running_title() {
+        let shelf = std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../resources/games/plaintext/Cracked Games"
+        ));
+        if eapp_loader::title_exe(&shelf.join("Mini Golf")).is_none() {
+            println!("SKIPPED: the title corpus is not here (gitignored)");
+            return;
+        }
+
+        let settings = Rc::new(RefCell::new(Settings::default()));
+        let w = a_window();
+        let shell = Rc::new(drops::Shell::answering([shelf.clone()]));
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), shell);
+        w.invoke_games_choose();
+        let titles = w.get_titles();
+        let which = (0..titles.row_count())
+            .find(|i| titles.row_data(*i).is_some_and(|t| t.name.contains("Mini Golf")))
+            .expect("Mini Golf is on the shelf");
+        w.invoke_games_play(which as i32);
+
+        // Let the title reach its frame loop before anything is sent to it, so what is measured is
+        // a running machine draining input rather than one that has not started.
+        let started = std::time::Instant::now();
+        while started.elapsed() < std::time::Duration::from_secs(30) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let held = _wiring.live.borrow();
+            let Some(l) = held.as_ref() else { break };
+            if matches!(l.link.out.lock().unwrap().phase, emu::Phase::Running) {
+                break;
+            }
+        }
+
+        let held = _wiring.live.borrow();
+        let l = held.as_ref().expect("the title is on the bench");
+        {
+            let mut inbox = l.link.inbox.lock().unwrap();
+            inbox.events.push_back(eapp_loader::WheelEvent::Step(1));
+            inbox.events.push_back(eapp_loader::WheelEvent::Step(1));
+            inbox.events.push_back(eapp_loader::WheelEvent::Button(
+                eapp_loader::WHEEL_SELECT,
+                true,
+            ));
+        }
+        // **The control that makes the drain observable**: the queue is non-empty right now, so a
+        // pump that never looked at it would leave these three sitting there for ever. Without
+        // this line an empty queue at the end would also be what "nothing was ever sent" looks
+        // like — §6's rule, applied to a queue.
+        assert_eq!(
+            l.link.inbox.lock().unwrap().events.len(),
+            3,
+            "the three events were not queued, so what follows would measure nothing"
+        );
+
+        let sending = std::time::Instant::now();
+        let mut drained = false;
+        while sending.elapsed() < std::time::Duration::from_secs(15) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            if l.link.inbox.lock().unwrap().events.is_empty() {
+                drained = true;
+                break;
+            }
+        }
+        assert!(
+            drained,
+            "a running title never took the wheel events off its queue, so every drawn control is \
+             inert while a title is on the bench"
+        );
+        assert_eq!(
+            l.link.out.lock().unwrap().stats.input_dropped,
+            0,
+            "input reached the machine and was thrown away"
+        );
+    }
+
     /// **A shelf that has moved says so, rather than reporting itself as empty.**
     ///
     /// The one failure the library's reference-not-copy rule has, and the reason it is worth a test
