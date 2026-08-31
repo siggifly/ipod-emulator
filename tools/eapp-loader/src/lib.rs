@@ -1280,6 +1280,61 @@ pub fn manifest_name(dir: &std::path::Path) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
+/// The executable inside a title's directory, if that directory is a title.
+///
+/// **Every title ships as `<Title>/Executables/<name>.bin`**, with its `.pix` textures,
+/// `Manifest.plist` and audio beside the `Executables` folder rather than inside it. That layout is
+/// the whole test: a directory with an `Executables` holding a `.bin` is a title, and one without
+/// is a folder someone dropped by mistake.
+///
+/// Deliberately does NOT parse the binary. A caller that wants to know whether it will run should
+/// try to load it and report what `EApp::parse` says — asking a cheap question here and a real one
+/// there is how a "supported" list comes to disagree with what actually opens.
+pub fn title_exe(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut hits: Vec<std::path::PathBuf> = std::fs::read_dir(dir.join("Executables"))
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("bin")))
+        .collect();
+    // Sorted, so a directory holding two answers the same way twice. Directory order is not stable
+    // across filesystems and a list that reorders itself between launches is its own bug report.
+    hits.sort();
+    hits.into_iter().next()
+}
+
+/// Every title directly under `dir`, by display name, sorted.
+///
+/// The name is the title's own, from its manifest — the directory is often named by an opaque id
+/// (50513, 88888, 1500C) and a list showing those is a list nobody can read. Falls back to the
+/// directory name, which is at least what the operator sees in a file browser.
+///
+/// `dir` itself being a title is handled: dropping one title and dropping a folder of them are the
+/// same gesture to a person, so they are the same call here.
+pub fn titles_under(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
+    let named = |d: &std::path::Path| {
+        manifest_name(d).unwrap_or_else(|| {
+            d.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        })
+    };
+    if title_exe(dir).is_some() {
+        return vec![(named(dir), dir.to_path_buf())];
+    }
+    let mut out: Vec<(String, std::path::PathBuf)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| title_exe(p).is_some())
+        .map(|p| (named(&p), p))
+        .collect();
+    out.sort();
+    out
+}
+
+
 /// Expand a 16-bit A1R5G5B5 or RGB565 pixel to RGBA8, colour-keying magenta.
 fn expand16(v: u16, rgb565: bool) -> [u8; 4] {
     let (r, g, b) = if rgb565 {
@@ -13856,6 +13911,48 @@ mod peek_tests {
     /// The `_a8` case: an 8-bit image whose palette is the greyscale ramp `(i, i, i, 0)`. Read
     /// literally that palette is fully transparent, so the index has to become the alpha and the
     /// colour white — these are font atlases, tinted by the draw's modulate register.
+    /// **Finding titles on disk, against the real corpus.**
+    ///
+    /// Asserts the COUNT, not that "some were found": a scanner that returns one title reads as
+    /// working right up until somebody notices nineteen are missing. Twenty is what
+    /// `Cracked Games` holds, and `cargo test` already asserts 116 executables elsewhere for the
+    /// same reason.
+    ///
+    /// Skips when the corpus is absent, and says so, because a silent pass here would be worth
+    /// nothing.
+    #[test]
+    fn every_title_in_the_corpus_is_found_by_name() {
+        let root = std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../resources/games/plaintext/Cracked Games"
+        ));
+        if !root.is_dir() {
+            println!("SKIPPED: {} is not here (gitignored)", root.display());
+            return;
+        }
+        let found = titles_under(&root);
+        assert_eq!(found.len(), 20, "the corpus holds twenty titles: {found:?}");
+
+        // Sorted and named, so the list does not reorder between launches.
+        let names: Vec<&str> = found.iter().map(|(n, _)| n.as_str()).collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted, "the list is stable, whatever order the filesystem gives");
+
+        // Every one resolves to an executable — the thing `build_game` will be handed.
+        for (name, dir) in &found {
+            assert!(title_exe(dir).is_some(), "{name} has no executable");
+        }
+
+        // A title directory answers for ITSELF, because dropping one title and dropping a folder
+        // of them is the same gesture.
+        let one = &found[0].1;
+        assert_eq!(titles_under(one).len(), 1, "a title directory is one title");
+
+        // And a directory that is not a title finds nothing rather than guessing.
+        assert!(title_exe(&root).is_none(), "the containing folder is not itself a title");
+    }
+
     /// **The completion list is a chain, and the last link has to be NULL.**
     ///
     /// A title walks it as `[req+0]` for next, store zero to unlink, dispatch, repeat. If the tail
