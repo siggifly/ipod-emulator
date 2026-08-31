@@ -972,6 +972,32 @@ fn manifest_paths(path: &std::path::Path) -> Option<Vec<String>> {
     (!out.is_empty()).then_some(out)
 }
 
+/// How a title is told *why* it is being called this frame.
+///
+/// **A frame is not just a call.** Apple's pump writes a reason byte into the context before it
+/// enters the frame vector, and titles built on the dispatcher-gate engine read it: the reason
+/// table is unreachable until the byte has been 0 once and non-zero after. Get this wrong and the
+/// title runs, draws, and never advances — which is a silence, not an error.
+///
+/// The modes are measured, and [`defaults_for`] carries which title needs which. `--frame-reason=`
+/// and `--pump-mark=` override, because a sweep needs to try one against another.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameReason {
+    /// The steady value, once the title is past its first frame.
+    pub steady: u8,
+    /// Where in the context the byte lives.
+    pub offset: u32,
+    /// `first0`: zero on frame 0, `steady` after. The dispatcher-gate engine's requirement.
+    pub first_zero: bool,
+    /// `auto`: write `steady` only once the title has ANSWERED — the byte is no longer what we
+    /// left there. Without a mark, "answered" is simply non-zero.
+    pub auto: bool,
+    /// A value seeded into the answer slot each frame, so `auto` can tell an answer from a byte
+    /// nobody touched. **With a mark, "answered" means DIFFERENT FROM THE MARK** — the mark is
+    /// itself non-zero and would otherwise read as an answer on frame one.
+    pub mark: Option<u8>,
+}
+
 /// What an entry-vector walk reports: which vector, where it was, and what it did.
 ///
 /// `None` in the last slot means the vector was SKIPPED rather than run — which is not an absence
@@ -991,6 +1017,31 @@ pub struct TitleSession {
     pub ctx: Vec<u32>,
     /// The entry that draws one frame — the last non-zero vector.
     pub frame_vector: u32,
+}
+
+impl TitleSession {
+    /// Tell the title why this frame is happening, then run it.
+    ///
+    /// The order matters and is Apple's: the mark is seeded, the reason byte is written, and only
+    /// then does the frame vector run. `n` is the frame number, which `first_zero` needs and
+    /// nothing else does.
+    pub fn frame(&self, m: &mut Machine, n: u64, r: &FrameReason, budget: usize) -> Stop {
+        // Where `auto` looks for the answer. The two live in different halves of the object: with
+        // the reason at 0 the answer is at 0x100, and otherwise the answer is at 0.
+        let answer_off: u32 = if r.offset == 0 { 0x100 } else { 0 };
+        if let Some(mk) = r.mark {
+            m.mem.poke8(self.ctx_base + 0x100, mk);
+        }
+        if r.first_zero {
+            m.mem
+                .poke8(self.ctx_base + r.offset, if n == 0 { 0 } else { r.steady });
+        } else if r.auto {
+            let answered = m.mem.read8(self.ctx_base + answer_off) != r.mark.unwrap_or(0);
+            m.mem
+                .poke8(self.ctx_base + r.offset, if answered { r.steady } else { 0 });
+        }
+        m.call_with(self.frame_vector, &self.ctx, budget)
+    }
 }
 
 /// The two command-line facts [`Machine::install_game_stubs`] needs.

@@ -625,11 +625,11 @@ fn main() {
     // Taken apart into the three names the rest of this file already uses. They come from ONE
     // place now, which is the point: `ctx` is derived from `ctx_base` and rebuilding it by hand is
     // the defect `start_title` exists to prevent.
-    let eapp_loader::TitleSession {
-        ctx_base,
-        ctx,
-        frame_vector,
-    } = session;
+    // Copies of the three, because the rest of this file already reads them by those names —
+    // and `session` stays alive, since it is what runs a frame.
+    let ctx_base = session.ctx_base;
+    let ctx = session.ctx.clone();
+    let frame_vector = session.frame_vector;
     // --call-log=FILE writes every framework call as one line, `FRAME Framework#ord r0 r1 r2 r3
     // sp0 sp1 sp2 sp3 from LR`, so a static recompilation of the same title can be diffed against
     // this emulator call for call (recomps/Mini Golf/tests/diff.sh). Calls made by the init
@@ -843,9 +843,6 @@ fn main() {
     // Lower bound on the clock at the start of the next frame, so a fast frame cannot report a
     // zero-length delta to the game. Raised after every frame call; see `hold_clock_above`.
     let mut frame_clock_floor: u32 = 0;
-    // --frame-reason=auto state: whether we still own the byte, and what we last put there.
-    let reason_ours = true;
-    let mut reason_last: u8;
     // --frame-reason keeps the pump's reason byte refreshed each frame. `auto` runs the
     // handshake RetailOS actually runs; see `reason_auto` below.
     let reason_spec = args
@@ -873,7 +870,6 @@ fn main() {
         .find_map(|a| a.strip_prefix("--reason-offset="))
         .and_then(|v| u32::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok())
         .unwrap_or(0);
-    let answer_off: u32 = if reason_off == 0 { 0x100 } else { 0 };
     // `--pump-mark=N` writes N into `ctx+0x100` before every call.
     //
     // Sudoku gates its whole dispatcher on it: `0x18031258` does `cmp r0,#1 / bhi 0x18031330`
@@ -931,6 +927,15 @@ fn main() {
         .find_map(|a| a.strip_prefix("--pump-mark="))
         .and_then(|v| v.parse().ok())
         .or(td.pump_mark);
+    // Gathered into the one value the library takes, so the modes cannot drift apart from the
+    // per-title table that decides which of them a title needs.
+    let frame_reason = eapp_loader::FrameReason {
+        steady: reason_steady,
+        offset: reason_off,
+        first_zero: reason_first0,
+        auto: reason_auto,
+        mark: pump_mark,
+    };
     // The four-voice sound-effect pool, and how many triggers it turned away.
     let mut voices: Vec<(String, std::process::Child, Option<PathBuf>)> = Vec::new();
     let mut dropped_voices: u64 = 0;
@@ -1868,20 +1873,10 @@ fn main() {
                 m.mem.poke32(at + 4 * i as u32, *w);
             }
         }
-        if let Some(mk) = pump_mark {
-            m.mem.poke8(ctx_base + 0x100, mk);
-        }
-        if reason_first0 {
-            m.mem.poke8(ctx_base + reason_off, if frames == 0 { 0 } else { reason_steady });
-        } else if reason_auto {
-            // "Answered" means the byte is no longer what we left there. With no seed that is
-            // simply non-zero; with `--pump-mark` it is "different from the seed", because the
-            // seed is itself non-zero and would otherwise read as an answer on frame one.
-            let answered = m.mem.read8(ctx_base + answer_off) != pump_mark.unwrap_or(0);
-            reason_last = if answered { reason_steady } else { 0 };
-            m.mem.poke8(ctx_base + reason_off, reason_last);
-            let _ = reason_ours;
-        } else if let Some(r) = per_frame_reason {
+        // The measured modes are the library's, so the window tells a title why it is being
+        // called the same way. `--frame-reason=N` stays here: it is a fixed value a sweep asks
+        // for, not something a title needs.
+        if let Some(r) = per_frame_reason {
             m.mem.poke8(ctx_base + reason_off, r);
         }
         // Never hand the game a frame shorter than the rate we are pacing at.
@@ -1898,7 +1893,11 @@ fn main() {
             m.hold_clock_above(frame_clock_floor);
             frame_clock_floor = m.clock_now().wrapping_add(1_000_000 / fps as u32);
         }
-        let stop = m.call_with(frame_vector, &ctx, budget);
+        let stop = if per_frame_reason.is_some() {
+            m.call_with(frame_vector, &ctx, budget)
+        } else {
+            session.frame(&mut m, frames as u64, &frame_reason, budget)
+        };
         flush_call_log(&mut call_log, &m.trace, frames);
         frames += 1;
 
