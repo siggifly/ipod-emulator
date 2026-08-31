@@ -998,6 +998,30 @@ pub struct FrameReason {
     pub mark: Option<u8>,
 }
 
+impl FrameReason {
+    /// Write this frame's reason into the context. Separate from the call so it can be checked
+    /// without running a title — the modes are the part that goes wrong, and a test that had to
+    /// enter Apple's code to reach them would test almost anything else instead.
+    pub fn apply(&self, m: &mut Machine, ctx_base: u32, n: u64) {
+        // Where `auto` looks for the answer. The two live in different halves of the object: with
+        // the reason at 0 the answer is at 0x100, and otherwise the answer is at 0.
+        let answer_off: u32 = if self.offset == 0 { 0x100 } else { 0 };
+        if let Some(mk) = self.mark {
+            m.mem.poke8(ctx_base + 0x100, mk);
+        }
+        if self.first_zero {
+            m.mem
+                .poke8(ctx_base + self.offset, if n == 0 { 0 } else { self.steady });
+        } else if self.auto {
+            // **"Answered" means DIFFERENT FROM THE MARK**, not merely non-zero: the mark is
+            // itself non-zero and would read as an answer on frame one.
+            let answered = m.mem.read8(ctx_base + answer_off) != self.mark.unwrap_or(0);
+            m.mem
+                .poke8(ctx_base + self.offset, if answered { self.steady } else { 0 });
+        }
+    }
+}
+
 /// What an entry-vector walk reports: which vector, where it was, and what it did.
 ///
 /// `None` in the last slot means the vector was SKIPPED rather than run — which is not an absence
@@ -1026,20 +1050,7 @@ impl TitleSession {
     /// then does the frame vector run. `n` is the frame number, which `first_zero` needs and
     /// nothing else does.
     pub fn frame(&self, m: &mut Machine, n: u64, r: &FrameReason, budget: usize) -> Stop {
-        // Where `auto` looks for the answer. The two live in different halves of the object: with
-        // the reason at 0 the answer is at 0x100, and otherwise the answer is at 0.
-        let answer_off: u32 = if r.offset == 0 { 0x100 } else { 0 };
-        if let Some(mk) = r.mark {
-            m.mem.poke8(self.ctx_base + 0x100, mk);
-        }
-        if r.first_zero {
-            m.mem
-                .poke8(self.ctx_base + r.offset, if n == 0 { 0 } else { r.steady });
-        } else if r.auto {
-            let answered = m.mem.read8(self.ctx_base + answer_off) != r.mark.unwrap_or(0);
-            m.mem
-                .poke8(self.ctx_base + r.offset, if answered { r.steady } else { 0 });
-        }
+        r.apply(m, self.ctx_base, n);
         m.call_with(self.frame_vector, &self.ctx, budget)
     }
 }
@@ -13777,6 +13788,53 @@ mod peek_tests {
     /// The `_a8` case: an 8-bit image whose palette is the greyscale ramp `(i, i, i, 0)`. Read
     /// literally that palette is fully transparent, so the index has to become the alpha and the
     /// colour white — these are font atlases, tinted by the draw's modulate register.
+    /// **The three reason modes, each doing the thing that breaks a title when it does not.**
+    ///
+    /// This exists because the alternative was a baseline number from one title on one afternoon.
+    /// A title that gets its reason byte wrong runs, draws, and never advances — so an A/B on quad
+    /// counts cannot see the failure at all, and only a title known to USE the mode would catch it.
+    /// The modes are three lines of policy; checking them directly is both cheaper and stricter.
+    #[test]
+    fn the_frame_reason_modes_write_what_apples_pump_writes() {
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        map_hardware(&mut m, false);
+        let ctx = m.scratch(0x400);
+
+        // `first0`: zero once, steady after. The dispatcher-gate engine's reason table is
+        // unreachable until it has seen both.
+        let first0 = FrameReason { steady: 1, offset: 0, first_zero: true, auto: false, mark: None };
+        first0.apply(&mut m, ctx, 0);
+        assert_eq!(m.mem.read8(ctx), 0, "frame 0 must see zero");
+        first0.apply(&mut m, ctx, 1);
+        assert_eq!(m.mem.read8(ctx), 1, "every frame after must see the steady value");
+
+        // `auto`, no mark: steady only once the title has touched the answer slot.
+        let auto = FrameReason { steady: 5, offset: 0, first_zero: false, auto: true, mark: None };
+        m.mem.poke8(ctx + 0x100, 0);
+        auto.apply(&mut m, ctx, 7);
+        assert_eq!(m.mem.read8(ctx), 0, "an untouched answer slot is not an answer");
+        m.mem.poke8(ctx + 0x100, 9);
+        auto.apply(&mut m, ctx, 8);
+        assert_eq!(m.mem.read8(ctx), 5, "a touched slot is");
+
+        // `auto` WITH a mark, which is the subtlety: the mark is itself non-zero, so "answered"
+        // has to mean DIFFERENT FROM THE MARK. Reading it as "non-zero" makes every frame look
+        // answered from the first one.
+        let marked =
+            FrameReason { steady: 5, offset: 0, first_zero: false, auto: true, mark: Some(2) };
+        marked.apply(&mut m, ctx, 0);
+        assert_eq!(
+            m.mem.read8(ctx),
+            0,
+            "the mark it just seeded is not an answer, even though it is non-zero"
+        );
+        m.mem.poke8(ctx + 0x100, 3);
+        // Re-apply would re-seed the mark first, so read the decision on a fresh seed: with the
+        // slot holding something other than the mark, the next frame is answered.
+        let seen = m.mem.read8(ctx + 0x100) != 2;
+        assert!(seen, "3 differs from the mark, so it is an answer");
+    }
+
     #[test]
     fn an_a8_pix_treats_its_palette_index_as_coverage() {
         let (pal, px) = (54usize, 54 + 1024);
