@@ -2647,23 +2647,47 @@ fn wire(
         let rail = rail.clone();
         let rows = rows.clone();
         let work = work.clone();
+        let live = live.clone();
+        let ticking_machine = ticking_machine.clone();
+        let repaint_all = repaint_all.clone();
         let weak = window.as_weak();
         window.on_games_play(move |i| {
             let Some(t) = titles.row_data(i as usize) else {
                 return;
             };
-            // **Not wired to the bench yet, and it says so rather than doing nothing.** The
-            // machine this needs is `BootTarget::Game`, which `emu::build_game` already makes; what
-            // is missing is the frame pump in the window's own run loop. A row that silently did
-            // nothing would read as a broken title rather than an unfinished program.
-            rail.borrow_mut().note(&format!(
-                "{} is not runnable from this window yet — the machine builds, the frame pump does \
-                 not run here. `ipg-player {}` plays it now.",
-                t.name, t.path
-            ));
+            let dir = std::path::PathBuf::from(t.path.to_string());
+            // **The row carries the title's folder, and the executable is found from it.** Not
+            // stored on the row: `title_exe` sorts, so a folder holding two answers the same way
+            // twice, and a path captured when the page was pushed is a path that can have moved
+            // since. The shelf is the operator's and it changes under this window — the same
+            // reason `refresh_titles` reads the disk on every push.
+            let Some(exe) = eapp_loader::title_exe(&dir) else {
+                rail.borrow_mut().note(&format!(
+                    "{} holds no Executables/<name>.bin any more, so there is nothing to run. It \
+                     may have moved since this list was drawn.",
+                    t.name
+                ));
+                if let Some(w) = weak.upgrade() {
+                    sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+                }
+                return;
+            };
+            // §12.5's power-on, for a title. The old machine's `Drop` joins inside `start_title`
+            // before this one exists, which is the ordering that stops two interpreters holding one
+            // drive image — a title has none, but the machine it replaces may.
+            match start_title(&live, &t.name, &exe, &dir) {
+                Ok(()) => {
+                    rail.borrow_mut().note(&format!("{} is on the bench", t.name));
+                    ticking_machine();
+                }
+                Err(f) => {
+                    rail.borrow_mut().failed("start", &t.name, f);
+                }
+            }
             if let Some(w) = weak.upgrade() {
                 sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
             }
+            repaint_all();
         });
     }
 
@@ -3317,6 +3341,91 @@ fn machine_config(s: &Settings, name: &str) -> Option<emu::Config> {
         boot: emu::BootTarget::Os,
         ..emu::Config::default()
     })
+}
+
+/// **The well holds no library row.** `Live::index` is *which row of the library is the machine*,
+/// and a title is not in the library at all — it is a folder on a shelf. Every reader of that field
+/// compares it against a device's index or looks it up in the devices model, so a number no row can
+/// have is the honest answer: the press on a device row does not find this machine, and no row is
+/// drawn as running. That is correct rather than convenient — while a title is on the bench, no
+/// *device* is.
+const NO_LIBRARY_ROW: usize = usize::MAX;
+
+/// Put a **title** on the bench, on the same thread a device gets.
+///
+/// The sibling of [`start_machine`], and deliberately not a branch inside it: a title shares the
+/// thread, the `Link`, the frame pump and the drawn wheel, and shares none of the resolution — no
+/// drive to find, no ROM to name, no restore point to pair. `emu::build` sees `BootTarget::Game`
+/// and returns before it looks for either, which is the early return
+/// `a_title_is_built_as_a_game_and_not_as_an_ipod` holds shut.
+///
+/// **No snapshot, and that is what stops a title parking.** `write_restore_point` returns `None`
+/// for a config that names no path, so the close handler's park writes nothing and
+/// `Settings::record_park` — which answers `false` for a name that is not a device — records
+/// nothing. A title is cheap to start again; a 64 MB image of one is a file nobody asked for.
+///
+/// A title that cannot be read is **not refused here**: `emu::session` publishes
+/// `Phase::Stopped(e)` naming the file, which the bench already draws. Refusing eagerly would mean
+/// reading the executable and every texture beside it twice.
+fn start_title(
+    live: &Rc<RefCell<Option<Live>>>,
+    name: &str,
+    exe: &std::path::Path,
+    dir: &std::path::Path,
+) -> Result<(), rail::Failure> {
+    // Same order as `start_machine`, and for the same reason: the drop joins the old thread before
+    // the new machine exists.
+    *live.borrow_mut() = None;
+
+    let cfg = emu::Config {
+        boot: emu::BootTarget::Game { exe: exe.to_path_buf(), dir: dir.to_path_buf() },
+        snapshot: None,
+        ..emu::Config::default()
+    };
+    let link = emu::Link::new();
+    let thread = {
+        let cfg = cfg.clone();
+        let link = link.clone();
+        std::thread::Builder::new()
+            .name("ipod-title".into())
+            .spawn(move || emu::run(cfg, link))
+            .map_err(|e| {
+                rail::Failure::saying(
+                    rail::Class::Permission,
+                    "starting a title",
+                    format!("the machine thread could not be started: {e}"),
+                )
+            })?
+    };
+
+    *live.borrow_mut() = Some(Live {
+        link,
+        thread: Some(thread),
+        index: NO_LIBRARY_ROW,
+        // **A device that is not in the library**, holding only the name, because that is all the
+        // bench asks a device for while a machine is running: `shelf_state` and `cradle_of` want
+        // something to call it. `Device::default()`'s empty `firmware` is the scratch value its own
+        // doc describes, and this one never reaches `Settings::devices` — nothing here adds it.
+        device: Device { name: name.to_string(), ..Device::default() },
+        absent: Vec::new(),
+        cfg,
+        // Nothing to measure against: a title has no cold boot, so §12.3's bar has no denominator
+        // and says so rather than inventing one.
+        denominator: None,
+        life: RefCell::new(machine::Life::Booting {
+            target: emu::BootTarget::Os,
+            progress: machine::Progress::read(0, None),
+        }),
+        seq: Cell::new(0),
+        booted: Cell::new(None),
+        learned: Cell::new(false),
+        parking: Cell::new(false),
+        finger: RefCell::new(wheel::Finger::default()),
+        hold: Cell::new(false),
+        drawn: Cell::new(false),
+        buttons: Cell::new(0),
+    });
+    Ok(())
 }
 
 /// Put a machine on the bench, on the thread `emu.rs` already has.
@@ -16551,6 +16660,118 @@ pub(crate) mod tests {
         assert!(named, "pressing a title produced nothing a person could see");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A title pressed on the Games page runs on the bench and puts something on the panel.**
+    ///
+    /// The gate for §13's whole point, and it asserts the thing that matters rather than the thing
+    /// that is easy: not that a `Live` exists, not that a thread started, but that the interpreter
+    /// executed a real title far enough to **draw**. `Out::fb_nonzero` is the machine's own answer
+    /// about its own panel, so a title that built and then sat in a spin loop fails here.
+    ///
+    /// **Skips when the corpus is absent**, the way the emulator's own title tests do — the games
+    /// are gitignored, and a test that passed without them would be worth nothing. It says so
+    /// rather than passing quietly.
+    ///
+    /// It presses through `games-play`, so what is proved is the *wiring*: the row's ordinal, the
+    /// lookup back to a folder, `title_exe`, `start_title`, the thread, and the frame the pump
+    /// reads. Calling `start_title` directly would prove the launcher and not the page.
+    #[test]
+    fn a_title_pressed_on_the_games_page_runs_and_draws() {
+        let shelf = std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../resources/games/plaintext/Cracked Games"
+        ));
+        if eapp_loader::title_exe(&shelf.join("Mini Golf")).is_none() {
+            println!("SKIPPED: the title corpus is not here (gitignored)");
+            return;
+        }
+
+        let settings = Rc::new(RefCell::new(Settings::default()));
+        let w = a_window();
+        let shell = Rc::new(drops::Shell::answering([shelf.clone()]));
+        let _wiring = wire(&w, settings.clone(), args::Machine::default(), shell);
+        w.invoke_games_choose();
+
+        let titles = w.get_titles();
+        let which = (0..titles.row_count())
+            .find(|i| titles.row_data(*i).is_some_and(|t| t.name.contains("Mini Golf")))
+            .expect("Mini Golf is on the shelf");
+
+        w.invoke_games_play(which as i32);
+
+        // **Wall-clock, because the thing being measured is a real thread.** The machine is an
+        // interpreter running a title from its entry point; the window's own pump is a timer that
+        // does not tick in a test, so this reads the `Link` directly — which is what the pump reads
+        // too. Sixty seconds is not a performance claim, it is a bound on a hang: `play` reaches a
+        // drawn frame in a fraction of that, and a title that has not drawn by then is stuck.
+        let started = std::time::Instant::now();
+        let mut drew = false;
+        let mut instructions = 0u64;
+        while started.elapsed() < std::time::Duration::from_secs(60) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let held = _wiring.live.borrow();
+            let Some(l) = held.as_ref() else { break };
+            let out = l.link.out.lock().unwrap();
+            instructions = out.stats.executed;
+            if out.fb_nonzero > 0 {
+                drew = true;
+                break;
+            }
+        }
+        assert!(
+            drew,
+            "the title ran {instructions} instructions and never put a pixel on the panel — it is \
+             on the bench and stuck, which is a machine defect rather than a wiring one"
+        );
+
+        // ── And it is PLAYING, not merely drawn ─────────────────────────────────────────────
+        //
+        // **This is the assertion the whole page is for.** Started as a plain machine a title runs
+        // its initialisation, draws one frame and returns — `Phase::Stopped("Returned at 88563
+        // instructions")`, measured, which is a game that vanishes the instant it appears. What
+        // makes it play is `title_session`'s pump calling the frame vector again and again. A
+        // panel that never changes and a phase that is not `Running` are the two ways that pump
+        // can be absent, and each is checked.
+        let (first_frame, first_seq) = {
+            let held = _wiring.live.borrow();
+            let l = held.as_ref().expect("the title is on the bench");
+            let out = l.link.out.lock().unwrap();
+            assert!(
+                matches!(out.phase, emu::Phase::Running),
+                "a title that is playing is running; this one says {:?}",
+                out.phase
+            );
+            (out.fb.clone(), out.fb_seq)
+        };
+        let mut moved = false;
+        let watching = std::time::Instant::now();
+        while watching.elapsed() < std::time::Duration::from_secs(20) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let held = _wiring.live.borrow();
+            let Some(l) = held.as_ref() else { break };
+            let out = l.link.out.lock().unwrap();
+            if out.fb_seq != first_seq && out.fb != first_frame {
+                moved = true;
+                break;
+            }
+        }
+        assert!(
+            moved,
+            "the panel never changed, so the title drew one frame and stopped — the frame pump is \
+             not calling the frame vector, which is the difference between a title that runs and a \
+             title that plays"
+        );
+
+        // And it is the TITLE on the bench, not a device: no library row is the machine.
+        let held = _wiring.live.borrow();
+        let l = held.as_ref().expect("the title is still on the bench");
+        assert_eq!(l.index, NO_LIBRARY_ROW, "a title took a device's row in the library");
+        assert!(
+            matches!(l.cfg.boot, emu::BootTarget::Game { .. }),
+            "the bench built an iPod for a title"
+        );
+        assert!(l.cfg.snapshot.is_none(), "a title was given a restore point it can never resume");
     }
 
     /// **A shelf that has moved says so, rather than reporting itself as empty.**

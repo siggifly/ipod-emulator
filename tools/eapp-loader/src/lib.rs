@@ -3849,6 +3849,12 @@ pub struct Machine {
     pub watch_log: Capped<(u32, u32, u32)>,
     /// Directory holding the game's resources, if one was supplied.
     pub game_dir: Option<std::path::PathBuf>,
+    /// The title's entry vectors, kept because a caller that builds a machine and runs it later
+    /// cannot re-read them: [`EApp`] is parsed and dropped, and the header they came from is at a
+    /// file offset rather than anywhere in the address space. `start_title` needs them, and the
+    /// alternative — parsing the executable twice — reads the file again to learn what was already
+    /// known. Empty for every machine that is not a title.
+    pub game_vectors: Vec<u32>,
     /// Contents and read position of each opened file, indexed by handle - 1.
     open_files: Vec<(Vec<u8>, usize)>,
     /// The file behind each open handle, parallel to `open_files`.
@@ -4335,6 +4341,7 @@ impl Machine {
             watch: None,
             watch_log: Capped::new(4096),
             game_dir: None,
+            game_vectors: Vec::new(),
             open_files: Vec::new(),
             open_paths: Vec::new(),
             rewind_after_load: true,

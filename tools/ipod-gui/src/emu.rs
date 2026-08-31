@@ -1047,6 +1047,24 @@ fn build_game(exe: &std::path::Path, dir: &std::path::Path) -> Result<Machine, S
     // flags to override them with, which is the point of them being defaults.
     m.install_game_stubs(&stem, eapp_loader::GameStubs::default());
     m.preload_textures();
+
+    // **The two machine settings the player sets from the same table, and leaving them out is not
+    // a smaller version of running a title — it is a different one.** Measured against
+    // `ipg-player` on Mini Golf: without these the window's frames executed 8 640 instructions
+    // each against the player's 24 783, and the panel never changed after the first frame. A
+    // title that renders a third of the work and then stops moving reads as a broken emulator; it
+    // was a machine that had never been told how its files load or whose clock it follows.
+    let td = eapp_loader::defaults_for(&stem);
+    // An async open whose request carries a buffer loads the whole file. True for every title in
+    // the table but Pac-Man, whose 512 KB `.tga` sends its loader into a loop if pre-loaded.
+    m.load_on_open = td.load_on_open;
+    // **The title's timers follow the wall, not our call rate.** `ipg-player` sets this for every
+    // run that is not `--fixed-clock`, and `hold_clock_above` — the floor that stops a short frame
+    // reporting a zero-length delta to a title that divides by it — is gated on it.
+    m.wall_clock = true;
+    // Kept on the machine because the `EApp` does not survive this function and the run loop needs
+    // them a frame later. See `Machine::game_vectors`.
+    m.game_vectors = app.vectors.clone();
     Ok(m)
 }
 
@@ -1706,7 +1724,24 @@ pub fn run(cfg: Config, link: Arc<Link>) {
     // Across sessions, because "again" is a fact about the sequence and a session cannot see one.
     let mut deaths = Deaths::default();
     loop {
-        match session(&cfg, &link, first, &mut deaths) {
+        // **A title gets the frame pump, and a boot gets the boot.** Decided here rather than
+        // inside `session` for the same reason `build` decides it rather than threading a flag
+        // through every peripheral: the two runs share the panel and the `Link` and nothing else,
+        // and a boot loop with a title branch woven through it would be one function pretending to
+        // be two. See `title_session`.
+        let outcome = if matches!(cfg.boot, BootTarget::Game { .. }) {
+            match build(&cfg, first) {
+                Ok(m) => title_session(&cfg, &link, m),
+                Err(e) => {
+                    println!("{}", deaths.note(&e));
+                    link.out.lock().unwrap().phase = Phase::Stopped(e);
+                    return;
+                }
+            }
+        } else {
+            session(&cfg, &link, first, &mut deaths)
+        };
+        match outcome {
             Outcome::Quit => return,
             Outcome::ColdBoot => first = false,
             // Changing the boot target is a power cycle, and a session reached by one never
@@ -1721,6 +1756,159 @@ pub fn run(cfg: Config, link: Arc<Link>) {
                 }
                 first = false;
             }
+        }
+    }
+}
+
+/// **Run a title, frame by frame, until the window asks it to stop.**
+///
+/// The sibling of [`session`], and separate from it for the reason `build` returns early for a
+/// title: the two share the panel, the `Link` and the thread, and share nothing else. A boot is a
+/// machine executing from a reset vector with a co-processor, a NOR image and a drive; a title is
+/// Apple's own frame contract — call the entry vectors once, then call the frame vector again and
+/// again, with the reason byte the per-title table says that title reads.
+///
+/// **The pump is the whole difference between running and playing.** Started as a plain machine, a
+/// title executes its initialisation, draws one frame and RETURNS — measured at 88 563 instructions
+/// for Mini Golf, which reads as a game that stops the instant it appears. Nothing is wrong with
+/// it: eApp titles do not own their main loop, RetailOS does, and calling that loop's body is the
+/// host's job. `TitleSession::frame` is that call.
+///
+/// **Every measured per-title quirk comes from `defaults_for`, not from here.** Which byte the
+/// reason lives in, whether frame 0 must read zero, whether the value is written blind or only
+/// after the title has answered, how big a budget one frame needs, and what rate to pace at — all
+/// of it is the table `ipg-player` uses, so the window and the command line cannot drift into
+/// disagreeing about what a title needs.
+fn title_session(cfg: &Config, link: &Arc<Link>, mut m: Machine) -> Outcome {
+    let stem = match &cfg.boot {
+        BootTarget::Game { exe, .. } => exe
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        // Unreachable by construction — `run` routes here on the boot target alone — and answered
+        // rather than panicked for the reason the `None` arm above gives: a panic on this thread
+        // takes the window with it.
+        _ => String::new(),
+    };
+    let td = eapp_loader::defaults_for(&stem);
+    let budget = td.budget.unwrap_or(8_000_000) as usize;
+
+    // Taken off the machine: `start_title` needs `&mut self` and the vectors live on it, so a
+    // borrow of both at once is not expressible. Nothing reads them again.
+    let vectors = std::mem::take(&mut m.game_vectors);
+    // **`call_terminate` is false.** `vectors[1]` is the shutdown entry, and calling it runs
+    // `__cxa_finalize` — which nulls the resource manager's queue, after which the title loads
+    // nothing for the rest of its life and reports no error at all. `enter_title` says so at
+    // length; this is the caller that must not get it wrong.
+    let (session, _ran) = m.start_title(&vectors, td.ctx_seed, budget, false);
+    let Some(session) = session else {
+        let why = format!("{stem} has no entry vector, so there is nothing to call");
+        link.out.lock().unwrap().phase = Phase::Stopped(why);
+        return Outcome::Quit;
+    };
+
+    let spec = td.frame_reason;
+    let reason = eapp_loader::FrameReason {
+        steady: spec
+            .and_then(|v| v.split_once(':').map(|(_, n)| n))
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(1),
+        // `ipg-player` exposes this as `--reason-offset=` because Sudoku reads the pump's other
+        // byte, and the per-title table has no column for it yet. Zero is what every title the
+        // table names uses; when that column exists this reads it instead.
+        offset: 0,
+        first_zero: spec.is_some_and(|v| v.starts_with("first0")),
+        auto: spec.is_some_and(|v| v.starts_with("auto")),
+        mark: td.pump_mark,
+    };
+    let fps = td.fps.unwrap_or(60);
+
+    link.out.lock().unwrap().phase = Phase::Running;
+    let mut frames = 0u64;
+    let mut fb = vec![0u8; FB_W * FB_H * 3];
+    let mut fb_seq = 0u64;
+    let mut frame_clock_floor: u32 = 0;
+    let mut last_fb = Instant::now();
+
+    loop {
+        if link.quit.load(Ordering::Relaxed) {
+            return Outcome::Quit;
+        }
+        if let Some(c) = link.inbox.lock().unwrap().cmds.pop_front() {
+            match c {
+                Cmd::PowerOff => return Outcome::PoweredOff,
+                Cmd::PowerCycle => return Outcome::ColdBoot,
+                Cmd::Boot(t) => return Outcome::ColdBootInto(t),
+                Cmd::PowerOn => {}
+            }
+        }
+
+        // **Never hand a title a frame shorter than the rate it is being paced at.** The throttle
+        // keeps the average near `fps`, but individual frames jitter either side, and a title that
+        // divides by its own frame delta cannot survive the short ones — this killed Vortex at
+        // frame 73 in the player before the floor existed.
+        if fps > 0 {
+            m.hold_clock_above(frame_clock_floor);
+            frame_clock_floor = m.clock_now().wrapping_add(1_000_000 / fps as u32);
+        }
+        // ── What the host owes the game, before the next frame ──────────────────────────────
+        //
+        // **Without this a title runs forever and never progresses.** Measured against
+        // `ipg-player` on Mini Golf: the window held a flat 4 quads per frame for as long as it
+        // ran, while the player ramped 3 -> 9 as the game loaded — because a title issues an async
+        // file request and then WAITS for the callback, and nothing here was ever calling it back.
+        // The panel not changing was the symptom; a splash screen waiting on a read that would
+        // never complete was the cause.
+        //
+        // Callbacks are dispatched directly rather than through `deliver_completions`'s linked
+        // list. Both are real — the list is what RetailOS does — but the direct call is what every
+        // title in the measured set runs against by default, and `--completion-list` is the flag
+        // that asks for the other one. The window has no flags, so it takes the default.
+        let due: Vec<u32> = m.pending_completions.drain(..).collect();
+        for req in due {
+            // `peek32` rather than `read32`: this is the host reading the game's request object,
+            // not the game reading memory, and it must not be counted as an access or reach a
+            // peripheral hook. A request field that is not mapped reads 0, which is the same
+            // "no callback" this already handles.
+            let cb = m.mem.peek32(req + eapp_loader::REQ_CALLBACK).unwrap_or(0);
+            let ctx_arg = m.mem.peek32(req + eapp_loader::REQ_CONTEXT).unwrap_or(0);
+            if cb != 0 {
+                // The stop is not acted on: a completion that does not return is a hang inside the
+                // game's own loader, and the frame below is what notices — this call has no more
+                // information about it than the next frame does.
+                let _ = m.call_with(cb, &[req, ctx_arg], budget);
+            }
+        }
+
+        let stop = session.frame(&mut m, frames, &reason, budget);
+        frames += 1;
+
+        // A title that has torn itself down is not a title that is running, and saying so is what
+        // stops the window drawing a frozen last frame as a live machine.
+        if let eapp_loader::Stop::Lost(why) = &stop {
+            let mut out = link.out.lock().unwrap();
+            out.phase = Phase::Stopped(format!("{stem}: {why}"));
+            return Outcome::Quit;
+        }
+
+        // ~60 Hz to the window, whatever the title is paced at: the panel is the same panel, and
+        // `Machine::framebuffer` is already the packed RGB the window wants.
+        if last_fb.elapsed() >= std::time::Duration::from_millis(16) {
+            last_fb = Instant::now();
+            fb_seq += 1;
+            let n = m.framebuffer.len().min(fb.len());
+            fb[..n].copy_from_slice(&m.framebuffer[..n]);
+            let nonzero = fb[..n].iter().filter(|&&b| b != 0).count() as u32;
+            let mut out = link.out.lock().unwrap();
+            let dropped = out.stats.input_dropped;
+            out.stats = Stats {
+                input_dropped: dropped,
+                executed: m.executed as u64,
+                ..Stats::default()
+            };
+            out.fb.copy_from_slice(&fb);
+            out.fb_nonzero = nonzero;
+            out.fb_seq = fb_seq;
         }
     }
 }
