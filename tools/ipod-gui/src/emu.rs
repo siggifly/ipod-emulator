@@ -2149,7 +2149,20 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
                         .filter(|(_, &p)| p != 0)
                         .count() as u32,
                 ),
-                None => (0, 0),
+                // **A title has no co-processor, and draws into the machine's own panel.**
+                // `Machine::framebuffer` is already 320x240 packed RGB — the same format
+                // `read_framebuffer` spends its time producing out of the surface's RGB565 — so
+                // this is a copy rather than a conversion, and there is no second surface to
+                // count because a game never flips one.
+                //
+                // Reaching this arm on a BOOT would mean the machine lost its co-processor, which
+                // is a different fault; it reads zero there exactly as it always did, because an
+                // absent BCM leaves `framebuffer` untouched at all-zero.
+                None => {
+                    let n = m.framebuffer.len().min(fb.len());
+                    fb[..n].copy_from_slice(&m.framebuffer[..n]);
+                    (fb[..n].iter().filter(|&&b| b != 0).count() as u32, 0)
+                }
             }
         } else {
             (0, 0)
@@ -3189,6 +3202,34 @@ mod tests {
     /// error text is a witness for which branch ran, and it needs no gitignored resource to be one.
     ///
     /// **How to make it go red**: delete the `if let BootTarget::Game` early return from `build`.
+    /// **The two panels are the same size, and the copy that joins them must not be hiding it.**
+    ///
+    /// A boot's frame arrives through `read_framebuffer`, which expands the co-processor's RGB565
+    /// surface into `Out::fb`. A title's arrives by copying `Machine::framebuffer`, which is packed
+    /// RGB already. That copy is bounded by `min()` so it can never overrun — which also means that
+    /// if the two ever disagreed about the panel's size it would silently show a partial picture
+    /// rather than fail. This is the assertion that stops that being possible quietly.
+    #[test]
+    fn a_titles_panel_is_the_same_panel_the_window_draws() {
+        let window = FB_W * FB_H * 3;
+        let machine = eapp_loader::FB_WIDTH * eapp_loader::FB_HEIGHT * 3;
+        assert_eq!(
+            window, machine,
+            "the window expects {FB_W}x{FB_H} and the machine draws {}x{}",
+            eapp_loader::FB_WIDTH,
+            eapp_loader::FB_HEIGHT
+        );
+
+        // And a machine really does allocate it, rather than growing it on first draw — a title
+        // that draws nothing must still hand over a full black frame, not an empty slice.
+        let m = Machine::new(&placeholder_app(), RAM_BASE, RAM_SIZE);
+        assert_eq!(
+            m.framebuffer.len(),
+            machine,
+            "a fresh machine's panel is allocated at full size"
+        );
+    }
+
     #[test]
     fn a_title_is_built_as_a_game_and_not_as_an_ipod() {
         let missing = std::path::PathBuf::from("/nonexistent/Title/Executables/Title.bin");
