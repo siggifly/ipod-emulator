@@ -19,3 +19,10 @@
 //! Everything here is re-exported from the crate root, so nothing outside had to change.
 
 pub mod backlight;
+pub mod wheel;
+pub mod mailbox;
+pub mod flash;
+pub mod pmu;
+pub mod ata;
+pub mod cop;
+pub mod video;
