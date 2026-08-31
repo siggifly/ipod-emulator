@@ -972,6 +972,21 @@ fn manifest_paths(path: &std::path::Path) -> Option<Vec<String>> {
     (!out.is_empty()).then_some(out)
 }
 
+/// The two command-line facts [`Machine::install_game_stubs`] needs.
+///
+/// A struct rather than two bools, because they are opposites of each other's default and a call
+/// site reading `install_game_stubs(name, false, true)` says nothing about which is which.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GameStubs {
+    /// `--open-returns-handle`: an open reports success by returning the handle rather than 0.
+    /// Off by default — the two conventions are opposites and every title measured before Minigolf
+    /// wanted the zero.
+    pub open_returns_handle: bool,
+    /// `--sync-files`: ask for the synchronous file model. A title whose measured default is the
+    /// async one gets async anyway; see `defaults_for`.
+    pub sync_files: bool,
+}
+
 /// **Measured per-title behaviour, and it belongs to the machine rather than to a front end.**
 ///
 /// This lived in `bin/play.rs` while `play` was the only thing that ran a title. The window runs
@@ -4253,6 +4268,158 @@ impl Machine {
     /// `play` and `trace` had drifted to 61 and 31 `set_stub` calls respectively, which meant a
     /// finding could be true in the viewer and absent from the headless tool that is supposed to
     /// measure it. Everything the audit adds goes here instead.
+/// Wire a title's imports to this machine — the 60 entry points a game actually calls.
+///
+/// **Lifted out of `bin/play.rs` so the window can run a title too.** Every one of these was
+/// identified against Apple's own implementations, and several carry the symptom that found them:
+/// `glTexImage2D` is why the golf course rendered as a white field, `InputEvents #0` writes the
+/// event word to `[r1]` rather than `[r0+4]` and writing it to the wrong one meant Sims Bowling
+/// never saw a single input. A second copy of that in a front end is a second place for those
+/// findings to rot.
+///
+/// `exe_stem` is the executable's name — `defaults_for` keys the measured per-title table on it.
+///
+/// Returns whether the **async** file model was installed, because that is a real difference in
+/// how the machine behaves and a caller that reports its setup should be able to say which it got.
+pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
+        // Identified framework entry points — see README §"The GL surface actually in use".
+        self.set_stub("miscTBD", 0, Stub::Alloc);
+        self.set_stub("miscTBD", 1, Stub::Free { arg: 0 });
+        self.set_stub("miscTBD", 9, Stub::Clock { arg: 0, step: 16_667 });
+        // The iPod status bar the game draws itself: #12 is the time of day, #13 the battery level.
+        // Both were unstubbed, so the clock formatted whatever was on the stack and the gauge read
+        // empty. See `Stub::HostTime` and `Stub::HostBattery` for the disassembly behind each.
+        // Metadata: Lost reaches exactly two ordinals, both from one wrapper at 0x18006d48.
+        // #62 is the now-playing playlist — it is never dereferenced, only handed back, so a stable
+        // non-NULL block is enough; a NULL would be the failure value. #134 is its track count.
+        // The render-server lifecycle — NOT a draw path. Lost draws with the ordinary
+        // #137/#40/#37 vertex-array calls, but only once the server reports itself started.
+        // #152 start, #153 stop, #159 select built-in pipeline, #164 set the server image
+        // (the `rserver.bin` blob). Each answers 1 for success; 0, which an unstubbed entry
+        // returns, means failure.
+        self.set_stub("OpenGLES", 125, Stub::GlUniformMatrix { value: 3 });
+        self.set_stub("OpenGLES", 152, Stub::GlStartRenderServer);
+        self.set_stub("OpenGLES", 153, Stub::Value(1));
+        self.set_stub("OpenGLES", 159, Stub::PipelineSelect);
+        self.set_stub("OpenGLES", 164, Stub::Value(1));
+
+        let playlist = self.scratch(0x90);
+        self.set_stub("Metadata", 62, Stub::Value(playlist));
+        self.set_stub("Metadata", 134, Stub::AudioStreamCount);
+        self.set_stub("miscTBD", 12, Stub::HostTime { out: 0 });
+        self.set_stub("miscTBD", 13, Stub::HostBattery);
+        // Everything the §18.0 coverage audit settled, shared with `trace` so a finding cannot be
+        // true in the viewer and missing from the tool that measures it.
+        self.install_audit_stubs();
+        self.set_stub("OpenGLES", 12, Stub::GlClear);
+        self.set_stub("OpenGLES", 13, Stub::GlClearColor);
+        self.set_stub("OpenGLES", 157, Stub::GlSwap);
+        self.set_stub("OpenGLES", 137, Stub::GlVertexAttribPointer);
+        self.set_stub("OpenGLES", 37, Stub::GlDrawArrays);
+        // #38 glDrawElements — Pac-Man's maze and pellet field are indexed draws.
+        self.set_stub("OpenGLES", 38, Stub::GlDrawElements);
+        // #45 glGenTextures — names start at 1, so 0 stays "unbound".
+        self.set_stub("OpenGLES", 45, Stub::GlGenTextures);
+        // #148 glUniform4xvAPPLE — the per-draw modulate colour, 16.16 fixed. #120 is the float twin.
+        self.set_stub("OpenGLES", 148, Stub::GlUniform4x { fixed: true });
+        self.set_stub("OpenGLES", 120, Stub::GlUniform4x { fixed: false });
+        // #158 — a private enable/disable whose meaning lives in the render-server firmware. Accept it.
+        self.set_stub("OpenGLES", 158, Stub::Value(0x3000));
+        // #165/#166 loadIdentity and #167 ortho are plain matrix maths with no driver state.
+        self.set_stub("OpenGLES", 165, Stub::GlLoadIdentity { fixed: false });
+        self.set_stub("OpenGLES", 166, Stub::GlLoadIdentity { fixed: true });
+        self.set_stub("OpenGLES", 167, Stub::GlOrtho);
+        // The mat4 helpers. #175 is not optional: Minigolf's only glUniformMatrix4fv upload is built
+        // by it into a stack frame, so leaving it a no-op fed that upload uninitialised stack.
+        self.set_stub("OpenGLES", 169, Stub::GlMatrixOp { op: MatrixOp::Translate });
+        self.set_stub("OpenGLES", 171, Stub::GlMatrixOp { op: MatrixOp::Scale });
+        self.set_stub("OpenGLES", 173, Stub::GlMatrixOp { op: MatrixOp::Rotate });
+        self.set_stub("OpenGLES", 175, Stub::GlMatrixOp { op: MatrixOp::Mult });
+        // #105 glTexSubImage2D — Bejeweled and Zuma refill existing textures through it.
+        self.set_stub("OpenGLES", 105, Stub::GlTexSubImage2D);
+        // Lost's own colour and matrix paths: it calls neither #148 nor #125.
+        self.set_stub("OpenGLES", 147, Stub::GlUniform4xScalar);
+        self.set_stub("OpenGLES", 149, Stub::GlUniformMatrixFixed);
+        // #53 glGetError is exactly `return the pending error, then clear it`; 0 is the right answer
+        // when none is pending. #84 glPixelStorei is inert on this driver — neither #99 nor #105
+        // consults alignment — and #101 glTexParameterf stores nothing, so filters are fixed-function.
+        self.set_stub("OpenGLES", 4, Stub::GlBindTexture);
+        self.set_stub("OpenGLES", 19, Stub::GlCompressedTexImage2D);
+        // #99 glTexImage2D — named from Apple's implementation at 0x00270240. Unstubbed it returned
+        // 0 and the upload was dropped, which is why the golf course rendered as a white field.
+        self.set_stub("OpenGLES", 99, Stub::GlTexImage2D);
+        // #21 glCopyTexImage2D — render-to-texture. Minigolf allocates a screen-sized texture from a
+        // placeholder and then fills it from the framebuffer; without this the placeholder is drawn.
+        self.set_stub("OpenGLES", 21, Stub::GlCopyTexImage2D);
+        self.set_stub("OpenGLES", 40, Stub::GlEnableVertexAttribArray);
+        self.set_stub("OpenGLES", 36, Stub::GlDisableVertexAttribArray);
+        // `Audio #52` (the 255 divisor) now lives in the shared defaults in lib.rs, so `trace` and
+        // `play` agree on it; research/01's "any non-zero" sweep landed on 1, the measured value is
+        // 0xff. See the comment there for the Hold'em divide-by-zero it was silently causing.
+        // The audio stream model, measured: miscTBD #14 resolves a name, Audio #40 registers it,
+        // Audio #43 plays one by index.
+        self.set_stub("miscTBD", 14, Stub::ResolveName { name: 3, out: 1 });
+        self.set_stub("Audio", 0, Stub::AudioSfxRegister { idx: 1 });
+        self.set_stub("Audio", 40, Stub::AudioRegister);
+        self.set_stub("Audio", 43, Stub::AudioPlay { arg: 0 });
+        // #48 carries the player's repeat setting; the game sets it to 1 before starting the music
+        // and then never issues another play, so the loop is the player's job, not the game's.
+        self.set_stub("Audio", 48, Stub::AudioRepeat { arg: 0 });
+        // The sound-effect path, from Apple's implementations: #0 creates a descriptor and returns
+        // its slot index, #7 points that descriptor at the PCM, and #2 plays it. #8 is a buffer-LENGTH
+        // setter and was never the trigger, which is why hooking it captured nothing across a whole
+        // hole of play.
+        self.set_stub("Audio", 7, Stub::SfxSetBuffer { handle: 0, ptr: 1 });
+        self.set_stub("Audio", 2, Stub::SfxPlay { handle: 0 });
+        self.set_stub("Audio", 16, Stub::SfxRepeat { handle: 0, count: 1 });
+        // `poll(&out0, &out1)`. Apple's implementation at `0x001181f8` writes a delta to out0 and the
+        // encoded event word to out1; this fills out1, which is the one Minigolf reads (the only stack
+        // reads in its whole handler are `[sp+4]`).
+        // `InputEvents #0(a, out)` writes the event word to `[r1]`, NOT to `[r0+4]`.
+        //
+        // Minigolf, Bejeweled and Tetris all call it with `r1 == r0 + 4` (measured: r0=0x117ffed8,
+        // r1=0x117ffedc), so the two rules name the same address and the wrong one looked correct for
+        // years. Sims Bowling passes `r1 == r0 - 4` (r0=0x117ffeb4, r1=0x117ffeb0) and reads the word
+        // back from `[r1]` at `0x18007684`:
+        //
+        //     ldr r0,[sp,#0] / and r2,r0,#0xff / and r1,r0,#0x40000000 / mov r4,r1,lsr #30
+        //
+        // — the low byte and the EVENT PRESENT bit, exactly the word this stub builds. Writing it to
+        // `[r0+4]` put it eight bytes up the stack and the title never saw a single input.
+        self.set_stub("InputEvents", 0, Stub::InputPoll { arg: 1, offset: 0 });
+        self.set_stub("Filesytem", 0, Stub::FileOpen { path: 1, out: 3, return_handle: o.open_returns_handle });
+        self.set_stub("AsyncFileIO", 0, Stub::FileOpen { path: 1, out: 3, return_handle: o.open_returns_handle });
+        self.set_stub("AsyncFileIO", 3, Stub::FileOpen { path: 1, out: 2, return_handle: o.open_returns_handle });
+        let rd = Stub::FileRead { handle: 0, buffer: 1, length: 2, out: 3 };
+        self.set_stub("Filesytem", 2, rd.clone());
+        self.set_stub("AsyncFileIO", 2, rd);
+
+        // Per-title defaults, then anything the command line says explicitly. See `defaults_for`.
+        // Resolved here rather than further down because the file-model stubs below consult it.
+        let td = defaults_for(exe_stem);
+
+        // Per-title knowledge wins over the flag's absence: a title whose measured default is the
+        // async model gets it even without `--sync-files` being considered.
+        let async_files = !o.sync_files || td.async_files;
+        if async_files {
+            self.set_stub("AsyncFileIO", 0, Stub::AsyncOpen { path: 1, request: 3 });
+            self.set_stub("AsyncFileIO", 3, Stub::AsyncOpen { path: 1, request: 2 });
+            self.set_stub("AsyncFileIO", 2, Stub::AsyncRead { request: 0 });
+            // #1 takes the request in r0, #4 in r2 (shims at 0x002680c8 / 0x00268160). Leaving #1
+            // unstubbed returns 0, which the game reads as failure one step after the open.
+            self.set_stub("AsyncFileIO", 1, Stub::AsyncOp { request: 0 });
+            self.set_stub("AsyncFileIO", 4, Stub::AsyncOp { request: 2 });
+            // #12/#14/#16 are the save/settings store — they route through a different singleton
+            // (0x0017154c) than the file entries and only appear when the pause menu opens. Left
+            // unstubbed they return 0, i.e. "failed", and the menu stalls before drawing its items.
+            // Reporting success is a guess at the value but a well-founded one about the direction.
+            self.set_stub("AsyncFileIO", 12, Stub::SyncOpenWrite { mode: 0, name: 1, obj: 2 });
+            self.set_stub("AsyncFileIO", 14, Stub::SyncWrite { handle: 0, buffer: 1, length: 2 });
+            self.set_stub("AsyncFileIO", 16, Stub::SyncClose { handle: 0 });
+        }
+        async_files
+    }
+
     pub fn install_audit_stubs(&mut self) {
         // `EAPP_AUDIT_SKIP=audio,misc,gl` leaves a group unimplemented. This exists because a
         // batch of stubs that lands together cannot be bisected afterwards, and the first one
