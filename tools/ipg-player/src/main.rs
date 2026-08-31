@@ -111,33 +111,6 @@ impl HoldTimers {
 
 
 
-fn post_event(m: &mut Machine, ctx_base: u32, node: u32, ty: u8, state: u8, payload: u32, wheel: u8) {
-    // The real mechanism, from Apple's `postEvent` at `0x0024d918`: a 12-byte node —
-    // `{ type at +0x00, state at +0x01, payload at +0x04, next at +0x08 }` — appended to a list
-    // whose head is `mgr+0x26c`. The frame pump at `0x0024dad4` republishes that head into
-    // `ctx+0x30`, and the game hands it straight to its input dispatcher. The same struct is what
-    // Apple's `InputEvents #1` decoder at `0x0026a8bc` reads, and it ignores any event whose
-    // state byte is not 1.
-    //
-    // This is the route that selected a letter. `ctx+0x100` is NOT it — that is the frame
-    // callback's reason code, and any non-zero value there sends the game down a lifecycle path
-    // (which is what "every key resets the game" was).
-    m.mem.poke8(node, ty);
-    m.mem.poke8(node + 1, state);
-    m.mem.poke32(node + 4, payload);
-    m.mem.poke32(node + 8, 0); // next — a list of one
-    m.mem.poke32(ctx_base + 0x30, node);
-    // The game only LOOKS at the event list when its input flags are non-zero:
-    //
-    //   18018a44  ldr r0,[r9,#0x14] / cmp r0,#0 / beq   -> skip the dispatcher
-    //   18018a50  ldr r1,[r4,#0x30] / bl 0x18011528     -> dispatch
-    //
-    // and those flags are only set by an `InputEvents #0` poll that reports an event. So a button
-    // pressed while the wheel is still is never read at all — which is why Select appeared to
-    // work (you are usually scrolling) and every other button appeared dead. Post a wheel sample
-    // alongside the button so the frame carries one.
-    m.queue_input(wheel);
-}
 
 
 /// Ask the window server to constrain the window to the panel's aspect ratio.
@@ -950,7 +923,6 @@ fn main() {
     }
     let mut music: Option<Music> = None;
     // Somewhere to build the 12-byte event node.
-    let event_node = m.scratch(0x10);
     // W is Menu, which is the one button whose type is known. The other three are still guesses
     // and post event types rather than event-word bytes, which is at least the right channel.
     // Type 1 is EXIT — measured: after it, quads stop and the frame vector drops from ~29 000
@@ -1113,7 +1085,7 @@ fn main() {
             // wheel moved LOST's name-entry highlight but Select never picked a letter.
             if event_buttons {
                 let ty = event_type_for(held_bits);
-                post_event(&mut m, ctx_base, event_node, ty, 2, 0, wheel_byte(wheel_raw));
+                session.post_event(&mut m, ty, 2, 0, wheel_byte(wheel_raw));
                 // Retire it afterwards — see the note at the press sites.
                 event_hold = 2;
             }
@@ -1137,7 +1109,7 @@ fn main() {
             if let Some(bit) = bit {
                 println!("script frame {frames}: {action} -> flags bit {bit:#04x}");
                 if event_buttons {
-                    post_event(&mut m, ctx_base, event_node, event_type_for(bit), 1, 0,
+                    session.post_event(&mut m, event_type_for(bit), 1, 0,
                                wheel_byte(wheel_raw));
                     // A posted node has to be RETIRED, or the press never ends.
                     //
@@ -1215,7 +1187,7 @@ fn main() {
             if window.is_key_pressed(key, minifb::KeyRepeat::No) {
                 println!("button {name:<11} -> flags bit {bit:#04x}");
                 if event_buttons {
-                    post_event(&mut m, ctx_base, event_node, event_type_for(bit), 1, 0,
+                    session.post_event(&mut m, event_type_for(bit), 1, 0,
                                wheel_byte(wheel_raw));
                     // A posted node has to be RETIRED, or the press never ends.
                     //
@@ -1247,7 +1219,7 @@ fn main() {
             //      compares against 5 and 6 at 0x0024e0dc. This is the better-founded guess.
             println!("button Select      -> flags bit {BTN_SELECT:#04x}");
             if event_buttons {
-                post_event(&mut m, ctx_base, event_node, event_type_for(BTN_SELECT), 1, 0,
+                session.post_event(&mut m, event_type_for(BTN_SELECT), 1, 0,
                            wheel_byte(wheel_raw));
                 event_hold = 2;
             }
@@ -1385,7 +1357,7 @@ fn main() {
             && (window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift))
         {
             println!("event type 1 (QUIT)");
-            post_event(&mut m, ctx_base, event_node, 1, 1, 0, wheel_byte(wheel_raw));
+            session.post_event(&mut m, 1, 1, 0, wheel_byte(wheel_raw));
             event_hold = 2;
         }
 

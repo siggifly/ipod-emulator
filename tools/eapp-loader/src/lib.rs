@@ -1041,9 +1041,47 @@ pub struct TitleSession {
     pub ctx: Vec<u32>,
     /// The entry that draws one frame — the last non-zero vector.
     pub frame_vector: u32,
+    /// A 12-byte node reused for every input event. One, not one per press: the list this builds
+    /// is always a list of ONE, republished each time, and the title consumes it within the frame.
+    pub event_node: u32,
 }
 
 impl TitleSession {
+    /// Post one input event, the way RetailOS does.
+    ///
+    /// Apple's `postEvent` at `0x0024d918` builds a 12-byte node —
+    /// `{ type at +0x00, state at +0x01, payload at +0x04, next at +0x08 }` — and appends it to a
+    /// list whose head is `mgr+0x26c`. The frame pump at `0x0024dad4` republishes that head into
+    /// `ctx+0x30`, and the title hands it straight to its input dispatcher. `InputEvents #1`'s
+    /// decoder at `0x0026a8bc` reads the same struct and **ignores any event whose state byte is
+    /// not 1**.
+    ///
+    /// **`ctx+0x100` is NOT this route.** That is the frame callback's reason code, and any
+    /// non-zero value there sends the title down a lifecycle path — which is what "every key
+    /// resets the game" turned out to be.
+    ///
+    /// **A button pressed while the wheel is still is never read at all.** The title only looks at
+    /// the event list when its input flags are non-zero:
+    ///
+    /// ```asm
+    /// 18018a44  ldr r0,[r9,#0x14] / cmp r0,#0 / beq   ; skip the dispatcher
+    /// 18018a50  ldr r1,[r4,#0x30] / bl 0x18011528     ; dispatch
+    /// ```
+    ///
+    /// and those flags are set only by an `InputEvents #0` poll that reports an event. That is why
+    /// Select appeared to work — you are usually scrolling — and every other button appeared dead.
+    /// So a wheel sample goes with the button, and that is not a workaround: it is what a hand on
+    /// the wheel actually produces.
+    pub fn post_event(&self, m: &mut Machine, ty: u8, state: u8, payload: u32, wheel: u8) {
+        let node = self.event_node;
+        m.mem.poke8(node, ty);
+        m.mem.poke8(node + 1, state);
+        m.mem.poke32(node + 4, payload);
+        m.mem.poke32(node + 8, 0); // next — a list of one
+        m.mem.poke32(self.ctx_base + 0x30, node);
+        m.queue_input(wheel);
+    }
+
     /// Hand the title its finished requests as a LINKED LIST, which is what RetailOS's pump does.
     ///
     /// The pump fills `ctx+0x2c` from `0x001e3c14`, which walks the manager's finished-job list
@@ -4560,10 +4598,12 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
         self.mem.poke8(ctx_base, seed);
         let ctx = vec![ctx_base, ctx_base + 0x100, 0, 0];
         let (frame_vector, ran) = self.enter_title(vectors, &ctx, budget, call_terminate);
+        let event_node = self.scratch(0x10);
         let session = frame_vector.map(|frame_vector| TitleSession {
             ctx_base,
             ctx,
             frame_vector,
+            event_node,
         });
         (session, ran)
     }
@@ -13832,6 +13872,7 @@ mod peek_tests {
             ctx_base: ctx,
             ctx: vec![ctx, ctx + 0x100, 0, 0],
             frame_vector: 0,
+            event_node: m.scratch(0x10),
         };
 
         let due = [m.scratch(0x40), m.scratch(0x40), m.scratch(0x40)];
