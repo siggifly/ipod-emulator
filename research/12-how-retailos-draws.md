@@ -805,3 +805,102 @@ every earlier md5 in this file was taken against.
 **One new signal, unexplained**: input *reduces* the draw counts — 21 presents without it, 6 with.
 Input is not being ignored; it is making RetailOS do something that draws less. That is the next
 thread, and it is a different question from the one this file has been asking.
+
+
+### The input chain is complete, all of it — and the panel has nowhere to land (2026-09-01)
+
+The thread above ends on *"input reduces the draw counts — 21 presents without it, 6 with"*. This
+carries the chain past the decoder to its end, and the answer is that **the question was never about
+input**.
+
+**Every remaining hop, measured.** Real retail NOR, a drive built from `iPod_20.1.3` in the same
+run, `--clock=5 --wheel-click-instr=300000`, input at `@250s` — which lands at ~@531.9 M because the
+machine idles, and that is why the anchor is in seconds:
+
+| hop | address | count |
+|---|---|---|
+| frames posted by the model | — | 17 (4 dropped unread) |
+| IRQ 40 asserted | — | 13 |
+| word reads of `DATA` | — | 12 |
+| **acknowledged** (`STATUS` bit 26 written) | `0x002813e4` | **12 — every read** |
+| decoder | `0x00281350` | 9 |
+| poster | `0x000cd6a0` | 4 |
+| **queue send** | `0x00151a40` | 4 |
+| **queue receive** | `0x00130960` | 4 |
+| dispatcher | `0x00151890` | 4 |
+| handler-table body | `0x001518a8` | 4 |
+| **handler, claims the event** | `0x00170de0` | 4 |
+| dispatcher's post-claim call | `0x001517d4` | 4 |
+| *fell off the table, unhandled* | `0x001518fc` | **0** |
+
+Send and receive pair up one-for-one, ~2 000 instructions apart every time:
+
+```
+send @531920310 -> receive @531922429      send @536299982 -> receive @536301796
+send @532008899 -> receive @532010713      send @536373120 -> receive @536375239
+```
+
+**Two things NEXT.md says about this do not reproduce and are retired.** `0x00151a40` is described
+there as "the queue consumer"; its five instructions load the queue handle from `[0x1081e0e0+0x18]`,
+set `r2 = 0x1c` and tail-branch into a *send* primitive — it is a producer. And "the widget at
+`0x001ae214` receives none of them" — it receives x6, though at @281 M and @369 M, which is the menu
+being drawn rather than anything to do with input.
+
+**The handler is five instructions and it claims every event:**
+
+```asm
+00170de0  ldr r1, [pc, #0xc]   ; 0x1081e134
+00170de4  ldr r1, [r1, #0x8]   ; the field the dispatcher gates on
+00170de8  str r1, [r0, #0x0]   ; *out
+00170dec  mov r0, #1           ; claimed
+00170df0  bx  lr
+```
+
+`0x001518fc` — the dispatcher's "nobody wanted it" exit — is **never reached**, and `0x001518e4`,
+which runs only when that field is non-zero, is reached **x4**. So the event is delivered, claimed,
+and acted on. There is no unbound delegate and no empty handler table.
+
+### What is actually missing: we accept the display server and never run it
+
+```
+                       control (no input)   with input
+bcm commands kicked            4                4
+bcm frame updates              2                2
+bcm gencmd answered           57               41
+```
+
+**Two frame updates, in both arms.** The white screen and the language picker. After that the panel
+is never updated again, and no amount of input changes that — which is exactly what §7 predicts:
+`0xE0000` *"is a transfer buffer, not the panel — the panel is the co-processor's own frame store,
+and the model publishes the store back over the buffer"*.
+
+`hw/video.rs` says what the model is, in its own first paragraph: *"This models the protocol and its
+internal address space, **not the video hardware**: enough for Apple's bootloader to upload the
+`vmcs` firmware and get the acknowledgement it waits for."* RetailOS uploads `vmcs.bin` — 101 728
+bytes of VideoCore code, [research/11](11-the-videocore-runtime.md)'s 183-symbol runtime — through
+that window, we store it, we acknowledge it, and **we never execute it**. DispmanX lives in that
+image. Every redraw after the first is an IPC transaction with a service that does not exist here.
+
+**This is why Rockbox and the bootloaders are not affected and RetailOS is.** Rockbox drives the
+panel directly through the same bus window (`lcd-video.c`), and Apple's bootloader has its own small
+command interface; neither needs the runtime. RetailOS is the only thing in this machine that boots
+the co-processor and then talks to it. The counters say so: `4 commands kicked` is the bootloader's
+interface, and 41–57 `gencmd` answers against the 165 requests §0 tabulates is a stub replying to
+what it recognises.
+
+**So #40 is misnamed.** "RetailOS reads wheel input but never issues a redraw" describes the
+symptom and points at the wrong half. It reads the input, decodes it, queues it, dispatches it and
+hands it to a handler that claims it. What it cannot do is draw the result, because the drawing is
+done by a processor we do not run. The next work is on the co-processor, not the wheel — and §0's
+opcode table plus research/11 §3's DispmanX model are the specification for it.
+
+### One instrument that lied, and it was the film (2026-09-01)
+
+Every conclusion above nearly died on a sampling rate. `--bcm-film`'s `EVERY` was 25 000 000
+instructions while the whole input window — first frame posted to last acknowledged — is **4.5 M**.
+The window fell cleanly between two samples, so the film could not have shown a change if one had
+happened, and it was being read as evidence that none did. Re-run at 1 000 000 the picture is the
+same, and only *then* is "the panel does not change" a measurement rather than a coincidence.
+
+**Match the cadence to the event, not to the run.** A film sampled coarsely enough to be cheap over
+a 2.6 G budget is sampled far too coarsely to see anything a person does.

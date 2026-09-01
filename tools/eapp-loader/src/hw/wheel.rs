@@ -140,6 +140,17 @@ pub struct ClickWheel {
     pub frames_unarmed: u64,
     /// Times the line went from clear to asserted.
     pub irqs: u64,
+    /// Times the firmware **acknowledged** a packet — a write that cleared `RX_READY`.
+    ///
+    /// **Reading `DATA` does not clear it; only this write does.** So this, not `data_reads`, is
+    /// the number that says whether the firmware is still in the loop: the line stays asserted
+    /// until the acknowledgement lands, and while it stays asserted no later frame can raise it,
+    /// so every frame after an un-acknowledged one is dropped. A run whose posts keep climbing
+    /// while this stops is a firmware that stopped acknowledging — which is a different failure
+    /// from one that never received anything, and the two used to be indistinguishable here.
+    pub acks: u64,
+    /// When the last acknowledgement landed, in executed instructions.
+    pub last_ack: Option<u64>,
     /// Every frame posted, capped — the sequence is short by construction and its *order* is the
     /// thing worth reading back. `frames_posted` above is the census; this is the sample.
     pub log: Capped<(u64, u32)>,
@@ -273,6 +284,8 @@ impl ClickWheel {
             frames_suppressed: 0,
             frames_unarmed: 0,
             irqs: 0,
+            acks: 0,
+            last_ack: None,
             log: Capped::new(256),
         }
     }
@@ -445,8 +458,13 @@ impl ClickWheel {
             Self::STATUS => {
                 let mask = (Self::W1C >> (8 * b)) as u8;
                 let mut w = self.status.to_le_bytes();
+                let before = self.status;
                 w[b] = (w[b] & !(val & mask)) | (val & !mask);
                 self.status = u32::from_le_bytes(w);
+                if before & Self::RX_READY != 0 && self.status & Self::RX_READY == 0 {
+                    self.acks += 1;
+                    self.last_ack = Some(icount);
+                }
                 true
             }
             Self::TX => {

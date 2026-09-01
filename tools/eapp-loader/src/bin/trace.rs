@@ -2236,6 +2236,17 @@ fn main() {
                 w.status,
                 w.rx
             );
+            // **The acknowledgement is the half that keeps the loop running**, and it is separate from
+            // the read because reading `DATA` does not clear `RX_READY`. Posts far above acks means
+            // every frame after the last one is being dropped against a line nobody lowered.
+            println!(
+                "  {} acknowledged (`STATUS` bit 26 written), last at {}",
+                w.acks,
+                match w.last_ack {
+                    Some(n) => format!("@{n}"),
+                    None => "never".into(),
+                }
+            );
             println!("  script: {} of {} steps fired", w.next, w.script.len());
             if !w.log.is_empty() {
                 println!("  frames posted, in order: {}", w.log.census());
