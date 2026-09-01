@@ -352,6 +352,21 @@ pub fn drive_facts(path: &Path) -> Vec<Fact> {
     let mut out = Vec::new();
     if let Ok(m) = std::fs::metadata(path) {
         out.push(("Size", bytes(m.len())));
+        // **What is actually on the disk, beside what the file claims.** A drive image is sparse:
+        // 8 GiB apparent and 20 MB allocated is an ordinary fresh one. The pair matters because a
+        // COPY THAT DIED HALFWAY looks perfect by length — it is full-length, it opens, its
+        // partition table is there — and is missing most of its content. Measured on 2026-09-01: a
+        // `cp` killed by a timeout produced 8 GiB apparent / 452 MB allocated / 114 walkable
+        // entries, against a source of 3.1 GB / 10 853, and it was used for a Doom run before
+        // anyone noticed. `ipod-boot` removes such a file when ITS OWN `cp` fails; nothing helps
+        // when the copy was made some other way, and one line here would have shown it at a glance.
+        let on_disk = crate::settings::on_disk_size(&m);
+        if on_disk > 0 && on_disk != m.len() {
+            // Stated flat, with no adjective. Sparse is the ordinary case — a fresh drive is 20 MB of
+            // 8 GiB — so a warning on every row would be noise, and the reader who needs this is
+            // comparing two drives rather than judging one.
+            out.push(("On disk", bytes(on_disk)));
+        }
     }
     if let Ok(state) = crate::ipsw::firmware_state(path) {
         if !state.tags.is_empty() {
