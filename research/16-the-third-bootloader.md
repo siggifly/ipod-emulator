@@ -395,7 +395,7 @@ libgpod row.
 own NOR's serial and GUID, `Family ID 6`, with a use count and a last-connected date. **iTunes
 accepted the identity a virtual iPod presented.** `research/02` said the Gestalt ID work happened "in
 the USB research (not published)"; this is that work's footprint, and it is why
-[`Identity::title_auth`](../tools/eapp-loader/src/identity.rs) has three states rather than two.
+[`Identity::title_auth`](../tools/ipod-machine/src/identity.rs) has three states rather than two.
 
 That file also contains **several other people's serials and GUIDs**. It is not copied into this
 repository, and no value from it is written down here — the same rule `research/07` already carries.

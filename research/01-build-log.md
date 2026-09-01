@@ -207,7 +207,7 @@ Validation function at `0x101224C4`. Headlines:
   against Apple's own `cmp`.
 - **Frameworks bind by a 16-byte interface hash, not by name.** The loader `memcmp`s 16 bytes from
   descriptor `+0x20` against a system table of 20-byte entries and takes the pointer at `entry+0x10`.
-  The ABI is therefore **explicitly versioned by content hash** — and `eapp-loader` currently resolves
+  The ABI is therefore **explicitly versioned by content hash** — and `ipod-machine` currently resolves
   positionally, which is a real behavioural gap to close.
 - Error codes recovered: `-1` for a bad header, `-1001` for a system-table magic mismatch.
 
@@ -218,7 +218,7 @@ The only prior report of this constant had the bytes as `29 06 19 68`. RetailOS 
 13/06/1973; that reading only works in this order, which is strong corroboration on top of the
 firmware being ground truth.
 
-`eapp-inspect` and `eapp-loader` are corrected, and **both scan for either order** — only a real game
+`eapp-inspect` and `ipod-machine` are corrected, and **both scan for either order** — only a real game
 binary settles which appears in the wild, and quietly searching for the wrong bytes is
 indistinguishable from "this file has no frameworks."
 
@@ -365,7 +365,7 @@ stage produces something that runs, and each stage's corpus is strictly less enc
 | Stage | Deliverable | Needs | Gate |
 |---|---|---|---|
 | **B0** | ✅ **ARMv4T interpreter core** — [`tools/arm7tdmi/`](tools/arm7tdmi/) | Nothing | **Done 2026-08-11 — 59 tests green, incl. differential fuzz** |
-| **B1** | ✅ **eApp loader** — [`tools/eapp-loader/`](tools/eapp-loader/) | **Done 2026-08-11 — real Pac-Man executes and traces** | ✅ ordered call trace, with arguments |
+| **B1** | ✅ **eApp loader** — [`tools/ipod-machine/`](tools/ipod-machine/) | **Done 2026-08-11 — real Pac-Man executes and traces** | ✅ ordered call trace, with arguments |
 | **B2** | ✅ **First frame** — [geometry rasterised from the game's own vertex data](#-b2-complete--geometry-on-screen) | B1 | ✅ **a picture** |
 | **B3** | **Playable** — input (wheel model) + audio | B2 | Brick is playable |
 | **B4** | **The 20** | B3 + plaintext corpus | Titles run unmodified |
@@ -412,7 +412,7 @@ rather than the architecture's "unpredictable".
 
 ### B1 — built, awaiting a real binary
 
-`tools/eapp-loader/` — 9 tests, clippy clean. Parses the eApp header, derives the load base,
+`tools/ipod-machine/` — 9 tests, clippy clean. Parses the eApp header, derives the load base,
 discovers framework blocks and their thunks, maps the image alongside a RAM region, and runs the
 entry point on the B0 core.
 
@@ -1152,7 +1152,7 @@ will not explain how to make them.
 | 6 | Performance: interpreter vs dynarec | ⏸ Mac trivial, Pi marginal. Only matters after a first frame |
 | 7 | Do 5G builds differ from Nano/Classic? | 🔧 **Yes, and it may help.** Olsro: iPod Video always gets "liter" binaries. The 5G has no GPU, so its GL ES is software — likely a *narrower* surface than the nano 3G+ titles |
 | 8 | **Does L4's "own purchases" clause survive the 54-title goal?** | ❓ **Operator decision, now unavoidable** — the operator has already run the preservation-project route on games he did not own (see #10). L4 as written does not describe what is actually happening |
-| 9 | ~~Is a 5G RetailOS image obtainable without the iPod?~~ | ✅ **YES — obtained 2026-08-11.** Stock Apple `iPod_20.1.3`, `Firmware-20.6.3`. OSOS extracted: file offset `0x4400`, length `0x735A00`, **loads at `0x10000000`**, plaintext (entropy 6.17). See [The eApp loader, found](#the-eapp-loader-found) |
+| 9 | ~~Is a 5G RetailOS image obtainable without the iPod?~~ | ✅ **YES — obtained 2026-08-11.** Stock Apple `iPod_20.1.3`, `Firmware-20.6.3`. OSOS extracted: file offset `0x4400`, length `0x735A00`, **loads at `0x10000000`**, plaintext (entropy 6.17). See [The eApp loader, found](#the-ipod-machine-found) |
 | 13 | **Are the built-in games separate eApps in the firmware?** | ❌ **No — hypothesis disproved 2026-08-11.** Exactly one `eapp` occurrence in all 7.5 MB of OSOS, and it is a *constant in the loader's literal pool*, not an image header. Brick/Parachute/Solitaire/Music Quiz are linked into RetailOS directly |
 | 14 | ~~Does the 5G actually cover all 54 titles?~~ | ✅ **YES — measured 2026-08-11 across all 56 archives. Every single title ships a `PlatformID 1` build.** One emulator, one target. See [Per-model coverage](#per-model-coverage) |
 | 10 | ~~Can a fresh iPod still be authorised in 2026?~~ | ✅ **YES — operator first-hand, 2026-08-11.** Done on a 5G a few months ago via the preservation-project instructions, without owning any of the games. **The ceiling is 54, not 20.** (That iPod has since been sold; a replacement is weeks out) |

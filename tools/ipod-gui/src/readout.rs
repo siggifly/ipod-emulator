@@ -146,7 +146,7 @@ impl Gauge {
 ///
 /// §12.8's own diagram uses a thin space, which `geometry::GLYPHS` does not hold; an ASCII space
 /// groups the same digits and is a character this program's font is trusted for. Not
-/// `eapp_loader::si`, which is the same arithmetic against a different noun — these rows are counts
+/// `ipod_machine::si`, which is the same arithmetic against a different noun — these rows are counts
 /// and a `1.6 G` beside a label reading `instructions` loses the four digits somebody is comparing.
 pub fn grouped(n: u64) -> String {
     let digits = n.to_string();

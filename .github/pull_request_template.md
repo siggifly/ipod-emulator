@@ -9,7 +9,7 @@
      history of suites reporting hundreds of passes in a fraction of a second without
      compiling. Read the count and the clock. -->
 
-- [ ] `cargo test -p arm7tdmi -p eapp-loader -p eapp-inspect`
+- [ ] `cargo test -p arm7tdmi -p ipod-machine -p eapp-inspect`
 - [ ] `cargo build --workspace` — the GUI is **not** covered by CI, so check it here
 - [ ] If this touches a gate: I have watched it fail, not only pass
 

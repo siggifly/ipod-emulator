@@ -40,8 +40,8 @@
 
 use std::path::{Path, PathBuf};
 
-use eapp_loader::settings::{self, Presence, Resource, Settings};
-use eapp_loader::{firmware, identity, inspect, nor, si};
+use ipod_machine::settings::{self, Presence, Resource, Settings};
+use ipod_machine::{firmware, identity, inspect, nor, si};
 
 use crate::composer::{FixRow, Secret};
 use crate::rail::{Caps, Next};
@@ -1186,7 +1186,7 @@ impl Action {
     ///   - a surface that holds a recipe for `Synthesise…` and `Build…`, which is the Composer,
     ///     and this build has one — so both are drawn live;
     ///   - **`curl`, for `Fetch…`** — because every download in this program goes through it, and
-    ///     `caps.download` is `eapp_loader::tooling::can_download()` measured once per launch.
+    ///     `caps.download` is `ipod_machine::tooling::can_download()` measured once per launch.
     ///
     /// **`Fetch…` asks `Next::Retry` again, and the argument for taking it away has expired.** It
     /// was moved off that question because *a capability question is the wrong question when the
@@ -1429,7 +1429,7 @@ fn inventory(s: &Settings, seen: &mut Presence, machine: Option<&str>) -> Vec<En
             // and a park time with no size is what made four of them invisible.
             fact: match bytes {
                 0 => format!("parked {}", crate::ago(secs)),
-                n => format!("parked {}, {}", crate::ago(secs), eapp_loader::si(n)),
+                n => format!("parked {}, {}", crate::ago(secs), ipod_machine::si(n)),
             },
             path: files.first().cloned(),
             expandable: Group::Snapshots.expandable(),
@@ -1966,7 +1966,7 @@ mod tests {
 
     // ─── Fixtures ───────────────────────────────────────────────────────────────────────────────
 
-    use eapp_loader::settings::{Device, Disk, Item, Provenance, Verification};
+    use ipod_machine::settings::{Device, Disk, Item, Provenance, Verification};
 
     /// Every capability on. The running build has **none** of the first four — see `main::caps` —
     /// so this is the arm that proves a control goes live rather than being disabled for ever.

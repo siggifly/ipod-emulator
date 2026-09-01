@@ -544,7 +544,7 @@ fn the_verdict_is_never_computed_in_a_binding() {
 ///
 /// Every string these four files draw arrives on a pushed model, built in `main.rs` out of
 /// `composer.rs` / `parts.rs` / `devices.rs` / `settings_page.rs`, which are built out of the model
-/// in `eapp-loader`. What is left is each surface's own furniture — its page name, its back label,
+/// in `ipod-machine`. What is left is each surface's own furniture — its page name, its back label,
 /// its section captions and its two or three verbs — and that list is written here rather than
 /// inferred, so a sentence smuggled into markup fails rather than reads.
 #[test]
@@ -1008,7 +1008,7 @@ fn every_ipod_boot_capability_is_reachable_in_the_window_or_listed_as_a_gap() {
     // ── What the window cannot do, and what it would take ─────────────────────────────────────
     //
     // Each entry is dated and names its own retirement condition. These four are one feature —
-    // putting software on a drive — and every one of them exists in `eapp_loader::install` with a
+    // putting software on a drive — and every one of them exists in `ipod_machine::install` with a
     // CLI caller and no window caller at all.
     const GAPS: &[(&str, &str)] = &[
         // **Five of these were listed as routed through `Start as…`, and that control does not
@@ -1091,7 +1091,7 @@ fn every_ipod_boot_capability_is_reachable_in_the_window_or_listed_as_a_gap() {
 
     let cli = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../eapp-loader/src/bin/ipod-boot.rs"
+        "/../ipod-machine/src/bin/ipod-boot.rs"
     ))
     .expect("ipod-boot.rs");
 

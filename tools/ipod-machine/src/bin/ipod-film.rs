@@ -1,6 +1,6 @@
 //! `ipod-film` — turn a run's panel into a PNG sequence, and that into the shipped assets.
 //!
-//! The capture, the deduplication and the manifest are the emulator's ([`eapp_loader::film`]); this
+//! The capture, the deduplication and the manifest are the emulator's ([`ipod_machine::film`]); this
 //! is everything that used to be shell around it. Three jobs:
 //!
 //! ```text
@@ -142,7 +142,7 @@ impl Pace {
         let d = if self.realtime {
             // `held_instr / CLOCK` is microseconds of simulated time, by the definition of
             // `--clock`: instructions per simulated microsecond.
-            held_instr / eapp_loader::CLOCK as f64 / 1_000_000.0
+            held_instr / ipod_machine::CLOCK as f64 / 1_000_000.0
         } else {
             held_instr / rate
         };

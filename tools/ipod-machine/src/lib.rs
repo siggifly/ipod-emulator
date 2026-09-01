@@ -1,4 +1,21 @@
-//! B1 — load an eApp, resolve its framework imports, and trace every call it makes.
+//! The iPod, as a machine: the bus, the peripherals, the boot path, and the disk formats.
+//!
+//! **This crate was called `eapp-loader` until 2026-09-01, and the name had been wrong for two
+//! stages.** It began as stage B1 — load one eApp, resolve its framework imports, trap every call
+//! and count which of the advertised ~98 imports a real game touches. That job is done and the
+//! answer sized the rest of the project. What grew around it is the machine: an ARM bus with nine
+//! modelled peripherals, ATA with bus-master DMA, a NOR the firmware can erase and program, the
+//! video co-processor's host protocol, FAT and IPSW and the firmware partition, and six binaries
+//! including `trace` and `ipod-boot`. Measured on the day of the rename: **45 660 lines, of which
+//! 274 mention an eApp — 0.6 %.**
+//!
+//! It also carries **the model** — `settings`, `compose`, `identity`, `nor` — which knows nothing
+//! about any UI toolkit and must stay that way, because that is what makes the window replaceable
+//! (AGENTS.md §9).
+//!
+//! The import-trapping machinery the old name described is still here and still works; it is one
+//! part rather than the whole. `eapp-inspect` keeps its name, because inspecting eApp binaries is
+//! exactly and only what it does.
 //!
 //! The whole point of this stage is the **call trace**: the eApp header advertises ~98 imports,
 //! but nobody knows how many a real game actually touches. Wiring every import to a distinct trap

@@ -3,7 +3,7 @@
 //! Hand-rolled rather than pulled from `image` or `png`: a PNG is about forty lines of framing
 //! around a zlib stream that is allowed to be *stored* — deflate's uncompressed block type. The
 //! result is byte-exact and spec-conformant, about three times the size of a compressed one, and
-//! costs this crate no dependency at all. `eapp-loader` has exactly one dependency (`arm7tdmi`,
+//! costs this crate no dependency at all. `ipod-machine` has exactly one dependency (`arm7tdmi`,
 //! the CPU) and the whole project's reproducibility argument rests on that staying true.
 //!
 //! **This is the second copy of this encoder in the tree.** `tools/ipod-gui/src/png.rs` carries an

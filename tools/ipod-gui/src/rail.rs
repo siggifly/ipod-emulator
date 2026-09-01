@@ -15,17 +15,17 @@
 
 use std::path::PathBuf;
 
-use eapp_loader::compose;
+use ipod_machine::compose;
 
 /// Bytes, in the units a person reads. **One formatter, and this is a re-export rather than a copy.**
 ///
-/// It used to be a second implementation, byte for byte identical to `eapp_loader::si` and sitting
+/// It used to be a second implementation, byte for byte identical to `ipod_machine::si` and sitting
 /// two hundred lines below this one. Nothing had gone wrong yet, which is the only interesting thing
 /// about it: `Entry::measure` and `Entry::cancel_cost` render here, `compose::Step::sub` renders in
-/// the model — `21 MB` is built inside eapp-loader and cannot reach a formatter in this crate — and
+/// the model — `21 MB` is built inside ipod-machine and cannot reach a formatter in this crate — and
 /// `push_ledger` renders in `main.rs`. Four surfaces, one number, and two functions that could drift
 /// on any edit to either. Two names for one number is how they come to disagree.
-use eapp_loader::si;
+use ipod_machine::si;
 
 /// What an entry is doing. §9.2's states, plus the two an entry can end in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -544,7 +544,7 @@ impl Next {
 /// | `clipboard` | still `false` | about the **build**, and the route is a `.slint` `TextInput` rather than a crate — see `main::caps` |
 /// | `devices_page` | `nav::Page::Devices.slot()` | about the **markup** |
 /// | `composer` | `nav::Page::Composer.slot()` | about the **markup** |
-/// | `download` | `eapp_loader::tooling::can_download()` | about the **computer** — every download in this program goes through `curl` |
+/// | `download` | `ipod_machine::tooling::can_download()` | about the **computer** — every download in this program goes through `curl` |
 ///
 /// The two kinds are not interchangeable: a fact about the build is a **project state** and says
 /// *we have not finished this*; a fact about the computer is a **machine rule** and says *your
@@ -1089,7 +1089,7 @@ impl Rail {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eapp_loader::compose::{Loader, Os, Recipe, Start};
+    use ipod_machine::compose::{Loader, Os, Recipe, Start};
 
     /// One value of every class, and the sweep asserts it is one of each.
     fn every_class() -> Vec<Class> {

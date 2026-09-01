@@ -12,7 +12,7 @@
 > quoted command carrying it describes a machine that no longer exists.
 
 > **One front end, and it is a program.** `ipod-boot`
-> (`tools/eapp-loader/src/bin/ipod-boot.rs`, built by `cargo build --release`) composes and runs
+> (`tools/ipod-machine/src/bin/ipod-boot.rs`, built by `cargo build --release`) composes and runs
 > every recipe, which is also what makes them work on Windows:
 >
 > ```

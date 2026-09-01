@@ -51,9 +51,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use eapp_loader::inspect::{self, Kind, Verdict};
-use eapp_loader::settings::{Provenance, Resource, Settings};
-use eapp_loader::{firmware, group, nor, si};
+use ipod_machine::inspect::{self, Kind, Verdict};
+use ipod_machine::settings::{Provenance, Resource, Settings};
+use ipod_machine::{firmware, group, nor, si};
 
 use crate::parts::{Group, Wrote};
 
@@ -129,7 +129,7 @@ pub fn can_reveal() -> bool {
     match reveal_tool() {
         Some("open") => Path::new("/usr/bin/open").is_file(),
         Some("explorer") => true,
-        Some(t) => eapp_loader::tooling::have(t),
+        Some(t) => ipod_machine::tooling::have(t),
         None => false,
     }
 }
@@ -385,7 +385,7 @@ pub fn provide_games(s: &mut Settings, p: &Path) -> Result<(Wrote, String), Stri
             p.display()
         ));
     }
-    let found = eapp_loader::titles_under(p);
+    let found = ipod_machine::titles_under(p);
     if found.is_empty() {
         return Err(format!(
             "no titles in {}. A title is a folder holding `Executables/<name>.bin`; this has \
@@ -923,7 +923,7 @@ mod tests {
         assert!(said.contains("20 titles"), "it says how many it found: {said:?}");
 
         // One title files as itself and is named, not counted.
-        let one = eapp_loader::titles_under(&shelf)[0].1.clone();
+        let one = ipod_machine::titles_under(&shelf)[0].1.clone();
         let mut s1 = Settings::default();
         let (_, said1) = provide_games(&mut s1, &one).expect("one title files");
         assert!(!said1.contains("titles"), "a single title is named: {said1:?}");
@@ -941,7 +941,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&empty);
 
         // A file is refused with the reason, because a title is a directory.
-        let exe = eapp_loader::title_exe(&one).expect("the title has an executable");
+        let exe = ipod_machine::title_exe(&one).expect("the title has an executable");
         let err = provide_games(&mut Settings::default(), &exe).expect_err("a file is not a folder");
         assert!(err.contains("is a file"), "{err}");
     }
@@ -1229,7 +1229,7 @@ mod tests {
                 && match reveal_tool() {
                     Some("open") => Path::new("/usr/bin/open").is_file(),
                     Some("explorer") => true,
-                    Some(t) => eapp_loader::tooling::have(t),
+                    Some(t) => ipod_machine::tooling::have(t),
                     None => false,
                 },
             "the capability and the tool disagree"
@@ -1240,7 +1240,7 @@ mod tests {
         if cfg!(target_os = "macos") {
             assert!(can_reveal(), "/usr/bin/open is missing, which macOS does not do");
             assert!(
-                !eapp_loader::tooling::have("open"),
+                !ipod_machine::tooling::have("open"),
                 "`open --version` succeeded, so the reason the macOS arm does not use `have` has \
                  gone away and this arm should go with it"
             );

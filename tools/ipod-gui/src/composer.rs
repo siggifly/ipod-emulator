@@ -61,11 +61,11 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use eapp_loader::compose::{self, Cost, Fix, Holes, Loader, Os, Recipe, Start, Step, Verdict};
-use eapp_loader::firmware;
-use eapp_loader::identity::{self, Identity, Model, Refusal, TitleAuth, MODELS};
-use eapp_loader::nor;
-use eapp_loader::settings::{self, Resource, Settings};
+use ipod_machine::compose::{self, Cost, Fix, Holes, Loader, Os, Recipe, Start, Step, Verdict};
+use ipod_machine::firmware;
+use ipod_machine::identity::{self, Identity, Model, Refusal, TitleAuth, MODELS};
+use ipod_machine::nor;
+use ipod_machine::settings::{self, Resource, Settings};
 
 /// Whether this is a new device or one that already exists.
 ///
@@ -2339,7 +2339,7 @@ fn other_label(family: u16) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eapp_loader::identity::Colour;
+    use ipod_machine::identity::Colour;
 
     /// This file, as text, for the sweeps that hold the one-recipe rule.
     ///
@@ -3074,7 +3074,7 @@ mod tests {
     /// those two say.
     #[test]
     fn one_ipod_has_one_name_on_this_page() {
-        use eapp_loader::identity::{Identity, Model, Source as IdSource};
+        use ipod_machine::identity::{Identity, Model, Source as IdSource};
 
         let at = std::env::temp_dir().join(format!("ipod-composer-onename-{}", std::process::id()));
         std::fs::create_dir_all(&at).expect("a scratch directory");
@@ -3738,7 +3738,7 @@ mod tests {
     ///
     /// §11.2 asked for the opposite for as long as this file has existed — *the iPod becomes a
     /// filed resource the moment it is made, not on `Create`* — and nothing ever built it. Two doc
-    /// comments in `eapp_loader::settings` stated the mint-filing as fact, and a comment in
+    /// comments in `ipod_machine::settings` stated the mint-filing as fact, and a comment in
     /// `main.rs`'s `on_composer_act` recorded the gap without closing it. This is the assertion
     /// that keeps the design and the program together from the program's side: whichever way the
     /// decision goes next, it cannot go silently.

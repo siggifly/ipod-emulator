@@ -3,22 +3,22 @@
 #[ignore]
 fn the_wizard_can_fetch_apple_firmware_for_a_video() {
     for (label, families) in [("5G", vec![13u32, 20]), ("5.5G", vec![25u32])] {
-        let rel = eapp_loader::firmware::CATALOGUE
+        let rel = ipod_machine::firmware::CATALOGUE
             .iter()
             .filter(|r| families.contains(&(r.updater_family as u32)))
             .rfind(|r| r.served && r.is_verifiable())
             .unwrap_or_else(|| panic!("{label}: no served, verifiable release"));
         println!("  {label} -> {} ({} bytes)", rel.file, rel.bytes);
-        let got = eapp_loader::firmware::download(rel, &eapp_loader::firmware::cache_dir())
+        let got = ipod_machine::firmware::download(rel, &ipod_machine::firmware::cache_dir())
             .unwrap_or_else(|e| panic!("{label}: {} failed: {e}", rel.file));
         let n = std::fs::metadata(&got).unwrap().len();
         assert_eq!(n, rel.bytes, "{label}: wrong size");
         // And it has to be usable: inspected, and the right family.
-        match eapp_loader::ipsw::inspect(&got) {
-            eapp_loader::ipsw::Ipsw::Good(what, fw) => {
+        match ipod_machine::ipsw::inspect(&got) {
+            ipod_machine::ipsw::Ipsw::Good(what, fw) => {
                 println!("    {what} — firmware {} bytes", fw.len())
             }
-            eapp_loader::ipsw::Ipsw::Wrong(w) | eapp_loader::ipsw::Ipsw::Bad(w) => {
+            ipod_machine::ipsw::Ipsw::Wrong(w) | ipod_machine::ipsw::Ipsw::Bad(w) => {
                 panic!("{label}: fetched but unusable: {w}")
             }
         }

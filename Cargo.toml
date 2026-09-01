@@ -5,13 +5,13 @@
 # when you did not, and it is the first thing a stranger hits after `git clone`.
 #
 # `ipod-boot` and `ipod-film` are not listed because they are not crates — they are shell recipes
-# plus, for `ipod-boot`, a binary that lives inside `eapp-loader`. `ghidra` is shell wrappers around
+# plus, for `ipod-boot`, a binary that lives inside `ipod-machine`. `ghidra` is shell wrappers around
 # a third-party server. 
 [workspace]
 resolver = "2"
 members = [
     "tools/arm7tdmi",    # the ARMv4T interpreter core — no dependencies, no unsafe
-    "tools/eapp-loader", # the machine: peripherals, the boot path, `trace` and `ipod-boot`
+    "tools/ipod-machine", # the machine: peripherals, the boot path, `trace` and `ipod-boot`
     "tools/eapp-inspect",# static inspection of eApp binaries
     "tools/ipod-gui",    # the window: a drawn iPod over the emulator
     "tools/ipg-player",  # one .ipg title in a window — the model with a toolkit on top, never inside

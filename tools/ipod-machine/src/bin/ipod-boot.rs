@@ -89,7 +89,7 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        let Some(c) = eapp_loader::inspect::syscfg(&nor) else {
+        let Some(c) = ipod_machine::inspect::syscfg(&nor) else {
             eprintln!(
                 "ipod-boot syscfg: {path} has no SysCfg block at 0x4000.\n\
                  A 5G/5.5G NOR dump is 1 MiB and starts with the boot ROM; a file that is neither \
@@ -203,9 +203,9 @@ fn main() {
         let sub = rest.first().map(String::as_str).unwrap_or("");
         let tail: Vec<String> = rest.iter().skip(1).cloned().collect();
         let r = match sub {
-            "bridge" => eapp_loader::ghidra::bridge(&tail),
-            "serve" => eapp_loader::ghidra::serve(tail.iter().any(|a| a == "--status")),
-            "q" => eapp_loader::ghidra::query(&tail),
+            "bridge" => ipod_machine::ghidra::bridge(&tail),
+            "serve" => ipod_machine::ghidra::serve(tail.iter().any(|a| a == "--status")),
+            "q" => ipod_machine::ghidra::query(&tail),
             _ => Err("usage: ipod-boot ghidra bridge | serve [--status] | q …".to_string()),
         };
         match r {
@@ -270,11 +270,11 @@ fn main() {
         };
         let p = Path::new(p);
         let is_rom =
-            std::fs::metadata(p).map(|m| m.len()).unwrap_or(0) == eapp_loader::inspect::NOR_LEN;
+            std::fs::metadata(p).map(|m| m.len()).unwrap_or(0) == ipod_machine::inspect::NOR_LEN;
         let facts = if is_rom {
-            eapp_loader::inspect::rom_facts(p)
+            ipod_machine::inspect::rom_facts(p)
         } else {
-            eapp_loader::inspect::drive_facts(p)
+            ipod_machine::inspect::drive_facts(p)
         };
         if facts.is_empty() {
             println!("{}: nothing recognised", p.display());
@@ -301,7 +301,7 @@ fn main() {
         let src = rest
             .first()
             .map(PathBuf::from)
-            .or_else(|| eapp_loader::settings::Settings::load().disk.clone());
+            .or_else(|| ipod_machine::settings::Settings::load().disk.clone());
         let Some(src) = src else {
             eprintln!("usage: ipod-boot rockbox-install [DISK.img [OUT.img]]");
             std::process::exit(2);
@@ -310,17 +310,17 @@ fn main() {
             .get(1)
             .map(PathBuf::from)
             .unwrap_or_else(|| src.with_file_name("rockbox.img"));
-        let cache = eapp_loader::rockbox::cache_dir();
+        let cache = ipod_machine::rockbox::cache_dir();
         let r = (|| -> Result<(), String> {
             let boot =
-                eapp_loader::rockbox::download(eapp_loader::rockbox::FULL_INSTALL[0], &cache)?;
+                ipod_machine::rockbox::download(ipod_machine::rockbox::FULL_INSTALL[0], &cache)?;
             let zip =
-                eapp_loader::rockbox::download(eapp_loader::rockbox::FULL_INSTALL[1], &cache)?;
+                ipod_machine::rockbox::download(ipod_machine::rockbox::FULL_INSTALL[1], &cache)?;
             println!("  verified {} and {}", boot.display(), zip.display());
-            for l in eapp_loader::install::install_os(&src, &boot, &out)? {
+            for l in ipod_machine::install::install_os(&src, &boot, &out)? {
                 println!("{l}");
             }
-            for l in eapp_loader::install::put_zip(&out, &zip)? {
+            for l in ipod_machine::install::put_zip(&out, &zip)? {
                 println!("{l}");
             }
             println!(
@@ -340,7 +340,7 @@ fn main() {
         let disk = rest
             .first()
             .map(PathBuf::from)
-            .or_else(|| eapp_loader::settings::Settings::load().disk.clone());
+            .or_else(|| ipod_machine::settings::Settings::load().disk.clone());
         let Some(disk) = disk else {
             eprintln!(
                 "usage: ipod-boot open-drive [DISK.img]   (defaults to the configured drive)"
@@ -348,7 +348,7 @@ fn main() {
             std::process::exit(2);
         };
         println!("  {}", disk.display());
-        match eapp_loader::mount::open(&disk) {
+        match ipod_machine::mount::open(&disk) {
             Ok(lines) => {
                 for l in lines {
                     println!("  {l}");
@@ -554,7 +554,7 @@ impl From {
 /// The setup-screen rung is the point of the function: `ipod-gui`'s setup screen asks for these two
 /// files, validates them, and remembers them. Before this, it remembered them only for itself — you
 /// could complete setup in the window and every shell recipe would still fail. The file is
-/// `eapp_loader::settings`, which is a plain `key = value` file with no dependencies, which is why
+/// `ipod_machine::settings`, which is a plain `key = value` file with no dependencies, which is why
 /// this binary can read it.
 ///
 /// **The passthrough rung is new and it closes a hole that made measurements wrong.** These two
@@ -622,7 +622,7 @@ fn require(p: &Path, what: &str) -> Result<(), String> {
     // The old message explained that `resources/` is gitignored. That is the repository's mental
     // model, and someone who unpacked a release has no `resources/` and never will — so it named a
     // directory that does not exist and gave them nothing to do. Say what to do instead.
-    let where_settings = eapp_loader::settings::Settings::path()
+    let where_settings = ipod_machine::settings::Settings::path()
         .map(|p| format!("\n  Remembered in {}.", p.display()))
         .unwrap_or_default();
     Err(format!(
@@ -814,10 +814,10 @@ fn passthrough_wins(run: &mut Vec<String>, user: &[String]) {
 /// The recipe itself: every flag `ipod-boot` writes for it, with the caller's passthrough appended
 /// last. [`plan`] is what callers want — this is the half before the caller is allowed to win.
 fn compose(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
-    let root = eapp_loader::settings::repo_root();
+    let root = ipod_machine::settings::repo_root();
     let res = root.join("resources");
     let trace = env_path("TRACE").unwrap_or_else(default_trace);
-    let saved = eapp_loader::settings::Settings::load();
+    let saved = ipod_machine::settings::Settings::load();
 
     // The eApp every `trace` invocation is handed. A boot never executes it — RetailOS is entered
     // from the reset vector and never looks at 0x18000000 — but `trace`'s first positional is the
@@ -923,8 +923,8 @@ fn compose(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
                 require(&flash, "NOR dump (FLASH=)")?;
                 require(&disk, "disk image (DISK=)")?;
                 let nor = std::fs::read(&flash).map_err(|e| format!("{}: {e}", flash.display()))?;
-                let bytes = eapp_loader::inspect::nor_image(&nor, &img).ok_or_else(|| {
-                    let have = eapp_loader::inspect::nor_images(&nor)
+                let bytes = ipod_machine::inspect::nor_image(&nor, &img).ok_or_else(|| {
+                    let have = ipod_machine::inspect::nor_images(&nor)
                         .iter()
                         .map(|e| e.tag.clone())
                         .collect::<Vec<_>>();
@@ -941,7 +941,7 @@ fn compose(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
                 // Entering data is not an error the interpreter can see: it decodes whatever is
                 // there, wanders, and exhausts the budget. `logo` and `vmcs` are payloads, not
                 // programs, and running them reported "executes to budget, no fault" for years.
-                if !eapp_loader::inspect::is_bootable(&bytes) {
+                if !ipod_machine::inspect::is_bootable(&bytes) {
                     let head = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
                     let what: String = bytes[..4]
                         .iter()
@@ -960,12 +960,12 @@ fn compose(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
                          co-processor's firmware — both are read by other code. Entering one runs \
                          the interpreter through data and reports a full budget and no fault.\n\
                          Bootable images in this dump: {}",
-                        eapp_loader::inspect::nor_images(&nor)
+                        ipod_machine::inspect::nor_images(&nor)
                             .iter()
                             .filter(|e| {
                                 let at = e.offset as usize;
                                 nor.get(at..at + 4)
-                                    .is_some_and(eapp_loader::inspect::is_bootable)
+                                    .is_some_and(ipod_machine::inspect::is_bootable)
                             })
                             .map(|e| e.tag.clone())
                             .collect::<Vec<_>>()
@@ -1294,7 +1294,7 @@ fn compose(recipe: Recipe, user: &[String], dry: bool) -> Result<Plan, String> {
 /// It writes the same file the window writes and uses the same verdicts, so neither front end knows
 /// which one did the asking, and an answer that is wrong is rejected here rather than at boot.
 fn setup() -> Result<(), String> {
-    use eapp_loader::{inspect, settings::Settings};
+    use ipod_machine::{inspect, settings::Settings};
     use std::io::Write as _;
 
     let mut s = Settings::load();
@@ -1318,7 +1318,7 @@ fn setup() -> Result<(), String> {
                 return Err("nothing saved".into());
             }
         }
-        s.nor = eapp_loader::nor::Source::File(p.clone());
+        s.nor = ipod_machine::nor::Source::File(p.clone());
     }
 
     // The drive, or the .ipsw one is built from. `make-disk` is right here, so offer it rather
@@ -1424,14 +1424,14 @@ fn make_disk(args: &[String]) -> Result<(), String> {
                 .map_err(|e| format!("SECTORS: {e}"))
         })
         .transpose()?
-        .unwrap_or(eapp_loader::ipsw::DEFAULT_SECTORS);
+        .unwrap_or(ipod_machine::ipsw::DEFAULT_SECTORS);
 
-    let mut fw = match eapp_loader::ipsw::inspect(Path::new(src)) {
-        eapp_loader::ipsw::Ipsw::Good(what, fw) => {
+    let mut fw = match ipod_machine::ipsw::inspect(Path::new(src)) {
+        ipod_machine::ipsw::Ipsw::Good(what, fw) => {
             println!("{src}\n  {what}");
             fw
         }
-        eapp_loader::ipsw::Ipsw::Wrong(why) | eapp_loader::ipsw::Ipsw::Bad(why) => return Err(why),
+        ipod_machine::ipsw::Ipsw::Wrong(why) | ipod_machine::ipsw::Ipsw::Bad(why) => return Err(why),
     };
     if with_aupd {
         println!(
@@ -1439,7 +1439,7 @@ fn make_disk(args: &[String]) -> Result<(), String> {
              will run the OS, which is what a real iPod does after a restore. \
              `ipod-boot flash-update` is the recipe that measures both."
         );
-    } else if eapp_loader::ipsw::mark_aupd_applied(&mut fw) {
+    } else if ipod_machine::ipsw::mark_aupd_applied(&mut fw) {
         println!(
             "  `aupd` marked applied (+0x08 = 1), so the first boot runs the OS. That is the state \
              a real iPod is in after its post-restore firmware update; `--with-aupd` leaves it \
@@ -1448,14 +1448,14 @@ fn make_disk(args: &[String]) -> Result<(), String> {
     }
     // Before the write, not after: the drive RetailOS reads has to be in the layout RetailOS
     // reads. See `normalise_image_headers` — on a 5G bundle this does nothing at all.
-    for (tag, header, shift) in eapp_loader::ipsw::normalise_image_headers(&mut fw) {
+    for (tag, header, shift) in ipod_machine::ipsw::normalise_image_headers(&mut fw) {
         println!(
             "  `{tag}` content sits {header:#x} into its image where RetailOS looks {HEADER_EXPECTED:#x} \
              in; its directory offset is moved on by {shift:#x} so the two agree. Without this the \
              5.5G's `rsrc` never mounts, its font is never found, and RetailOS resets in a loop."
         );
     }
-    eapp_loader::ipsw::build_disk(&fw, Path::new(out), sectors)?;
+    ipod_machine::ipsw::build_disk(&fw, Path::new(out), sectors)?;
     println!(
         "wrote {out} — {sectors} sectors ({} MiB), sparse. \
          The firmware partition is Apple's payload byte for byte — only the directory's offsets are \
@@ -1569,7 +1569,7 @@ fn quote_one(s: &str) -> String {
 /// SHA-256, ~60 lines of it, so this program and `from-idle.sh` compute the **same** cache key and
 /// share one snapshot instead of each paying its own 80-second cold boot.
 ///
-/// Written out rather than depended on: `eapp-loader` has one dependency (`arm7tdmi`, a path) and
+/// Written out rather than depended on: `ipod-machine` has one dependency (`arm7tdmi`, a path) and
 /// the README's claim that the core crates build with no third-party code is worth more than the
 /// sixty lines. There is a NIST known-answer test below.
 fn sha256_hex(data: &[u8]) -> String {
@@ -1657,7 +1657,7 @@ fn fat_cmd(args: &[String]) -> Result<(), String> {
                          catall SUFFIX DIR | lba N...";
     let disk = args.first().ok_or(USAGE)?;
     let cmd = args.get(1).map(String::as_str).unwrap_or("tree");
-    let mut v = eapp_loader::fat::Fat32::open_ro(std::path::Path::new(disk))?;
+    let mut v = ipod_machine::fat::Fat32::open_ro(std::path::Path::new(disk))?;
 
     match cmd {
         "tree" => {
@@ -1777,7 +1777,7 @@ fn fat_cmd(args: &[String]) -> Result<(), String> {
 /// `ipod-boot rsrc DISK.img [--list | --get PATH [-o OUT] | --volume OUT]`
 ///
 /// Reads the `rsrc` volume out of the firmware partition without mounting anything. The parsing
-/// lives in [`eapp_loader::rsrc`] so it is testable without a disk image, and there is no write
+/// lives in [`ipod_machine::rsrc`] so it is testable without a disk image, and there is no write
 /// path in it at all — a stronger guarantee than remembering to open the file read-only, on a tree
 /// whose reference images cannot be regenerated.
 fn rsrc_cmd(args: &[String]) -> Result<(), String> {
@@ -1803,7 +1803,7 @@ fn rsrc_cmd(args: &[String]) -> Result<(), String> {
 
     let disk = std::fs::read(disk_path).map_err(|e| format!("{disk_path}: {e}"))?;
     let dir =
-        eapp_loader::rsrc::read_directory(&disk, 63).map_err(|e| format!("{disk_path}: {e}"))?;
+        ipod_machine::rsrc::read_directory(&disk, 63).map_err(|e| format!("{disk_path}: {e}"))?;
     let img = dir
         .iter()
         .find(|i| i.tag == "rsrc")
@@ -1827,7 +1827,7 @@ fn rsrc_cmd(args: &[String]) -> Result<(), String> {
     if vol.len() < 0x200 {
         return Err("`rsrc` is shorter than its own header".into());
     }
-    let fat = eapp_loader::rsrc::Fat12::new(&vol[0x200..])?;
+    let fat = ipod_machine::rsrc::Fat12::new(&vol[0x200..])?;
     let walk = fat.walk();
 
     let Some(want) = get else {
@@ -2004,7 +2004,7 @@ mod tests {
     #[test]
     fn every_repeatable_flag_a_recipe_writes_is_exempt() {
         let trace_src = std::fs::read_to_string(
-            eapp_loader::settings::repo_root().join("tools/eapp-loader/src/bin/trace.rs"),
+            ipod_machine::settings::repo_root().join("tools/ipod-machine/src/bin/trace.rs"),
         )
         .expect("trace.rs is beside this file in the same crate");
 
@@ -2088,9 +2088,9 @@ mod tests {
     /// command that reproduces an iPod builds a ROM; it does not boot one.
     #[test]
     fn the_command_the_window_copies_rebuilds_the_ipod_it_names() {
-        use eapp_loader::identity::Identity;
-        use eapp_loader::nor;
-        use eapp_loader::settings;
+        use ipod_machine::identity::Identity;
+        use ipod_machine::nor;
+        use ipod_machine::settings;
 
         // 0x123456 — a seed whose hex spelling is made only of digits, so a hex surface would not
         // fail here either. It would build a different iPod.
@@ -2192,7 +2192,7 @@ mod install_tests {
         f.read_exact(&mut b).unwrap();
         let mut out = [0u32; 8];
         for (k, o) in out.iter_mut().enumerate() {
-            *o = eapp_loader::install::le(&b, 8 + k * 4);
+            *o = ipod_machine::install::le(&b, 8 + k * 4);
         }
         out
     }
@@ -2285,21 +2285,21 @@ mod install_tests {
 }
 
 /// `ipod-boot firmware list | get`.
-/// `ipod-boot install-os SRC.img OS.ipod OUT.img` — argv, then [`eapp_loader::install::install_os`].
+/// `ipod-boot install-os SRC.img OS.ipod OUT.img` — argv, then [`ipod_machine::install::install_os`].
 fn install_os(args: &[String]) -> Result<(), String> {
     const USAGE: &str = "usage: ipod-boot install-os SRC.img OS.ipod OUT.img";
     let (src, os, out) = match (args.first(), args.get(1), args.get(2)) {
         (Some(a), Some(b), Some(c)) => (Path::new(a), Path::new(b), Path::new(c)),
         _ => return Err(USAGE.into()),
     };
-    for line in eapp_loader::install::install_os(src, os, out)? {
+    for line in ipod_machine::install::install_os(src, os, out)? {
         println!("{line}");
     }
     Ok(())
 }
 
 /// `ipod-boot install-linux [SRC.img [OUT.img]]` — argv, then
-/// [`eapp_loader::install::install_linux`].
+/// [`ipod_machine::install::install_linux`].
 ///
 /// Both paths default: the drive from settings, and `<drive>-linux.img` beside it. The loader is
 /// fetched and verified — v2.8.1, 56 912 B, SHA-256 on record — unless `IPOD_LOADER=` names one;
@@ -2313,7 +2313,7 @@ fn install_linux(args: &[String]) -> Result<(), String> {
     let src = args
         .first()
         .map(PathBuf::from)
-        .or_else(|| eapp_loader::settings::Settings::load().disk.clone())
+        .or_else(|| ipod_machine::settings::Settings::load().disk.clone())
         .ok_or(USAGE)?;
     let out = args.get(1).map(PathBuf::from).unwrap_or_else(|| {
         let stem = src
@@ -2322,21 +2322,21 @@ fn install_linux(args: &[String]) -> Result<(), String> {
             .unwrap_or_default();
         src.with_file_name(format!("{stem}-linux.img"))
     });
-    let root = eapp_loader::settings::repo_root();
+    let root = ipod_machine::settings::repo_root();
     let tree = root.join("resources/vendor/zeroslackr/tree");
     // The loader is resolved BEFORE the 101 MB fetch below, so a failure that used to arrive after
     // a download arrives before it.
-    let cache = eapp_loader::ipodlinux::cache_dir();
-    let (loader, from) = eapp_loader::ipodlinux::resolve_loader(&cache)?;
+    let cache = ipod_machine::ipodlinux::cache_dir();
+    let (loader, from) = ipod_machine::ipodlinux::resolve_loader(&cache)?;
     println!(
         "{}",
         match from {
-            eapp_loader::ipodlinux::LoaderFrom::Release => format!(
+            ipod_machine::ipodlinux::LoaderFrom::Release => format!(
                 "  ipodloader2 — {} ({} bytes, SHA-256 verified)",
                 loader.display(),
-                eapp_loader::ipodlinux::LOADER.bytes
+                ipod_machine::ipodlinux::LOADER.bytes
             ),
-            eapp_loader::ipodlinux::LoaderFrom::Provided => format!(
+            ipod_machine::ipodlinux::LoaderFrom::Provided => format!(
                 "  ipodloader2 — {} (IPOD_LOADER; not hashed — this project holds no hash for a \
                  build somebody made)",
                 loader.display()
@@ -2350,16 +2350,16 @@ fn install_linux(args: &[String]) -> Result<(), String> {
         tree
     } else {
         println!("  ZeroSlackr is not unpacked yet — fetching it (101 MB, verified)");
-        eapp_loader::ipodlinux::fetch(&cache)?
+        ipod_machine::ipodlinux::fetch(&cache)?
     };
-    for line in eapp_loader::install::install_linux(&src, &loader, &tree, &out)? {
+    for line in ipod_machine::install::install_linux(&src, &loader, &tree, &out)? {
         println!("{line}");
     }
     println!("  -> {}", out.display());
     Ok(())
 }
 
-/// `ipod-boot put-zip DISK.img ARCHIVE.zip` — argv, then [`eapp_loader::install::put_zip`].
+/// `ipod-boot put-zip DISK.img ARCHIVE.zip` — argv, then [`ipod_machine::install::put_zip`].
 fn put_zip(args: &[String]) -> Result<(), String> {
     const USAGE: &str = "usage: ipod-boot put-zip DISK.img ARCHIVE.zip\n\
                          unpacks the archive straight into the drive's FAT32 volume";
@@ -2367,13 +2367,13 @@ fn put_zip(args: &[String]) -> Result<(), String> {
         (Some(a), Some(b)) => (Path::new(a), Path::new(b)),
         _ => return Err(USAGE.into()),
     };
-    for line in eapp_loader::install::put_zip(disk, zip)? {
+    for line in ipod_machine::install::put_zip(disk, zip)? {
         println!("{line}");
     }
     Ok(())
 }
 
-/// `ipod-boot put-files DISK.img SRC_DIR [DEST]` — argv, then [`eapp_loader::install::put_files`].
+/// `ipod-boot put-files DISK.img SRC_DIR [DEST]` — argv, then [`ipod_machine::install::put_files`].
 fn put_files(args: &[String]) -> Result<(), String> {
     const USAGE: &str = "usage: ipod-boot put-files DISK.img SRC_DIR [DEST_PATH]\n\
                          copies the CONTENTS of SRC_DIR into DEST_PATH (default: the volume root)";
@@ -2382,7 +2382,7 @@ fn put_files(args: &[String]) -> Result<(), String> {
         _ => return Err(USAGE.into()),
     };
     for line in
-        eapp_loader::install::put_files(disk, src, args.get(2).map(String::as_str).unwrap_or(""))?
+        ipod_machine::install::put_files(disk, src, args.get(2).map(String::as_str).unwrap_or(""))?
     {
         println!("{line}");
     }
@@ -2390,7 +2390,7 @@ fn put_files(args: &[String]) -> Result<(), String> {
 }
 
 fn firmware_cmd(sub: &str, args: &[String]) -> Result<(), String> {
-    use eapp_loader::firmware;
+    use ipod_machine::firmware;
     match sub {
         "list" => {
             let filter = args.first().map(|s| s.to_lowercase());
@@ -2569,8 +2569,8 @@ fn human(n: u64) -> String {
 
 /// `ipod-boot make-nor` — build a boot ROM from a model, a colour and an identity.
 fn make_nor_cmd(args: &[String]) -> Result<(), String> {
-    use eapp_loader::identity::{Colour, Identity, Model};
-    use eapp_loader::nor;
+    use ipod_machine::identity::{Colour, Identity, Model};
+    use ipod_machine::nor;
 
     let flag = |name: &str| -> Option<&String> {
         args.iter()
@@ -2595,7 +2595,7 @@ fn make_nor_cmd(args: &[String]) -> Result<(), String> {
         Some(p) => {
             let path = std::path::Path::new(p);
             let bytes = std::fs::read(path).map_err(|e| format!("{p}: {e}"))?;
-            match eapp_loader::inspect::syscfg(&bytes) {
+            match ipod_machine::inspect::syscfg(&bytes) {
                 Some(c) => Some(c),
                 None => {
                     // Not a NOR — try it as a drive, whose SysInfo carries the same identity.
@@ -2633,7 +2633,7 @@ fn make_nor_cmd(args: &[String]) -> Result<(), String> {
             Some(c) if c.guid.is_some() => Identity {
                 serial: c.serial.clone(),
                 guid: c.guid.expect("checked"),
-                source: eapp_loader::identity::Source::RealDevice,
+                source: ipod_machine::identity::Source::RealDevice,
             },
             _ => Identity::generate(model, seed),
         },
@@ -2673,9 +2673,9 @@ fn make_nor_cmd(args: &[String]) -> Result<(), String> {
     println!(
         "  identity {}",
         match identity.source {
-            eapp_loader::identity::Source::Generated => "generated from a seed",
-            eapp_loader::identity::Source::Provided => "provided",
-            eapp_loader::identity::Source::RealDevice => "read from real hardware",
+            ipod_machine::identity::Source::Generated => "generated from a seed",
+            ipod_machine::identity::Source::Provided => "provided",
+            ipod_machine::identity::Source::RealDevice => "read from real hardware",
         }
     );
     println!("  {} bytes, marked as synthetic", image.len());
@@ -2692,7 +2692,7 @@ fn make_nor_cmd(args: &[String]) -> Result<(), String> {
             rgb[i * 3 + 1] = ((g << 2) | (g >> 4)) as u8;
             rgb[i * 3 + 2] = ((b << 3) | (b >> 2)) as u8;
         }
-        std::fs::write(png_path, eapp_loader::png::encode(&rgb, w, h))
+        std::fs::write(png_path, ipod_machine::png::encode(&rgb, w, h))
             .map_err(|e| format!("{png_path}: {e}"))?;
         println!("  boot screen -> {png_path}");
     }

@@ -1581,7 +1581,7 @@ from the shape, and the shape was wrong.
 
 Reading forty instructions cost a 600 M-instruction boot, because `trace --disasm` can only show
 code a *run* has already placed in memory. The firmware image is flat — `OSOS_correct.bin` lands
-byte-identical at `0x10000000` and is mirrored at 0 — so `tools/eapp-loader/src/bin/dis.rs` answers
+byte-identical at `0x10000000` and is mirrored at 0 — so `tools/ipod-machine/src/bin/dis.rs` answers
 every static question from the file, in milliseconds, sharing `arm7tdmi::disasm` with the
 interpreter so the two can never disagree about what an encoding *is*.
 
@@ -2915,7 +2915,7 @@ word 15 of a saved frame is the resume PC; every resume PC is one instruction pa
 `bl 0x00084644` inside one of the service wrappers at `0x000a613c..0x000a69cc`; and `r0` in that same
 frame is the request block the wrapper built on the task's own stack. That walk has now been done by
 hand three times (Addendum 7 §2, Addendum 8 §1, Addendum 11 §2) and each time it produced the one or
-two tasks the session was already chasing. `tools/eapp-loader/src/bin/tcb.rs` does it for all of them,
+two tasks the session was already chasing. `tools/ipod-machine/src/bin/tcb.rs` does it for all of them,
 off a `--save-region=sdram` file, in 40 ms.
 
 Two things in it are worth naming because both were wrong first.
@@ -3348,7 +3348,7 @@ history. Both were sitting in a dump that already existed.
 Measured 2026-08-14 across eleven runs of `retail-boot.sh --clock=5 --stop-when-idle=400000000`,
 `BUDGET=4000000000`. **The baseline moved under this pass and every "never" below is against the new
 one.** Commit `55854a4` landed Addendum 17 §8's `CPU_INT_STAT` bit-30 aggregate in
-`tools/eapp-loader/src/lib.rs`, so the fingerprint is now the "+ HI aggregate" column of that table,
+`tools/ipod-machine/src/lib.rs`, so the fingerprint is now the "+ HI aggregate" column of that table,
 not the one printed everywhere else in this file:
 
 ```
@@ -5642,7 +5642,7 @@ the clock 1 725 688 µs through the idle task's sleeps, which is the machine wor
 tolerance tight enough to catch the defect would have cried wolf on every run; the identity catches
 it exactly and never otherwise.
 
-**Tests: `cargo test --release` in `eapp-loader` goes 30 → 33** — `tests/load_and_trace.rs` 27 → 30 —
+**Tests: `cargo test --release` in `ipod-machine` goes 30 → 33** — `tests/load_and_trace.rs` 27 → 30 —
 and the round-trip test is built so that "always passes" and "passes correctly" are distinguishable.
 *(45 after merging the `ipod-film` work, which brought twelve unit tests of its own; the three below
 are this session's.)*

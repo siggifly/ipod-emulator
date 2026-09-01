@@ -34,10 +34,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 
-use eapp_loader::compose::{self, Cost, Holes, Loader, Os, Recipe, Start, Step, Verb};
-use eapp_loader::firmware::{self, Release, Trouble, Watch};
-use eapp_loader::settings::{self, Device, Provenance, Resource, Settings, Verification};
-use eapp_loader::{identity, ipodlinux, ipsw, nor, rockbox, si, volume};
+use ipod_machine::compose::{self, Cost, Holes, Loader, Os, Recipe, Start, Step, Verb};
+use ipod_machine::firmware::{self, Release, Trouble, Watch};
+use ipod_machine::settings::{self, Device, Provenance, Resource, Settings, Verification};
+use ipod_machine::{identity, ipodlinux, ipsw, nor, rockbox, si, volume};
 
 use crate::rail::{Class, Failure, Kind, Progress, Rail, Tool};
 
@@ -102,7 +102,7 @@ pub fn plan(holes: Holes) -> Vec<Step> {
     let mut v = vec![Step {
         kind: Verb::Synthesise,
         what: "a boot ROM".into(),
-        sub: match eapp_loader::identity::Model::lookup(compose::FIRST_RUN_MODEL) {
+        sub: match ipod_machine::identity::Model::lookup(compose::FIRST_RUN_MODEL) {
             Some(m) => format!(
                 "{}, {} GB, {}, model {} — instant, nothing downloaded",
                 m.generation.label(),
@@ -320,7 +320,7 @@ impl Filing {
 /// which is what makes a fetch of any of them verifiable and its progress honest.
 ///
 /// **Borrowed rather than owned, and `'static` rather than cloned.** A catalogue entry is a
-/// constant in `eapp-loader`; copying one into a plan would be a second copy of a hash that the
+/// constant in `ipod-machine`; copying one into a plan would be a second copy of a hash that the
 /// verifier does not read, and the first thing to go stale.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Want {
@@ -395,7 +395,7 @@ impl Want {
             what: self.file().to_string(),
             sub: format!(
                 "{} B — {}, SHA-256 checked",
-                eapp_loader::group(self.bytes()),
+                ipod_machine::group(self.bytes()),
                 self.from()
             ),
             cost: Cost {
@@ -931,7 +931,7 @@ fn cached_line(file: &str) -> String {
 fn downloaded_line(file: &str, from: &str, bytes: u64, took: std::time::Duration) -> String {
     format!(
         "{file} — {} B downloaded {from} in {} — SHA-256 checked",
-        eapp_loader::group(bytes),
+        ipod_machine::group(bytes),
         elapsed(took)
     )
 }
@@ -1238,7 +1238,7 @@ fn install_run(
     let out = dest.write_to.clone();
     let _ = tx.send(Report::Started { i: n });
     let _ = tx.send(Report::Writing { i: n, path: out.clone(), meter: Meter::OnDisk });
-    if let Err(said) = eapp_loader::install::install_os(&src, &got[0], &out) {
+    if let Err(said) = ipod_machine::install::install_os(&src, &got[0], &out) {
         // **A write that failed part way, and the honest two reasons.** `Permission` is the one a
         // person can act on — `Next::Reveal` opens the folder — and it is the right class for a
         // drive that could not be written where it was asked to go.
@@ -1251,7 +1251,7 @@ fn install_run(
     let _ = tx.send(Report::Done { i: n, outcome: Outcome::Nothing });
 
     let _ = tx.send(Report::Started { i: n + 1 });
-    if let Err(said) = eapp_loader::install::put_zip(&out, &got[1]) {
+    if let Err(said) = ipod_machine::install::put_zip(&out, &got[1]) {
         // Past this point the new drive exists and has a bootloader on it, so a failure here is
         // `SpaceMidWrite`'s shape — a partial thing on disk that somebody has to decide about —
         // rather than a permission problem, which would have stopped the write above.
@@ -1461,7 +1461,7 @@ impl Reads {
     /// Read the MBR of `path` on a thread of its own.
     pub fn start(&mut self, path: PathBuf) {
         let file = path.clone();
-        self.answer(path, move || eapp_loader::install::data_partition_type(&file));
+        self.answer(path, move || ipod_machine::install::data_partition_type(&file));
     }
 
     /// Run `ask` on a thread of its own and post what it says, tagged with the drive it is about.
@@ -1610,8 +1610,8 @@ enum Run {
 /// **One variant, and iPodLinux is deliberately not the second one yet.**
 ///
 /// Rockbox is two pieces applied in a fixed order — a bootloader through
-/// [`eapp_loader::install::install_os`] and a release zip through
-/// [`eapp_loader::install::put_zip`] — and `rockbox::FULL_INSTALL` states both the pieces and the
+/// [`ipod_machine::install::install_os`] and a release zip through
+/// [`ipod_machine::install::put_zip`] — and `rockbox::FULL_INSTALL` states both the pieces and the
 /// order. iPodLinux is a different shape: `install::install_linux` takes a loader AND a
 /// ZeroSlackr tree, from two separate constants, and the tree is 101 MB. Writing one enum whose
 /// second variant answered `wants()` with the wrong two files would be a landmine dressed as
@@ -2683,7 +2683,7 @@ fn volume_refusal(dir: &Path, at: u64, why: &str) -> Failure {
             "{} would not take {} {} file — {why}. A drive image is one file that size, so it \
              cannot be built there.",
             dir.display(),
-            eapp_loader::article(at),
+            ipod_machine::article(at),
             si(at)
         ),
     )
@@ -2729,7 +2729,7 @@ pub fn gate(need: u64, space: Option<&volume::Space>, dir: &Path) -> Option<Fail
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eapp_loader::identity::Identity;
+    use ipod_machine::identity::Identity;
 
     /// This file's own text, for the two sweeps that are about what is written rather than about
     /// what it does. Cheaper and more honest than a convention nobody enforces.
@@ -3155,8 +3155,8 @@ mod tests {
         println!(
             "  drive {} — {} apparent, {} allocated",
             disk.display(),
-            eapp_loader::si(meta.len()),
-            eapp_loader::si(settings::on_disk_size(&meta))
+            ipod_machine::si(meta.len()),
+            ipod_machine::si(settings::on_disk_size(&meta))
         );
         assert!(meta.len() > 1 << 30, "the drive is {} — too small to be a volume", meta.len());
     }
@@ -3480,7 +3480,7 @@ mod tests {
             "the finished line does not say the bytes came down: {landed}"
         );
         assert!(
-            landed.contains(&eapp_loader::group(rel.bytes)),
+            landed.contains(&ipod_machine::group(rel.bytes)),
             "the finished line does not carry the byte count: {landed}"
         );
 
@@ -4240,7 +4240,7 @@ mod tests {
 mod offline_worker_tests {
     use super::tests::{drain_to_a_stop, DataDir};
     use super::*;
-    use eapp_loader::ipsw::{self, DIRECTORY_AT, LOAD_ADDR_5G};
+    use ipod_machine::ipsw::{self, DIRECTORY_AT, LOAD_ADDR_5G};
 
     /// A firmware partition a 5G/5.5G would accept: `osos` at the load address, `rsrc`, and an
     /// **armed** `aupd`, so `mark_aupd_applied` has something to do.
@@ -4346,7 +4346,7 @@ mod offline_worker_tests {
             url: "http://127.0.0.1:1/offline-fixture.ipsw",
             bytes: bundle.len() as u64,
             sha256: Some(Box::leak(
-                eapp_loader::firmware::sha256(&bundle).into_boxed_str(),
+                ipod_machine::firmware::sha256(&bundle).into_boxed_str(),
             )),
             served: true,
         }));
@@ -4562,7 +4562,7 @@ mod offline_worker_tests {
     ///
     /// Reported as *"it made me synthesise bootrom 5.5g 30gb black"*, and the colour was only half
     /// of it: the shelf draws `d.chassis.unwrap_or_default()`, so a device filed with `chassis:
-    /// None` is drawn in [`eapp_loader::identity::Colour`]'s `Black` whatever its `Mod#` says. The
+    /// None` is drawn in [`ipod_machine::identity::Colour`]'s `Black` whatever its `Mod#` says. The
     /// Composer's `commit` and `drops::land` both resolved the colour before saving; `press` — the
     /// route that makes the *only* iPod nobody chose the model for — did not, so a white `A444`
     /// came out in a black case.
@@ -4603,7 +4603,7 @@ mod offline_worker_tests {
         );
         assert_ne!(
             want,
-            eapp_loader::identity::Colour::default(),
+            ipod_machine::identity::Colour::default(),
             "the default model's colour is the fallback colour, so the line above cannot fail"
         );
     }
@@ -4647,7 +4647,7 @@ mod offline_worker_tests {
             url: Box::leak(format!("file://{}", served.display()).into_boxed_str()),
             bytes: bundle.len() as u64,
             sha256: Some(Box::leak(
-                eapp_loader::firmware::sha256(&bundle).into_boxed_str(),
+                ipod_machine::firmware::sha256(&bundle).into_boxed_str(),
             )),
             served: true,
         }));
@@ -5229,7 +5229,7 @@ mod offline_worker_tests {
     /// A Rockbox piece this test wrote, hashed here.
     ///
     /// **`Box::leak`, because a [`Want`] borrows its catalogue entry.** In the running program that
-    /// entry is a `const` in `eapp-loader`; in a test it is a few bytes this function makes, and
+    /// entry is a `const` in `ipod-machine`; in a test it is a few bytes this function makes, and
     /// leaking one per test is what lets the offline path drive the real `Want` rather than a
     /// second type standing in for it. `a_plan` does the same thing for a `Release`.
     fn a_piece(
@@ -5243,7 +5243,7 @@ mod offline_worker_tests {
             // answers true and the fetcher is not called at all.
             url: "http://127.0.0.1:1/never",
             bytes: body.len() as u64,
-            sha256: Box::leak(eapp_loader::firmware::sha256(body).into_boxed_str()),
+            sha256: Box::leak(ipod_machine::firmware::sha256(body).into_boxed_str()),
             goes,
             about: "a fixture",
         }))
@@ -5255,7 +5255,7 @@ mod offline_worker_tests {
             file,
             url: "http://127.0.0.1:1/never",
             bytes: body.len() as u64,
-            sha256: Box::leak(eapp_loader::firmware::sha256(body).into_boxed_str()),
+            sha256: Box::leak(ipod_machine::firmware::sha256(body).into_boxed_str()),
             about: "a fixture",
         }))
     }
@@ -5416,7 +5416,7 @@ mod offline_worker_tests {
     #[test]
     fn a_fetch_in_flight_is_stopped_and_leaves_no_partial_file() {
         assert!(
-            eapp_loader::tooling::can_download(),
+            ipod_machine::tooling::can_download(),
             "this test drives the fetcher, and the fetcher is curl"
         );
         let _data = crate::data_dir_lock();
@@ -5432,7 +5432,7 @@ mod offline_worker_tests {
             // A denominator, so the bar drawn over this would be a real one — and so
             // `Want::offered` would accept it.
             bytes: 4096,
-            sha256: Box::leak(eapp_loader::firmware::sha256(b"never").into_boxed_str()),
+            sha256: Box::leak(ipod_machine::firmware::sha256(b"never").into_boxed_str()),
             goes: rockbox::Where::FirmwarePartition,
             about: "a fixture that never arrives",
         }));

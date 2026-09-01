@@ -2123,7 +2123,7 @@ mod tests {
     /// A Rail holding one of every kind §9.2 has: a finished step, a step working against a byte
     /// count with a part-file behind it, a failed step, four still planned, and a note.
     fn a_rail_holding_one_of_everything() -> crate::rail::Rail {
-        use eapp_loader::compose::{Holes, Loader, Os, Recipe, Start};
+        use ipod_machine::compose::{Holes, Loader, Os, Recipe, Start};
 
         let recipe = Recipe {
             start: Start::FromIpsw("iPod_25.1.3".into()),
@@ -2205,7 +2205,7 @@ mod tests {
     ///
     /// **The grep this replaces was green through a working one.** Measured 2026-08-22: a
     /// `filed: Vec<(u64, u64)>` on `Rail`, stamped in `note` and `failed` from
-    /// `eapp_loader::settings::now_unix()`, and a `line()` that skips an entry four seconds old —
+    /// `ipod_machine::settings::now_unix()`, and a `line()` that skips an entry four seconds old —
     /// a failure fading off the bench out from under somebody reading it, which is precisely the
     /// thing §14.4 names — passed [`no_clock_is_named_anywhere_in_rail_rs`] and **all 342 tests in
     /// this crate**, because `now_unix` is not `std::time`, `Instant`, `SystemTime` or `Duration`.
@@ -2274,7 +2274,7 @@ mod tests {
     ///
     /// **The vocabulary is the workspace's, not `std`'s.** The four words it used to hold were all
     /// `std::time`'s, and the clock nearest to hand here is
-    /// [`eapp_loader::settings::now_unix`] — one `use` away, a whole second of granularity, and
+    /// [`ipod_machine::settings::now_unix`] — one `use` away, a whole second of granularity, and
     /// named by none of them. `parked_for` is its consumer and is on the list for the same reason.
     #[test]
     fn no_clock_is_named_anywhere_in_rail_rs() {
@@ -2300,7 +2300,7 @@ mod tests {
         }
         // The control: the matcher can see one when there is one, so a matcher that found nothing
         // is not mistaken for a file that holds nothing.
-        let planted = "self.filed.push((id, eapp_loader::settings::now_unix()));";
+        let planted = "self.filed.push((id, ipod_machine::settings::now_unix()));";
         assert!(
             CLOCKS.iter().any(|w| planted.contains(w)),
             "the vocabulary cannot see the clock this rule was written for"
@@ -3166,12 +3166,12 @@ mod tests {
         depth
     }
 
-    /// **The model's own sources — `eapp-loader`'s library, and not its command-line programs.**
+    /// **The model's own sources — `ipod-machine`'s library, and not its command-line programs.**
     ///
     /// §6.7's rule is about a glyph rendered by *this program's* font. Half the sentences that font
     /// is asked to draw are not written in this crate at all: `inspect::flash`'s verdict, the fact
     /// lists behind every Parts row, `nor::Source::describe` and every `Provenance` line are worded
-    /// in `eapp-loader` and rendered here verbatim. Four of them joined their lists with U+00B7 and
+    /// in `ipod-machine` and rendered here verbatim. Four of them joined their lists with U+00B7 and
     /// nothing looked, because this sweep read `tools/ipod-gui/src` and that is the other crate.
     ///
     /// **The line is the crate's own shape.** `src/*.rs` is the library the window links; a
@@ -3208,7 +3208,7 @@ mod tests {
     /// is the one that proves the strip against a planted shipped line under a test-only `fn`.
     fn model_sources() -> Vec<(String, String)> {
         let dir =
-            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../eapp-loader/src"));
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../ipod-machine/src"));
         let mut out: Vec<(String, String)> = std::fs::read_dir(&dir)
             .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
             .flatten()
@@ -3294,7 +3294,7 @@ mod tests {
     ///
     /// The control for [`strip_test_items`], and it is the planted form of the defect the shipping
     /// cut had: a `#[cfg(test)]` helper with real code below it. `take_while` stopped at the
-    /// attribute and everything after was invisible — 443 shipped lines of `eapp-loader`, in the
+    /// attribute and everything after was invisible — 443 shipped lines of `ipod-machine`, in the
     /// three files where that attribute is not the test module's.
     ///
     /// Both directions, because a strip that ate the whole file would pass the first half alone.
@@ -3351,7 +3351,7 @@ mod tests {
     /// the character the shipped window built into UI strings with no coverage gate at all. The
     /// first widening added this crate's `src/*.rs`, because `ui/*.slint` carries almost no prose
     /// and every sentence the bench and the Rail draw is built in Rust. That left the *model*: four
-    /// sentences worded in `eapp-loader` and drawn here verbatim, joining their lists with the very
+    /// sentences worded in `ipod-machine` and drawn here verbatim, joining their lists with the very
     /// character §6.7 names. `parts.rs` substituted a comma for them at its own boundary, which
     /// covered one page and left every other caller drawing empty squares. See [`model_sources`].
     #[test]
@@ -3372,7 +3372,7 @@ mod tests {
             .chain(
                 model_sources()
                     .into_iter()
-                    .map(|(n, t)| (format!("eapp-loader/src/{n}"), t)),
+                    .map(|(n, t)| (format!("ipod-machine/src/{n}"), t)),
             );
         for (name, text) in files {
             match name.split('/').next() {

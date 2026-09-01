@@ -17,7 +17,7 @@
 //! still produce a machine that cannot fetch an instruction.
 
 use arm7tdmi::Bus as _;
-use eapp_loader::{EApp, Machine, Stop};
+use ipod_machine::{EApp, Machine, Stop};
 
 const RAM_BASE: u32 = 0x1000_0000;
 const RAM_SIZE: usize = 0x10_0000;
@@ -43,7 +43,7 @@ fn put32(m: &mut Machine, addr: u32, val: u32) {
 fn fresh_machine() -> Machine {
     let app = EApp::none();
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    eapp_loader::map_hardware(&mut m, true);
+    ipod_machine::map_hardware(&mut m, true);
     m
 }
 

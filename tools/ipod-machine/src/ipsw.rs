@@ -23,7 +23,7 @@
 //! # No dependencies, and what that costs
 //!
 //! An IPSW is a zip, and its members are deflated, so this file carries an inflate. That is the
-//! price of `eapp-loader` having one dependency (`arm7tdmi`, a path) and the README's claim that
+//! price of `ipod-machine` having one dependency (`arm7tdmi`, a path) and the README's claim that
 //! the core crates build with no third-party code. It is not a guess at correctness either: every
 //! member carries a CRC-32 and [`Zip::extract`] checks it, so a wrong bit anywhere in the inflate
 //! is a hard error on the very first real file rather than a subtly corrupt firmware partition.

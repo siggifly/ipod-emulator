@@ -24,7 +24,7 @@
 //! person by a different route, so agreement is evidence the walk is right rather than evidence
 //! it is self-consistent.
 
-use eapp_loader::EApp;
+use ipod_machine::EApp;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// `(framework, ordinal)`.

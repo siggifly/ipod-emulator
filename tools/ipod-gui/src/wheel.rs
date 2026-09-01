@@ -6,7 +6,7 @@
 //!
 //! **Derived.** 96 clicks per rotation, and that clockwise motion increases the value. Rockbox's
 //! `button-clickwheel.c` gives both ("Highest wheel = 0x5F, clockwise increases"), and
-//! [`eapp_loader::WHEEL_CLICKS_PER_ROTATION`] is where this project already records it. The wrap is
+//! [`ipod_machine::WHEEL_CLICKS_PER_ROTATION`] is where this project already records it. The wrap is
 //! therefore modular in 96 and a rotation is a ring, not a range.
 //!
 //! **Chosen.** Where position 0 sits *physically*. Nothing in RetailOS, in the boot ROM, or in
@@ -19,7 +19,7 @@
 
 use std::f32::consts::TAU;
 
-use eapp_loader::{
+use ipod_machine::{
     WHEEL_CLICKS_PER_ROTATION, WHEEL_LEFT, WHEEL_MENU, WHEEL_PLAY, WHEEL_RIGHT, WHEEL_SELECT,
 };
 
@@ -58,7 +58,7 @@ pub fn shortest_delta(from: u8, to: u8) -> i32 {
 
 /// The five buttons, in the order they are drawn: the ring's four printed labels, then the centre.
 ///
-/// The mask is the streaming frame's bit order relative to bit 8, straight from `eapp-loader`;
+/// The mask is the streaming frame's bit order relative to bit 8, straight from `ipod-machine`;
 /// nothing here re-derives it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Button {
@@ -79,10 +79,10 @@ impl Button {
     ];
 
     /// A button by name, using the same spellings the command line's `--wheel` scripts accept —
-    /// `eapp_loader::wheel_button` is the one place those live, so the two cannot drift.
+    /// `ipod_machine::wheel_button` is the one place those live, so the two cannot drift.
     #[allow(dead_code)]  // retired when: something in the window names a button in text — §16.8's keys map letters to variants directly and the drawn labels raise a pointer stream, so nothing in this program spells a button out loud yet
     pub fn parse(name: &str) -> Option<Button> {
-        let mask = eapp_loader::wheel_button(name.trim())?;
+        let mask = ipod_machine::wheel_button(name.trim())?;
         Button::ALL.into_iter().find(|b| b.mask() == mask)
     }
 
@@ -253,7 +253,7 @@ impl Finger {
     /// Answers nothing for a press the wheel does not own: the centre button is a control of its
     /// own with its own route, and the moulding between it and the ring is *"a press on neither —
     /// which is the honest answer, since on the hardware it is the moulding"*.
-    pub fn pressed(&mut self, ring: &WheelRing, x: f32, y: f32) -> Vec<eapp_loader::WheelEvent> {
+    pub fn pressed(&mut self, ring: &WheelRing, x: f32, y: f32) -> Vec<ipod_machine::WheelEvent> {
         let (at, button) = match ring.hit(x, y) {
             Hit::Ring(p) => (p, 0),
             Hit::RingButton(b, p) => (p, b.mask()),
@@ -261,11 +261,11 @@ impl Finger {
         };
         let mut out = Vec::new();
         if self.touch == Touch::Off {
-            out.push(eapp_loader::WheelEvent::Touch);
+            out.push(ipod_machine::WheelEvent::Touch);
         }
         self.touch = Touch::Pointer { at, button };
         if button != 0 {
-            out.push(eapp_loader::WheelEvent::Button(button, true));
+            out.push(ipod_machine::WheelEvent::Button(button, true));
         }
         out
     }
@@ -277,7 +277,7 @@ impl Finger {
     /// inside a 58 px annulus to keep scrolling is a wheel that stops working when you press
     /// slightly too hard. Where the finger went **on** is decided by [`WheelRing::hit`], which does
     /// read the radius; where it has got to since is an angle.
-    pub fn moved(&mut self, x: f32, y: f32) -> Vec<eapp_loader::WheelEvent> {
+    pub fn moved(&mut self, x: f32, y: f32) -> Vec<ipod_machine::WheelEvent> {
         let Touch::Pointer { at, button } = self.touch else {
             return Vec::new();
         };
@@ -287,7 +287,7 @@ impl Finger {
             return Vec::new();
         }
         self.touch = Touch::Pointer { at: to, button };
-        vec![eapp_loader::WheelEvent::Step(d.signum() as i8); d.unsigned_abs() as usize]
+        vec![ipod_machine::WheelEvent::Step(d.signum() as i8); d.unsigned_abs() as usize]
     }
 
     /// The pointer lifted. Whatever it was holding comes up, then the finger leaves.
@@ -295,16 +295,16 @@ impl Finger {
     /// The order is the hardware's: a button that came up *after* the touch ended would post a
     /// frame with the button still set and no finger on the wheel, which is a state the part cannot
     /// be in.
-    pub fn released(&mut self) -> Vec<eapp_loader::WheelEvent> {
+    pub fn released(&mut self) -> Vec<ipod_machine::WheelEvent> {
         let Touch::Pointer { button, .. } = self.touch else {
             return Vec::new();
         };
         self.touch = Touch::Off;
         let mut out = Vec::new();
         if button != 0 {
-            out.push(eapp_loader::WheelEvent::Button(button, false));
+            out.push(ipod_machine::WheelEvent::Button(button, false));
         }
-        out.push(eapp_loader::WheelEvent::Release);
+        out.push(ipod_machine::WheelEvent::Release);
         out
     }
 
@@ -313,27 +313,27 @@ impl Finger {
     /// The first one touches the wheel and the key's release lifts it, so holding the key down is
     /// one contact with a stream of clicks in it — which is what a scroll is. Auto-repeat is the
     /// repeat rate, and it is the platform's rather than one this program invents.
-    pub fn keyed(&mut self, by: i8) -> Vec<eapp_loader::WheelEvent> {
+    pub fn keyed(&mut self, by: i8) -> Vec<ipod_machine::WheelEvent> {
         if by == 0 || matches!(self.touch, Touch::Pointer { .. }) {
             return Vec::new();
         }
         let mut out = Vec::new();
         if self.touch == Touch::Off {
-            out.push(eapp_loader::WheelEvent::Touch);
+            out.push(ipod_machine::WheelEvent::Touch);
             self.touch = Touch::Key;
         }
-        out.push(eapp_loader::WheelEvent::Step(by.signum()));
+        out.push(ipod_machine::WheelEvent::Step(by.signum()));
         out
     }
 
     /// The key came up. Nothing happens if the contact was a pointer's — see the type's note on
     /// there being one finger.
-    pub fn key_released(&mut self) -> Vec<eapp_loader::WheelEvent> {
+    pub fn key_released(&mut self) -> Vec<ipod_machine::WheelEvent> {
         if self.touch != Touch::Key {
             return Vec::new();
         }
         self.touch = Touch::Off;
-        vec![eapp_loader::WheelEvent::Release]
+        vec![ipod_machine::WheelEvent::Release]
     }
 }
 
@@ -487,7 +487,7 @@ mod tests {
     }
     // ── The finger ──────────────────────────────────────────────────────────────────────────────
 
-    use eapp_loader::WheelEvent::{Button as Btn, Release, Step, Touch};
+    use ipod_machine::WheelEvent::{Button as Btn, Release, Step, Touch};
 
     /// The unit ring the window uses: the pointer arrives in units of the wheel's outer radius, so
     /// the whole of `main.rs` needs no idea how big the drawing is.

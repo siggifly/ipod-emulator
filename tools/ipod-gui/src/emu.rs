@@ -2,13 +2,13 @@
 //!
 //! This is a **front end over the existing model**, not a second model. Every device here is built
 //! with the same call the `trace` recipes make, in the same order, with the same arguments; the
-//! peripheral map comes from [`eapp_loader::map_hardware`] rather than from a copy of it. If this
+//! peripheral map comes from [`ipod_machine::map_hardware`] rather than from a copy of it. If this
 //! file and `tools/ipod-boot/retail-boot.sh` ever disagree about what the machine is, that is a bug
 //! in this file, and `--headless` exists so the disagreement is a number rather than an impression.
 //!
 //! # How input reaches the wheel, and why it is scheduled rather than poked
 //!
-//! [`eapp_loader::ClickWheel`] posts a frame only from its script — `service_clickwheel` walks
+//! [`ipod_machine::ClickWheel`] posts a frame only from its script — `service_clickwheel` walks
 //! `script[next..]` and fires every step whose instruction count has arrived. Writing `w.position`
 //! directly would move the device's state and report nothing, which is precisely the failure this
 //! project keeps calling "an instrument that lies". So the GUI *appends steps*, at the current
@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use eapp_loader::{
+use ipod_machine::{
     Ata, Bcm, ClickWheel, EApp, Machine, Nor, Pcf50605, Region, Stop, WheelEvent, WheelStep,
 };
 
@@ -107,7 +107,7 @@ pub struct Config {
     // a value computed on every launch and dropped.
     /// Where the boot ROM comes from. A synthesised one is built here, in memory, from a recipe:
     /// there is no file, nothing to cache and nothing to go stale.
-    pub nor: eapp_loader::nor::Source,
+    pub nor: ipod_machine::nor::Source,
     /// The pristine image. Never written — a per-run clone is.
     pub disk: PathBuf,
     /// The writable clone the machine actually runs against. Re-made every launch.
@@ -384,7 +384,7 @@ impl BootTarget {
             // The title's own name from its manifest, which is what a person calls it. The
             // directory it lives in is named by an opaque id — 50513, 88888, 1500C — so a label
             // taken from the path shows a number nobody recognises.
-            BootTarget::Game { exe, dir } => eapp_loader::manifest_name(dir)
+            BootTarget::Game { exe, dir } => ipod_machine::manifest_name(dir)
                 .or_else(|| {
                     exe.file_stem()
                         .map(|n| n.to_string_lossy().split("_1_1_").next().unwrap_or("").to_string())
@@ -539,7 +539,7 @@ pub fn boot_end(settled: Option<u64>, executed: u64, snap_at: u64) -> Option<Opt
 /// - **Whose it is.** `ipod-boot retail --storeaddr=0x7000c120 --storelog-dump=`, on the same NOR
 ///   dump and the same reference drive: the first `0x8001052a` is written by **`pc = 0x4000e654`**
 ///   at **@2 211 983** — the boot ROM's own opto bring-up, running out of IRAM **55 M instructions
-///   before the drive answers at all**. `eapp-loader`'s snapshot note had said as much all along:
+///   before the drive answers at all**. `ipod-machine`'s snapshot note had said as much all along:
 ///   *"the firmware turns it on once with opcode `0x052a` early in the boot"*.
 /// - **Whether RetailOS sends one later.** It does — and the window's own boot is the only run that
 ///   can say so, because `ipod-boot retail` diverges from it (see below). Over the bench boot's
@@ -665,7 +665,7 @@ pub struct Stats {
     /// that has finished starting sits in `CPU_CTRL`'s sleep bit waiting for an interrupt, and one
     /// that is still starting is executing. It costs an addition in the halt arm of `Machine::run`
     /// and nothing at all anywhere else — no bitset, no per-instruction probe — which is what makes
-    /// it affordable in a window that is not being measured. `eapp-loader`'s own note on
+    /// it affordable in a window that is not being measured. `ipod-machine`'s own note on
     /// `last_novel_sleeps` is where this was first written down: *"a machine that is genuinely
     /// waiting asks the core to sleep, so a window with zero sleeps in it is a busy machine"*.
     pub idle_steps: u64,
@@ -675,7 +675,7 @@ pub struct Stats {
     pub buttons: u8,
     /// The `0x052a` gate. **On at reset** — the part streams unless told not to, which is what
     /// lets a driver that never sends the command (Rockbox) receive anything at all. Autonomous
-    /// frames also need the receiver armed; both conditions live in `eapp-loader`.
+    /// frames also need the receiver armed; both conditions live in `ipod-machine`.
     pub reporting: bool,
     /// Whether the firmware has *sent* `0x052a` at all — a different question from whether the
     /// stream is on. After a restore it starts false, because the click wheel is not part of a
@@ -1028,7 +1028,7 @@ impl Config {
 /// this is not `build` with pieces switched off, it is a different machine, and pretending
 /// otherwise would mean carrying an iPod's hardware behind a game that cannot address it.
 ///
-/// The wiring itself is [`eapp_loader::Machine::install_game_stubs`], shared with `play` so the two
+/// The wiring itself is [`ipod_machine::Machine::install_game_stubs`], shared with `play` so the two
 /// front ends cannot disagree about what a title needs.
 fn build_game(exe: &std::path::Path, dir: &std::path::Path) -> Result<Machine, String> {
     let bytes = std::fs::read(exe).map_err(|e| format!("{}: {e}", exe.display()))?;
@@ -1045,7 +1045,7 @@ fn build_game(exe: &std::path::Path, dir: &std::path::Path) -> Result<Machine, S
         .unwrap_or_default();
     // The defaults are the measured per-title table's, not the command line's — the window has no
     // flags to override them with, which is the point of them being defaults.
-    m.install_game_stubs(&stem, eapp_loader::GameStubs::default());
+    m.install_game_stubs(&stem, ipod_machine::GameStubs::default());
     m.preload_textures();
 
     // **The two machine settings the player sets from the same table, and leaving them out is not
@@ -1054,7 +1054,7 @@ fn build_game(exe: &std::path::Path, dir: &std::path::Path) -> Result<Machine, S
     // each against the player's 24 783, and the panel never changed after the first frame. A
     // title that renders a third of the work and then stops moving reads as a broken emulator; it
     // was a machine that had never been told how its files load or whose clock it follows.
-    let td = eapp_loader::defaults_for(&stem);
+    let td = ipod_machine::defaults_for(&stem);
     // An async open whose request carries a buffer loads the whole file. True for every title in
     // the table but Pac-Man, whose 512 KB `.tga` sends its loader into a loop if pre-loaded.
     m.load_on_open = td.load_on_open;
@@ -1069,7 +1069,7 @@ fn build_game(exe: &std::path::Path, dir: &std::path::Path) -> Result<Machine, S
     // reproduces Minigolf's hand-measured `0x18037a0c` exactly, and gives nine further titles a
     // button path they otherwise would not have. `None` is a real answer — those titles take
     // presses through the event list instead.
-    m.game_flags = eapp_loader::find_flags_word(&app.image);
+    m.game_flags = ipod_machine::find_flags_word(&app.image);
     Ok(m)
 }
 
@@ -1104,7 +1104,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // `Lost(24)` the instant a button was pressed. `ipod-boot flsh` never passes `--cold-boot`,
     // which is why the same image driven from the command line always worked.
     m.mem.second_core = cfg.second_core;
-    eapp_loader::map_hardware(&mut m, cfg.boot.is_os());
+    ipod_machine::map_hardware(&mut m, cfg.boot.is_os());
     // The part's own name at `PP_VER1`/`PP_VER2`, from the one place that decides it.
     //
     // This wrote `0x00360000` until 2026-08-26 — `research/16`'s chip lie, one byte shaped to pass
@@ -1116,8 +1116,8 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // 872 236 211 / 38 307** after — one extra `READ DMA`, and the same 75 267 lit pixels and the
     // same `Idle` at the language picker. Not identical, so it is a real if small change, and
     // saying "identical" here before measuring it is the mistake this comment is now the record
-    // of. See [`eapp_loader::seed_chip_id`] for which byte and why.
-    eapp_loader::seed_chip_id(&mut m);
+    // of. See [`ipod_machine::seed_chip_id`] for which byte and why.
+    ipod_machine::seed_chip_id(&mut m);
     {
         use arm7tdmi::Bus as _;
         // `--charger`: GPIOL bit 3 low is "mains charger attached", and it is what decides between
@@ -1134,12 +1134,12 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // 0x8000, find zeros and hang. So the boot ROM's *effects* are produced here instead of its
     // instructions being run: the OS is copied out of the drive's own firmware partition to
     // 0x10000000, the `sysinfo_t` handoff block is written where Apple writes it, and the CPU
-    // starts at the OS's entry. That is what "HLE" means here — see [`eapp_loader::nor`].
+    // starts at the OS's entry. That is what "HLE" means here — see [`ipod_machine::nor`].
     //
     // Everything about *which iPod this is* comes from the synthesised flash, so RetailOS reads the
     // same identity it would read off a real one.
     use arm7tdmi::Bus as _;
-    let synthetic = eapp_loader::nor::is_synthetic(&flash);
+    let synthetic = ipod_machine::nor::is_synthetic(&flash);
     // **Booting one of the ROM's own images instead of the OS.**
     //
     // `diag` is Apple's service diagnostic — on real hardware you reach it by holding SELECT+REW
@@ -1155,8 +1155,8 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         BootTarget::Game { .. } => None,
         BootTarget::Os => None,
         BootTarget::Nor(tag) => {
-            let img = eapp_loader::inspect::nor_image(&flash, tag).ok_or_else(|| {
-                let have: Vec<String> = eapp_loader::inspect::nor_images(&flash)
+            let img = ipod_machine::inspect::nor_image(&flash, tag).ok_or_else(|| {
+                let have: Vec<String> = ipod_machine::inspect::nor_images(&flash)
                     .iter()
                     .map(|e| e.tag.clone())
                     .collect();
@@ -1183,7 +1183,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // whatever is there and runs out of budget looking busy. The same is true of any file somebody
     // points this at, which is why the check is here and not only on the NOR's own images.
     if let Some((name, img)) = &boot_image {
-        if !eapp_loader::inspect::is_bootable(img) {
+        if !ipod_machine::inspect::is_bootable(img) {
             return Err(format!(
                 "`{name}` is data, not a program: word 0 is not an ARM branch, so there is no \
                  reset vector to enter."
@@ -1197,7 +1197,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
                 (img, 0x1000_0000u32, 0u32)
             }
             None => {
-                let (osos, load_at, entry) = eapp_loader::ipsw::osos_from_drive(&cfg.disk)?;
+                let (osos, load_at, entry) = ipod_machine::ipsw::osos_from_drive(&cfg.disk)?;
                 println!(
                     "  high-level boot: {} bytes of OS from {} -> {load_at:#010x}",
                     osos.len(),
@@ -1232,7 +1232,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         // With the bytes in SDRAM there is one storage and the remap points at it, which is the
         // arrangement the hardware has. Nothing is mirrored at 0: before RetailOS programs that
         // window it is running from `0x1000xxxx`, and after it, address 0 *is* SDRAM.
-        eapp_loader::place_image(&mut m, load_at, &osos);
+        ipod_machine::place_image(&mut m, load_at, &osos);
         // **Where the machine starts, decided here and read back by the run loop.** `Machine::new`
         // puts the PC at the placeholder app's entry, which is 0; `session` used to re-decide the
         // address with a second `if cfg.boot.is_os()` of its own, and two places deciding one thing
@@ -1251,7 +1251,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         }
 
         // The handoff, byte for byte as a cold boot leaves it.
-        let cfg_block = eapp_loader::inspect::syscfg(&flash);
+        let cfg_block = ipod_machine::inspect::syscfg(&flash);
         let identity = cfg.nor.identity()?;
         let model = cfg
             .nor
@@ -1259,26 +1259,26 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
             .ok_or("the synthesised ROM names a model this program does not know")?;
         let syscfg_bytes = match &cfg_block {
             Some(c) => {
-                let at = eapp_loader::inspect::SYSCFG_AT;
-                let len = eapp_loader::inspect::SYSCFG_HEADER
-                    + c.records.len() * eapp_loader::inspect::SYSCFG_RECORD;
+                let at = ipod_machine::inspect::SYSCFG_AT;
+                let len = ipod_machine::inspect::SYSCFG_HEADER
+                    + c.records.len() * ipod_machine::inspect::SYSCFG_RECORD;
                 flash.get(at..at + len).unwrap_or(&[]).to_vec()
             }
             None => Vec::new(),
         };
-        let block = eapp_loader::nor::handoff(&identity, model, &syscfg_bytes);
+        let block = ipod_machine::nor::handoff(&identity, model, &syscfg_bytes);
         for (i, chunk) in block.chunks(4).enumerate() {
             let mut w = [0u8; 4];
             w[..chunk.len()].copy_from_slice(chunk);
             m.mem.write32(
-                eapp_loader::nor::HANDOFF_AT + (i as u32) * 4,
+                ipod_machine::nor::HANDOFF_AT + (i as u32) * 4,
                 u32::from_le_bytes(w),
             );
         }
         // The scaffolding a real ROM would already have done — see `install_sysinfo` in trace.rs,
         // where the same reasoning is spelled out and bisected.
         let hw = |m: &mut Machine, off: u32, v: u32| {
-            m.mem.write32(eapp_loader::nor::HANDOFF_AT + off, v)
+            m.mem.write32(ipod_machine::nor::HANDOFF_AT + off, v)
         };
         hw(&mut m, 0x60, u32::from_le_bytes(*b"Flsh"));
         hw(&mut m, 0x68, 0x2000_0000);
@@ -1304,12 +1304,12 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         hw(&mut m, 0xe0, MEASURED_SDRAM_WORD);
         hw(&mut m, 0x128, 0x0005_0014);
         m.mem.write32(
-            eapp_loader::nor::HANDOFF_TAG_AT,
+            ipod_machine::nor::HANDOFF_TAG_AT,
             u32::from_le_bytes(*b"IsyS"),
         );
         m.mem.write32(
-            eapp_loader::nor::HANDOFF_TAG_AT + 4,
-            eapp_loader::nor::HANDOFF_AT,
+            ipod_machine::nor::HANDOFF_TAG_AT + 4,
+            ipod_machine::nor::HANDOFF_AT,
         );
         println!(
             "  identity: {} · {}",
@@ -1580,7 +1580,7 @@ const MIN_BUTTON_HOLD: u64 = instructions_for_ms(300);
 /// `CLOCK` is instructions per simulated microsecond — the definition of `--clock` — so this is
 /// `ms * 1_000 * CLOCK`. At the real part's 75 that is 75 000 instructions per millisecond.
 pub const fn instructions_for_ms(ms: u64) -> u64 {
-    ms * 1_000 * eapp_loader::CLOCK as u64
+    ms * 1_000 * ipod_machine::CLOCK as u64
 }
 
 /// When an event may fire, given what is already scheduled and the earliest slot free.
@@ -1588,14 +1588,14 @@ pub const fn instructions_for_ms(ms: u64) -> u64 {
 /// Everything fires at `earliest` except a button's **release**, which waits until the button has
 /// been held for [`MIN_BUTTON_HOLD`]. The hold is measured from the button's own down event in the
 /// script, so the two cannot disagree the way a separate ledger could.
-fn schedule_at(script: &[WheelStep], ev: eapp_loader::WheelEvent, earliest: u64) -> u64 {
-    let eapp_loader::WheelEvent::Button(mask, false) = ev else {
+fn schedule_at(script: &[WheelStep], ev: ipod_machine::WheelEvent, earliest: u64) -> u64 {
+    let ipod_machine::WheelEvent::Button(mask, false) = ev else {
         return earliest;
     };
     match script
         .iter()
         .rev()
-        .find(|s| matches!(s.event, eapp_loader::WheelEvent::Button(m2, true) if m2 == mask))
+        .find(|s| matches!(s.event, ipod_machine::WheelEvent::Button(m2, true) if m2 == mask))
     {
         Some(down) => earliest.max(down.at + MIN_BUTTON_HOLD),
         None => earliest,
@@ -1616,7 +1616,7 @@ fn drain(m: &mut Machine, inbox: &Mutex<Inbox>, next_at: &mut u64, gap: u64) {
         //
         // A held button is exempt: its release is deliberately far in the future, and deferring it
         // here would stall every event behind it — including the release itself, for ever.
-        if at > now + gap * 8 && !matches!(ev, eapp_loader::WheelEvent::Button(_, false)) {
+        if at > now + gap * 8 && !matches!(ev, ipod_machine::WheelEvent::Button(_, false)) {
             break;
         }
         inbox.events.pop_front();
@@ -1820,7 +1820,7 @@ fn title_session(cfg: &Config, link: &Arc<Link>, mut m: Machine) -> Outcome {
         // takes the window with it.
         _ => String::new(),
     };
-    let td = eapp_loader::defaults_for(&stem);
+    let td = ipod_machine::defaults_for(&stem);
     let budget = td.budget.unwrap_or(8_000_000) as usize;
 
     // Taken off the machine: `start_title` needs `&mut self` and the vectors live on it, so a
@@ -1838,7 +1838,7 @@ fn title_session(cfg: &Config, link: &Arc<Link>, mut m: Machine) -> Outcome {
     };
 
     let spec = td.frame_reason;
-    let reason = eapp_loader::FrameReason {
+    let reason = ipod_machine::FrameReason {
         steady: spec
             .and_then(|v| v.split_once(':').map(|(_, n)| n))
             .and_then(|n| n.parse().ok())
@@ -1911,10 +1911,10 @@ fn title_session(cfg: &Config, link: &Arc<Link>, mut m: Machine) -> Outcome {
                     }
                     WheelEvent::Button(mask, true) => {
                         let bit = match mask {
-                            eapp_loader::WHEEL_SELECT => BTN_SELECT,
-                            eapp_loader::WHEEL_MENU => BTN_MENU,
-                            eapp_loader::WHEEL_PLAY => BTN_PLAY,
-                            eapp_loader::WHEEL_RIGHT => BTN_NEXT,
+                            ipod_machine::WHEEL_SELECT => BTN_SELECT,
+                            ipod_machine::WHEEL_MENU => BTN_MENU,
+                            ipod_machine::WHEEL_PLAY => BTN_PLAY,
+                            ipod_machine::WHEEL_RIGHT => BTN_NEXT,
                             _ => BTN_PREV,
                         };
                         session.post_event(&mut m, event_type_for(bit), 1, 0, wheel_byte(wheel_raw));
@@ -1968,8 +1968,8 @@ fn title_session(cfg: &Config, link: &Arc<Link>, mut m: Machine) -> Outcome {
             // not the game reading memory, and it must not be counted as an access or reach a
             // peripheral hook. A request field that is not mapped reads 0, which is the same
             // "no callback" this already handles.
-            let cb = m.mem.peek32(req + eapp_loader::REQ_CALLBACK).unwrap_or(0);
-            let ctx_arg = m.mem.peek32(req + eapp_loader::REQ_CONTEXT).unwrap_or(0);
+            let cb = m.mem.peek32(req + ipod_machine::REQ_CALLBACK).unwrap_or(0);
+            let ctx_arg = m.mem.peek32(req + ipod_machine::REQ_CONTEXT).unwrap_or(0);
             if cb != 0 {
                 // The stop is not acted on: a completion that does not return is a hang inside the
                 // game's own loader, and the frame below is what notices — this call has no more
@@ -1983,7 +1983,7 @@ fn title_session(cfg: &Config, link: &Arc<Link>, mut m: Machine) -> Outcome {
 
         // A title that has torn itself down is not a title that is running, and saying so is what
         // stops the window drawing a frozen last frame as a live machine.
-        if let eapp_loader::Stop::Lost(why) = &stop {
+        if let ipod_machine::Stop::Lost(why) = &stop {
             let mut out = link.out.lock().unwrap();
             out.phase = Phase::Stopped(format!("{stem}: {why}"));
             return Outcome::Quit;
@@ -2067,7 +2067,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
                 // point: a restore point written by an older build is refused rather than
                 // migrated, because regenerating one costs a boot and carrying two readers
                 // costs forever. The else-branch below is already right for both.
-                if eapp_loader::pack::unpack(&b).is_some_and(|raw| m.restore(&raw)) {
+                if ipod_machine::pack::unpack(&b).is_some_and(|raw| m.restore(&raw)) {
                     restored = true;
                 } else {
                     // Two things are wrong at once here, and patching either alone leaves the
@@ -2584,7 +2584,7 @@ fn write_restore_point(cfg: &Config, m: &Machine, frame: Option<&[u8]>) -> Optio
     // what the *drive* cost, which is backwards: the drive is the half that cannot be regenerated.
     // See `pack`, which measures 17:1 on a real parked 5.5G.
     let raw = m.snapshot();
-    let img = eapp_loader::pack::pack(&raw);
+    let img = ipod_machine::pack::pack(&raw);
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -2610,7 +2610,7 @@ fn write_restore_point(cfg: &Config, m: &Machine, frame: Option<&[u8]>) -> Optio
         }
     }
     write_parked_frame(cfg, frame);
-    Some(eapp_loader::settings::now_unix())
+    Some(ipod_machine::settings::now_unix())
 }
 
 /// §12.4's parked frame: `<snapshot>.parked.png`, at exactly 320 × 240.
@@ -2660,7 +2660,7 @@ fn snapshot_bytes(m: &Machine) -> u64 {
         .mem
         .regions
         .iter()
-        .map(|r| (eapp_loader::pack::packed_len(&r.data) + r.name.len() + 12) as u64)
+        .map(|r| (ipod_machine::pack::packed_len(&r.data) + r.name.len() + 12) as u64)
         .sum();
     let bcm = m.mem.bcm.as_ref().map_or(0, |b| b.mem.len() as u64 * 8);
     regions + bcm + SNAPSHOT_SLACK
@@ -2800,8 +2800,8 @@ impl SelfTest {
                         link.push(WheelEvent::Step(1));
                     }
                     link.push(WheelEvent::Release);
-                    link.push(WheelEvent::Button(eapp_loader::WHEEL_SELECT, true));
-                    link.push(WheelEvent::Button(eapp_loader::WHEEL_SELECT, false));
+                    link.push(WheelEvent::Button(ipod_machine::WHEEL_SELECT, true));
+                    link.push(WheelEvent::Button(ipod_machine::WHEEL_SELECT, false));
                 }
                 self.stage = 1;
                 // 40 events at 20 000 instructions apart is 800 k; give the firmware ten times
@@ -3041,8 +3041,8 @@ impl Probing {
                 // it is what puts the combo arms in front of the same screen as the menu arms.
                 if mode != Probe::MenuControl {
                     link.push(WheelEvent::Touch);
-                    link.push(WheelEvent::Button(eapp_loader::WHEEL_SELECT, true));
-                    link.push(WheelEvent::Button(eapp_loader::WHEEL_SELECT, false));
+                    link.push(WheelEvent::Button(ipod_machine::WHEEL_SELECT, true));
+                    link.push(WheelEvent::Button(ipod_machine::WHEEL_SELECT, false));
                     link.push(WheelEvent::Release);
                 }
                 self.stage = 1;
@@ -3058,17 +3058,17 @@ impl Probing {
                     if now >= combo_at && !self.combo_down {
                         self.combo_down = true;
                         if mode == Probe::Combo {
-                            link.push(WheelEvent::Button(eapp_loader::WHEEL_MENU, true));
+                            link.push(WheelEvent::Button(ipod_machine::WHEEL_MENU, true));
                         }
                         // The control holds SELECT alone, so "the firmware saw a held button" and
                         // "the firmware saw *that pair*" are different arms rather than one claim.
-                        link.push(WheelEvent::Button(eapp_loader::WHEEL_SELECT, true));
+                        link.push(WheelEvent::Button(ipod_machine::WHEEL_SELECT, true));
                         self.sample(m, "combo-down");
                     }
                     if self.combo_down && !self.combo_up && now >= combo_at + COMBO_HOLD {
                         self.combo_up = true;
-                        link.push(WheelEvent::Button(eapp_loader::WHEEL_MENU, false));
-                        link.push(WheelEvent::Button(eapp_loader::WHEEL_SELECT, false));
+                        link.push(WheelEvent::Button(ipod_machine::WHEEL_MENU, false));
+                        link.push(WheelEvent::Button(ipod_machine::WHEEL_SELECT, false));
                         self.sample(m, "combo-up");
                     }
                 }
@@ -3170,7 +3170,7 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
             let rows = w.sample();
             let (lo, hi): (Vec<u32>, Vec<u32>) = rows
                 .iter()
-                .partition(|&&u| u < eapp_loader::BACKLIGHT_STEP_USEC);
+                .partition(|&&u| u < ipod_machine::BACKLIGHT_STEP_USEC);
             println!(
                 "    pulse widths: {} pulses{} — {} under {} µs, {} over{}",
                 w.seen(),
@@ -3180,7 +3180,7 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
                     " (SAMPLE, NOT A CENSUS)"
                 },
                 lo.len(),
-                eapp_loader::BACKLIGHT_STEP_USEC,
+                ipod_machine::BACKLIGHT_STEP_USEC,
                 hi.len(),
                 if rows.is_empty() {
                     String::new()
@@ -3482,7 +3482,7 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eapp_loader::{WheelEvent, WheelStep};
+    use ipod_machine::{WheelEvent, WheelStep};
 
     /// **A press has a duration, and the duration is the machine's, not the operator's.**
     ///
@@ -3551,12 +3551,12 @@ mod tests {
     #[test]
     fn a_titles_panel_is_the_same_panel_the_window_draws() {
         let window = FB_W * FB_H * 3;
-        let machine = eapp_loader::FB_WIDTH * eapp_loader::FB_HEIGHT * 3;
+        let machine = ipod_machine::FB_WIDTH * ipod_machine::FB_HEIGHT * 3;
         assert_eq!(
             window, machine,
             "the window expects {FB_W}x{FB_H} and the machine draws {}x{}",
-            eapp_loader::FB_WIDTH,
-            eapp_loader::FB_HEIGHT
+            ipod_machine::FB_WIDTH,
+            ipod_machine::FB_HEIGHT
         );
 
         // And a machine really does allocate it, rather than growing it on first draw — a title
@@ -3616,7 +3616,7 @@ mod tests {
             instructions_for_ms(1),
             75_000,
             "CLOCK is {} — has the part changed?",
-            eapp_loader::CLOCK
+            ipod_machine::CLOCK
         );
         assert_eq!(
             MIN_BUTTON_HOLD, 22_500_000,
@@ -3633,9 +3633,9 @@ mod tests {
             )
         };
 
-        let down = WheelStep::instr(1_000, WheelEvent::Button(eapp_loader::WHEEL_MENU, true));
+        let down = WheelStep::instr(1_000, WheelEvent::Button(ipod_machine::WHEEL_MENU, true));
         let script = vec![down];
-        let up = WheelEvent::Button(eapp_loader::WHEEL_MENU, false);
+        let up = WheelEvent::Button(ipod_machine::WHEEL_MENU, false);
 
         // The release is pushed back to the end of the hold, however soon it was asked for.
         assert_eq!(schedule_at(&script, up, 1_300), 1_000 + MIN_BUTTON_HOLD);
@@ -3645,7 +3645,7 @@ mod tests {
 
         // Only the release. A press, a rotation and a touch all fire when asked.
         for ev in [
-            WheelEvent::Button(eapp_loader::WHEEL_MENU, true),
+            WheelEvent::Button(ipod_machine::WHEEL_MENU, true),
             WheelEvent::Step(1),
             WheelEvent::Touch,
             WheelEvent::Release,
@@ -3662,7 +3662,7 @@ mod tests {
         // And it is *this* button's press that counts, not any press.
         let other = vec![WheelStep::instr(
             1_000,
-            WheelEvent::Button(eapp_loader::WHEEL_PLAY, true),
+            WheelEvent::Button(ipod_machine::WHEEL_PLAY, true),
         )];
         assert_eq!(schedule_at(&other, up, 1_300), 1_300);
     }
@@ -3685,7 +3685,7 @@ mod tests {
             disk: dir.join("d.img"),
             workdisk: dir.join("w.img"),
             frozen: frozen.clone(),
-            clock: eapp_loader::CLOCK,
+            clock: ipod_machine::CLOCK,
             snapshot: Some(snap.clone()),
             snap_at: 1,
             cold: false,
@@ -3742,7 +3742,7 @@ mod tests {
             disk: drive.clone(),
             workdisk: drive.clone(),
             frozen: dir.join("b.frozen"),
-            clock: eapp_loader::CLOCK,
+            clock: ipod_machine::CLOCK,
             snapshot: Some(snap.clone()),
             snap_at: 1,
             cold: false,
@@ -4086,8 +4086,8 @@ mod tests {
         std::fs::write(&boot, [0xfeu8, 0xff, 0xff, 0xea].repeat(16)).unwrap();
 
         let cfg = Config {
-            nor: eapp_loader::nor::Source::Synthetic {
-                model: eapp_loader::nor::DEFAULT_MODEL.into(),
+            nor: ipod_machine::nor::Source::Synthetic {
+                model: ipod_machine::nor::DEFAULT_MODEL.into(),
                 seed: 1,
                 serial: None,
                 guid: None,
@@ -4100,7 +4100,7 @@ mod tests {
             frozen: dir.join("m.frozen"),
             snapshot: Some(dir.join("m.snap")),
             snap_at: SNAP_AT,
-            clock: eapp_loader::CLOCK,
+            clock: ipod_machine::CLOCK,
             boot: BootTarget::Image(boot),
             ..Default::default()
         };
@@ -4151,7 +4151,7 @@ mod tests {
         let png = cfg.parked_frame().expect("a snapshot has a parked frame path");
         assert_eq!(png, dir.join("m.parked.png"), "beside the snapshot, under its own stem");
         assert!(png.exists(), "the park wrote no picture, so a parked glass is dark");
-        let mut seen = eapp_loader::settings::Presence::new();
+        let mut seen = ipod_machine::settings::Presence::new();
         assert_eq!(
             crate::machine::parked_frame(&cfg, &mut seen),
             Some(png.clone()),
@@ -4215,7 +4215,7 @@ mod tests {
     #[test]
     #[ignore = "needs resources/: a real drive image, which is not in git"]
     fn a_synthesised_rom_boots_the_os_and_this_needs_resources() {
-        let pristine = eapp_loader::settings::repo_root()
+        let pristine = ipod_machine::settings::repo_root()
             .join("resources/drives/ipod8g-retail.PRISTINE.img");
         assert!(
             pristine.is_file(),
@@ -4240,7 +4240,7 @@ mod tests {
         let cfg = Config {
             // A synthesised ROM, which is the whole point: no Apple code anywhere in this machine
             // except what comes off the drive.
-            nor: eapp_loader::nor::Source::Synthetic {
+            nor: ipod_machine::nor::Source::Synthetic {
                 model: "A146".into(),
                 seed: 1,
                 serial: None,
@@ -4250,7 +4250,7 @@ mod tests {
             disk: work.clone(),
             workdisk: work.clone(),
             frozen: dir.join("m.frozen"),
-            clock: eapp_loader::CLOCK,
+            clock: ipod_machine::CLOCK,
             boot: BootTarget::Os,
             ..Default::default()
         };
@@ -4261,13 +4261,13 @@ mod tests {
         const BUDGET: u64 = 400_000_000;
         let pc = m.cpu.regs[15];
         let mut stop = m.call_with(pc, &[0, 0, 0, 0], SLICE);
-        while stop == eapp_loader::Stop::BudgetExhausted && (m.executed as u64) < BUDGET {
+        while stop == ipod_machine::Stop::BudgetExhausted && (m.executed as u64) < BUDGET {
             stop = m.run(SLICE);
         }
 
         let ata = m.mem.ata.as_ref().map_or(0, |(_, a)| a.commands.seen());
         assert!(
-            !matches!(stop, eapp_loader::Stop::Lost(_)),
+            !matches!(stop, ipod_machine::Stop::Lost(_)),
             "the machine left every mapped region after {} instructions with {ata} ATA commands: \
              {stop:?}",
             m.executed
@@ -4383,7 +4383,7 @@ mod tests {
         // A drive is a file with a firmware partition at LBA 63 and an `!ATA` directory in it.
         // Nothing else here reads the volume, so nothing else is written.
         let image: Vec<u8> = OS.iter().flat_map(|w| w.to_le_bytes()).collect();
-        let base = eapp_loader::ipsw::FIRMWARE_LBA as u64 * 512;
+        let base = ipod_machine::ipsw::FIRMWARE_LBA as u64 * 512;
         const DEV_OFFSET: u32 = 0x4400;
         let mut entry = [0u8; 40];
         entry[..4].copy_from_slice(b"!ATA");
@@ -4392,13 +4392,13 @@ mod tests {
         entry[8..12].copy_from_slice(&0u32.to_le_bytes());
         entry[0x0c..0x10].copy_from_slice(&DEV_OFFSET.to_le_bytes());
         entry[0x10..0x14].copy_from_slice(&(image.len() as u32).to_le_bytes());
-        entry[0x14..0x18].copy_from_slice(&eapp_loader::ipsw::LOAD_ADDR_5G.to_le_bytes());
+        entry[0x14..0x18].copy_from_slice(&ipod_machine::ipsw::LOAD_ADDR_5G.to_le_bytes());
         entry[0x18..0x1c].copy_from_slice(&0u32.to_le_bytes());
         {
             use std::io::{Seek, SeekFrom, Write};
             let mut f = std::fs::File::create(&disk).unwrap();
             f.set_len(1 << 20).unwrap();
-            f.seek(SeekFrom::Start(base + eapp_loader::ipsw::DIRECTORY_AT as u64))
+            f.seek(SeekFrom::Start(base + ipod_machine::ipsw::DIRECTORY_AT as u64))
                 .unwrap();
             f.write_all(&entry).unwrap();
             f.seek(SeekFrom::Start(base + DEV_OFFSET as u64)).unwrap();
@@ -4406,8 +4406,8 @@ mod tests {
         }
 
         let cfg = Config {
-            nor: eapp_loader::nor::Source::Synthetic {
-                model: eapp_loader::nor::DEFAULT_MODEL.into(),
+            nor: ipod_machine::nor::Source::Synthetic {
+                model: ipod_machine::nor::DEFAULT_MODEL.into(),
                 seed: 1,
                 serial: None,
                 guid: None,
@@ -4418,7 +4418,7 @@ mod tests {
             // machine reads what was just written.
             workdisk: disk.clone(),
             frozen: dir.join("m.frozen"),
-            clock: eapp_loader::CLOCK,
+            clock: ipod_machine::CLOCK,
             boot: BootTarget::Os,
             ..Default::default()
         };
@@ -4428,7 +4428,7 @@ mod tests {
         // bootloader leaves and the reason the rest of the test can pass: a region filed behind
         // `sdram` reads as zero here.
         assert_eq!(
-            m.mem.read32(eapp_loader::ipsw::LOAD_ADDR_5G),
+            m.mem.read32(ipod_machine::ipsw::LOAD_ADDR_5G),
             OS[0],
             "SDRAM does not hold the OS at its load address, so the remap below has nothing to \
              point at"
@@ -4436,7 +4436,7 @@ mod tests {
         // And the machine starts where the bootloader's console says it starts.
         assert_eq!(
             m.cpu.regs[15],
-            eapp_loader::ipsw::LOAD_ADDR_5G,
+            ipod_machine::ipsw::LOAD_ADDR_5G,
             "the CPU was not left at the entry `Running 'osos' 0 from 0x10000000` names"
         );
 
@@ -4446,7 +4446,7 @@ mod tests {
 
         assert_eq!(
             stop,
-            eapp_loader::Stop::BudgetExhausted,
+            ipod_machine::Stop::BudgetExhausted,
             "the machine left every mapped region after remapping low memory onto SDRAM"
         );
         assert_eq!(

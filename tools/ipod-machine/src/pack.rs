@@ -14,7 +14,7 @@
 //! ```
 //!
 //! Nearly all of that ratio is runs of zeros rather than general redundancy, so a zero-run encoder
-//! collects most of it without a compression crate. That is the deciding argument: `eapp-loader`
+//! collects most of it without a compression crate. That is the deciding argument: `ipod-machine`
 //! has **exactly one dependency**, a path dep on the CPU, and sixty lines is a smaller thing to own
 //! than a supply chain — especially in a program whose whole claim is that it is auditable.
 //!
@@ -217,7 +217,7 @@ mod tests {
     ///
     /// ```text
     /// IPOD_PACK_SAMPLE="$HOME/Library/Application Support/ipod-emulator/snapshots/my-5.5g.snap" \
-    ///   cargo test -p eapp-loader --lib pack:: -- --ignored --nocapture
+    ///   cargo test -p ipod-machine --lib pack:: -- --ignored --nocapture
     /// ```
     #[test]
     #[ignore]

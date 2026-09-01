@@ -290,7 +290,7 @@ fn main() {
     //  (3) the boot-task descriptors the creation code at 0x000d3b60 memcpy's to 0x108c77b4:
     //      6 words, {id, prio, stack top, size, entry, name}. This is the record Addendum 7 §2 read
     //      by hand; the field order is confirmed by every priority in it matching the resulting TCB.
-    let mut by_entry: BTreeMap<u32, String> = eapp_loader::extract_symbols(&img.0, 0);
+    let mut by_entry: BTreeMap<u32, String> = ipod_machine::extract_symbols(&img.0, 0);
     let mut by_id: BTreeMap<u32, String> = BTreeMap::new();
     let prologue = |a: u32| img.w(a) & 0x0fff_0000 == 0x092d_0000 || img.w(a) == 0xe52d_e004;
     for k in 0..64u32 {

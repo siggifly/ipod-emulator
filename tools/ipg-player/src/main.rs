@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use arm7tdmi::Bus;
-use eapp_loader::{defaults_for, EApp, Machine, Stop, FB_HEIGHT, FB_WIDTH};
+use ipod_machine::{defaults_for, EApp, Machine, Stop, FB_HEIGHT, FB_WIDTH};
 use minifb::{Key, MouseButton, Scale, ScaleMode, Window, WindowOptions};
 
 /// Post one button event, the way RetailOS does.
@@ -423,7 +423,7 @@ fn main() {
     let td = defaults_for(&title_exe);
     let async_files = m.install_game_stubs(
         &title_exe,
-        eapp_loader::GameStubs {
+        ipod_machine::GameStubs {
             open_returns_handle: open_ret_handle,
             sync_files: args.iter().any(|a| a == "--sync-files"),
         },
@@ -615,7 +615,7 @@ fn main() {
             println!("call log -> {path}");
             (std::io::BufWriter::new(file), 0usize)
         });
-    fn flush_call_log(log: &mut Option<(std::io::BufWriter<fs::File>, usize)>, trace: &[eapp_loader::Call], frame: usize) {
+    fn flush_call_log(log: &mut Option<(std::io::BufWriter<fs::File>, usize)>, trace: &[ipod_machine::Call], frame: usize) {
         use std::io::Write;
         if let Some((out, flushed)) = log {
             for c in &trace[*flushed..] {
@@ -661,7 +661,7 @@ fn main() {
     let title = m
         .game_dir
         .as_deref()
-        .and_then(eapp_loader::manifest_name)
+        .and_then(ipod_machine::manifest_name)
         .or_else(|| (!from_exe.is_empty()).then_some(from_exe))
         .unwrap_or_else(|| {
             PathBuf::from(path)
@@ -902,7 +902,7 @@ fn main() {
         .or(td.pump_mark);
     // Gathered into the one value the library takes, so the modes cannot drift apart from the
     // per-title table that decides which of them a title needs.
-    let frame_reason = eapp_loader::FrameReason {
+    let frame_reason = ipod_machine::FrameReason {
         steady: reason_steady,
         offset: reason_off,
         first_zero: reason_first0,
@@ -955,7 +955,7 @@ fn main() {
         // hand-measured address from the signature alone, and gives one to nine further titles
         // that had no buttons at all — Bejeweled, Cubis 2, Mahjong, Ms. PAC-MAN's sibling
         // Pac-Man, Tetris, Texas Hold'em, TWA, Vortex and Zuma.
-        .or_else(|| eapp_loader::find_flags_word(&app.image));
+        .or_else(|| ipod_machine::find_flags_word(&app.image));
     // The long-press timestamps that go with that flags word. Same rule as the word itself:
     // Minigolf's are measured, anything else has to be told, and a title we cannot vouch for gets
     // nothing written. See `MINIGOLF_PRESS_TIMES` for what the game does with them.
@@ -1365,7 +1365,7 @@ fn main() {
         // photographing the whole desktop. Numbered, so a sequence can be captured.
         if script_shot || window.is_key_pressed(Key::P, minifb::KeyRepeat::No) {
             let path = format!("/tmp/ipod-shot-{shot_n:02}.png");
-            let png = eapp_loader::png::encode(&m.framebuffer, FB_WIDTH, FB_HEIGHT);
+            let png = ipod_machine::png::encode(&m.framebuffer, FB_WIDTH, FB_HEIGHT);
             match fs::write(&path, png) {
                 Ok(()) => println!("screenshot -> {path}  (frame {frames})"),
                 Err(e) => println!("screenshot failed: {e}"),
@@ -1506,7 +1506,7 @@ fn main() {
             // "play this sound" — only fire during gameplay, so they have to be captured live.
             // The per-frame volume refresh (#2/#13/#14/#15 on handle 0) floods any window and
             // pushes the rare calls out. Filter it away so a trigger cannot hide behind it.
-            let aud: Vec<&eapp_loader::Call> = m
+            let aud: Vec<&ipod_machine::Call> = m
                 .trace
                 .iter()
                 .filter(|c| c.framework == "Audio")
@@ -1521,7 +1521,7 @@ fn main() {
                 );
             }
             println!("  AsyncFileIO calls (last 10):");
-            let afio: Vec<&eapp_loader::Call> =
+            let afio: Vec<&ipod_machine::Call> =
                 m.trace.iter().filter(|c| c.framework == "AsyncFileIO").collect();
             for c in afio.iter().rev().take(10).rev() {
                 println!(
@@ -1613,8 +1613,8 @@ fn main() {
             }
         }
         for req in due.iter().copied().filter(|_| !completion_list) {
-            let cb = m.mem.read32(req + eapp_loader::REQ_CALLBACK);
-            let ctx_arg = m.mem.read32(req + eapp_loader::REQ_CONTEXT);
+            let cb = m.mem.read32(req + ipod_machine::REQ_CALLBACK);
+            let ctx_arg = m.mem.read32(req + ipod_machine::REQ_CONTEXT);
             m.file_log.push(format!(
                 "completion req {req:#010x} cb {cb:#010x} ctx {ctx_arg:#010x}"
             ));

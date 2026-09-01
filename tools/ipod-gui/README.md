@@ -2,7 +2,7 @@
 
 A drawn iPod 5G whose screen is the live framebuffer and whose click wheel, five buttons and hold
 switch actually drive the machine. It is a **front end over the existing model**, not a second
-model: the same `eapp-loader` crate the `trace` recipes use, the same peripheral map, the same
+model: the same `ipod-machine` crate the `trace` recipes use, the same peripheral map, the same
 devices, built by the same calls in the same order.
 
 ```
@@ -434,20 +434,20 @@ synthetic test passed throughout, because the helper wrote the same wrong magic.
 
 ## Changes outside this directory
 
-**`map_hardware` moved** from `tools/eapp-loader/src/bin/trace.rs` into `lib.rs` as
-`eapp_loader::map_hardware`, and `trace.rs` keeps a one-line delegate. Two front ends now stand the
+**`map_hardware` moved** from `tools/ipod-machine/src/bin/trace.rs` into `lib.rs` as
+`ipod_machine::map_hardware`, and `trace.rs` keeps a one-line delegate. Two front ends now stand the
 same machine up, and a peripheral map that existed in two copies would become two different machines
 the first time either copy was corrected. The move was byte-for-byte and the baseline proved it:
 `BUDGET=4000000000 ipod-boot retail --clock=5 --stop-when-idle=400000000` before and after produced
 run reports that `diff` reports as identical — at the time, `Idle after 1610279157`, 38 266 code
-buckets, 770 ata commands, 4 unmapped reads, and `cargo test --release` in `eapp-loader` 24 passed
+buckets, 770 ata commands, 4 unmapped reads, and `cargo test --release` in `ipod-machine` 24 passed
 either way. *(That baseline has since moved to `Idle after 1562789429` / 38 220 buckets — not from
 this work but from research/10 Addendum 30's charger-GPIO fix, which landed on a parallel branch.)*
 
 **`Machine::snapshot` carries `Memory::slept_usec`** (format `IPODSNP4`, older images refused), so a
 restored machine's simulated clock is the one the snapshot was taken with. Three tests cover it —
 including a negative control that reproduces the old format and asserts the clock falls back by
-exactly the amount dropped — and `cargo test --release` in `eapp-loader` goes 30 → 33 (45 once the
+exactly the amount dropped — and `cargo test --release` in `ipod-machine` goes 30 → 33 (45 once the
 parallel `ipod-film` work is merged in, which brings twelve of its own). The full-boot
 baseline is `diff`-identical across the change, as it must be: a cold boot never restores.
 research/10 Addendum 31 §1–2.

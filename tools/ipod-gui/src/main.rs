@@ -2,7 +2,7 @@
 //!
 //! [`docs/GUI.md`](../../../docs/GUI.md) is the design this implements; the markup is
 //! `ui/window.slint`, compiled to Rust by `build.rs`. This file is the wiring between the model —
-//! which lives in `eapp-loader` and knows nothing about any toolkit — and that markup.
+//! which lives in `ipod-machine` and knows nothing about any toolkit — and that markup.
 //!
 //! **The separation is the point.** `settings.rs`, `compose.rs`, `identity.rs` and `nor.rs` hold
 //! the device model, the compatibility rules and the identity validation, and none of them has ever
@@ -56,7 +56,7 @@
 //
 // **And `wheel`'s has come due too, which is why writing *"when Running lands"* over it would have
 // been wrong.** Running and input were two surfaces and this is the second one: `wheel::Finger`
-// turns the drawn wheel's pointer stream and §16.8's keys into `eapp_loader::WheelEvent`s, `wire`
+// turns the drawn wheel's pointer stream and §16.8's keys into `ipod_machine::WheelEvent`s, `wire`
 // pushes them onto `emu::Link`, and `select_d` was already reading the same `WheelRing` the hit
 // test uses. One condition for both surfaces would have retired with the wrong half — the module
 // would have come off its blanket a commit before anything called it. What is still waiting in
@@ -155,10 +155,10 @@ mod drops;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use eapp_loader::compose;
-use eapp_loader::identity::Colour;
-use eapp_loader::settings::{Absent, Device, Presence, Settings};
-use eapp_loader::volume;
+use ipod_machine::compose;
+use ipod_machine::identity::Colour;
+use ipod_machine::settings::{Absent, Device, Presence, Settings};
+use ipod_machine::volume;
 // Only for `on_winit_window_event`: `Resized`, `Moved` and `ScaleFactorChanged` are the three
 // moments §16.1 says the fit has to be recomputed at, and Slint exposes none of them.
 use i_slint_backend_winit::WinitWindowAccessor;
@@ -317,7 +317,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // declines the moment a settings file exists in the new directory, and `load_and_seed` writes
     // one back whenever seeding changed something — so a carry-forward that runs second never runs
     // at all.
-    eapp_loader::settings::migrate_legacy();
+    ipod_machine::settings::migrate_legacy();
 
     // `load_and_seed` rather than `load`: the window is the surface that owns the library, so it is
     // the one entitled to persist what seeding produced — without which the marker that makes a
@@ -539,7 +539,7 @@ fn main() -> Result<(), slint::PlatformError> {
 /// lets §13's empty state say *that folder is not there any more* instead of blaming its contents.
 fn refresh_titles(model: &Rc<VecModel<TitleRow>>, settings: &Settings) -> bool {
     let named = settings.games.as_deref();
-    let found = named.map(eapp_loader::titles_under).unwrap_or_default();
+    let found = named.map(ipod_machine::titles_under).unwrap_or_default();
     let rows: Vec<TitleRow> = found
         .into_iter()
         .map(|(name, path)| TitleRow {
@@ -699,7 +699,7 @@ fn wire(
     let cost = work::cost(compose::Holes::Sparse);
     // One `df`, synchronously, beside the `stat`s `Settings::missing` already does here — see
     // `push_ledger` for why the clause is honest only when it was measured.
-    let space = volume::space(&eapp_loader::settings::drives_dir());
+    let space = volume::space(&ipod_machine::settings::drives_dir());
 
     if offer.has_plan() {
         work.borrow_mut().show(&mut rail.borrow_mut(), &plan);
@@ -737,7 +737,7 @@ fn wire(
     push_ledger(
         window,
         offer.has_plan().then_some(cost),
-        &eapp_loader::firmware::cache_dir(),
+        &ipod_machine::firmware::cache_dir(),
         space.as_ref(),
     );
     sync_rail(window, &rows, &rail.borrow(), caps, work.borrow().shape());
@@ -977,7 +977,7 @@ fn wire(
             // which is the machine's own field, so the switch and the drawing cannot disagree about
             // which way it is thrown.
             to_the_machine(&w, &live, machine::NO_MACHINE_HOLD, |l| {
-                vec![eapp_loader::WheelEvent::Hold(!l.hold.get())]
+                vec![ipod_machine::WheelEvent::Hold(!l.hold.get())]
             });
         });
     }
@@ -1242,8 +1242,8 @@ fn wire(
             push_ledger(
                 &w,
                 Some(cost),
-                &eapp_loader::firmware::cache_dir(),
-                volume::space(&eapp_loader::settings::drives_dir()).as_ref(),
+                &ipod_machine::firmware::cache_dir(),
+                volume::space(&ipod_machine::settings::drives_dir()).as_ref(),
             );
             sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
             // The press mints an iPod, files it and starts a run: the library moved and a build is
@@ -2748,7 +2748,7 @@ fn wire(
             // twice, and a path captured when the page was pushed is a path that can have moved
             // since. The shelf is the operator's and it changes under this window — the same
             // reason `refresh_titles` reads the disk on every push.
-            let Some(exe) = eapp_loader::title_exe(&dir) else {
+            let Some(exe) = ipod_machine::title_exe(&dir) else {
                 rail.borrow_mut().note(&format!(
                     "{} holds no Executables/<name>.bin any more, so there is nothing to run. It \
                      may have moved since this list was drawn.",
@@ -3076,8 +3076,8 @@ fn pump_once(
         push_ledger(
             window,
             Some(cost),
-            &eapp_loader::firmware::cache_dir(),
-            volume::space(&eapp_loader::settings::drives_dir()).as_ref(),
+            &ipod_machine::firmware::cache_dir(),
+            volume::space(&ipod_machine::settings::drives_dir()).as_ref(),
         );
     }
     // §12.2's handoff. Every step but the boot is done, and the boot is what this tick hands over:
@@ -3389,7 +3389,7 @@ impl Drop for Live {
 /// setting and defaults to off, which is what the hardware does: the iPod writes to its drive.
 fn machine_config(s: &Settings, name: &str) -> Option<emu::Config> {
     let disk = s.disk.clone()?;
-    let snapshot = eapp_loader::settings::restore_point(name);
+    let snapshot = ipod_machine::settings::restore_point(name);
     if let Some(dir) = snapshot.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -3406,7 +3406,7 @@ fn machine_config(s: &Settings, name: &str) -> Option<emu::Config> {
         // early when the two are the same path. That is the default because it is what the hardware
         // does — the iPod writes to its drive, which is why a real one remembers things.
         workdisk: if s.work_on_copy.unwrap_or(false) {
-            eapp_loader::settings::drives_dir().join("work.img")
+            ipod_machine::settings::drives_dir().join("work.img")
         } else {
             disk.clone()
         },
@@ -3415,7 +3415,7 @@ fn machine_config(s: &Settings, name: &str) -> Option<emu::Config> {
         // Instructions per simulated microsecond. **Not `Config::default()`'s zero**, which
         // `emu::build` clamps to 1 — a machine running at one seventy-fifth of the part, reported
         // as though it were the part.
-        clock: eapp_loader::CLOCK,
+        clock: ipod_machine::CLOCK,
         // The gap between two appended wheel steps. `emu.rs`'s own default, named there.
         click_gap: 300_000,
         // **Two things, and only one of them is this window's.** It is the instruction count a
@@ -3554,7 +3554,7 @@ fn start_machine(
     };
     // **The command line, over the library, and in that order.** `machine_config` builds the
     // machine the *device* describes; these four say what this *launch* is doing to it. Written
-    // second so a `--clock=5` beats `eapp_loader::CLOCK` rather than the other way round, and
+    // second so a `--clock=5` beats `ipod_machine::CLOCK` rather than the other way round, and
     // narrow by construction: `Machine::apply` writes four fields and nothing else can reach the
     // config from a command line at all.
     launch.apply(&mut cfg);
@@ -3624,7 +3624,7 @@ fn start_machine(
 /// which is the same answer `machine::no_machine` gives the sentence.
 fn to_the_machine<F>(window: &MainWindow, live: &Rc<RefCell<Option<Live>>>, refusal: &str, what: F)
 where
-    F: FnOnce(&Live) -> Vec<eapp_loader::WheelEvent>,
+    F: FnOnce(&Live) -> Vec<ipod_machine::WheelEvent>,
 {
     if machine::no_machine(&life(live)).is_some() {
         window.set_held_sentence(refusal.into());
@@ -3641,7 +3641,7 @@ where
 /// because the one thing a held refusal must not do is stay held after the finger left.
 fn off_the_machine<F>(window: &MainWindow, live: &Rc<RefCell<Option<Live>>>, what: F)
 where
-    F: FnOnce(&Live) -> Vec<eapp_loader::WheelEvent>,
+    F: FnOnce(&Live) -> Vec<ipod_machine::WheelEvent>,
 {
     window.set_held_sentence(slint::SharedString::new());
     if machine::no_machine(&life(live)).is_some() {
@@ -3677,7 +3677,7 @@ fn centre_to_the_machine(live: &Rc<RefCell<Option<Live>>>, down: bool) {
     if machine::centre(&l.stand(&life)) != machine::Act::ToMachine {
         return;
     }
-    l.link.push(eapp_loader::WheelEvent::Button(wheel::Button::Select.mask(), down));
+    l.link.push(ipod_machine::WheelEvent::Button(wheel::Button::Select.mask(), down));
 }
 
 /// §16.8's machine rows, answered. **`true` means the key was this program's**, which is what
@@ -3762,8 +3762,8 @@ fn machine_key_act(
         // A button's down and up are the key's own, so `M` held is MENU held — which on a 5G is how
         // you get back to the main menu, and is the thing a synthesised tap could never say. The
         // release is pushed out to `MIN_BUTTON_HOLD` by the emulator, not by anything here.
-        (Keyed::Press(b), _) => vec![eapp_loader::WheelEvent::Button(b.mask(), down)],
-        (Keyed::Hold, true) => vec![eapp_loader::WheelEvent::Hold(!l.hold.get())],
+        (Keyed::Press(b), _) => vec![ipod_machine::WheelEvent::Button(b.mask(), down)],
+        (Keyed::Hold, true) => vec![ipod_machine::WheelEvent::Hold(!l.hold.get())],
         // §7.4 makes the hold switch a position rather than a press: there is no *up* to send.
         (Keyed::Hold, false) => Vec::new(),
     };
@@ -4112,7 +4112,7 @@ fn glass(frame: Option<slint::Image>, g: &machine::Glass) -> Option<slint::Image
 /// - `devices_page` and `composer` are asked of [`nav::Page::slot`], a **fact about the markup**.
 ///   Both pages ship — the drawer draws Devices at level 1 and the Composer at level 2, with its
 ///   three sub-levels under it.
-/// - `download` is `eapp_loader::tooling::can_download()` — it runs `curl --version`, because a
+/// - `download` is `ipod_machine::tooling::can_download()` — it runs `curl --version`, because a
 ///   `PATH` walk is a second implementation of what the OS is about to do and is wrong on Windows,
 ///   where the extension list is a policy rather than a suffix.
 ///
@@ -4170,7 +4170,7 @@ fn caps() -> rail::Caps {
         // disabled reason goes on naming a gap that has been closed. §16.9's rule about a stale
         // claim, applied to a boolean.
         devices_page: nav::Page::Devices.slot().is_some(),
-        download: eapp_loader::tooling::can_download(),
+        download: ipod_machine::tooling::can_download(),
         // **Derived from the same question, and it is now `true`.** `Page::Composer` answers
         // `Some(2)`, so the surface a `Next::Fix` goes to exists — the four Composer pages ship and
         // `mod composer;` is declared at the top of this file. This line read `false` beside them,
@@ -4463,7 +4463,7 @@ fn take_next_step(
         // what this step's escape hatch says — so this shows them the folder the sentence is about
         // rather than a file inside it.
         rail::Next::Reveal => {
-            let at = eapp_loader::settings::data_dir();
+            let at = ipod_machine::settings::data_dir();
             match shell.reveal(&at) {
                 // **A line on the Rail, where the Parts row's own `Reveal` is silent**, and the
                 // difference is which surface asked. A row press is a person looking at a path and
@@ -4654,7 +4654,7 @@ fn shelf_state(d: &Device, life: &machine::Life) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    match eapp_loader::settings::parked_for(d, now) {
+    match ipod_machine::settings::parked_for(d, now) {
         Some(secs) => format!("{word}, parked {}", ago(secs)),
         None => word,
     }
@@ -4947,7 +4947,7 @@ fn empty_cradle_label(press: Press, caps: rail::Caps) -> String {
 /// records that it was not, because a phantom that quietly became a route reads exactly like one
 /// nobody checked.
 fn empty_device(first: bool, caps: rail::Caps, cost: compose::Cost) -> DeviceRow {
-    let si = eapp_loader::si;
+    let si = ipod_machine::si;
         DeviceRow {
             // Nothing is running on a bench with no device on it, and there is no device to
             // name — the row is a placeholder and its control is never drawn enabled.
@@ -4969,7 +4969,7 @@ fn empty_device(first: bool, caps: rail::Caps, cost: compose::Cost) -> DeviceRow
             // so row 2 was naming it twice on the bench and wrongly on the pane. *One press* is
             // true on both surfaces and is the fact a person actually needs: this costs one press,
             // not a form.
-            match eapp_loader::identity::Model::lookup(compose::FIRST_RUN_MODEL) {
+            match ipod_machine::identity::Model::lookup(compose::FIRST_RUN_MODEL) {
                 Some(m) => format!(
                     "You do not need an iPod, or any files off one. One press makes one: \
                      a {}, {} GB, {}.",
@@ -5365,7 +5365,7 @@ fn to_row(e: &rail::Entry, caps: rail::Caps) -> RailRow {
 ///
 /// **The free-space clause arrived with its own measurement**, which was its stated retirement
 /// condition: nothing in this tree could query free bytes, so `312 GB free on …` would have been
-/// invented. `eapp_loader::volume::space` measures it now — and returns `None` where nothing could
+/// invented. `ipod_machine::volume::space` measures it now — and returns `None` where nothing could
 /// say, in which case the clause is **absent** rather than zero. An unmeasured volume states
 /// nothing and warns about nothing.
 ///
@@ -5399,7 +5399,7 @@ fn ledger_lines(
     cost: Option<compose::Cost>,
     space: Option<&volume::Space>,
 ) -> (String, String, bool) {
-    let si = eapp_loader::si;
+    let si = ipod_machine::si;
     let Some(cost) = cost else {
         // No plan, so no figure. Saying there is none is the honest line; printing `0 B` would read
         // as a free download.
@@ -5985,7 +5985,7 @@ fn in_place<T: Clone + PartialEq + 'static>(model: &Rc<VecModel<T>>, want: &[T])
 /// A refusal, never a silent drop: the sentence goes on the Rail. A control that appears to copy
 /// and does not is worse than one that says why it will not.
 fn clipboard_refusal(text: &str) -> Option<&'static str> {
-    use eapp_loader::identity::Identity;
+    use ipod_machine::identity::Identity;
     for token in text.split(|c: char| !c.is_ascii_alphanumeric()) {
         if Identity::check_serial_for(token, None).is_ok() {
             return Some(
@@ -6422,8 +6422,8 @@ fn summary(settings: &Settings, d: &Device, seen: &mut Presence) -> String {
 
     // Which iPod. A dump states its own model; a synthesised one was told.
     match settings.nor_of(d) {
-        Some(eapp_loader::nor::Source::Synthetic { model, .. }) => parts.push(model.clone()),
-        Some(eapp_loader::nor::Source::File(_)) => parts.push("from a dump".into()),
+        Some(ipod_machine::nor::Source::Synthetic { model, .. }) => parts.push(model.clone()),
+        Some(ipod_machine::nor::Source::File(_)) => parts.push("from a dump".into()),
         // Nothing. The `missing` branch below names the iPod that is gone, and saying
         // "from a dump" about a dump that is not there would be the caption inventing a fact.
         None => {}
@@ -6642,7 +6642,7 @@ fn dark_screen() -> slint::Image {
 /// either extension existing in this file. It is not a machine; it is the question *where would
 /// this device's restore point be*, and `Settings::restore_point` is the model's answer.
 fn restore_point_of(name: &str) -> emu::Config {
-    let snapshot = eapp_loader::settings::restore_point(name);
+    let snapshot = ipod_machine::settings::restore_point(name);
     emu::Config {
         // Copy mode's other half, under the same stem. Derived here rather than at each use site
         // so `machine_config` and the resting bench cannot disagree about where it is.
@@ -6669,7 +6669,7 @@ fn resting_config(s: &Settings, d: &Device) -> emu::Config {
     let copy = d.work_on_copy.unwrap_or(false);
     emu::Config {
         workdisk: if copy {
-            eapp_loader::settings::drives_dir().join("work.img")
+            ipod_machine::settings::drives_dir().join("work.img")
         } else {
             disk.clone()
         },
@@ -6868,9 +6868,9 @@ fn readout_act(live: &Rc<RefCell<Option<Live>>>, which: i32) -> String {
     };
     match which {
         0 => {
-            let dir = eapp_loader::settings::data_dir().join("shots");
-            let stem = eapp_loader::settings::file_stem_of(&l.device.name);
-            let at = dir.join(format!("{stem}-{}-panel.png", eapp_loader::settings::now_unix()));
+            let dir = ipod_machine::settings::data_dir().join("shots");
+            let stem = ipod_machine::settings::file_stem_of(&l.device.name);
+            let at = dir.join(format!("{stem}-{}-panel.png", ipod_machine::settings::now_unix()));
             let Ok(out) = l.link.out.lock() else {
                 return "The machine's own thread has panicked, so its last frame cannot be read."
                     .into();
@@ -6888,7 +6888,7 @@ fn readout_act(live: &Rc<RefCell<Option<Live>>>, which: i32) -> String {
                     at.display(),
                     emu::FB_W,
                     emu::FB_H,
-                    eapp_loader::si(png.len() as u64)
+                    ipod_machine::si(png.len() as u64)
                 ),
                 Err(e) => format!("{}: {e}", at.display()),
             }
@@ -7302,7 +7302,7 @@ pub(crate) mod tests {
     #[test]
     fn a_device_with_a_disk_always_says_what_it_writes_to() {
         let mut s = Settings::default();
-        s.disks.push(eapp_loader::settings::Disk {
+        s.disks.push(ipod_machine::settings::Disk {
             name: "mine".into(),
             path: "/tmp/my-5.5g.img".into(),
             built_from: None,
@@ -7373,7 +7373,7 @@ pub(crate) mod tests {
     #[test]
     fn a_device_round_tripped_through_the_settings_file_still_says_what_it_writes_to() {
         let mut s = Settings {
-            nor: eapp_loader::nor::Source::Synthetic {
+            nor: ipod_machine::nor::Source::Synthetic {
                 model: "5.5G 80 GB".into(),
                 seed: 7,
                 serial: None,
@@ -7451,7 +7451,7 @@ pub(crate) mod tests {
     #[test]
     fn an_unanswered_device_works_on_a_copy() {
         let mut s = Settings::default();
-        s.disks.push(eapp_loader::settings::Disk {
+        s.disks.push(ipod_machine::settings::Disk {
             name: "x.img".into(),
             path: "/tmp/x.img".into(),
             built_from: None,
@@ -7481,7 +7481,7 @@ pub(crate) mod tests {
             ..Device::default()
         };
 
-        s.disks.push(eapp_loader::settings::Disk {
+        s.disks.push(ipod_machine::settings::Disk {
             name: "theirs.img".into(),
             path: "/tmp/theirs.img".into(),
             built_from: None,
@@ -7516,7 +7516,7 @@ pub(crate) mod tests {
     #[test]
     fn the_warn_colour_never_disagrees_with_the_sentence() {
         let mut s = Settings::default();
-        s.disks.push(eapp_loader::settings::Disk {
+        s.disks.push(ipod_machine::settings::Disk {
             name: "mine".into(),
             path: "/tmp/mine.img".into(),
             built_from: None,
@@ -7563,7 +7563,7 @@ pub(crate) mod tests {
         std::fs::write(&img, b"not really a drive").expect("the image");
 
         let mut s = Settings {
-            nor: eapp_loader::nor::Source::Synthetic {
+            nor: ipod_machine::nor::Source::Synthetic {
                 model: "5.5G 80 GB".into(),
                 seed: 9,
                 serial: None,
@@ -7607,13 +7607,13 @@ pub(crate) mod tests {
     /// pointing at a fictional `/tmp/x.img` would put `missing x.img` in the caption and the line
     /// under test would no longer be the intended one.
     fn a_composed_device(dir: &std::path::Path) -> (Settings, Device) {
-        use eapp_loader::settings::Resource;
+        use ipod_machine::settings::Resource;
         let img = dir.join("x.img");
         std::fs::write(&img, b"not really a drive").unwrap();
 
         let mut s = Settings::default();
         let rom = s.file_away(
-            Resource::Firmware(eapp_loader::nor::Source::Synthetic {
+            Resource::Firmware(ipod_machine::nor::Source::Synthetic {
                 model: "5.5G 80 GB".into(),
                 seed: 1,
                 serial: None,
@@ -7623,7 +7623,7 @@ pub(crate) mod tests {
             "an iPod",
             None,
         );
-        s.disks.push(eapp_loader::settings::Disk {
+        s.disks.push(ipod_machine::settings::Disk {
             name: "iPod 1".into(),
             path: img,
             built_from: Some("iPod_25.1.3.ipsw".into()),
@@ -7729,11 +7729,11 @@ pub(crate) mod tests {
     /// whoever writes §11.4's Parts page: **an item nobody recorded a provenance for contributes
     /// the empty string, and no provenance renders `verified` unless it is one.**
     ///
-    /// `eapp_loader::settings::a_size_only_row_never_says_verified` holds the second half at the
+    /// `ipod_machine::settings::a_size_only_row_never_says_verified` holds the second half at the
     /// model's own level and more strictly; this is the window-side half — `None` is not a claim.
     #[test]
     fn no_row_claims_a_verification_the_model_did_not_record() {
-        use eapp_loader::settings::{Provenance, Verification};
+        use ipod_machine::settings::{Provenance, Verification};
 
         let says = |from: Option<Provenance>| from.map(|p| p.line()).unwrap_or_default();
         assert_eq!(
@@ -7774,7 +7774,7 @@ pub(crate) mod tests {
     fn the_shelf_says_which_phase_the_machine_is_in() {
         let mut s = Settings::default();
         let rom = s.file_away(
-            eapp_loader::settings::Resource::Firmware(eapp_loader::nor::Source::default()),
+            ipod_machine::settings::Resource::Firmware(ipod_machine::nor::Source::default()),
             "an iPod",
             None,
         );
@@ -7974,7 +7974,7 @@ pub(crate) mod tests {
         std::fs::write(&rom, b"not really a ROM").unwrap();
         let mut s = Settings::default();
         let named = s.file_away(
-            eapp_loader::settings::Resource::Firmware(eapp_loader::nor::Source::File(rom)),
+            ipod_machine::settings::Resource::Firmware(ipod_machine::nor::Source::File(rom)),
             "nor-a146",
             None,
         );
@@ -8230,7 +8230,7 @@ pub(crate) mod tests {
     /// written since. Nothing here opens either — the machine runs on a copy-on-write clone of it,
     /// which is the same protection `retail-boot.sh` gives the source.
     fn apples_own_5g() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
-        let res = eapp_loader::settings::repo_root().join("resources");
+        let res = ipod_machine::settings::repo_root().join("resources");
         let rom = res.join("roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin");
         let drive = res.join("drives/ipod8g-retail.PRISTINE.img");
         (rom.is_file() && drive.is_file()).then_some((rom, drive))
@@ -8326,11 +8326,11 @@ pub(crate) mod tests {
         // is what routes the press to `Route::Existing` rather than to the first run's plan.
         let mut s = Settings::default();
         let firmware = s.file_away(
-            eapp_loader::settings::Resource::Firmware(eapp_loader::nor::Source::File(rom.clone())),
+            ipod_machine::settings::Resource::Firmware(ipod_machine::nor::Source::File(rom.clone())),
             "a real 5G",
             None,
         );
-        s.disks.push(eapp_loader::settings::Disk {
+        s.disks.push(ipod_machine::settings::Disk {
             name: "the reference drive".into(),
             path: work.clone(),
             built_from: None,
@@ -8749,7 +8749,7 @@ pub(crate) mod tests {
     }
 
     /// Everything queued for the machine, drained — so each assertion is about what THIS press did.
-    fn drain_queue(wiring: &Wiring) -> Vec<eapp_loader::WheelEvent> {
+    fn drain_queue(wiring: &Wiring) -> Vec<ipod_machine::WheelEvent> {
         let held = wiring.live.borrow();
         let l = held.as_ref().expect("the machine");
         let drained = l.link.inbox.lock().unwrap().events.drain(..).collect();
@@ -8791,13 +8791,13 @@ pub(crate) mod tests {
         press_at(&w, centre);
         assert_eq!(
             drain_queue(&wiring),
-            vec![eapp_loader::WheelEvent::Button(eapp_loader::WHEEL_SELECT, true)],
+            vec![ipod_machine::WheelEvent::Button(ipod_machine::WHEEL_SELECT, true)],
             "the press on the drawn centre button did not reach the machine"
         );
         lift_at(&w, centre);
         assert_eq!(
             drain_queue(&wiring),
-            vec![eapp_loader::WheelEvent::Button(eapp_loader::WHEEL_SELECT, false)],
+            vec![ipod_machine::WheelEvent::Button(ipod_machine::WHEEL_SELECT, false)],
             "the button went down on the machine and never came up — a stuck finger, which is the \
              one thing §7.4 says a release must never become"
         );
@@ -8810,8 +8810,8 @@ pub(crate) mod tests {
         assert_eq!(
             drain_queue(&wiring),
             vec![
-                eapp_loader::WheelEvent::Touch,
-                eapp_loader::WheelEvent::Button(eapp_loader::WHEEL_MENU, true),
+                ipod_machine::WheelEvent::Touch,
+                ipod_machine::WheelEvent::Button(ipod_machine::WHEEL_MENU, true),
             ],
             "a press on the drawn MENU label is not a touch and a button"
         );
@@ -8819,8 +8819,8 @@ pub(crate) mod tests {
         assert_eq!(
             drain_queue(&wiring),
             vec![
-                eapp_loader::WheelEvent::Button(eapp_loader::WHEEL_MENU, false),
-                eapp_loader::WheelEvent::Release,
+                ipod_machine::WheelEvent::Button(ipod_machine::WHEEL_MENU, false),
+                ipod_machine::WheelEvent::Release,
             ]
         );
 
@@ -8853,24 +8853,24 @@ pub(crate) mod tests {
 
         // Twelve o'clock is MENU, so start a quarter round from it — bare ring, no button.
         press_at(&w, on_the_drawn_ring(12));
-        assert_eq!(drain_queue(&wiring), vec![eapp_loader::WheelEvent::Touch]);
+        assert_eq!(drain_queue(&wiring), vec![ipod_machine::WheelEvent::Touch]);
         drag_to(&w, on_the_drawn_ring(36));
         let turned = drain_queue(&wiring);
         assert_eq!(
             turned,
-            vec![eapp_loader::WheelEvent::Step(1); 24],
+            vec![ipod_machine::WheelEvent::Step(1); 24],
             "a quarter turn of the drawn wheel sent {} steps",
             turned.len()
         );
         lift_at(&w, on_the_drawn_ring(36));
-        assert_eq!(drain_queue(&wiring), vec![eapp_loader::WheelEvent::Release]);
+        assert_eq!(drain_queue(&wiring), vec![ipod_machine::WheelEvent::Release]);
 
         // …and the other way, which is what would catch a `shortest_delta` that had lost its sign
         // somewhere between the markup and the ring.
         press_at(&w, on_the_drawn_ring(36));
         drain_queue(&wiring);
         drag_to(&w, on_the_drawn_ring(12));
-        assert_eq!(drain_queue(&wiring), vec![eapp_loader::WheelEvent::Step(-1); 24]);
+        assert_eq!(drain_queue(&wiring), vec![ipod_machine::WheelEvent::Step(-1); 24]);
         lift_at(&w, on_the_drawn_ring(12));
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -8891,7 +8891,7 @@ pub(crate) mod tests {
         w.invoke_hold_pressed();
         assert_eq!(
             drain_queue(&wiring),
-            vec![eapp_loader::WheelEvent::Hold(true)],
+            vec![ipod_machine::WheelEvent::Hold(true)],
             "the drawn hold switch did not reach the machine"
         );
         assert!(w.get_held_sentence().is_empty(), "a switch that worked also filed a refusal");
@@ -8901,7 +8901,7 @@ pub(crate) mod tests {
         // switch on, the next press throws it off rather than sending `Hold(true)` twice.
         wiring.live.borrow().as_ref().expect("the machine").hold.set(true);
         w.invoke_hold_pressed();
-        assert_eq!(drain_queue(&wiring), vec![eapp_loader::WheelEvent::Hold(false)]);
+        assert_eq!(drain_queue(&wiring), vec![ipod_machine::WheelEvent::Hold(false)]);
         w.invoke_hold_released();
 
         // …and with no machine it is §7.4's sentence, held while the pointer is down.
@@ -8949,9 +8949,9 @@ pub(crate) mod tests {
         assert_eq!(
             drain_queue(&wiring),
             vec![
-                eapp_loader::WheelEvent::Touch,
-                eapp_loader::WheelEvent::Step(1),
-                eapp_loader::WheelEvent::Release,
+                ipod_machine::WheelEvent::Touch,
+                ipod_machine::WheelEvent::Step(1),
+                ipod_machine::WheelEvent::Release,
             ],
             "§16.8's `↓` did not reach the machine's wheel"
         );
@@ -8959,9 +8959,9 @@ pub(crate) mod tests {
         assert_eq!(
             drain_queue(&wiring),
             vec![
-                eapp_loader::WheelEvent::Touch,
-                eapp_loader::WheelEvent::Step(-1),
-                eapp_loader::WheelEvent::Release,
+                ipod_machine::WheelEvent::Touch,
+                ipod_machine::WheelEvent::Step(-1),
+                ipod_machine::WheelEvent::Release,
             ]
         );
         // `←` `→` are the wheel too, while there is one.
@@ -8971,24 +8971,24 @@ pub(crate) mod tests {
         // The four labels, down and up with the key — `M` held is the main menu on a real 5G, and
         // a synthesised tap could not say so.
         for (key, mask) in [
-            ("m", eapp_loader::WHEEL_MENU),
-            ("p", eapp_loader::WHEEL_PLAY),
-            ("n", eapp_loader::WHEEL_RIGHT),
-            ("b", eapp_loader::WHEEL_LEFT),
+            ("m", ipod_machine::WHEEL_MENU),
+            ("p", ipod_machine::WHEEL_PLAY),
+            ("n", ipod_machine::WHEEL_RIGHT),
+            ("b", ipod_machine::WHEEL_LEFT),
         ] {
             tap_key(&w, key);
             assert_eq!(
                 drain_queue(&wiring),
                 vec![
-                    eapp_loader::WheelEvent::Button(mask, true),
-                    eapp_loader::WheelEvent::Button(mask, false),
+                    ipod_machine::WheelEvent::Button(mask, true),
+                    ipod_machine::WheelEvent::Button(mask, false),
                 ],
                 "§16.8's `{}` is not {mask:#04x}",
                 key.to_uppercase()
             );
         }
         tap_key(&w, "h");
-        assert_eq!(drain_queue(&wiring), vec![eapp_loader::WheelEvent::Hold(true)]);
+        assert_eq!(drain_queue(&wiring), vec![ipod_machine::WheelEvent::Hold(true)]);
 
         // A key this table does not claim reaches nothing, which is the control: a handler that
         // answered every key would satisfy every assertion above.
@@ -9015,7 +9015,7 @@ pub(crate) mod tests {
         w.window().dispatch_event(slint::platform::WindowEvent::KeyReleased { text: "m".into() });
         assert_eq!(
             drain_queue(&wiring),
-            vec![eapp_loader::WheelEvent::Button(eapp_loader::WHEEL_MENU, false)],
+            vec![ipod_machine::WheelEvent::Button(ipod_machine::WHEEL_MENU, false)],
             "the guard swallowed a release that belonged to a press this window took"
         );
 
@@ -9490,12 +9490,12 @@ pub(crate) mod tests {
         assert_eq!(resting_glass(&s, 0), machine::Glass::Dark);
 
         // A park time and a frame beside the snapshot, which is what a park leaves behind.
-        s.devices[0].parked_at = Some(eapp_loader::settings::now_unix());
+        s.devices[0].parked_at = Some(ipod_machine::settings::now_unix());
         // …the time alone is not enough: §12.4's fallback for a missing picture is a dark glass,
         // and this is the state a device parked by a build before the PNG existed is in.
         assert_eq!(resting_glass(&s, 0), machine::Glass::Dark);
 
-        let snap = eapp_loader::settings::restore_point(&d.name);
+        let snap = ipod_machine::settings::restore_point(&d.name);
         std::fs::create_dir_all(snap.parent().unwrap()).unwrap();
         let mut frame = vec![0u8; emu::FB_W * emu::FB_H * 3];
         for (i, px) in frame.chunks_exact_mut(3).enumerate() {
@@ -10084,7 +10084,7 @@ pub(crate) mod tests {
         let dir = temp_dir("dropped");
         std::fs::create_dir_all(&dir).expect("the scratch directory");
         let rom = dir.join("internal_rom_000000-0FFFFF.bin");
-        let mut nor = vec![0u8; eapp_loader::inspect::NOR_LEN as usize];
+        let mut nor = vec![0u8; ipod_machine::inspect::NOR_LEN as usize];
         // A plausible reset vector, so `flash` gets past word 0 — the band's verdict is `drops`'
         // own test's business; what this one needs is a file `classify` calls a ROM.
         nor[..4].copy_from_slice(&0xea00_1ffeu32.to_le_bytes());
@@ -10133,7 +10133,7 @@ pub(crate) mod tests {
             1,
             "a ROM and an .ipsw dropped together did not produce one device (§11.4 rule 3)"
         );
-        assert_eq!(s.nor, eapp_loader::nor::Source::File(rom), "the device is made of the wrong ROM");
+        assert_eq!(s.nor, ipod_machine::nor::Source::File(rom), "the device is made of the wrong ROM");
     }
 
     /// Every `set_*` model handoff in this crate, and whether it builds the model on the spot.
@@ -11007,7 +11007,7 @@ pub(crate) mod tests {
         std::fs::write(&path, &img).expect("a fabricated drive");
 
         let mut s = Settings::default();
-        s.disks.push(eapp_loader::settings::Disk {
+        s.disks.push(ipod_machine::settings::Disk {
             name: called.into(),
             path,
             built_from: None,
@@ -11165,7 +11165,7 @@ pub(crate) mod tests {
         wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         w.invoke_device_new();
 
-        let path = eapp_loader::settings::Settings::path().expect("a settings path");
+        let path = ipod_machine::settings::Settings::path().expect("a settings path");
         // A comment nobody's model holds, which is exactly what `render` cannot carry.
         std::fs::write(&path, "# a comment somebody added\nwelcomed = true\n").expect("scratch");
 
@@ -11660,7 +11660,7 @@ pub(crate) mod tests {
     fn a_library_of_one() -> Settings {
         let mut s = Settings::default();
         let rom = s.file_away(
-            eapp_loader::settings::Resource::Firmware(eapp_loader::nor::Source::default()),
+            ipod_machine::settings::Resource::Firmware(ipod_machine::nor::Source::default()),
             "an iPod",
             None,
         );
@@ -11952,7 +11952,7 @@ pub(crate) mod tests {
     /// may be named by a tracked file, and a fixture that needs somebody's own dump is a fixture
     /// that runs on one machine.
     fn a_furnished_library(at: &std::path::Path) -> Settings {
-        use eapp_loader::settings::{self, Provenance, Resource, Verification};
+        use ipod_machine::settings::{self, Provenance, Resource, Verification};
 
         let file = |name: &str, len: usize| -> std::path::PathBuf {
             let p = at.join(name);
@@ -11964,14 +11964,14 @@ pub(crate) mod tests {
         // Two iPods. `Group::Ipods` draws a recipe and a dump differently — *synthesised, seed
         // 5e5510* against *dumped* — and the group's third row is `parts.rs`'s reserved *No iPod is
         // plugged in* line, which is there whether or not anything is.
-        let synth = eapp_loader::nor::Source::Synthetic {
-            model: eapp_loader::nor::DEFAULT_MODEL.into(),
+        let synth = ipod_machine::nor::Source::Synthetic {
+            model: ipod_machine::nor::DEFAULT_MODEL.into(),
             seed: 0x5e_5510,
             serial: None,
             guid: None,
             splash: None,
         };
-        let dump = eapp_loader::nor::Source::File(file("nor-a146.bin", 1 << 20));
+        let dump = ipod_machine::nor::Source::File(file("nor-a146.bin", 1 << 20));
         // `None` for the recipe and `Dumped` for the file: `normalised` derives a synthetic's
         // provenance from the recipe itself, and cannot tell a dump from a download.
         s.file_away(
@@ -12308,13 +12308,13 @@ pub(crate) mod tests {
     /// come to spell one name two ways — which is how a `position()` lookup finds nothing and the
     /// test that depends on it reports an absence it could not observe.
     fn the_synthesised_ipod(s: &Settings) -> String {
-        use eapp_loader::settings::Resource;
+        use ipod_machine::settings::Resource;
         s.resources
             .iter()
             .find(|it| {
                 matches!(
                     &it.what,
-                    Resource::Firmware(eapp_loader::nor::Source::Synthetic { .. })
+                    Resource::Firmware(ipod_machine::nor::Source::Synthetic { .. })
                 )
             })
             .map(|it| it.name.clone())
@@ -12335,10 +12335,10 @@ pub(crate) mod tests {
     /// serial, GUID or name reaches a tracked file, and the way not to is to reuse the ones the
     /// tree already invented rather than to invent a new one that has to be checked.
     fn a_dump_that_is_not_apples(at: &std::path::Path) -> std::path::PathBuf {
-        use eapp_loader::identity::{Identity, Model, Source};
+        use ipod_machine::identity::{Identity, Model, Source};
 
         let m = Model::lookup("MA146").expect("the reference 5G");
-        let spec = eapp_loader::nor::Spec::new(
+        let spec = ipod_machine::nor::Spec::new(
             m,
             Identity {
                 serial: Some("AB1234XYZQR".into()),
@@ -12347,16 +12347,16 @@ pub(crate) mod tests {
             },
         );
         let p = at.join("foreign-oui.rom");
-        std::fs::write(&p, eapp_loader::nor::synthesise(&spec)).expect("a fabricated dump");
+        std::fs::write(&p, ipod_machine::nor::synthesise(&spec)).expect("a fabricated dump");
         p
     }
 
     /// A library holding exactly that dump, and the name it is filed under.
     fn a_library_with_a_foreign_dump(at: &std::path::Path) -> (Settings, String) {
-        use eapp_loader::settings::{self, Provenance, Resource};
+        use ipod_machine::settings::{self, Provenance, Resource};
 
         let mut s = Settings::default();
-        let dump = eapp_loader::nor::Source::File(a_dump_that_is_not_apples(at));
+        let dump = ipod_machine::nor::Source::File(a_dump_that_is_not_apples(at));
         let name = settings::suggest_nor_name(&dump);
         s.file_away(Resource::Firmware(dump), &name, Some(Provenance::Dumped));
         (s, name)
@@ -12368,11 +12368,11 @@ pub(crate) mod tests {
     /// calling it twice is how a person ends up with two devices sharing one identity — and it is
     /// the only shape that makes `Composer::devices_sharing` answer more than one.
     fn a_library_with_a_shared_ipod(at: &std::path::Path) -> (Settings, String) {
-        use eapp_loader::settings::{self, Resource};
+        use ipod_machine::settings::{self, Resource};
 
         let mut s = Settings::default();
-        let synth = eapp_loader::nor::Source::Synthetic {
-            model: eapp_loader::nor::DEFAULT_MODEL.into(),
+        let synth = ipod_machine::nor::Source::Synthetic {
+            model: ipod_machine::nor::DEFAULT_MODEL.into(),
             seed: 0x5e_5510,
             serial: None,
             guid: None,
@@ -12564,7 +12564,7 @@ pub(crate) mod tests {
     /// off-by-one row and a panel drawn at the wrong scale all show up in it by eye, and a black
     /// rectangle — the failure this whole exercise is about — is not one of the things it can be.
     fn a_running_machine(d: &Device) -> Live {
-        let mut bcm = eapp_loader::Bcm::new(eapp_loader::Bcm::HOST_BASE);
+        let mut bcm = ipod_machine::Bcm::new(ipod_machine::Bcm::HOST_BASE);
         for y in 0..emu::FB_H {
             for x in 0..emu::FB_W {
                 let edge = x == 0 || y == 0 || x == emu::FB_W - 1 || y == emu::FB_H - 1;
@@ -12803,7 +12803,7 @@ pub(crate) mod tests {
         {
             let l = running.live.borrow();
             let mut out = l.as_ref().expect("the machine").link.out.lock().unwrap();
-            out.stats.buttons = eapp_loader::WHEEL_MENU;
+            out.stats.buttons = ipod_machine::WHEEL_MENU;
             out.stats.hold = true;
             out.stats.touched = true;
         }
@@ -12886,7 +12886,7 @@ pub(crate) mod tests {
             )
             .unwrap();
         }
-        parked.settings.devices[0].parked_at = Some(eapp_loader::settings::now_unix() - 240);
+        parked.settings.devices[0].parked_at = Some(ipod_machine::settings::now_unix() - 240);
         shots.push(("bench-parked", shoot(&w, &nav::Stack::new(), &parked, "bench-parked")));
         dress_the_bench(&w);
 
@@ -12914,7 +12914,7 @@ pub(crate) mod tests {
             std::fs::create_dir_all(&dir).expect("the scratch directory");
             let mut over: Vec<std::path::PathBuf> = Vec::new();
             let photo = dir.join("holiday.jpg");
-            let mut jpeg = vec![0u8; eapp_loader::inspect::NOR_LEN as usize];
+            let mut jpeg = vec![0u8; ipod_machine::inspect::NOR_LEN as usize];
             jpeg[..4].copy_from_slice(&[0xff, 0xd8, 0xff, 0xe0]);
             std::fs::write(&photo, &jpeg).expect("the 1 MiB photograph");
             over.push(photo);
@@ -14640,7 +14640,7 @@ pub(crate) mod tests {
         settings.borrow_mut().welcomed = true;
         // Nothing is written here: the press below is refused before the worker, because `drives`
         // is a file where the directory has to be. What is being checked is the ROUTE.
-        let drives = eapp_loader::settings::drives_dir();
+        let drives = ipod_machine::settings::drives_dir();
         let _ = std::fs::remove_dir_all(&drives);
         if let Some(parent) = drives.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -14680,7 +14680,7 @@ pub(crate) mod tests {
                 "a half-made one" => {
                     // **Named from the model, not typed.** A fixture that spells the colour goes on
                     // calling the default iPod black the day the default stops being black.
-                    let src = eapp_loader::nor::Source::Synthetic {
+                    let src = ipod_machine::nor::Source::Synthetic {
                         model: compose::FIRST_RUN_MODEL.into(),
                         seed: 424_242,
                         serial: None,
@@ -14688,8 +14688,8 @@ pub(crate) mod tests {
                         splash: None,
                     };
                     let rom = s.file_away(
-                        eapp_loader::settings::Resource::Firmware(src.clone()),
-                        &eapp_loader::settings::suggest_ipod_name(&src),
+                        ipod_machine::settings::Resource::Firmware(src.clone()),
+                        &ipod_machine::settings::suggest_ipod_name(&src),
                         None,
                     );
                     s.devices.push(Device {
@@ -14820,8 +14820,8 @@ pub(crate) mod tests {
             drawn.push(r.measure.to_string());
         }
 
-        let bill = eapp_loader::si(work::cost(compose::Holes::Sparse).disk);
-        let drive = eapp_loader::si(compose::DRIVE_ON_DISK);
+        let bill = ipod_machine::si(work::cost(compose::Holes::Sparse).disk);
+        let drive = ipod_machine::si(compose::DRIVE_ON_DISK);
         assert_ne!(bill, drive, "the fixture cannot tell the two figures apart");
 
         // Every `… on disk` figure on the screen, in the order it is drawn.
@@ -14992,7 +14992,7 @@ pub(crate) mod tests {
         let (settings, _held) = a_fresh_installation();
         let w = a_window();
         let _wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
-        let cache = eapp_loader::firmware::cache_dir();
+        let cache = ipod_machine::firmware::cache_dir();
         assert_eq!(w.get_ledger_note(), "Nothing has been downloaded yet.");
         std::fs::create_dir_all(&cache).expect("a cache");
         std::fs::write(cache.join("arrived.ipsw"), b"as if it had been fetched").expect("a bundle");
@@ -15021,7 +15021,7 @@ pub(crate) mod tests {
     fn the_press_routes_by_the_row_it_was_given() {
         let _held = use_a_scratch_data_dir();
         let mut s = Settings::default();
-        let src = eapp_loader::nor::Source::Synthetic {
+        let src = ipod_machine::nor::Source::Synthetic {
             model: compose::FIRST_RUN_MODEL.into(),
             seed: 909_090,
             serial: None,
@@ -15029,8 +15029,8 @@ pub(crate) mod tests {
             splash: None,
         };
         let rom = s.file_away(
-            eapp_loader::settings::Resource::Firmware(src.clone()),
-            &eapp_loader::settings::suggest_ipod_name(&src),
+            ipod_machine::settings::Resource::Firmware(src.clone()),
+            &ipod_machine::settings::suggest_ipod_name(&src),
             None,
         );
         // The half-made first-run device: minted, and no drive.
@@ -15304,8 +15304,8 @@ pub(crate) mod tests {
 
         let down = w.get_ledger_download().to_string();
         let disk = w.get_ledger_disk().to_string();
-        assert_eq!(down, format!("{} to download", eapp_loader::si(cost.down)));
-        assert_eq!(disk, format!("about {} on disk", eapp_loader::si(cost.disk)));
+        assert_eq!(down, format!("{} to download", ipod_machine::si(cost.down)));
+        assert_eq!(disk, format!("about {} on disk", ipod_machine::si(cost.disk)));
         // **The apparent 8 GiB is not on the ledger at all.** It is a fact about the drive, and it
         // belongs in the build step's own sub-line where it is not a bill.
         for line in [&down, &disk] {
@@ -15330,7 +15330,7 @@ pub(crate) mod tests {
         let tight = volume::Space { free: 1_000_000, mount: "/scratch".into() };
         push_ledger(&w, Some(cost), &cache, Some(&tight));
         assert!(w.get_ledger_disk().contains("1.0 MB free on /scratch"), "{}", w.get_ledger_disk());
-        assert!(w.get_ledger_warn(), "1 MB free for a {} build did not warn", eapp_loader::si(cost.disk));
+        assert!(w.get_ledger_warn(), "1 MB free for a {} build did not warn", ipod_machine::si(cost.disk));
 
         // Measured, and roomy: the clause appears and the warning does not.
         let roomy = volume::Space { free: 900_000_000_000, mount: "/".into() };
@@ -15496,9 +15496,9 @@ pub(crate) mod tests {
     /// serial, GUID, name or Apple ID never enters a tracked file, and a test fixture is a tracked
     /// file.
     fn a_generated_identity() -> (String, String) {
-        let model = eapp_loader::identity::Model::lookup("A446")
+        let model = ipod_machine::identity::Model::lookup("A446")
             .expect("A446 is in this build's model table");
-        let id = eapp_loader::identity::Identity::generate(model, 3);
+        let id = ipod_machine::identity::Identity::generate(model, 3);
         (
             id.serial.clone().expect("a generated identity carries a serial"),
             format!("{:016X}", id.guid),
@@ -15525,7 +15525,7 @@ pub(crate) mod tests {
     #[test]
     fn the_registered_centre_button_starts_the_first_run_on_an_empty_library() {
         let (settings, _held) = a_fresh_installation();
-        let drives = eapp_loader::settings::drives_dir();
+        let drives = ipod_machine::settings::drives_dir();
         let _ = std::fs::remove_dir_all(&drives);
         if let Some(parent) = drives.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -15545,8 +15545,8 @@ pub(crate) mod tests {
             s.resources
                 .iter()
                 .find_map(|i| match &i.what {
-                    eapp_loader::settings::Resource::Firmware(
-                        eapp_loader::nor::Source::Synthetic { seed, .. },
+                    ipod_machine::settings::Resource::Firmware(
+                        ipod_machine::nor::Source::Synthetic { seed, .. },
                     ) => Some(*seed),
                     _ => None,
                 })
@@ -15573,7 +15573,7 @@ pub(crate) mod tests {
 
         // Nothing ran, so nothing was fetched and nothing was built.
         assert!(!wiring.work.borrow().busy(), "a worker was started");
-        let cache = eapp_loader::firmware::cache_dir();
+        let cache = ipod_machine::firmware::cache_dir();
         let fetched = std::fs::read_dir(&cache)
             .into_iter()
             .flatten()
@@ -15605,7 +15605,7 @@ pub(crate) mod tests {
         let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         let began = std::time::Instant::now();
 
-        println!("\ndata directory  {}", eapp_loader::settings::data_dir().display());
+        println!("\ndata directory  {}", ipod_machine::settings::data_dir().display());
         println!("ledger          {}", w.get_ledger_download());
         println!("                {}", w.get_ledger_disk());
         println!("                {}", w.get_ledger_note());
@@ -15627,7 +15627,7 @@ pub(crate) mod tests {
             assert_eq!(r.kind, RailKind::Planned, "step {i} is not planned before the press");
         }
         assert_eq!(
-            std::fs::read_dir(eapp_loader::firmware::cache_dir())
+            std::fs::read_dir(ipod_machine::firmware::cache_dir())
                 .map(|d| d.flatten().count())
                 .unwrap_or(0),
             0,
@@ -15741,7 +15741,7 @@ pub(crate) mod tests {
         println!("  apparent  {} bytes", meta.len());
         println!(
             "  on disk   {} bytes",
-            eapp_loader::settings::on_disk_size(&meta)
+            ipod_machine::settings::on_disk_size(&meta)
         );
 
         assert_eq!(failed, 0, "a step failed; see the Rail above");
@@ -15753,7 +15753,7 @@ pub(crate) mod tests {
         // §10.2 step 4: the drive is Apple's software, and the flash updater is not armed — a drive
         // that would boot the updater instead of the OS looks broken later for a reason nobody
         // recorded.
-        let state = eapp_loader::ipsw::firmware_state(&img).expect("the drive reads back");
+        let state = ipod_machine::ipsw::firmware_state(&img).expect("the drive reads back");
         println!("  firmware  {state:?}");
         assert!(state.has_os, "the drive has no OS image on it");
         assert!(!state.aupd_armed, "Apple's flash updater is still armed on the drive");
@@ -15779,8 +15779,8 @@ pub(crate) mod tests {
         let (settings, _held) = a_fresh_installation_in("e2e-resume");
         let w = a_window();
         let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
-        let drives = eapp_loader::settings::drives_dir();
-        let cache = eapp_loader::firmware::cache_dir();
+        let drives = ipod_machine::settings::drives_dir();
+        let cache = ipod_machine::firmware::cache_dir();
 
         // The block: a directory where the drive's partial file has to be a file.
         std::fs::create_dir_all(drives.join("my-5.5g.img.part")).expect("the blocker");
@@ -15814,8 +15814,8 @@ pub(crate) mod tests {
             s.resources
                 .iter()
                 .find_map(|i| match &i.what {
-                    eapp_loader::settings::Resource::Firmware(
-                        eapp_loader::nor::Source::Synthetic { seed, .. },
+                    ipod_machine::settings::Resource::Firmware(
+                        ipod_machine::nor::Source::Synthetic { seed, .. },
                     ) => Some(*seed),
                     _ => None,
                 })
@@ -15871,13 +15871,13 @@ pub(crate) mod tests {
         let w = a_window();
         let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
 
-        println!("\ndata directory  {}", eapp_loader::settings::data_dir().display());
+        println!("\ndata directory  {}", ipod_machine::settings::data_dir().display());
         println!("ledger          {}", w.get_ledger_disk());
 
         let seed = |s: &Settings| -> Option<u64> {
             s.resources.iter().find_map(|i| match &i.what {
-                eapp_loader::settings::Resource::Firmware(
-                    eapp_loader::nor::Source::Synthetic { seed, .. },
+                ipod_machine::settings::Resource::Firmware(
+                    ipod_machine::nor::Source::Synthetic { seed, .. },
                 ) => Some(*seed),
                 _ => None,
             })
@@ -15988,7 +15988,7 @@ pub(crate) mod tests {
     /// `caps()` says is pressable has to be a variant `take_next_step` acts on.
     #[test]
     fn every_next_step_this_build_offers_is_wired_to_something() {
-        use eapp_loader::compose::Fix;
+        use ipod_machine::compose::Fix;
         use rail::{Class, Tool};
 
         // `Provide a file…` files what the picker answered and then saves, so the settings file
@@ -16001,8 +16001,8 @@ pub(crate) mod tests {
         zip[..4].copy_from_slice(b"PK\x03\x04");
         std::fs::write(&an_ipsw, &zip).expect("the fixture bundle");
         assert_eq!(
-            eapp_loader::inspect::classify(&an_ipsw),
-            eapp_loader::inspect::Kind::Ipsw,
+            ipod_machine::inspect::classify(&an_ipsw),
+            ipod_machine::inspect::Kind::Ipsw,
             "the fixture the picker answers with is not a file this program files, so the \
              assertion that it reached the library would be about the wrong thing"
         );
@@ -16145,7 +16145,7 @@ pub(crate) mod tests {
                         ),
                         rail::Next::Reveal => assert_eq!(
                             shell.revealed(),
-                            vec![eapp_loader::settings::data_dir()],
+                            vec![ipod_machine::settings::data_dir()],
                             "{:?} pressed `Reveal` and nothing was shown",
                             c
                         ),
@@ -17184,7 +17184,7 @@ pub(crate) mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../resources/games/plaintext/Cracked Games"
         ));
-        if eapp_loader::title_exe(&shelf.join("Mini Golf")).is_none() {
+        if ipod_machine::title_exe(&shelf.join("Mini Golf")).is_none() {
             println!("SKIPPED: the title corpus is not here (gitignored)");
             return;
         }
@@ -17296,7 +17296,7 @@ pub(crate) mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../resources/games/plaintext/Cracked Games"
         ));
-        if eapp_loader::title_exe(&shelf.join("Mini Golf")).is_none() {
+        if ipod_machine::title_exe(&shelf.join("Mini Golf")).is_none() {
             println!("SKIPPED: the title corpus is not here (gitignored)");
             return;
         }
@@ -17328,10 +17328,10 @@ pub(crate) mod tests {
         let l = held.as_ref().expect("the title is on the bench");
         {
             let mut inbox = l.link.inbox.lock().unwrap();
-            inbox.events.push_back(eapp_loader::WheelEvent::Step(1));
-            inbox.events.push_back(eapp_loader::WheelEvent::Step(1));
-            inbox.events.push_back(eapp_loader::WheelEvent::Button(
-                eapp_loader::WHEEL_SELECT,
+            inbox.events.push_back(ipod_machine::WheelEvent::Step(1));
+            inbox.events.push_back(ipod_machine::WheelEvent::Step(1));
+            inbox.events.push_back(ipod_machine::WheelEvent::Button(
+                ipod_machine::WHEEL_SELECT,
                 true,
             ));
         }
@@ -17670,7 +17670,7 @@ pub(crate) mod tests {
             "a press with nothing to fetch changed the library"
         );
         assert_eq!(
-            std::fs::read_dir(eapp_loader::firmware::cache_dir())
+            std::fs::read_dir(ipod_machine::firmware::cache_dir())
                 .map(|d| d.flatten().count())
                 .unwrap_or(0),
             0,
@@ -17702,15 +17702,15 @@ pub(crate) mod tests {
         let (settings, _held) = a_fresh_installation_in("e2e-per-part-fetch");
         // The library a person would be standing in front of: one iPod, no firmware for it.
         settings.borrow_mut().file_away(
-            eapp_loader::settings::Resource::Firmware(eapp_loader::nor::Source::default()),
+            ipod_machine::settings::Resource::Firmware(ipod_machine::nor::Source::default()),
             "a 5.5G",
-            Some(eapp_loader::settings::Provenance::Synthesised { seed: 1 }),
+            Some(ipod_machine::settings::Provenance::Synthesised { seed: 1 }),
         );
         let w = a_window();
         let wiring = wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
         w.invoke_open_page(DrawerPage::Parts, 1);
 
-        println!("\ndata directory  {}", eapp_loader::settings::data_dir().display());
+        println!("\ndata directory  {}", ipod_machine::settings::data_dir().display());
         let verb = |w: &MainWindow| {
             w.get_parts_groups()
                 .iter()
@@ -17726,7 +17726,7 @@ pub(crate) mod tests {
             before.reason
         );
         assert_eq!(
-            std::fs::read_dir(eapp_loader::firmware::cache_dir())
+            std::fs::read_dir(ipod_machine::firmware::cache_dir())
                 .map(|d| d.flatten().count())
                 .unwrap_or(0),
             0,
@@ -17788,16 +17788,16 @@ pub(crate) mod tests {
         println!("                {}", path.display());
         assert_eq!(
             filed.from,
-            Some(eapp_loader::settings::Provenance::Fetched {
-                verified: eapp_loader::settings::Verification::Sha256
+            Some(ipod_machine::settings::Provenance::Fetched {
+                verified: ipod_machine::settings::Verification::Sha256
             })
         );
         // Checked again here, because a test that trusts the fetcher to verify its own download has
         // checked nothing.
         let name = path.file_name().expect("a name").to_string_lossy().into_owned();
-        let rel = eapp_loader::firmware::by_file(&name).expect("a catalogued release");
+        let rel = ipod_machine::firmware::by_file(&name).expect("a catalogued release");
         let bytes = std::fs::read(&path).expect("the bundle");
-        eapp_loader::firmware::verify(rel, &bytes).expect("the bytes on record");
+        ipod_machine::firmware::verify(rel, &bytes).expect("the bytes on record");
         println!("verified        {} bytes, sha256 on record", bytes.len());
 
         // …and the verb has gone grey, because there is nothing left for it to do.
@@ -18119,7 +18119,7 @@ pub(crate) mod tests {
         // ── Every fact the page can word, out of the shipped producer ─────────────────────────
         let at = temp_dir("fact-heights");
         let s = a_furnished_library(&at);
-        let mut seen = eapp_loader::settings::Presence::default();
+        let mut seen = ipod_machine::settings::Presence::default();
         let mut dp = devices::Devices::new();
         let mut facts: Vec<(String, String)> = Vec::new();
         for (i, d) in s.devices.iter().enumerate() {
@@ -18412,7 +18412,7 @@ pub(crate) mod tests {
         // fixture reaches is a sentence no gate measures — `AGENTS.md` §6 — so they are named here.
         let mut with_an_ipod = Settings::default();
         with_an_ipod.file_away(
-            eapp_loader::settings::Resource::Firmware(eapp_loader::nor::Source::default()),
+            ipod_machine::settings::Resource::Firmware(ipod_machine::nor::Source::default()),
             "an iPod",
             None,
         );
@@ -18483,7 +18483,7 @@ pub(crate) mod tests {
             for busy in [false, true] {
                 for running in [None, machine.as_deref()] {
                     let mut p = parts::Parts::new();
-                    let mut seen = eapp_loader::settings::Presence::new();
+                    let mut seen = ipod_machine::settings::Presence::new();
                     for g in &p.view(&empty, &mut seen, caps, busy, None).groups {
                         for (a, f) in [&g.a, &g.b].into_iter().flatten() {
                             say(

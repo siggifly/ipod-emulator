@@ -1138,7 +1138,7 @@ pub enum Holes {
 /// **MEASURED 2026-08-21 on macOS 27.0 / APFS**, with this recipe:
 ///
 /// ```no_run
-/// # use eapp_loader::{ipsw, settings};
+/// # use ipod_machine::{ipsw, settings};
 /// let out = std::path::Path::new("/tmp/measure.img");
 /// ipsw::build_disk(&vec![0u8; 27_140 * 512], out, ipsw::DEFAULT_SECTORS).unwrap();
 /// let m = std::fs::metadata(out).unwrap();

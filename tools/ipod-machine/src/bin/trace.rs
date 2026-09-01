@@ -10,7 +10,7 @@ use std::env;
 use std::fs;
 
 use arm7tdmi::{disasm, Bus};
-use eapp_loader::{EApp, Machine, Stop, Stub};
+use ipod_machine::{EApp, Machine, Stop, Stub};
 
 // Above OSOS, which occupies 0x10000000..~0x10736000 when mapped.
 const RAM_BASE: u32 = 0x1100_0000;
@@ -507,7 +507,7 @@ fn main() {
     // "supply three files" and "supply one" -- the drive already carries the OS.
     let mut osos_entry: Option<u32> = None;
     // **The image, held back until `map_hardware` has run.** On the `--boot-osos` path it is
-    // written INTO SDRAM rather than pushed in front of it — see [`eapp_loader::place_image`] for
+    // written INTO SDRAM rather than pushed in front of it — see [`ipod_machine::place_image`] for
     // why, and for the two `Lost(…)` addresses that are what getting this wrong looks like.
     let mut pending_osos: Option<(Vec<u8>, u32)> = None;
     // Set once an image has actually been written into SDRAM, which is the fact the `--boot-osos`
@@ -531,10 +531,10 @@ fn main() {
                 std::process::exit(1);
             }
             Some(disk) => {
-                match eapp_loader::ipsw::image_from_drive(std::path::Path::new(disk), &fw_tag) {
+                match ipod_machine::ipsw::image_from_drive(std::path::Path::new(disk), &fw_tag) {
                     Ok((d, at, entry)) => {
                         let n = d.len();
-                        m.symbols = eapp_loader::extract_symbols(&d, 0);
+                        m.symbols = ipod_machine::extract_symbols(&d, 0);
                         // A boot places the image in SDRAM after the map is built; everything else
                         // keeps the region, which is what the eApp and `--native` paths read.
                         let booting = args.iter().any(|a| a == "--boot-osos");
@@ -580,7 +580,7 @@ fn main() {
             Ok(d) => {
                 let n = d.len();
                 // RetailOS executes aliased at 0, so the symbol keys match trace PCs directly.
-                m.symbols = eapp_loader::extract_symbols(&d, 0);
+                m.symbols = ipod_machine::extract_symbols(&d, 0);
                 if args.iter().any(|a| a == "--symbols") {
                     println!(
                         "recovered {} function names from RetailOS's own labels:",
@@ -609,7 +609,7 @@ fn main() {
         // where the firmware's own boot executes. Without this region they resolve to nothing.
         if let Some(osos) = m.mem.regions.iter().find(|r| r.name == "osos") {
             let mirror = osos.data.clone();
-            m.mem.regions.push(eapp_loader::Region {
+            m.mem.regions.push(ipod_machine::Region {
                 name: "osos-low",
                 base: 0,
                 data: mirror,
@@ -713,12 +713,12 @@ fn main() {
         let mut flash_entry: Option<u32> = None;
         // `--bcm-film`'s recorder, built below once the co-processor exists. Declared here because
         // it outlives the setup block and is sampled by the run itself.
-        let mut film: Option<eapp_loader::film::Film> = None;
+        let mut film: Option<ipod_machine::film::Film> = None;
         // The boot code jumps to physical 0x23c, so OSOS must also appear at address 0 — the
         // usual ARM arrangement where the vector table is mirrored into low memory.
         if let Some(osos) = m.mem.regions.iter().find(|r| r.name == "osos") {
             let mirror = osos.data.clone();
-            m.mem.regions.push(eapp_loader::Region {
+            m.mem.regions.push(ipod_machine::Region {
                 name: "osos-low",
                 base: 0,
                 data: mirror,
@@ -741,7 +741,7 @@ fn main() {
             if let Some(osos) = m.mem.regions.iter().find(|r| r.name == "osos") {
                 let mirror = osos.data.clone();
                 println!("  osos mirror at {base:#010x} ({} bytes)", mirror.len());
-                m.mem.regions.push(eapp_loader::Region {
+                m.mem.regions.push(ipod_machine::Region {
                     name: "osos-alias",
                     base,
                     data: mirror,
@@ -775,14 +775,14 @@ fn main() {
         let os_boot = args.iter().any(|a| a == "--cold-boot") || pending_osos.is_some();
         map_hardware(&mut m, os_boot);
         if let Some((data, at)) = pending_osos.take() {
-            eapp_loader::place_image(&mut m, at, &data);
+            ipod_machine::place_image(&mut m, at, &data);
             image_placed = true;
         }
         // The part's own name at `PP_VER1`/`PP_VER2`, from the one place that decides it —
-        // which byte, and why that one, is [`eapp_loader::seed_chip_id`].
-        eapp_loader::seed_chip_id(&mut m);
+        // which byte, and why that one, is [`ipod_machine::seed_chip_id`].
+        ipod_machine::seed_chip_id(&mut m);
         for (base, size) in &maps {
-            m.mem.regions.push(eapp_loader::Region {
+            m.mem.regions.push(ipod_machine::Region {
                 name: "extra",
                 base: *base,
                 data: vec![0; *size],
@@ -802,7 +802,7 @@ fn main() {
             let flash_for_sysinfo = args.iter().find_map(|a| a.strip_prefix("--flash="));
             install_sysinfo(
                 &mut m,
-                eapp_loader::nor::HANDOFF_AT,
+                ipod_machine::nor::HANDOFF_AT,
                 size,
                 flash_for_sysinfo,
             );
@@ -873,7 +873,7 @@ fn main() {
                         m.mem.readonly.push("flash-low");
                         m.mem.regions.insert(
                             0,
-                            eapp_loader::Region {
+                            ipod_machine::Region {
                                 name: "flash-low",
                                 base: 0,
                                 data: data.clone(),
@@ -886,7 +886,7 @@ fn main() {
                     // meant the one place an errant write could land silently was the image the
                     // whole boot is read out of.
                     m.mem.readonly.push("flash");
-                    m.mem.regions.push(eapp_loader::Region {
+                    m.mem.regions.push(ipod_machine::Region {
                         name: "flash",
                         base: 0x2000_0000,
                         data,
@@ -901,7 +901,7 @@ fn main() {
                             windows.push((0, size));
                             regions.push("flash-low");
                         }
-                        let nor = eapp_loader::Nor::sst39wf800a(windows, regions);
+                        let nor = ipod_machine::Nor::sst39wf800a(windows, regions);
                         println!(
                             "  nor model: JEDEC {:#06x}/{:#06x}, {} KiB, {} KiB sectors",
                             nor.mfr,
@@ -917,7 +917,7 @@ fn main() {
         }
         // --bcm : model the video co-processor's host protocol instead of leaving it as memory.
         if args.iter().any(|a| a == "--bcm") {
-            let mut b = eapp_loader::Bcm::new(0x3000_0000);
+            let mut b = ipod_machine::Bcm::new(0x3000_0000);
             // --no-bcm-registry : do NOT publish the GENCMD service directory RetailOS reads at
             // internal 0x1f0, nor answer the ring RPC behind it.
             //
@@ -1022,7 +1022,7 @@ fn main() {
         // said: model the registers, never raise IRQ 40.
         let wheel_spec = args.iter().find_map(|a| a.strip_prefix("--wheel="));
         if !args.iter().any(|a| a == "--no-clickwheel") {
-            let mut w = eapp_loader::ClickWheel::new(0x7000_c000);
+            let mut w = ipod_machine::ClickWheel::new(0x7000_c000);
             w.irq_enabled = !args.iter().any(|a| a == "--wheel-no-irq");
             let gap = args
                 .iter()
@@ -1038,9 +1038,9 @@ fn main() {
                 .find_map(|a| a.strip_prefix("--clock="))
                 .and_then(|v| v.parse::<u64>().ok())
                 .map(|n| n.max(1))
-                .unwrap_or(eapp_loader::CLOCK as u64);
+                .unwrap_or(ipod_machine::CLOCK as u64);
             if let Some(spec) = wheel_spec {
-                match eapp_loader::parse_wheel_script(spec, gap, clock) {
+                match ipod_machine::parse_wheel_script(spec, gap, clock) {
                     Ok(steps) => w.script = steps,
                     // Refused rather than partially applied: a script that silently drops the step
                     // it could not parse would report a delta from a sequence nobody wrote.
@@ -1052,7 +1052,7 @@ fn main() {
             }
             println!(
                 "  clickwheel model at 0x7000c100/0x104/0x120/0x140, irq {} ({})",
-                eapp_loader::OPTO_IRQ_HI + 32,
+                ipod_machine::OPTO_IRQ_HI + 32,
                 if w.irq_enabled {
                     "enabled"
                 } else {
@@ -1070,7 +1070,7 @@ fn main() {
                     println!(
                         "    @{:<14} {}",
                         s.when(),
-                        eapp_loader::wheel_step_name(s.event)
+                        ipod_machine::wheel_step_name(s.event)
                     );
                 }
             }
@@ -1103,7 +1103,7 @@ fn main() {
                         );
                         m.mem.regions.insert(
                             0,
-                            eapp_loader::Region {
+                            ipod_machine::Region {
                                 name: "flash-image",
                                 base: load,
                                 data: rom[off..(off + len).min(rom.len())].to_vec(),
@@ -1156,7 +1156,7 @@ fn main() {
         if args.iter().any(|a| a == "--second-core") {
             m.mem.second_core = true;
             if let Some(q) = args.iter().find_map(|a| a.strip_prefix("--quantum=")) {
-                m.mem.quantum = q.parse().unwrap_or(eapp_loader::Machine::QUANTUM).max(1);
+                m.mem.quantum = q.parse().unwrap_or(ipod_machine::Machine::QUANTUM).max(1);
             }
             // `--cop-trace` gives the coprocessor the eyes the CPU has had all along: a novelty map
             // over its own instruction count, and a park/wake ledger carrying both cores' clocks
@@ -1173,7 +1173,7 @@ fn main() {
         }
         // --disk=PATH : attach the image as the ATA drive, so RetailOS can read its own filesystem.
         if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--disk=")) {
-            match eapp_loader::Ata::open(
+            match ipod_machine::Ata::open(
                 std::path::Path::new(path),
                 args.iter().any(|a| a == "--disk-writable"),
             ) {
@@ -1201,7 +1201,7 @@ fn main() {
         // so the two can be given together and the device wins — which is what makes them
         // comparable in one run of the recipe.
         if args.iter().any(|a| a == "--pmu") {
-            let mut pmu = eapp_loader::Pcf50605::new();
+            let mut pmu = ipod_machine::Pcf50605::new();
             // The emulated iPod reports the charge of the machine it is running on, and its clock
             // is the host's local time. --battery=N overrides the percentage; a host with no
             // battery reads 100. Both are set before the flags below so an explicit --pmu-adc=2
@@ -1210,9 +1210,9 @@ fn main() {
                 .iter()
                 .find_map(|a| a.strip_prefix("--battery="))
                 .and_then(|n| n.parse::<u8>().ok())
-                .unwrap_or_else(eapp_loader::host_battery_percent);
+                .unwrap_or_else(ipod_machine::host_battery_percent);
             pmu.set_battery_percent(pct);
-            let tm = eapp_loader::host_local_time();
+            let tm = ipod_machine::host_local_time();
             pmu.set_clock(tm);
             println!(
                 "  pcf50605 battery {pct}%, clock 20{:02}-{:02}-{:02} {:02}:{:02}:{:02}",
@@ -1294,7 +1294,7 @@ fn main() {
         }
         if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--restore=")) {
             match std::fs::read(path) {
-                Ok(b) if eapp_loader::pack::unpack(&b).is_some_and(|raw| m.restore(&raw)) => {
+                Ok(b) if ipod_machine::pack::unpack(&b).is_some_and(|raw| m.restore(&raw)) => {
                     println!(
                         "  restored {path} — {} instructions already executed, pc {:#010x}",
                         m.executed, m.cpu.regs[15]
@@ -1331,13 +1331,13 @@ fn main() {
                 );
                 std::process::exit(2);
             }
-            match eapp_loader::film::Film::parse(spec) {
+            match ipod_machine::film::Film::parse(spec) {
                 Ok(mut f) => {
                     // --bcm-film-from=N : start sampling at N instructions. The run is still issued
                     // in `every`-sized chunks from instruction 0, so the machine is unchanged; what
                     // is skipped is the surface scan, which is the whole cost of a fine cadence.
                     if let Some(v) = args.iter().find_map(|a| a.strip_prefix("--bcm-film-from=")) {
-                        match eapp_loader::film::parse_count(v) {
+                        match ipod_machine::film::parse_count(v) {
                             Some(n) => f.from = n,
                             None => {
                                 println!(
@@ -1431,7 +1431,7 @@ fn main() {
         // **Two ways an image can be present, and the region list only knows one of them.** This
         // tested `region_named("osos")` alone, which was complete while every image was *pushed as
         // a region*. A boot image is now written INTO SDRAM instead (see
-        // [`eapp_loader::place_image`]), and against that the region test refused a machine that
+        // [`ipod_machine::place_image`]), and against that the region test refused a machine that
         // was in fact loaded and ready at its entry.
         //
         // Probing the address directly was tried first and is not reliable here: SDRAM's storage
@@ -1508,7 +1508,7 @@ fn main() {
         if let Some(spec) = snap_spec {
             if let Some((_, path)) = spec.split_once(':') {
                 let raw = m.snapshot();
-                let img = eapp_loader::pack::pack(&raw);
+                let img = ipod_machine::pack::pack(&raw);
                 match std::fs::write(path, &img) {
                     Ok(()) => println!(
                         "  snapshot -> {path} ({} bytes, packed from {} — {:.0}:1)",
@@ -1578,7 +1578,7 @@ fn main() {
                     .map(|(_, dest, n)| dest.wrapping_add(*n))
                     .max()?;
                 let n = (top.saturating_sub(base) as usize).min(data.len());
-                Some(eapp_loader::extract_symbols(&data[..n], 0))
+                Some(ipod_machine::extract_symbols(&data[..n], 0))
             });
             if let Some(syms) = recovered {
                 println!(
@@ -1691,8 +1691,8 @@ fn main() {
             m.mem.ide_irq_acked,
             m.mem.ide_irq_delivered,
         );
-        let en = m.mem.read32(0x6000_4020) >> eapp_loader::IDE_IRQ & 1;
-        let pend = m.mem.int_pending >> eapp_loader::IDE_IRQ & 1;
+        let en = m.mem.read32(0x6000_4020) >> ipod_machine::IDE_IRQ & 1;
+        let pend = m.mem.int_pending >> ipod_machine::IDE_IRQ & 1;
         if m.mem.dma_dropped > 0 {
             println!(
                 "  DMA DROPPED {} bytes at {} destinations, first {:#010x}",
@@ -1711,7 +1711,7 @@ fn main() {
         // contributes thousands while the operating system contributes dozens — so they cannot say
         // whether a *particular* completion arrived. The tail can.
         if !m.mem.ide_events.is_empty() {
-            use eapp_loader::{IDE_EV_ARMED, IDE_EV_ASSERTED, IDE_EV_DELIVERED, IDE_EV_NAMES};
+            use ipod_machine::{IDE_EV_ARMED, IDE_EV_ASSERTED, IDE_EV_DELIVERED, IDE_EV_NAMES};
             println!(
                 "  ide completion timeline — last {} events, oldest first (µs, what):",
                 m.mem.ide_events.len()
@@ -1731,7 +1731,7 @@ fn main() {
             let mut open = false;
             for (_, w) in &ev {
                 match *w {
-                    IDE_EV_ARMED | IDE_EV_ASSERTED | eapp_loader::IDE_EV_ASSERTED_MASKED => {
+                    IDE_EV_ARMED | IDE_EV_ASSERTED | ipod_machine::IDE_EV_ASSERTED_MASKED => {
                         if open {
                             lost += 1;
                         }
@@ -1758,7 +1758,7 @@ fn main() {
         if let Some(l) = m.mem.pp_dma_log.more_line(m.mem.pp_dma_log.sample().len()) {
             println!("  {l}");
         }
-        for (i, c) in eapp_loader::PP_DMA.iter().enumerate() {
+        for (i, c) in ipod_machine::PP_DMA.iter().enumerate() {
             let irq = if i == 0 {
                 m.mem.pp_dma_irq.unwrap_or(c.irq)
             } else {
@@ -1906,7 +1906,7 @@ fn main() {
                     rgb.push(((bl << 3) | (bl >> 2)) as u8);
                 }
                 let out = if png {
-                    eapp_loader::png::encode(&rgb, w, h)
+                    ipod_machine::png::encode(&rgb, w, h)
                 } else {
                     let mut v = format!("P6\n{w} {h}\n255\n").into_bytes();
                     v.extend_from_slice(&rgb);
@@ -1925,17 +1925,17 @@ fn main() {
             let rs = b.timeline.sample();
             let mut i = 0usize;
             let mut printed = 0usize;
-            let run_of = |op: &eapp_loader::BcmOp| match *op {
-                eapp_loader::BcmOp::Write { base, halfwords } => Some((base, halfwords)),
+            let run_of = |op: &ipod_machine::BcmOp| match *op {
+                ipod_machine::BcmOp::Write { base, halfwords } => Some((base, halfwords)),
                 _ => None,
             };
             while i < rs.len() && printed < 32 {
                 match rs[i] {
-                    eapp_loader::BcmOp::Command { cmd } => {
+                    ipod_machine::BcmOp::Command { cmd } => {
                         println!("    command {cmd:#x}");
                         i += 1;
                     }
-                    eapp_loader::BcmOp::Blit {
+                    ipod_machine::BcmOp::Blit {
                         x0,
                         y0,
                         x1,
@@ -1949,7 +1949,7 @@ fn main() {
                         );
                         i += 1;
                     }
-                    eapp_loader::BcmOp::Write { base, halfwords } => {
+                    ipod_machine::BcmOp::Write { base, halfwords } => {
                         let stride = match rs.get(i + 1).and_then(run_of) {
                             Some((nb, nl)) if nl == halfwords => nb as i64 - base as i64,
                             _ => 0,
@@ -2092,7 +2092,7 @@ fn main() {
                 println!("    {line}");
             }
             if !d.id_handover.is_empty() {
-                let want = eapp_loader::Ata::identify_sector(16_777_216, 0, 0);
+                let want = ipod_machine::Ata::identify_sector(16_777_216, 0, 0);
                 println!("\nIDENTIFY hand-over — the first bytes the guest received, by buffer position:");
                 let got: Vec<String> = d
                     .id_handover
@@ -2252,7 +2252,7 @@ fn main() {
             );
             println!(
                 "  irq {} asserted {} times; CTRL now {:#010x} (receiver {}), STATUS {:#010x}, last frame {:#010x}",
-                eapp_loader::OPTO_IRQ_HI + 32,
+                ipod_machine::OPTO_IRQ_HI + 32,
                 w.irqs,
                 w.ctrl,
                 if w.ctrl & 0x4000_0000 != 0 { "armed" } else { "NEVER ARMED" },
@@ -2671,7 +2671,7 @@ fn main() {
         use arm7tdmi::Bus as _;
         // RetailOS's globals live above OSOS and are populated during boot, which we skip.
         // Map that space so the loader's registry head is at least writable.
-        m.mem.regions.push(eapp_loader::Region {
+        m.mem.regions.push(ipod_machine::Region {
             name: "osos-bss",
             base: 0x1073_6000,
             data: vec![0; 0x0090_0000],
@@ -2875,11 +2875,11 @@ fn main() {
             // callback is the game's own code, at the address it parked in the request.
             let due: Vec<u32> = m.pending_completions.drain(..).collect();
             for req in due {
-                let cb = m.mem.read32(req + eapp_loader::REQ_CALLBACK);
+                let cb = m.mem.read32(req + ipod_machine::REQ_CALLBACK);
                 // Two arguments, not one. The read completion at 0x18017574 asserts
                 // `arg0 == arg1 + 0x128` and spins on `b .` at 0x180175d0 when it does not hold,
                 // so a one-argument call hangs in the game's own code rather than erroring.
-                let ctx_arg = m.mem.read32(req + eapp_loader::REQ_CONTEXT);
+                let ctx_arg = m.mem.read32(req + ipod_machine::REQ_CONTEXT);
                 if cb != 0 {
                     let s = m.call_with(cb, &[req, ctx_arg], budget);
                     if !matches!(s, Stop::Returned) {
@@ -2952,7 +2952,7 @@ fn main() {
     // --calls=NAME : every call to one framework, uncapped. The generic call trace shows the
     // first 400, and a subsystem that only wakes up later — audio, save — never appears in it.
     for want in args.iter().filter_map(|a| a.strip_prefix("--calls=")) {
-        let sel: Vec<&eapp_loader::Call> =
+        let sel: Vec<&ipod_machine::Call> =
             m.trace.iter().filter(|c| c.framework == *want).collect();
         println!("\n--- {want} calls: {} ---", sel.len());
         for c in sel.iter().take(60) {
@@ -3049,7 +3049,7 @@ fn main() {
 /// Vertex buffers are built at runtime in BSS, so they do not exist in the file and can only be
 /// seen from inside a running machine. Same for hardware registers the firmware programs itself:
 /// reading them back is how we learn what it decided, instead of guessing.
-fn report_dumps(args: &[String], m: &mut eapp_loader::Machine) {
+fn report_dumps(args: &[String], m: &mut ipod_machine::Machine) {
     // --disasm=ADDR:COUNT — read code out of the running machine. The alternative is dumping hex
     // and decoding ARM by eye, which is where guesses come from.
     for spec in args.iter().filter_map(|a| a.strip_prefix("--disasm=")) {
@@ -3181,7 +3181,7 @@ fn report_dumps(args: &[String], m: &mut eapp_loader::Machine) {
 }
 
 /// Print the sampled PC histogram, hottest first.
-fn report_profile(m: &eapp_loader::Machine) {
+fn report_profile(m: &ipod_machine::Machine) {
     let Some(p) = &m.profile else { return };
     let total: u64 = p.values().sum();
     if total == 0 {
@@ -3226,7 +3226,7 @@ fn report_profile(m: &eapp_loader::Machine) {
 /// plausibly carry it — including `+0xe0`, which the firmware demonstrably reads and which falls
 /// inside the region iPodLinux calls `pad7[120]`, i.e. bytes they never identified. That one is a
 /// deliberate guess, and the run either clears the assertion or it does not.
-fn install_sysinfo(m: &mut eapp_loader::Machine, base: u32, sdram_size: u32, flash: Option<&str>) {
+fn install_sysinfo(m: &mut ipod_machine::Machine, base: u32, sdram_size: u32, flash: Option<&str>) {
     // **The co-processor is powered, and the pin that says so has to say so.**
     //
     // `GPO32_VAL` bit 14 is a general-purpose output Apple's bootloader drives when it brings the
@@ -3254,37 +3254,37 @@ fn install_sysinfo(m: &mut eapp_loader::Machine, base: u32, sdram_size: u32, fla
     // 0x000B0005, and a `len` of 0x184 where a real cold boot writes 0xf8.
     let from_nor = flash
         .and_then(|p| std::fs::read(p).ok())
-        .and_then(|rom| eapp_loader::inspect::syscfg(&rom).map(|c| (rom, c)));
+        .and_then(|rom| ipod_machine::inspect::syscfg(&rom).map(|c| (rom, c)));
 
     let block = match &from_nor {
         Some((rom, cfg)) => {
             let model = cfg.model_info();
-            let identity = eapp_loader::identity::Identity {
+            let identity = ipod_machine::identity::Identity {
                 serial: cfg.serial.clone(),
                 guid: cfg.guid.unwrap_or(0),
-                source: eapp_loader::identity::Source::RealDevice,
+                source: ipod_machine::identity::Source::RealDevice,
             };
-            let at = eapp_loader::inspect::SYSCFG_AT;
-            let len = eapp_loader::inspect::SYSCFG_HEADER
-                + cfg.records.len() * eapp_loader::inspect::SYSCFG_RECORD;
+            let at = ipod_machine::inspect::SYSCFG_AT;
+            let len = ipod_machine::inspect::SYSCFG_HEADER
+                + cfg.records.len() * ipod_machine::inspect::SYSCFG_RECORD;
             let syscfg = rom.get(at..at + len).unwrap_or(&[]);
             match model {
-                Some(mdl) => eapp_loader::nor::handoff(&identity, mdl, syscfg),
+                Some(mdl) => ipod_machine::nor::handoff(&identity, mdl, syscfg),
                 // A dump whose Mod# we cannot resolve still has a serial and a GUID worth passing
                 // through; only the model-derived fields go missing.
                 None => {
                     let fallback =
-                        eapp_loader::identity::Model::lookup("A146").expect("A146 is in the table");
-                    eapp_loader::nor::handoff(&identity, fallback, syscfg)
+                        ipod_machine::identity::Model::lookup("A146").expect("A146 is in the table");
+                    ipod_machine::nor::handoff(&identity, fallback, syscfg)
                 }
             }
         }
         // No NOR at all — a warm boot straight into an OS image. The block still has to exist or
         // RetailOS asserts at 0xda0, so it is built from a generated identity.
         None => {
-            let model = eapp_loader::identity::Model::lookup("A146").expect("A146 is in the table");
-            let identity = eapp_loader::identity::Identity::generate(model, 0);
-            eapp_loader::nor::handoff(&identity, model, &[])
+            let model = ipod_machine::identity::Model::lookup("A146").expect("A146 is in the table");
+            let identity = ipod_machine::identity::Identity::generate(model, 0);
+            ipod_machine::nor::handoff(&identity, model, &[])
         }
     };
 
@@ -3303,7 +3303,7 @@ fn install_sysinfo(m: &mut eapp_loader::Machine, base: u32, sdram_size: u32, fla
     // Bisected rather than assumed: with them removed the warm boot fell from 18 ATA commands to
     // 7 and sent a thousand reads to a garbage pointer, and neither the block's address nor its
     // Gestalt changed that. They are warm-path scaffolding, not part of the handoff.
-    let w = |m: &mut eapp_loader::Machine, off: u32, v: u32| m.mem.write32(base + off, v);
+    let w = |m: &mut ipod_machine::Machine, off: u32, v: u32| m.mem.write32(base + off, v);
     w(m, 0x60, u32::from_le_bytes(*b"Flsh"));
     w(m, 0x68, 0x2000_0000);
     w(m, 0x6c, 0x0010_0000);
@@ -3318,10 +3318,10 @@ fn install_sysinfo(m: &mut eapp_loader::Machine, base: u32, sdram_size: u32, fla
     w(m, 0x128, 0x0005_0014);
 
     m.mem.write32(
-        eapp_loader::nor::HANDOFF_TAG_AT,
+        ipod_machine::nor::HANDOFF_TAG_AT,
         u32::from_le_bytes(*b"IsyS"),
     );
-    m.mem.write32(eapp_loader::nor::HANDOFF_TAG_AT + 4, base);
+    m.mem.write32(ipod_machine::nor::HANDOFF_TAG_AT + 4, base);
     let who = match &from_nor {
         Some((_, c)) => c.model.clone().unwrap_or_else(|| "unknown model".into()),
         None => "generated".into(),
@@ -3340,7 +3340,7 @@ fn install_sysinfo(m: &mut eapp_loader::Machine, base: u32, sdram_size: u32, fla
 /// conditional form, because ARM puts the condition in the top nibble — and a bootloader's error
 /// paths are overwhelmingly `moveq` / `movne`. `0xe3a00058/0x0fffffff` finds all sixteen at once.
 /// Matches are disassembled, since a hit that is code is unreadable as a bare hex word.
-fn report_findptr(args: &[String], m: &eapp_loader::Machine) {
+fn report_findptr(args: &[String], m: &ipod_machine::Machine) {
     for spec in args.iter().filter_map(|a| a.strip_prefix("--findptr=")) {
         let hex = |t: &str| u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok();
         let (val, mask) = match spec.split_once('/') {
@@ -3388,7 +3388,7 @@ fn report_findptr(args: &[String], m: &eapp_loader::Machine) {
 ///
 /// The host hands the BCM a bitmap; capturing what it *writes* gives us the image without having to
 /// execute the co-processor's own firmware. Pixels are RGB565, the 5G panel format.
-fn report_bcm_dump(args: &[String], m: &eapp_loader::Machine) {
+fn report_bcm_dump(args: &[String], m: &ipod_machine::Machine) {
     let Some(b) = &m.mem.bcm else { return };
     for spec in args.iter().filter_map(|a| a.strip_prefix("--bcm-dump=")) {
         // `splitn(4, …)` and not `split(…)`: the fourth field is a PATH, and a Windows path has a
@@ -3433,7 +3433,7 @@ fn report_bcm_dump(args: &[String], m: &eapp_loader::Machine) {
 /// `--bcm-peek=ADDR[:N]` — print N 32-bit words of the co-processor's internal memory at the end
 /// of the run. Pure instrument: the framebuffer dump renders halfwords as RGB565 and loses the low
 /// bits, which is useless when the question is whether a word reads exactly `1`.
-fn report_bcm_peek(args: &[String], m: &eapp_loader::Machine) {
+fn report_bcm_peek(args: &[String], m: &ipod_machine::Machine) {
     let Some(b) = &m.mem.bcm else { return };
     for spec in args.iter().filter_map(|a| a.strip_prefix("--bcm-peek=")) {
         let (a, n) = spec.split_once(':').unwrap_or((spec, "4"));
@@ -3455,7 +3455,7 @@ fn report_bcm_peek(args: &[String], m: &eapp_loader::Machine) {
 ///
 /// Every line here is a piece of hardware we have not modelled, named by the address range it
 /// answers on and by the PC that went looking for it — which is the part that makes it actionable.
-fn report_unmapped(m: &mut eapp_loader::Machine) {
+fn report_unmapped(m: &mut ipod_machine::Machine) {
     if m.mem.unmapped.is_empty() {
         return;
     }
@@ -3503,15 +3503,15 @@ fn report_unmapped(m: &mut eapp_loader::Machine) {
 /// 766-ATA retail boot on 2026-08-26 and got "no such file" — the run had already exited through
 /// the early return. An instrument that writes no file and reports no error is indistinguishable
 /// from a boot that drew nothing, which is the question it was being asked.
-fn report_ppm(args: &[String], m: &eapp_loader::Machine) {
+fn report_ppm(args: &[String], m: &ipod_machine::Machine) {
     let Some(path) = args.iter().find_map(|a| a.strip_prefix("--ppm=")) else {
         return;
     };
     match fs::write(path, m.framebuffer_ppm()) {
         Ok(()) => println!(
             "wrote {path} ({}x{})",
-            eapp_loader::FB_WIDTH,
-            eapp_loader::FB_HEIGHT
+            ipod_machine::FB_WIDTH,
+            ipod_machine::FB_HEIGHT
         ),
         Err(e) => eprintln!("{path}: {e}"),
     }
@@ -3521,7 +3521,7 @@ fn report_ppm(args: &[String], m: &eapp_loader::Machine) {
 ///
 /// Shared because `--boot-osos` returns from `main` early; when this only existed at the bottom
 /// of `main`, both flags were accepted, fired correctly, and reported nothing on that path.
-fn report_break_watch(m: &mut eapp_loader::Machine) {
+fn report_break_watch(m: &mut ipod_machine::Machine) {
     let args: Vec<String> = std::env::args().collect();
     if !m.break_log.is_empty() {
         // Every hit, not a sample. An earlier truncation to 8 was read as the whole set and
@@ -3771,12 +3771,12 @@ fn report_break_watch(m: &mut eapp_loader::Machine) {
     }
 }
 
-/// Map the memory RetailOS code expects — see [`eapp_loader::map_hardware`], which is where it
+/// Map the memory RetailOS code expects — see [`ipod_machine::map_hardware`], which is where it
 /// lives now.
 ///
 /// Moved out of this file when `tools/ipod-gui` became a second front end over the same machine.
 /// Kept as a delegate rather than replaced at the two call sites so that the diff which moved it
 /// proves itself: the body went to the library and nothing here changed but this line.
-fn map_hardware(m: &mut eapp_loader::Machine, cold_boot: bool) {
-    eapp_loader::map_hardware(m, cold_boot);
+fn map_hardware(m: &mut ipod_machine::Machine, cold_boot: bool) {
+    ipod_machine::map_hardware(m, cold_boot);
 }

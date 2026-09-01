@@ -113,7 +113,7 @@
 // And `on_start_device` asks the machine rule again on the press, for the reason `row_action` asks
 // it twice below.
 
-use eapp_loader::settings::{self, Device, Presence, Settings};
+use ipod_machine::settings::{self, Device, Presence, Settings};
 
 use crate::composer::{Composer, FixRow};
 use crate::parts::{Detail, RowAction, Wrote};
@@ -469,7 +469,7 @@ fn made_of(
     out.push(device_fact(
         "Modes",
         match s.nor_of(d) {
-            Some(eapp_loader::nor::Source::Synthetic { .. }) => {
+            Some(ipod_machine::nor::Source::Synthetic { .. }) => {
                 "everything on its drive; Diagnostics and Disk Mode need a real dump".into()
             }
             _ => "everything on its drive, and the modes its own ROM carries".into(),
@@ -513,7 +513,7 @@ fn install_row(s: &Settings, d: &Device, caps: Caps, machine: Option<&str>) -> F
     // `Make me one` still carries Apple's updater, and the room a bootloader needs is the room the
     // updater is in — `ipsw::build_volume` sizes the firmware partition to Apple's firmware
     // exactly, because that is what a real iPod has. Starting it once consumes the updater.
-    if eapp_loader::ipsw::firmware_state(&disk)
+    if ipod_machine::ipsw::firmware_state(&disk)
         .map(|f| f.tags.iter().any(|t| t == "aupd"))
         .unwrap_or(false)
     {
@@ -827,8 +827,8 @@ fn name_at(s: &Settings, index: i32) -> Option<String> {
 mod tests {
     use super::*;
 
-    use eapp_loader::nor;
-    use eapp_loader::settings::{Disk, Item, Provenance, Resource};
+    use ipod_machine::nor;
+    use ipod_machine::settings::{Disk, Item, Provenance, Resource};
     use std::path::PathBuf;
 
     /// Every capability on. The running build has **none** of the first four — see `main::caps` —
@@ -1416,7 +1416,7 @@ mod tests {
     /// pair measured from the writing end.
     #[test]
     fn the_edit_route_carries_the_recipe_the_model_resolves() {
-        use eapp_loader::compose::{BootShape, Loader, Os, Start};
+        use ipod_machine::compose::{BootShape, Loader, Os, Start};
 
         let dir = scratch("edit");
         let mut s = library(&dir);

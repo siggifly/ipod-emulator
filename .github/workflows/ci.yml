@@ -1,7 +1,7 @@
 # Build and test the iPod 5G emulator on Linux, macOS and Windows.
 #
 # This file is the difference between "cross-platform" and "cross-platform until somebody tries".
-# The core was portable in principle before it existed — `arm7tdmi` has no dependencies, `eapp-loader`
+# The core was portable in principle before it existed — `arm7tdmi` has no dependencies, `ipod-machine`
 # uses only `std` — and it still had a hard Linux build break sitting in it (eframe with
 # `default-features = false` and neither `x11` nor `wayland`, which winit answers with a
 # `compile_error!`). Nothing but a Linux runner was ever going to find that.

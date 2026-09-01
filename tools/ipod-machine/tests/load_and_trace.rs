@@ -5,7 +5,7 @@
 //! `bl` hit a genuine `ldr pc, [pc, #imm]` thunk whose literal the loader rewrote. That is
 //! exactly the mechanism a real title will use.
 
-use eapp_loader::{EApp, LoadError, Machine, Stop, TRAP_BASE};
+use ipod_machine::{EApp, LoadError, Machine, Stop, TRAP_BASE};
 
 const LOAD_BASE: u32 = 0x1800_0000;
 const RAM_BASE: u32 = 0x1000_0000;
@@ -225,14 +225,14 @@ fn the_memory_bus_completes_a_configuration_only_when_it_is_kicked() {
     use arm7tdmi::Bus as _;
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    m.mem.regions.push(eapp_loader::Region {
+    m.mem.regions.push(ipod_machine::Region {
         name: "mmio-7",
         base: 0x7000_0000,
         data: vec![0; 0x100],
     });
-    m.mem.xmb = Some(eapp_loader::Xmb::new(0x7000_0000));
+    m.mem.xmb = Some(ipod_machine::Xmb::new(0x7000_0000));
     m.mem
-        .write8(0x7000_0033, eapp_loader::Xmb::ctrl_hi_at_reset());
+        .write8(0x7000_0033, ipod_machine::Xmb::ctrl_hi_at_reset());
 
     // Bit 27 answers ready out of reset, and the firmware cannot clear it — the enable path waits
     // for it while bit 30 is still clear, so a bit that echoed anything would deadlock there.
@@ -273,19 +273,19 @@ fn sleeping_advances_the_clock_and_not_the_instruction_count() {
     use arm7tdmi::Bus as _;
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    m.mem.regions.push(eapp_loader::Region {
+    m.mem.regions.push(ipod_machine::Region {
         name: "mmio-6",
         base: 0x6000_0000,
         data: vec![0; 0x8000],
     });
 
     // Only bit 31 is the sleep request; the register carries other fields the firmware writes.
-    m.mem.write32(eapp_loader::CPU_CTRL, 0x0000_0001);
+    m.mem.write32(ipod_machine::CPU_CTRL, 0x0000_0001);
     assert!(
         !m.mem.cpu_sleep,
         "a write without bit 31 is not a sleep request"
     );
-    m.mem.write32(eapp_loader::CPU_CTRL, 0x8000_0000);
+    m.mem.write32(ipod_machine::CPU_CTRL, 0x8000_0000);
     assert!(m.mem.cpu_sleep);
 
     // With nothing armed there is no wake-up to skip to. Inventing time here would be inventing an
@@ -299,22 +299,22 @@ fn sleeping_advances_the_clock_and_not_the_instruction_count() {
 fn wheel_machine() -> Machine {
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    m.mem.regions.push(eapp_loader::Region {
+    m.mem.regions.push(ipod_machine::Region {
         name: "mmio-6",
         base: 0x6000_0000,
         data: vec![0; 0x1_0000],
     });
-    m.mem.regions.push(eapp_loader::Region {
+    m.mem.regions.push(ipod_machine::Region {
         name: "mmio-6d",
         base: 0x6000_d000,
         data: vec![0; 0x1000],
     });
-    m.mem.regions.push(eapp_loader::Region {
+    m.mem.regions.push(ipod_machine::Region {
         name: "mmio-7",
         base: 0x7000_0000,
         data: vec![0; 0x1_0000],
     });
-    m.mem.clickwheel = Some(eapp_loader::ClickWheel::new(0x7000_c000));
+    m.mem.clickwheel = Some(ipod_machine::ClickWheel::new(0x7000_c000));
     m
 }
 
@@ -363,7 +363,7 @@ fn enable_reporting(m: &mut Machine) {
 #[test]
 fn the_wheel_answers_the_command_retailos_sends_and_refuses_ones_it_does_not() {
     use arm7tdmi::Bus as _;
-    use eapp_loader::*;
+    use ipod_machine::*;
     let mut m = wheel_machine();
     // Deliver a reply that is due: the sender's ack runs first, then the caller polls.
     let settle = |m: &mut Machine| {
@@ -467,11 +467,11 @@ fn the_wheel_answers_the_command_retailos_sends_and_refuses_ones_it_does_not() {
 #[test]
 fn the_set_reporting_command_is_answered_with_silence_and_gates_the_stream() {
     use arm7tdmi::Bus as _;
-    use eapp_loader::*;
+    use ipod_machine::*;
     let mut m = wheel_machine();
 
     // (3a) Reporting is off out of reset: an injected event is refused, not posted.
-    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@0:touch", 10, eapp_loader::CLOCK as u64).expect("script");
+    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@0:touch", 10, ipod_machine::CLOCK as u64).expect("script");
     m.mem.icount = 0;
     m.service_interrupts();
     {
@@ -511,7 +511,7 @@ fn the_set_reporting_command_is_answered_with_silence_and_gates_the_stream() {
 
     // (3b) The same script step, now that the wheel has been told to report.
     m.mem.clickwheel.as_mut().unwrap().script =
-        parse_wheel_script("@100:rotate=+1", 10, eapp_loader::CLOCK as u64).expect("script");
+        parse_wheel_script("@100:rotate=+1", 10, ipod_machine::CLOCK as u64).expect("script");
     m.mem.clickwheel.as_mut().unwrap().next = 0;
     m.mem.icount = 100;
     m.service_interrupts();
@@ -537,7 +537,7 @@ fn the_set_reporting_command_is_answered_with_silence_and_gates_the_stream() {
         "payload 0 did not turn reporting off"
     );
     m.mem.clickwheel.as_mut().unwrap().script =
-        parse_wheel_script("@200:rotate=+1", 10, eapp_loader::CLOCK as u64).expect("script");
+        parse_wheel_script("@200:rotate=+1", 10, ipod_machine::CLOCK as u64).expect("script");
     m.mem.clickwheel.as_mut().unwrap().next = 0;
     m.mem.icount = 200;
     m.service_interrupts();
@@ -584,10 +584,10 @@ fn the_set_reporting_command_is_answered_with_silence_and_gates_the_stream() {
 /// published check and fail on the machine this emulator runs.
 #[test]
 fn a_scripted_rotation_posts_one_frame_per_click_and_wraps_at_96() {
-    use eapp_loader::*;
+    use ipod_machine::*;
     let mut m = wheel_machine();
     enable_reporting(&mut m);
-    let steps = parse_wheel_script("@100:touch,+50:rotate=+3,+50:release", 10, eapp_loader::CLOCK as u64).expect("script");
+    let steps = parse_wheel_script("@100:touch,+50:rotate=+3,+50:release", 10, ipod_machine::CLOCK as u64).expect("script");
     // touch, three clicks 10 apart, release 50 after the last of them.
     assert_eq!(steps.len(), 5);
     assert_eq!(
@@ -631,7 +631,7 @@ fn a_scripted_rotation_posts_one_frame_per_click_and_wraps_at_96() {
     let mut m = wheel_machine();
     enable_reporting(&mut m);
     m.mem.clickwheel.as_mut().unwrap().script =
-        parse_wheel_script("@0:rotate=-2", 10, eapp_loader::CLOCK as u64).expect("script");
+        parse_wheel_script("@0:rotate=-2", 10, ipod_machine::CLOCK as u64).expect("script");
     for n in (0..=20).step_by(10) {
         m.mem.icount = n;
         m.service_interrupts();
@@ -668,14 +668,14 @@ fn a_scripted_rotation_posts_one_frame_per_click_and_wraps_at_96() {
 #[test]
 fn receive_ready_is_write_one_to_clear_and_the_line_follows_it() {
     use arm7tdmi::Bus as _;
-    use eapp_loader::*;
+    use ipod_machine::*;
     let mut m = wheel_machine();
     enable_reporting(&mut m);
     let line = 1u32 << OPTO_IRQ_HI;
 
     // Disarm, and confirm a frame is not delivered at all.
     m.mem.write32(0x7000_c100, 0x0000_0000);
-    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@0:touch", 10, eapp_loader::CLOCK as u64).expect("script");
+    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@0:touch", 10, ipod_machine::CLOCK as u64).expect("script");
     m.mem.icount = 0;
     m.service_interrupts();
     assert_eq!(
@@ -692,7 +692,7 @@ fn receive_ready_is_write_one_to_clear_and_the_line_follows_it() {
 
     // 0x002813f0 / Rockbox's ISR tail: arm the receiver, then let the next step through.
     m.mem.write32(0x7000_c100, 0x6000_0000);
-    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@1:touch", 10, eapp_loader::CLOCK as u64).expect("script");
+    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@1:touch", 10, ipod_machine::CLOCK as u64).expect("script");
     m.mem.clickwheel.as_mut().unwrap().next = 0;
     m.mem.icount = 1;
     m.service_interrupts();
@@ -734,12 +734,12 @@ fn receive_ready_is_write_one_to_clear_and_the_line_follows_it() {
 #[test]
 fn engaging_hold_moves_both_the_frame_bit_and_the_gpio_line() {
     use arm7tdmi::Bus as _;
-    use eapp_loader::*;
+    use ipod_machine::*;
     let mut m = wheel_machine();
     enable_reporting(&mut m);
     m.mem.write32(GPIOA_INPUT_VAL, GPIOA_HOLD); // hold off, as map_hardware leaves it
     m.mem.clickwheel.as_mut().unwrap().script =
-        parse_wheel_script("@0:touch,@10:hold,@20:unhold", 10, eapp_loader::CLOCK as u64).expect("script");
+        parse_wheel_script("@0:touch,@10:hold,@20:unhold", 10, ipod_machine::CLOCK as u64).expect("script");
 
     m.mem.icount = 0;
     m.service_interrupts();
@@ -780,8 +780,8 @@ fn engaging_hold_moves_both_the_frame_bit_and_the_gpio_line() {
 /// steps here, so the schedule in a log can be pasted back into `--wheel=` and produce the same run.
 #[test]
 fn a_script_expands_to_the_steps_it_prints_and_a_bad_one_is_refused() {
-    use eapp_loader::*;
-    let s = parse_wheel_script("@1000:press=select", 25, eapp_loader::CLOCK as u64).expect("script");
+    use ipod_machine::*;
+    let s = parse_wheel_script("@1000:press=select", 25, ipod_machine::CLOCK as u64).expect("script");
     assert_eq!(s.len(), 2);
     assert_eq!(
         s[0],
@@ -794,7 +794,7 @@ fn a_script_expands_to_the_steps_it_prints_and_a_bad_one_is_refused() {
     assert_eq!(wheel_step_name(s[0].event), "down=select");
 
     // `+N` is relative to the previous step's *last* expanded click, so a sequence stays in order.
-    let s = parse_wheel_script("@0:rotate=+3,+5:touch", 10, eapp_loader::CLOCK as u64).expect("script");
+    let s = parse_wheel_script("@0:rotate=+3,+5:touch", 10, ipod_machine::CLOCK as u64).expect("script");
     assert_eq!(
         s.iter().map(|x| x.at).collect::<Vec<_>>(),
         vec![0, 10, 20, 25]
@@ -802,11 +802,11 @@ fn a_script_expands_to_the_steps_it_prints_and_a_bad_one_is_refused() {
 
     // Suffixes and separators, because instruction counts in this project are eight digits long.
     assert_eq!(
-        parse_wheel_script("@49_700k:touch", 1, eapp_loader::CLOCK as u64).unwrap()[0].at,
+        parse_wheel_script("@49_700k:touch", 1, ipod_machine::CLOCK as u64).unwrap()[0].at,
         49_700_000
     );
     assert_eq!(
-        parse_wheel_script("@50M:touch", 1, eapp_loader::CLOCK as u64).unwrap()[0].at,
+        parse_wheel_script("@50M:touch", 1, ipod_machine::CLOCK as u64).unwrap()[0].at,
         50_000_000
     );
 
@@ -819,7 +819,7 @@ fn a_script_expands_to_the_steps_it_prints_and_a_bad_one_is_refused() {
         "@50:rotate=0",
     ] {
         assert!(
-            parse_wheel_script(bad, 10, eapp_loader::CLOCK as u64).is_err(),
+            parse_wheel_script(bad, 10, ipod_machine::CLOCK as u64).is_err(),
             "{bad:?} should not parse"
         );
     }
@@ -836,10 +836,10 @@ fn a_script_expands_to_the_steps_it_prints_and_a_bad_one_is_refused() {
 #[test]
 fn pp_dma_moves_bytes_to_a_fixed_port_and_posts_a_read_to_clear_completion() {
     use arm7tdmi::Bus as _;
-    use eapp_loader::*;
+    use ipod_machine::*;
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    m.mem.regions.push(eapp_loader::Region {
+    m.mem.regions.push(ipod_machine::Region {
         name: "mmio-6",
         base: 0x6000_0000,
         data: vec![0; 0x1_0000],
@@ -948,7 +948,7 @@ const BCM_RD_ADDR: u32 = BCM + 0x2_0000;
 fn bcm_machine() -> Machine {
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    m.mem.bcm = Some(eapp_loader::Bcm::new(BCM));
+    m.mem.bcm = Some(ipod_machine::Bcm::new(BCM));
     m
 }
 
@@ -1179,7 +1179,7 @@ fn a_request_written_into_the_ring_is_answered_only_once_the_doorbell_is_rung() 
 
 #[test]
 fn a_saturated_log_reports_the_census_and_says_the_rows_are_a_sample() {
-    let mut c: eapp_loader::Capped<u32> = eapp_loader::Capped::new(3);
+    let mut c: ipod_machine::Capped<u32> = ipod_machine::Capped::new(3);
     for i in 0..10 {
         c.push(i);
     }
@@ -1198,7 +1198,7 @@ fn a_saturated_log_reports_the_census_and_says_the_rows_are_a_sample() {
     );
 
     // The control: below the cap, the same call is a bare number with no warning at all.
-    let mut quiet: eapp_loader::Capped<u32> = eapp_loader::Capped::new(3);
+    let mut quiet: ipod_machine::Capped<u32> = ipod_machine::Capped::new(3);
     quiet.push(1);
     quiet.push(2);
     assert!(!quiet.truncated());
@@ -1219,7 +1219,7 @@ fn a_lazy_row_that_is_never_built_is_still_counted() {
     // `push_with` exists so an expensive row can stay lazy. If laziness cost the count, the cheap
     // instrument would be the lying one — which is exactly the trade that produced `ata commands`.
     let mut built = 0;
-    let mut c: eapp_loader::Capped<String> = eapp_loader::Capped::new(2);
+    let mut c: ipod_machine::Capped<String> = ipod_machine::Capped::new(2);
     for i in 0..7 {
         c.push_with(|| {
             built += 1;
@@ -1238,7 +1238,7 @@ fn the_i2c_census_keeps_counting_after_its_ordered_log_has_filled() {
     use arm7tdmi::Bus as _;
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    m.mem.regions.push(eapp_loader::Region {
+    m.mem.regions.push(ipod_machine::Region {
         name: "mmio-7",
         base: 0x7000_0000,
         data: vec![0; 0x1_0000],
@@ -1338,13 +1338,13 @@ fn pmu_machine() -> Machine {
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
     // The I²C block is MMIO, so it needs storage behind it before the controller can be driven.
-    m.mem.regions.push(eapp_loader::Region {
+    m.mem.regions.push(ipod_machine::Region {
         name: "mmio-7",
         base: 0x7000_0000,
         data: vec![0; 0x10_000],
     });
     m.mem.i2c_base = Some(I2C);
-    m.mem.pmu = Some(eapp_loader::Pcf50605::new());
+    m.mem.pmu = Some(ipod_machine::Pcf50605::new());
     m
 }
 
@@ -1481,7 +1481,7 @@ fn sleeping_machine() -> Machine {
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
     // Storage behind the on-chip register block: the interrupt controller at 0x60004000, the two
     // timers at 0x60005000, the free-running counter at 0x60005010, CPU_CTRL at 0x60007000.
-    m.mem.regions.push(eapp_loader::Region {
+    m.mem.regions.push(ipod_machine::Region {
         name: "mmio-6",
         base: 0x6000_0000,
         data: vec![0; 0x1_0000],
@@ -1496,7 +1496,7 @@ fn sleeping_machine() -> Machine {
     let code = RAM_BASE + 0x200;
     m.mem.write32(code, 0xe580_1000);
     m.mem.write32(code + 4, 0xeaff_fffd);
-    m.call_with(code, &[eapp_loader::CPU_CTRL, 0x8000_0000, 0, 0], 5_000);
+    m.call_with(code, &[ipod_machine::CPU_CTRL, 0x8000_0000, 0, 0], 5_000);
     m
 }
 
@@ -1634,7 +1634,7 @@ fn an_older_snapshot_is_refused() {
 #[test]
 fn a_restored_wheel_is_still_reporting() {
     let mut m = sleeping_machine();
-    m.mem.clickwheel = Some(eapp_loader::ClickWheel::new(0x7000_c000));
+    m.mem.clickwheel = Some(ipod_machine::ClickWheel::new(0x7000_c000));
     {
         let w = m.mem.clickwheel.as_mut().unwrap();
         w.reporting = true;
@@ -1644,7 +1644,7 @@ fn a_restored_wheel_is_still_reporting() {
     let img = m.snapshot();
 
     let mut into = sleeping_machine();
-    into.mem.clickwheel = Some(eapp_loader::ClickWheel::new(0x7000_c000));
+    into.mem.clickwheel = Some(ipod_machine::ClickWheel::new(0x7000_c000));
     assert!(into.restore(&img), "the snapshot did not restore");
     let w = into.mem.clickwheel.as_ref().expect("wheel");
     assert!(
@@ -1674,7 +1674,7 @@ fn a_read_or_mask_is_observed_through_the_ordinary_read_path() {
     use arm7tdmi::Bus;
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    m.mem.regions.push(eapp_loader::Region {
+    m.mem.regions.push(ipod_machine::Region {
         name: "mmio-6",
         base: 0x6000_0000,
         data: vec![0; 0x10_000],
@@ -1721,7 +1721,7 @@ fn a_read_or_mask_is_observed_through_the_ordinary_read_path() {
 /// rather than against a round number of its own.
 #[test]
 fn the_dimmer_counts_short_pulses_up_and_long_pulses_down() {
-    use eapp_loader::{Backlight, BACKLIGHT_PIN};
+    use ipod_machine::{Backlight, BACKLIGHT_PIN};
     let mut b = Backlight::default();
     assert_eq!(
         b.level, 16,
@@ -1774,7 +1774,7 @@ fn the_dimmer_counts_short_pulses_up_and_long_pulses_down() {
 #[test]
 fn setting_a_mailbox_bit_makes_it_readable_and_clearing_it_removes_it() {
     use arm7tdmi::Bus as _;
-    use eapp_loader::Mbx;
+    use ipod_machine::Mbx;
     let mut m = wheel_machine();
     assert_eq!(
         m.mem.read32(Mbx::BASE),
@@ -1816,7 +1816,7 @@ fn setting_a_mailbox_bit_makes_it_readable_and_clearing_it_removes_it() {
 #[test]
 fn the_mailbox_is_thirty_two_bits_wide_not_eight() {
     use arm7tdmi::Bus as _;
-    use eapp_loader::Mbx;
+    use ipod_machine::Mbx;
     let mut m = wheel_machine();
     m.mem.write32(Mbx::BASE + Mbx::SET, 0x8040_2010);
     assert_eq!(m.mem.read32(Mbx::BASE), 0x8040_2010);
@@ -1837,10 +1837,10 @@ fn the_mailbox_is_thirty_two_bits_wide_not_eight() {
 #[test]
 fn the_core_registers_answer_at_both_widths() {
     use arm7tdmi::Bus;
-    use eapp_loader::{Core, PROC_ID};
+    use ipod_machine::{Core, PROC_ID};
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    eapp_loader::map_hardware(&mut m, false);
+    ipod_machine::map_hardware(&mut m, false);
 
     // Single-core, which is what every measurement in research/ was taken on: the CPU's value,
     // whoever asks, and no second-core register at all.
@@ -1910,7 +1910,7 @@ fn the_device_window_is_mirrored_where_the_kernel_reads_it() {
     use arm7tdmi::Bus;
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    eapp_loader::map_hardware(&mut m, false);
+    ipod_machine::map_hardware(&mut m, false);
 
     // CPU_INT_STAT and its high bank — the two the kernel actually holds in its pool.
     for (real, mirror) in [(0x6000_4000u32, 0x6400_4000u32), (0x6000_4100, 0x6400_4100)] {
@@ -1952,7 +1952,7 @@ fn the_device_window_is_mirrored_where_the_kernel_reads_it() {
 /// its own heads and sectors can reach.
 #[test]
 fn identify_does_not_advertise_fields_it_leaves_empty() {
-    let id = eapp_loader::Ata::identify_sector(16_777_216, 0, 0);
+    let id = ipod_machine::Ata::identify_sector(16_777_216, 0, 0);
     let w = |n: usize| u16::from_le_bytes([id[n * 2], id[n * 2 + 1]]);
 
     assert_eq!(id.len(), 512, "IDENTIFY DEVICE is one sector");
@@ -1993,16 +1993,16 @@ fn waking_the_coprocessor_yields_to_it_immediately() {
     use arm7tdmi::Bus;
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    eapp_loader::map_hardware(&mut m, false);
+    ipod_machine::map_hardware(&mut m, false);
     m.mem.second_core = true;
 
     // Park it, the way the coprocessor parks itself: PROC_SLEEP into COP_CTL.
-    m.mem.write32(eapp_loader::Core::Cop.ctrl(), 0x8000_0000);
+    m.mem.write32(ipod_machine::Core::Cop.ctrl(), 0x8000_0000);
     assert!(m.mem.cop_asleep, "PROC_SLEEP should park it");
     assert!(!m.mem.yield_to_cop, "parking is not a reason to yield");
 
     // And wake it, the way Apple's bootloader does: PROC_WAKE is zero.
-    m.mem.write32(eapp_loader::Core::Cop.ctrl(), 0);
+    m.mem.write32(ipod_machine::Core::Cop.ctrl(), 0);
     assert!(!m.mem.cop_asleep, "PROC_WAKE should start it");
     assert!(
         m.mem.yield_to_cop,
@@ -2012,13 +2012,13 @@ fn waking_the_coprocessor_yields_to_it_immediately() {
     // Re-writing the same state is not an edge and must not yield: firmware polls this register,
     // and a yield per poll would hand the coprocessor a turn thousands of times for nothing.
     m.mem.yield_to_cop = false;
-    m.mem.write32(eapp_loader::Core::Cop.ctrl(), 0);
+    m.mem.write32(ipod_machine::Core::Cop.ctrl(), 0);
     assert!(!m.mem.yield_to_cop, "only the transition is an edge");
 
     // A single-core machine must be untouched by any of this.
     let mut solo = Machine::new(&EApp::parse(synth_eapp()).unwrap(), RAM_BASE, RAM_SIZE);
-    eapp_loader::map_hardware(&mut solo, false);
-    solo.mem.write32(eapp_loader::Core::Cop.ctrl(), 0);
+    ipod_machine::map_hardware(&mut solo, false);
+    solo.mem.write32(ipod_machine::Core::Cop.ctrl(), 0);
     assert!(!solo.mem.yield_to_cop, "no second core, no yield");
 }
 
@@ -2037,12 +2037,12 @@ fn a_byte_store_lands_where_a_word_store_does() {
     use arm7tdmi::Bus;
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    eapp_loader::map_hardware(&mut m, true); // cold: NOR over 0, SDRAM at 0x10000000
+    ipod_machine::map_hardware(&mut m, true); // cold: NOR over 0, SDRAM at 0x10000000
 
     // **The flash model has to be present or this test proves nothing** — with `nor` unset the
     // branch that swallowed the store is never entered and the assertion passes against the bug.
     // Confirmed: without this line the test is green either way.
-    m.mem.nor = Some(eapp_loader::Nor::sst39wf800a(
+    m.mem.nor = Some(ipod_machine::Nor::sst39wf800a(
         vec![(0, 0x10_0000)],
         vec!["flash-low"],
     ));
@@ -2093,8 +2093,8 @@ fn a_32_bit_read_of_the_data_register_yields_one_ata_word() {
 
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    eapp_loader::map_hardware(&mut m, false);
-    let drive = eapp_loader::Ata::open(&img, false).expect("open image");
+    ipod_machine::map_hardware(&mut m, false);
+    let drive = ipod_machine::Ata::open(&img, false).expect("open image");
     let sectors = drive.sectors;
     m.mem.ata = Some((0xc300_0000, drive));
 
@@ -2110,7 +2110,7 @@ fn a_32_bit_read_of_the_data_register_yields_one_ata_word() {
         got.extend_from_slice(&(w as u16).to_le_bytes());
     }
 
-    let want = eapp_loader::Ata::identify_sector(sectors, 0, 0);
+    let want = ipod_machine::Ata::identify_sector(sectors, 0, 0);
     assert_eq!(
         got.len(),
         want.len(),
@@ -2143,8 +2143,8 @@ fn initialize_device_parameters_moves_the_current_geometry() {
 
     let app = EApp::parse(synth_eapp()).expect("parse");
     let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
-    eapp_loader::map_hardware(&mut m, false);
-    let drive = eapp_loader::Ata::open(&img, false).expect("open image");
+    ipod_machine::map_hardware(&mut m, false);
+    let drive = ipod_machine::Ata::open(&img, false).expect("open image");
     let sectors = drive.sectors;
     m.mem.ata = Some((0xc300_0000, drive));
 
@@ -2190,7 +2190,7 @@ fn initialize_device_parameters_moves_the_current_geometry() {
 /// that models the real part, so every `--clock=5` run — the documented research configuration —
 /// scrolled fifteen times faster than it asked to.
 ///
-/// **How to make it go red:** divide by `eapp_loader::CLOCK` instead of the parameter. The 4 ms
+/// **How to make it go red:** divide by `ipod_machine::CLOCK` instead of the parameter. The 4 ms
 /// assertion drops to 266 us, and the two clocks stop disagreeing in the test as they stopped
 /// disagreeing in the run — which is what let the bug sit behind a green suite.
 ///
@@ -2201,7 +2201,7 @@ fn initialize_device_parameters_moves_the_current_geometry() {
 fn a_time_anchored_rotate_is_spaced_by_the_runs_own_clock() {
     let gap_instr = 20_000u64;
     for (clock, want_us) in [(5u64, 4_000u64), (75, 266), (1, 20_000)] {
-        let s = eapp_loader::parse_wheel_script("@10s:rotate=+3", gap_instr, clock).expect("script");
+        let s = ipod_machine::parse_wheel_script("@10s:rotate=+3", gap_instr, clock).expect("script");
         let at: Vec<u64> = s.iter().map(|x| x.at).collect();
         assert!(s.iter().all(|x| x.in_usec), "a seconds script must stay in seconds");
         assert_eq!(at[0], 10_000_000, "the anchor moved");
@@ -2217,7 +2217,7 @@ fn a_time_anchored_rotate_is_spaced_by_the_runs_own_clock() {
     // An instruction-anchored script converts nothing, whatever the clock — which is why every
     // other test in this file was blind to the bug.
     for clock in [5u64, 75, 1] {
-        let s = eapp_loader::parse_wheel_script("@1000:rotate=+2", gap_instr, clock).expect("script");
+        let s = ipod_machine::parse_wheel_script("@1000:rotate=+2", gap_instr, clock).expect("script");
         assert!(s.iter().all(|x| !x.in_usec));
         assert_eq!(s[1].at - s[0].at, gap_instr, "instructions were rescaled");
     }

@@ -39,7 +39,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use eapp_loader::settings::Settings;
+use ipod_machine::settings::Settings;
 
 use crate::{bundle, update};
 
@@ -100,7 +100,7 @@ pub struct Machine {
     /// equivalent and is per press.
     pub cold: bool,
     /// `--clock=N`: interpreter instructions per simulated microsecond. `None` is
-    /// `eapp_loader::CLOCK`.
+    /// `ipod_machine::CLOCK`.
     ///
     /// **A property of the experiment, not of the iPod.** Every recipe in `research/` states its
     /// clock, and a device that stored one would make two runs of the same iPod incomparable for a
@@ -124,7 +124,7 @@ impl Machine {
     /// Write these four onto a config the window has already built from the library.
     ///
     /// **One place, and it only ever writes what was asked for.** `clock` is an `Option` precisely
-    /// so that *not saying* leaves `machine_config`'s `eapp_loader::CLOCK` standing rather than
+    /// so that *not saying* leaves `machine_config`'s `ipod_machine::CLOCK` standing rather than
     /// overwriting it with a zero — which `emu::build` clamps to 1, a machine running at one
     /// seventy-fifth of the part and reported as though it were the part.
     pub fn apply(&self, cfg: &mut crate::emu::Config) {
@@ -274,7 +274,7 @@ const RETIRED: &[(&str, Gone)] = &[
 /// stay green through it. Two texts held against each other by two tests can each catch the other
 /// losing something. The version is filled in at run time by [`help`].
 const HELP: &str = "\
-ipod-emulator {v} — an interactive iPod 5G over the eapp-loader emulator
+ipod-emulator {v} — an interactive iPod 5G over the ipod-machine emulator
 
 With no arguments it opens the window. These run and exit instead, with no window at all,
 so they work over SSH and on a runner with no display:
@@ -421,7 +421,7 @@ pub fn parse(args: &[String]) -> Cli {
                         "--clock={n}: instructions per simulated microsecond has to be a whole \
                          number above zero. 5 is what every recipe in research/ uses; {} is the \
                          real part and is the default.",
-                        eapp_loader::CLOCK
+                        ipod_machine::CLOCK
                     ))
                 }
                 Ok(v) => {
@@ -541,7 +541,7 @@ fn refusal(word: &str) -> String {
 /// answer and `err` is the complaint, which is the split a shell script depends on.
 ///
 /// **One thing does not go through `out`**, and it is worth saying rather than hiding: the two
-/// reports `--check-images` prints are `eapp_loader::inspect::report`'s own, written to stdout by
+/// reports `--check-images` prints are `ipod_machine::inspect::report`'s own, written to stdout by
 /// the crate that knows how to read a NOR dump. Routing them through here would mean a second
 /// implementation of the same paragraph, and the two would drift. Its exit code is this function's.
 pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
@@ -636,7 +636,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 }
             };
             match (flash, disk) {
-                (Some(f), Some(d)) => eapp_loader::inspect::report(&f, &d),
+                (Some(f), Some(d)) => ipod_machine::inspect::report(&f, &d),
                 (f, d) => {
                     // Naming the half that is missing, rather than reporting `UNREADABLE ` against
                     // an empty path — which would be this program inventing a verdict about a file
@@ -827,12 +827,12 @@ mod tests {
         // **On the config, and nothing else on it moves.** `apply` writes four fields; a fifth
         // would be the command line reaching past the boundary this struct is.
         let mut cfg = crate::emu::Config {
-            clock: eapp_loader::CLOCK,
+            clock: ipod_machine::CLOCK,
             snapshot: Some(PathBuf::from("/somewhere/m.snap")),
             ..Default::default()
         };
         Machine::default().apply(&mut cfg);
-        assert_eq!(cfg.clock, eapp_loader::CLOCK, "a flag nobody typed overwrote the default");
+        assert_eq!(cfg.clock, ipod_machine::CLOCK, "a flag nobody typed overwrote the default");
         assert!(!cfg.cold && !cfg.second_core && !cfg.charger);
         win("--cold --clock=5 --second-core --charger").apply(&mut cfg);
         assert!(cfg.cold && cfg.second_core && cfg.charger);

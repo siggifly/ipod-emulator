@@ -43,7 +43,7 @@
 
 use std::path::{Path, PathBuf};
 
-use eapp_loader::settings::Settings;
+use ipod_machine::settings::Settings;
 
 use crate::parts::Wrote;
 use crate::rail::{Caps, Next};
@@ -325,7 +325,7 @@ impl Prefs {
 
 /// The home directory, for [`shorten`] and for nothing else.
 ///
-/// **`eapp_loader::settings` has this function and it is private**, so this is a second reader of
+/// **`ipod_machine::settings` has this function and it is private**, so this is a second reader of
 /// one environment variable rather than a second spelling of a decision. It is deliberately not
 /// worth widening that module's surface for: this is *presentation*, and the worst a disagreement
 /// can do is draw a path in full.

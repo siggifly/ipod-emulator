@@ -135,11 +135,11 @@ fn parse(t: &str) -> Option<u32> {
 
 /// The RetailOS image under the gitignored `resources/` tree, relative to the repository root.
 ///
-/// The root is found by [`eapp_loader::settings::repo_root`] — the same two walks `ipod-gui` and
+/// The root is found by [`ipod_machine::settings::repo_root`] — the same two walks `ipod-gui` and
 /// `ipod-boot` use, and for the same reason: a shared `CARGO_TARGET_DIR` puts the binary a long
 /// way from the source.
 fn default_image() -> std::path::PathBuf {
-    eapp_loader::settings::repo_root().join("resources/derived/fw/OSOS_correct.bin")
+    ipod_machine::settings::repo_root().join("resources/derived/fw/OSOS_correct.bin")
 }
 
 fn main() {
@@ -156,7 +156,7 @@ fn main() {
         eprintln!("{path}: {e}");
         std::process::exit(1)
     });
-    let syms = eapp_loader::extract_symbols(&d, 0);
+    let syms = ipod_machine::extract_symbols(&d, 0);
     // --base=ADDR reads the file as if loaded there instead of in the firmware's own window.
     // For a game that is 0x18000000; `eapp` in the first four bytes says so without being told.
     let base = args
@@ -164,7 +164,7 @@ fn main() {
         .find_map(|a| a.strip_prefix("--base="))
         .and_then(parse)
         .unwrap_or(if d.starts_with(b"eapp") {
-            eapp_loader::EApp::parse(d.clone()).map(|a| a.load_base).unwrap_or(0)
+            ipod_machine::EApp::parse(d.clone()).map(|a| a.load_base).unwrap_or(0)
         } else {
             0
         });

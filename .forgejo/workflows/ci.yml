@@ -57,7 +57,7 @@ jobs:
       # What is NOT covered is the window. That hole is real — state it, do not
       # let a green tick here be read as "the GUI builds".
       - name: Build the core crates
-        run: cargo build -p arm7tdmi -p eapp-loader -p eapp-inspect --all-targets
+        run: cargo build -p arm7tdmi -p ipod-machine -p eapp-inspect --all-targets
 
       # **The count AND the clock.** This repository has been burned by a
       # suite that reported "275 passed" in 0.26 s without compiling
@@ -67,7 +67,7 @@ jobs:
         run: |
           set -o pipefail
           start=$(date +%s)
-          cargo test -p arm7tdmi -p eapp-loader -p eapp-inspect 2>&1 | tee /tmp/test.log
+          cargo test -p arm7tdmi -p ipod-machine -p eapp-inspect 2>&1 | tee /tmp/test.log
           elapsed=$(( $(date +%s) - start ))
           passed=$(grep -oE 'test result: ok\. [0-9]+ passed' /tmp/test.log \
                    | awk '{s+=$4} END {print s+0}')

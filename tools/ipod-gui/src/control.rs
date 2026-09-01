@@ -26,7 +26,7 @@
 //! number any report has produced.
 
 use crate::emu::{self, Link};
-use eapp_loader::{wheel_button, WheelEvent};
+use ipod_machine::{wheel_button, WheelEvent};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
@@ -160,7 +160,7 @@ fn command(line: &str, link: &Arc<Link>) -> String {
                 return "error: shot wants a path".into();
             }
             let out = link.out.lock().unwrap();
-            let png = eapp_loader::png::encode(&out.fb, emu::FB_W, emu::FB_H);
+            let png = ipod_machine::png::encode(&out.fb, emu::FB_W, emu::FB_H);
             match std::fs::write(arg, &png) {
                 Ok(()) => format!(
                     "ok shot {arg} ({} bytes, {} non-black)",

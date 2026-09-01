@@ -61,7 +61,7 @@
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
-use eapp_loader::settings::{Absent, Device, Presence};
+use ipod_machine::settings::{Absent, Device, Presence};
 
 use crate::emu::{BootTarget, Cmd, Config, Out, Phase, Stats};
 
@@ -109,7 +109,7 @@ pub const WHEEL_IS_LIVE: &str = "the wheel and buttons are the iPod's now";
 
 /// **A count of instructions, for a person.** `412 M instr`, `21.5 G instr`, `900 instr`.
 ///
-/// Not `eapp_loader::si`, which is the same arithmetic against a different noun: it renders `412 MB`
+/// Not `ipod_machine::si`, which is the same arithmetic against a different noun: it renders `412 MB`
 /// and this row is not about bytes. Writing `si(n)` here and letting the unit read as bytes is the
 /// shape of defect §12.8 is about — a number whose label says something the number is not.
 ///
@@ -524,13 +524,13 @@ impl Park {
 
     /// §12.4's own sentence, for the Rail: *"1.6 GB needed, 0.9 GB free."*
     ///
-    /// `eapp_loader::si` and not [`instructions`]: this row **is** about bytes, which is the one
+    /// `ipod_machine::si` and not [`instructions`]: this row **is** about bytes, which is the one
     /// case that function's own doc carves out.
     pub fn sentence(&self) -> String {
         format!(
             "{} needed, {} free",
-            eapp_loader::si(self.needed),
-            self.free.map_or_else(|| "an unmeasured amount".into(), eapp_loader::si)
+            ipod_machine::si(self.needed),
+            self.free.map_or_else(|| "an unmeasured amount".into(), ipod_machine::si)
         )
     }
 }
@@ -938,8 +938,8 @@ pub fn permits(life: &Life, c: &Cmd) -> bool {
 mod tests {
     use super::*;
 
-    use eapp_loader::nor;
-    use eapp_loader::settings::{Disk, Item, Presence, Resource, Settings};
+    use ipod_machine::nor;
+    use ipod_machine::settings::{Disk, Item, Presence, Resource, Settings};
     use std::path::PathBuf;
 
     /// A scratch directory of this test's own. Never inside the operator's data directory.

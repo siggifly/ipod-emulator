@@ -168,7 +168,7 @@ the limit that bites here.
 ## Where the code is
 
 The recorder is `--bcm-film=ADDR:W:H:EVERY:DIR` in the `trace` binary, implemented in
-`tools/eapp-loader/src/film.rs` with a dependency-free PNG writer in `tools/eapp-loader/src/png.rs`.
+`tools/ipod-machine/src/film.rs` with a dependency-free PNG writer in `tools/ipod-machine/src/png.rs`.
 It lives there rather than in this directory for the same reason `ipod-gui` grew a `map_hardware`
 delegate instead of a copy: a second front end that stood its own machine up would be a second
 machine the first time either copy was corrected. This directory is the recipe over the one machine.
@@ -185,5 +185,5 @@ to exactly that shape of silence.
 
 `tools/ipod-gui/src/png.rs` carries an equivalent PNG encoder for its screenshot button. Folding the
 two together is a follow-up, deliberately not done here: that crate is under concurrent edit. The
-two produce the same bytes for the same pixels; whoever folds them should keep the `eapp-loader`
+two produce the same bytes for the same pixels; whoever folds them should keep the `ipod-machine`
 copy, since both front ends already depend on that crate.

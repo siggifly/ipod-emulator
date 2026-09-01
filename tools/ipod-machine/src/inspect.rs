@@ -914,7 +914,7 @@ pub fn disk(path: &Path) -> Verdict {
 /// Parse an IPSW and say whether its firmware partition is a 5G/5.5G one.
 ///
 /// The same [`Verdict`] the two image checks produce, so the setup screen has one shape to draw.
-/// The work is [`eapp_loader::ipsw`]'s: a zip reader, an inflate, a CRC-32 check, and the `!ATA`
+/// The work is [`ipod_machine::ipsw`]'s: a zip reader, an inflate, a CRC-32 check, and the `!ATA`
 /// directory out of the extracted bundle.
 pub fn ipsw(path: &Path) -> Verdict {
     match crate::ipsw::inspect(path) {

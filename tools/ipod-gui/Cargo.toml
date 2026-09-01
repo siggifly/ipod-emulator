@@ -12,8 +12,8 @@ description = "An interactive iPod 5G: the emulator's framebuffer on a drawn dev
 name = "ipod-emulator"
 path = "src/main.rs"
 
-# A sibling crate rather than another `[[bin]]` in eapp-loader, deliberately. A UI toolkit pulls in
-# winit and a hundred transitive crates; putting it behind a feature in eapp-loader would still make
+# A sibling crate rather than another `[[bin]]` in ipod-machine, deliberately. A UI toolkit pulls in
+# winit and a hundred transitive crates; putting it behind a feature in ipod-machine would still make
 # `cargo build` there resolve them, and every baseline in research/ is measured with `cargo test
 # --release` in that crate. Keeping the window out of the emulator's manifest keeps that fast and
 # keeps `trace` buildable on a machine with no display stack at all.
@@ -61,7 +61,7 @@ default = ["accessibility"]
 accessibility = ["slint/accessibility"]
 
 [dependencies]
-eapp-loader = { path = "../eapp-loader" }
+ipod-machine = { path = "../ipod-machine" }
 
 # ── The file picker (docs/GUI.md §17 Q3, §11.4) ──────────────────────────────────────────────────
 #
