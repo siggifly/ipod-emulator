@@ -987,6 +987,39 @@ the boot-time queries — and drops twenty-five.
 "the wheel works if you do not press Select" — it is that the *reading* stops there, and the reading
 was the half that looked healthy.
 
+**The ISR, measured across the select-first script**, which narrows it further:
+
+| address | | arrivals |
+|---|---|---|
+| `0x00277128` | the CPU dispatcher body | **137 561** |
+| `0x002771dc` | `tst r5, #0x100` — is IRQ 40 pending? | **545** |
+| `0x002771e4` | `bl 0x281350` — the branch to the decoder | **2** |
+| `0x00281350` | the decoder | **2** |
+
+and from the model's own side of the same run:
+
+```
+27 frames posted (21 dropped unread), 5 word reads of DATA
+irq 40 asserted 6 times; CTRL 0x600a1f00 (receiver armed), STATUS 0x05000000
+5 acknowledged
+```
+
+**It is a self-limiting loop, and the numbers say which link is short.** `RX_READY` is
+write-1-to-clear, so a post while a frame is unread does not raise a new edge — 27 posts produce
+only **6** assertions. The firmware acknowledges **5** times, which is the only thing that lowers
+the line, so there are only five chances for a sixth edge. Every frame after that is dropped
+against a line nobody lowered.
+
+The 545 against 137 561 is not the anomaly it looks like: the dispatcher runs for every source and
+the hi-bank aggregate gate (`tst r4, #0x40000000`) is what admits 545 of them, most being the drive
+— research/06 records `IDE_DMA_IRQ_HI = 23` in the same bank. **The anomaly is 2 of 545**: on all
+but two of the passes that DO reach the hi-bank test, the wheel's bit 8 reads clear.
+
+So the question is no longer "does the interrupt reach the firmware" — it reaches it 545 times and
+the bit is not set. Either the assertion is not surviving to the moment the ISR samples it, or
+something clears it between. `STATUS` still reads `0x05000000` at the end of the run — bit 26 set,
+a frame waiting, unacknowledged — so the model believes the line is up when the run stops.
+
 **Where this points.** Something the Select does takes the firmware off the path that services
 IRQ 40. The obvious candidates are a task switch — the picker's own task exiting and its successor
 not arming the receiver — or a mode change in the driver. `CTRL` still reads `receiver armed` at the
