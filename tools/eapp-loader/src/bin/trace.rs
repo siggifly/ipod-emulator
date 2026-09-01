@@ -1030,8 +1030,17 @@ fn main() {
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(20_000)
                 .max(1);
+            // **Read here rather than taken from the machine**, because `--clock=` is applied
+            // further down and a script parsed before it would convert against the default. Same
+            // argument, same precedence, so the two cannot disagree.
+            let clock = args
+                .iter()
+                .find_map(|a| a.strip_prefix("--clock="))
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(|n| n.max(1))
+                .unwrap_or(eapp_loader::CLOCK as u64);
             if let Some(spec) = wheel_spec {
-                match eapp_loader::parse_wheel_script(spec, gap) {
+                match eapp_loader::parse_wheel_script(spec, gap, clock) {
                     Ok(steps) => w.script = steps,
                     // Refused rather than partially applied: a script that silently drops the step
                     // it could not parse would report a delta from a sequence nobody wrote.

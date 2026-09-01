@@ -9100,7 +9100,11 @@ pub const WHEEL_CLICKS_PER_ROTATION: u8 = 96;
 /// before anything runs, so the schedule the trace prints is byte-for-byte the schedule that
 /// executes — a script cannot mean one thing on paper and another on the machine. That is the whole
 /// reason this is a parser returning a list rather than an interpreter running beside the CPU.
-pub fn parse_wheel_script(spec: &str, click_instr: u64) -> Result<Vec<WheelStep>, String> {
+pub fn parse_wheel_script(
+    spec: &str,
+    click_instr: u64,
+    instr_per_usec: u64,
+) -> Result<Vec<WheelStep>, String> {
     /// Enough for a hundred full rotations; beyond that a script is a stress test, not a sequence,
     /// and would push the printed schedule past anything a run report can carry.
     const MAX_STEPS: usize = 16384;
@@ -9195,7 +9199,16 @@ pub fn parse_wheel_script(spec: &str, click_instr: u64) -> Result<Vec<WheelStep>
         // configured in instructions. In a time-anchored script it has to be the same unit as
         // everything else, or a rotation would land somewhere unrelated to where it was asked for.
         let click_instr = if in_usec {
-            (click_instr / CLOCK as u64).max(1)
+            // **The machine's clock, not the compile-time one.** This used to divide by `CLOCK`,
+            // the 75 that models the real part — which is right only when nothing overrode it.
+            // `--clock=5` is the documented research accelerant, and under it every click landed
+            // fifteen times closer together than asked for: `--wheel-click-instr`'s own comment
+            // promises "20000, which at --clock=5 is 4 ms per click, a brisk but human scroll",
+            // and 20000/75 gives 266 us instead of 4 ms. Measured consequence, on RetailOS at its
+            // language menu: 31 frames posted and **18 dropped unread**, because the firmware was
+            // handed a scroll no thumb could produce. The instrument was reporting the emulator's
+            // input as ignored when what it had actually done was flood it.
+            (click_instr / instr_per_usec.max(1)).max(1)
         } else {
             click_instr
         };

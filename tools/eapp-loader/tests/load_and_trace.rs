@@ -471,7 +471,7 @@ fn the_set_reporting_command_is_answered_with_silence_and_gates_the_stream() {
     let mut m = wheel_machine();
 
     // (3a) Reporting is off out of reset: an injected event is refused, not posted.
-    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@0:touch", 10).expect("script");
+    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@0:touch", 10, eapp_loader::CLOCK as u64).expect("script");
     m.mem.icount = 0;
     m.service_interrupts();
     {
@@ -511,7 +511,7 @@ fn the_set_reporting_command_is_answered_with_silence_and_gates_the_stream() {
 
     // (3b) The same script step, now that the wheel has been told to report.
     m.mem.clickwheel.as_mut().unwrap().script =
-        parse_wheel_script("@100:rotate=+1", 10).expect("script");
+        parse_wheel_script("@100:rotate=+1", 10, eapp_loader::CLOCK as u64).expect("script");
     m.mem.clickwheel.as_mut().unwrap().next = 0;
     m.mem.icount = 100;
     m.service_interrupts();
@@ -537,7 +537,7 @@ fn the_set_reporting_command_is_answered_with_silence_and_gates_the_stream() {
         "payload 0 did not turn reporting off"
     );
     m.mem.clickwheel.as_mut().unwrap().script =
-        parse_wheel_script("@200:rotate=+1", 10).expect("script");
+        parse_wheel_script("@200:rotate=+1", 10, eapp_loader::CLOCK as u64).expect("script");
     m.mem.clickwheel.as_mut().unwrap().next = 0;
     m.mem.icount = 200;
     m.service_interrupts();
@@ -587,7 +587,7 @@ fn a_scripted_rotation_posts_one_frame_per_click_and_wraps_at_96() {
     use eapp_loader::*;
     let mut m = wheel_machine();
     enable_reporting(&mut m);
-    let steps = parse_wheel_script("@100:touch,+50:rotate=+3,+50:release", 10).expect("script");
+    let steps = parse_wheel_script("@100:touch,+50:rotate=+3,+50:release", 10, eapp_loader::CLOCK as u64).expect("script");
     // touch, three clicks 10 apart, release 50 after the last of them.
     assert_eq!(steps.len(), 5);
     assert_eq!(
@@ -631,7 +631,7 @@ fn a_scripted_rotation_posts_one_frame_per_click_and_wraps_at_96() {
     let mut m = wheel_machine();
     enable_reporting(&mut m);
     m.mem.clickwheel.as_mut().unwrap().script =
-        parse_wheel_script("@0:rotate=-2", 10).expect("script");
+        parse_wheel_script("@0:rotate=-2", 10, eapp_loader::CLOCK as u64).expect("script");
     for n in (0..=20).step_by(10) {
         m.mem.icount = n;
         m.service_interrupts();
@@ -675,7 +675,7 @@ fn receive_ready_is_write_one_to_clear_and_the_line_follows_it() {
 
     // Disarm, and confirm a frame is not delivered at all.
     m.mem.write32(0x7000_c100, 0x0000_0000);
-    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@0:touch", 10).expect("script");
+    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@0:touch", 10, eapp_loader::CLOCK as u64).expect("script");
     m.mem.icount = 0;
     m.service_interrupts();
     assert_eq!(
@@ -692,7 +692,7 @@ fn receive_ready_is_write_one_to_clear_and_the_line_follows_it() {
 
     // 0x002813f0 / Rockbox's ISR tail: arm the receiver, then let the next step through.
     m.mem.write32(0x7000_c100, 0x6000_0000);
-    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@1:touch", 10).expect("script");
+    m.mem.clickwheel.as_mut().unwrap().script = parse_wheel_script("@1:touch", 10, eapp_loader::CLOCK as u64).expect("script");
     m.mem.clickwheel.as_mut().unwrap().next = 0;
     m.mem.icount = 1;
     m.service_interrupts();
@@ -739,7 +739,7 @@ fn engaging_hold_moves_both_the_frame_bit_and_the_gpio_line() {
     enable_reporting(&mut m);
     m.mem.write32(GPIOA_INPUT_VAL, GPIOA_HOLD); // hold off, as map_hardware leaves it
     m.mem.clickwheel.as_mut().unwrap().script =
-        parse_wheel_script("@0:touch,@10:hold,@20:unhold", 10).expect("script");
+        parse_wheel_script("@0:touch,@10:hold,@20:unhold", 10, eapp_loader::CLOCK as u64).expect("script");
 
     m.mem.icount = 0;
     m.service_interrupts();
@@ -781,7 +781,7 @@ fn engaging_hold_moves_both_the_frame_bit_and_the_gpio_line() {
 #[test]
 fn a_script_expands_to_the_steps_it_prints_and_a_bad_one_is_refused() {
     use eapp_loader::*;
-    let s = parse_wheel_script("@1000:press=select", 25).expect("script");
+    let s = parse_wheel_script("@1000:press=select", 25, eapp_loader::CLOCK as u64).expect("script");
     assert_eq!(s.len(), 2);
     assert_eq!(
         s[0],
@@ -794,7 +794,7 @@ fn a_script_expands_to_the_steps_it_prints_and_a_bad_one_is_refused() {
     assert_eq!(wheel_step_name(s[0].event), "down=select");
 
     // `+N` is relative to the previous step's *last* expanded click, so a sequence stays in order.
-    let s = parse_wheel_script("@0:rotate=+3,+5:touch", 10).expect("script");
+    let s = parse_wheel_script("@0:rotate=+3,+5:touch", 10, eapp_loader::CLOCK as u64).expect("script");
     assert_eq!(
         s.iter().map(|x| x.at).collect::<Vec<_>>(),
         vec![0, 10, 20, 25]
@@ -802,11 +802,11 @@ fn a_script_expands_to_the_steps_it_prints_and_a_bad_one_is_refused() {
 
     // Suffixes and separators, because instruction counts in this project are eight digits long.
     assert_eq!(
-        parse_wheel_script("@49_700k:touch", 1).unwrap()[0].at,
+        parse_wheel_script("@49_700k:touch", 1, eapp_loader::CLOCK as u64).unwrap()[0].at,
         49_700_000
     );
     assert_eq!(
-        parse_wheel_script("@50M:touch", 1).unwrap()[0].at,
+        parse_wheel_script("@50M:touch", 1, eapp_loader::CLOCK as u64).unwrap()[0].at,
         50_000_000
     );
 
@@ -819,7 +819,7 @@ fn a_script_expands_to_the_steps_it_prints_and_a_bad_one_is_refused() {
         "@50:rotate=0",
     ] {
         assert!(
-            parse_wheel_script(bad, 10).is_err(),
+            parse_wheel_script(bad, 10, eapp_loader::CLOCK as u64).is_err(),
             "{bad:?} should not parse"
         );
     }
@@ -2180,4 +2180,45 @@ fn initialize_device_parameters_moves_the_current_geometry() {
         sectors / (8 * 32),
         "and cylinders follow from them, or the drive describes a disk of another size"
     );
+}
+
+/// **A time-anchored rotate is spaced by the machine's clock, not by the compile-time one.**
+///
+/// `--wheel-click-instr`'s own documentation promises "20000, which at `--clock=5` is 4 ms per
+/// click — a brisk but human scroll". That promise is only kept if the conversion from instructions
+/// to microseconds uses the clock the run will actually have. It used to divide by `CLOCK`, the 75
+/// that models the real part, so every `--clock=5` run — the documented research configuration —
+/// scrolled fifteen times faster than it asked to.
+///
+/// **How to make it go red:** divide by `eapp_loader::CLOCK` instead of the parameter. The 4 ms
+/// assertion drops to 266 us, and the two clocks stop disagreeing in the test as they stopped
+/// disagreeing in the run — which is what let the bug sit behind a green suite.
+///
+/// The measured consequence is in the wheel model's own counters: at 266 us per click RetailOS was
+/// handed 31 frames and dropped 18 of them unread, which reads from the outside exactly like an
+/// emulator whose input is ignored.
+#[test]
+fn a_time_anchored_rotate_is_spaced_by_the_runs_own_clock() {
+    let gap_instr = 20_000u64;
+    for (clock, want_us) in [(5u64, 4_000u64), (75, 266), (1, 20_000)] {
+        let s = eapp_loader::parse_wheel_script("@10s:rotate=+3", gap_instr, clock).expect("script");
+        let at: Vec<u64> = s.iter().map(|x| x.at).collect();
+        assert!(s.iter().all(|x| x.in_usec), "a seconds script must stay in seconds");
+        assert_eq!(at[0], 10_000_000, "the anchor moved");
+        assert_eq!(
+            at[1] - at[0],
+            want_us,
+            "at --clock={clock} the clicks are {} us apart, not {want_us}",
+            at[1] - at[0]
+        );
+        assert_eq!(at[2] - at[1], want_us, "the spacing is not uniform");
+    }
+
+    // An instruction-anchored script converts nothing, whatever the clock — which is why every
+    // other test in this file was blind to the bug.
+    for clock in [5u64, 75, 1] {
+        let s = eapp_loader::parse_wheel_script("@1000:rotate=+2", gap_instr, clock).expect("script");
+        assert!(s.iter().all(|x| !x.in_usec));
+        assert_eq!(s[1].at - s[0].at, gap_instr, "instructions were rescaled");
+    }
 }
