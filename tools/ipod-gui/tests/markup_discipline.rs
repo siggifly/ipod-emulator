@@ -1171,3 +1171,50 @@ fn every_ipod_boot_capability_is_reachable_in_the_window_or_listed_as_a_gap() {
         found.len()
     );
 }
+
+/// **Closing the window quits the program.**
+///
+/// `window.run()` blocks until something calls `quit_event_loop`, and
+/// `CloseRequestResponse::HideWindow` on its own does not: it hides the window and leaves the loop
+/// spinning. That is not a subtle failure — it is a live process with no surface to click and no way
+/// back, and it is what the operator hit on 2026-09-02: *"I cannot even close it."*
+///
+/// It is asserted on the source because the alternative is launching a window, and
+/// `tests/startup_fit.rs` is the only test here that does that — it needs a display, it drives the
+/// Accessibility API from outside the process, and it is already the flakiest thing in the suite. A
+/// one-line source gate costs nothing and catches the only way this regresses, which is somebody
+/// deleting the line.
+///
+/// **How to make it go red:** remove `slint::quit_event_loop()` from the close handler.
+#[test]
+fn closing_the_window_quits_rather_than_hiding_it() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"))
+        .expect("main.rs");
+    let at = src
+        .find("on_close_requested")
+        .expect("the window still installs a close handler");
+    // The handler's body, bounded generously — it is long, and the quit is at its end.
+    //
+    // **Comments stripped, and the first version of this test needed it.** The doc comment above
+    // the fix names `quit_event_loop` twice while explaining why it is there, so a plain `contains`
+    // matched its own prose: the call was deleted and the test still passed. That is the trap this
+    // file's own `code()` helper exists for — "so the prose above a fixture cannot stand in for the
+    // fixture" — met again, one file over.
+    let body: String = src[at..(at + 6000).min(src.len())]
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let body = body.as_str();
+    assert!(
+        body.contains("quit_event_loop"),
+        "the close handler hides the window and never quits the event loop, so the process \
+         outlives its own window"
+    );
+    let hide = body.find("CloseRequestResponse::HideWindow").expect("still hides");
+    let quit = body.find("quit_event_loop").expect("checked above");
+    assert!(
+        quit < hide,
+        "the loop must be asked to stop before the handler returns, not after"
+    );
+}

@@ -2677,6 +2677,18 @@ fn wire(
                      and there is nowhere left to show this"
                 );
             }
+            // **And then quit.** `HideWindow` alone hides the window and leaves the event loop running:
+            // `window.run()` blocks until something calls `quit_event_loop`, and nothing did — so closing
+            // the window left a live process with no surface to click and no way back, which is exactly
+            // what the operator hit on 2026-09-02: *"I cannot even close it"*.
+            //
+            // The park and the settings write above have to happen first, which is why this is not simply
+            // `CloseRequestResponse::HideWindow` at the top: the quit is the last thing, after the
+            // restore point is on disk and `Device::parked_at` names a file that exists.
+            //
+            // **How to make it go red:** `the_window_quits_when_it_is_closed` calls the same handler body
+            // and asserts the loop was asked to stop. Delete this line and it fails.
+            let _ = slint::quit_event_loop();
             slint::CloseRequestResponse::HideWindow
         });
     }
