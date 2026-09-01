@@ -93,7 +93,11 @@ row() { printf '%-9s %-6s %-11s %-14s %-8s %s\n' "$1" "$2" "$3" "$4" "$5" "$6"; 
 
 pictures() { grep -c '^[0-9]' "$1/frames.tsv" 2>/dev/null || echo 0; }
 last_digest() { awk '/^[0-9]/{d=$NF} END{print d}' "$1/frames.tsv" 2>/dev/null; }
-last_nonblack() { awk '/^[0-9]/{n=$8} END{print n+0}' "$1/frames.tsv" 2>/dev/null; }
+# **$9, not $8.** The manifest gained a `first_usec` column when the assets were re-anchored in
+# simulated time, and every index after `first_instr` shifted by one. This read `held_instr` and
+# reported it as a pixel count — `last nonblack 2236000000` — which is obviously wrong to a person
+# and passed the `-gt 1000` test silently, so the verdict it fed was arrived at for the wrong reason.
+last_nonblack() { awk -F'\t' '/^[0-9]/{n=$9} END{print n+0}' "$1/frames.tsv" 2>/dev/null; }
 
 # One RetailOS boot. The route is decided by the ROM, not by the caller: a dump with Apple's own
 # build string runs Apple's bootloader; a synthesised one is entered through the firmware
@@ -103,25 +107,36 @@ boot_retailos() {                   # $1 nor  $2 gen  $3 label  $4 drive
   local out="$SCRATCH/os-$gen-$label" work="$SCRATCH/os-$gen-$label.img" route
   [ -n "$drive" ] || { row retailos "$gen" "$label" - BLOCKED "no drive for this generation"; return; }
   mkdir -p "$out"; cp "$drive" "$work"
+  # **The descent, not just the boot.** "RetailOS works" has to mean the wheel moves it, and a
+  # static picker proves only that something drew once. Anchored in simulated time because this
+  # machine halts — the picker draws at 73.2 s, measured off `--bcm-film`'s `first_usec` — and with
+  # `down=`/`up=` pairs because `press=` is one click long and a polling firmware cannot see it.
+  local head=",+150ms:down=select,+300ms:up=select,+150ms:release"
+  local w="@80s:touch$head"
+  w="$w,+1500ms:touch,+150ms:rotate=+8,+400ms:release"
+  w="$w,+1500ms:touch,+150ms:rotate=+8,+400ms:release"
+  w="$w,+1500ms:touch$head"
   if [ -n "$(fact "$nor" "Build")" ]; then
     route="Apple ROM"
-    FLASH="$nor" DISK="$work" BUDGET=1400000000 "$BIN" retail --clock=5 --clickwheel \
-      --enterlog=0x10000000 --bcm-film=0xE0000:140:F0:25000000:"$out" > "$out.log" 2>&1
+    FLASH="$nor" DISK="$work" BUDGET=2600000000 "$BIN" retail --clock=5 --clickwheel \
+      --wheel="$w" --enterlog=0x10000000 --bcm-film=0xE0000:140:F0:2000000:"$out" > "$out.log" 2>&1
   else
     route="from the drive"
-    "$TRACE" 1400000000 --osos-from-disk --boot-osos --flash="$nor" --disk="$work" \
+    "$TRACE" 2600000000 --osos-from-disk --boot-osos --flash="$nor" --disk="$work" \
       --disk-writable --sysinfo --bcm --pmu --nor --clock=5 --clickwheel \
-      --enterlog=0x10000000 --bcm-film=0xE0000:140:F0:25000000:"$out" > "$out.log" 2>&1
+      --wheel="$w" --enterlog=0x10000000 --bcm-film=0xE0000:140:F0:2000000:"$out" > "$out.log" 2>&1
   fi
   local hit pics nb
   hit=$(grep -oE '0x10000000 +unnamed +(x[0-9]+|NEVER REACHED)' "$out.log" | head -1 | awk '{print $3}')
   pics=$(pictures "$out"); nb=$(last_nonblack "$out")
   if [ "${hit:-NEVER}" = "NEVER" ]; then
     row retailos "$gen" "$label" "$route" FAIL "0x10000000 never reached, $pics pictures"
-  elif [ "${pics:-0}" -ge 3 ] && [ "${nb:-0}" -gt 1000 ] && [ "${nb:-0}" -ne 76800 ]; then
+  elif [ "${pics:-0}" -ge 7 ] && [ "${nb:-0}" -gt 1000 ] && [ "${nb:-0}" -ne 76800 ]; then
+    # More pictures than a boot alone produces (five), so the wheel moved it somewhere.
     row retailos "$gen" "$label" "$route" PASS "entered $hit, $pics pictures, last $(last_digest "$out")"
   else
-    row retailos "$gen" "$label" "$route" PARTIAL "entered $hit but $pics pictures, last nonblack $nb"
+    row retailos "$gen" "$label" "$route" PARTIAL \
+      "entered $hit, $pics pictures (a boot alone gives 5, so input changed nothing), last nonblack $nb"
   fi
 }
 
@@ -170,6 +185,49 @@ boot_rockbox() {                    # $1 nor  $2 gen  $3 label  $4 drive
   fi
 }
 
+# `doom` — Rockbox's plugin, reached by a SHORTCUT rather than a counted descent.
+#
+# **Rockbox accelerates the wheel**, and research/06 measured what that costs a script: two runs of
+# the same forward descent, 24 clicks and 18 clicks, landed on `Shortcuts` and on `Settings` — half
+# the clicks moved less than half as far. A fixed click count cannot target a menu item, and a
+# descent several menus deep multiplies the error.
+#
+# The design around it: `Shortcuts` is the LAST item of the main menu, so one small backward step
+# from `Files` wraps onto it — too short to accelerate, and where it lands does not depend on how
+# far it travelled. Same trick inside Doom's own menu: `Play Game` is index 4 of 6, so it is two
+# backward steps from `Game` rather than four forward ones.
+#
+# Needs a drive carrying `/.rockbox/doom/rockdoom.wad` (the wiki attachment, 285 048 B, 186 lumps),
+# an IWAD as `doom2.wad` (Freedoom 0.13.0 — Rockbox's own manual names it as the free substitute),
+# and `/.rockbox/shortcuts.txt`. Reported BLOCKED rather than FAIL when they are absent, because a
+# missing asset is not a failing emulator.
+boot_doom() {                       # $1 nor  $2 gen  $3 label  $4 drive
+  local nor="$1" gen="$2" label="$3" drive="$4"
+  local out="$SCRATCH/doom-$gen-$label" work="$SCRATCH/doom-$gen-$label.img"
+  local rb; rb="$(ls "$RES"/drives/*rockbox*.img 2>/dev/null | head -1)"
+  [ -n "$rb" ] || { row doom "$gen" "$label" - BLOCKED "no Rockbox drive in resources/drives"; return; }
+  local have; have="$("$BIN" fat "$rb" 2>/dev/null | grep -ciE "rockdoom|doom2\.wad|shortcuts\.txt")"
+  if [ "${have:-0}" -lt 3 ]; then
+    row doom "$gen" "$label" - BLOCKED "the drive has doom.rock but $have of 3 of rockdoom.wad/doom2.wad/shortcuts.txt"
+    return
+  fi
+  mkdir -p "$out"; cp "$rb" "$work"
+  # research/06, and every offset is a duration rather than a click count.
+  local w="@25s:touch,+600ms:rotate=-6,+2s:release"
+  w="$w,+1s:down=select,+300ms:up=select,+4s:down=select,+300ms:up=select"
+  w="$w,+50s:touch,+600ms:rotate=-6,+2s:release,+2s:touch,+600ms:rotate=-6,+2s:release"
+  w="$w,+2s:down=select,+300ms:up=select"
+  FLASH="$nor" DISK="$work" BUDGET=12000000000 "$BIN" rockbox --clock=5 --clickwheel \
+    --wheel="$w" --bcm-film=0xE0000:140:F0:2000000:"$out" > "$out.log" 2>&1
+  local pics fired; pics=$(pictures "$out")
+  fired=$(grep -oE "script: [0-9]+ of [0-9]+" "$out.log" | head -1)
+  if [ "${pics:-0}" -ge 8 ]; then
+    row doom "$gen" "$label" "shortcut" PASS "$pics pictures, $fired -> $out"
+  else
+    row doom "$gen" "$label" "shortcut" FAIL "$pics pictures, $fired"
+  fi
+}
+
 # ── one generation: build its drive, mint its ROM, run every target on both NOR sources ────────
 generation() {                      # $1 label  $2 model  $3 families  $4 seed  $5.. real dumps
   local gen="$1" model="$2" fams="$3" seed="$4"; shift 4
@@ -188,12 +246,14 @@ generation() {                      # $1 label  $2 model  $3 families  $4 seed  
     boot_retailos "$n" "$gen" real "$drive"
     boot_diag     "$n" "$gen" real "$drive"
     boot_rockbox  "$n" "$gen" real "$drive"
+    boot_doom     "$n" "$gen" real "$drive"
   done
   [ ${#} -eq 0 ] && row retailos "$gen" real - ABSENT "no real dump of this generation on this machine"
   if [ -n "$syn" ]; then
     boot_retailos "$syn" "$gen" synthetic "$drive"
     boot_diag     "$syn" "$gen" synthetic "$drive"
     boot_rockbox  "$syn" "$gen" synthetic "$drive"
+    boot_doom     "$syn" "$gen" synthetic "$drive"
   fi
   echo
 }
