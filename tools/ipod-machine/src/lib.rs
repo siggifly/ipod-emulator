@@ -9460,6 +9460,13 @@ impl Memory {
             }
             self.int_pending_hi |= 1 << OPTO_IRQ_HI;
         } else {
+            // Lowering it while a packet is still waiting is the case worth counting: the frame
+            // survives, but the only thing that would have told the firmware about it does not.
+            if self.int_pending_hi & (1 << OPTO_IRQ_HI) != 0
+                && w.status & ClickWheel::RX_READY != 0
+            {
+                w.line_dropped_waiting += 1;
+            }
             self.int_pending_hi &= !(1 << OPTO_IRQ_HI);
         }
         self.clickwheel = Some(w);

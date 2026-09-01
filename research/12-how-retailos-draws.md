@@ -1020,6 +1020,29 @@ the bit is not set. Either the assertion is not surviving to the moment the ISR 
 something clears it between. `STATUS` still reads `0x05000000` at the end of the run — bit 26 set,
 a frame waiting, unacknowledged — so the model believes the line is up when the run stops.
 
+**The model is not stealing the interrupt, and that is now measured rather than assumed.**
+
+The obvious suspicion, given six assertions and two sightings, was that the line was being withdrawn
+under a waiting frame: the level is `irq_enabled && RX_READY && ARM`, so a receiver disarmed between
+a post and the ISR would lower it — and nothing would raise it again, because a later post finds
+`RX_READY` already set and produces no edge. `ClickWheel::line_dropped_waiting` counts exactly that
+case, and on the select-first run it is **zero**.
+
+With that ruled out the numbers reconcile completely:
+
+```
+27 frames posted, 21 dropped unread, 5 word reads, 5 acknowledged, 6 assertions
+```
+
+Six assertions is five completed cycles — assert, read, acknowledge, line clears, next post asserts
+— plus one still pending when the run ends. The twenty-one dropped are frames posted while an
+earlier one was unread, which is what the hardware does too: `RX_READY` is write-1-to-clear and the
+receiver holds one packet.
+
+**So the wheel model is behaving correctly and RetailOS stops acknowledging after five.** That is a
+different sentence from the one this file has been able to write until now, and it moves the whole
+question out of the peripheral and into the firmware's own scheduling.
+
 **Where this points.** Something the Select does takes the firmware off the path that services
 IRQ 40. The obvious candidates are a task switch — the picker's own task exiting and its successor
 not arming the receiver — or a mode change in the driver. `CTRL` still reads `receiver armed` at the

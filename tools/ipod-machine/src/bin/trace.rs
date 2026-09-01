@@ -2276,11 +2276,22 @@ fn main() {
             // the read because reading `DATA` does not clear `RX_READY`. Posts far above acks means
             // every frame after the last one is being dropped against a line nobody lowered.
             println!(
-                "  {} acknowledged (`STATUS` bit 26 written), last at {}",
+                "  {} acknowledged (`STATUS` bit 26 written), last at {}{}",
                 w.acks,
                 match w.last_ack {
                     Some(n) => format!("@{n}"),
                     None => "never".into(),
+                },
+                // The line withdrawn under a waiting packet. Non-zero here means the firmware was never
+                // told about frames the model had already accepted, which is a different fault from a
+                // firmware that stopped listening.
+                if w.line_dropped_waiting > 0 {
+                    format!(
+                        "\n  ⚠ the interrupt line was lowered {} times WHILE A FRAME WAS WAITING",
+                        w.line_dropped_waiting
+                    )
+                } else {
+                    String::new()
                 }
             );
             println!("  script: {} of {} steps fired", w.next, w.script.len());

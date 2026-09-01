@@ -151,6 +151,18 @@ pub struct ClickWheel {
     pub acks: u64,
     /// When the last acknowledgement landed, in executed instructions.
     pub last_ack: Option<u64>,
+    /// Times the interrupt line was **lowered while a frame was still waiting**.
+    ///
+    /// The line is level, and the level is `irq_enabled && RX_READY && ARM`. So a frame can sit
+    /// unread with the line down, if the receiver was disarmed in between — and then nothing
+    /// raises it again, because a later post finds `RX_READY` already set and produces no edge.
+    /// The firmware never learns about the frame it was sent.
+    ///
+    /// **This separates two explanations that look identical from outside.** A run where the
+    /// firmware stops reading, and a run where the model withdrew the interrupt underneath it,
+    /// both end with frames posted and unread. Measured on RetailOS's language picker: 27 posted,
+    /// 6 assertions, 2 seen by Apple's ISR — this says which story the missing four belong to.
+    pub line_dropped_waiting: u64,
     /// Every frame posted, capped — the sequence is short by construction and its *order* is the
     /// thing worth reading back. `frames_posted` above is the census; this is the sample.
     pub log: Capped<(u64, u32)>,
@@ -286,6 +298,7 @@ impl ClickWheel {
             irqs: 0,
             acks: 0,
             last_ack: None,
+            line_dropped_waiting: 0,
             log: Capped::new(256),
         }
     }
