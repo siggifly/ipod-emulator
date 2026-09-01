@@ -951,3 +951,45 @@ uploaded scanlines into a surface nothing ever read back, and the only thing on 
 the *bootloader's* command interface had placed — which is why "0 frame updates" could sit next to
 75 267 lit pixels without contradiction. RetailOS's own compositing now reaches the glass. Why it
 draws the same picture after input it drew before is the next question, and it is above stage 4.
+
+
+### The leading Select is what stops RetailOS reading the wheel (2026-09-01)
+
+Four variables tested against the language picker, one at a time, everything else pinned — real
+retail ROM, a drive built from `iPod_20.1.3` in the same run, `--clock=5`, 2.6 G budget. Three of
+them change nothing and the fourth changes everything.
+
+| | frames posted | dropped unread | **word reads of `DATA`** |
+|---|---|---|---|
+| `touch, rotate, rotate, release` | 17 | 4 | **12** (and 12 acknowledged) |
+| `touch, SELECT, rotate, rotate, SELECT` | 31 | 25 | **5** |
+
+**Pressing Select on the language picker is what stops the firmware servicing the wheel.** Before it,
+RetailOS reads and acknowledges every frame it is given. After it, it reads five — three of which are
+the boot-time queries — and drops twenty-five.
+
+**What is NOT the variable**, each with its own run:
+
+- **Click spacing.** `--wheel-click-instr` at 20 000, 100 000 and 300 000 — 4 ms, 20 ms and 60 ms per
+  detent at this clock — give *identical* counts: 31 posted, 25 dropped, 5 read, the same five
+  pictures, the same digest. An earlier note here reasoned that the default floods the firmware; on
+  the select-first script it makes no difference at all.
+- **When the input arrives.** `@80s` (seconds after the picker draws at 73.2 s) and `@150s` are
+  identical to each other in every number. RetailOS is not "not ready yet".
+- **The second core.** `--cop-awake` against the default, same script: identical frames posted,
+  dropped, read, ATA commands, `bcm` frame updates, distinct pictures **and final digest**
+  (`0xc25f6a64ddfcf335`). This is worth stating plainly because it is measured *after* the
+  interrupt-wake fix and *after* the co-processor began compositing, which the earlier reading of it
+  could not claim: **the COP is irrelevant to RetailOS on this path.** It is not irrelevant to
+  Rockbox — see research/06, where waking it takes Doom from 3 982 ATA commands to zero.
+
+**Neither arm changes the panel.** Five distinct pictures in both, same digest. So this is not yet
+"the wheel works if you do not press Select" — it is that the *reading* stops there, and the reading
+was the half that looked healthy.
+
+**Where this points.** Something the Select does takes the firmware off the path that services
+IRQ 40. The obvious candidates are a task switch — the picker's own task exiting and its successor
+not arming the receiver — or a mode change in the driver. `CTRL` still reads `receiver armed` at the
+end of the run, so it is not a disarm this model can see. The next measurement is the ISR itself
+across the Select: `--enterlog` on `0x00277128` and `0x00281350` in both arms, counting arrivals
+before and after the button rather than over the whole run.

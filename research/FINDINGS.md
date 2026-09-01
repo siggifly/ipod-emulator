@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-853 headings across 17 documents — 37 dated, 14 settled, 14 retracted, 5 corrected.
+854 headings across 17 documents — 38 dated, 14 settled, 14 retracted, 5 corrected.
 
 ## Where each document stands today
 
@@ -28,7 +28,7 @@ above it in the same document may have been superseded.
 | [`09-what-the-hardware-must-supply.md`](09-what-the-hardware-must-supply.md) | GPIOL, and what it exposed — **RESOLVED 2026-08-14, and both halves below… | `2026-08-14` |  |
 | [`10-the-resource-image.md`](10-the-resource-image.md) | 8b. The audit this fix owed, run 2026-08-13 | `2026-08-13` |  |
 | [`11-the-videocore-runtime.md`](11-the-videocore-runtime.md) | *nothing in it is dated* | — | |
-| [`12-how-retailos-draws.md`](12-how-retailos-draws.md) | Opcode 3's payload, measured — and the flip implemented (2026-09-01) | `2026-09-01` |  |
+| [`12-how-retailos-draws.md`](12-how-retailos-draws.md) | The leading Select is what stops RetailOS reading the wheel (2026-09-01) | `2026-09-01` |  |
 | [`13-do-the-games-load.md`](13-do-the-games-load.md) | 2026-08-18: the built-ins are not eApps, and the framework surface is enu… | `2026-08-18` |  |
 | [`14-the-apple-logo.md`](14-the-apple-logo.md) | 9. Extracting it — 2026-08-19 | `2026-08-19` |  |
 | [`15-the-register-agreement-table.md`](15-the-register-agreement-table.md) | *nothing in it is dated* | — | |
@@ -178,7 +178,7 @@ and nothing dated replaced it.
 
 ### [`12-how-retailos-draws.md`](12-how-retailos-draws.md)
 
-27 headings, 7 of them marked or dated:
+28 headings, 8 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
@@ -189,6 +189,7 @@ and nothing dated replaced it.
 | 810 | 2026-09-01 |  | The input chain is complete, all of it — and the panel has nowhere to land (2026-09-0… |
 | 897 | 2026-09-01 |  | One instrument that lied, and it was the film (2026-09-01) |
 | 909 | 2026-09-01 |  | Opcode 3's payload, measured — and the flip implemented (2026-09-01) |
+| 956 | 2026-09-01 |  | The leading Select is what stops RetailOS reading the wheel (2026-09-01) |
 
 ### [`13-do-the-games-load.md`](13-do-the-games-load.md)
 
