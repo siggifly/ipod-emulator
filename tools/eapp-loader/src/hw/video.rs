@@ -54,6 +54,24 @@ pub struct Bcm {
     /// answer the RPC that follows. Off by default: with it off the co-processor is a memory and
     /// a protocol, which is what every published measurement was taken against.
     pub registry: bool,
+    /// A bounded sample of each opcode's payload, as `(opcode, bytes)`.
+    ///
+    /// **For deriving a layout that has never been measured.** research/12 §5's opcode table names
+    /// opcode 3 `element_add — handle, two points, four rects` and marks the DispmanX column
+    /// *proposed, not derived*; only opcode 8's argument and reply shape are forced. A model that
+    /// composites has to know which word is the resource handle, and the honest way to learn that
+    /// is to read the bytes the firmware sends rather than port the later chip's header and hope.
+    ///
+    /// Capped because it is a sample — `gencmd` below is the census.
+    pub payloads: Vec<(u32, Vec<u8>)>,
+    /// Surfaces the host asked us to allocate — `handle -> (address, width, height, pitch)`.
+    ///
+    /// Opcode 8 is `resource_create`: the host sends a descriptor whose address word is zero,
+    /// meaning *allocate*, and gets back a handle and a co-processor-side address. It then uploads
+    /// pixels straight to that address through the bus window — research/11 §4.2 measured exactly
+    /// that and named it "the write path is an RPC and an address, not an API symbol". Keeping the
+    /// geometry is what lets a later `show` find those pixels again.
+    pub surfaces: BTreeMap<u32, (u32, u32, u32, u32)>,
     /// Every GENCMD request the host sent, as `(opcode, payload length)`.
     pub gencmd: Vec<(u32, u32)>,
     /// Requests dropped because the header did not carry the magic, or the reply ring was full.
@@ -205,6 +223,8 @@ impl Bcm {
             blits_rejected: Capped::new(8),
             commands: Vec::new(),
             frames: 0,
+            payloads: Vec::new(),
+            surfaces: BTreeMap::new(),
             wr_phase_high: false,
             rd_phase_high: false,
         }
@@ -555,8 +575,30 @@ impl Bcm {
             }
             self.mem.insert(r + 0x10, nrd as u16);
             self.gencmd.push((op, len));
+            if self.payloads.len() < 48 {
+                self.payloads.push((op, pay.clone()));
+            }
             self.reply(op, seq, &pay);
         }
+    }
+
+    /// Put a surface on the panel — what "show this element" means when the compositor is one
+    /// function rather than a co-processor running `vmcs.bin`.
+    ///
+    /// RGB565 halfwords out of the internal address space, row by row at the surface's own pitch,
+    /// into the frame store — then published, so `0xE0000` keeps being "the panel" for every
+    /// instrument (research/12 §7).
+    fn show_surface(&mut self, addr: u32, w: u32, h: u32, pitch: u32) {
+        let (w, h) = (w.min(PANEL_W as u32), h.min(PANEL_H as u32));
+        for y in 0..h {
+            let row = addr + y * pitch;
+            for x in 0..w {
+                let px = self.mem.get(&(row + x * 2)).copied().unwrap_or(0);
+                self.panel[y as usize * PANEL_W + x as usize] = px;
+            }
+        }
+        self.frames += 1;
+        self.publish_panel();
     }
 
     /// Build the 16-byte header + 16-byte payload every caller reads back.
@@ -573,6 +615,22 @@ impl Bcm {
         let h = self.next_handle;
         self.next_handle += 1;
         m[0x10..0x14].copy_from_slice(&h.to_le_bytes());
+        // **Opcode 3 is the flip, and `+0x0c` is which surface.** research/12 §4 reads RetailOS's
+        // present as `upload the dirty scanlines -> FUN_00286b6c(back + 0x20) -> swap front and
+        // back`, and four consecutive payloads measured here say the same: `+0x0c` alternates
+        // **1, 2, 1, 2** while every other word holds still — the two handles the two
+        // `resource_create`s returned. Each call names the surface that is now the front one.
+        //
+        // Without it the panel showed only what the *bootloader's* command interface had placed —
+        // two frame updates for an entire boot — while every RetailOS redraw uploaded pixels into a
+        // surface nothing ever read back. That is why a booted menu would not redraw, and why
+        // Rockbox and the bootloaders were unaffected: neither uses this interface at all.
+        if op == 3 && pay.len() >= 0x10 {
+            let handle = u32::from_le_bytes(pay[0x0c..0x10].try_into().unwrap());
+            if let Some(&(addr, sw, sh, pitch)) = self.surfaces.get(&handle) {
+                self.show_surface(addr, sw, sh, pitch);
+            }
+        }
         if op == 8 && pay.len() >= 0x20 {
             // FUN_00286ca8's payload, from FUN_00286a1c's descriptor: +0x04 type (u8),
             // +0x08 width, +0x0c height, +0x10 pitch, +0x18 co-processor address (0 = allocate).
@@ -584,6 +642,10 @@ impl Bcm {
                 self.next_surface += (height.saturating_mul(pitch) + 0xfff) & !0xfff;
             }
             m[0x14..0x18].copy_from_slice(&addr.to_le_bytes());
+            // Measured, not assumed: a retail boot's descriptor reads +0x08 = 0x140 (320),
+            // +0x0c = 0xf0 (240), +0x10 = 0x280 (640 = 320 x 2, RGB565) — the layout this branch
+            // already documented, now confirmed against the bytes the firmware actually sends.
+            self.surfaces.insert(h, (addr, w(0x08), height, pitch));
         }
         // Append to the reply ring, if it fits. Dropping is visible; corrupting is not.
         let r = REG_BASE + REG_REC2;

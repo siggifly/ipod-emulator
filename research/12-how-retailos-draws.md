@@ -904,3 +904,50 @@ same, and only *then* is "the panel does not change" a measurement rather than a
 
 **Match the cadence to the event, not to the run.** A film sampled coarsely enough to be cheap over
 a 2.6 G budget is sampled far too coarsely to see anything a person does.
+
+
+### Opcode 3's payload, measured — and the flip implemented (2026-09-01)
+
+§5's table marks its DispmanX column *"proposed, not derived — only opcode 8's argument and reply
+shape force it"*. The payloads are now read rather than proposed. `--bcm` keeps a bounded sample of
+each opcode's bytes and `trace` prints them; four consecutive opcode-3 payloads from a retail boot:
+
+```
+opcode 0x03, 32 bytes, four consecutive calls
+  +0x00  00000000   display id — DISPMANX_ID_MAIN_LCD is 0
+  +0x04  ffffffce   -50, a layer (int32)
+  +0x08  00000000
+  +0x0c  00000001 / 00000002 / 00000001 / 00000002   <- ALTERNATES
+  +0x10  00000000
+  +0x14  00000000
+  +0x18  00f00140   320 | 240<<16, the rect as two u16
+  +0x1c  13e6acc4   an ARM-side pointer
+```
+
+**`+0x0c` alternates 1, 2, 1, 2 while every other word holds still.** Those are the handles the two
+`resource_create`s were answered with, so each call names which surface is now the front one — which
+is §4's `FUN_00286b6c(back + 0x20, …)` followed by `ctx->back <-> ctx->front`, seen from the bus.
+
+Opcode 8's descriptor is confirmed by the same method, against the layout that branch had already
+documented from the ARM side: `+0x08 = 0x140` (320), `+0x0c = 0xf0` (240), `+0x10 = 0x280`
+(640 = 320 × 2, RGB565).
+
+**The model now composites on opcode 3**: look `+0x0c` up in the surface table, copy that surface's
+RGB565 halfwords out of the internal address space at its own pitch into the frame store, publish.
+A/B, one variable, everything else pinned:
+
+| | frame updates | panel |
+|---|---|---|
+| composite off | 2 | the language picker |
+| composite on | **12** | **byte-identical** |
+
+**Identical is the right answer and it is the check that matters.** A wrong address, a wrong handle
+offset or a wrong pitch would have blacked or sheared the panel; ten extra publishes that leave it
+unchanged means the pixels being read are the pixels that were there. What it does *not* do is make
+anything new appear — RetailOS renders the same screen ten times.
+
+**So this is a path made correct, not a redraw made to happen.** Before it, every RetailOS present
+uploaded scanlines into a surface nothing ever read back, and the only thing on the panel was what
+the *bootloader's* command interface had placed — which is why "0 frame updates" could sit next to
+75 267 lit pixels without contradiction. RetailOS's own compositing now reaches the glass. Why it
+draws the same picture after input it drew before is the next question, and it is above stage 4.

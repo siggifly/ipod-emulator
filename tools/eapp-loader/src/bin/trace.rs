@@ -1818,6 +1818,29 @@ fn main() {
                 for (op, n) in by_op {
                     println!("  opcode {op:#04x}  x{n}");
                 }
+                // **The bytes, for the opcodes whose layout is proposed rather than derived.** research/12
+                // §5 marks its DispmanX column exactly that, and a model that composites has to know which
+                // word of opcode 3 is the resource handle. One sample of each is enough to read a layout;
+                // the census above is what says how often it happens.
+                // Up to four samples of each, because ONE sample cannot show which word varies — and
+                // which word varies is the whole question for a double-buffered flip.
+                let mut shown: Vec<u32> = Vec::new();
+                for (op, pay) in &b.payloads {
+                    if shown.iter().filter(|s| *s == op).count() >= 4 || pay.is_empty() {
+                        continue;
+                    }
+                    shown.push(*op);
+                    print!("  opcode {op:#04x} payload {} bytes:", pay.len());
+                    for (i, w) in pay.chunks(4).enumerate() {
+                        if i % 4 == 0 {
+                            print!("\n    +{:#06x} ", i * 4);
+                        }
+                        let mut b4 = [0u8; 4];
+                        b4[..w.len()].copy_from_slice(w);
+                        print!(" {:08x}", u32::from_le_bytes(b4));
+                    }
+                    println!();
+                }
             }
             println!("  address latches: {}", b.latch_log.census());
             for (kind, off, val, high) in b.latch_log.iter().take(12) {
