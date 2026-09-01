@@ -45,6 +45,7 @@ pub use hw::ata::{Ata, PpDmaCtl};
 pub use hw::cop::{Core};
 pub use hw::video::{Bcm, BcmOp};
 pub mod compose;
+pub mod doom;
 pub mod fat;
 pub mod film;
 pub mod firmware;
