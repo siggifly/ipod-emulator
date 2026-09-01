@@ -890,6 +890,59 @@ none of them.**
 consumes those 19 events?* One `--enterlog` on `0x00151a40`'s queue consumer answers it, and it is
 the only remaining live link between a working wheel and a blank screen.
 
+### ⚠️ Measured 2026-09-01 — the consumer runs, and the question moves one link downstream
+
+`--enterlog` on `0x00151a40` was the experiment this asked for. It was run, and **two claims above
+do not reproduce**:
+
+- *"the widget at `0x001ae214` receives none of them"* — it receives **x6**.
+- *who consumes the events* — `EventManager+0x58` at `0x00151a40` **is reached**, x2 with the input
+  at its default spacing and x4 once the spacing was corrected. It is not an unconsumed queue.
+
+The recipe, which matters because three earlier attempts at this measurement were invalid and each
+one failed differently:
+
+```
+ipod-boot retail --clock=5 --clickwheel --wheel-click-instr=300000
+  FLASH=<retail 5G dump>  DISK=resources/drives/ipod8g-retail.PRISTINE.img  BUDGET=2600000000
+  --wheel='@250s:touch,@255s:rotate=+6,@262s:rotate=+6,@269s:release'
+```
+
+- **`--clock=5` or nothing boots.** At the faithful 75 a 1.6 G budget is 21 s of simulated time and
+  the run ends inside the bootloader with `Bootloader could not execute target image!`, which reads
+  as a disk fault and is a timeout.
+- **The PRISTINE drive.** `my-5.5g.img`, built from an IPSW by the window's own `Make me one`, does
+  **not** boot: same `could not execute target image`. That is a real gap in the IPSW flow, not a
+  property of this measurement.
+- **Input after `@1.05 G`.** The language menu first draws there. Input before it is consumed and
+  discarded — measured: the poster fires 32 times at `@310 M` and nothing downstream moves, which
+  looks exactly like a working wheel driving a dead UI.
+
+**The chain is connected end to end and the panel still does not change.** Every stage, one run:
+
+| stage | count |
+|---|---|
+| frames posted by the model | 17 |
+| dropped unread | 4 |
+| `word reads of DATA` | **12** |
+| decoder `0x00281350` | **9** |
+| event posted `0x000cd6a0` | 4 |
+| `EventManager+0x58` `0x00151a40` | 4 |
+| distinct pictures on the panel | **4 — byte-identical to the no-input control** |
+
+**The signature to chase is a constant.** Posting 17, 29 or 45 frames gives `irq 40 asserted` **13**
+times and `12` word reads *every time*. The loop is post → IRQ → read `DATA` → ack `STATUS` bit 26 →
+line clears → post; it runs thirteen cycles and then the firmware stops acking. Reading `DATA` does
+not clear `RX_READY` — only the write-1-to-clear does — so once it stops, every later frame is
+dropped and no further interrupt edge exists. **What stops the firmware acking after the thirteenth
+is the question**, and it is a different one from "who consumes the events".
+
+**A note on why three attempts were wasted.** `parse_wheel_script` divided its click gap by the
+compile-time `CLOCK` rather than the run's own, so at `--clock=5` clicks landed 266 us apart instead
+of the 4 ms `--wheel-click-instr` documents — 16 of 29 frames dropped unread, and the instrument
+reported the firmware as ignoring input it had actually been flooded with. Fixed, with
+`a_time_anchored_rotate_is_spaced_by_the_runs_own_clock` holding it.
+
 ## 4 — The prototype ROM's power-off after a restored `aupd` · **bypass #12's open half**
 
 Retired on the retail ROM: `ipod-boot flash-update` reproduces the real thing end to end — boot 1 prints
