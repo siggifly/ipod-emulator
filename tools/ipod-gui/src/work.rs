@@ -715,13 +715,13 @@ impl Worker {
     /// §11.4's `Install…`, on a thread of its own — two downloads and two writes to a drive.
     pub fn spawn_install(
         src: PathBuf,
-        out: PathBuf,
+        dest: Destination,
         what: Software,
         cache: PathBuf,
         cancel: Arc<Cancel>,
     ) -> Result<Worker, std::io::Error> {
         Worker::start("ipod-install", cancel, move |tx, flag| {
-            install_run(src, out, what, cache, tx, flag)
+            install_run(src, dest, what, cache, tx, flag)
         })
     }
 
@@ -1181,7 +1181,7 @@ fn install(
 /// undoable by pointing the device back at it.
 fn install_run(
     src: PathBuf,
-    out: PathBuf,
+    dest: Destination,
     what: Software,
     cache: PathBuf,
     tx: &mpsc::Sender<Report>,
@@ -1235,6 +1235,7 @@ fn install_run(
         let _ = tx.send(Report::Cancelled { i: n, removed: None });
         return;
     }
+    let out = dest.write_to.clone();
     let _ = tx.send(Report::Started { i: n });
     let _ = tx.send(Report::Writing { i: n, path: out.clone(), meter: Meter::OnDisk });
     if let Err(said) = eapp_loader::install::install_os(&src, &got[0], &out) {
@@ -1260,6 +1261,33 @@ fn install_run(
         });
         return;
     }
+    // **The swap, and it is the last thing that happens.** Everything above wrote to a
+    // staging name; only now — with a complete drive carrying both the bootloader and the
+    // zip — does it take the place of the one it was made from. A crash anywhere before this
+    // line leaves the original drive exactly as it was, with a `.installing` file beside it.
+    let out = match dest.rename_to {
+        Some(finished) => {
+            if let Err(e) = std::fs::rename(&out, &finished) {
+                // The staged image is complete and on disk, so this is not a lost install —
+                // it is a finished install under the wrong name, which a person can act on.
+                // Say where it actually is.
+                let _ = tx.send(Report::Failed {
+                    i: n + 1,
+                    fault: Fault {
+                        class: Class::Permission,
+                        said: format!(
+                            "the drive is built but could not take the place of the one it \
+                             was made from: {e}. It is complete, at {}.",
+                            out.display()
+                        ),
+                    },
+                });
+                return;
+            }
+            finished
+        }
+        None => out,
+    };
     let allocated = std::fs::metadata(&out)
         .map(|m| settings::on_disk_size(&m))
         .unwrap_or(0);
@@ -1614,15 +1642,69 @@ impl Software {
         }
     }
 
-    /// What the finished drive is called, beside the one it was made from. The source is never
-    /// written to — `install_os` says so — so both images exist afterwards and this is what tells
-    /// them apart.
+    /// The software's own short name, to build a filename out of. **Not a filename by itself** —
+    /// every device in the library shares it, which is precisely the bug [`install_destination`]
+    /// exists in order not to have.
     pub fn image_stem(self) -> &'static str {
         match self {
             Software::Rockbox => "rockbox",
         }
     }
-}
+    }
+
+    /// Where an install puts the finished drive, and whether the drive it started from survives.
+    ///
+    /// **Two answers, because there are two kinds of drive and only one of them is ours to
+    /// replace.** A drive this program built from an IPSW is rebuildable and belongs to the
+    /// library, so installing onto it should leave the iPod with *one* drive — the way a real iPod
+    /// has one. A drive the person imported is theirs, possibly the only copy of an iPod they own,
+    /// and nothing here writes to it; that is the rule `work_on_copy` keeps at boot, applied at
+    /// install time.
+    ///
+    /// The answer this replaces was one name for both — `src.with_file_name("rockbox.img")` — and
+    /// it was wrong twice. It left a second multi-gigabyte image beside the first, for an iPod that
+    /// has one drive. And because `with_file_name` keeps the *directory*, every device in the
+    /// library resolved to the same `drives/rockbox.img`, so installing Rockbox on a second iPod
+    /// **silently destroyed the first one's installed drive** — nothing reported it, the second
+    /// write simply landed on the first. `two_ipods_do_not_install_over_each_other` holds it down.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Destination {
+        /// What `install_os` writes. Never `src`: that function refuses to edit a drive in place
+        /// and is right to, because a half-written image with the original already gone is the one
+        /// failure that has no recovery.
+        write_to: PathBuf,
+        /// Where it lands once the write is complete, when that is not where it was written.
+        /// `rename` inside one directory is atomic, so the drive is replaced by a *finished* image
+        /// or not at all.
+        rename_to: Option<PathBuf>,
+    }
+
+    /// Pick one. `ours` is `Disk::built_from.is_some()` — this program made it, so it can remake it.
+    fn install_destination(src: &Path, what: Software, ours: bool) -> Destination {
+        if ours {
+            // Beside the target rather than in a temp directory, so the rename cannot cross a
+            // filesystem: a `rename` that has to fall back to a copy is neither atomic nor free
+            // when the thing being copied is eight gigabytes.
+            let mut staging = src.as_os_str().to_owned();
+            staging.push(".installing");
+            Destination {
+                write_to: PathBuf::from(staging),
+                rename_to: Some(src.to_path_buf()),
+            }
+        } else {
+            // Theirs stays untouched and ours goes beside it, named after **the drive** it was
+            // made from. The software's name is shared by every device; the drive's is not, and
+            // that is the whole of the collision fix.
+            let stem = src
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "ipod".into());
+            Destination {
+                write_to: src.with_file_name(format!("{stem}-{}.img", what.image_stem())),
+                rename_to: None,
+            }
+        }
+    }
 
 /// One first run: its plan, its identity, its thread.
 #[derive(Debug)]
@@ -2086,12 +2168,13 @@ impl Queue {
                 ),
             ));
         }
-        let out = src.with_file_name(format!("{}.img", what.image_stem()));
-        self.source_installed = settings
-            .disks
-            .iter()
-            .find(|k| k.path == src)
-            .map(|k| k.installed.clone());
+        // **Whether this drive is ours to replace**, which is what decides where the install
+        // lands. `built_from` is `Some` for a drive built from an IPSW and `None` for one the
+        // person imported, and that is exactly the line between a drive the library may remake
+        // and a file it is only borrowing.
+        let entry = settings.disks.iter().find(|k| k.path == src);
+        let dest = install_destination(&src, what, entry.is_some_and(|k| k.built_from.is_some()));
+        self.source_installed = entry.map(|k| k.installed.clone());
 
         // Two fetches and two writes, as one plan. The Rail shows all four before any of them runs,
         // which is §10.1's rule: a person agrees to the whole thing or to none of it.
@@ -2116,7 +2199,7 @@ impl Queue {
         self.done = vec![false; steps.len()];
         self.steps = steps;
         let cancel = Cancel::new();
-        match Worker::spawn_install(src, out, what, self.cache.clone(), Arc::clone(&cancel)) {
+        match Worker::spawn_install(src, dest, what, self.cache.clone(), Arc::clone(&cancel)) {
             Ok(w) => {
                 self.worker = Some(w);
                 self.cancel = Some(cancel);
@@ -2460,7 +2543,16 @@ impl Queue {
                     .unwrap_or_else(|| vec![Os::Apple.label().to_string()]);
                 let adding = self.installing.map(|w| w.label().to_string());
                 if let Some(d) = settings.disks.iter_mut().find(|d| d.name == name) {
-                    d.built_from = self.installer.clone();
+                    // **Only when this run actually had an installer.** An `Install…` fetches a
+                    // bootloader and a zip, never an IPSW, so `installer` is None here — and assigning
+                    // it unconditionally would erase the provenance saying this drive is ours to
+                    // rewrite. Since the install now rewrites the drive in place, that is not a stale
+                    // label but a live one: the NEXT install reads `built_from` to decide whether it may
+                    // replace the file, so clearing it turns our own drive into one that has to be
+                    // treated as the person's and copied beside itself.
+                    if let Some(from) = self.installer.clone() {
+                        d.built_from = Some(from);
+                    }
                     for label in carried.into_iter().chain(adding) {
                         if !d.installed.contains(&label) {
                             d.installed.push(label);
@@ -3083,6 +3175,77 @@ mod tests {
     /// that press made. A hand-built image would prove `install_os` works, which its own tests
     /// already do.
     ///
+    /// **Installing on a second iPod used to destroy the first one's installed drive.**
+    ///
+    /// The destination was `src.with_file_name("rockbox.img")`, and `with_file_name` keeps the
+    /// *directory* — so every device in the library, whose drives all live in `drives/`, resolved
+    /// to the same `drives/rockbox.img`. Two iPods, one output path, no warning: the second
+    /// install simply landed on the first one's drive.
+    ///
+    /// **How to make it go red:** put the old line back and the first assertion fails with two
+    /// identical paths. It is asserted on the naming rather than through an install because the
+    /// install test below needs the network and is `#[ignore]`d — which is exactly how a data-loss
+    /// bug like this one survives in a suite that is otherwise green.
+    #[test]
+    fn two_ipods_do_not_install_over_each_other() {
+        let drives = std::path::Path::new("/library/drives");
+        let (a, b) = (drives.join("my-5.5g.img"), drives.join("black-5g.img"));
+        let (da, db) = (
+            install_destination(&a, Software::Rockbox, true),
+            install_destination(&b, Software::Rockbox, true),
+        );
+        assert_ne!(
+            da.write_to, db.write_to,
+            "two iPods install to one path, so the second overwrites the first"
+        );
+        // And each lands back on the drive it was made from: one iPod, one drive.
+        assert_eq!(da.rename_to.as_deref(), Some(a.as_path()));
+        assert_eq!(db.rename_to.as_deref(), Some(b.as_path()));
+    }
+
+    /// A drive this program built is **rewritten**, and the swap is atomic.
+    ///
+    /// Two properties, neither decoration. The staged name is not the source, because `install_os`
+    /// refuses to edit in place and is right to — a half-written image with the original already
+    /// gone is the one failure with no recovery. And it sits in the *same directory*, because
+    /// `rename` is atomic only within a filesystem; a staging file in a temp directory would
+    /// quietly become a copy, which for eight gigabytes is neither atomic nor free.
+    #[test]
+    fn our_own_drive_is_staged_beside_itself_and_then_swapped() {
+        let src = std::path::Path::new("/library/drives/my-5.5g.img");
+        let d = install_destination(src, Software::Rockbox, true);
+        assert_ne!(d.write_to, src, "install_os refuses to write to its own source");
+        assert_eq!(
+            d.write_to.parent(),
+            src.parent(),
+            "the staging file must share a filesystem with the drive it replaces"
+        );
+        assert_eq!(d.rename_to.as_deref(), Some(src));
+    }
+
+    /// A drive the person imported is **never written to** — `work_on_copy`'s rule at install time.
+    ///
+    /// It may be the only copy of an iPod somebody owns, and AGENTS.md §3 is unconditional about
+    /// that. So the install goes beside theirs under a name of ours, and nothing renames over the
+    /// original. The new name carries the *drive's* stem rather than the software's, so two
+    /// imported drives cannot collide with each other either.
+    #[test]
+    fn a_drive_the_person_imported_is_left_alone() {
+        let theirs = std::path::Path::new("/Volumes/backup/my real ipod.img");
+        let d = install_destination(theirs, Software::Rockbox, false);
+        assert_ne!(d.write_to, theirs, "an imported drive was written to");
+        assert_eq!(
+            d.rename_to, None,
+            "something renames over a file this program did not make"
+        );
+        let other = std::path::Path::new("/Volumes/backup/another.img");
+        assert_ne!(
+            install_destination(other, Software::Rockbox, false).write_to,
+            d.write_to,
+            "two imported drives install to one path"
+        );
+    }
+
     /// **It stops at a refusal, and that refusal is the point.** Composing the two presses found
     /// something neither alone could: a drive straight out of `Make me one` still carries Apple's
     /// flash updater, and the megabyte the updater occupies is exactly where a bootloader goes. So
