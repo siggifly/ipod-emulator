@@ -46,18 +46,22 @@ jobs:
           cargo --version
           rustc --version
 
-      # **Three crates, not four, and the reason is not laziness.** `ipod-gui`
+      # **Four crates, not five, and the reason is not laziness.** `ipod-gui`
       # depends on eframe with `glow`, `x11` and `wayland`, which need system GL
       # and display headers. The GitHub workflow installs them with `apt-get`;
       # this runner is a host executor with no root, so it cannot. Building the
       # window here fails for a reason that says nothing about the code.
       #
       # What is covered is where the emulator actually lives: the ARMv4T core,
-      # the machine and its peripherals and boot path, and the static inspector.
+      # the machine and its peripherals and boot path, the static inspector, and
+      # `docgen` — pure std, no dependencies, so none of the display problem
+      # applies. It is in the gate because its whole job is to fail when
+      # `research/FINDINGS.md` and the corpus disagree, and a generator nobody
+      # runs is exactly the drift it exists to prevent.
       # What is NOT covered is the window. That hole is real — state it, do not
       # let a green tick here be read as "the GUI builds".
       - name: Build the core crates
-        run: cargo build -p arm7tdmi -p ipod-machine -p eapp-inspect --all-targets
+        run: cargo build -p arm7tdmi -p ipod-machine -p eapp-inspect -p docgen --all-targets
 
       # **The count AND the clock.** This repository has been burned by a
       # suite that reported "275 passed" in 0.26 s without compiling
@@ -67,18 +71,22 @@ jobs:
         run: |
           set -o pipefail
           start=$(date +%s)
-          cargo test -p arm7tdmi -p ipod-machine -p eapp-inspect 2>&1 | tee /tmp/test.log
+          cargo test -p arm7tdmi -p ipod-machine -p eapp-inspect -p docgen 2>&1 | tee /tmp/test.log
           elapsed=$(( $(date +%s) - start ))
           passed=$(grep -oE 'test result: ok\. [0-9]+ passed' /tmp/test.log \
                    | awk '{s+=$4} END {print s+0}')
           echo "passed=$passed elapsed=${elapsed}s"
-          # **250, from a measured baseline of 294** — the three crates run
-          # 294 tests locally as of 2026-08-30. The floor sits below that with
+          # **420, from a measured baseline of 472** — re-measured 2026-09-01.
+          # The old pair here read 250 against 294 and the 294 was from
+          # 2026-08-30; the suite has since grown to 472, so the floor was 53% of
+          # the real count and could not have bitten. A floor is only a gate while
+          # somebody re-measures it, which is the same failure this repository
+          # keeps meeting in its instruments. The floor sits below the count with
           # room for a genuinely removed test, and far enough above zero that a
           # suite which silently stops collecting cannot pass. A floor picked by
           # guesswork is a gate that never bites; this one has a number behind it.
-          if [ "$passed" -lt 250 ]; then
-            echo "::error::only $passed tests ran; the baseline is 294"
+          if [ "$passed" -lt 420 ]; then
+            echo "::error::only $passed tests ran; the baseline is 472"
             exit 1
           fi
           if [ "$elapsed" -lt 5 ]; then

@@ -12,6 +12,7 @@ resolver = "2"
 members = [
     "tools/arm7tdmi",    # the ARMv4T interpreter core — no dependencies, no unsafe
     "tools/ipod-machine", # the machine: peripherals, the boot path, `trace` and `ipod-boot`
+    "tools/docgen",       # research/FINDINGS.md, generated from research/ and kept honest by a test
     "tools/eapp-inspect",# static inspection of eApp binaries
     "tools/ipod-gui",    # the window: a drawn iPod over the emulator
     "tools/ipg-player",  # one .ipg title in a window — the model with a toolkit on top, never inside

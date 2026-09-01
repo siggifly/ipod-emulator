@@ -1,0 +1,9 @@
+[package]
+name = "docgen"
+version = "0.5.0"
+edition = "2024"
+publish = false
+
+# No dependencies, like `arm7tdmi`. A generator that decides what the corpus says is a thing to be
+# able to read in one sitting, and a parser for a convention this small does not need a crate.
+[dependencies]
