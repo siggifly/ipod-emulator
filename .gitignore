@@ -21,6 +21,11 @@ resources/
 
 # Emulator run output — framebuffer dumps, profiles. Regenerable; never review-relevant.
 _out/
+# Local debugging artifacts — films, dumps, working drive copies. **4.6 GB on the machine this
+# line was added from**, and until now not ignored: `git add -A` would have swept the lot into a
+# commit, and an 8 GB drive image in a public repository's history cannot be taken back out.
+# `_out/` and `dist/` were already here; this one was missed because it is newer.
+_debug/
 
 # Per-agent cargo target dirs and audit scratch — regenerable, never review-relevant.
 .target-*/

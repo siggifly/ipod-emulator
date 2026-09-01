@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-852 headings across 17 documents — 36 dated, 14 settled, 14 retracted, 5 corrected.
+853 headings across 17 documents — 37 dated, 14 settled, 14 retracted, 5 corrected.
 
 ## Where each document stands today
 
@@ -22,7 +22,7 @@ above it in the same document may have been superseded.
 | [`03-rtxc-and-the-video-coprocessor.md`](03-rtxc-and-the-video-coprocessor.md) | *nothing in it is dated* | — | |
 | [`04-bypass-ledger.md`](04-bypass-ledger.md) | Caveat on the interrupt-wake fix (2026-08-31) — it stops the machine idli… | `2026-08-31` |  |
 | [`05-the-chip-inventory.md`](05-the-chip-inventory.md) | *nothing in it is dated* | — | |
-| [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md) | 2026-08-18, later still: the cold boot stops powering off, and starts sta… | `2026-08-18` |  |
+| [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md) | `--cop-awake` does not unblock Doom — it stops the machine entirely (2026… | `2026-09-01` |  |
 | [`07-the-flash-images.md`](07-the-flash-images.md) | *nothing in it is dated* | — | |
 | [`08-differential-register-map.md`](08-differential-register-map.md) | *nothing in it is dated* | — | |
 | [`09-what-the-hardware-must-supply.md`](09-what-the-hardware-must-supply.md) | GPIOL, and what it exposed — **RESOLVED 2026-08-14, and both halves below… | `2026-08-14` |  |
@@ -121,7 +121,7 @@ and nothing dated replaced it.
 
 ### [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md)
 
-65 headings, 8 of them marked or dated:
+66 headings, 9 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
@@ -133,6 +133,7 @@ and nothing dated replaced it.
 | 1300 | 2026-08-18 |  | 2026-08-18, later still: the menu's font was never on the volume the recipe mounts |
 | 1416 | 2026-08-18 |  | 2026-08-18: the yellow dashes are the gif encoder, and the raw frames say so |
 | 1499 | 2026-08-18 |  | 2026-08-18, later still: the cold boot stops powering off, and starts stalling |
+| 1908 | 2026-09-01 |  | `--cop-awake` does not unblock Doom — it stops the machine entirely (2026-09-01) |
 
 ### [`07-the-flash-images.md`](07-the-flash-images.md)
 

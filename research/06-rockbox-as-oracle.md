@@ -1903,3 +1903,43 @@ forward ones.
 
 Two runs of the forward descent landed on `Shortcuts` and on `Settings` with 24 and 18 clicks; this
 one lands where it means to every time, because nothing in it depends on a click-to-item ratio.
+
+
+### `--cop-awake` does not unblock Doom — it stops the machine entirely (2026-09-01)
+
+The section above reads `Doom past its load` as blocked on the absent second core, and *"the
+coprocessor is doing the work — it parked and was woken 18 554 times"* makes waking it the obvious
+next move. It was tried. It is worse than not helping.
+
+A Doom-ready drive was built for this: `/.rockbox/doom/rockdoom.wad` (285 048 B, the wiki
+attachment), `doom2.wad` (Freedoom 0.13.0's `freedoom2.wad`, 28 787 748 B) and
+`/.rockbox/shortcuts.txt`, all four files verified present on the volume. Same drive, same ROM, same
+wheel script — the shortcut wrap from §"Doom runs" — one variable:
+
+| | default | `--cop-awake` |
+|---|---|---|
+| bypasses live | 4 | **3** — the ablation landed |
+| `script: N of M` | 30 of 30 | 30 of 30 |
+| frames posted to the wheel | 30, 0 dropped | **0** |
+| ATA commands | **3 982** | **0** |
+| distinct pictures | 8 | **1** (black) |
+| instructions | 13.6 G | 14 G, all of it |
+
+**With the COP asleep Doom loads.** The wheel wraps onto `Shortcuts`, `DOOM` is selected, the plugin
+starts, and the panel holds `Loading…` — 3 982 ATA commands against the 4 023 this file records for
+that load, so it is genuinely reading its WADs. It does not finish.
+
+**With the COP awake nothing happens at all.** No disk, no wheel traffic, one black frame, and a
+full budget spent. That is not "Doom needs the other core and now has it"; it is a second
+interpreter that diverges before the firmware does anything observable.
+
+So the shape of this stays exactly as §"Doom stops in the same place" states it — *"a second
+interpreter over the same bus, with `CPU_CTRL`/`COP_CTRL` sleep and wake and the `0x60001000`
+mailbox doing real work. That is a feature, not a fix"* — and what is now measured is that the flag
+which exists today is not that feature. research/12 records `--cop-awake` leaving RetailOS's
+framebuffer byte-identical, which read as "harmless"; on a guest that actually dispatches to the
+second core it is not harmless, it is total.
+
+**What Doom is waiting for is therefore still unmeasured**, and the honest next step is to find out
+where it stops with the COP asleep rather than to keep toggling the flag: `--enterlog` on the
+core-lock spin this file already names at `0x00086300`, against a run that reaches `Loading…`.
