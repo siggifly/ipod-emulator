@@ -415,7 +415,7 @@ mod tests {
         let b = bcm_with(0x1000, &[0x0000; 8]);
         f.sample(&a, 0, 0);
         f.sample(&b, 1_000_000, 200_000);
-        f.sample(&a, 2_000_000);
+        f.sample(&a, 2_000_000, 400_000);
         assert_eq!(f.frames.len(), 3);
         assert_eq!(f.frames[2].repeat_of, Some(0));
         assert_eq!(f.frames[2].file, f.frames[0].file);
