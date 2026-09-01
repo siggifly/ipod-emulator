@@ -14,7 +14,7 @@ Or without a clone. The packages have to be named — the workspace root is a vi
 `cargo install` will not guess:
 
 ```sh
-cargo install --git https://github.com/siggifly/ipod-emulator ipod-gui eapp-loader eapp-inspect
+cargo install --git https://github.com/siggifly/ipod-emulator ipod-gui ipod-machine eapp-inspect
 ```
 
 `ipod-gui` is the crate; the binary it installs is `ipod-emulator`.
@@ -27,8 +27,8 @@ applies.
 | | |
 |---|---|
 | `tools/arm7tdmi` | the CPU |
-| `tools/eapp-loader` | the machine — memory map, peripherals, ATA, flash, the co-processor. Ships `ipod-boot`, `trace` and `ipod-film`. |
-| `tools/ipod-gui` | the window. Its peripheral map comes from `eapp_loader::map_hardware` rather than a copy of it. |
+| `tools/ipod-machine` | the machine — memory map, peripherals, ATA, flash, the co-processor. Ships `ipod-boot`, `trace` and `ipod-film`. |
+| `tools/ipod-gui` | the window. Its peripheral map comes from `ipod_machine::map_hardware` rather than a copy of it. |
 | `tools/eapp-inspect` | reading Apple's binaries |
 | `tools/ghidra` | the headless decompiler path |
 

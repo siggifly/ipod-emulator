@@ -136,7 +136,7 @@ the same discipline as R5, applied to the tool instead of to the machine.
 
 > **On `--clock=5` in the numbers below.** It is the research accelerant, not a default: 75 is the
 > real PP5021C, and 5 makes simulated time run fifteen times fast so the bootloader's delay loops
-> collapse. Every clock literal in the code is now [`eapp_loader::CLOCK`] and it is 75. The
+> collapse. Every clock literal in the code is now [`ipod_machine::CLOCK`] and it is 75. The
 > recorded commands here keep `--clock=5` because that is what produced the numbers next to them —
 > changing the command without re-running it would make the record wrong. Re-measuring the
 > baselines at the real clock is its own exercise, and the instruction counts will not survive it.
@@ -165,7 +165,7 @@ pp dma: 4 transfers, 201216 bytes                    bcm: 4 commands kicked, 2 f
 irqs: 221033 asserted, 108017 taken; usec 119999990
 ide irq: raised 1176, delivered 479, acked 496; enabled=1 pending=0
 unmapped: 4 reads, 0 writes across 1 pages           (0xea000078, first pc 0x000a0bd0)
-i2c: 3749 transfers                    cargo test --release: 66 in eapp-loader, 49 in ipod-gui
+i2c: 3749 transfers                    cargo test --release: 66 in ipod-machine, 49 in ipod-gui
 ```
 
 **No `cpu sleep:` line at all**, and `usec` is exactly `budget / clock`. At 600 M the machine never
@@ -182,11 +182,11 @@ pp dma: 4 transfers, 201216 bytes                    bcm: 4 commands kicked, 2 f
 ide irq: raised 1607, delivered 693, acked 713; enabled=0 pending=0
 unmapped: 4 reads, 0 writes across 1 pages
 bcm: 230572 halfwords written, 28 read, 177508 internal words held
-cargo test --release: 66 passed in eapp-loader, 49 in ipod-gui. **Build the whole workspace** —
+cargo test --release: 66 passed in ipod-machine, 49 in ipod-gui. **Build the whole workspace** —
 the GUI was broken on `main` for an hour because a merge verified only one crate.
 ```
 
-> *Four of eapp-loader's are the command interface's (item 0), and they assert that
+> *Four of ipod-machine's are the command interface's (item 0), and they assert that
 > `LCD_UPDATERECT` places the rectangle its header describes, that a header this model will not
 > honour changes nothing and says so, that `LCD_UPDATE` reads the buffer with no header, and that a
 > non-image command moves no pixels. Both totals re-counted on this tree — the whole workspace, not

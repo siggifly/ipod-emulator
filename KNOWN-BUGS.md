@@ -236,7 +236,7 @@ the first ATA command twenty-five times.
 click wheel for autonomous frames — reasoning that *"a machine asking for input is a machine that has
 finished starting"*. Cold-booting from Apple's own NOR, that command arrives from the **boot ROM**
 long before RetailOS is loaded: `--storeaddr=0x7000c120` puts it at `@2 211 983` from
-`pc = 0x4000e654`, 55 M instructions before the drive answers at all. `eapp-loader`'s snapshot code
+`pc = 0x4000e654`, 55 M instructions before the drive answers at all. `ipod-machine`'s snapshot code
 had said so in as many words — *"the firmware turns it on once with opcode `0x052a` **early in the
 boot**"*.
 

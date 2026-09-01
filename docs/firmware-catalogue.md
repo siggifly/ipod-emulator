@@ -41,7 +41,7 @@ Transcribed from [theapplewiki's Firmware/iPod page](https://theapplewiki.com/wi
 read through the MediaWiki API rather than the HTML, which sits behind a challenge page. `FamilyID`
 and `SHA-256` come from the files themselves.
 
-The machine-readable copy is [`tools/eapp-loader/src/firmware.rs`](../tools/eapp-loader/src/firmware.rs).
+The machine-readable copy is [`tools/ipod-machine/src/firmware.rs`](../tools/ipod-machine/src/firmware.rs).
 
 ## The table
 

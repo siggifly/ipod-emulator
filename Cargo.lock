@@ -1083,6 +1083,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "docgen"
+version = "0.5.0"
+
+[[package]]
 name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1143,13 +1147,6 @@ checksum = "edf234dd1594d6dd434a8fb8cada51ddbbc593e40e4a01556a0b31c62da2775b"
 [[package]]
 name = "eapp-inspect"
 version = "0.5.0"
-
-[[package]]
-name = "eapp-loader"
-version = "0.5.0"
-dependencies = [
- "arm7tdmi",
-]
 
 [[package]]
 name = "either"
@@ -2395,7 +2392,7 @@ name = "ipg-player"
 version = "0.5.0"
 dependencies = [
  "arm7tdmi",
- "eapp-loader",
+ "ipod-machine",
  "minifb",
 ]
 
@@ -2404,9 +2401,9 @@ name = "ipod-gui"
 version = "0.5.0"
 dependencies = [
  "arm7tdmi",
- "eapp-loader",
  "i-slint-backend-testing",
  "i-slint-backend-winit",
+ "ipod-machine",
  "libc",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -2414,6 +2411,13 @@ dependencies = [
  "slint",
  "slint-build",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ipod-machine"
+version = "0.5.0"
+dependencies = [
+ "arm7tdmi",
 ]
 
 [[package]]
