@@ -41,6 +41,20 @@ pub struct Frame {
     /// Instruction count at the first sample that saw it, and at the last.
     pub first_at: u64,
     pub last_at: u64,
+    /// **Simulated microseconds at the same two samples**, which is the anchor that survives.
+    ///
+    /// Instructions are the right unit for a *measurement* — reproducible, and unmoved by how
+    /// much the machine slept. They are the wrong unit for a *script that has to reach a screen*,
+    /// because how far a budget gets depends entirely on how much the machine halts, and that
+    /// changes with the machine: the interrupt-wake fix alone took a 3 G budget from 395 M
+    /// retired to 2.69 G. Every instruction-anchored asset in `ipod-film` was calibrated before
+    /// that and now fires zero of its steps.
+    ///
+    /// The firmware's own timers run on this clock, so a screen that appears 210 seconds into a
+    /// boot appears there whatever the host does. Recording it is what lets an asset be
+    /// re-anchored to something that will still be true next month.
+    pub first_usec: u64,
+    pub last_usec: u64,
     /// How many consecutive samples held it. `held_instructions` is this times the cadence.
     pub samples: u64,
     /// Non-black pixels, the same count `--bcm-dump` prints. Useful for exactly one thing: telling
@@ -132,7 +146,7 @@ impl Film {
     ///
     /// `at` is the machine's instruction count. Called between chunks of the run, so the cadence is
     /// the chunk size and a frame's time span is exact to that.
-    pub fn sample(&mut self, bcm: &crate::Bcm, at: u64) {
+    pub fn sample(&mut self, bcm: &crate::Bcm, at: u64, usec: u64) {
         if at < self.from {
             return;
         }
@@ -144,6 +158,7 @@ impl Film {
         if let Some(last) = self.frames.last_mut() {
             if last.digest == digest {
                 last.last_at = at;
+                last.last_usec = usec;
                 last.samples += 1;
                 return;
             }
@@ -171,6 +186,8 @@ impl Film {
             repeat_of,
             first_at: at,
             last_at: at,
+            first_usec: usec,
+            last_usec: usec,
             samples: 1,
             nonblack: px.iter().filter(|v| **v != 0).count() as u32,
             digest,
@@ -185,7 +202,7 @@ impl Film {
         let mut tsv = format!(
             "# film of {:#010x}, {}x{}, sampled every {} instructions\n\
              # {} samples collapsed to {} frames ({} distinct pictures)\n\
-             # index\tfile\trepeat_of\tfirst_instr\tlast_instr\tsamples\theld_instr\tnonblack\tdigest\n",
+             # index\tfile\trepeat_of\tfirst_instr\tfirst_usec\tlast_instr\tsamples\theld_instr\tnonblack\tdigest\n",
             self.base,
             self.w,
             self.h,
@@ -196,12 +213,13 @@ impl Film {
         );
         for f in &self.frames {
             tsv.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:#018x}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:#018x}\n",
                 f.index,
                 f.file,
                 f.repeat_of
                     .map_or_else(|| "-".to_string(), |i| i.to_string()),
                 f.first_at,
+                f.first_usec,
                 f.last_at,
                 f.samples,
                 f.samples * self.every,
@@ -372,7 +390,7 @@ mod tests {
         let mut f = Film::parse(&format!("0x1000:4:2:1M:{}", dir.display())).unwrap();
         let a = bcm_with(0x1000, &[0xffff; 8]);
         for i in 0..5 {
-            f.sample(&a, i * 1_000_000);
+            f.sample(&a, i * 1_000_000, i * 200_000);
         }
         assert_eq!(f.samples, 5);
         assert_eq!(f.frames.len(), 1, "five identical samples are one frame");
@@ -395,8 +413,8 @@ mod tests {
         let mut f = Film::parse(&format!("0x1000:4:2:1M:{}", dir.display())).unwrap();
         let a = bcm_with(0x1000, &[0xffff; 8]);
         let b = bcm_with(0x1000, &[0x0000; 8]);
-        f.sample(&a, 0);
-        f.sample(&b, 1_000_000);
+        f.sample(&a, 0, 0);
+        f.sample(&b, 1_000_000, 200_000);
         f.sample(&a, 2_000_000);
         assert_eq!(f.frames.len(), 3);
         assert_eq!(f.frames[2].repeat_of, Some(0));

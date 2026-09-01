@@ -467,18 +467,26 @@ fn asset(args: &[String]) -> Result<(), String> {
 
 /// The tour through Apple's service diagnostics, as one wheel script.
 ///
-/// **The holds are the whole calibration.** `diag`'s main loop is `read the button byte, sleep
-/// 150 ms`, and 150 ms is 11.25 M instructions at the real clock — so a press shorter than that
-/// falls between two polls and is never seen. `press=` expands to a down/up pair 20 000
-/// instructions apart, which is 0.27 ms, and using it here produced a run where the interrupt
-/// handler demonstrably recorded MENU and the firmware demonstrably ignored it. Every button below
-/// is therefore an explicit `down=`/`up=` pair **25 M apart**, with 35 M of quiet after it for the
-/// screen to settle.
+/// **The holds are the whole calibration, and they are now stated in the unit they mean.**
+/// `diag`'s main loop is `read the button byte, sleep 150 ms`, so a press shorter than that
+/// falls between two polls and is never seen. `press=` expands to a down/up pair one click
+/// apart, and using it here produced a run where the interrupt handler demonstrably recorded
+/// MENU and the firmware demonstrably ignored it. Every button below is an explicit
+/// `down=`/`up=` pair held **500 ms**, with 700 ms of quiet after it for the screen to settle.
+///
+/// These were `25M` and `35M` instructions, which is 333 ms and 467 ms **at the real clock and
+/// nothing like that at any other** — 5 s and 7 s at `--clock=5`. A duration written in
+/// instructions is a duration only for one clock, and every recipe here is run at a different
+/// one from the one it was calibrated against. `500ms` is 500 ms to the firmware always, which
+/// is the thing the 150 ms poll is being compared against.
+///
+/// **`@5s`**: diagnostics settles onto its boot screen at **3.2 s simulated**, measured with
+/// `--bcm-film`'s `first_usec` column.
 fn diag_tour() -> String {
     // One press: hold it across at least two of the firmware's polls, then let the screen settle.
-    let press = |b: &str| format!(",+35M:down={b},+25M:up={b}");
-    let scroll = ",+35M:rotate=+8";
-    let mut w = String::from("@200M:touch,+20M:down=menu,+25M:up=menu"); // -> the manual-test menu
+    let press = |b: &str| format!(",+700ms:down={b},+500ms:up={b}");
+    let scroll = ",+700ms:rotate=+8";
+    let mut w = String::from("@5s:touch,+300ms:down=menu,+500ms:up=menu"); // -> the manual-test menu
     w.push_str(scroll); // Memory -> IO
     w.push_str(&press("select")); // -> Comms / Wheel / Display / HeadphoneDetect / HardDrive
     w.push_str(scroll); // Comms -> Wheel
@@ -490,7 +498,7 @@ fn diag_tour() -> String {
     // `select` last: Key Test takes MENU as "exit" only once the other four are done, so pressing
     // the action key last is what leaves KEY PASS on screen instead of leaving the test.
     w.push_str(&press("select"));
-    w.push_str(",+60M:release");
+    w.push_str(",+1s:release");
     w
 }
 
@@ -530,13 +538,29 @@ fn do_diag(film: &Path, post: &Path) -> Result<(), String> {
 // The descent, as named pieces — one row per gesture, with quiet either side. NOT eight clicks
 // inside a longer burst: a continuous burst accelerates and the same count moves three rows.
 fn to_brick() -> String {
-    let head = "@1500M:touch,+2M:press=select,+5M:release";
-    let row = ",+60M:touch,+2M:rotate=+8,+5M:release";
-    let sel = ",+60M:touch,+2M:press=select,+5M:release";
+    // **Anchored in simulated time, and it has to be.** These were instruction counts — `@1500M`
+    // for the first Select — and on 2026-09-01 the whole descent fired **0 of 48 steps**: a 4 G
+    // budget retires 895 M instructions and reaches 800 s, because the machine spends its budget
+    // halted. How far a budget gets changes with the machine — the interrupt-wake fix alone took a
+    // 3 G budget from 395 M retired to 2.69 G — so an instruction anchor is a number calibrated
+    // against a machine that then moves out from under it. AGENTS.md §6 names this trap by its
+    // symptom, and research/12 records it happening to NEXT.md's recipe before this one.
+    //
+    // The firmware's own timers run on the simulated clock, so a screen that appears 73 seconds
+    // into a boot appears there whatever the host does.
+    //
+    // **`@80s`**: the language picker draws at **73.2 s simulated** — measured with `--bcm-film`'s
+    // `first_usec` column, on the retail ROM and a drive built from `iPod_20.1.3`.
+    //
+    // **`down=`/`up=` rather than `press=`**, for the reason `diag_tour` gives at length: `press=`
+    // expands to a down/up pair one click apart, and a firmware that polls cannot see it.
+    let head = "@80s:touch,+150ms:down=select,+300ms:up=select,+150ms:release";
+    let row = ",+1500ms:touch,+150ms:rotate=+8,+400ms:release";
+    let sel = ",+1500ms:touch,+150ms:down=select,+300ms:up=select,+150ms:release";
     let to_games = format!("{head}{row}{row}{row}{sel}{row}");
     format!(
-        "{to_games}{sel},+150M:touch,+2M:rotate=+8,+5M:release{row}{row}{row}{row}\
-         ,+100M:touch,+2M:press=select,+5M:release"
+        "{to_games}{sel},+3s:touch,+150ms:rotate=+8,+400ms:release{row}{row}{row}{row}\
+         ,+2s:touch,+150ms:down=select,+300ms:up=select,+150ms:release"
     )
 }
 

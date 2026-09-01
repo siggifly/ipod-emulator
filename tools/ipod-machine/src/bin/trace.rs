@@ -1480,7 +1480,7 @@ fn main() {
                 // Frame 0 is the machine as it stands before a single instruction of this run —
                 // for a restored machine that is the snapshot's screen, which is a real frame.
                 if let Some(b) = &m.mem.bcm {
-                    f.sample(b, m.executed as u64);
+                    f.sample(b, m.executed as u64, m.mem.usec as u64);
                 }
                 let chunk = (f.every as usize).max(1);
                 let mut left = boot_budget;
@@ -1496,7 +1496,7 @@ fn main() {
                     };
                     left -= n;
                     if let Some(b) = &m.mem.bcm {
-                        f.sample(b, m.executed as u64);
+                        f.sample(b, m.executed as u64, m.mem.usec as u64);
                     }
                     if !matches!(stop, Stop::BudgetExhausted) {
                         break;
