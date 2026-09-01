@@ -298,11 +298,54 @@ pub fn rom_facts(path: &Path) -> Vec<Fact> {
             out.push(("FireWire GUID", format!("{g:016X}")));
         }
     }
+    // **What this ROM is, and therefore which firmware belongs with it.**
+    //
+    // A drive already reports its `Updater family`; without the other half of that pair a
+    // person has to know from somewhere that 13 and 20 are the 5G's and 25 is the 5.5G's.
+    // `generation_mismatch` can only speak when both halves are readable, and the honest
+    // place to read this one is the ROM's own `Mod#` rather than a filename — which is what
+    // the matrix harness was doing, and it picked another model's firmware by doing it.
+    if let Some(cfg) = syscfg(&nor) {
+        if let Some(m) = cfg.model.as_deref().and_then(crate::identity::Model::lookup) {
+            out.push((
+                "Model",
+                format!("{} — a {}", m.apple_number(), m.generation.label()),
+            ));
+            let f = m.generation.updater_families();
+            if !f.is_empty() {
+                out.push((
+                    "Takes updater family",
+                    f.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(" or "),
+                ));
+            }
+            // `HwVr` states the generation a second time and independently. The two should
+            // agree; the field's own documentation says that if they ever do not, that is
+            // worth knowing rather than silently preferring one. So it is reported, not
+            // resolved.
+            let by_hwvr = match cfg.hw_vr {
+                Some(0x000B_0005) => Some(crate::models::Generation::Video1),
+                Some(0x000B_0010) => Some(crate::models::Generation::Video2),
+                _ => None,
+            };
+            if let Some(h) = by_hwvr {
+                if h != m.generation {
+                    out.push((
+                        "Disagrees with itself",
+                        format!(
+                            "Mod# says {}, HwVr says {} — one of the two is wrong",
+                            m.generation.label(),
+                            h.label()
+                        ),
+                    ));
+                }
+            }
+        }
+    }
     if let Some(b) = build_string(path) {
         out.push(("Build", b));
     }
     out
-}
+    }
 
 /// What a drive image turned out to contain.
 pub fn drive_facts(path: &Path) -> Vec<Fact> {
