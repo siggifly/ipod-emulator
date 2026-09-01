@@ -1526,11 +1526,24 @@ fn main() {
         // sleep, so zero sleeps across the trailing window means it was busy in a loop over code it
         // had already run — raise --stop-when-idle rather than conclude a call never returns.
         if matches!(stop, Stop::Idle) {
-            let win = m.executed as u64 - m.last_novel;
+            // **`checked_sub`, because these two counters can disagree and the wrap is a 20-digit
+            // lie.** Measured on `ipod-film asset gameplay`: the run stopped at 414 022 124 with
+            // `last_novel` at 1 329 078 684 — novelty recorded ahead of the instruction count — and
+            // the report printed `18446744072794495056 instructions since`, which is 2^64 minus the
+            // real gap. A number that large is obviously wrong to a person and invisible to a script,
+            // and the honest output is to say the counters disagree rather than to print either a
+            // wrapped value or a soothing zero.
+            let disagree = m.last_novel > m.executed as u64;
+            let win = (m.executed as u64).saturating_sub(m.last_novel);
             let naps = m.mem.sleeps - m.last_novel_sleeps;
             println!(
-                "     last new code @{}; {win} instructions since, {naps} CPU sleeps in them{}",
+                "     last new code @{}; {win} instructions since, {naps} CPU sleeps in them{}{}",
                 m.last_novel,
+                if disagree {
+                    "  <- COUNTERS DISAGREE: last-novel is ahead of executed, so this window is not real"
+                } else {
+                    ""
+                },
                 if naps == 0 {
                     "  <- BUSY, not blocked: raise --stop-when-idle"
                 } else {
