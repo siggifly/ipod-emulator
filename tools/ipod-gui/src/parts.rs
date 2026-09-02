@@ -214,6 +214,17 @@ pub enum RowAction {
     ShowBootScreen,
     /// §11.4's masked identity. Toggles; the label says what the press will do next.
     ShowIdentity,
+    /// **Start this iPod without resuming — discard its restore point first.**
+    ///
+    /// §12.4 gives a device three ways INTO a park and, until this, none out of it that a person
+    /// could find. The discard existed — on the Parts page, behind the Developer toggle, acting on
+    /// every parked device at once — which is a developer's tool wearing a person's job. The
+    /// operator's report was exactly that: *"there is no way to force a cold boot"*, on a window
+    /// that had opened onto a device parked a day earlier and would have resumed it forever.
+    ///
+    /// It is one device, from the row that device already draws, and it says what it costs: a cold
+    /// boot is about 75 seconds where a resume is three.
+    StartCold,
     /// Put Rockbox on this iPod's drive — `work::Queue::install`.
     ///
     /// **Handled in `main.rs` rather than in `devices::row_action`**, and that is not where the
@@ -224,7 +235,7 @@ pub enum RowAction {
 }
 
 impl RowAction {
-    pub const ALL: [RowAction; 9] = [
+    pub const ALL: [RowAction; 10] = [
         RowAction::Reveal,
         RowAction::CopyPath,
         RowAction::Remove,
@@ -237,6 +248,7 @@ impl RowAction {
         // new action anywhere but the end renumbers every one after it and a row starts sending a
         // different action than it draws.
         RowAction::InstallRockbox,
+        RowAction::StartCold,
     ];
 
     pub fn from_i32(n: i32) -> Option<RowAction> {
@@ -800,6 +812,8 @@ impl Parts {
             // never offers this; answering rather than panicking keeps a stray ordinal a no-op,
             // which is the rule the `from_i32` above already follows.
             RowAction::InstallRockbox => Ok(Wrote::Nothing),
+            // Routed by `devices::row_action`, which owns the library this changes.
+            RowAction::StartCold => Ok(Wrote::Nothing),
             RowAction::ShowIdentity => {
                 if let Some(o) = self.open.as_mut().filter(|o| o.id == id) {
                     o.identity_shown = !o.identity_shown;
@@ -1241,6 +1255,7 @@ impl RowAction {
             RowAction::ShowBootScreen => "Show its boot screen",
             RowAction::ShowIdentity => "Show",
             RowAction::InstallRockbox => "Install Rockbox",
+            RowAction::StartCold => "Start fresh",
         }
     }
 }

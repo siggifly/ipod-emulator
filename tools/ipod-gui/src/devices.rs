@@ -287,6 +287,26 @@ impl Devices {
             RowAction::Start => {
                 Err("Start is the bench's own control and does not act on the library".into())
             }
+            // **The files go with the timestamp.** `Settings::discard_park` clears the record and says
+            // so — *"deletes no files: the caller does that"* — and `Config::may_restore` asks the two
+            // files rather than the library, so clearing the record alone would leave a control that
+            // looked like it worked while the machine went on resuming.
+            RowAction::StartCold => {
+                let Some(d) = s.devices.iter().find(|x| x.name == name) else {
+                    return Err(format!("Start fresh: there is no iPod called {name}"));
+                };
+                if d.parked_at.is_none() {
+                    // **Named, because the page's own test requires it and the requirement is right**: a
+                    // refusal that does not say which control it came from is a sentence a person cannot
+                    // act on when three rows can each refuse.
+                    return Err(format!("Start fresh: {name} has no restore point to discard"));
+                }
+                for f in crate::restore_point_files(&name) {
+                    let _ = std::fs::remove_file(f);
+                }
+                s.discard_park(&name);
+                Ok(Wrote::Library)
+            }
             RowAction::Reveal
             | RowAction::CopyPath
             | RowAction::PowerOff
@@ -481,6 +501,7 @@ fn made_of(
     }
 
     out.push(device_act(RowAction::InstallRockbox, install_row(s, d, caps, machine)));
+    out.push(device_act(RowAction::StartCold, cold_row(d, machine)));
     out.push(device_act(RowAction::Edit, edit_row(s, d, caps, machine)));
     out.push(device_act(RowAction::Remove, remove_row(s, d, machine)));
     out
@@ -493,6 +514,44 @@ fn made_of(
 /// two downloads later. The order is the order they bite: a running machine first, because that is
 /// about this moment; then the drive, because there has to be something to install onto; then the
 /// updater, which is the one that surprises people.
+/// **Start without resuming**, offered only where there is something to not resume.
+///
+/// A device that was never parked already cold-boots, so the row would be a control that
+/// changes nothing — §16.3's anti-shuffle rule wants it PRESENT and refused rather than absent,
+/// because a row that comes and goes moves every row under it.
+fn cold_row(d: &Device, machine: Option<&str>) -> FixRow {
+    let refuse = |why: String, machine_rule: bool| FixRow {
+        label: "Start fresh".to_string(),
+        enabled: false,
+        reason: why,
+        escape: String::new(),
+        machine_rule,
+        presses: 1,
+        consequence: String::new(),
+    };
+    if let Some(m) = machine.filter(|m| *m == d.name) {
+        return refuse(running_rule(m), true);
+    }
+    if d.parked_at.is_none() {
+        return refuse(
+            format!("{} has no restore point, so it already starts cold.", d.name),
+            false,
+        );
+    }
+    FixRow {
+        label: "Start fresh".to_string(),
+        enabled: true,
+        reason: String::new(),
+        escape: String::new(),
+        machine_rule: false,
+        presses: 1,
+        // What it costs, because the whole point of a restore point is that it is faster —
+        // and short, because §9.4's slot is 324 px and the first draft measured 357.
+        consequence: "Discards the restore point. Next start is cold, about 75 s."
+            .to_string(),
+    }
+}
+
 fn install_row(s: &Settings, d: &Device, caps: Caps, machine: Option<&str>) -> FixRow {
     let refuse = |why: String, machine_rule: bool| FixRow {
         label: "Install Rockbox".to_string(),
@@ -1298,10 +1357,16 @@ mod tests {
                     p.open_row(&s, i, true);
                     let v = p.view(&s, &mut seen, caps, machine);
                     let acts = v.detail.iter().filter(|d| d.action.is_some()).count();
-                    // **Three, and it was two.** §11.4's `Install…` joined `Edit` and `Remove`
-                    // — and it is swept with them, which is the point of counting: a control
-                    // that draws a refusal has to have a reason under it whatever the caps.
-                    assert_eq!(acts, 3, "device {i} draws {acts} acts");
+                    // **Four, and it was three, and before that two.** §11.4's `Install…`
+                    // joined `Edit` and `Remove`, and `Start fresh` joined those — each swept
+                    // with the rest, which is the point of counting: a control that draws a
+                    // refusal has to have a reason under it whatever the caps.
+                    //
+                    // `Start fresh` earned its place from a report rather than a section: a
+                    // window opened onto a device parked a day earlier, and the only way to
+                    // not resume it was the Parts page behind the Developer toggle, acting
+                    // on every parked device at once.
+                    assert_eq!(acts, 4, "device {i} draws {acts} acts");
                     // **`Start` is swept with the other two.** It is the third control in the same
                     // body and the only one whose refusal `primitives.slint` would have drawn from
                     // a field this page does not own — see [`start_row`].
@@ -1336,11 +1401,11 @@ mod tests {
                 }
             }
         }
-        // Two capability arms, two machine states, four devices, FOUR controls — `Install…`
-        // joined `Edit`, `Remove` and `Start`. The floor sits **on** the population rather than
-        // under it, so a control that stops being emitted turns this red instead of quietly
-        // shrinking what the sweep reads. 2 x 2 x 4 x 4 = 64.
-        assert_eq!(checked, 64, "the sweep read {checked} controls");
+        // Two capability arms, two machine states, four devices, FIVE controls — `Start fresh`
+        // joined `Install…`, `Edit`, `Remove` and `Start`. The floor sits **on** the population
+        // rather than under it, so a control that stops being emitted turns this red instead of
+        // quietly shrinking what the sweep reads. 2 x 2 x 4 x 5 = 80.
+        assert_eq!(checked, 80, "the sweep read {checked} controls");
         assert!(
             refused > 0,
             "nothing was ever refused, so the disabled half of the sweep read nothing"
