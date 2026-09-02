@@ -43,3 +43,129 @@ RELEASING.md
 # `docs/GUI.md` is deliberately NOT here — the design of the window is about the program.
 AGENTS.md
 CLAUDE.md
+
+# ---------------------------------------------------------------------------------------------
+# Build trees and debug output, repo-wide. The per-project .gitignore files under recomps/ repeat
+# the rules that matter to them so each project stays self-contained; this is the safety net.
+# ---------------------------------------------------------------------------------------------
+
+# Cargo build trees — the root workspace, tools/*, and the recomps' pinned oracle emulators.
+target/
+**/target/
+
+# CMake / Meson / generic build trees (recomps/build, recomps/*/build-asan, build-cov,
+# build-recomp, build-regions, build-switch, ...).
+build/
+build-*/
+build_*/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+compile_commands.json
+.cache/
+.ninja_deps
+.ninja_log
+
+# Compiler and linker output that escapes a build tree.
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.dSYM/
+*.pdb
+*.ilk
+*.exp
+*.map
+
+# Nintendo Switch homebrew output (recomps/*/tools/switch-build.sh).
+*.nro
+*.nso
+*.nacp
+*.nsp
+*.elf
+
+# Coverage, profiling, and sanitizer output.
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
+coverage.info
+lcov.info
+*.lcov
+*.asan.*
+*.tsan.*
+*.ubsan.*
+*.msan.*
+
+# Crash dumps and core files.
+core
+core.*
+*.core
+*.crash
+*.stackdump
+
+# Logs and scratch traces.
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*.swp
+*.swo
+*~
+
+# Python bytecode, caches, and virtualenvs (recomps/*/tools, recomps/common, tools/*.py).
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Editor and OS noise.
+.vscode/
+.idea/
+*.code-workspace
+Thumbs.db
+Desktop.ini
+
+# The recompilation projects (Mini Golf, Lost, common) live outside this repository.
+recomps/
+
+# ---------------------------------------------------------------------------------------------
+# Apple's binaries, by name — a second fence behind `resources/`, for when one gets copied out of
+# it. Firmware bundles, RetailOS/bootloader images, NOR and IRAM dumps, disk images, the games,
+# and Ghidra projects built from any of them. tools/git-hooks/pre-commit checks content too.
+# ---------------------------------------------------------------------------------------------
+*.ipsw
+*.MSE
+*.mse
+Firmware-*
+[Oo][Ss][Oo][Ss]*
+*.osos
+*.aupd
+*.rsrc
+*.hibe
+vmcs*.bin
+internal_rom_*
+*.img
+*.dmg
+*.iso
+*.bin
+*.rom
+*.nor
+*.eapp
+*.gpr
+*.rep/

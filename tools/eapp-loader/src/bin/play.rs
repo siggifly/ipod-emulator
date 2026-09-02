@@ -480,7 +480,7 @@ fn main() {
         "--ctx-seed=", "--draws=", "--dump-mem=", "--dump-tex=", "--fast-until=", "--file-ops=",
         "--flags-addr=", "--fps=", "--frame-reason=", "--gamedir=", "--patch=", "--poke=",
         "--press-times=", "--pump-mark=", "--reason-offset=", "--scale=", "--script=",
-        "--watch-mem=", "--watch-pc=",
+        "--time=", "--watch-mem=", "--watch-pc=",
         "--wheel-sensitivity=", "--wheel-top=",
     ];
     let bad: Vec<&String> = args
@@ -584,6 +584,17 @@ fn main() {
         .find_map(|a| a.strip_prefix("--battery="))
         .and_then(|n| n.parse::<u8>().ok())
         .map(|n| n.min(100));
+    // --time=HH:MM reports that time of day instead of this machine's, so a recording is the
+    // same whatever minute it was made in (see `time_override`).
+    m.time_override = args.iter().find_map(|a| a.strip_prefix("--time=")).map(|v| {
+        let (h, m) = v
+            .split_once(':')
+            .unwrap_or_else(|| panic!("--time wants HH:MM, not {v}"));
+        let h: u8 = h.parse().unwrap_or_else(|e| panic!("--time: {e}"));
+        let m: u8 = m.parse().unwrap_or_else(|e| panic!("--time: {e}"));
+        assert!(h < 24 && m < 60, "--time wants HH:MM within the day, not {v}");
+        (h, m)
+    });
     m.set_stub("OpenGLES", 12, Stub::GlClear);
     m.set_stub("OpenGLES", 13, Stub::GlClearColor);
     m.set_stub("OpenGLES", 157, Stub::GlSwap);

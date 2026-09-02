@@ -1250,6 +1250,21 @@ struct Texture {
     /// replacing the fragment with it paints black, because that RGB is zero by definition — which
     /// is what turned Cubis 2's whole menu and Tetris's name-entry text into unreadable dark grey.
     alpha_only: bool,
+    /// The texture carries NO COLOUR OF ITS OWN — `GL_ALPHA`, `GL_LUMINANCE` or
+    /// `GL_LUMINANCE_ALPHA`. Its RGB is either nothing at all or a single grey ramp, so whatever
+    /// colour such a draw ends up in has to come from somewhere else: the vertex colour array,
+    /// or — when there is no array — the constant colour register.
+    ///
+    /// That is what this decides: whether the register is applied (`fill_triangle`, and the
+    /// `--modulate` note in `play.rs`). Cubis 2 is the measurement. Every cube on its board is
+    /// one 228x240 `GL_LUMINANCE_ALPHA` sheet of grey cube shapes (`classic/sheet-0-c.raw`,
+    /// a TGA under a `.raw` name) drawn with that cube's colour in the register, then a second,
+    /// mostly transparent sheet of white highlights (`-w.raw`) over it. With the register
+    /// ignored every cube on the board is grey. In the same frames the game draws
+    /// `logosml.ipd` — `GL_RGBA` 4444, a full-colour logo — with a stale `(0,1,0,1)` left in the
+    /// register, and applying it there turns the logo green. Same title, same screen, same
+    /// pipeline id: the texture's format is what separates them.
+    colourless: bool,
 }
 
 /// Which `mat4` helper a `Stub::GlMatrixOp` performs.
@@ -3532,6 +3547,11 @@ pub struct Machine {
     battery: Option<(u64, u8)>,
     /// Report this charge instead of the host's. For testing the gauge at a known level.
     pub battery_override: Option<u8>,
+    /// Report this hour and minute instead of the host's, with the seconds at zero and the date
+    /// still the host's — `--time=HH:MM`. A recording made without it carries the minute it was
+    /// made in, and a title that formats the clock into a string (Vortex's main menu) then
+    /// diverges from any replay by the *length* of that string, not just its digits.
+    pub time_override: Option<(u8, u8)>,
     /// Treat an async open whose request carries a buffer as a whole-file load.
     ///
     /// Off by default. Lost needs it — it hands `#3` a 512 KB buffer and never issues a read,
@@ -4007,6 +4027,7 @@ impl Machine {
             tz_offset: None,
             battery: None,
             battery_override: None,
+            time_override: None,
             mvp: None,
             modulate: [1.0; 4],
             next_texture_name: 0,
@@ -4613,7 +4634,7 @@ impl Machine {
                 "tex#{name} <- {} ({w}x{h}, .{ext})",
                 path.file_name().unwrap_or_default().to_string_lossy()
             ));
-            self.textures.insert(name, Texture { w, h, rgba, alpha_only: false });
+            self.textures.insert(name, Texture { w, h, rgba, alpha_only: false, colourless: false });
         }
         loaded
     }
@@ -4973,8 +4994,9 @@ impl Machine {
             w, h, opaque, w * h,
             px(0, 0), px(1, 1), w - 1, h - 1, px(w - 1, h - 1), px(w / 2, h / 2)
         ));
-        let alpha_only = false;
-        self.textures.insert(self.bound_texture, Texture { w, h, rgba, alpha_only });
+        // A palette is colour, whatever the index bytes look like.
+        let (alpha_only, colourless) = (false, false);
+        self.textures.insert(self.bound_texture, Texture { w, h, rgba, alpha_only, colourless });
     }
 
     /// `glTexSubImage2D(target, level, x, y, w, h, format, type, pixels)` — refill part of a
@@ -5047,8 +5069,8 @@ impl Machine {
             self.bound_texture
         ));
         // A framebuffer capture always carries real colour.
-        let alpha_only = false;
-        self.textures.insert(self.bound_texture, Texture { w, h, rgba, alpha_only });
+        let (alpha_only, colourless) = (false, false);
+        self.textures.insert(self.bound_texture, Texture { w, h, rgba, alpha_only, colourless });
     }
 
     /// `glTexImage2D` — an uncompressed upload.
@@ -5195,7 +5217,12 @@ impl Machine {
         // `GL_ALPHA` carries coverage and no colour, so the fragment must keep the colour it
         // already has. Cubis 2's menu font and Tetris's name-entry font are both this format.
         let alpha_only = format == GL_ALPHA;
-        self.textures.insert(self.bound_texture, Texture { w, h, rgba, alpha_only });
+        // ...and these three formats carry no colour at all, only coverage and/or a grey ramp,
+        // so a draw that samples one takes its colour from the constant register. See
+        // `Texture::colourless`.
+        let colourless =
+            matches!(format, GL_ALPHA | GL_LUMINANCE | GL_LUMINANCE_ALPHA);
+        self.textures.insert(self.bound_texture, Texture { w, h, rgba, alpha_only, colourless });
     }
 
     /// Read one attribute component as 16.16 fixed point, in pixels.
@@ -5527,9 +5554,10 @@ impl Machine {
                 // pause menu — as a translucent panel over the live course, and a rasteriser that
                 // only understands "skip or paint opaque" turns every one of those into a solid
                 // slab. `tex#5` carries texels at alpha 0x80, so the data is there to blend with.
-                // Whether the sampled texture supplies coverage only — decided inside the
-                // textured branch, needed by the colour-register block below.
-                let mut tex_alpha_only = false;
+                // Whether the sampled texture supplies no COLOUR of its own — coverage, or
+                // coverage and a grey ramp. Decided inside the textured branch; the colour
+                // register block below is what needs it. See `Texture::colourless`.
+                let mut tex_colourless = false;
                 let mut alpha: u8 = if textured {
                     255
                 } else {
@@ -5586,8 +5614,27 @@ impl Machine {
                     // and what the hardware effectively did. Alpha itself still filters normally,
                     // so edges keep their soft falloff.
                     // A 1:1 blit takes the nearest texel outright — see `one_to_one`.
+                    //
+                    // The comparison carries a TOLERANCE, and it is not a nicety. These games
+                    // draw a full-screen backdrop with its texture rectangle offset by exactly
+                    // half a texel — Cubis 2's is `pos [0..320] uv [0.5..320.5]` — so the sample
+                    // for every pixel lands *exactly* on the boundary between two texels and the
+                    // test above is a coin toss decided by the last bit of a barycentric
+                    // interpolation. Measured on that backdrop against the artwork it is drawn
+                    // from: a bare `>= 0.5` reproduces 57–75 % of the artist's pixels, the rest
+                    // coming from the neighbouring texel, scattered per pixel — which is what
+                    // made a 320x240 photographic background render as noise. With a tolerance
+                    // wider than the arithmetic's noise (~1e-6 texels) and far narrower than any
+                    // real offset, the same run reproduces 88–99 % of them, the remainder being
+                    // what the game legitimately draws on top.
+                    //
+                    // It also stops the picture depending on how a *compiler* rounds: the recomp
+                    // ports this rasteriser to C++, where clang contracts `a*b - c*d` into an FMA
+                    // by default and rustc does not, and the two therefore fall on opposite sides
+                    // of the tie (recomps/Cubis2/PLAN.md, progress log).
+                    const TIE: f32 = 0.5 - 1e-3;
                     let (dx, dy) = if one_to_one {
-                        (if dx >= 0.5 { 1.0 } else { 0.0 }, if dy >= 0.5 { 1.0 } else { 0.0 })
+                        (if dx >= TIE { 1.0 } else { 0.0 }, if dy >= TIE { 1.0 } else { 0.0 })
                     } else {
                         (dx, dy)
                     };
@@ -5612,9 +5659,9 @@ impl Machine {
                     // fragment keeps the colour it arrived with and only its alpha is combined.
                     // Sampling the RGB here instead paints black, because that RGB is zero by
                     // construction.
+                    tex_colourless = t.colourless;
                     if t.alpha_only {
                         // `rgb` already holds the interpolated vertex colour.
-                        tex_alpha_only = true;
                         if alpha < 8 && !self.ignore_colour_key {
                             continue;
                         }
@@ -5680,6 +5727,16 @@ impl Machine {
                 // not alpha-only, so its `[0.45 0.50 0.23 0.81]` register never reaches them, and
                 // Cubis 2's alpha font is drawn with a register of exactly [1,1,1,1].
                 //
+                // The same argument reaches one format further, and Cubis 2 is why it has to.
+                // A `GL_LUMINANCE_ALPHA` texture has no colour of its own either — one grey ramp
+                // is not a colour — so the register is equally the only thing that can be
+                // supplying one. Every cube on this game's board is such a sheet, drawn with the
+                // cube's colour in the register; with the register off the whole board is grey.
+                // What that widening does NOT touch is the colour formats: the same screens draw
+                // `GL_RGBA` art with a stale `(0,1,0,1)` in the register, which is where LOST's
+                // monochrome UI and The Sims Bowling's black alley came from, and those stay
+                // exactly as they were. `Texture::colourless` is the whole rule.
+                //
                 // — but only when the draw has no COLOUR ARRAY. GL ES 1.1 §2.7: an enabled
                 // `GL_COLOR_ARRAY` supplies the primary colour and the current colour set by
                 // `glColor4f` is not used at all. So the register is the ink only when nothing
@@ -5693,7 +5750,7 @@ impl Machine {
                     && self.arrays[2].is_some()
                     && std::env::var_os("EAPP_LEGACY_MODULATE").is_none();
                 if self.modulate != [1.0; 4]
-                    && (!self.no_modulate || (tex_alpha_only && !colour_array))
+                    && (!self.no_modulate || (tex_colourless && !colour_array))
                 {
                     for i in 0..3 {
                         rgb[i] = (rgb[i] as f32 * self.modulate[i]).round().clamp(0.0, 255.0) as u8;
@@ -7646,6 +7703,10 @@ impl Machine {
                                 .map(|d| d.as_secs() as i64)
                                 .unwrap_or(0);
                             let [y, mo, d, h, mi, se] = civil_from_unix(unix + off);
+                            let (h, mi, se) = match self.time_override {
+                                Some((hh, mm)) => (i64::from(hh), i64::from(mm), 0),
+                                None => (h, mi, se),
+                            };
                             let h12 = match h % 12 {
                                 0 => 12,
                                 n => n,
