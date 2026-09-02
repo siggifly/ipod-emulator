@@ -459,25 +459,6 @@ export component Bench inherits Rectangle {
     // dark value rather than a taste. It holds one device and nothing else, ever.
     // ── The way in (§4) ──────────────────────────────────────────────────────────────────────
     //
-    // **The drawer needs a control on the bench, and until now it had two — both on the shelf.**
-    // `MENU ›` and the whole write-target row opened it; `Control + \` was the only other route.
-    // So deleting the shelf without this first would have left the drawer reachable by keyboard
-    // alone, which is the same defect as a row drawn live over a page with no slot: a surface you
-    // can see and cannot get to.
-    //
-    // Top-trailing, over the well rather than inside it, so it survives the well being hidden at a
-    // window too short to draw the device — the one state where you most need a way out.
-    Act {
-        x: parent.width - root.drawer-inset - self.width - Metric.s3;
-        y: Metric.s3;
-        icon: "menu";
-        label: "Menu";
-        visible: !root.drawer-open;
-        activated => {
-            root.open-drawer();
-        }
-    }
-
     well := Rectangle {
         x: 0;
         y: 0;
@@ -977,6 +958,34 @@ export component Bench inherits Rectangle {
                 }
             }
 
+        }
+    }
+
+    // **Declared LAST, and that is the whole of it working.** Slint paints siblings in
+    // declaration order, so this sat FIRST and `well` — a full-area Rectangle at (0,0) covering
+    // exactly where this is positioned — painted straight over it. The comment below said *over
+    // the well*; the code put it under. The operator's report is the consequence: *"I cannot
+    // trigger sidebar with hamburger click"* — a control that was there, correct, and invisible.
+    //
+    // Last rather than merely after `well`, because `short` covers the same corner in the
+    // too-short state, which is the one state this control has to survive.
+    //
+    // **The drawer needs a control on the bench, and until the shelf went it had two.**
+    // `MENU ›` and the write-target row both opened it; `Control + \` was the only other route.
+    // Deleting the shelf without this would have left the drawer reachable by keyboard alone —
+    // the same defect as a row drawn over a page with no slot: a surface you can see and cannot
+    // get to. Which is what it became anyway, by z-order rather than by omission.
+    //
+    // Top-trailing, over the well rather than inside it, so it survives the well being hidden at
+    // a window too short to draw the device — the one state where you most need a way out.
+    Act {
+        x: parent.width - root.drawer-inset - self.width - Metric.s3;
+        y: Metric.s3;
+        icon: "menu";
+        label: "Menu";
+        visible: !root.drawer-open;
+        activated => {
+            root.open-drawer();
         }
     }
 }

@@ -1218,3 +1218,32 @@ fn closing_the_window_quits_rather_than_hiding_it() {
         "the loop must be asked to stop before the handler returns, not after"
     );
 }
+
+/// **The drawer's control on the bench paints above everything it sits over.**
+///
+/// Slint paints siblings in declaration order. The hamburger is positioned top-trailing *inside*
+/// `well`'s rectangle — `well` is a full-area element at (0,0) — so declaring it before `well` puts
+/// it underneath: drawn, correct, and invisible. It was, and the operator's report was the
+/// consequence: *"I cannot trigger sidebar with hamburger click."*
+///
+/// `short` covers the same corner in the too-short state, which is the one state the control's own
+/// comment says it has to survive, so "after `well`" is not enough — it has to be last.
+///
+/// **How to make it go red:** move the `Act` above `well := Rectangle`.
+#[test]
+fn the_drawer_control_is_declared_after_everything_it_overlaps() {
+    let src = ui("bench.slint");
+    let act = src
+        .find("icon: \"menu\";")
+        .expect("the bench still carries a hamburger");
+    for covering in ["well := Rectangle", "short := ShortPane", "shelf := Rectangle"] {
+        let at = src
+            .find(covering)
+            .unwrap_or_else(|| panic!("{covering} is gone; this test needs re-deriving"));
+        assert!(
+            at < act,
+            "`{covering}` is declared after the drawer's Act, so it paints over a control that \
+             has to be reachable"
+        );
+    }
+}
