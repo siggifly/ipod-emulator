@@ -540,6 +540,58 @@ ever — 93 of them when somebody counted. `DataDirGuard` takes its directory wi
 the outermost guard does, because the lock is re-entrant and a first cut of this deleted the tree
 halfway through the test that had set it up.
 
+## A wheel gesture makes RetailOS write through a null pointer and destroy its own IRQ vector — 2026-09-03
+
+**The menus stopped working on 2026-08-18 and nothing noticed for a fortnight**, because the failure
+is silent: the script fires every step, the report says `106 of 106 steps fired`, and the panel holds
+the language picker as though the input had simply been ignored.
+
+**What actually happens.** About 300 ms after the first gesture, at @419 981 874:
+
+```
+0x001472d4  str  r1, [r4, #0x0]     ->  wrote absolute 0x00000000
+0x001472e4  str  r2, [r4, #0x4]     ->  wrote absolute 0x00000004
+0x001472ec  str  r3, [r4, #0x8]     ->  wrote absolute 0x00000008
+0x001465d0  strb r1, [r0, #0x18]    ->  wrote absolute 0x00000018   <- the IRQ vector
+```
+
+Ordinary struct field stores. They land on the vector page because **`r0` and `r4` are null** — the
+offsets and the absolute addresses are the same numbers, which is the whole proof and needs no
+second run. `0x00000018` takes a **one-byte** `strb`, so the IRQ vector is left as three bytes of
+Apple's branch and one byte of somebody's boolean.
+
+The next interrupt therefore does not reach the handler. It branches into the boot ROM's own
+signature string — `0x00000024` is `"alpl"`, `0x44` is `"20AF"`, `0x50` is `"P07-"`, all of
+`portalplayer PP5020AF-07` — executes it as ARM, wanders to `0x0000000c`, and that IS the prefetch
+abort vector. RetailOS's exception reporter then runs forever: **1 686 726 console writes**, and the
+profile after the fault is **88 buckets** — 1.4 KB of code, all of it `printf`.
+
+So `5 word reads of DATA` was never a firmware that stopped listening. It is a firmware with no IRQ
+vector.
+
+**Bisected to `7e30c1f`** (*the clock stops inventing time*, 2026-08-18) over the 181 commits since
+the last known-good build, 9 steps. That commit is correct and is not reverted: before it a halted
+core teleported `usec` to the next due interrupt, one 4 G boot skipped 2 531 061 ms, and an
+untouched iPod powered itself off in seconds. What it changed is how much simulated time a unit of
+work buys, and something RetailOS reads after a gesture is null on the honest clock and was not on
+the free one.
+
+**What has been ruled out**, each with its own run: the instruction budget (90 s of simulated time
+costs 416 M instructions, and the descent was given 520 s), gesture pacing (30 s between gestures
+fails; the old build passes at 1.7 s), press duration (300 ms `down=`/`up=` pairs fail exactly as
+`press=` does), click spacing (4 ms and 100 ms give byte-identical counts), interrupt masking
+(`CPU_HI_INT_EN`/`DIS` are written 14 times, all during boot, none during the input window), and the
+`release` event (a script with no release at all wedges identically, after 12 reads).
+
+**What is not yet known is which lookup returns the null.** The two writers are `0x001472d0` and
+`0x001465c0`; neither is the caller that supplied the pointer. Note that `KNOWN-BUGS`' own
+5.5G-drive entry describes the same shape one layer up — a registry answering null by design, that
+null bound into an object, and the first call through it landing on a vector — so the two may share
+a cause.
+
+**Not reproducible without a wheel script.** A boot left alone never takes the path, which is why
+every fingerprint in `research/17` is still green and the boot matrix cannot see this.
+
 ## The iPod the first run makes says 30 GB and its drive is 8 GiB — 2026-08-21
 
 `work::plan`'s first step reads *5.5G, 30 GB, white, model A444* — the model table's own figures for
