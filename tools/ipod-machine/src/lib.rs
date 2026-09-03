@@ -3160,6 +3160,9 @@ pub enum Stop {
     Exited,
     /// `--stop-at` fired: the PC reached a requested address for the requested time.
     StopPoint(u32),
+    /// `--until=` — the simulated clock reached the requested microsecond. A run bounded in the
+    /// firmware's own units rather than in ours; see [`Machine::until_usec`].
+    TimeReached(u32),
 }
 
 /// Extra space mapped above the image for the game's BSS.
@@ -4102,6 +4105,22 @@ pub struct Machine {
     /// those collapse when the clock advances quicker. Timing-sensitive code can notice, so it is a
     /// knob rather than a new default.
     pub instr_per_usec: usize,
+    /// `--until=` — stop when the simulated clock reaches this microsecond. `None` runs the
+    /// instruction budget and nothing else.
+    ///
+    /// **An instruction budget is a number calibrated against a machine that then moves out from
+    /// under it, and this project has now paid for that twice.** `--wheel`'s anchors were
+    /// instruction counts until 2026-09-01, when `7e30c1f` changed what a halt costs and the whole
+    /// Brick descent fired 0 of 48 steps. The anchors were re-based on simulated time; **the
+    /// budgets were not**, and they are the same mistake in the same units. On 2026-09-03 a bisect
+    /// over the same regression landed on that commit again: the descent's script now fires 106 of
+    /// 106 and the run ends a third of the way through the firmware behaviour it used to cover,
+    /// because `BUDGET` buys about five times less simulated time than it did.
+    ///
+    /// What a firmware does is a function of ITS clock, so what a run covers should be stated in
+    /// that clock. `--until=200s` is 200 seconds of iPod at any `--clock`, on any future machine,
+    /// whatever changes underneath it. `BUDGET` remains, as the ceiling that stops a wedged run.
+    pub until_usec: Option<u32>,
     /// Loop iterations spent with the core halted, at the same cost as executing one.
     ///
     /// **The clock is a function of work done, and nothing invents time.** A halted core used to
@@ -4478,6 +4497,7 @@ impl Machine {
             call_at: 0,
             call_log_on: false,
             instr_per_usec: CLOCK,
+            until_usec: None,
             idle_steps: 0,
             idle_frac: 0,
             timer_next: [0; 2],
@@ -7058,6 +7078,16 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
             // past it. Rate-limited because it costs several memory accesses.
             if self.mem.usec_timer.is_some() && self.steps() & 0x3f == 0 {
                 self.service_interrupts();
+                // **Checked here rather than per step, and that is deliberate.** A machine with no
+                // `--until` pays one `Option` compare every 64 steps and nothing per instruction,
+                // so the interpreter this bounds is bit-for-bit the one that ran before it existed.
+                // Overshoot is at most 64 steps — under a microsecond at every clock this program
+                // offers, and far below the resolution of anything asking the question.
+                if let Some(u) = self.until_usec {
+                    if self.mem.usec >= u {
+                        return Stop::TimeReached(self.mem.usec);
+                    }
+                }
             }
             // **The other core's turn.** Interleaved rather than threaded: one interpreter, two
             // register files, a fixed quantum each. That makes a dual-core run as reproducible as
@@ -11410,6 +11440,47 @@ mod peek_tests {
             !m.mem.cpu_sleep,
             "a pending, enabled IRQ 40 must wake the core — it is what an interrupt is for"
         );
+    }
+
+    /// **A run can be bounded in the firmware's clock rather than in ours.**
+    ///
+    /// The instruction budget measures OUR work; every deadline the firmware waits on is stated in
+    /// ITS time, and the two stopped agreeing when `7e30c1f` changed what a halted core costs. A
+    /// budget calibrated before that buys about a fifth of the simulated time it used to, which is
+    /// how a descent that reached Solitaire in August stops on the language picker today.
+    ///
+    /// The arrangement is the one that matters: an instruction budget **far larger** than the run
+    /// needs, so `BudgetExhausted` cannot be what ends it and only the clock can.
+    ///
+    /// **How to make it go red**: delete the `until_usec` check from the loop in `run`, or move it
+    /// outside the `usec_timer.is_some()` guard it shares with `service_interrupts` — a machine
+    /// with no timer has no clock to reach, and answering `TimeReached` there would be inventing
+    /// one.
+    #[test]
+    fn a_run_can_be_bounded_by_the_simulated_clock_rather_than_the_budget() {
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        map_hardware(&mut m, false);
+        m.instr_per_usec = 5;
+
+        // Nothing set: the budget is the only bound, and a small one is spent in full.
+        assert_eq!(m.run(1_000), Stop::BudgetExhausted, "with no --until the budget ends the run");
+
+        let before = m.mem.usec;
+        m.until_usec = Some(before + 400);
+        // 400 µs at 5 instructions each is 2 000 steps; the budget is fifty times that, so a run
+        // that ends on the budget here would mean the clock bound never fired.
+        match m.run(100_000) {
+            Stop::TimeReached(at) => {
+                assert!(at >= before + 400, "stopped at {at} µs, before the {} µs asked for", before + 400);
+                // The check runs every 64 steps, so the overshoot is bounded by that and not by
+                // the budget. Stated as a number because "close enough" is not a test.
+                assert!(
+                    at < before + 400 + 64,
+                    "overshot to {at} µs — the check is meant to be at most 64 steps late"
+                );
+            }
+            other => panic!("expected TimeReached, got {other:?}"),
+        }
     }
 
     #[test]

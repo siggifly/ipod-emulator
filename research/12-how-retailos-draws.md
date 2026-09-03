@@ -1049,3 +1049,57 @@ not arming the receiver — or a mode change in the driver. `CTRL` still reads `
 end of the run, so it is not a disarm this model can see. The next measurement is the ISR itself
 across the Select: `--enterlog` on `0x00277128` and `0x00281350` in both arms, counting arrivals
 before and after the button rather than over the whole run.
+
+### RETRACTED — everything above about the wheel is a measurement of a regression (2026-09-03)
+
+**RetailOS reads the wheel, moves its selection and draws the result. It did so on 2026-08-18, and
+the code that stopped it is bisected to one commit.** Every conclusion in this file dated 2026-09-01
+— *"the leading Select is what stops RetailOS reading the wheel"*, *"RetailOS stops acknowledging
+after five"*, and the §"So #40 is misnamed" reading that *"the next work is on the co-processor, not
+the wheel"* — was measured on a machine that had already broken, against no known-good control.
+
+**The control that settles it.** `957d990` is the commit that last regenerated the Brick media.
+Built it, ran **the same ROM, the same drive, the same script** — `post-assets.sh`'s own
+instruction-anchored `TO_BRICK`, unmodified:
+
+| build | frames posted | dropped unread | **word reads of `DATA`** | simulated time reached |
+|---|---|---|---|---|
+| `957d990` (2026-08-18) | 109 | **0** | **109** | 2 473 s |
+| `bfe5ff3` (today) | 109 | 103 | **5** | 397 s |
+
+and the 08-18 arm's final panel is **Solitaire, dealt and drawn** — Language → main menu → Extras →
+Games → a game, every step of it by wheel input, through the co-processor this file had just
+finished blaming. 
+
+**`git bisect run`, 9 steps over the 181 commits between them**, testing *does the firmware read at
+least 50 of the frames it is given*:
+
+```
+first bad commit: 7e30c1f  the clock stops inventing time: a halted core costs what a running one does
+```
+
+**It is a correct fix and it must not be reverted.** Before it, `CPU_CTRL`'s sleep bit teleported
+`usec` to the next due interrupt, so idle was free: one 4 G boot skipped 2 531 061 ms and an
+untouched iPod powered itself off in seconds. What it changed is not the wheel and not the display —
+it is the machine's **time economy**. A halt now costs a cycle, so a fixed instruction budget buys
+roughly five times less simulated time than it did, and everything calibrated against the old
+economy — every budget in `research/`, every recipe, every film — silently began measuring a
+shorter run than its author intended.
+
+**The control that proves the wheel model is not at fault, at HEAD, today**: Apple's own diagnostics,
+same NOR, driven by `diag_tour` — **36 frames posted, 0 dropped, 72 word reads**, all five keys
+registered, and the panel ends on **KEY PASS**. The hardware's own certification of the wheel passes
+on the build where RetailOS reads 5 of 109. `diag` polls every 150 ms across a 15 s tour and never
+needs the machine to idle; RetailOS's RTXC scheduler does.
+
+**What this file's 2026-09-01 numbers actually are**: honest readings of a starved run. 545 passes
+through the hi-bank test with the bit set twice, 2 arrivals at the decoder, 5 acknowledgements — all
+reproducible, all consequences of a machine that covers a fraction of the firmware behaviour the
+same budget used to cover. The `ClickWheel::line_dropped_waiting` counter added that day measured
+**0** and that remains true and remains useful: the model is not withdrawing the line.
+
+**The methodological failure is the one AGENTS.md §5 and NEXT.md R4 both name**, and it cost two
+sessions: a conclusion about a subsystem was drawn from a machine that had changed underneath it,
+with no arm from a build known to work. R4 says every change to the *machine* re-runs the
+conclusions the old one produced. This change had a stated, measured side effect on the clock, and
+nothing re-ran the wheel against it.

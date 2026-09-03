@@ -1281,6 +1281,47 @@ fn main() {
                 println!("  clock {n} instructions per simulated microsecond");
             }
         }
+        // --until=NNNs | NNNms | NNNus : run until the SIMULATED clock reaches this, rather than
+        // until an instruction budget runs out. See `Machine::until_usec` for why this exists;
+        // the short version is that `BUDGET` measures our work and the firmware measures its own
+        // time, and every recipe in this repository was calibrated in the wrong one of those.
+        //
+        // The same three suffixes `--wheel`'s anchors take, parsed the same way, because a person
+        // writing `--until=200s --wheel=@80s:touch` is naming one clock twice and the two must not
+        // disagree about what a second is.
+        if let Some(spec) = args.iter().find_map(|a| a.strip_prefix("--until=")) {
+            let parsed = if let Some(d) = spec.strip_suffix("ms") {
+                d.parse::<u64>().ok().map(|v| v * 1_000)
+            } else if let Some(d) = spec.strip_suffix("us") {
+                d.parse::<u64>().ok()
+            } else if let Some(d) = spec.strip_suffix('s') {
+                d.parse::<u64>().ok().map(|v| v * 1_000_000)
+            } else {
+                None
+            };
+            match parsed {
+                // `usec` is a `u32`, so the ceiling is about 4 295 s of simulated time. Refusing
+                // above it is the point: silently wrapping would stop the run instantly and read
+                // as "the machine reached 4 000 seconds in no instructions at all".
+                Some(us) if us <= u32::MAX as u64 => {
+                    m.until_usec = Some(us as u32);
+                    println!("  until {} s of simulated time", us as f64 / 1e6);
+                }
+                Some(us) => {
+                    eprintln!(
+                        "--until={spec} is {} s; the simulated clock is a u32 of microseconds and \
+                         stops at {} s",
+                        us as f64 / 1e6,
+                        u32::MAX as f64 / 1e6
+                    );
+                    std::process::exit(2);
+                }
+                None => {
+                    eprintln!("--until={spec} — expected a number with `s`, `ms` or `us`");
+                    std::process::exit(2);
+                }
+            }
+        }
         // --snapshot=N:FILE : run N instructions, then write the whole machine to FILE.
         // --restore=FILE     : start from a saved machine instead of from reset.
         let snap_spec = args.iter().find_map(|a| a.strip_prefix("--snapshot="));
