@@ -28,10 +28,44 @@ answers, the port is up, and every query returns nothing at all.
 ## Setup
 
 ```sh
-brew install ghidra                                  # 12.1.2 at time of writing
-git clone https://github.com/bethington/ghidra-mcp    # Apache-2.0
-cd ghidra-mcp && mvn package                          # builds target/GhidraMCP-7.0.0.jar
+brew install ghidra                                  # 12.1.3 at time of writing
+git clone https://github.com/bethington/ghidra-mcp    # Apache-2.0, into resources/vendor/
+JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home \
+GHIDRA_INSTALL_DIR=/opt/homebrew/Cellar/ghidra/<version>/libexec \
+  ./gradlew buildExtension                            # -> build/distributions/GhidraMCP-7.0.0.zip
+unzip -o build/distributions/GhidraMCP-7.0.0.zip \
+  -d ~/Library/ghidra/ghidra_<version>_PUBLIC/Extensions/
 ```
+
+**`mvn package` does not work and the line above used to say it did.** The pom resolves Ghidra's
+own jars — `ghidra:DB`, `ghidra:Debugger-rmi-trace` and nine more — and they are not on Maven
+Central, so it fails at dependency resolution before compiling anything. `gradlew buildExtension`
+reads them out of `GHIDRA_INSTALL_DIR` instead. It also needs `JAVA_HOME` set explicitly: this
+machine's `/usr/bin/java` is the stub, and `/usr/libexec/java_home` answers *"Unable to locate a
+Java Runtime"*, so the wrapper dies before Gradle starts.
+
+### A Ghidra upgrade silently uninstalls this, and the symptom names nothing
+
+**This is the failure mode to recognise**, because it cost most of a session. Extensions live in the
+**per-version user directory** — `~/Library/ghidra/ghidra_12.1.3_PUBLIC/Extensions/GhidraMCP/` — and
+`extension.properties` carries `version=<the Ghidra release>`. `brew upgrade ghidra` makes a new
+user directory with no extensions in it, and the old extension would be refused anyway because its
+stamp names the old release.
+
+What you see is `ipod-boot ghidra serve` printing **`Ghidra did not come up`** after two minutes,
+which reads like a broken script or a busy machine. Ghidra *is* running; it simply has no plugin, so
+nothing ever listens on 8089. `--status` says `nothing at http://127.0.0.1:8089`, which is the same
+sentence you get when Ghidra was never started at all.
+
+Both user directories survive the upgrade, so the diagnosis is one command:
+
+```sh
+ls ~/Library/ghidra/*/Extensions/          # the old release has GhidraMCP, the new one is empty
+```
+
+**Rebuild against the new release and install into the new user directory.** Do not put it in
+`<install>/Extensions/Ghidra/` inside the Cellar — that works, and the next `brew upgrade` deletes
+it again with no trace.
 
 Then, from the repo root:
 
