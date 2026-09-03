@@ -682,6 +682,35 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### The capability layer is inert, not just its start call (2026-09-03)
+
+Two measurements that change the shape of the remaining question.
+
+**No method of the `"Str "` capability is ever called.** Armed seven of its vtable entries —
+`0x001dee88`, `0x001dee0c`, `0x001dee48`, `0x001df210` and three from the `0x0018cexx` base — and
+every one is `NEVER REACHED`. The object is constructed once and is completely inert. The eight
+fetches of its singleton all come from `FUN_001dfee0`, which is `isCurrent` on the *shell's* vtable
+(slot `0x006707bc`) — it fetches the object only to compare it.
+
+**And the shell has no current capability at all.** `isCurrent` is
+`ldr r0,[r5,#0x18] / cmp r0,r6`, and `--regs-at` on the compare reads **`r0 = 0x00000000`** every
+time, against `r6 = 0x10874aa8` (the `"Str "` object). `[shell + 0x18]` is null throughout the run.
+
+So the gap is not one uncalled method. **A whole layer — capability selection — never happens.**
+Nothing is ever made current, so nothing is ever started, so audio is never requested.
+
+**One control worth having**: a real iPod's own drive (`ipod8g-retail.PRISTINE.img`, 1.11 G
+instructions to 300 s) also boots to the **Language picker**, so this is not an artefact of a
+freshly-built volume. And on a boot with no input the vector-page guard reports **16 stores across 1
+word** — the bootloader's, and nothing else. The null store needs a wheel event; a machine left alone
+is clean.
+
+**What is not yet explained, and should not be glossed:** if a bare wheel movement on the language
+picker asks for a voice, a real iPod would face the same empty pool at the same moment. Either the
+click is not played on that screen on real hardware, or the pool is not empty by then. This file does
+not know which, and the difference matters — the first would make our fault a missing *selection*,
+the second a missing *initialisation*.
+
 ### The object is built and registered; nothing ever calls its start slot (2026-09-03)
 
 Two links further, and the bottom of the chain is now a **registry walk that does not happen**.
