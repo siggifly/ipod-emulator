@@ -644,9 +644,48 @@ build where that word never changed, and a first draft of this entry read that a
 both". The hook is in `count()`, ahead of the store, so a write into a read-only region is counted
 and then discarded. Recorded in `NEXT.md`'s instrument table.
 
-So the open question is no longer *where is the null* but **why the vtable at `0x00239f24` now
-dispatches into a subsystem whose pool was never filled** — and that is where a fix has to start,
-because the pool being empty is the older and more basic fault.
+### The whole chain, traced to the function that never runs (2026-09-03)
+
+**`0x00217e04` is the pool's initialiser**, found by scanning the pool module for the only
+instruction shape that can fill a slot — `str rD, [rN, rM, lsl #2]` — which occurs exactly twice in
+it:
+
+```
+00217e20  mov r0, #0xa8              168 bytes
+00217e24  bl  0x0025a974             operator new
+00217e28  bl  0x00147354             construct
+00217e2c  cmp r0, #0
+00217e30  strne r0, [r4, r5, lsl #2]  pool[i] = the object      <- the fill
+00217e44  str r7, [r0, #0x18]         priority[i] = 0x7fff
+00217e48  blt 0x00217e20              four times
+```
+
+It has exactly one caller, `0x0023fa84`, inside `0x0023f8dc`, and **the whole of `0x0023f8dc` is
+`NEVER REACHED`** — measured, along with `0x00217e04` and the constructor `0x00147354`, all three
+zero on a run that crashes. `0x0023f8dc` is reached only from `0x0023fc50`, which has **no BL callers
+at all**: it is dispatched through a pointer at `0x00677838`.
+
+So the chain, end to end:
+
+| | |
+|---|---|
+| `0x0023fc50` | never dispatched — its only reference is the word at `0x00677838` |
+| `0x0023f8dc` | therefore never runs |
+| `0x00217e04` | therefore never runs, so nothing ever `new`s the four objects |
+| the pool | stays four nulls, which the C++ lazy static leaves it as **by design** |
+| `0x00217a70` | a gesture asks it for a slot; `is_busy(NULL)` reads `[0x68]`, gets the boot ROM's ASCII, and reports every empty slot **busy**; the steal path returns slot 0, null |
+| `0x001472ac` | `configure(NULL, 8000, 8, 1)` writes fields onto `0x00`, `0x04`, `0x08` and `0x18` |
+| `0x18` | the IRQ vector. The next interrupt branches into `portalplayer PP5020AF-07` and runs away |
+
+**This gap is long-standing, not a regression.** `957d990` also probes four null slots, so
+`0x0023f8dc` has never run in this emulator. What `7e30c1f` changed is only whether step six's `strb`
+lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
+none of those vectors is used at runtime.
+
+**The open question is now one link only: why the pointer at `0x00677838` is never dispatched.**
+That table is not a clean vtable — it interleaves OSOS code addresses with three bootloader
+addresses (`0x4001d5d8`, `0x4001d594`, `0x4001d538`) and zero words — so what it is, and who walks
+it, is the next thing to establish rather than assume.
 
 **Not reproducible without a wheel script.** A boot left alone never takes the path, which is why
 every fingerprint in `research/17` is still green and the boot matrix cannot see this.
