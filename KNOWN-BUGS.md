@@ -682,6 +682,53 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### Root cause: audio is a lazy singleton and nothing ever asks for it (2026-09-03)
+
+Traced to the top. **`FUN_0024d88c` is a C++ lazy-static accessor** — guard, construct, register a
+destructor, release — and the thing it constructs is the audio manager:
+
+```c
+undefined4 FUN_0024d88c(void) {
+  if (((*DAT_0024d8d4 & 1) == 0) && (FUN_0025ab48(DAT_0024d8d4) != 0)) {   // __cxa_guard_acquire
+    uVar2 = FUN_0024e718(DAT_0024d8d8);                                    // the CONSTRUCTOR
+    FUN_0025aa40(uVar2, DAT_0024d8e0, DAT_0024d8dc);                       // __cxa_atexit
+    FUN_0025ab64(DAT_0024d8d4);                                            // __cxa_guard_release
+  }
+  return DAT_0024d8d8;
+}
+```
+
+`FUN_0024e718` is what creates the audio tasks — one directly, and the PCM task through
+`0x001b0758`. **It has 26 call sites, and `FUN_0024d88c` is `NEVER REACHED`.** Nothing in a boot
+ever asks for audio, so the singleton is never constructed, so its tasks are never defined.
+
+The chain, complete:
+
+| | |
+|---|---|
+| `FUN_0024d88c` | audio's lazy-static accessor. 26 call sites, **none of them reached** |
+| `FUN_0024e718` | its constructor — creates the audio tasks. Never runs |
+| `0x001b0758` → `0x0028c314` | the PCM task's starter. Never runs. Its working siblings in the same template family (`0x0028c19c` and five more) **do** run, for other objects |
+| `FUN_0023fc50` | the PCM task body, whose first act is to fill the voice pool. Never defined |
+| the pool | four nulls — the state its own lazy static leaves it in |
+| a wheel click | asks that pool for a voice, gets null, and configures through it onto the IRQ vector |
+
+**How the two independent faults line up.** The empty pool has been true since before 0.1. Until
+`a72a768` (2026-08-19) the fatal byte store was eaten by the flash model, so it was harmless and
+Brick played. That commit fixed a real defect — byte stores under 1 MB were being swallowed after
+the MMAP remap, which is why cold-booted Rockbox could not mount its partitions — and in doing so
+removed the accidental protection.
+
+**Its own regression control could not have caught this.** The commit records *"Unmoved: retail 599
+ATA and **2 916 pixels**"* — and 2 916 is the Apple boot logo, not the language picker's 75 267. The
+RetailOS arm it checked was already stopping at the logo, so "unmoved" meant "still not working",
+and a RetailOS regression was invisible to it. Same shape as every other insensitive control in this
+file.
+
+**The open question is now bounded and concrete**: which of `FUN_0024d88c`'s 26 call sites is
+supposed to run on a real iPod, and what stops it here. That is a far smaller question than "why is
+there no audio", and it is the one to answer next.
+
 ### The task list, and the PCM task is not on it (2026-09-03)
 
 `research/03` §"the dispatcher hook" names RTXC's task-creation entry — **`0x0011c808`** — and it is
