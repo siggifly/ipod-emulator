@@ -583,11 +583,42 @@ fails; the old build passes at 1.7 s), press duration (300 ms `down=`/`up=` pair
 (`CPU_HI_INT_EN`/`DIS` are written 14 times, all during boot, none during the input window), and the
 `release` event (a script with no release at all wedges identically, after 12 reads).
 
-**What is not yet known is which lookup returns the null.** The two writers are `0x001472d0` and
-`0x001465c0`; neither is the caller that supplied the pointer. Note that `KNOWN-BUGS`' own
-5.5G-drive entry describes the same shape one layer up — a registry answering null by design, that
-null bound into an object, and the first call through it landing on a vector — so the two may share
-a cause.
+### Where the null comes from, traced to the store that makes it
+
+A four-entry table at `0x1088342c` is **zeroed at @46 945 058 and never populated**. The zeroing is
+`0x000843a0`, a word-wise `bzero` — `mov r2,#0 / cmp r0,r1 / strcc r2,[r0],#4 / bcc` — and across a
+whole run nothing else ever writes those four words. The slots are null from boot to crash.
+
+A wheel gesture reaches an allocator over that table, `0x00217a70`, through a vtable dispatch at
+`0x00239f24` (`bx r3`, `r3 = [r0+0x19c]`). It runs two passes:
+
+1. **Find a free slot.** `is_busy(slot)` is `0x0014729c` — `ldrh r0,[r0,#0x68]`, nonzero means busy.
+   With the slot null that reads absolute `0x68`, which is **inside the boot ROM's own
+   `portalplayer PP5020AF-07` signature**, and the halfwords there are `0x3033`, `0x3034`, `0x3035`
+   — the ASCII pairs `"30"`, `"40"`, `"50"`. Nonzero. **Every empty slot therefore reports itself
+   busy**, and the search finds nothing.
+2. **Steal the best slot.** `r8` starts at 0 (`0x00217a78`, and it is genuinely initialised — an
+   earlier reading of this as an uninitialised register was wrong). No slot scores above `r6`'s
+   starting 0, so `r8` stays 0, `r7 = 0`, and `r5 = table[0]` — null, like all four.
+
+Then `configure(NULL, 8000, 8, 1)` at `0x001472ac`, whose `mov r4, r0` puts the null in `r4`, and
+the four stores above land on the vector page. The guard at `0x00217b6c` checks the *result* of
+`0x001465f0` and never checks `r4` itself.
+
+`8000 / 8 / 1` is a sample rate, a bit depth and a channel count, and the pool is four deep — this
+has the shape of a UI-sound voice allocator, which would make the empty pool a consequence of
+**audio being unmodelled** (`README` §*What it does not do*: the Wolfson codec answers no I²C). That
+identification is by argument shape and is **not** established; nothing here has read a symbol or a
+string naming the subsystem.
+
+**What is established is the divergence.** On `957d990` — the last build that reached Solitaire —
+`0x00217a70`, `0x001b9168`, `0x00239f00` and `0x0014729c` are all **NEVER REACHED** with the same
+ROM, drive and gestures. August's RetailOS does not take this path at all. Today's does, and the
+path cannot survive being taken.
+
+So the open question is no longer *where is the null* but **why the vtable at `0x00239f24` now
+dispatches into a subsystem whose pool was never filled** — and that is where a fix has to start,
+because the pool being empty is the older and more basic fault.
 
 **Not reproducible without a wheel script.** A boot left alone never takes the path, which is why
 every fingerprint in `research/17` is still green and the boot matrix cannot see this.
