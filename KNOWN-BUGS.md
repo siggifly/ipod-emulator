@@ -682,6 +682,32 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### The task list, and the PCM task is not on it (2026-09-03)
+
+`research/03` §"the dispatcher hook" names RTXC's task-creation entry — **`0x0011c808`** — and it is
+the instrument this needed. On a run that crashes, it is entered **27 times**, and `r1` is the task
+body each time:
+
+```
+000d2ff4  00151ab4  001519e8  001abfb0  00170d0c  00170ea4  00164d54  00186b20
+00186c20  001239b8  000c8da8  000c8dc8  000cc614  0016b044  00184558  0028c110
+000e1dbc  0028be28  0028c708  0028bfa0  0028c408  0028c588  000e660c  00156228
+001b9b3c  00197e98  0014165c
+```
+
+**`0x0023fc50` is not there.** So the PCM task is not merely unscheduled and not merely unstarted —
+it is never *defined*. That agrees with the `--readlog` result on its vtable slot (`0x00677838`,
+**zero reads** against a control that fires eight), and the two were measured independently.
+
+Six of the twenty-seven — the `0x0028bxxx`/`0x0028cxxx` cluster — take a heap object in `r0` and a
+small thunk near the caller in `r1`, so the generic shape *does* exist: a thunk that dispatches into
+the object. Whatever picks the PCM queue up never runs.
+
+**Where not to look.** `research/03` §46 records three consecutive static dead ends chasing exactly
+this shape — *"RetailOS is C++ and its control flow is not in the call graph"* — and names
+`--novelty` as the instrument that broke the deadlock, by recording the instruction count at which
+each code bucket **first** executes. That is the next thing to run, not another xref.
+
 ### Why the same store was harmless in August: byte writes were going into the flash
 
 **The two machines differ by one byte.** Page 0 at the end of the descent, same ROM, same drive,
