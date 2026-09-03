@@ -682,6 +682,51 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### Why the same store was harmless in August: byte writes were going into the flash
+
+**The two machines differ by one byte.** Page 0 at the end of the descent, same ROM, same drive,
+same script:
+
+```
+today   ... fe ff ff ea | 01 00 00 ea | 4e 00 00 ea
+08-18   ... fe ff ff ea | 58 00 00 ea | 4e 00 00 ea
+                           ^^
+```
+
+Everything else is identical — `0x00`, `0x04` and `0x08` carry the same `8000 / 8 / 1` in both. The
+whole difference between a machine that deals a hand of Solitaire and one that hangs is byte `0x18`.
+
+`locate_write` and `translate` are **byte-identical** between the builds; the change is in
+`write8_inner`:
+
+```rust
+// 08-18                                  // today
+Some(n) => n.hit(addr)                    let nor_addr = self.translate(addr);
+                                          Some(n) => n.hit(nor_addr)
+```
+
+**`--cold-boot` gives the NOR model a window at `(0, size)`** (`trace.rs`, `windows.push((0, size))`),
+so address `0x18` is inside the flash's own window. Asking with the **raw** address therefore hit the
+low NOR window, and the byte went to the chip's **command state machine** — where a write is an
+unlock sequence, not data — and was swallowed. Asking with the **translated** address misses the
+window, falls through, and lands in SDRAM.
+
+**Today's behaviour is the correct one and must not be reverted.** Once RetailOS is running, address
+0 is SDRAM; a store there is a store to RAM, and routing it into the flash command machine was
+wrong. August was not surviving the bug, it was *mis-delivering* the store that expresses it.
+
+**So there are two independent faults, and either one alone hides the other:**
+
+1. **RetailOS dereferences null** because its PCM task never starts, so the voice pool is empty.
+   This has always been true here — `957d990` probes four null slots too.
+2. **The store that made it fatal was previously being eaten by the flash model.** Fixing that made
+   fault 1 visible, which is what "the menus stopped working" actually was.
+
+Fixing 1 is the honest repair; fixing 2 back would only re-hide it. Note the consequence for the
+hardware question: **a real iPod does not do this**, because on real hardware the PCM task runs and
+the pool is not null — the null store is a symptom of unmodelled audio, not something Apple's
+firmware does on real silicon.
+
 ### It is the PCM task, and it is never started (2026-09-03, via Ghidra)
 
 **The subsystem is named, by a string rather than by inference.** `FUN_00240614` builds the object
