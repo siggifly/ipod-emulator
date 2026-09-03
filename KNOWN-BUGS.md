@@ -682,10 +682,48 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
-**The open question is now one link only: why the pointer at `0x00677838` is never dispatched.**
-That table is not a clean vtable — it interleaves OSOS code addresses with three bootloader
-addresses (`0x4001d5d8`, `0x4001d594`, `0x4001d538`) and zero words — so what it is, and who walks
-it, is the next thing to establish rather than assume.
+### It is the PCM task, and it is never started (2026-09-03, via Ghidra)
+
+**The subsystem is named, by a string rather than by inference.** `FUN_00240614` builds the object
+whose vtable is `0x0067782c`, and it registers the name `TPCMQUEUE`:
+
+```c
+FUN_0007ce4c(param_1 + 7, s_TPCMQUEUE_00240830, 0x1f, ...);
+*param_1 = DAT_00240848;          // vtable = 0x0067782c
+```
+
+So this is the **PCM queue** — audio. The `8000 / 8 / 1` reading was right, and it is now evidence
+rather than argument shape: the voice constructor `FUN_00147354` sets `16` and `2` as its defaults,
+which is 16-bit stereo, and `configure` later asks for 8 kHz 8-bit mono.
+
+`0x0023fc50` is **vtable slot `+0xC`**, and it is not a method at all:
+
+```c
+void FUN_0023fc50(int param_1) {
+  iVar1 = FUN_0023f8dc(param_1);            // <- allocates the four voices
+  if (iVar1 != 4) FUN_00144cc8(0, 0xe7, 0);
+  do {
+    while (*(char *)(param_1 + 200) != '\0') { /* DMA and buffer work */ }
+    FUN_002353b0(param_1 + 0x1554);          // block
+  } while( true );                            // never returns
+}
+```
+
+**It is an RTXC task body.** The pool initialiser is the first thing it does, before its loop — so
+the four voices exist from the moment the task starts, and never otherwise.
+
+Measured: the object **is** constructed, exactly once (`FUN_00240614` x1), and its task body is
+**NEVER REACHED**. RetailOS builds the PCM queue and never runs it.
+
+**So the question is not "who calls slot +0xC" — nothing calls it. The question is why RetailOS
+never starts this task**, and that is a scheduler-and-hardware question of exactly the kind this
+emulator exists to answer. The audio hardware is unmodelled (`README` §*What it does not do*: the
+Wolfson codec answers no I²C), which is the obvious first suspect and is **not yet established** —
+nothing here has shown the task creation failing, or shown what it waits on.
+
+Note what does **not** follow: the codec is written 52 times and never read — there is no `dev 0x35`
+on the bus, only `dev 0x34` — so a codec that never answers cannot be what blocks a *read*. Whatever
+stops the task, it is not I²C silence.
 
 **Not reproducible without a wheel script.** A boot left alone never takes the path, which is why
 every fingerprint in `research/17` is still green and the boot matrix cannot see this.
