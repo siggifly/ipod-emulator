@@ -682,6 +682,35 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### Five things it is not (2026-09-03)
+
+Each of these was a live theory, and each is now eliminated by a run rather than by argument:
+
+**It is not timing.** `research/03` records `MP3ExampleTask` and `LoadDataTasks` starting only at
+2 400 simulated seconds, which made the earlier 600 s control look short. Re-run at **`--until=2400s`
+— forty minutes of iPod time — with no input**: still 27 task creations, `setCurrent` still
+`NEVER REACHED`, audio still never requested. Identical to 140 s.
+
+**It is not the drive.** A **real iPod's own drive** (`ipod8g-retail.PRISTINE.img`), driven with the
+same script, produces the **same 29 vector-page stores** and the same fault. Nothing about our
+IPSW-built volumes is responsible.
+
+**It is not the piezo.** `AsyncPiezo` starts once and blocks; `--watch-range` and `--input-regs` over
+`0x7000A000:64` both report nothing in a whole run. The zero is trustworthy — the same instrument on
+the adjacent I²C block at `0x7000C000` reports **14 056** writes as a control. The piezo is
+unmodelled *and* unused, so modelling it would add a device nothing talks to.
+
+**It is not the byte at `0x68`.** `is_busy(NULL)` reads absolute `0x68`, which holds `0x3032` — the
+`"20"` of the boot ROM's `2003.10.30` build string — so every empty slot reports *busy*. Making it
+read zero would not help: the free-slot path ends at `ldr r5,[r4,r7,lsl #2]`, which is null whichever
+index it picks. **The allocator requires a populated pool; no memory-content change substitutes for
+that.**
+
+**And `makeCurrent` cannot be reached statically.** `0x0018ce98` — `mov r1,r0 / ldr r0,[r0,#4] /
+b 0x0018cb20`, the base class's *make myself current* — appears in **no vtable** and has **zero**
+BL callers. Its sibling `resign` at `0x0018cea4` likewise. This is `research/03` §46's wall a fourth
+time: the dispatch exists and is not in the call graph.
+
 ### What triggers it, narrowed by four controls (2026-09-03)
 
 The vector-page guard makes this cheap to bisect by input, and the answer is sharp:
