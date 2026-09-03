@@ -611,10 +611,38 @@ has the shape of a UI-sound voice allocator, which would make the empty pool a c
 identification is by argument shape and is **not** established; nothing here has read a symbol or a
 string naming the subsystem.
 
-**What is established is the divergence.** On `957d990` — the last build that reached Solitaire —
-`0x00217a70`, `0x001b9168`, `0x00239f00` and `0x0014729c` are all **NEVER REACHED** with the same
-ROM, drive and gestures. August's RetailOS does not take this path at all. Today's does, and the
-path cannot survive being taken.
+### August was writing through the same null. It survived by luck.
+
+The first reading of the divergence was wrong and is corrected here rather than above. `957d990`
+**does** reach the allocator — 11 arrivals at `0x00217a70` and 11 at `0x001472ac` on the descent
+that reaches Solitaire, with `r0 = 0` on every `is_busy` probe, exactly as today. The earlier
+`NEVER REACHED` was measured on the *fast-paced* arm, which reads all 109 frames and never navigates;
+the arm that actually reaches a game takes this path every time.
+
+Page 0 at the end of that run says the rest:
+
+```
+0x00 = 00001f40 (8000)   <- clobbered      0x0c = ea00006b   intact
+0x04 = 00000008 (8)      <- clobbered      0x10 = ea000070   intact
+0x08 = 00000001 (1)      <- clobbered      0x14 = eafffffe   intact
+                                           0x18 = ea000058   INTACT  <- the IRQ vector
+                                           0x1c = ea00004e   intact
+```
+
+The `configure(NULL, 8000, 8, 1)` word stores landed in August too, on the reset,
+undefined-instruction and SWI vectors — none of which RetailOS uses at runtime. **The one that is
+fatal, the `strb` at `0x18`, did not land.** Today it does: writes at page 0 skip the read-only
+`flash-low` region and fall through into SDRAM.
+
+So the firmware bug is not new and the emulator did not cause it. **What changed is that we stopped
+silently dropping the store that matters** — which makes today's behaviour the more faithful one and
+makes "restore the old memory model" a fix that would only re-hide this. The empty pool is the
+fault, and it is older than the regression.
+
+**`--watch-range` counts attempted stores, not landed ones.** It reported 11 writes to `0x18` on the
+build where that word never changed, and a first draft of this entry read that as "the write lands on
+both". The hook is in `count()`, ahead of the store, so a write into a read-only region is counted
+and then discarded. Recorded in `NEXT.md`'s instrument table.
 
 So the open question is no longer *where is the null* but **why the vtable at `0x00239f24` now
 dispatches into a subsystem whose pool was never filled** — and that is where a fix has to start,
