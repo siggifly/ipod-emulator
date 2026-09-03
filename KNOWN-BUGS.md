@@ -682,6 +682,53 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### The audio starter is a virtual method that is never dispatched (2026-09-03)
+
+Two links further. **`FUN_001dee1c` is the one place in 7.5 MB that requests subsystem 8:**
+
+```c
+undefined4 FUN_001dee1c(int param_1) {
+  if (*(char *)(param_1 + 8) == '\0') {
+    FUN_000cd30c(8);                      // start audio
+    *(undefined1 *)(param_1 + 8) = 1;     // once only
+  }
+  return 1;
+}
+```
+
+A one-shot *ensure audio is running*. It is **NEVER REACHED**, and its only reference in the whole
+image is a **DATA** word at `0x006706cc` — a **vtable slot**. It is a virtual method that nothing
+ever dispatches.
+
+**A wrong turn worth recording.** The subsystem request goes through `FUN_000cd30c`, which falls
+into `FUN_000cd314`; scanning for callers of the *second* address found nineteen sites and **not one
+of the five that actually run**, because the live callers all use the wrapper. Ghidra's xref list
+had the same nineteen. The runtime `lr` values were the thing that exposed it — five addresses that
+appeared in neither list. **Scan for the entry the callers use, not the one the code falls into.**
+
+The seven real requests, measured, with the ids they ask for:
+
+```
+0x000fec90  id 13     0x00171124  id 4      0x001c7e24  id r4 (computed)
+0x0012b560  id 10     0x00171154  id 4      0x00284f24  id 12
+0x001dee34  id 8   <- audio, and this site never executes
+```
+
+**Where this stands.** The chain is now twelve links and every one is measured:
+
+```
+??? dispatches vtable slot 0x006706cc  ->  FUN_001dee1c requests subsystem 8
+  ->  FUN_001e0458 case 8  ->  post 0x63800003  ->  FUN_001eccdc gate
+  ->  FUN_001ed9f0 sets [obj+0x484] = 1  ->  FUN_001e9f9c passes its first gate
+  ->  FUN_0024d88c constructs the audio manager  ->  FUN_0024e718 defines its tasks
+  ->  FUN_0023fc50 fills the four-slot voice pool
+  ->  a wheel click gets a voice instead of NULL  ->  the IRQ vector survives
+```
+
+The single open question is the first line: **which class owns the vtable at `0x006706a0`, and what
+should call its slot `+0x2c`.** Its neighbours are `0x001dee88`, `0x001dee0c` and `0x001dee48` from
+the same module over a `0x0018cexx` base, so the class is identifiable from the table alone.
+
 ### Audio is subsystem 8, and nothing ever asks for it (2026-09-03)
 
 Three links further up, and the shape changes from "a flag nobody sets" to "a subsystem nobody
