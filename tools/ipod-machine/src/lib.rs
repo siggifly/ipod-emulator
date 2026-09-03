@@ -754,6 +754,28 @@ pub struct Memory {
     /// and per PC at capture time is bounded by distinct `(word, PC)` pairs, not by run length, and
     /// names every writer instead of the earliest one.
     pub watch_range_words: BTreeMap<u32, WatchWord>,
+    /// **Every store below `0x100`, always, with no flag to forget.** ARM's exception vectors are
+    /// the first eight words of memory, so a store down here is either the firmware installing them
+    /// — which happens once, early, from the bootloader — or a **null pointer dereference**.
+    ///
+    /// This exists because one of the latter went unremarked for a fortnight. RetailOS reaches a
+    /// four-slot pool whose entries are null, calls a configure method on `NULL`, and its field
+    /// stores land on absolute `0x00`, `0x04`, `0x08` and `0x18`. `0x18` is the **IRQ vector**: the
+    /// next interrupt branches into the boot ROM's own `portalplayer PP5020AF-07` signature,
+    /// executes it as ARM, wanders into the prefetch-abort vector at `0x0c`, and the exception
+    /// reporter spins forever. The panel simply stops responding to the wheel, which reads as an
+    /// input bug and was investigated as one, twice. See `KNOWN-BUGS.md`.
+    ///
+    /// **A guard behind a flag is a guard nobody runs**, which is the whole reason this is not an
+    /// instrument. It costs one compare per store on a path that already exists, and a healthy run
+    /// prints the bootloader's handful of rows and nothing else.
+    ///
+    /// It counts **attempted** stores, like everything else fed by `count`, and the report says so:
+    /// a store into a read-only region is counted here and then discarded. That distinction is not
+    /// pedantry — it is the entire difference between the build that reached a dealt game of
+    /// Solitaire and the one that hangs, and `NEXT.md`'s instrument table records it costing a
+    /// wrong conclusion already.
+    pub low_stores: BTreeMap<u32, LowStore>,
     pub write_log: Option<(u32, u32)>,
     pub write_log_entries: Capped<(u32, u32, u32, &'static str)>,
     /// Stores in the `--writelog` span by answering region, **uncapped** — including `DROPPED`.
@@ -976,6 +998,21 @@ pub struct WatchWord {
     pub pcs: BTreeMap<u32, u64>,
     /// Instruction count of the first write, so a span can be split into eras by hand.
     pub first_at: u64,
+}
+
+/// One word of the exception-vector page, and every store that reached it.
+///
+/// Same shape as [`WatchWord`] on purpose — the difference is that this one is **never armed and
+/// never off**. See [`Machine::low_stores`].
+#[derive(Debug, Default, Clone)]
+pub struct LowStore {
+    /// Byte-granular stores landing anywhere in the word.
+    pub writes: u64,
+    /// Every storing PC, with a count.
+    pub pcs: BTreeMap<u32, u64>,
+    /// Instruction counts of the first and last, so boot can be told from runtime by eye.
+    pub first_at: u64,
+    pub last_at: u64,
 }
 
 /// Pull `Files[].Path` out of an XML `Manifest.plist`, in document order.
@@ -2100,6 +2137,18 @@ impl Memory {
             self.read_log.push((pc, addr, 0, n));
         }
         if write {
+            // The vector-page guard. Ahead of `watch_range` because it is not conditional on
+            // anything: see `Machine::low_stores`.
+            if !self.internal && addr < 0x100 {
+                let (pc, n) = (self.pc, self.icount);
+                let e = self.low_stores.entry(addr & !3).or_insert(LowStore {
+                    first_at: n,
+                    ..Default::default()
+                });
+                e.writes += 1;
+                e.last_at = n;
+                *e.pcs.entry(pc).or_insert(0) += 1;
+            }
             if let Some((base, len)) = self.watch_range {
                 if !self.internal && addr.wrapping_sub(base) < len {
                     let (pc, v, n) = (self.pc, wval, self.icount);
@@ -4300,6 +4349,7 @@ impl Machine {
             watch_range: None,
             watch_range_log: Capped::new(4096),
             watch_range_words: BTreeMap::new(),
+            low_stores: BTreeMap::new(),
             write_log: None,
             write_log_entries: Capped::new(8192),
             write_log_regions: BTreeMap::new(),
@@ -11481,6 +11531,54 @@ mod peek_tests {
             }
             other => panic!("expected TimeReached, got {other:?}"),
         }
+    }
+
+    /// **A store into the exception-vector page is always recorded, with no flag to arm.**
+    ///
+    /// The guard exists because RetailOS's null-pointer store onto the IRQ vector at `0x18` went
+    /// unremarked for a fortnight — the panel stopped answering the wheel, and it was investigated
+    /// as an input bug twice before anyone looked at what had been written to address `0x18`.
+    ///
+    /// **How to make it go red**: delete the `addr < 0x100` block from `count`, or put it behind a
+    /// flag — which is the same thing, because the flag would not have been passed.
+    #[test]
+    fn a_store_into_the_vector_page_is_always_recorded() {
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        map_hardware(&mut m, false);
+
+        // **A bare machine has no memory at 0 and the store would go nowhere**, which would make
+        // this test pass against a deleted guard. The real machine has the vector page backed —
+        // that is why the defect is reachable at all — so the test has to have it too.
+        m.mem.regions.insert(
+            0,
+            Region {
+                name: "vector-page",
+                base: 0,
+                data: vec![0u8; 0x200],
+            },
+        );
+
+        assert!(
+            m.mem.low_stores.is_empty(),
+            "a machine that has stored nothing must report nothing"
+        );
+
+        // The exact shape of the real defect: a field store through a null object pointer, landing
+        // on the IRQ vector.
+        m.mem.write32(0x18, 0xdead_beef);
+        let e = m
+            .mem
+            .low_stores
+            .get(&0x18)
+            .expect("a store at 0x18 must be recorded — this is the one that is fatal");
+        assert!(e.writes > 0, "recorded the word but counted no stores");
+
+        // A store above the page is not this guard's business, or every heap write would be.
+        m.mem.write32(0x100, 1);
+        assert!(
+            !m.mem.low_stores.contains_key(&0x100),
+            "0x100 is outside the vector page and must not be recorded"
+        );
     }
 
     #[test]

@@ -2691,6 +2691,7 @@ fn main() {
                 println!("  from {lr:#010x}  str {p:#010x}  {txt:?}");
             }
         }
+        report_low_stores(&m);
         report_bcm_dump(&args, &m);
         report_bcm_peek(&args, &m);
         if let Some(h) = &m.mem.nor_reads {
@@ -3453,6 +3454,56 @@ fn report_findptr(args: &[String], m: &ipod_machine::Machine) {
 ///
 /// The host hands the BCM a bitmap; capturing what it *writes* gives us the image without having to
 /// execute the co-processor's own firmware. Pixels are RGB565, the 5G panel format.
+/// **Stores into the exception-vector page, always printed.** See `Machine::low_stores`.
+///
+/// The first eight words of memory are ARM's vectors. A store into them is the firmware installing
+/// them — once, early, from the bootloader — or a null pointer dereference, and the second kind is
+/// what this exists to make impossible to miss. It went unnoticed for a fortnight once; the panel
+/// stopped answering the wheel and it was investigated as an input bug, twice.
+///
+/// **Silence is a result here**, so the healthy case says so rather than printing nothing: a report
+/// that vanishes when the news is good is indistinguishable from one nobody wired up, which is the
+/// failure `NEXT.md`'s instrument table catalogues over and over.
+fn report_low_stores(m: &ipod_machine::Machine) {
+    let v = &m.mem.low_stores;
+    if v.is_empty() {
+        println!("\nvector page: no stores below 0x100 — the vectors are as the firmware left them");
+        return;
+    }
+    let total: u64 = v.values().map(|e| e.writes).sum();
+    println!("\nvector page: {total} attempted stores below 0x100, across {} words", v.len());
+    // Attempted, not landed — `count` runs ahead of the store, so one into a read-only region is
+    // counted here and discarded. That difference is the whole difference between the build that
+    // reached a game and the one that hangs, so it is named rather than implied.
+    println!("  (ATTEMPTED stores — one into a read-only region is counted and then discarded;");
+    println!("   confirm with --dump=0x0:32 before concluding the memory changed)");
+    for (addr, e) in v {
+        let what = match addr {
+            0x00 => "  reset",
+            0x04 => "  undefined",
+            0x08 => "  SWI",
+            0x0c => "  prefetch abort",
+            0x10 => "  data abort",
+            0x14 => "  reserved",
+            0x18 => "  IRQ  <- a store here is fatal: the next interrupt vectors into whatever it left",
+            0x1c => "  FIQ",
+            _ => "",
+        };
+        let pcs: Vec<String> = e
+            .pcs
+            .iter()
+            .map(|(pc, n)| format!("{pc:#010x} x{n}"))
+            .collect();
+        println!(
+            "  {addr:#06x}{what}\n      {} store(s), @{}..@{}, from {}",
+            e.writes,
+            e.first_at,
+            e.last_at,
+            pcs.join("  ")
+        );
+    }
+}
+
 fn report_bcm_dump(args: &[String], m: &ipod_machine::Machine) {
     let Some(b) = &m.mem.bcm else { return };
     for spec in args.iter().filter_map(|a| a.strip_prefix("--bcm-dump=")) {
