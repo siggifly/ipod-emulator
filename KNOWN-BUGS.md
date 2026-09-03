@@ -682,6 +682,40 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### What triggers it, narrowed by four controls (2026-09-03)
+
+The vector-page guard makes this cheap to bisect by input, and the answer is sharp:
+
+| input at the language picker | vector-page stores |
+|---|---|
+| none at all, 600 s of simulated time | **16** — the bootloader's, and nothing else |
+| `touch` then `release`, no movement, no button | **16** — clean |
+| **HOLD engaged**, then twenty detents | **16** — clean |
+| twenty detents, no hold | **29** — the null store lands |
+| one `down=select` / `up=select`, **no scrolling at all** | **29** — the null store lands |
+
+So a *touch* is not enough and a *held* wheel is correctly ignored — **our hold switch is right, and
+that is a positive control for the whole input path.** What triggers it is an **actionable** event:
+a detent or a button. Not the Select specifically, and not the scroll specifically; either will do.
+
+**The clicker is the obvious suspect and the evidence does not support it.** `research/05` §3 puts the
+piezo inside the SoC at `0x7000A000`, and RetailOS has an `AsyncPiezo` task. Measured: the task
+**starts once** (`0x00285060`, at 49.7 M, `lr = 0xeeeeee23` — RTXC's task-start poison, so this is
+the entry) and then blocks. `--watch-range` and `--input-regs` over `0x7000A000:64` report **nothing
+at all** — the piezo registers are never touched in a whole run. The piezo is unmodelled *and*
+unused, so it is not what the click is being routed to, and modelling it would not by itself fill
+the voice pool.
+
+**And the capability layer does not wake up on its own.** `setCurrent` — `0x0018cac8`, which stores
+the object at `[owner+0x18]` and then dispatches its vtable slot `+0x8` — is `NEVER REACHED`, and so
+are both of its callers. With **no input at all and 600 s of simulated time**, nothing changes: no
+capability is ever made current, and audio is never requested. It is not a timing problem.
+
+**Where that leaves the shape of the fault.** RetailOS at the language picker has no active
+capability, which is very likely correct for a pre-setup modal screen. So the open question is not
+"why is audio off" but **why an actionable wheel event on that screen reaches a PCM voice allocator
+at all** — because on real hardware the same screen, with the same empty pool, does not crash.
+
 ### The capability layer is inert, not just its start call (2026-09-03)
 
 Two measurements that change the shape of the remaining question.
