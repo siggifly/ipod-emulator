@@ -682,6 +682,31 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### The object is built and registered; nothing ever calls its start slot (2026-09-03)
+
+Two links further, and the bottom of the chain is now a **registry walk that does not happen**.
+
+The class is a capability object tagged with the fourcc **`"Str "`** (`r2 = 0x53747220`, read off a
+live run). Its singleton accessor `FUN_001dedb8` is a C++ lazy static, and it **runs — eight times**,
+always from `0x001dfee4`. The constructor `FUN_001dee4c` **runs once**: it installs vtable
+`0x006706a4` and clears the one-shot flag at `+8`.
+
+So the object exists, is correctly built, and is handed out. What `0x001dfee0` does with it is
+**register** it — fetch the singleton and tail-branch into `0x0018cebc` in the base-class module.
+Eight times. It never starts it.
+
+**Slot `+0x28` of that vtable is `FUN_001dee1c`, the audio starter, and nothing calls it.** The
+mechanism is not missing: **74 sites in the image call slot `+0x28`** through some object, so
+"start this capability" is a normal thing for this firmware to do. This one object never receives it.
+
+So the shape at the bottom is: a capability is constructed and registered, and the pass that would
+walk the registry and start it either does not run here or does not include this entry.
+
+**Not audio, and worth being exact about it.** Nothing above needs sound to come out. The PCM task's
+*first act* is filling the four-slot voice pool, before its loop; once the pool is non-null a wheel
+click gets a voice instead of `NULL` and the IRQ vector is never written. The Wolfson codec can stay
+unmodelled and M6 can stay a 1.0 item. **What is being fixed is a crash, not a feature.**
+
 ### The audio starter is a virtual method that is never dispatched (2026-09-03)
 
 Two links further. **`FUN_001dee1c` is the one place in 7.5 MB that requests subsystem 8:**
