@@ -95,6 +95,72 @@ pub const SHORTCUTS_TXT: &str = "[shortcut]\ntype: file\ndata: /.rockbox/rocks/g
 /// Where the plugin looks. `rockdoom.c` builds both paths from this.
 pub const DOOM_DIR: &str = "/.rockbox/doom";
 
+/// Fetch the two files, verify them, and write all three onto the drive.
+///
+/// **This is the half that was missing, and its absence is what `missing()` kept reporting.** The
+/// catalogue, the hashes and the shortcut text have been here since 2026-09-01 with nothing calling
+/// them, so `doom` was BLOCKED in the boot matrix for want of a caller rather than for want of a
+/// fact. A module that knows exactly where three files live and cannot put them on a disk is the
+/// same defect class as a flag with no mechanism behind it.
+///
+/// **The extracted WAD is checked against its own hash, not the archive's.** An archive that
+/// verifies can still be unpacked wrongly, and 28 MB of the wrong bytes fails inside Doom's
+/// renderer rather than at the door — see [`FREEDOOM2`].
+///
+/// Writes to `disk` and never to the cache; returns what it put where, so the caller can print it
+/// rather than claim success.
+pub fn install(disk: &Path, cache: &Path, w: &mut dyn crate::firmware::Watch) -> Result<Vec<String>, String> {
+    std::fs::create_dir_all(cache).map_err(|e| format!("{}: {e}", cache.display()))?;
+    let mut done = Vec::new();
+
+    // Fetch first, both of them, before touching the drive: a half-installed volume is worse than
+    // an untouched one, and the network is the part that fails.
+    let mut payloads: Vec<(&'static str, Vec<u8>)> = Vec::new();
+    for wad in CATALOGUE {
+        // `get_watched` reports a `Trouble` alongside its message so a caller can retry
+        // differently on a network fault than on a hash mismatch. Nothing here can act on that
+        // distinction, so the message is kept and the tag dropped rather than pretended about.
+        let got = crate::firmware::get_watched(wad.file, wad.url, wad.bytes, wad.sha256, cache, w)
+            .map_err(|(_, e)| e)?;
+        let bytes = std::fs::read(&got).map_err(|e| format!("{}: {e}", got.display()))?;
+        if wad.file.ends_with(".zip") {
+            // Freedoom ships both IWADs in one archive; the plugin wants the Doom 2 one under Doom
+            // 2's name. Matched case-insensitively on the leaf, because the archive has carried a
+            // top-level directory in some releases and pinning the full path would break silently.
+            let zip = crate::ipsw::Zip::open(&got)?;
+            let m = zip
+                .members
+                .iter()
+                .find(|m| {
+                    m.name
+                        .rsplit('/')
+                        .next()
+                        .is_some_and(|leaf| leaf.eq_ignore_ascii_case("freedoom2.wad"))
+                })
+                .ok_or_else(|| format!("{}: no freedoom2.wad inside", wad.file))?
+                .clone();
+            let inner = zip.extract(&m)?;
+            crate::firmware::checked("freedoom2.wad", FREEDOOM2.0, FREEDOOM2.1, &inner)?;
+            payloads.push((wad.install_as, inner));
+        } else {
+            payloads.push((wad.install_as, bytes));
+        }
+    }
+
+    let mut v = crate::fat::Fat32::open(disk)?;
+    let dir = v.mkdir_p(DOOM_DIR)?;
+    for (name, bytes) in &payloads {
+        v.write_file(dir, name, bytes)?;
+        done.push(format!("{DOOM_DIR}/{name}  {} bytes", bytes.len()));
+    }
+    // The shortcut lives one level up, beside Rockbox's own config, not in `doom/`.
+    let rockbox = v.mkdir_p("/.rockbox")?;
+    v.write_file(rockbox, "shortcuts.txt", SHORTCUTS_TXT.as_bytes())?;
+    done.push("/.rockbox/shortcuts.txt".into());
+    v.flush()?;
+    Ok(done)
+}
+
 /// Is this drive ready to play?
 ///
 /// Returns what is missing, so a caller can say which of three files to go and get rather than

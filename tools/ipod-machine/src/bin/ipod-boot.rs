@@ -297,6 +297,48 @@ fn main() {
     // partition where Apple's boot ROM will run it, and the release goes on the data volume where
     // that bootloader then looks. So this does both, in the order that works, from files it
     // verifies by SHA-256 before touching a drive.
+    // Doom needs three files Rockbox deliberately does not distribute. `doom.rs` has held their
+    // URLs, sizes and hashes since 2026-09-01 with nothing calling it, which is why the boot
+    // matrix's `doom` row read BLOCKED — for want of a caller, not for want of a fact.
+    if name == "doom-assets" {
+        let disk = rest
+            .first()
+            .map(PathBuf::from)
+            .or_else(|| ipod_machine::settings::Settings::load().disk.clone());
+        let Some(disk) = disk else {
+            eprintln!("usage: ipod-boot doom-assets [DISK.img]");
+            eprintln!("  Installs rockdoom.wad, doom2.wad (Freedoom) and shortcuts.txt onto a");
+            eprintln!("  drive that already has Rockbox. MODIFIES the image in place.");
+            std::process::exit(2);
+        };
+        // Named before the fetch, because 24 MB arriving with no explanation reads as a hang.
+        for w in ipod_machine::doom::CATALOGUE {
+            println!("  {} — {}", w.file, w.about);
+        }
+        let cache = ipod_machine::rockbox::cache_dir();
+        let mut watch = ipod_machine::firmware::Silent;
+        match ipod_machine::doom::install(&disk, &cache, &mut watch) {
+            Ok(lines) => {
+                for l in lines {
+                    println!("  wrote {l}");
+                }
+                let left = ipod_machine::doom::missing(&disk);
+                if left.is_empty() {
+                    println!("{} — Doom has everything it needs.", disk.display());
+                } else {
+                    // The installer's own opinion is not the check. `missing` re-reads the volume.
+                    eprintln!("still missing after install: {}", left.join(", "));
+                    std::process::exit(1);
+                }
+            }
+            Err(e) => {
+                eprintln!("doom-assets: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     if name == "rockbox-install" {
         let src = rest
             .first()
@@ -452,6 +494,11 @@ ipod-boot — Apple's firmware, booted under the emulator
                                      download Rockbox, verify it, and install both halves onto a
                                      copy of the drive: the bootloader into the firmware partition
                                      and the release onto the volume. Never writes to DISK.img.
+  ipod-boot doom-assets [DISK.img]
+                                     fetch the three files Rockbox's Doom needs and cannot ship —
+                                     rockdoom.wad, Freedoom's doom2.wad and a shortcuts.txt —
+                                     verify them against recorded hashes, and write them onto a
+                                     drive that already has Rockbox. MODIFIES DISK.img.
   ipod-boot open-drive [DISK.img]
                                      mount the drive on this computer so you can put your own
                                      files on it. macOS and Linux only — Windows cannot mount a

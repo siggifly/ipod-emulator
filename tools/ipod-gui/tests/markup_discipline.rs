@@ -1032,6 +1032,16 @@ fn every_ipod_boot_capability_is_reachable_in_the_window_or_listed_as_a_gap() {
           carries `osos, rsrc, aupd`, and `rsrc` holds `VIDEOC~1/BOOT/VMCS.BIN` (201,376 B) with \
           the whole codec library beside it. So the co-processor's firmware and every operating \
           system come out of the firmware DOWNLOAD; only Diagnostics and Disk Mode need a dump."),
+        ("doom-assets",
+         "2026-09-03. Fetches the three files Rockbox's Doom needs and cannot distribute — \
+          rockdoom.wad, Freedoom's doom2.wad and a shortcuts.txt — verifies them against recorded \
+          hashes, and writes them onto a drive that already has Rockbox. A gap rather than a \
+          developer shortcut: a person who has installed Rockbox and picked DOOM has done nothing \
+          unusual, and the plugin's own failure is `W_GetNumForName: TANGTABL not found` from \
+          inside the renderer, which teaches nothing. Retired when the window's Rockbox install \
+          can offer Doom's assets beside it. Until then the boot matrix reports the row BLOCKED \
+          with the three names, which is the honest state and is why this is listed rather than \
+          quietly routed."),
         ("flash-update",
          "2026-09-01. Runs Apple's `aupd` updater and then the boot that proves it took. Retired \
           with `Start as…`."),
