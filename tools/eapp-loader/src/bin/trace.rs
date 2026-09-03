@@ -137,9 +137,51 @@ fn main() {
     m.set_stub("OpenGLES", 37, Stub::GlDrawArrays);
     m.set_stub("OpenGLES", 4, Stub::GlBindTexture);
     m.set_stub("OpenGLES", 19, Stub::GlCompressedTexImage2D);
+    // #99 glTexImage2D — named from Apple's implementation at 0x00270240. Unstubbed it returned
+    // 0 and the upload was dropped, which is why the golf course rendered as a white field.
+    m.set_stub("OpenGLES", 99, Stub::GlTexImage2D);
+    // #21 glCopyTexImage2D — render-to-texture. Minigolf allocates a screen-sized texture from a
+    // placeholder and then fills it from the framebuffer; without this the placeholder is drawn.
+    m.set_stub("OpenGLES", 21, Stub::GlCopyTexImage2D);
+    m.set_stub("OpenGLES", 40, Stub::GlEnableVertexAttribArray);
+    m.set_stub("OpenGLES", 36, Stub::GlDisableVertexAttribArray);
+    // --open-returns-handle : make an open report success by returning the handle rather than 0.
+    // Off by default, because the two conventions are opposites and every title measured before
+    // Minigolf wanted the zero. See `Stub::FileOpen`.
+    let open_ret_handle = args.iter().any(|a| a == "--open-returns-handle");
+    if open_ret_handle {
+        println!("open-returns-handle: FileOpen returns the handle (0 = miss = failure)");
+    }
+    // --async-files : model AsyncFileIO the way RetailOS implements it — accept the operation,
+    // park the request, and run the game's completion callback between frames. Opt-in, because
+    // it replaces the synchronous open/read every other title has been measured against.
+    // --profile on the eApp path too; the flag was only honoured inside the boot branch, so it
+    // was accepted, did nothing, and printed nothing.
+    if args.iter().any(|a| a.starts_with("--profile")) && m.profile.is_none() {
+        m.profile = Some(std::collections::HashMap::new());
+    }
+    m.ignore_colour_key = args.iter().any(|a| a == "--no-colour-key");
+    let async_files = args.iter().any(|a| a == "--async-files");
+    if async_files {
+        println!("async-files: AsyncFileIO #0/#3 open, #2 read, completions drained per frame");
+    }
     // open(?, path, ?, &handle) — confirmed by reading the string argument: "Sounds/All_Out.wav"
-    m.set_stub("Filesytem", 0, Stub::FileOpen { path: 1, out: 3 });
-    m.set_stub("AsyncFileIO", 0, Stub::FileOpen { path: 1, out: 3 });
+    // Peek at what the game registers as an audio stream.
+    for spec in args.iter().filter_map(|a| a.strip_prefix("--peek=")) {
+        if let Some((fw, rest)) = spec.split_once(':') {
+            if let Some((idx, reg)) = rest.split_once('=') {
+                let (rs, os) = reg.split_once('+').unwrap_or((reg, "0"));
+                if let (Ok(i), Ok(r), Ok(o)) =
+                    (idx.parse::<usize>(), rs.parse::<usize>(), os.parse::<u32>())
+                {
+                    m.set_stub(fw, i, Stub::PeekStr { arg: r, off: o });
+                    println!("peek {fw}#{i} r{r}+{o}");
+                }
+            }
+        }
+    }
+    m.set_stub("Filesytem", 0, Stub::FileOpen { path: 1, out: 3, return_handle: open_ret_handle });
+    m.set_stub("AsyncFileIO", 0, Stub::FileOpen { path: 1, out: 3, return_handle: open_ret_handle });
     // read(handle, buffer, length, &bytesRead) — the game allocates exactly `length` first.
     let rd = Stub::FileRead {
         handle: 0,
@@ -150,7 +192,27 @@ fn main() {
     m.set_stub("Filesytem", 2, rd.clone());
     m.set_stub("AsyncFileIO", 2, rd.clone());
     // AsyncFileIO #3 takes a filename in r1 — Pac-Man passes "pac_man.dat", its save file.
-    m.set_stub("AsyncFileIO", 3, Stub::FileOpen { path: 1, out: 2 });
+    m.set_stub("AsyncFileIO", 3, Stub::FileOpen { path: 1, out: 2, return_handle: open_ret_handle });
+    if async_files {
+        // Request-object register per import, from the shims at 0x002680e4 / 0x00268118 /
+        // 0x00268144: #0 takes it fifth (game r3), #3 third (game r2), #2 first (game r0).
+        m.set_stub("AsyncFileIO", 0, Stub::AsyncOpen { path: 1, request: 3 });
+        m.set_stub("AsyncFileIO", 3, Stub::AsyncOpen { path: 1, request: 2 });
+        m.set_stub("AsyncFileIO", 2, Stub::AsyncRead { request: 0 });
+        // #1 takes the request in r0, #4 in r2 (shims at 0x002680c8 / 0x00268160).
+        m.set_stub("AsyncFileIO", 1, Stub::AsyncOp { request: 0 });
+        m.set_stub("AsyncFileIO", 4, Stub::AsyncOp { request: 2 });
+        // #12/#14/#16 are the save/settings store — they route through a different singleton
+        // (0x0017154c) than the file entries and only appear when the pause menu opens. Left
+        // unstubbed they return 0, i.e. "failed", and the menu stalls before drawing its items.
+        // Reporting success is a guess at the value but a well-founded one about the direction.
+        m.set_stub("AsyncFileIO", 12, Stub::Value(1));
+        m.set_stub("AsyncFileIO", 14, Stub::Value(1));
+        m.set_stub("AsyncFileIO", 16, Stub::Value(1));
+    }
+    // Everything the §18.0 coverage audit settled. Shared with `play` — this tool exists to
+    // measure what the viewer does, so the two must answer the same imports the same way.
+    m.install_audit_stubs();
     // --input=CODE[,CODE...] queues edge-triggered events, one consumed per poll.
     if let Some(list) = args.iter().find_map(|a| a.strip_prefix("--input=")) {
         m.set_stub("InputEvents", 0, Stub::InputPoll { arg: 0, offset: 4 });
@@ -412,6 +474,8 @@ fn main() {
         })
         .collect();
 
+    // --load-on-open: an async open whose request carries a buffer loads the whole file.
+    m.load_on_open = args.iter().any(|a| a == "--load-on-open");
     m.game_dir = args
         .iter()
         .find_map(|a| a.strip_prefix("--gamedir="))
@@ -1129,6 +1193,22 @@ fn main() {
         // comparable in one run of the recipe.
         if args.iter().any(|a| a == "--pmu") {
             let mut pmu = eapp_loader::Pcf50605::new();
+            // The emulated iPod reports the charge of the machine it is running on, and its clock
+            // is the host's local time. --battery=N overrides the percentage; a host with no
+            // battery reads 100. Both are set before the flags below so an explicit --pmu-adc=2
+            // still wins.
+            let pct = args
+                .iter()
+                .find_map(|a| a.strip_prefix("--battery="))
+                .and_then(|n| n.parse::<u8>().ok())
+                .unwrap_or_else(eapp_loader::host_battery_percent);
+            pmu.set_battery_percent(pct);
+            let tm = eapp_loader::host_local_time();
+            pmu.set_clock(tm);
+            println!(
+                "  pcf50605 battery {pct}%, clock 20{:02}-{:02}-{:02} {:02}:{:02}:{:02}",
+                tm[6], tm[5], tm[4], tm[2], tm[1], tm[0]
+            );
             // --pmu-adc=CH=VALUE, repeatable: answer one ADC channel on its own scale.
             //
             // This pushed into `m.mem.pmu` until 2026-08-14 — the device that existed *before* this
@@ -2528,7 +2608,7 @@ fn main() {
         }
         report_findptr(&args, &m);
         report_dumps(&args, &mut m);
-        report_profile(&m);
+    report_profile(&m);
         report_unmapped(&mut m);
         // This path returns from main, so the shared reporting at the bottom never runs. Without
         // this call --break, --watch and --dump are accepted, do fire, and print nothing — which
@@ -2555,7 +2635,11 @@ fn main() {
             m.mem.write32(REGISTRY_HEAD, addr);
             println!("registry head {REGISTRY_HEAD:#x} <- {addr:#010x}");
         }
-        const RETAILOS_EAPP_LOADER: u32 = 0x1012_24C4;
+        // 0x001222c4 mapped at 0x10000000. This read 0x1012_24C4 until 2026-08-19, which is the
+        // `bne` failure exit *inside* the validator, not its entry: the call executed four
+        // instructions (`mvn r0,#1; b …; add sp…; ldmia`), returned -2, resolved 0 of 277 thunks,
+        // and reported it as a result.
+        const RETAILOS_EAPP_LOADER: u32 = 0x1012_22C4;
         let before = m.thunk_targets(&app);
         println!(
             "\nrunning RetailOS's eApp loader at {RETAILOS_EAPP_LOADER:#010x} with r0 = image base"
@@ -2611,11 +2695,22 @@ fn main() {
 
     // Synthetic context arguments. RetailOS passes real structures here; zeroed scratch at
     // least makes the pointers dereferenceable instead of null.
+    // The real shape, from `0x0024da80`: `mov r0, r4` / `add r1, r4, #0x100`, so the two
+    // arguments are one object and a pointer 0x100 into it. `[ctx+0x00]` is a state byte the
+    // pump sets to 5 (or 4) immediately before the call.
     let ctx: Vec<u32> = if args.iter().any(|a| a == "--ctx") {
         let a = m.scratch(0x400);
-        let b = m.scratch(0x400);
-        println!("context args: r0={a:#x} r1={b:#x}");
-        vec![a, b, 0, 0]
+        // `--ctx-seed=N` — the reason byte the *init* call sees. 5 is what the pump leaves for
+        // most titles, but Hold'em only registers its state object while `[ctx+0]` is 0
+        // (`0x18004988`: `ldrb r0,[r0,#0] / cmp r0,#0 / bleq 0x180057f8`), so it needs 0 here.
+        let seed: u8 = args
+            .iter()
+            .find_map(|x| x.strip_prefix("--ctx-seed="))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5);
+        m.mem.poke8(a, seed);
+        println!("context args: r0={a:#x} r1={:#x} (r0+0x100)", a + 0x100);
+        vec![a, a + 0x100, 0, 0]
     } else {
         vec![]
     };
@@ -2645,9 +2740,110 @@ fn main() {
         .filter_map(|s| s.parse().ok())
         .next()
         .unwrap_or(0);
+    // --poke-at=FRAME:ADDR=VALUE — write one byte just before the given frame runs.
+    //
+    // The async file API these titles use is callback-driven: the game hands RetailOS a request
+    // object and RetailOS calls back on completion, moving the object's state byte on. Nothing
+    // here models that callback, so a request issued in frame N is still pending in frame N+1
+    // forever. This delivers the completion by hand, which is how the state machine gets read
+    // out at all — an instrument for identifying the transitions, not a fix for the missing
+    // callback, and it writes only what the caller names.
+    let poke_at: Vec<(usize, u32, u8)> = args
+        .iter()
+        .filter_map(|a| a.strip_prefix("--poke-at="))
+        .filter_map(|spec| {
+            let (fr, rest) = spec.split_once(':')?;
+            let (addr, val) = rest.split_once('=')?;
+            Some((fr.parse().ok()?, parse_addr(addr)?, parse_addr(val)? as u8))
+        })
+        .collect();
+    for (f, a, v) in &poke_at {
+        println!("poke-at: frame {f} -> [{a:#010x}] = {v:#04x}");
+    }
+
+    // --call-at=FRAME:ADDR:A0[,A1…] — call a guest function between two frames.
+    //
+    // The completion side of the async file API is a callback the game registers and RetailOS
+    // invokes; the registration is real code in the image, so the honest way to deliver a
+    // completion is to call what the game actually asked for rather than to forge the state it
+    // would have written. Minigolf's open registers `0x18017f00` at request+0x34, and that
+    // function reads its status from request+0x20, hands the handle to the file object, frees
+    // the request and falls through to `0x18017f34`, which is what moves the state byte to 2.
+    let call_at: Vec<(usize, u32, Vec<u32>)> = args
+        .iter()
+        .filter_map(|a| a.strip_prefix("--call-at="))
+        .filter_map(|spec| {
+            let mut p = spec.splitn(3, ':');
+            let fr = p.next()?.parse().ok()?;
+            let addr = parse_addr(p.next()?)?;
+            let a: Vec<u32> = p
+                .next()
+                .map(|s| s.split(',').filter_map(parse_addr).collect())
+                .unwrap_or_default();
+            Some((fr, addr, a))
+        })
+        .collect();
+    for (f, a, v) in &call_at {
+        println!("call-at: frame {f} -> {a:#010x}({})", v.iter().map(|x| format!("{x:#x}")).collect::<Vec<_>>().join(", "));
+    }
+
+    // --frame-reason=N / --frame-reason=first0:N, --pump-mark=N : the two context bytes the
+    // RetailOS pump refreshes before every frame call. `play` has had these for a long time;
+    // `trace` did not, so the two binaries drove titles that read them down different paths.
+    // Only meaningful together with `--ctx`, which is what allocates the context in the first
+    // place.
+    let reason_spec = args.iter().find_map(|a| a.strip_prefix("--frame-reason="));
+    let reason_first0 = reason_spec.is_some_and(|v| v.starts_with("first0"));
+    let reason_steady: u8 = reason_spec
+        .and_then(|v| v.rsplit(':').next())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let pump_mark: Option<u8> = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--pump-mark="))
+        .and_then(|v| v.parse().ok());
+    let ctx_base = ctx.first().copied().unwrap_or(0);
+
     if let (Some(v), true) = (last_vector, frames > 0) {
         let mut prev = m.trace.len();
         for f in 0..frames {
+            if ctx_base != 0 {
+                if let Some(mk) = pump_mark {
+                    m.mem.poke8(ctx_base + 0x100, mk);
+                }
+                if reason_spec.is_some() {
+                    let r = if reason_first0 && f == 0 { 0 } else { reason_steady };
+                    m.mem.poke8(ctx_base, r);
+                }
+            }
+            for (pf, addr, val) in &poke_at {
+                if *pf == f {
+                    m.mem.poke8(*addr, *val);
+                    println!("  frame {f:<4} poked [{addr:#010x}] = {val:#04x}");
+                }
+            }
+            // Deliver any completion the host owes the game before the next frame runs. The
+            // callback is the game's own code, at the address it parked in the request.
+            let due: Vec<u32> = m.pending_completions.drain(..).collect();
+            for req in due {
+                let cb = m.mem.read32(req + eapp_loader::REQ_CALLBACK);
+                // Two arguments, not one. The read completion at 0x18017574 asserts
+                // `arg0 == arg1 + 0x128` and spins on `b .` at 0x180175d0 when it does not hold,
+                // so a one-argument call hangs in the game's own code rather than erroring.
+                let ctx_arg = m.mem.read32(req + eapp_loader::REQ_CONTEXT);
+                if cb != 0 {
+                    let s = m.call_with(cb, &[req, ctx_arg], budget);
+                    if !matches!(s, Stop::Returned) {
+                        println!("  frame {f:<4} completion {cb:#010x}({req:#010x}) -> {s:?}");
+                    }
+                }
+            }
+            for (cf, addr, cargs) in &call_at {
+                if *cf == f {
+                    let s = m.call_with(*addr, cargs, budget);
+                    println!("  frame {f:<4} called {addr:#010x} -> {s:?}");
+                }
+            }
             stop = m.call_with(v, &ctx, budget);
             let now = m.trace.len();
             // Only report frames that differ, so a steady state is visible at a glance.
@@ -2703,26 +2899,65 @@ fn main() {
 
     report_break_watch(&mut m);
 
+
+    // --dump=ADDR:N — hexdump guest memory after the run. The async request structs are built by
+    // the game and read by the host, so their layout is only visible in a live object.
+    for spec in args.iter().filter_map(|a| a.strip_prefix("--dump=")) {
+        if let Some((a, n)) = spec.split_once(':') {
+            if let (Some(base), Some(len)) = (parse_addr(a), parse_addr(n)) {
+                println!("\n--- memory {base:#010x}..{:#010x} ---", base + len);
+                for row in (0..len).step_by(16) {
+                    let addr = base + row;
+                    let words: Vec<String> =
+                        (0..4).map(|k| format!("{:08x}", m.mem.read32(addr + k * 4))).collect();
+                    println!("  +{:#05x} {addr:#010x}  {}", row, words.join(" "));
+                }
+            }
+        }
+    }
+
+        // --calls=NAME : every call to one framework, uncapped. The generic call trace shows the
+    // first 400, and a subsystem that only wakes up later — audio, save — never appears in it.
+    for want in args.iter().filter_map(|a| a.strip_prefix("--calls=")) {
+        let sel: Vec<&eapp_loader::Call> =
+            m.trace.iter().filter(|c| c.framework == *want).collect();
+        println!("\n--- {want} calls: {} ---", sel.len());
+        for c in sel.iter().take(60) {
+            println!(
+                "  #{:<4} r:{:08x} {:08x} {:08x} {:08x}  sp:{:08x} {:08x} {:08x} {:08x}  <-{:#010x}",
+                c.index, c.args[0], c.args[1], c.args[2], c.args[3],
+                c.stack[0], c.stack[1], c.stack[2], c.stack[3], c.return_to
+            );
+        }
+    }
+
+    report_profile(&m);
+
     if !m.file_log.is_empty() {
         println!("\n--- file activity: {} ---", m.file_log.census());
-        for l in m.file_log.iter().take(14) {
+        for l in m.file_log.iter().take(60) {
             println!("  {l}");
         }
-        if let Some(l) = m.file_log.more_line(14) {
+        if let Some(l) = m.file_log.more_line(60) {
             println!("{l}");
         }
     }
 
     if !m.tex_log.is_empty() {
-        println!(
-            "\n--- texture / draw diagnostics: {} ---",
-            m.tex_log.census()
-        );
-        for l in m.tex_log.iter().take(14) {
+        println!("\n--- texture / draw diagnostics: {} ---", m.tex_log.census());
+        // Uploads in full, separately: they are what a draw's `tex#N` refers to, and truncating
+        // the middle of a mixed log hides every one of them behind the draws.
+        for l in m.tex_log.iter().filter(|l| !l.starts_with("n=")) {
             println!("  {l}");
         }
-        if let Some(l) = m.tex_log.more_line(14) {
-            println!("{l}");
+        // The interesting draws are the late ones — the early frames are the title card, and a
+        // first-N sample can only ever show that.
+        let kept: Vec<&String> = m.tex_log.iter().collect();
+        if kept.len() > 6 {
+            println!("  ... last 22 of {} kept:", kept.len());
+            for l in kept.iter().rev().take(22).rev() {
+                println!("  {l}");
+            }
         }
     }
 
