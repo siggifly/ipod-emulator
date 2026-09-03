@@ -682,6 +682,37 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### Everything else works. Brick runs. (2026-09-03)
+
+**The decisive experiment.** `a72a768`'s one line was put back **as a temporary diagnostic** — raw
+address instead of translated, the pre-2026-08-19 behaviour — and the descent re-run. It was reverted
+immediately afterwards and the tree is clean; this is recorded because of what it proves, not as a
+change anyone should make.
+
+With that single line reverted, on today's build:
+
+- **Language picker → main menu → Extras → Games**, every gesture landing where it was aimed
+- the **Games menu** drawn: `Brick · Music Quiz · Parachute · Solitaire`
+- one more Select and **Brick runs** — three lives, the score, the paddle, the ball, the brick rows
+
+**And the audio chain is `NEVER REACHED` throughout, including while Brick is playing.**
+`FUN_0024d88c`, `FUN_0023fc50` and `FUN_00217e04` are all zero on a run that reaches the game.
+
+So two things are now established that were not before:
+
+1. **The machine is sound end to end.** Menus, submenus, the games list, and a built-in game running.
+   Nothing else is broken; the wheel, the display, the drive and the firmware all work.
+2. **RetailOS tolerates audio being absent everywhere except one unchecked null dereference.** It does
+   not need audio to draw menus, to navigate, or to play Brick. The empty voice pool costs exactly one
+   store, and that store lands on the IRQ vector.
+
+**Why this is still not a licence to revert.** The MMAP unit is modelled — eight windows, rebuilt when
+the firmware programs them, applied by `translate` to instruction fetch and data alike, as the real
+PP502x applies it. So a null store at virtual `0x18` reaches whatever physical memory holds the
+vectors **on real hardware too**. A real iPod therefore cannot be making this store, which means its
+voice pool is not empty, which means audio does start there. The gap is real and reverting only hides
+it — and breaks cold-booted Rockbox, which is what the line was written to fix.
+
 ### Five things it is not (2026-09-03)
 
 Each of these was a live theory, and each is now eliminated by a run rather than by argument:
