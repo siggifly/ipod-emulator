@@ -682,6 +682,48 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### Audio is subsystem 8, and nothing ever asks for it (2026-09-03)
+
+Three links further up, and the shape changes from "a flag nobody sets" to "a subsystem nobody
+requests".
+
+**What sets the flag.** `FUN_001eccdc` is a message dispatcher on `param_2[1]`. The branch that calls
+the setter is guarded by a two-instruction immediate compare — `sub r12,r1,#0x40000002` then
+`subs r12,r12,#0x23800000`, ARM's way of testing a constant it cannot encode in one field:
+
+```
+001ecd54  sub  r12, r1, #0x40000003
+001ecd58  subs r12, r12, #0x23800000
+001ecd5c  bne  0x001ed16c              ; skip unless r1 == 0x63800003
+001ecd64  bl   0x001ed9f0              ; -> mov r0,#1 / strb r0,[r4,#0x484]
+```
+
+**So audio starts on message `0x63800003`.** That constant appears three times in the image; the one
+that matters is `0x0018ae8c`, the literal pool of `FUN_0018ae70` — a one-line wrapper whose whole
+body is `FUN_0018ad88(param_1, 0x63800003, 0, 0, 0)`. It is the sender, and it is **NEVER REACHED**.
+
+**Who would send it.** `FUN_0018ae70` has one caller, and it is `case 8` of a switch in
+`FUN_001e0458`. That function **runs seven times**, measured, with `r0` = **0, 3, 2, 0xd, 4, 0xd, 4**
+— and never 8. Its own only reference is `DATA`, from a handler table at `0x000b0260`, so it is
+dispatched rather than called.
+
+Subsystems are addressed **by name**: `FUN_000cd314` resolves one through `FUN_001173ac` and passes
+`id & 0xff` on. Five distinct ids are requested during a boot. Audio's is not among them.
+
+**Where this now stands.** The question is no longer about a null pointer, a task, or a flag — each
+of those is a consequence. It is: **what enumerates the subsystems to start, and why is 8 absent
+from that set here?** Everything below it is understood and measured:
+
+```
+subsystem 8 requested  ->  FUN_001e0458 case 8  ->  post 0x63800003
+  ->  FUN_001eccdc gate  ->  FUN_001ed9f0 sets [obj+0x484] = 1
+  ->  FUN_001e9f9c passes its first gate  ->  FUN_0024d88c constructs the audio manager
+  ->  FUN_0024e718 defines its tasks  ->  FUN_0023fc50 fills the four-slot voice pool
+  ->  a wheel click gets a voice instead of NULL  ->  nothing is written to the IRQ vector
+```
+
+Ten links, every one of them measured on a running machine rather than inferred from the call graph.
+
 ### The chain from the crash to a single byte, and where it now stands (2026-09-03)
 
 Walked from the faulting store to one flag, each link measured rather than reasoned:
