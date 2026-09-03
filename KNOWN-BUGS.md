@@ -682,6 +682,34 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### The chain from the crash to a single byte, and where it now stands (2026-09-03)
+
+Walked from the faulting store to one flag, each link measured rather than reasoned:
+
+| | |
+|---|---|
+| `FUN_001eccdc` | **runs, 8 times.** Its call to the setter at `0x001ecd64` is `NEVER REACHED` — a gate inside it, not yet identified. **This is the live end of the chain.** |
+| `FUN_001ed9f0` | `mov r0,#1 / strb r0,[r4,#0x484]` — the **only** thing in 7.5 MB that sets the flag. Never runs |
+| `[obj + 0x484]` | stays **0**. Written once, by the object's constructor at `0x001ef1cc`, zero-initialising (`r5 = 0`, read with `--regs-at`) |
+| `FUN_001e9f9c` | runs **45 times**, and returns at its first instruction pair every time: `ldrb r0,[r0,#0x484] / cmp r0,#0 / ldmiaeq sp!,{r4,pc}`. Its call to the audio accessor is never reached |
+| `FUN_0024d88c` | audio's lazy-static accessor. **24 of its 26 call sites never run at all**; the one that does is `FUN_001e9f9c`, which is stopped by the flag |
+| `FUN_0024e718` | the audio manager's constructor — creates its tasks. Never runs |
+| `FUN_0023fc50` | the PCM task body, whose first act fills the voice pool. Never defined |
+| the pool | four nulls |
+| a wheel click | asks for a voice, gets null, configures through it onto the **IRQ vector** |
+
+**One byte, `[obj + 0x484]`, gates the whole of audio**, and nothing in a boot ever sets it.
+
+**Method note.** Every link here came from the emulator, not from Ghidra's call graph: `--enterlog`
+on a function *and* on the instruction after its gate, so "the function runs but the call does not"
+is distinguishable from "the function does not run" — which is exactly the distinction that made
+`FUN_001eccdc` the live end rather than another dead one. `research/03` §46's *"RetailOS is C++ and
+its control flow is not in the call graph"* is why the static route kept dead-ending; the dynamic one
+did not.
+
+**Next**: decompile `FUN_001eccdc`, find the branch that skips `0x001ecd64`, and measure what it
+tests. It runs eight times, so whatever it reads is available to measure.
+
 ### Root cause: audio is a lazy singleton and nothing ever asks for it (2026-09-03)
 
 Traced to the top. **`FUN_0024d88c` is a C++ lazy-static accessor** — guard, construct, register a
