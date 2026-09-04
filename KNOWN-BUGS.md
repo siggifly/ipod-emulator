@@ -682,6 +682,39 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### Re-verified counts after the scan fix (2026-09-04)
+
+Every count taken with the broken scan was re-run. Most held; one did not:
+
+| | buggy | corrected |
+|---|---|---|
+| RTXC task creator `0x0011c808` | 36 | 36 |
+| message sender `0x0018ad88` | 18 | 18 |
+| voice-pool accessor `0x00217968` | 12 | 12 |
+| **subsystem request `0x000cd30c`** | **7** | **10** |
+
+So *"thirteen of eighteen subsystems are never started"* stands — the message-sender census was
+unaffected — but the subsystem-request census had **three hidden sites**: a `bleq` asking for id 5,
+a `b` asking for id 9, and `FUN_00144d3c`, which is **generic**:
+
+```
+00144d50  ldrb r0, [r4, #0x11]   ; the id is a byte field ON THE OBJECT
+00144d58  b    0x000cd30c        ; request that subsystem
+```
+
+**Subsystems are a property of the object**, and `FUN_00144d3c(obj)` means *start whatever this
+object belongs to*. It runs **four times**, on `0x10874e94`, `0x108782c4`, `0x10878ed4` and
+`0x10879af8`. Ghidra names some of the neighbourhood: `ss_get_status`, `RsistrAccsryMgr`,
+`HPhoneDetTask`.
+
+**It is not the audio path.** The `"Str "` capability at `0x10874aa8` has a different layout — its
+`+0x10` is a pointer (`0x10874abc`), so `+0x11` reads `0x4a`, not a subsystem id, and no object
+carrying `8` in that field is ever passed here. Audio is requested only through `FUN_001dee1c`,
+vtable slot `+0x28`, which the activation pass would call and does not.
+
+So the corrected scan widened the map without moving the conclusion: **the only route to audio is the
+activation pass, and the two ways to reach it are still `NEVER REACHED`.**
+
 ### My own caller scan was blind to conditional branches (2026-09-04)
 
 **Every "zero callers" in the entries below was produced by a scan that only matched
