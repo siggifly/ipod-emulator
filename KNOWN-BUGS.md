@@ -682,6 +682,44 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### The activation pass exists, has two modes, and only the wrong one runs (2026-09-04)
+
+**`FUN_0018ccb4(owner, cap)` is the capability start routine, and it is a two-way switch:**
+
+```
+0018cccc  ldrb r0, [r4, #0x8]   ; already started?
+0018ccd4  bne  0x0018cd04       ;   yes -> nothing to do
+0018ccdc  cmp  r6, #0           ; r6 = the second argument
+0018cce4  strne r6, [r4, #0x18] ;   non-zero: just make THIS one current...
+0018cce8  bne  0x0018ccf4       ;   ...and skip activation entirely
+0018ccf0  bl   0x0018ce38       ; ZERO: ACTIVATE EVERY CAPABILITY
+```
+
+`0x0018ce38` iterates the collection at `owner+0xc` with the **slot `+0x20`** thunk as its callback.
+On the `"Str "` capability, slot `+0x20` is `FUN_001dee48`, which tail-branches into the base class's
+activate, which calls **slot `+0x28`** — `FUN_001dee1c` — **which requests subsystem 8.** That is the
+whole path from "activate all" to "start audio", and every link of it is present in the firmware.
+
+**It runs exactly once, and takes the other branch.** Measured: `r0 = 0x10874a88` (the owner),
+**`r1 = 0x10874aa8` — the `"Str "` capability itself** — so `r6 != 0`, so it sets `owner->current`
+and skips activation. The write at `0x0018cce0` is in the run's store census, which is how the path
+is known rather than inferred; an earlier reading of this as the *already-started* branch was wrong,
+because `0x0018cd04` is also the fall-through after the second pass.
+
+**Nothing ever calls it with zero.** `0x0018ce38` is `NEVER REACHED`, and so the thirteen unstarted
+subsystems stay unstarted.
+
+**Operator testimony, recorded as such.** A real iPod clicks the piezo when scrolling *and* when
+pressing buttons — through the headphones instead if they are plugged in — and, from memory, does so
+on the language picker of a fresh device. That is not a measurement and is marked as memory, but it
+is the only evidence available about the real machine, and it says a real iPod has its sound path
+running by that screen. Which means a real iPod **does** perform the activate-all pass before the
+picker, and ours does not.
+
+**The one open question, finally singular:** what calls `FUN_0018ccb4(owner, 0)`. It has **zero**
+direct callers — the single run arrives with `lr = 0x00284530`, tail-branched out of the chain
+below `0x000d05c0`, so the entry is a computed one. `research/03` §46 for the fifth time.
+
 ### Thirteen of eighteen subsystems are never started (2026-09-04)
 
 The message vocabulary is small and enumerable. `FUN_0018ad88(target, msg, 0, 0, 0)` is the sender,
