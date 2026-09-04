@@ -682,6 +682,41 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### The timeline, and what slot `+0x84` actually is (2026-09-04)
+
+Slot `+0x84` is not "activate this object" — it is a **tree-walk visitor**:
+
+```c
+void FUN_001d2f08(node, ...) {
+  (**(code **)(*node + 0x84))(node);      // visit this node
+  FUN_001e2828(&iter, node + 6);          // iterate its children
+  while (FUN_001e27e0(&iter, &child))
+    (**(code **)(*child + 0x84))();       // visit each child
+}
+```
+
+It runs **exactly once**, at **@127.5 M**, from `0x001d2910`, rooted at `0x13e42708` — one visit to
+the root and **24 to children**. The subsystem manager `0x13e36d64` is **not among the 25**.
+
+**The order rules out the obvious guess.** Measured entry times on one run:
+
+| @instr | what |
+|---|---|
+| 53 201 100 | the subsystem manager `0x13e36d64` is constructed |
+| 127 575 496 | the `+0x84` tree walk runs, 25 nodes, manager not among them |
+| 217 182 667 | the `"Str "` capability `0x10874aa8` is constructed |
+| ~351 700 000 | five subsystem-start messages; the capability is made **current** |
+| 359 641 547 | the language picker draws |
+| ~419 980 000 | first input → the null store → the IRQ vector dies |
+
+So the manager **already existed** when the walk ran — this is not a construction-order race. It
+simply is not in that tree. And the capability it would have to activate did not exist until 90 M
+instructions *after* the walk, so that single early walk could not have started audio even if the
+manager had been visited.
+
+**Which means a second activation must happen on a real iPod, later** — after the capability is
+constructed at 217 M and before the picker at 359 M. Nothing in this machine performs one.
+
 ### Route B is a method on the subsystem manager, and it is the only one never called (2026-09-04)
 
 `FUN_001dfdb0` — the route that reaches *activate-all* — is **vtable slot `+0x84`** of the class
