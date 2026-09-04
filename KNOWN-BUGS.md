@@ -682,6 +682,33 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### A behavioural target: the wheel should spin the disk, and here it does not (2026-09-04)
+
+**Operator memory, recorded as such:** on a real iPod at the language picker, *moving the wheel spins
+the drive*. That is a signature of the working machine, and it is directly measurable here.
+
+Measured, same ROM, same drive, same budget, one variable:
+
+```
+no input, to 140 s     ata commands: 347
+20 detents, to 140 s   ata commands: 347
+```
+
+**Identical. Wheel input causes exactly zero disk activity in this emulator.** The click's sound
+object (`0x10882440`) is already resident when `FUN_001b9168` is entered at `@419.9 M`, so nothing on
+that path needs the drive — which is what "audio never started, so nothing ever asks for anything"
+looks like from the outside.
+
+**This is worth more as an acceptance criterion than as a clue.** When the fault is fixed, a run with
+wheel input must show *more* ATA commands than one without. That is a cheap, mechanical check that
+does not depend on reading a screen, and it can go in the boot matrix.
+
+**And it explains the Rockbox/RetailOS asymmetry the operator raised.** Rockbox works here precisely
+because it does none of this: it drives the panel and the drive itself and never touches RetailOS's
+capability, subsystem or audio machinery. Rockbox passing on all three ROM/IPSW pairs therefore
+proves the ATA path, the drive and the wheel are sound — which is exactly why the remaining fault has
+to be inside RetailOS's own initialisation and nowhere else.
+
 ### The timeline, and what slot `+0x84` actually is (2026-09-04)
 
 Slot `+0x84` is not "activate this object" — it is a **tree-walk visitor**:
