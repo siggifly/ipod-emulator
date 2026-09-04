@@ -682,6 +682,43 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### Thirteen of eighteen subsystems are never started (2026-09-04)
+
+The message vocabulary is small and enumerable. `FUN_0018ad88(target, msg, 0, 0, 0)` is the sender,
+and **eighteen** tiny functions call it, one per message:
+
+```
+63800001 63800002 63800003 63800004 63800006 63800007 63800009 6380000d 6380000f
+63800012 63800014 63800016 63800017 63800018 6380001c 6380001e 63800022 63800023
+```
+
+`0x63800003` is *start audio*, sent by `FUN_0018ae70`. Armed all eighteen senders on a run that
+crashes. **Five fire:**
+
+| sender | message |
+|---|---|
+| `0x0018abb8` | `63800012` |
+| `0x0018abe8` | `63800009` |
+| `0x0018ac94` | `6380000d` ×2 |
+| `0x0018aea0` | `6380001e` ×2 |
+| `0x0018af68` | `63800002` |
+
+**Thirteen never do, and audio is one of the thirteen.** So this is not an audio-specific failure —
+RetailOS is bringing up a *minimal set* of subsystems, and the same is true of the id-based path
+measured a day earlier, where five distinct ids are requested and audio's is not among them.
+
+**Two things this rules out.** Headphone detect is answered correctly — `GPIOA` at `0x6000d030`
+reads `0x20` (hold off, no headphones) throughout, and RetailOS genuinely consults it, eight reads
+from three sites. And the caller of the allocator **does** check for null (`if (iVar1 != 0)` in
+`FUN_001b9168`), so Apple's own code treats an exhausted pool as survivable — the fault is inside
+the allocator's steal path, which configures through the null slot *before* returning it. On real
+hardware that path is never taken because the pool is never empty.
+
+**The shape of the remaining question.** RetailOS at the language picker runs a reduced set of
+subsystems, which is plausibly correct for a first-run setup screen. What is not explained is why
+its own UI, on that screen, plays a sound through a pipeline that setup has not started. Either a
+real iPod does not click on that screen, or a real iPod starts more than five subsystems by then.
+
 ### Everything else works. Brick runs. (2026-09-03)
 
 **The decisive experiment.** `a72a768`'s one line was put back **as a temporary diagnostic** — raw
