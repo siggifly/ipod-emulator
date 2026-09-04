@@ -682,6 +682,29 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### Route B is a method on the subsystem manager, and it is the only one never called (2026-09-04)
+
+`FUN_001dfdb0` — the route that reaches *activate-all* — is **vtable slot `+0x84`** of the class
+whose table is at `0x00670720`. The constructor at `FUN_001e080c` installs that table and stores the
+object into a global at `0x10822eb4`; read at runtime, that global holds **`0x13e36d64`** — which is
+the **same object** `r0` carries in all five subsystem-start message sends.
+
+So route B is a method on the **subsystem manager itself**, and that object is anything but idle:
+`--readlog` on its vtable pointer counts **233 dispatches** across a run, from a dozen sites in
+`0x001e0xxx` and beyond.
+
+**And slot `+0x84` is not one of them.** `--readlog` on `0x006707a4` reports **zero**, against a
+control in the same run — `0x006706c8`, the slot that *is* dispatched, read once by the thunk at
+`0x0018ce50`. The instrument works; the answer is a real zero.
+
+So the object is constructed, registered, and used two hundred times, and the one method that would
+activate its capabilities is never invoked. Twenty-one sites in the image dispatch slot `+0x84` on
+*some* object, so the mechanism is ordinary — this object simply never receives it.
+
+**The state of the whole question, in one line:** every link from *activate-all* down to *Brick plays*
+is present, measured, and understood; the entry to that chain is one virtual call that this machine
+never makes, and nothing found so far explains why a real iPod makes it.
+
 ### Re-verified counts after the scan fix (2026-09-04)
 
 Every count taken with the broken scan was re-run. Most held; one did not:
