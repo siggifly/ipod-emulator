@@ -682,6 +682,42 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### My own caller scan was blind to conditional branches (2026-09-04)
+
+**Every "zero callers" in the entries below was produced by a scan that only matched
+`0xEB`/`0xEA` — unconditional `BL` and `B`.** ARM encodes the condition in the top nibble, so
+`bne` (`0x1A`), `beq` (`0x0A`) and `blle` (`0xDB`) are all branches this missed. The correct test is
+`(word >> 25) & 7 == 5`, which accepts any condition.
+
+It changed results materially:
+
+| | with the bug | corrected |
+|---|---|---|
+| callers of `FUN_0018ccb4` (start/make-current) | **0** | 1 — `bne` at `0x000d0604` |
+| callers of `0x0018ce38` (activate-all) | 1 | **2** — plus `blle` at `0x0018cba4` |
+| callers of `0x0018ce98` (makeCurrent) | **0** | **2** — `beq` at `0x00163a8c`, `bne` at `0x001dfdc8` |
+
+Three "this is unreachable, §46 again" conclusions were wrong, and one of them —
+`FUN_0018ccb4` — was reported as unreachable in the entry directly below while the emulator was
+simultaneously showing it **running**. That contradiction should have been caught at the time: a
+function cannot both execute and have no way in.
+
+### What the corrected scan shows
+
+**`FUN_000d05c0` always makes the capability current, never activates.** Its tail call is
+`movne r1, r0` (the `"Str "` singleton) then `bne 0x0018ccb4` — so `r6 != 0` by construction and the
+activation branch is unreachable *from here by design*. This path is not the bug.
+
+**The activate-all route is `FUN_0018cb20`**, which reaches `0x0018ce38` through a conditional
+`blle`. It is entered from the thunk at `0x0018ce98`, whose two callers are `FUN_00163a30` and
+`FUN_001dfdb0` — the latter a vtable slot at `0x006707a4`. **All five of those addresses are
+`NEVER REACHED`.**
+
+**And the end state confirms the switch.** Dumped at the end of a run: `[owner+0x08] = 1` (started)
+and **`[owner+0x18] = 0x10874aa8`** — the `"Str "` capability **is** current. It was made current and
+never activated, which is exactly what the `r6 != 0` branch does. The earlier `isCurrent` reads of
+zero were all before `@359 M`, when the store happens; they were right and so is this.
+
 ### The activation pass exists, has two modes, and only the wrong one runs (2026-09-04)
 
 **`FUN_0018ccb4(owner, cap)` is the capability start routine, and it is a two-way switch:**
