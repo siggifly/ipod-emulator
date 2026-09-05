@@ -720,6 +720,62 @@ thirteen never started, and no activation pass.
 mystery**: make the second core work, then re-run every measurement above. `research/06`'s
 `--cop-awake` entry and `research/03`'s COP notes are the starting material.
 
+### ✅ The second core works — and it is what stops the null write (2026-09-05)
+
+The entry above says the first thing to establish is to make the second core work. It works, and
+re-running the measurement on it does what that entry hoped: **the fatal store at `0x18` does not
+happen with two cores.**
+
+**The fault was one line, and not in the co-processor model.** Reading `CPU_QUEUE` is what clears it
+and drops `MAILBOX_IRQ`, and that clear lives in `read8_inner`. `read32` has a fast path that
+returns the four stored bytes straight from the region and never calls it, so a word read of
+`0x60001010` took the message and left bit 29 set: the CPU was interrupted, read the queue, and was
+interrupted again for the whole budget. The tell is that two numbers were *equal* — **2 953 894
+reads of `0x60001010` and 2 953 894 interrupts taken**. Fixed by naming the mailbox page in
+`page_is_plain`, the list every device window has to appear in, and the sixth time that list has
+been the bug. Full account, recipe and the `peek32` recursion trap: `research/03` §57.
+
+```
+plain cold boot         before        after     one core
+ata commands                70          620          619
+interrupts taken     2 953 894      166 712            —
+second core           spinning    asleep, 15 057 sleeps / 15 056 wakes
+panel               Apple logo   language picker   language picker
+```
+
+#### The controlled pair, and the control that had to come first
+
+Same route, same drive, same script, same anchor; the only variable is `--second-core`.
+
+```
+input at 210 s, on the picker      one core        two cores
+frames posted                            31               31
+frames DROPPED unread                    25                0
+word reads of DATA                        5               31
+vector-page stores                       29               16
+store at 0x0018 (fatal)              1, from 0x001465d0   NONE
+```
+
+**One core drops 25 of 31 wheel frames and writes through the null pointer. Two cores read every
+frame and never do.** That is the whole defect this file has been describing, and the missing half
+of the processor is what produced it.
+
+The first attempt at this pair proved nothing, and is worth keeping because the failure is a
+standing trap. Both arms were anchored at **80 s**, and on that route the picker does not draw until
+**200 s** — so all 28 steps landed on the boot screen, both arms showed 16 benign stores and no
+`0x18`, and it read as a fix. It was the absence of the *trigger*. The anchor came from a recipe
+measured on `ipod-boot retail`, where the picker draws at 73.2 s; these runs used a hand-rolled
+`trace --boot-osos --cold-boot`, which reaches the same picture 127 s later. **Anchor to the film's
+own `first_usec` — column 5 — for the route actually being run**, never to a number measured on a
+different one.
+
+#### What this does not yet claim
+
+The crash is gone; **the menu still does not move.** Both arms draw five pictures and stop at the
+language picker, so with two cores RetailOS now consumes every wheel event and survives, and still
+does not act on one visibly. That is a different and much better-posed question than the one this
+file opened with, and it is the next one.
+
 ### The capability receives exactly one virtual call, and it is a no-op (2026-09-05)
 
 Two measurements that close off the tree-walk thread entirely.
