@@ -682,6 +682,47 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### The capability receives exactly one virtual call, and it is a no-op (2026-09-05)
+
+Two measurements that close off the tree-walk thread entirely.
+
+**The subsystem manager is not a tree node and never was.** Its constructor, in full:
+
+```c
+void FUN_001e080c(void) {
+  puVar1 = FUN_0018afb8();
+  *puVar1 = DAT_001e0834;                        // vtable 0x00670720
+  *(undefined1 *)((int)puVar1 + 0x1a) = 0;
+  puVar1[7] = 0;
+  *(undefined4 **)(DAT_001e0838 + 8) = puVar1;   // register in a global. that is all
+}
+```
+
+No parent, no attachment, no list insertion. It is a standalone singleton, so **the `+0x84` tree walk
+was never going to reach it** — the two share an offset and nothing else. That thread is closed.
+
+**And on the capability object, only one slot is ever dispatched.** `--readlog` on three adjacent
+vtable words in one run:
+
+| slot | what it is | reads |
+|---|---|---|
+| `+0x20` `0x006706c4` | `FUN_001dee48`, *activate me* | **0** |
+| `+0x24` `0x006706c8` | `0x0018ce80`, a base-class `bx lr` | **1** |
+| `+0x28` `0x006706cc` | `FUN_001dee1c`, *request subsystem 8* | **0** |
+
+So the `"Str "` capability is constructed, registered, made current — and the only virtual call it
+ever receives in a whole run **does nothing**. The two methods that would start audio are never even
+looked up.
+
+That single `+0x24` call comes from `FUN_0018ccb4`'s *second* pass, the one that runs unconditionally.
+The *first* pass — `+0x20`, activate — is the one gated behind `r6 == 0`.
+
+**Stated as plainly as the evidence allows: in this image, as executed here, no live path calls
+`FUN_0018ccb4(owner, 0)`.** Its only caller passes a non-null capability by construction; the two
+routes through `FUN_0018cb20` are an orphaned function and a slot nothing dispatches. Either one of
+those is live on real hardware for a reason not visible here, or activation happens by a path not yet
+found.
+
 ### RETRACTED SAME DAY — the audio node is NOT in the tree (2026-09-05)
 
 Enumerated the 25 objects the `+0x84` walk visits, with `--regs-at` at the dispatch:
