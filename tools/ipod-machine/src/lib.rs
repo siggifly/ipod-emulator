@@ -2355,7 +2355,19 @@ impl Bus for Memory {
         if let Some(v) = self.core_register(a) {
             return v;
         }
-        if let Some((idx, off)) = self.fast_region(a, false) {
+        // **`CPU_QUEUE` has to leave the fast path, exactly as it does on the write side.**
+        // Reading it is what clears it — Rockbox's `pp5020.h` says so outright, *"only CPU read
+        // clears it"* — and that clear lives in `read8`, on the last byte of the word. This path
+        // returns the four stored bytes and never calls `read8`, so an `ldr` of the queue took the
+        // message and left bit 29 set. The line then never fell: the CPU was interrupted, read the
+        // queue, was interrupted again, and never made progress. Measured on a cold retail boot
+        // with `--second-core`: **2 953 894 reads of `0x60001010` and 2 953 894 interrupts taken,
+        // exactly equal**, against 70 ATA commands where one core manages 619.
+        //
+        // The write path has carried `Mbx::queue(a).is_none()` in its own hoist filter since the
+        // mailbox was modelled, with a comment saying the hoist has to name every consumer or it
+        // silences one. The read path never got the matching line.
+        if let Some((idx, off)) = self.fast_region(a, false).filter(|_| Mbx::queue(a).is_none()) {
             // `count` is a no-op unless something asked for accounting, so hoist that test out of
             // the four calls rather than making them and returning immediately from each.
             // `input_probe` is in the list because it consumes `count` too — the hoist has to name
@@ -2562,7 +2574,12 @@ impl Memory {
         // byte reads and clearing on the first would drop three quarters of the value.
         if Mbx::queue(addr) == Some(Core::Cpu) && addr & 3 == 3 && self.asking == Core::Cpu {
             let word = Mbx::BASE + Mbx::CPU_QUEUE;
-            let v = self.read32(word);
+            // **`peek32`, not `read32`.** Now that `read32` sends queue addresses down the slow
+            // path so this clear can run at all, calling it from inside the clear is unbounded
+            // recursion — `read32` -> `read8` -> here -> `read32`. It overflows the stack on the
+            // first `ldr` of the queue, which is how this was found. `peek32` reads the backing
+            // store with no side effects, which is exactly what taking the message needs.
+            let v = self.peek32(word).unwrap_or(0);
             if v & Mbx::MSG != 0 {
                 let cleared = (v & !Mbx::MSG).to_le_bytes();
                 for (k, b) in cleared.iter().enumerate() {
