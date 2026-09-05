@@ -761,13 +761,17 @@ frame and never do.** That is the whole defect this file has been describing, an
 of the processor is what produced it.
 
 The first attempt at this pair proved nothing, and is worth keeping because the failure is a
-standing trap. Both arms were anchored at **80 s**, and on that route the picker does not draw until
-**200 s** — so all 28 steps landed on the boot screen, both arms showed 16 benign stores and no
-`0x18`, and it read as a fix. It was the absence of the *trigger*. The anchor came from a recipe
-measured on `ipod-boot retail`, where the picker draws at 73.2 s; these runs used a hand-rolled
-`trace --boot-osos --cold-boot`, which reaches the same picture 127 s later. **Anchor to the film's
-own `first_usec` — column 5 — for the route actually being run**, never to a number measured on a
-different one.
+standing trap. Both arms were anchored at **80 s**, and the picker does not draw until **200 s** —
+so all 28 steps landed on the boot screen, both arms showed 16 benign stores and no `0x18`, and it
+read as a fix. It was the absence of the *trigger*.
+
+The 80 s came from `clean-run-matrix.sh`, whose comment records the picker at **73.2 s**. That is
+not a route difference — `ipod-boot retail`, the canonical route, draws it at **200.4 s** on the
+same drive, within half a second of the hand-rolled `trace --boot-osos --cold-boot` used here. What
+differs is the **drive**: the matrix builds one per generation from an IPSW, and these runs use
+`ipod8g-retail.PRISTINE.img`. A drive is part of the machine, and an anchor measured on one does
+not transfer to another. **Take the anchor from the film's own `first_usec` — column 5 — for the
+run in hand.**
 
 #### What this does not yet claim
 
