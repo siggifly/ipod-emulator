@@ -3189,3 +3189,55 @@ read of a device register bypassed the device."
 
 The instrument that found it was `--watch-range`, and only because the count was compared against
 `irqs: … taken` rather than read on its own. Either number alone is unremarkable.
+
+## 58. ✅ The audio subsystem does start — it needs the coprocessor, 2026-09-05
+
+`KNOWN-BUGS.md` spent a fortnight describing a layer that had *never* started: a four-slot voice
+pool at `0x1088342c` zeroed at boot and never filled, thirteen subsystems that never come up, a
+capability layer receiving exactly one virtual call, and an activation pass with no caller. Every
+one of those measurements is reproducible and every one was taken on **one core**.
+
+Fix §57's mailbox read, run the same descent with the coprocessor alive, and dump the pool:
+
+```sh
+trace 2600000000 --boot-osos --cold-boot \
+  --flash=resources/roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin \
+  --disk=<clone of ipod8g-retail.PRISTINE.img> --disk-writable \
+  --bcm --pmu --nor --clock=5 --clickwheel --wheel="@210s:touch,+150ms:down=select,…" \
+  --dump=0x1088342c:64
+```
+
+```text
+two cores  1088342c  10 c2 86 10  5c c1 86 10  50 ff ef 13  a4 fe ef 13
+one core   1088342c  00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00
+```
+
+**Four slots, four live pointers** — `0x1086c210`, `0x1086c15c`, `0x13efff50`, `0x13effea4` — against
+four zeros for the same firmware on the same drive with `--no-second-core`. The only variable is
+whether the part has the second ARM7TDMI it shipped with.
+
+The store that used to land on the IRQ vector tells the same story from the other end. Arming its PC
+with `--enterlog`:
+
+```text
+two cores  0x001465d0 x11   0x00146504 x4    vector page: 16 stores, NONE at 0x18
+one core   0x001465d0 x1    0x00146504 x2    vector page: 29 stores, 0x0018 IRQ FATAL
+```
+
+Eleven executions and nothing on the vector page. The store is not being skipped — it is writing
+into a voice that exists, eleven times, where one core got null on the first attempt and destroyed
+its own interrupt vector with it.
+
+### What this costs the record, and what it does not
+
+Nothing measured on one core was wrong. The pool really was empty, the subsystems really did not
+start, the activation pass really had no caller — **on that machine**. What expired is the inference
+those measurements invited: that RetailOS's audio layer is unreachable in this emulator and has been
+since 0.1. It is reachable, it needs a coprocessor, and the coprocessor needed one line in `read32`.
+
+That is also the answer to a question the operator asked from memory and nothing here could confirm:
+*does the iPod click when you scroll?* It does. The voices exist to make the sound with.
+
+**It does not explain the still menu.** RetailOS receives every wheel frame, acknowledges each one,
+runs `core_wake` against the press, allocates a voice for the click — and draws nothing. That is a
+redraw problem, and it is the first time it has been *only* that.

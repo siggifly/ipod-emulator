@@ -540,7 +540,39 @@ ever — 93 of them when somebody counted. `DataDirGuard` takes its directory wi
 the outermost guard does, because the lock is re-entrant and a first cut of this deleted the tree
 halfway through the test that had set it up.
 
-## A wheel gesture makes RetailOS write through a null pointer and destroy its own IRQ vector — 2026-09-03
+## ✅ ~~A wheel gesture makes RetailOS write through a null pointer and destroy its own IRQ vector~~ — FIXED 2026-09-05
+
+> **The cause was a missing coprocessor, and the null was a symptom.** RetailOS's voice pool is
+> filled by a subsystem that cannot start on one core, so the allocator returned null and
+> `configure(NULL, 8000, 8, 1)` wrote onto the IRQ vector at `0x18`. The second core could not run
+> because a word read of `CPU_QUEUE` took `read32`'s fast path and never reached the clear in
+> `read8_inner` — see `research/03` §57. With two cores, **the pool is populated and the store is
+> gone.** Same descent, same drive, `--second-core` the only variable, dumping the pool this whole
+> entry is about:
+>
+> ```text
+> two cores  1088342c  10 c2 86 10  5c c1 86 10  50 ff ef 13  a4 fe ef 13
+>            -> four live voices: 0x1086c210 0x1086c15c 0x13efff50 0x13effea4
+> one core   1088342c  00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00
+> ```
+>
+> And the store site itself, armed with `--enterlog`:
+>
+> ```text
+> two cores  0x001465d0 x11   0x00146504 x4    vector page: 16 stores, NONE at 0x18
+> one core   0x001465d0 x1    0x00146504 x2    vector page: 29 stores, 0x0018 IRQ FATAL
+> ```
+>
+> Eleven executions and no vector-page write: the store is not being skipped, it is storing into a
+> voice that exists. **The audio subsystem starts.** Everything below about the empty pool, the
+> thirteen unstarted subsystems, the inert capability layer and the activation pass nobody calls was
+> measured on a machine missing half its processor, and is kept because it is how the cause was
+> found — not because it still describes this emulator.
+>
+> **What is NOT fixed: the menu still does not move.** RetailOS receives every wheel frame,
+> acknowledges it, schedules against it, allocates a voice for the click, and draws nothing. That is
+> the open question, and it is now a redraw problem rather than a whole layer that never starts.
+
 
 **The menus stopped working on 2026-08-18 and nothing noticed for a fortnight**, because the failure
 is silent: the script fires every step, the report says `106 of 106 steps fired`, and the panel holds

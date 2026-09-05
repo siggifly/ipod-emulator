@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-859 headings across 17 documents — 40 dated, 15 settled, 15 retracted, 5 corrected.
+861 headings across 17 documents — 41 dated, 16 settled, 15 retracted, 5 corrected.
 
 ## Where each document stands today
 
@@ -19,7 +19,7 @@ above it in the same document may have been superseded.
 |---|---|---|---|
 | [`01-build-log.md`](01-build-log.md) | App Store — reassessed 2026-08-11 (an earlier "realistically no" here was… | `2026-08-11` |  |
 | [`02-retailos-boot.md`](02-retailos-boot.md) | *nothing in it is dated* | — | |
-| [`03-rtxc-and-the-video-coprocessor.md`](03-rtxc-and-the-video-coprocessor.md) | 57.  The second core was stalled by a read that never cleared the thing i… | `2026-09-05` | settled |
+| [`03-rtxc-and-the-video-coprocessor.md`](03-rtxc-and-the-video-coprocessor.md) | 58.  The audio subsystem does start — it needs the coprocessor, 2026-09-05 | `2026-09-05` | settled |
 | [`04-bypass-ledger.md`](04-bypass-ledger.md) | Caveat on the interrupt-wake fix (2026-08-31) — it stops the machine idli… | `2026-08-31` |  |
 | [`05-the-chip-inventory.md`](05-the-chip-inventory.md) | *nothing in it is dated* | — | |
 | [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md) | `--cop-awake` does not unblock Doom — it stops the machine entirely (2026… | `2026-09-01` |  |
@@ -90,7 +90,7 @@ and nothing dated replaced it.
 
 ### [`03-rtxc-and-the-video-coprocessor.md`](03-rtxc-and-the-video-coprocessor.md)
 
-161 headings, 12 of them marked or dated:
+163 headings, 13 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
@@ -106,6 +106,7 @@ and nothing dated replaced it.
 | 1690 | — | RETRACTED | It renders — ❌ **RETRACTED, see §39** |
 | 1909 | — | settled | 38.  ADCS2 bit 7 is conversion-ready — and the PMU was **not** the boot loop |
 | 3121 | 2026-09-05 | settled | 57.  The second core was stalled by a read that never cleared the thing it read, 2026… |
+| 3193 | 2026-09-05 | settled | 58.  The audio subsystem does start — it needs the coprocessor, 2026-09-05 |
 
 ### [`04-bypass-ledger.md`](04-bypass-ledger.md)
 
