@@ -126,10 +126,18 @@ boot_retailos() {                   # $1 nor  $2 gen  $3 label  $4 drive
       --disk-writable --sysinfo --bcm --pmu --nor --clock=5 --clickwheel \
       --wheel="$w" --enterlog=0x10000000 --bcm-film=0xE0000:140:F0:2000000:"$out" > "$out.log" 2>&1
   fi
-  local hit pics nb
+  local hit pics nb vec
   hit=$(grep -oE '0x10000000 +unnamed +(x[0-9]+|NEVER REACHED)' "$out.log" | head -1 | awk '{print $3}')
   pics=$(pictures "$out"); nb=$(last_nonblack "$out")
-  if [ "${hit:-NEVER}" = "NEVER" ]; then
+  # **The vector-page guard turns a symptom into a cause.** A store at 0x18 is RetailOS writing
+  # through a null voice pointer onto its own IRQ vector; the next interrupt branches into the boot
+  # ROM's signature and the machine wedges. Without this the row reads PARTIAL / "input changed
+  # nothing", which is true and tells nobody what to fix. See KNOWN-BUGS.md.
+  vec=$(grep -cE '^  0x0018  IRQ' "$out.log" 2>/dev/null || true)
+  if [ "${vec:-0}" -gt 0 ]; then
+    row retailos "$gen" "$label" "$route" FAIL \
+      "wrote through NULL onto the IRQ vector at 0x18 — the voice pool is empty (KNOWN-BUGS)"
+  elif [ "${hit:-NEVER}" = "NEVER" ]; then
     row retailos "$gen" "$label" "$route" FAIL "0x10000000 never reached, $pics pictures"
   elif [ "${pics:-0}" -ge 7 ] && [ "${nb:-0}" -gt 1000 ] && [ "${nb:-0}" -ne 76800 ]; then
     # More pictures than a boot alone produces (five), so the wheel moved it somewhere.
