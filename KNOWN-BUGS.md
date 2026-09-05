@@ -682,6 +682,44 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### Every measurement this session was made on a machine RetailOS was not written for (2026-09-05)
+
+**The firmware sweep came back negative, and that is what made the next question worth asking.**
+`iPod_13.1.3` — a different firmware generation from the `20.1.3` used all session — behaves
+*identically*: 24 frames posted, 12 read, **29 vector-page stores**, the same null write. So this is
+not a quirk of one Apple build. Every RetailOS we hold does it.
+
+Which points at the machine. And there is one machine variable that was never changed in two days of
+measurement:
+
+```
+                        single core          --second-core
+ata commands                   347                     70
+DATA reads                      12                      3   (boot queries only)
+vector-page stores              29                     16   (bootloader only — NO null write)
+panel                 language picker            Apple logo
+```
+
+**With the second core enabled the null write does not happen — because the machine never gets far
+enough to make it.** It stalls at the boot logo. That is not a fix; it is the same defect
+`research/06` records for `--cop-awake`, where Doom went from 3 982 ATA commands to **zero** — *"a
+second interpreter that diverges before the firmware does anything observable."*
+
+**The PP5021C has two ARM7TDMI cores and RetailOS is a dual-core operating system.** Our second core
+does not work. So every conclusion in the entries above — the unstarted subsystems, the inert
+capability layer, the activation pass nobody calls — was measured on a machine that is **missing half
+the processor the firmware expects**.
+
+That does not make those measurements wrong; they are all reproducible and they describe this
+machine accurately. But it supplies something that was missing: a **bounded, known, plausible reason**
+why a whole layer never starts, in place of an unfindable caller. If subsystem tasks are scheduled on
+the COP, a machine whose COP diverges immediately would show exactly what we see — five subsystems up,
+thirteen never started, and no activation pass.
+
+**This is now the first thing to establish, and it is a real emulator milestone rather than a
+mystery**: make the second core work, then re-run every measurement above. `research/06`'s
+`--cop-awake` entry and `research/03`'s COP notes are the starting material.
+
 ### The capability receives exactly one virtual call, and it is a no-op (2026-09-05)
 
 Two measurements that close off the tree-walk thread entirely.
