@@ -173,7 +173,13 @@ pub struct Config {
     /// coprocessor is now doing part of the work. RetailOS genuinely uses it (it parks and
     /// dispatches to it twice during a boot, then runs 111 M instructions there), so with this on
     /// the machine is *more* faithful and *less* comparable to what is already written down.
-    pub second_core: bool,
+    /// Run the part with **one** core instead of the two it has.
+    ///
+    /// Inverted on 2026-09-05, when two cores became the default: the field used to be
+    /// `second_core` and mean "opt in to the coprocessor". An opt-in field with a default-true
+    /// machine behind it is a field that silently turns the machine back off, which is how
+    /// `ipod-boot retail` and this window came to boot different machines in the first place.
+    pub one_core: bool,
     /// What this machine boots. [`BootTarget::Os`] is the ordinary one.
     pub boot: BootTarget,
     /// `--press=BUTTON@SECONDS`, repeatable — press a button through the window's own input path,
@@ -1103,7 +1109,7 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     // Without this the wheel's IRQ 40 fetched from an unmapped 0x18 and the machine reported
     // `Lost(24)` the instant a button was pressed. `ipod-boot flsh` never passes `--cold-boot`,
     // which is why the same image driven from the command line always worked.
-    m.mem.second_core = cfg.second_core;
+    m.mem.second_core = !cfg.one_core;
     ipod_machine::map_hardware(&mut m, cfg.boot.is_os());
     // The part's own name at `PP_VER1`/`PP_VER2`, from the one place that decides it.
     //
@@ -2239,7 +2245,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
             // The coprocessor comes out of reset running the same code and decides for itself, on
             // `PROC_ID`, that it is not the CPU — Apple's bootloader branches on it at 0x8738 and
             // parks it three instructions later.
-            if cfg.second_core {
+            if !cfg.one_core {
                 m.cop.regs[15] = pc;
             }
             m.call_with(pc, &[0, 0, 0, 0], SLICE)

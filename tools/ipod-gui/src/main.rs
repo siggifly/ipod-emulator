@@ -9363,7 +9363,7 @@ pub(crate) mod tests {
         let wiring = wire(
             &w,
             settings.clone(),
-            args::Machine { cold: true, clock: Some(5), second_core: true, charger: true },
+            args::Machine { cold: true, clock: Some(5), cores: Some(true), charger: true },
             Rc::new(drops::Shell::Native),
         );
         w.invoke_start_device(0);
@@ -9372,7 +9372,7 @@ pub(crate) mod tests {
         let cfg = &live.as_ref().expect("the press started no machine").cfg;
         assert!(cfg.cold, "--cold did not reach the machine");
         assert_eq!(cfg.clock, 5, "--clock= did not reach the machine");
-        assert!(cfg.second_core, "--second-core did not reach the machine");
+        assert!(!cfg.one_core, "--second-core did not reach the machine");
         assert!(cfg.charger, "--charger did not reach the machine");
         // …and the library's own answers are still under them. `apply` writes four fields; the
         // fifth is the one that says a flag reached past its boundary.

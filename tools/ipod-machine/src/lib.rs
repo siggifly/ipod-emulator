@@ -2708,10 +2708,13 @@ impl Memory {
         // Ahead of `--i2c-fill` deliberately: that flag answers the I²C *data* registers, and the
         // wheel is a different device that happens to share the block. Behind the PMU for the same
         // reason — neither can claim the other's addresses.
+        // Read before the borrow: `asking` and `clickwheel` are fields of the same struct, so
+        // taking one by value first is what makes the other borrowable mutably.
+        let who = self.asking;
         if let Some(w) = &mut self.clickwheel {
             let off = addr.wrapping_sub(w.base);
             if (ClickWheel::CTRL..ClickWheel::WINDOW).contains(&off) {
-                if let Some(v) = w.read8(off) {
+                if let Some(v) = w.read8(off, who) {
                     return v;
                 }
             }
@@ -4289,7 +4292,33 @@ impl Machine {
             call_trace: Vec::new(),
             pc_hist: None,
             cop_awake: false,
-            second_core: false,
+            // **The part has two ARM7TDMI cores, so the machine has two.** Flipped on 2026-08-19,
+            // back on 2026-08-26 because two cores stalled RetailOS at the Apple logo — 70 ATA
+            // commands against 766 — and forward again now that the stall is understood and gone.
+            //
+            // It was never the coprocessor. A word read of `CPU_QUEUE` went down `read32`'s fast
+            // path and never reached the clear in `read8_inner`, so the mailbox interrupt was
+            // taken, the queue read, and the interrupt taken again: 2 953 894 reads and 2 953 894
+            // interrupts, exactly equal. `research/03` §57 has the whole account.
+            //
+            // What the evidence says now, retail 5G dump against `ipod8g-retail.PRISTINE.img`,
+            // and it is the same on `ipod-boot retail` and on a hand-rolled `trace`:
+            //
+            //   plain cold boot        one core 619   two cores 620
+            //   with wheel input       one core 705   two cores 769
+            //   wheel frames read      one core   5   two cores  31   (of 31 posted)
+            //   frames dropped unread  one core  25   two cores   0
+            //   store at 0x18 (fatal)  one core   1   two cores NONE
+            //   Rockbox cold boot      3977 ATA / 74 057 lit — IDENTICAL in both arms
+            //
+            // One core is not a smaller safer machine; it drops five wheel frames in six and then
+            // writes through a null pointer onto its own IRQ vector. It also needs bypass #7's
+            // `COP_STATUS` override, because a machine with no coprocessor still has to answer for
+            // one — so this retires a bypass rather than adding a risk.
+            //
+            // `--no-second-core` is the ablation, and it is honest again: it was listed, doc'd and
+            // never parsed until the same change that moved this line.
+            second_core: true,
             cop_asleep: false,
             quantum: Machine::QUANTUM,
             cop_sleeps: 0,

@@ -99,6 +99,13 @@ pub struct ClickWheel {
     /// Word reads of DATA, and how many of those found a frame waiting.
     pub data_reads: u64,
     pub data_reads_ready: u64,
+    /// How many of `data_reads` came from the **coprocessor** rather than the CPU.
+    ///
+    /// Written because two cores read every frame the wheel posts and the menu still does not
+    /// move, and "the firmware consumed the event" does not say *which* firmware did. If the COP
+    /// is taking the frames the CPU's UI is waiting for, that is a different defect from the UI
+    /// ignoring them, and no existing counter separates the two.
+    pub data_reads_cop: u64,
     /// Transmits started, and the commands we had no evidence for.
     pub commands: u64,
     pub unknown_commands: u64,
@@ -287,6 +294,7 @@ impl ClickWheel {
             frames_dropped: 0,
             data_reads: 0,
             data_reads_ready: 0,
+            data_reads_cop: 0,
             commands: 0,
             unknown_commands: 0,
             unknown: Capped::new(16),
@@ -425,7 +433,7 @@ impl ClickWheel {
 
     /// A byte of one of the four registers, or `None` for everything else in the window — which
     /// then falls through to ordinary memory.
-    pub(crate) fn read8(&mut self, off: u32) -> Option<u8> {
+    pub(crate) fn read8(&mut self, off: u32, who: Core) -> Option<u8> {
         let w = match off & !3 {
             Self::CTRL => self.ctrl,
             Self::STATUS => self.status,
@@ -436,6 +444,9 @@ impl ClickWheel {
                 // go uncounted, and no driver does that.
                 if off & 3 == 3 {
                     self.data_reads += 1;
+                    if who == Core::Cop {
+                        self.data_reads_cop += 1;
+                    }
                     if self.status & Self::RX_READY != 0 {
                         self.data_reads_ready += 1;
                     }

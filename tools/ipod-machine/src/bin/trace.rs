@@ -1122,39 +1122,47 @@ fn main() {
         // single-core one. A wake ends the running core's turn, which is what makes Apple's
         // two-instruction hand-off through the entry vector at `0x40000050` observable.
         //
-        // **It was defaulted ON on 2026-08-19 on evidence, and the evidence expired.** The
-        // argument, kept verbatim because it was a good one: *at the moment of flipping, every
-        // recipe measured here is identical with one core and two — retail 599 ATA commands and
-        // 2 916 non-black pixels, cold-booted Rockbox 10 304 and 74 057, in both arms. So the flip
-        // re-baselines nothing.* `research/04` ledger row 7 carries the same sentence.
+        // **Two cores, and this is the third time the default has moved.** ON 2026-08-19, OFF
+        // 2026-08-26, ON again 2026-09-05. Each move was made on measurement, and the middle one
+        // was right on the evidence it had: two cores stalled RetailOS at the Apple logo, **70 ATA
+        // commands against 766**, the same factor of eleven in both front ends, and a default that
+        // stalls the OS silently re-baselines everything measured through this program.
         //
-        // **Measured 2026-08-26, same NOR dump, same `PRISTINE` drive, `BUDGET=900000000`:**
+        // **The coprocessor was never the problem.** A word read of `CPU_QUEUE` went down
+        // `read32`'s fast path, which returns the stored bytes and never reaches the clear in
+        // `read8_inner` — so the mailbox interrupt was taken, the queue was read, and the interrupt
+        // was taken again, for the whole budget. Equal counts are the signature: **2 953 894 reads
+        // of `0x60001010` and 2 953 894 interrupts taken.** Fixed by naming the mailbox page in
+        // `page_is_plain`. `research/03` §57 carries the account and the recipe.
+        //
+        // Retail 5G dump, `ipod8g-retail.PRISTINE.img`, `--clock=5`. The wheel rows are a descent
+        // anchored at 210 s, after the picker draws at 200.4 s — an anchor taken from the film's
+        // own `first_usec`, because the 80 s in `clean-run-matrix.sh` belongs to the drives that
+        // script builds and not to this one:
         //
         // ```text
-        //                                 ata   lit      where
-        //   ipod-boot retail --no-second-core   766   —        past the logo, still going
-        //   ipod-boot retail (two cores)         70   —        Apple's logo
-        //   ipod-emulator --headless            769   75 267   the language picker, then Idle
-        //   ipod-emulator --headless --second-core  70    2 916   Apple's logo
+        //                            one core   two cores
+        //   plain cold boot, ATA          619         620
+        //   descent, ATA                  705         769
+        //   wheel frames read        5 of  31    31 of 31
+        //   frames dropped unread          25           0
+        //   store at 0x18 (fatal)           1        NONE
+        //   Rockbox cold boot       3977 ATA / 74 057 lit, IDENTICAL in both arms
         // ```
         //
-        // The arms are no longer identical; they differ by a factor of eleven, and they differ the
-        // same way in **both front ends**, so it is the coprocessor and not a harness. The one-core
-        // boot has moved a long way since the flip — 599 ATA and 2 916 pixels then, 769 and 75 267
-        // now, which is the Apple logo replaced by RetailOS's first interactive screen — and the
-        // two-core boot has not come with it. Whatever fixed the one-core path did not carry.
+        // Same on `ipod-boot retail` and on a hand-rolled `trace --boot-osos --cold-boot`, so it is
+        // the machine and not a harness — which is the test the 2026-08-26 entry set and passed the
+        // other way.
         //
-        // So the default goes back to one core, on the same kind of evidence that moved it: a
-        // default that stalls RetailOS at the logo silently re-baselines every measurement taken
-        // through this program, and `KNOWN-BUGS.md`'s *"`ipod-boot retail` and `ipod-gui` do not
-        // boot the same machine"* is exactly that happening. `--second-core` asks for the bigger
-        // machine and is where the defect now lives; `--no-second-core` still says what it says.
-        //
-        // Note that one core puts ledger #7's `COP_STATUS` override back, because a machine with
-        // no coprocessor has to answer that register somehow. That is the cost of this, and it is
-        // written into the ledger rather than left here.
-        if args.iter().any(|a| a == "--second-core") {
-            m.mem.second_core = true;
+        // **One core is not the safer choice.** It drops five wheel frames in six and then writes
+        // through a null pointer onto its own IRQ vector at `0x18`, and it needs bypass #7's
+        // `COP_STATUS` override, because a machine with no coprocessor still has to answer for one.
+        // Two cores retires that row rather than adding a risk. `--no-second-core` remains arm B
+        // and now *works* — it was listed in `ipod-boot`'s `MACHINE_SHAPING`, called arm B in
+        // `research/04`, and never parsed by anything until this change.
+        let cop_off = args.iter().any(|a| a == "--no-second-core");
+        m.mem.second_core = !cop_off;
+        if m.mem.second_core {
             if let Some(q) = args.iter().find_map(|a| a.strip_prefix("--quantum=")) {
                 m.mem.quantum = q.parse().unwrap_or(ipod_machine::Machine::QUANTUM).max(1);
             }
@@ -1170,6 +1178,10 @@ fn main() {
                 "  second core: on — interleaving {} instructions each",
                 m.mem.quantum
             );
+        } else {
+            // Said out loud. A run with half the processor missing is a different machine, and the
+            // one thing worse than measuring it is measuring it without noticing.
+            println!("  second core: OFF (--no-second-core) — one core, and bypass #7 back with it");
         }
         // --disk=PATH : attach the image as the ATA drive, so RetailOS can read its own filesystem.
         if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--disk=")) {
@@ -2261,6 +2273,19 @@ fn main() {
                 "\nclickwheel: {} frames posted ({} dropped unread), {} word reads of DATA ({} with a frame waiting)",
                 w.frames_posted, w.frames_dropped, w.data_reads, w.data_reads_ready
             );
+            // **Who read them.** Printed only with two cores, and printed even when the answer is
+            // zero, because zero is the interesting answer: it says the CPU took every frame and
+            // the coprocessor took none, which is a different machine from the one where the COP
+            // is eating the events the UI is waiting for. With one core there is no question to
+            // ask, and a line saying `0 by the coprocessor` on a machine that has none would be
+            // an observation nobody made.
+            if m.mem.second_core {
+                println!(
+                    "  {} by the CPU, {} by the coprocessor",
+                    w.data_reads - w.data_reads_cop,
+                    w.data_reads_cop
+                );
+            }
             println!(
                 "  {} transmits started, {} of them commands we have no evidence for{}",
                 w.commands,

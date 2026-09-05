@@ -106,13 +106,15 @@ pub struct Machine {
     /// clock, and a device that stored one would make two runs of the same iPod incomparable for a
     /// reason nobody could see on either.
     pub clock: Option<usize>,
-    /// `--second-core`: run the PP5021's coprocessor.
+    /// How many cores were **asked for**: `Some(true)` for `--second-core`, `Some(false)` for
+    /// `--no-second-core`, `None` for neither.
     ///
-    /// Same argument as `--clock=`, with a measured consequence: a retail cold boot goes from 102
-    /// ATA commands to 99 with this on, because the coprocessor is doing part of the work. Turning
-    /// it on makes the machine *more* faithful and *less* comparable to what is already written
-    /// down, which is a decision about a measurement rather than about an iPod.
-    pub second_core: bool,
+    /// An `Option` rather than a `bool` because both flags exist and a `bool` can only carry one
+    /// of them. The default is two cores — the part has two — so `--second-core` now asks for what
+    /// it would get anyway and `--no-second-core` is the one that changes the machine. Keeping
+    /// `--second-core` spelled out is deliberate: it appears in `research/` recipes, and a flag
+    /// that a recipe names must not become an argument this program shrugs at.
+    pub cores: Option<bool>,
     /// `--charger`: hold `GPIOL` bit 3 low, which is what RetailOS's charger sense reads.
     ///
     /// A property of what the iPod is plugged into, which is neither the device nor the experiment
@@ -129,7 +131,9 @@ impl Machine {
     /// seventy-fifth of the part and reported as though it were the part.
     pub fn apply(&self, cfg: &mut crate::emu::Config) {
         cfg.cold |= self.cold;
-        cfg.second_core |= self.second_core;
+        if let Some(two) = self.cores {
+            cfg.one_core = !two;
+        }
         cfg.charger |= self.charger;
         if let Some(n) = self.clock {
             cfg.clock = n;
@@ -207,6 +211,7 @@ pub const FLAGS: &[&str] = &[
     "--cold",
     "--clock=",
     "--second-core",
+    "--no-second-core",
     "--charger",
 ];
 
@@ -300,8 +305,10 @@ And these open the window as usual, and configure the machine it starts:
                           Cold boot is the same decision, one press at a time
   --clock=N               interpreter instructions per simulated microsecond. 5 is what every
                           recipe in research/ uses; 75 is the real part, and is the default
-  --second-core           run the PP5021's coprocessor. More faithful, and less comparable to
-                          every number already measured on one core
+  --second-core           run the PP5021's coprocessor. The default since 2026-09-05 — the
+                          part has two cores, so the machine has two
+  --no-second-core        run one core instead of two. The ablation, not a setting: one core
+                          drops five wheel frames in six and puts bypass #7 back
   --charger               plug the mains in — the only configuration in which there is a
                           charging screen to return to
 
@@ -405,7 +412,10 @@ pub fn parse(args: &[String]) -> Cli {
             machine.cold = true;
             asked_for_machine = true;
         } else if a == "--second-core" {
-            machine.second_core = true;
+            machine.cores = Some(true);
+            asked_for_machine = true;
+        } else if a == "--no-second-core" {
+            machine.cores = Some(false);
             asked_for_machine = true;
         } else if a == "--charger" {
             machine.charger = true;
@@ -590,7 +600,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 out,
                 "headless: {name} for {budget} instructions, {} per simulated microsecond{}",
                 cfg.clock,
-                if cfg.second_core { ", two cores" } else { "" }
+                if cfg.one_core { ", ONE core" } else { ", two cores" }
             );
             // The report goes to `println!` inside the run loop rather than into `out`, because it
             // is the same `report_headless` every other front end prints and reformatting it here
@@ -814,14 +824,18 @@ mod tests {
             other => panic!("`{line}` -> {other:?}"),
         };
         assert_eq!(win("--cold"), Machine { cold: true, ..Machine::default() });
-        assert_eq!(win("--second-core"), Machine { second_core: true, ..Machine::default() });
+        assert_eq!(win("--second-core"), Machine { cores: Some(true), ..Machine::default() });
+        assert_eq!(
+            win("--no-second-core"),
+            Machine { cores: Some(false), ..Machine::default() }
+        );
         assert_eq!(win("--charger"), Machine { charger: true, ..Machine::default() });
         assert_eq!(win("--clock=5"), Machine { clock: Some(5), ..Machine::default() });
         // …and together, because they are not exclusive and a line with two on it is the normal
         // shape of a measurement.
         assert_eq!(
             win("--cold --clock=5 --second-core --charger"),
-            Machine { cold: true, clock: Some(5), second_core: true, charger: true }
+            Machine { cold: true, clock: Some(5), cores: Some(true), charger: true }
         );
 
         // **On the config, and nothing else on it moves.** `apply` writes four fields; a fifth
@@ -833,10 +847,21 @@ mod tests {
         };
         Machine::default().apply(&mut cfg);
         assert_eq!(cfg.clock, ipod_machine::CLOCK, "a flag nobody typed overwrote the default");
-        assert!(!cfg.cold && !cfg.second_core && !cfg.charger);
+        // Two cores is the default, so "nothing asked for" is `!one_core`.
+        assert!(!cfg.cold && !cfg.one_core && !cfg.charger);
         win("--cold --clock=5 --second-core --charger").apply(&mut cfg);
-        assert!(cfg.cold && cfg.second_core && cfg.charger);
+        assert!(cfg.cold && !cfg.one_core && cfg.charger);
         assert_eq!(cfg.clock, 5);
+        // **The cores axis needs the flag that can move it.** Two cores is the default, so
+        // `--second-core` sets `one_core` to the value it already had and an assertion about it
+        // would hold with `apply` deleted. `--no-second-core` is the only input that changes the
+        // machine, so it is the only one worth asserting on — and it must go back, because these
+        // flags write onto a config the window has already built and a one-way switch would make
+        // the second run of a session a different machine from the first.
+        win("--no-second-core").apply(&mut cfg);
+        assert!(cfg.one_core, "--no-second-core did not reach the machine");
+        win("--second-core").apply(&mut cfg);
+        assert!(!cfg.one_core, "--second-core did not put the coprocessor back");
         assert_eq!(
             cfg.snapshot,
             Some(PathBuf::from("/somewhere/m.snap")),
@@ -876,7 +901,7 @@ mod tests {
         assert_eq!(
             parse(&argv("--headless=200000000 --clock=5 --second-core")),
             Cli::Headless {
-                machine: Machine { clock: Some(5), second_core: true, ..Machine::default() },
+                machine: Machine { clock: Some(5), cores: Some(true), ..Machine::default() },
                 budget: 200_000_000,
             }
         );
