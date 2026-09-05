@@ -3117,3 +3117,75 @@ correction. Whoever picks up the missing-font thread (§ledger item 1) should re
 > one-sector shift was real, but it was not what produced *this* symptom, which survives the repair).
 > The whole mechanism, the trigger, and the ablation that removes all 156 self-resets are in
 > [research/10 Addendum 5](10-the-resource-image.md#addendum-5-neither-it-is-bx-to-zero-and-the-headline-of-this-file-was-right-all-along).
+
+## 57. ✅ The second core was stalled by a read that never cleared the thing it read, 2026-09-05
+
+`--second-core` has been off by default because turning it on stalled the machine at the Apple
+logo. The cause is one line, and it is not in the co-processor model at all.
+
+**Reading `CPU_QUEUE` is what clears it.** Rockbox's `pp5020.h` states the rule for both queues in
+as many words: *"COP can set bit 29 — only CPU read clears it"*, and the mirror image for
+`COP_QUEUE`. The emulator implements exactly that, in `read8_inner`, on the last byte of the word.
+
+`read32` never called it. It has a fast path that resolves an address to a region once and then
+returns the four stored bytes directly, and a word read of `0x60001010` went straight down it. The
+message was taken and bit 29 stayed set, so `MAILBOX_IRQ` was never dropped: the CPU was
+interrupted, read the queue, and was interrupted again, for as long as the budget lasted.
+
+The signature is unmistakable once counted — the two numbers are *equal*:
+
+```sh
+trace 900000000 --boot-osos --cold-boot \
+  --flash=resources/roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin \
+  --disk=resources/drives/ipod8g-retail.PRISTINE.img \
+  --bcm --pmu --nor --clock=5 --second-core --watch-range=0x60001010:4
+```
+
+```
+irqs: 13291640 asserted, 2953894 taken
+  [0x60001010] read by 0x00267b58  x2953894
+```
+
+Two million nine hundred fifty-three thousand eight hundred ninety-four reads, and the same number
+of interrupts taken. A read that fails to clear its source looks like nothing else.
+
+### What it cost, and what it looks like fixed
+
+| | stalled | fixed | one core |
+|---|---|---|---|
+| ATA commands in a cold boot | 70 | **620** | 619 |
+| interrupts taken | 2 953 894 | 166 712 | — |
+| COP | spinning | 1 401 084 instructions, **asleep** | — |
+| COP sleeps / wakes | — | 15 057 / 15 056 | — |
+
+The two-core boot now goes one ATA command *further* than the single-core one, and the COP does
+what `thread-pp.c` says it should: work, sleep, get woken, repeat, fifteen thousand times.
+
+### The fix belongs in `page_is_plain`, and that is the sixth time
+
+The first repair filtered queue addresses out of `read32`'s fast path. That works and is the wrong
+layer — it patches one access width at one call site.
+
+`page_is_plain` decides whether a 4 KiB page may be served from plain memory, and its own doc
+comment is the specification: *"every window `read8`/`write8` consults must appear here; a missing
+one would route a device access to memory and silently change behaviour."* It already names the
+GPIO block, the DMA channels, the USB clock register and six others. Its comments keep the tally:
+the GPIO entry records itself as the third time this list was the bug, the USB entry as the fifth.
+**The mailbox is the sixth.** Naming the page fixes every width in both directions and lets the
+special case go away.
+
+One trap on the way. The clear handler read the queue word with `read32` to modify it. Once
+`read32` stops fast-pathing the mailbox it routes back into `read8`, which is the handler — so the
+first `ldr` of the queue recurses until the stack is gone. `peek32` reads the backing store with no
+side effects, which is what taking a message wants in the first place.
+
+### Why this was invisible for so long
+
+With one core the mailbox is a conversation with nobody. `core_sleep` and `core_wake` in
+`thread-pp.c` are a handshake between two cores; run one, and a mailbox stuck at zero is
+indistinguishable from a mailbox working. Nothing read `CPU_QUEUE` in anger until the COP started
+posting to it, and by then the stall read as "the co-processor model is wrong" rather than "a word
+read of a device register bypassed the device."
+
+The instrument that found it was `--watch-range`, and only because the count was compared against
+`irqs: … taken` rather than read on its own. Either number alone is unremarkable.
