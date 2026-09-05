@@ -346,6 +346,24 @@ fn main() {
     // not one, where it mattered.
     m.mem.cop_awake = args.iter().any(|a| a == "--cop-awake");
 
+    // **The core count is decided HERE, before `map_hardware`, and that is the whole point.**
+    // Ledger #7's `COP_STATUS` override is installed by `map_hardware` in `lib.rs`, gated on
+    // `second_core` — and `map_hardware` runs at line 623 while the flag block that used to set
+    // `second_core` is at 1164. So the gate read the **default** and nothing else.
+    //
+    // Two consequences, and the second is how this was found:
+    //
+    // - While one core was the default, a `--second-core` run got the override *as well*, because
+    //   the flag had not been parsed yet when the gate was read. `research/04` row 7's whole
+    //   justification for making the bypass switchable was that "nothing that depends on the
+    //   second core could be A/B'd, because there was no arm B" — and on the path that produces
+    //   every number in `research/`, **there still was not one.**
+    // - The moment two cores became the default, `--no-second-core` produced a machine with no
+    //   coprocessor AND no override, which spins forever waiting for a COP that never reports
+    //   sleeping. **Rockbox caught it: 0 ATA commands against 3977, nothing drawn, the wheel's
+    //   receiver never armed.** The oracle is the reason this is a fixed bug and not a shipped one.
+    m.mem.second_core = !args.iter().any(|a| a == "--no-second-core");
+
     // **Say which bypasses are live, every run, without being asked.**
     //
     // `research/04-bypass-ledger.md` names the failure mode exactly: "a reader who greps the
@@ -1160,8 +1178,7 @@ fn main() {
         // Two cores retires that row rather than adding a risk. `--no-second-core` remains arm B
         // and now *works* — it was listed in `ipod-boot`'s `MACHINE_SHAPING`, called arm B in
         // `research/04`, and never parsed by anything until this change.
-        let cop_off = args.iter().any(|a| a == "--no-second-core");
-        m.mem.second_core = !cop_off;
+        // Already decided, up beside `--cop-awake`, because `map_hardware` had to see it.
         if m.mem.second_core {
             if let Some(q) = args.iter().find_map(|a| a.strip_prefix("--quantum=")) {
                 m.mem.quantum = q.parse().unwrap_or(ipod_machine::Machine::QUANTUM).max(1);
