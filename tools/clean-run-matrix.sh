@@ -241,12 +241,22 @@ boot_doom() {                       # $1 nor  $2 gen  $3 label  $4 drive
   local out="$SCRATCH/doom-$gen-$label" work="$SCRATCH/doom-$gen-$label.img"
   local rb; rb="$(ls "$RES"/drives/*rockbox*.img 2>/dev/null | head -1)"
   [ -n "$rb" ] || { row doom "$gen" "$label" - BLOCKED "no Rockbox drive in resources/drives"; return; }
-  local have; have="$("$BIN" fat "$rb" 2>/dev/null | grep -ciE "rockdoom|doom2\.wad|shortcuts\.txt")"
+  mkdir -p "$out"; clone_disk "$rb" "$work"
+  # **The three files are installed into the clone, not demanded of the source drive.** `doom.rs`
+  # has carried their URLs, sizes and SHA-256s since 2026-09-01, and this row read BLOCKED first
+  # for want of any caller and then for want of one *here* — a harness that builds its own drives
+  # from an IPSW and fetches Rockbox itself was still asking a drive in `resources/` to have been
+  # prepared by hand. Three more downloads is not a new dependency, and they land in `$CACHE` with
+  # the rest, so a second run of the matrix fetches nothing.
+  #
+  # Rockbox will not ship them: `rockdoom.wad` is its own, and the game data is Freedoom, which is
+  # BSD-licensed and stands in for `doom2.wad`. Installed under the names the plugin looks for.
+  "$BIN" doom-assets "$work" > "$out-install.log" 2>&1
+  local have; have="$("$BIN" fat "$work" 2>/dev/null | grep -ciE "rockdoom|doom2\.wad|shortcuts\.txt")"
   if [ "${have:-0}" -lt 3 ]; then
-    row doom "$gen" "$label" - BLOCKED "the drive has doom.rock but $have of 3 of rockdoom.wad/doom2.wad/shortcuts.txt"
+    row doom "$gen" "$label" - BLOCKED "installing the assets left $have of 3 — see $out-install.log"
     return
   fi
-  mkdir -p "$out"; clone_disk "$rb" "$work"
   # research/06, and every offset is a duration rather than a click count.
   local w="@25s:touch,+600ms:rotate=-6,+2s:release"
   w="$w,+1s:down=select,+300ms:up=select,+4s:down=select,+300ms:up=select"
