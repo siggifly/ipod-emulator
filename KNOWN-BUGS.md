@@ -682,6 +682,34 @@ So the chain, end to end:
 lands — the three word stores onto the reset, undefined and SWI vectors landed in August too and
 none of those vectors is used at runtime.
 
+### The audio node IS in the tree — the walk just happens before the capability exists (2026-09-05)
+
+Enumerated the 25 objects the `+0x84` walk visits, with `--regs-at` at the dispatch:
+
+```
+13e425ac  13e4219c  13e420c4  13e41eb0  13e41e60  13e3fd34  13e3f45c  13e3e834
+13e3e730  13e3e5a4  13e3e46c  13e0697c  13e06878   … 25 in all
+```
+
+**`0x13e4219c` is in that list** — and it is the object carried in `r3` when the `"Str "` capability
+is constructed at `@217 182 667`. So the node that owns audio *is* part of the tree and *is* visited.
+
+**The walk simply runs too early.** It fires once, at `@127 575 496`, ninety million instructions
+before the capability it would activate is constructed. Visiting the node in an empty state does
+nothing, and nothing ever visits it again.
+
+That also corrects the reading in the entry below. "The subsystem manager is not in the tree" is
+still true of `0x13e36d64`, but it was the wrong object to be looking at: the audio capability hangs
+off `0x13e4219c`, which **is** walked. The gap is not membership, it is timing — and the timing
+question is a much better-posed one, because a second walk after `@217 M` is a thing a real iPod
+either does or does not do, rather than a caller that has to be found somewhere in 7.5 MB.
+
+**Also settled in passing:** the isCurrent predicate (`FUN_001ea534`, slot `+0x9c`) is a **UI label
+chooser**, not an activation path — both of its callers use its answer only to add 1 to a resource
+index and fetch a different string. It is asked seven times and answered *no* seven times, and
+nothing acts on it. The vtable base is confirmed as `0x00670720` by that offset, which also confirms
+route B is slot `+0x84`.
+
 ### A behavioural target: the wheel should spin the disk, and here it does not (2026-09-04)
 
 **Operator memory, recorded as such:** on a real iPod at the language picker, *moving the wheel spins
