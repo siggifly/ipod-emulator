@@ -780,6 +780,29 @@ language picker, so with two cores RetailOS now consumes every wheel event and s
 does not act on one visibly. That is a different and much better-posed question than the one this
 file opened with, and it is the next one.
 
+#### Ruled out, in order, and what is left
+
+Four things could have explained a menu that does not move. Three are dead on measurement.
+
+| | measurement | verdict |
+|---|---|---|
+| the clickwheel model is wrong | Rockbox, same model, same script: a new picture per detent from 20.4 s, 12 distinct pictures | **dead** — the model is correct |
+| the COP eats the frames | 31 posted, 31 read, **31 by the CPU and 0 by the coprocessor** | **dead** |
+| the driver is confused about the device | 10 transmits, **0 commands the model has no evidence for**; reporting ON, receiver armed, IRQ 40 asserted 31×, all 31 acknowledged | **dead** |
+| the CPU posts UI work to `COP_QUEUE`, which is storage-only | every write in `0x60001000..0x6000103f` during a live descent: `SET` ×4, `CLR` ×4, `CPU_QUEUE` ×24, **`COP_QUEUE` ZERO** | **dead** |
+
+The frames RetailOS receives are the frames Rockbox receives — a select press arrives as
+`0xc000011a` (`buttons 0x01`), and a rotation steps `pos 0` through `pos 14`, one frame per detent.
+
+And the event is not dropped on the floor: **`SET` and `CLR` are written 5 704 instructions after
+the select press** (`@1050420018` and `@1050420037` against a frame at `@1050414320`), which is
+`thread-pp.c`'s `core_wake` / `core_sleep` handshake. The button reaches cross-core scheduling.
+
+So RetailOS receives every event, acknowledges it, schedules against it, and draws nothing. What is
+left is above the driver and above the mailbox — and the one address that is known to be on the old
+path is `0x001465d0`, the store that used to land on the IRQ vector. Whether two cores reaches it at
+all is the next measurement.
+
 #### Ruled out: the coprocessor is not eating the events
 
 The obvious suspicion, once two cores were running, was that the COP had taken over the wheel and
