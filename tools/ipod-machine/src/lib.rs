@@ -1835,6 +1835,17 @@ impl Memory {
             // **Fifth time this list has been the bug** — `read_or_masks`, `--watch-range`,
             // `--input-regs`, the part-identity words, and now this.
             || hits(0xc500_0000, 0x1000)
+            // The mailbox, and the **sixth** time this list has been the bug. Reading `CPU_QUEUE`
+            // is what clears it and drops `MAILBOX_IRQ`; that clear lives in `read8_inner`, which
+            // the fast path does not call. A word read took the message and left bit 29 set, so
+            // the CPU was interrupted, read the queue, and was interrupted again — 2 953 894 reads
+            // and 2 953 894 interrupts taken on a cold retail boot, exactly equal, and 70 ATA
+            // commands against 619 for the same machine with one core. It is why `--second-core`
+            // stalled at the Apple logo.
+            //
+            // The whole page, per the rule at the top: the window is `BASE..BASE+0x24`, and the
+            // firmware touches it a few thousand times in a boot, so the fast path is no loss.
+            || hits(Mbx::BASE, 0x30)
             // Only while the chip is answering something other than its own bytes. The NOR is a
             // megabyte the CPU fetches instructions out of at address 0, so disqualifying its pages
             // unconditionally would take the whole cold boot off the fast path to model a handful
@@ -2355,19 +2366,7 @@ impl Bus for Memory {
         if let Some(v) = self.core_register(a) {
             return v;
         }
-        // **`CPU_QUEUE` has to leave the fast path, exactly as it does on the write side.**
-        // Reading it is what clears it — Rockbox's `pp5020.h` says so outright, *"only CPU read
-        // clears it"* — and that clear lives in `read8`, on the last byte of the word. This path
-        // returns the four stored bytes and never calls `read8`, so an `ldr` of the queue took the
-        // message and left bit 29 set. The line then never fell: the CPU was interrupted, read the
-        // queue, was interrupted again, and never made progress. Measured on a cold retail boot
-        // with `--second-core`: **2 953 894 reads of `0x60001010` and 2 953 894 interrupts taken,
-        // exactly equal**, against 70 ATA commands where one core manages 619.
-        //
-        // The write path has carried `Mbx::queue(a).is_none()` in its own hoist filter since the
-        // mailbox was modelled, with a comment saying the hoist has to name every consumer or it
-        // silences one. The read path never got the matching line.
-        if let Some((idx, off)) = self.fast_region(a, false).filter(|_| Mbx::queue(a).is_none()) {
+        if let Some((idx, off)) = self.fast_region(a, false) {
             // `count` is a no-op unless something asked for accounting, so hoist that test out of
             // the four calls rather than making them and returning immediately from each.
             // `input_probe` is in the list because it consumes `count` too — the hoist has to name
@@ -2464,6 +2463,11 @@ impl Bus for Memory {
             // and adding a device to the slow path without adding it here is a fix that changes
             // nothing. Measured: with the queue absent from this line, the second core ran exactly
             // the same 369 943 068 instructions it had before the queue was modelled at all.
+            //
+            // `page_is_plain` now also names the mailbox page, which strictly speaking makes this
+            // line redundant: the page never reaches the fast path from either direction. It stays
+            // because the two guards were added for different reasons and a reader who deletes one
+            // on the strength of the other should have to read this sentence first.
             .filter(|_| Mbx::strobe(a).is_none() && Mbx::queue(a).is_none())
         {
             // `watch_range` and `input_probe` were missing from this hoist, and `count` is the only
