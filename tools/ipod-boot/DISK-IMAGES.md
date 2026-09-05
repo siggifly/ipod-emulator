@@ -20,14 +20,26 @@ shasum -a 256 resources/drives/ipod8g-retail.img
 
 ## How the recipes protect it
 
-`retail-boot.sh` **never writes the source**. It makes a `cp -c` clone per run — an APFS
+> **The shell recipes are gone.** `retail-boot.sh`, `cold-boot.sh`, `flash-update.sh` and
+> `from-idle.sh` were deleted in `b4a4f07`, *"delete the shell recipes: one front end, and it is the
+> program"*. Each became a subcommand of the same name — `ipod-boot retail`, `ipod-boot
+> flash-update`, `ipod-boot from-idle` — and `cold-boot.sh`'s shared argv is now internal. The
+> behaviour below is unchanged; only the spelling of the command is. Recipes in `research/` still
+> name the scripts, and are left alone deliberately: they record what was run at the time.
+
+`ipod-boot retail` **never writes the source**. It makes a `cp -c` clone per run — an APFS
 copy-on-write clone, ~3 ms for 8 GB — passes `--disk-writable` against the clone, and deletes it on
-exit via a `trap`. RetailOS really does write during boot (FSInfo, both FATs, `Contacts`,
-`Calendars`, `Notes`, `Accessories`, two vCards, and it deletes `IC-Info.sid`), so the clone is not
-a precaution against a hypothetical — it is a precaution against something that happens every run.
+exit. RetailOS really does write during boot (FSInfo, both FATs, `Contacts`, `Calendars`, `Notes`,
+`Accessories`, two vCards, and it deletes `IC-Info.sid`), so the clone is not a precaution against a
+hypothetical — it is a precaution against something that happens every run.
+
+The clone is three rungs, because `cp -c` is Apple's and nobody else's: `cp -c`, then
+`cp --reflink=auto` for btrfs / XFS / bcachefs, then a plain byte copy. `clone_disk` in
+`ipod-gui/src/emu.rs` is the canonical one. A clone also inherits the source's mode, and the
+pristine images are `r--r--r--`, so whatever makes the working drive has to make it writable again.
 
 `WORKDISK=path` keeps a clone across runs, for when accumulated state is the point. **Never point
-`WORKDISK` at the source image.** `flash-update.sh` uses the same clone-into-`$WORK` pattern.
+`WORKDISK` at the source image.** `ipod-boot flash-update` uses the same clone-into-`$WORK` pattern.
 
 ## The trap this is guarding against
 
