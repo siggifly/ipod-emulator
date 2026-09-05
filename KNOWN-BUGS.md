@@ -780,6 +780,24 @@ language picker, so with two cores RetailOS now consumes every wheel event and s
 does not act on one visibly. That is a different and much better-posed question than the one this
 file opened with, and it is the next one.
 
+#### Ruled out: the coprocessor is not eating the events
+
+The obvious suspicion, once two cores were running, was that the COP had taken over the wheel and
+the CPU's UI was waiting for frames that were being consumed elsewhere. It has not. `data_reads`
+now splits by asking core — there was no instrument for this, because with one core there was no
+question — and on the descent above:
+
+```
+clickwheel: 31 frames posted (0 dropped unread), 31 word reads of DATA (31 with a frame waiting)
+  31 by the CPU, 0 by the coprocessor
+  10 transmits started, 0 of them commands we have no evidence for
+```
+
+**Every frame is read by the CPU. The coprocessor reads none.** The firmware also talks back to the
+wheel ten times and never sends a command the model has no evidence for, so the driver is running
+and is not confused about the device. Whatever stops the menu moving is downstream of a driver that
+receives every event, on the core that draws.
+
 ### The capability receives exactly one virtual call, and it is a no-op (2026-09-05)
 
 Two measurements that close off the tree-walk thread entirely.
