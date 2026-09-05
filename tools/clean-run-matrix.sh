@@ -99,6 +99,33 @@ last_digest() { awk '/^[0-9]/{d=$NF} END{print d}' "$1/frames.tsv" 2>/dev/null; 
 # and passed the `-gt 1000` test silently, so the verdict it fed was arrived at for the wrong reason.
 last_nonblack() { awk -F'\t' '/^[0-9]/{n=$9} END{print n+0}' "$1/frames.tsv" 2>/dev/null; }
 
+# **A working drive is a clone, not a byte copy.** The same three-rung ladder `clone_disk` climbs in
+# `ipod-gui/src/emu.rs`, whose doc comment says it exists in three places because each front end has
+# to make a writable disk before it has anything to share code with. This script is a fourth, and it
+# never got the ladder: it paid a full 8 GB `cp` per row. Measured on this machine — **ten minutes a
+# row against eleven milliseconds**, and four rows in a run.
+#
+# 1. `cp -c` — Apple's `clonefile(2)`. Not a GNU flag; on Linux it is an invalid option.
+# 2. `cp --reflink=auto` — the btrfs / XFS / bcachefs equivalent. Never fails for want of reflink
+#    support; it silently does a full copy instead.
+# 3. plain `cp` — anything else.
+#
+# `rm -f` between rungs because a failed `cp` can leave a truncated destination, and a partial 8 GB
+# image that later opens as a valid file is the exact silent failure this project keeps paying for.
+#
+# The `chmod` is not optional. A clone inherits the source's mode, the pristine images are
+# `r--r--r--`, and a working drive that cannot be written is not a working drive — the byte copy
+# this replaces produced `rw-------` and so never needed it.
+clone_disk() {                      # $1 src  $2 dst
+  local flag
+  for flag in -c --reflink=auto ''; do
+    rm -f "$2"
+    if [ -n "$flag" ]; then cp "$flag" "$1" "$2" 2>/dev/null; else cp "$1" "$2"; fi \
+      && { chmod u+w "$2"; return 0; }
+  done
+  rm -f "$2"; return 1
+}
+
 # One RetailOS boot. The route is decided by the ROM, not by the caller: a dump with Apple's own
 # build string runs Apple's bootloader; a synthesised one is entered through the firmware
 # partition, because there is no bootloader in it to run.
@@ -106,7 +133,7 @@ boot_retailos() {                   # $1 nor  $2 gen  $3 label  $4 drive
   local nor="$1" gen="$2" label="$3" drive="$4"
   local out="$SCRATCH/os-$gen-$label" work="$SCRATCH/os-$gen-$label.img" route
   [ -n "$drive" ] || { row retailos "$gen" "$label" - BLOCKED "no drive for this generation"; return; }
-  mkdir -p "$out"; cp "$drive" "$work"
+  mkdir -p "$out"; clone_disk "$drive" "$work"
   # **The descent, not just the boot.** "RetailOS works" has to mean the wheel moves it, and a
   # static picker proves only that something drew once. Anchored in simulated time because this
   # machine halts — the picker draws at 73.2 s, measured off `--bcm-film`'s `first_usec` — and with
@@ -158,7 +185,7 @@ boot_diag() {                       # $1 nor  $2 gen  $3 label  $4 drive
     *diag*) ;;
     *) row diag "$gen" "$label" - N/A "this ROM carries [$(fact "$nor" "Images")]"; return ;;
   esac
-  mkdir -p "$out"; [ -n "$drive" ] && cp "$drive" "$work" || work="$drive"
+  mkdir -p "$out"; [ -n "$drive" ] && clone_disk "$drive" "$work" || work="$drive"
   FLASH="$nor" DISK="$work" IMG=diag BUDGET=600000000 "$BIN" flsh --clock=5 --clickwheel \
     --bcm-film=0xE0000:140:F0:25000000:"$out" > "$out.log" 2>&1
   local pics nb; pics=$(pictures "$out"); nb=$(last_nonblack "$out")
@@ -182,7 +209,7 @@ boot_rockbox() {                    # $1 nor  $2 gen  $3 label  $4 drive
   local out="$SCRATCH/rb-$gen-$label" work="$SCRATCH/rb-$gen-$label.img"
   [ -f "$RES/vendor/rockbox/bin/rb-main.raw" ] || {
     row rockbox "$gen" "$label" - BLOCKED "resources/vendor/rockbox/bin/rb-main.raw is not here"; return; }
-  mkdir -p "$out"; [ -n "$drive" ] && cp "$drive" "$work" || work="$drive"
+  mkdir -p "$out"; [ -n "$drive" ] && clone_disk "$drive" "$work" || work="$drive"
   FLASH="$nor" DISK="$work" BUDGET=800000000 "$BIN" rockbox --clock=5 --clickwheel \
     --bcm-film=0xE0000:140:F0:25000000:"$out" > "$out.log" 2>&1
   local pics nb; pics=$(pictures "$out"); nb=$(last_nonblack "$out")
@@ -219,7 +246,7 @@ boot_doom() {                       # $1 nor  $2 gen  $3 label  $4 drive
     row doom "$gen" "$label" - BLOCKED "the drive has doom.rock but $have of 3 of rockdoom.wad/doom2.wad/shortcuts.txt"
     return
   fi
-  mkdir -p "$out"; cp "$rb" "$work"
+  mkdir -p "$out"; clone_disk "$rb" "$work"
   # research/06, and every offset is a duration rather than a click count.
   local w="@25s:touch,+600ms:rotate=-6,+2s:release"
   w="$w,+1s:down=select,+300ms:up=select,+4s:down=select,+300ms:up=select"
