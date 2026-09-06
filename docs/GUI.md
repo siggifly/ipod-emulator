@@ -5355,6 +5355,17 @@ implementation, because the ratio question — a trackpad's continuous delta aga
 one, without a flick firing two hundred clicks — is a design decision and not an implementation
 detail.
 
+**The Hold switch is load-bearing and must not stay a keyboard secret.** Measured while proving
+input reaches Doom: `CONFIG_KEYPAD IPOD_4G_PAD` has no DOWN key and no ESC key, Doom's menus are
+UP-only, and the wheel never moves one — `M_Responder` reads only `ev_keydown`. During demo playback
+`gamestate == GS_LEVEL`, so `G_Responder`'s demo branch discards keypresses outright: a ten-second
+centre hold reaches `D_PostEvent` four times and changes nothing. `button_hold()` going off→on posts
+`KEY_ESCAPE`, and **that is the only way into Doom's menu at all**.
+
+So the drawn hold switch has to be operable by pointer, not merely drawn, and `H` is not a
+sufficient way to offer it. A person who has been handed a game they cannot start because the one
+control that starts it is an undocumented keystroke has been handed nothing.
+
 ### 21.9 What this overturns
 
 Stated, because §18 requires it and because a redesign that does not name its casualties is hiding
