@@ -8,8 +8,11 @@
 //! the device model, the compatibility rules and the identity validation, and none of them has ever
 //! imported a UI crate. That is why replacing an 8,039-line window cost one file, and it is worth
 //! keeping for whoever replaces this one. `rail.rs`, `nav.rs`, `fit.rs`, `geometry.rs`, `motion.rs`,
-//! `args.rs` and `bundle.rs` are toolkit-free for the same reason; this file and `client_height.rs`
-//! are the only two that name a Slint type at all. **The command line is toolkit-free too, and that
+//! `args.rs` and `bundle.rs` are toolkit-free for the same reason; this file, `client_height.rs`
+//! and `trackpad.rs` are the only three that name a Slint type at all, and the two besides this one
+//! do it for the same reason — *which display is this window on* and *which `NSView` is this
+//! window* are questions that cannot be asked without a window, and there is nowhere else to ask
+//! them. **The command line is toolkit-free too, and that
 //! is not incidental**: `--help`, `--check-update`, `--check-images` and `--make-app` all answer
 //! before a platform is set, so a window that will not open cannot stop them answering.
 //!
@@ -158,6 +161,13 @@ mod settings_page;
 // and it is what `caps()`'s `file_picker`, `drop_target` and `reveal` are now read from rather
 // than typed as literals.
 mod drops;
+
+// §21.8. The trackpad is a capacitive surface reporting absolute position and so is the part being
+// emulated, so this is a coordinate transform and a mode rather than a new input path: what comes
+// out of it goes to `wheel::Finger`, which the pointer, the keys and the scroll wheel already
+// drive. Everything platform-specific is inside it, and on a build that is not macOS it is an
+// arithmetic module with tests and a `support()` that says so.
+mod trackpad;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -2855,6 +2865,119 @@ fn wire(
         });
     }
 
+    // ── §21.8: the trackpad, as the wheel ───────────────────────────────────────────────────────
+    //
+    // **Five lines of routing and no new input path.** `trackpad.rs` turns absolute finger
+    // positions into the same unit-radius coordinates `ipod.slint` sends and the same
+    // `wheel::Finger` the pointer drives, so everything below is the machine half that already
+    // existed — `to_the_machine` for a press, `off_the_machine` for a release, and the direct
+    // borrow for a move, exactly as `on_wheel_moved` takes it and for the same reason.
+    //
+    // **The detent is asked for from here rather than from inside the pad**, because the honest
+    // number is *what the machine took*, not what the hand did: with no machine on the bench the
+    // wheel does not turn, and an actuator clicking against a bench with nothing on it is a lie
+    // about what happened told through somebody's fingertip.
+    let trackpad = {
+        let live = live.clone();
+        let weak = window.as_weak();
+        let act: Rc<dyn Fn(trackpad::Act)> = Rc::new(move |a| {
+            let Some(w) = weak.upgrade() else { return };
+            match a {
+                trackpad::Act::Down(x, y) => to_the_machine(&w, &live, machine::NO_MACHINE, |l| {
+                    l.finger.borrow_mut().touched(&unit_ring(), x, y)
+                }),
+                trackpad::Act::Moved(x, y) => {
+                    if machine::no_machine(&life(&live)).is_some() {
+                        return;
+                    }
+                    let held = live.borrow();
+                    let Some(l) = held.as_ref() else { return };
+                    let evs = l.finger.borrow_mut().moved(x, y);
+                    let detents = evs.len() as u32;
+                    for ev in evs {
+                        l.link.push(ev);
+                    }
+                    trackpad::detent(detents);
+                }
+                trackpad::Act::Up => {
+                    off_the_machine(&w, &live, |l| l.finger.borrow_mut().released());
+                }
+                // **The centre button, and only the iPod's half of it.** The drawn disc raises
+                // three callbacks: `centre-down` / `centre-up`, which `machine::centre` answers as
+                // Select over a running machine, and `pressed-centre`, which starts or stops the
+                // device. The first two are a press on the *part* and belong here; the third is a
+                // press on the *program* — §7.3's *press ● to stop* — and a trackpad standing in
+                // for a click wheel has no business being a power button.
+                //
+                // The bare `to_the_machine` is not decoration. Without it a centre click over an
+                // empty bench would do nothing **and say nothing**, which is exactly §14.1's
+                // subject; with it, the same sentence lands on the cradle that a press on the drawn
+                // ring puts there. It queues no events, because Select is `centre_to_the_machine`'s
+                // to send and sending it twice would be two presses.
+                trackpad::Act::Press(wheel::Hit::Select) => {
+                    to_the_machine(&w, &live, machine::NO_MACHINE, |_| Vec::new());
+                    centre_to_the_machine(&live, true);
+                }
+                trackpad::Act::Release(wheel::Hit::Select) => {
+                    off_the_machine(&w, &live, |_| Vec::new());
+                    centre_to_the_machine(&live, false);
+                }
+                trackpad::Act::Press(wheel::Hit::RingButton(b, _)) => {
+                    to_the_machine(&w, &live, machine::NO_MACHINE, |_| {
+                        vec![ipod_machine::WheelEvent::Button(b.mask(), true)]
+                    });
+                }
+                trackpad::Act::Release(wheel::Hit::RingButton(b, _)) => {
+                    off_the_machine(&w, &live, |_| {
+                        vec![ipod_machine::WheelEvent::Button(b.mask(), false)]
+                    });
+                }
+                // Bare ring and off the wheel are under no switch — `Pad::clicked` refuses them
+                // before they get here, and these arms exist so that adding a `Hit` cannot make a
+                // press silently disappear.
+                trackpad::Act::Press(wheel::Hit::Ring(_) | wheel::Hit::None)
+                | trackpad::Act::Release(wheel::Hit::Ring(_) | wheel::Hit::None) => {}
+            }
+        });
+        // **Asked rather than assumed**, and asked in one place. `support()` is a `const fn` of the
+        // target, so on every build but macOS this is a compile-time `false` and nothing below it
+        // exists — which is what makes the mode *absent* elsewhere rather than present and broken.
+        let can = trackpad::support();
+        trackpad::note(can.describe());
+        #[cfg(target_os = "macos")]
+        {
+            // **The toolkit reach lives here, and that is `AGENTS.md` §9 rather than convenience.**
+            // `trackpad.rs` and `trackpad/mac.rs` name no toolkit type at all; what crosses to them
+            // is an `NSView`, which is AppKit and is the macOS adapter's proper business. A second
+            // window implementation replaces these four lines and changes nothing in either file.
+            let weak = window.as_weak();
+            let view: trackpad::View = Rc::new(move || ns_view(&weak.upgrade()?.window()));
+            let _ = &can;
+            can.available().then(|| trackpad::install(view, act)).flatten()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (&can, &act);
+            None
+        }
+    };
+
+    // **§21.8's foreground watch, and the clock is this file's because a timer is the toolkit.**
+    //
+    // It cannot be an event: nothing at all is delivered to an application that is not frontmost, so
+    // the one state that must end the trackpad mode is the one state that sends nothing. The mode
+    // owns the question — `Handle::ticker` — and the window owns the clock, which is `AGENTS.md` §9
+    // kept rather than bent.
+    //
+    // **Always on rather than started per engage**, which is both simpler and cheaper: `Mode::watch`
+    // returns on its first comparison while the mode is off, so what this costs when nobody is using
+    // the trackpad is one closure call every 200 ms.
+    let watch = Rc::new(slint::Timer::default());
+    if let Some(h) = &trackpad {
+        let ask = h.ticker();
+        watch.start(slint::TimerMode::Repeated, trackpad::WATCH, move || ask());
+    }
+
     Wiring {
         _tick: timer,
         _machine_timer: machine_timer,
@@ -2866,6 +2989,8 @@ fn wire(
         tick,
         lifted,
         files,
+        _trackpad: trackpad,
+        _watch: watch,
     }
 }
 
@@ -2958,6 +3083,21 @@ struct Wiring {
     /// It is the same arrangement `tick` is under and for the same reason: everything past the
     /// decode is drivable with no display, and everything before it is three lines of `match`.
     files: Rc<dyn Fn(drops::Event)>,
+    /// **§21.8's trackpad mode, held so that dropping this gives the cursor back.**
+    ///
+    /// It is the same arrangement the four timers above are under, one step sharper: a timer that
+    /// is not held stops, and a trackpad handle that is not held stops *and* re-associates the
+    /// cursor with the pointer. Every exit this process actually reaches — the window closing, a
+    /// test's `Wiring` going out of scope, a panic unwinding through `main` — runs that `Drop`, and
+    /// a person whose cursor never came back would not open this program a second time.
+    ///
+    /// `None` on any build that is not macOS, and on macOS if AppKit refuses a monitor.
+    _trackpad: Option<trackpad::Handle>,
+    /// **§21.8's foreground watch**, held for the reason the other four timers are: a `slint::Timer`
+    /// stops the moment it is dropped, and this one is what notices that the window has stopped
+    /// being frontmost while the trackpad owns the pointer. Dropped, the mode would stay engaged
+    /// with the cursor already handed back by macOS — the two disagreeing about who has the pointer.
+    _watch: Rc<slint::Timer>,
 }
 
 impl Drop for Wiring {
@@ -2996,6 +3136,34 @@ const MACHINE_TICK: std::time::Duration = std::time::Duration::from_millis(16);
 ///
 /// Not a `const`: `WheelRing::new` computes two ratios and is not a `const fn`, and making it one
 /// to save a multiplication that happens once per pointer event is the wrong trade.
+/// **The window's `NSView`, for §21.8's trackpad.** The one place the toolkit and AppKit meet.
+///
+/// It is here and not in `trackpad/mac.rs` because `AGENTS.md` §9 puts the toolkit in this file and
+/// nowhere else, and that rule is what makes the window replaceable — a second implementation
+/// rewrites this function and leaves both trackpad files alone. It is the same shape and the same
+/// justification as `client_height.rs`'s `ns_screen` reach, one layer further in.
+///
+/// `None` before the event loop is running (`i-slint-backend-winit-1.17.1/lib.rs:967-971`) and on a
+/// build with no window at all, which is what every test in this file runs on. That is not an
+/// error: the mode arms at its first engage, by which time there is a window.
+#[cfg(target_os = "macos")]
+fn ns_view(window: &slint::Window) -> Option<objc2::rc::Retained<objc2_app_kit::NSView>> {
+    use i_slint_backend_winit::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    window.with_winit_window(|w| {
+        let handle = w.window_handle().ok()?;
+        let RawWindowHandle::AppKit(h) = handle.as_raw() else {
+            return None;
+        };
+        let ptr: *mut objc2_app_kit::NSView = h.ns_view.as_ptr().cast();
+        // SAFETY: winit hands this pointer over unretained, exactly as `client_height.rs`'s
+        // `ns_screen` does, and the window keeps its content view alive. Take a reference of our
+        // own before the first message send rather than trusting the borrow — the trackpad holds
+        // this one for the life of the mode, so it has to be a real one.
+        unsafe { objc2::rc::Retained::retain(ptr) }
+    })?
+}
+
 fn unit_ring() -> wheel::WheelRing {
     wheel::WheelRing::new(0.0, 0.0, 1.0)
 }
@@ -10127,15 +10295,17 @@ pub(crate) mod tests {
     /// call site silently replaces the first — the same class as
     /// `there_is_exactly_one_winit_event_filter_registration`, and there is no error there either.
     ///
-    /// **There are four timers now and the count is four, which is not the same as the rule
+    /// **There are five timers now and the count is five, which is not the same as the rule
     /// being relaxed.** §12 needs a 60 Hz tick, a download needs a 10 Hz one, §16.4's drop needs a
-    /// single shot 150 ms after a file lands, and §16.11's scroll needs one 300 ms after the last
-    /// delta — the last two for the same reason, which is that neither winit nor Slint has an event
-    /// that says a drop or a gesture is over, so something has to come back and close what the
-    /// program opened. One constant for four rates is how a panel comes to run at the speed of a
-    /// progress bar. What the rule actually is — *each timer is started in exactly one place* — is
-    /// what this asserts: the starts are counted per timer by the name of the `Rc` each one is on,
-    /// so a second start on any of them is red however many timers exist.
+    /// single shot 150 ms after a file lands, §16.11's scroll needs one 300 ms after the last
+    /// delta, and §21.8's trackpad mode needs a 200 Hz-and-slower watch on the foreground — the
+    /// middle two for the same reason, which is that neither winit nor Slint has an event that says
+    /// a drop or a gesture is over, and the last for the sharper version of it: **nothing at all is
+    /// delivered to an application that is not frontmost**, so the one state that must end that
+    /// mode is the one state that sends no events. One constant for five rates is how a panel comes
+    /// to run at the speed of a progress bar. What the rule actually is — *each timer is started in
+    /// exactly one place* — is what this asserts: the starts are counted per timer by the name of
+    /// the `Rc` each one is on, so a second start on any of them is red however many timers exist.
     ///
     /// **The receiver is read off the line `TimerMode::` is on**, which is a real constraint on how
     /// a start may be written and not an artefact: `settle.start(` split across lines recorded the
@@ -10163,7 +10333,7 @@ pub(crate) mod tests {
         }
         // The control: a sweep that read no starts, or that could not tell the two apart, both
         // look exactly like a sweep that found no second start on one timer.
-        assert_eq!(starts.len(), 4, "the timer sweep read {starts:?}, which is not this window");
+        assert_eq!(starts.len(), 5, "the timer sweep read {starts:?}, which is not this window");
         let mut owners: Vec<&String> = starts.iter().map(|(on, _)| on).collect();
         owners.sort();
         owners.dedup();

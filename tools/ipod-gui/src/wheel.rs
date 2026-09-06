@@ -333,6 +333,33 @@ impl Finger {
         out
     }
 
+    /// **A finger arrived on the surface at `(x, y)` — contact, and not a press.**
+    ///
+    /// The difference from [`Finger::pressed`] is the whole of why this exists, and it is a
+    /// property of the input device rather than a policy: a mouse has no way to *rest* on a
+    /// wheel, so a pointer going down is the contact and the press at once and `pressed` sends the
+    /// label's `Button` along with the `Touch`. A capacitive surface says the two separately, and
+    /// so does the part being emulated — a thumb sitting on MENU is a finger on the wheel, not
+    /// MENU pressed. §21.8's trackpad reports contact and click on different events, so it uses
+    /// this one and raises the button from the click.
+    ///
+    /// The centre and the moulding answer nothing, exactly as they do for a pointer: the centre
+    /// button is a control of its own with its own route, and the gap between it and the ring is a
+    /// press on neither.
+    pub fn touched(&mut self, ring: &WheelRing, x: f32, y: f32) -> Vec<ipod_machine::WheelEvent> {
+        let at = match ring.hit(x, y) {
+            Hit::Ring(p) | Hit::RingButton(_, p) => p,
+            Hit::Select | Hit::None => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        if self.touch == Touch::Off {
+            out.push(ipod_machine::WheelEvent::Touch);
+        }
+        self.touch = Touch::Pointer { at, button: 0 };
+        self.residue = 0.0;
+        out
+    }
+
     /// The pointer moved to `(x, y)` — one `Step` per detent crossed, the short way round.
     ///
     /// **Only the angle is read, and the radius is deliberately ignored.** A drag that wanders
@@ -672,6 +699,49 @@ mod tests {
         // Off the wheel entirely.
         assert!(f.pressed(&unit(), 0.0, -2.0).is_empty());
         assert!(f.released().is_empty(), "a press that did nothing left a finger on the wheel");
+    }
+
+    /// **§21.8's trackpad, and the one thing it does that a pointer cannot.** A finger resting on
+    /// the MENU label is a finger on the wheel; it is not MENU pressed. The control that makes
+    /// this fail is `pressed` in place of `touched` — it answers `[Touch, Btn(MENU, true)]` and
+    /// the emulated iPod goes to the main menu because somebody put a thumb down at twelve
+    /// o'clock.
+    #[test]
+    fn a_contact_on_a_printed_label_is_a_touch_and_no_button() {
+        let mut f = Finger::default();
+        let (x, y) = on_ring(0);
+        assert_eq!(f.touched(&unit(), x, y), vec![Touch]);
+        assert_eq!(f.released(), vec![Release], "a contact that pressed nothing released something");
+    }
+
+    /// A contact turns the wheel exactly as a press does — the difference is the button, and
+    /// nothing else. Two turns from the same start must give the same steps.
+    #[test]
+    fn a_contact_turns_the_wheel_the_same_way_a_press_does() {
+        let steps = |f: &mut Finger| {
+            let (x, y) = on_ring(9);
+            f.moved(x, y)
+        };
+        let (x, y) = on_ring(6);
+
+        let mut pressed = Finger::default();
+        pressed.pressed(&unit(), x, y);
+        let mut touched = Finger::default();
+        touched.touched(&unit(), x, y);
+
+        assert_eq!(steps(&mut pressed), vec![Step(1); 3]);
+        assert_eq!(steps(&mut touched), vec![Step(1); 3]);
+    }
+
+    /// The same three places a press answers nothing for, asked of a contact: the centre is its
+    /// own control, the moulding is neither, and off the ring is off it.
+    #[test]
+    fn a_contact_the_ring_does_not_own_leaves_no_finger_behind() {
+        let mut f = Finger::default();
+        assert!(f.touched(&unit(), 0.0, 0.0).is_empty(), "the centre button is not the wheel");
+        assert!(f.touched(&unit(), 0.0, -0.49).is_empty(), "the moulding is neither control");
+        assert!(f.touched(&unit(), 0.0, -2.0).is_empty(), "off the ring entirely");
+        assert!(f.released().is_empty(), "a contact that did nothing left a finger on the wheel");
     }
 
     #[test]
