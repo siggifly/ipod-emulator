@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-883 headings across 17 documents — 45 dated, 17 settled, 15 retracted, 5 corrected.
+889 headings across 17 documents — 46 dated, 18 settled, 15 retracted, 5 corrected.
 
 ## Where each document stands today
 
@@ -23,7 +23,7 @@ above it in the same document may have been superseded.
 | [`04-bypass-ledger.md`](04-bypass-ledger.md) | Caveat on the interrupt-wake fix (2026-08-31) — it stops the machine idli… | `2026-08-31` |  |
 | [`05-the-chip-inventory.md`](05-the-chip-inventory.md) | *nothing in it is dated* | — | |
 | [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md) | Doom is played: input reaches the game, and the press has to land inside… | `2026-09-06` |  |
-| [`07-the-flash-images.md`](07-the-flash-images.md) | *nothing in it is dated* | — | |
+| [`07-the-flash-images.md`](07-the-flash-images.md) | The storm was the vector table, and the chord now takes input — 2026-09-06 | `2026-09-06` | settled |
 | [`08-differential-register-map.md`](08-differential-register-map.md) | *nothing in it is dated* | — | |
 | [`09-what-the-hardware-must-supply.md`](09-what-the-hardware-must-supply.md) | GPIOL, and what it exposed — **RESOLVED 2026-08-14, and both halves below… | `2026-08-14` |  |
 | [`10-the-resource-image.md`](10-the-resource-image.md) | 8b. The audit this fix owed, run 2026-08-13 | `2026-08-13` |  |
@@ -114,9 +114,9 @@ and nothing dated replaced it.
 
 | line | when | state | heading |
 |---|---|---|---|
-| 570 | — | settled | snapshot / restore —  faithful; the control that condemned it was wrong |
-| 837 | 2026-08-13 |  | Independent corroboration from `daniel5151/clicky` (2026-08-13) |
-| 939 | 2026-08-31 |  | Caveat on the interrupt-wake fix (2026-08-31) — it stops the machine idling |
+| 574 | — | settled | snapshot / restore —  faithful; the control that condemned it was wrong |
+| 849 | 2026-08-13 |  | Independent corroboration from `daniel5151/clicky` (2026-08-13) |
+| 951 | 2026-08-31 |  | Caveat on the interrupt-wake fix (2026-08-31) — it stops the machine idling |
 
 ### [`05-the-chip-inventory.md`](05-the-chip-inventory.md)
 
@@ -142,7 +142,11 @@ and nothing dated replaced it.
 
 ### [`07-the-flash-images.md`](07-the-flash-images.md)
 
-24 headings, none of them marked or dated.
+30 headings, 1 of them marked or dated:
+
+| line | when | state | heading |
+|---|---|---|---|
+| 608 | 2026-09-06 | settled | The storm was the vector table, and the chord now takes input — 2026-09-06 |
 
 ### [`08-differential-register-map.md`](08-differential-register-map.md)
 

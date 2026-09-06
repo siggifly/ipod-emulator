@@ -357,9 +357,20 @@ pub enum BootTarget {
     /// diagnostics, `disk` for target disk mode. Cut out of the dump in use.
     ///
     /// On real hardware these are reached by a key chord held at power-on, and the boot ROM does
-    /// the loading — see research/07, where that is measured and works. It is done here instead
+    /// the loading — see research/07, where that is measured and works. ~~It is done here instead
     /// because releasing the chord afterwards currently storms the interrupt controller, and a
-    /// diagnostics screen you cannot press a button on is not much of one.
+    /// diagnostics screen you cannot press a button on is not much of one.~~
+    ///
+    /// **That reason expired on 2026-09-06.** The storm was the exception vectors: an image the
+    /// boot ROM enters needs logical 0 to be *itself*, and it was still the NOR. Ledger #18 is the
+    /// fix, and the chord now walks Apple's diagnostics three screens deep — 70 669 / 68 428 /
+    /// 67 959 non-black pixels, the same figures the direct entry gives, with
+    /// `irqs: 26 asserted, 13 taken`. So this variant is no longer a workaround for anything, and
+    /// **the window could boot the chord instead.** It is kept because it is still the shape
+    /// [`BootTarget::Image`] needs — a raw image entered at `0x10000000` on a machine with no
+    /// bootloader to load it, which is also the only way to reach these images on a *synthesised*
+    /// ROM, since that one carries no `flsh` directory at all. Retiring it is a decision about
+    /// what the window's device page offers, not a bug fix.
     Nor(String),
     /// Any raw ARM image that expects to be loaded at 0x10000000 and entered there — Rockbox's
     /// `rb-main.raw`, its bootloader, `ipodloader2`. The same contract Apple's own `flsh` images

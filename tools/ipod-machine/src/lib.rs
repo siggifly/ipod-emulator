@@ -857,6 +857,10 @@ pub struct Memory {
     mmap_regs: [u32; 16],
     /// How many aliases were installed before any MMAP window; those survive a rebuild.
     pub mmap_alias_floor: usize,
+    /// SDRAM's physical base while the boot ROM is still in charge of a cold boot, and `None` once
+    /// it has handed an image control. [`Machine::run`] consumes it — see
+    /// [`Memory::boot_rom_handoff`] for the whole of why it exists.
+    pub boot_rom_handoff_at: Option<u32>,
     /// PC of the instruction being executed, so an unmapped access can name its own culprit.
     /// Set by [`Machine::run`]; zero when memory is driven directly by a test.
     pub pc: u32,
@@ -2056,6 +2060,60 @@ impl Memory {
             }
         }
         self.invalidate_fast();
+    }
+
+    /// The state Apple's boot ROM leaves when it enters an image: MMAP window 0 mapping logical
+    /// `0` onto SDRAM, so the image's own exception vectors are the machine's.
+    ///
+    /// **Why this is not optional, and not about `diag`.** Every image the ROM can enter begins
+    /// with an eight-entry ARM exception table — `diag` at its `+0x18` branches to its wheel ISR,
+    /// `disk` has eight distinct handlers of its own — and both of them *enable interrupts*:
+    /// `diag` writes `CPU_HI_INT_EN = 1 << 8` (IRQ 40, the click wheel) at its `0x100088d4` and
+    /// then runs in SVC mode with `I` clear. `diag`'s wheel ISR has exactly one caller chain and
+    /// its root is that vector slot: `0x18 -> 0x100002a4 -> 0x10000880 -> 0x10009e40 ->
+    /// 0x10008424`, which is the only code in the image that reads `CLICKWHEEL_DATA` and the only
+    /// writer of the button byte its main loop polls. An image entered with logical `0` still
+    /// answering NOR takes its first interrupt into Apple's own vector page, which forwards every
+    /// exception into IRAM at `0x400000xx`, where the ROM ships `b .` in the IRQ slot. Measured:
+    /// the wheel's line is level-held, so nothing acks it and the run ends
+    /// `irqs: 3 073 043 asserted, 1 taken` with the PC parked at `0x40000018`.
+    ///
+    /// **Why it has to be at the handoff rather than at reset.** The ROM reads the NOR's SysCfg
+    /// through logical `0` while it is running out of IRAM — remapping SDRAM over `0` from reset
+    /// makes it print `BootLoader running on ??? cpu PP5022-C` and never reach an image at all.
+    /// So the map genuinely changes when the ROM hands control on, and the trigger below is that
+    /// handoff: whatever the ROM entered, and however this machine was asked to boot, once the CPU
+    /// is executing out of SDRAM the boot ROM is finished with the map.
+    ///
+    /// **This is a bypass, and it is [`research/04`](../../../research/04-bypass-ledger.md) #18.**
+    /// Nothing in this NOR dump programs the MMAP unit: `--watch-range=0xf000f000:0x40` counts
+    /// **zero** writes across a whole chord boot, against 56 from RetailOS's own crt0 at
+    /// `0x10000208`, and a scan of the ROM's IRAM image for the unit's magic constants
+    /// (`0x3a00`/`0x3c00`/`0x0f84`/`0x3f84`) finds none. Its four `0xf000f000` literals all address
+    /// `+0x40`/`+0x44`, the cache mask and operation registers. So the window is *supplied* here
+    /// rather than executed. Two independent firmwares corroborate that the ROM leaves one:
+    /// `ipodloader2`'s `remap_memory()` **saves the eight words at `0xf000f000` and restores them**
+    /// before handing on, and it programs windows **1 and 2** rather than 0 — which is what you do
+    /// when window 0 is already spoken for.
+    ///
+    /// Encoding is Rockbox's `crt0-pp.S` for a 64 MB PP502x, byte for byte: `MMAP_MASK` `0x3c00`
+    /// in the logical half, `MMAP_FLAGS` `0x0f84` or'd with the physical base — the same
+    /// `0x00003c00` / `0x10000f84` pair `research/06` measured Rockbox writing.
+    ///
+    /// **Retirement condition**: an instruction in Apple's boot ROM (or a documented PP502x
+    /// behaviour) that programs this window, or a measurement of what `0x00000018` holds on real
+    /// hardware while `diag` is running. Either one replaces this with the mechanism.
+    fn boot_rom_handoff(&mut self, sdram: u32) {
+        // Only while the unit is untouched. A restored snapshot brings the firmware's own windows
+        // back in `aliases` while `mmap_regs` come back zeroed, and rebuilding from the registers
+        // would throw those away — so a machine that already has windows is one whose handoff is
+        // long past.
+        if self.aliases.len() != self.mmap_alias_floor {
+            return;
+        }
+        self.mmap_regs[0] = 0x0000_3c00;
+        self.mmap_regs[1] = 0x0000_0f84 | sdram;
+        self.rebuild_mmap_aliases();
     }
 
     /// Drop every cached page resolution. Must be called whenever regions, aliases, overrides or
@@ -4471,6 +4529,7 @@ impl Machine {
             mmap_base: None,
             mmap_regs: [0; 16],
             mmap_alias_floor: 0,
+            boot_rom_handoff_at: None,
             pc: 0,
         };
 
@@ -7215,6 +7274,23 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
                 self.run_cop(self.mem.quantum);
             }
             let pc = self.cpu.regs[15];
+            // **The boot ROM's handoff.** Apple's bootloader ends by branching to the image it has
+            // just put in SDRAM, and the machine the image is written for has that SDRAM at
+            // logical 0 as well — see [`Memory::boot_rom_handoff`], which is where the whole of
+            // the reasoning and the ledger entry live. The condition is "control has passed into
+            // SDRAM", not "which image" or "which recipe": every image the ROM can enter gets the
+            // same machine, and the ones that program the unit themselves (RetailOS about 0x208
+            // bytes into its own entry, Rockbox in `crt0-pp.S`) overwrite it a moment later.
+            //
+            // Clearing it before the call makes it one-shot, and a machine that is not a cold
+            // boot never arms it — so the cost off this path is one `Option` compare per
+            // instruction and the instruction stream is unchanged.
+            if let Some(sdram) = self.mem.boot_rom_handoff_at {
+                if pc.wrapping_sub(sdram) < SDRAM_LEN {
+                    self.mem.boot_rom_handoff_at = None;
+                    self.mem.boot_rom_handoff(sdram);
+                }
+            }
             // So an unmapped access can name the instruction that made it.
             self.mem.pc = pc;
             self.mem.icount = self.executed as u64;
@@ -9746,6 +9822,9 @@ pub const IDE_IRQ: u32 = 23;
 
 
 
+/// The SDRAM window, 64 MB — the size `map_hardware` registers and every alias onto it uses.
+pub const SDRAM_LEN: u32 = 0x0400_0000;
+
 /// Where `PROC_ID` lives. Read as a byte by every firmware that runs here.
 pub const PROC_ID: u32 = 0x6000_0000;
 
@@ -10746,6 +10825,12 @@ pub fn map_hardware(m: &mut Machine, cold_boot: bool) {
             // rebuilt each time the firmware programs one.
             m.mem.mmap_alias_floor = m.mem.aliases.len();
             m.mem.mmap_base = Some(0xf000_f000);
+            // Address 0 belongs to NOR only while the boot ROM is running; the image it enters
+            // needs its own exception vectors there. `Machine::run` installs the window Apple's
+            // handoff leaves the moment control passes into SDRAM — see `Memory::boot_rom_handoff`
+            // for the evidence and for the ledger entry, and note that the ROM reads the NOR's
+            // SysCfg through logical 0 while it runs, so this cannot be done at reset.
+            m.mem.boot_rom_handoff_at = Some(0x1000_0000);
         } else {
             m.mem.aliases.push((0x1400_0000, 0x0400_0000, 0x0000_0000));
             // The native SDRAM window. Same 64 MB, seen where the hardware puts it before the remap.
@@ -11693,6 +11778,76 @@ mod peek_tests {
             m.mem.read32(CPU_INT_EN_STAT) & TIMER2_MASK,
             TIMER2_MASK,
             "and the enable after it still stands"
+        );
+    }
+
+    /// **Address 0 is the NOR while the boot ROM runs, and the image once it has handed off.**
+    ///
+    /// Both halves matter and each one breaks something different. Apple's bootloader reads the
+    /// NOR's SysCfg through logical `0` while it is executing out of IRAM — put SDRAM there from
+    /// reset and it prints `BootLoader running on ??? cpu PP5022-C` and never loads an image at
+    /// all. And every image it can enter carries its own eight-entry exception table at its base
+    /// and turns interrupts on: leave the NOR at `0` afterwards and the first interrupt goes to
+    /// Apple's forwarder, into the ROM's `b .` in IRAM, and the machine is finished. Measured on
+    /// the retail dump, `ipod-boot retail` with the SELECT+REW chord released:
+    /// `irqs: 3 073 043 asserted, 1 taken` with the PC parked at `0x40000018`, against
+    /// `2 asserted, 1 taken` and Apple's diagnostics taking wheel input.
+    ///
+    /// **How to make it go red**: drop the `boot_rom_handoff_at` line from `map_hardware`'s
+    /// cold-boot branch, which is what leaves logical 0 as NOR for the whole run.
+    #[test]
+    fn the_boot_roms_handoff_gives_the_image_the_exception_vectors() {
+        // Apple's own page-0 IRQ vector, `mov pc, #0x40000018` — the forwarder into IRAM.
+        const NOR_IRQ_VECTOR: u32 = 0xe3a0_f161;
+        // The image's, in the shape `diag` and `disk` both have: eight PC-relative branches.
+        const IMAGE_IRQ_VECTOR: u32 = 0xea00_0006;
+
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        map_hardware(&mut m, true);
+        // The NOR's low mirror, as `trace --cold-boot` installs it. Ahead of everything else in
+        // the region list, which is where a cold boot puts it.
+        let mut nor = vec![0u8; 0x1000];
+        nor[0x18..0x1c].copy_from_slice(&NOR_IRQ_VECTOR.to_le_bytes());
+        // Somewhere for the ROM to be executing: `b .` at 0x100.
+        nor[0x100..0x104].copy_from_slice(&0xeaff_fffeu32.to_le_bytes());
+        m.mem.regions.insert(
+            0,
+            Region {
+                name: "flash-low",
+                base: 0,
+                data: nor,
+            },
+        );
+        m.mem.readonly.push("flash-low");
+        m.mem.invalidate_fast();
+        // The image the ROM loads into SDRAM, entered at its top: a vector table, then a self
+        // loop at the entry so the run has somewhere to sit.
+        for i in 0..8u32 {
+            m.mem.write32(0x1000_0000 + i * 4, 0xea00_0000 | i);
+        }
+        m.mem.write32(0x1000_0000, 0xeaff_fffe);
+
+        // The ROM is still in charge: it is executing out of the NOR and reading it through 0.
+        m.cpu.regs[15] = 0x100;
+        m.run(8);
+        assert_eq!(
+            m.mem.read32(0x18),
+            NOR_IRQ_VECTOR,
+            "while the ROM is running, logical 0 has to be the NOR — it reads its own SysCfg there"
+        );
+
+        // ...and now it hands off.
+        m.cpu.regs[15] = 0x1000_0000;
+        m.run(8);
+        assert_eq!(
+            m.mem.read32(0x18),
+            IMAGE_IRQ_VECTOR,
+            "once control is in SDRAM, logical 0x18 is the IMAGE's IRQ vector"
+        );
+        assert_eq!(
+            m.mem.read32(0x1000_0018),
+            IMAGE_IRQ_VECTOR,
+            "and the image is still where the ROM put it"
         );
     }
 
