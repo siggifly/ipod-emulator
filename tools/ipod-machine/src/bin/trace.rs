@@ -1405,8 +1405,30 @@ fn main() {
                         );
                     }
                 }
-                Ok(_) => println!("  restore {path}: not a valid snapshot"),
-                Err(e) => println!("  restore {path}: {e}"),
+                // **A refused restore ends the run; it does not fall through to a cold boot.**
+                // It used to print one line and carry on, exit 0 — so a stale snapshot produced a
+                // machine at usec 0 while every anchor in the caller's script had been written
+                // against the restore point's clock. Every step then fired into a booting machine
+                // and the panel sat unchanged, which reads exactly like a firmware that ignores
+                // input. That is how a frozen-panel session was misread earlier today, and the
+                // snapshot in question was refused only because the format had gained the
+                // coprocessor (IPODSNP8) an hour before.
+                //
+                // Asking for a restore and silently getting a cold boot is the shape AGENTS.md §6
+                // exists to delete: the run is not the one that was asked for, and nothing in its
+                // output says so after the first line scrolls past.
+                Ok(_) => {
+                    eprintln!(
+                        "restore {path}: not a valid snapshot — refusing rather than cold-booting, \
+                         because a run that silently starts from reset answers a question nobody \
+                         asked. Drop --restore= to boot from the beginning on purpose."
+                    );
+                    std::process::exit(2);
+                }
+                Err(e) => {
+                    eprintln!("restore {path}: {e} — refusing rather than cold-booting.");
+                    std::process::exit(2);
+                }
             }
         }
         // --bcm-film=ADDR:W:H:EVERY:DIR : record the panel over the whole run, not just at its end.
