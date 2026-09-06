@@ -135,22 +135,33 @@ boot_retailos() {                   # $1 nor  $2 gen  $3 label  $4 drive
   [ -n "$drive" ] || { row retailos "$gen" "$label" - BLOCKED "no drive for this generation"; return; }
   mkdir -p "$out"; clone_disk "$drive" "$work"
   # **The descent, not just the boot.** "RetailOS works" has to mean the wheel moves it, and a
-  # static picker proves only that something drew once. Anchored in simulated time because this
-  # machine halts — the picker draws at 73.2 s, measured off `--bcm-film`'s `first_usec` — and with
-  # `down=`/`up=` pairs because `press=` is one click long and a polling firmware cannot see it.
-  local head=",+150ms:down=select,+300ms:up=select,+150ms:release"
-  local w="@80s:touch$head"
-  w="$w,+1500ms:touch,+150ms:rotate=+8,+400ms:release"
-  w="$w,+1500ms:touch,+150ms:rotate=+8,+400ms:release"
-  w="$w,+1500ms:touch$head"
+  # static picker proves only that something drew once.
+  #
+  # **Stated in the firmware's clock, and that is what makes this row mean anything.** `BUDGET`
+  # counts OUR instructions; `7e30c1f` made a halt cost a cycle, so a fixed budget buys about a
+  # fifth of the iPod-time it used to and every recipe written before it silently began measuring a
+  # shorter run. This row said `PARTIAL — input changed nothing` for exactly that reason: 2.6 G buys
+  # 520 s, and **RetailOS does not answer its first press until 1 423 s** on a cold boot. It was
+  # reporting starvation as behaviour. `--until` is the iPod's own clock and `BUDGET` is now only
+  # the ceiling that stops a wedged run. See research/12 §"RESOLVED".
+  #
+  # The spacing is measured, not guessed: after the settle the machine answered at 1491 -> 1649 ->
+  # 1790 -> 1854 s, so steps are 150 s apart. `press=select` and a `down=`/`up=` pair were measured
+  # side by side at the same anchor and produced byte-identical runs, so the older comment here
+  # claiming `press=` is too short for a polling firmware is wrong and the shorter form is used.
+  local w="@80s:touch,+2s:press=select,+5s:release"
+  w="$w,+1320s:touch,+2s:rotate=+8,+5s:release"
+  w="$w,+150s:touch,+2s:rotate=+8,+5s:release"
+  w="$w,+150s:touch,+2s:press=select,+5s:release"
+  w="$w,+150s:touch,+2s:rotate=+8,+5s:release"
   if [ -n "$(fact "$nor" "Build")" ]; then
     route="Apple ROM"
-    FLASH="$nor" DISK="$work" BUDGET=2600000000 "$BIN" retail --clock=5 --clickwheel \
+    FLASH="$nor" DISK="$work" BUDGET=24000000000 "$BIN" retail --clock=5 --until=2200s --clickwheel \
       --wheel="$w" --enterlog=0x10000000 --bcm-film=0xE0000:140:F0:2000000:"$out" > "$out.log" 2>&1
   else
     route="from the drive"
-    "$TRACE" 2600000000 --osos-from-disk --boot-osos --flash="$nor" --disk="$work" \
-      --disk-writable --sysinfo --bcm --pmu --nor --clock=5 --clickwheel \
+    "$TRACE" 24000000000 --osos-from-disk --boot-osos --flash="$nor" --disk="$work" \
+      --disk-writable --sysinfo --bcm --pmu --nor --clock=5 --until=2200s --clickwheel \
       --wheel="$w" --enterlog=0x10000000 --bcm-film=0xE0000:140:F0:2000000:"$out" > "$out.log" 2>&1
   fi
   local hit pics nb vec
