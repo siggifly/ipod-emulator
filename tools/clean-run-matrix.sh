@@ -379,8 +379,14 @@ boot_loader2() {                    # $1 nor  $2 gen  $3 label  $4 drive
 # headers. Modelling it is the 0.6 work, and it is a much better question than the one that
 # started that note.
 #
-# ⚠️ docs/GUI.md §15 names a DIFFERENT stopping point — ZeroLauncher stalling at "Finishing Up…"
-# after a 101 MB download. At most one of those is current. Reconciling them is part of this row.
+# docs/GUI.md §15 names the same stall from the other end — "iPodLinux boots ... and then
+# ZeroLauncher stalls at 'Finishing Up…'". That is the SYMPTOM; the `0x64004000` poll is a
+# MECHANISM measured in a comparable run. They are consistent, not rival: one is what a person
+# sees, the other is what the machine does. (An earlier version of this comment called them
+# contradictory and said at most one could be current. That was wrong.) Whether they are the
+# same stall is not established — GUI.md's runs come from `ipod-boot install-linux` drives and
+# research/16's from the ipodloader2 chain — and establishing it is worth more than it sounds,
+# because it would turn a stalled splash screen into one unmapped page.
 boot_ipodlinux() {                  # $1 nor  $2 gen  $3 label  $4 drive
   local nor="$1" gen="$2" label="$3" drive="$4"
   local out="$SCRATCH/ipl-$gen-$label" work="$SCRATCH/ipl-$gen-$label.img"
