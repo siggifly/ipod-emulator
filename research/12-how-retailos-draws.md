@@ -1103,3 +1103,46 @@ sessions: a conclusion about a subsystem was drawn from a machine that had chang
 with no arm from a build known to work. R4 says every change to the *machine* re-runs the
 conclusions the old one produced. This change had a stated, measured side effect on the clock, and
 nothing re-ran the wheel against it.
+
+
+### ✅ RESOLVED — RetailOS navigates; every run that said otherwise was starved, 2026-09-05
+
+The retraction above bisected the wheel's failure to `7e30c1f` and named the mechanism — a halt now
+costs a cycle, so a fixed instruction budget buys about a fifth of the simulated time it used to.
+What it did not do is restate a descent in the firmware's clock and run it. Doing that ends the
+question:
+
+```sh
+trace 14000000000 --boot-osos --cold-boot --until=2450s \
+  --flash=resources/roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin \
+  --disk=<clone of ipod8g-retail.PRISTINE.img> --disk-writable \
+  --bcm --pmu --nor --clock=5 --clickwheel \
+  --wheel='@210s:touch,+2s:press=select,+5s:release,+30s:touch,+2s:rotate=+8,+5s:release,…' \
+  --bcm-film=0xE0000:140:F0:2000000:<out>
+```
+
+| | with the wheel script | control, no input |
+|---|---|---|
+| frames posted / read | 99 / 99 | 3 / 3 (the boot's own queries) |
+| distinct pictures | **10** | 5 |
+| last panel | **Slideshow Settings, fully drawn** | the language picker |
+| panel changes after 200.8 s | 1423.6 s · 1491.2 s · 1648.8 s · 1790.4 s · 1854.0 s | **none, for 2 250 s** |
+
+Same machine, same duration, same drive; **wheel input is the only variable.** Language list →
+`iPod` main menu → several levels down → a settings page with its rows, values, chevrons and
+selection highlight. The co-processor draws all of it, which is the second and final nail in the
+2026-09-01 reading that the display server is missing.
+
+**The panel does not answer for 1 200 s after the first press.** Input runs from 210 s to ~460 s and
+the first redraw lands at 1 423.6 s. That is not a hang — the machine is doing first-boot work — but
+it is the number that makes every short budget in this repository report a still panel. A 2.6 G
+budget buys 520 s; the answer arrives at 1 423 s. **Every wheel measurement taken this session, and
+the four hypotheses refuted with them, ran inside a window that closed before RetailOS replied.**
+
+### The rule this leaves
+
+`BUDGET` is a ceiling that stops a wedged run. **`--until` is what decides what a run covers**, and
+it is the only one of the two stated in the clock the firmware itself waits on. A recipe that says
+`BUDGET=2600000000` means "however much iPod this happens to buy today"; a recipe that says
+`--until=2450s` means the same thing on every build, at any `--clock`, whatever changes underneath
+it. `NEXT.md` said so when `--until` was added; nothing had yet re-run a conclusion against it.

@@ -569,9 +569,12 @@ halfway through the test that had set it up.
 > measured on a machine missing half its processor, and is kept because it is how the cause was
 > found — not because it still describes this emulator.
 >
-> **What is NOT fixed: the menu still does not move.** RetailOS receives every wheel frame,
-> acknowledges it, schedules against it, allocates a voice for the click, and draws nothing. That is
-> the open question, and it is now a redraw problem rather than a whole layer that never starts.
+> **And the menu does move.** The runs that said otherwise were starved: a 2.6 G budget buys 520 s
+> of firmware time and RetailOS does not answer the first press until **1 423 s**. Stated in the
+> iPod's own clock — `--until=2450s`, budget demoted to a ceiling — the same descent walks Language
+> list -> `iPod` main menu -> several levels down -> **Slideshow Settings, fully drawn**. Control
+> with no wheel input, same duration: five pictures, the last at 200.8 s, and nothing for the
+> remaining 2 250 s. Wheel input is the only variable. See `research/12` §"RESOLVED".
 
 
 **The menus stopped working on 2026-08-18 and nothing noticed for a fortnight**, because the failure
