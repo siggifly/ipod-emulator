@@ -1545,6 +1545,9 @@ const MACHINE_SHAPING: &[&str] = &[
     "--sysinfo",
     "--second-core",
     "--no-second-core",
+    // Ledger #18's ablation. It decides whether logical 0 is the NOR or the image the boot ROM
+    // entered, which is the memory map itself and therefore as shaping as a peripheral.
+    "--no-boot-handoff",
 ];
 
 /// `cold-boot.sh`'s argv, which `retail-boot.sh`, `flash-update.sh` and `from-idle.sh` all reach

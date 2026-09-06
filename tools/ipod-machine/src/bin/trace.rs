@@ -1247,7 +1247,21 @@ fn main() {
                 .and_then(|n| n.parse::<u8>().ok())
                 .unwrap_or_else(ipod_machine::host_battery_percent);
             pmu.set_battery_percent(pct);
-            let tm = ipod_machine::host_local_time();
+            // `--rtc=YYYY-MM-DDTHH:MM:SS` pins the clock the way `--battery=` pins the charge, and
+            // it exists because the pair of them are the only two things in this machine that come
+            // from outside it. Two runs of one recipe an hour apart are two different machines: the
+            // firmware reads the RTC, and `54d5dce` recorded two films of the same command
+            // disagreeing on frames 2-11 for no other reason. Measured while pinning a comparison
+            // for this session: cold-booted Rockbox on the SAME binary and the same `--battery=100`
+            // gave **44 511 132 instructions** at one time of day and **44 509 887** at another, so
+            // an instruction count was not usable as a before/after equality until this existed.
+            // ATA commands, IRQs taken and the frame counts did not move — but "did not move" is a
+            // claim about which numbers are stable, and it should not have to be one.
+            let tm = args
+                .iter()
+                .find_map(|a| a.strip_prefix("--rtc="))
+                .and_then(parse_rtc)
+                .unwrap_or_else(ipod_machine::host_local_time);
             pmu.set_clock(tm);
             println!(
                 "  pcf50605 battery {pct}%, clock 20{:02}-{:02}-{:02} {:02}:{:02}:{:02}",
@@ -4034,6 +4048,15 @@ fn report_live_bypasses(m: &ipod_machine::Machine) {
     if m.mem.ata.is_some() && !m.mem.ide_irq_latch_off {
         live.push("#9 IDE0_CFG bit 3 latch (--no-ide-irq-latch turns it off)".into());
     }
+    // #18 is armed by `map_hardware` on the cold path and consumed by the first instruction the
+    // CPU executes out of SDRAM, so this banner — printed before the run — sees it armed.
+    if m.mem.boot_rom_handoff_at.is_some() {
+        live.push(
+            "#18 the boot ROM's handoff remap: logical 0 -> SDRAM when control reaches the \
+             image (--no-boot-handoff turns it off)"
+                .into(),
+        );
+    }
     eprintln!("bypasses live: {}", live.len());
     for b in &live {
         eprintln!("  {b}");
@@ -4059,6 +4082,30 @@ fn report_live_bypasses(m: &ipod_machine::Machine) {
 /// `0` instead of implying it ablated something.
 fn map_hardware(m: &mut ipod_machine::Machine, cold_boot: bool, args: &[String]) {
     ipod_machine::map_hardware(m, cold_boot);
+    // `--no-boot-handoff` : ablate ledger #18, so the boot ROM hands off with logical 0 still
+    // answering NOR. It is arm B for the one row in this file whose evidence is a *behaviour*
+    // rather than an instruction — with it, the SELECT+REW chord released reproduces the storm on
+    // demand (`irqs: 3 073 043 asserted, 1 taken`, PC at `0x40000018`), the same way
+    // `--no-cfg-ack` reproduces the drive's. A bypass whose ablation nobody can run is one nobody
+    // can check.
+    //
+    // A warm entry has no handoff to ablate — SDRAM's storage is already at 0 there — and the
+    // flag says so rather than doing nothing quietly, which is the shape `--no-second-core` was
+    // in for months while nothing parsed it.
+    if args.iter().any(|a| a == "--no-boot-handoff") {
+        if cold_boot {
+            m.mem.boot_rom_handoff_at = None;
+            eprintln!(
+                "ledger #18: the boot ROM's handoff remap NOT installed (--no-boot-handoff) — \
+                 logical 0 stays NOR for the whole run"
+            );
+        } else {
+            eprintln!(
+                "--no-boot-handoff: nothing to ablate on a warm entry — SDRAM's storage is \
+                 already at 0 and #18 is not armed. The flag needs --cold-boot."
+            );
+        }
+    }
     if args.iter().any(|a| a == "--no-pll-lock") {
         let before = m.mem.read_or_masks.len();
         m.mem.read_or_masks.retain(|&(at, _)| at != PLL_STATUS);
@@ -4068,6 +4115,40 @@ fn map_hardware(m: &mut ipod_machine::Machine, cold_boot: bool, args: &[String])
              removed at {PLL_STATUS:#010x}"
         );
     }
+}
+
+/// `--rtc=YYYY-MM-DDTHH:MM:SS` -> the PMU's seven clock bytes, in `host_local_time`'s order:
+/// second, minute, hour, weekday, day, month, year-2000. `None` on anything that does not parse,
+/// which falls back to the host clock rather than to a made-up date.
+///
+/// The weekday is computed rather than asked for, by Sakamoto's method, because nobody writing a
+/// reproducible recipe should have to look one up — and a wrong one is a real difference to
+/// firmware that draws a date.
+fn parse_rtc(s: &str) -> Option<[u8; 7]> {
+    let (date, time) = s.split_once(['T', ' '])?;
+    let d: Vec<u32> = date.split('-').filter_map(|p| p.parse().ok()).collect();
+    let t: Vec<u32> = time.split(':').filter_map(|p| p.parse().ok()).collect();
+    if d.len() != 3 || t.len() != 3 {
+        return None;
+    }
+    let (y, mo, dy) = (d[0], d[1], d[2]);
+    if !(2000..2100).contains(&y) || !(1..=12).contains(&mo) || !(1..=31).contains(&dy) {
+        return None;
+    }
+    const T: [u32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let yy = if mo < 3 { y - 1 } else { y };
+    // 0 = Sunday out of Sakamoto; the PMU counts ISO days, 1 = Monday .. 7 = Sunday.
+    let dow = (yy + yy / 4 - yy / 100 + yy / 400 + T[mo as usize - 1] + dy) % 7;
+    let iso = if dow == 0 { 7 } else { dow };
+    Some([
+        t[2] as u8,
+        t[1] as u8,
+        t[0] as u8,
+        iso as u8,
+        dy as u8,
+        mo as u8,
+        (y - 2000) as u8,
+    ])
 }
 
 /// **Drive the machine from stdin instead of running it to a budget.**
@@ -4270,4 +4351,46 @@ fn drive(m: &mut Machine, entry: u32, restored: bool, ceiling: usize) -> Stop {
         let _ = std::io::stdout().flush();
     }
     last
+}
+
+#[cfg(test)]
+mod rtc_tests {
+    use super::parse_rtc;
+
+    /// **`--rtc=` has to agree with `date` about the weekday**, because firmware that draws a date
+    /// draws that byte and nothing else in the run would notice it was wrong. Four dates, checked
+    /// against `date -j -f %Y-%m-%d … +%u`: a Sunday (the PMU's 7, and Sakamoto's 0 before the
+    /// conversion), a January date whose year Sakamoto shifts back, the March boundary where it
+    /// stops shifting, and a leap day.
+    #[test]
+    fn the_pinned_clock_parses_and_dates_itself_correctly() {
+        // [second, minute, hour, weekday, day, month, year-2000]
+        assert_eq!(
+            parse_rtc("2026-09-06T12:34:56"),
+            Some([56, 34, 12, 7, 6, 9, 26])
+        );
+        assert_eq!(parse_rtc("2026-01-01T00:00:00"), Some([0, 0, 0, 4, 1, 1, 26]));
+        assert_eq!(parse_rtc("2026-03-01T00:00:00"), Some([0, 0, 0, 7, 1, 3, 26]));
+        assert_eq!(
+            parse_rtc("2024-02-29T23:59:59"),
+            Some([59, 59, 23, 4, 29, 2, 24])
+        );
+        // A space instead of the T, because that is how the run banner prints it back.
+        assert_eq!(
+            parse_rtc("2026-09-06 12:34:56"),
+            parse_rtc("2026-09-06T12:34:56")
+        );
+        // Anything that does not parse falls back to the host clock rather than to a made-up date.
+        for bad in [
+            "",
+            "garbage",
+            "2026-09-06",
+            "12:00:00",
+            "1999-09-06T12:00:00",
+            "2026-13-06T12:00:00",
+            "2026-09-32T12:00:00",
+        ] {
+            assert_eq!(parse_rtc(bad), None, "{bad:?} is not a date this should accept");
+        }
+    }
 }

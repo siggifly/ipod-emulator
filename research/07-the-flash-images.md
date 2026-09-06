@@ -604,3 +604,167 @@ failing run *and* on the drawing one. `diag` writes nothing there at all.
 So until the storm is understood, there are two ways in and they are good at different things: the
 chord is the faithful boot and the one to keep measuring against, and direct entry
 (`ipod-boot flsh`, and the window's diagnostics button) is the one that currently takes input.
+
+### ✅ The storm was the vector table, and the chord now takes input — 2026-09-06
+
+**The paragraph above is superseded. The release does not storm any more, and the last sentence of
+it is retired: the chord takes input.** The storm was never about the wheel; it was about where the
+machine's exception vectors are while an image the boot ROM entered is running. What follows is the
+whole chain, because every link of it is measurable and two of them were guessed wrong first.
+
+#### 1. `diag`'s only route to the wheel is the exception vector at logical `0x18`
+
+Apple's image begins with an eight-entry ARM vector table, PC-relative so it is correct wherever it
+is executed:
+
+```asm
+10000000  ea000006  b 0x10000020      ; reset
+10000004  eafffffe  b .
+…
+10000018  ea0000a1  b 0x100002a4      ; IRQ
+1000001c  ea0000ac  b 0x100002d4      ; FIQ
+```
+
+`0x100002a4` reads `PROC_ID`, and on the CPU calls `0x10000880`, which is the demux:
+
+```asm
+10000884  ldr r4, =0x60004100         ; CPU_HI_INT_STAT
+10000888  ldr r0, [r4, #0x0]
+1000088c  tst r0, #0x100              ; bit 8 == IRQ 40 == the click wheel
+10000890  beq 0x1000089c
+10000894  bl  0x10009e40              ; the wheel ISR
+```
+
+and `0x10009e40 -> 0x10008424` is the **only** code in the image that reads `CLICKWHEEL_DATA` at
+`0x7000c140`, writes the `0` back to it that acknowledges the frame, and stores the button byte at
+`0x1001aa9c` that the 150 ms poll then reads. `dis --xref` gives each of those exactly **one**
+caller — `0x100002c0 -> 0x10000880`, `0x10000894 -> 0x10009e40`, `0x10009e44 -> 0x10008424` — so
+there is no polling path, and the root of the chain is the vector word. `diag` also *turns the
+interrupt on*: `--watch-range=0x60004120:0x10` shows `CPU_HI_INT_EN` written from `0x100088d4`
+(`mov r0, #0x100; str r0, [r1, #0x124]`) at `@156 285 201`, and its crt0 has already entered SVC
+mode with `I` clear at `0x1000024c`. **`disk` is built the same way** — its own eight-entry table,
+and `CPU_INT_EN` / `CPU_INT_DIS` / `CPU_HI_INT_EN` literals in its pools.
+
+#### 2. On the chord path that vector was Apple's, not `diag`'s
+
+`--dump=0x0:0x40` at the halt, on a cold boot, is the NOR's own page 0:
+
+```text
+00000000  b 0x8000                   ; reset, position-correct at 0 and at 0x20000000
+00000004  mov pc, #0x40000004        ; every other vector forwards into IRAM, absolutely
+…
+00000018  mov pc, #0x40000018
+```
+
+and `--dump=0x40000000:0x20` is the table the ROM copies there from NOR `0x8000` in its first
+hundred instructions (PC `0x000087c0`, `@39..@131`):
+
+```text
+40000000  b 0x4000072c    40000004  b .    40000008  b 0x40000810    4000000c  b 0x40000858
+40000010  b .             40000014  nop    40000018  b .             4000001c  b .
+```
+
+**The IRQ slot is a halt in Apple's shipped bytes**, and `--watch-range=0x40000000:0x60` over a
+whole 400 M chord boot finds nothing but that first copy plus the `0x40000050` handoff word. So the
+first wheel frame after `diag` enabled IRQ 40 vectored `0x18 -> 0x40000018` and stopped there with
+`I` set; the wheel's line is level-held, nothing acked it, and the rest of the budget is the count.
+`r15=0x40000018` in the register file says it outright.
+
+#### 3. Nothing in this ROM programs the remap, and `diag` does not either
+
+The unit is the PP502x MMAP at `0xf000f000`, and the measurement is a control that produces a
+non-zero on the arm it is supposed to. `--watch-range=0xf000f000:0x40`:
+
+| run | writes |
+|---|---|
+| the chord boot, `diag` running for 342 M instructions | **0** |
+| `ipod-boot retail` reaching RetailOS | **56 byte-writes across 8 words**, all from `0x10000208`–`0x10000230` — RetailOS's own crt0 |
+
+A word scan of the ROM's whole IRAM image (NOR `0x8000..0x20000`) for the unit's magic constants —
+`0x3a00`, `0x3c00`, `0x3e00`, `0x0f84`, `0x3f84` — finds **none**, and its four `0xf000f000`
+literals all address `+0x40`/`+0x44`, which are `CACHE_MASK` and `CACHE_OPERATION`. The last
+instructions before the jump are the whole handoff and contain no remap:
+
+```asm
+400089e8  ldr r1, =0x40000050        ; the coprocessor's entry vector
+400089ec  ldr r2, =0x60007000        ; CPU_CTRL
+400089f0  str r0, [r1, #0x0]         ; = 0x10000000
+400089f4  mov r1, #0x0
+400089f8  str r1, [r2, #0x4]         ; COP_CTL = 0, wake the coprocessor
+400089fc  bx  r0                     ; -> 0x10000000
+```
+
+`diag`'s own crt0 disables every interrupt in both banks (`0x60004128` and `0x60004138` = `-1` from
+`0x1000014c`), sets up five mode stacks in IRAM, relocates and zeroes — and touches `0xf000f000`
+only on a path this build never executes, where it writes **eight zero words** to it, which turns
+windows *off*.
+
+#### 4. …and the ROM cannot simply have SDRAM at 0 from reset, because it reads the NOR through it
+
+The obvious repair — put SDRAM at logical 0 for the whole run and enter the ROM at the NOR's own
+base, which its position-independent reset vector allows — was tried and is **wrong**:
+
+```text
+$ ipod-boot retail   (SDRAM at logical 0 from instruction 0, entry 0x20000000)
+(C) Copyright 2000-2006
+BootLoader running on ??? cpu PP5022-C
+Image size: 86796 ( 7444 bytes free )
+```
+
+`iPod M25` became `???`: Apple's bootloader reads its own SysCfg block at logical `0x405c` while it
+is executing out of IRAM, and it never reaches an image at all. Rockbox says the same thing from
+the other side — `hwcompat.h` reads `IPOD_HW_REVISION` at `0x0000405c` in a `BOOTLOADER` build and
+at `0x2000405c` once it has remapped.
+
+**So the map genuinely changes at the handoff**: NOR at 0 while the ROM runs, the image at 0 once it
+has entered one. Both halves are load-bearing and each breaks something different.
+
+#### 5. The fix, and what it costs
+
+`map_hardware`'s cold branch arms `boot_rom_handoff_at`, and the first instruction the CPU executes
+out of SDRAM installs MMAP window 0 as `LOGICAL 0x00003c00` / `PHYSICAL 0x10000f84` — Rockbox's own
+encoding for a 64 MB PP502x, the pair [research/06](06-rockbox-as-oracle.md) measured it writing.
+The condition is *"control has passed into SDRAM"*, not which image or which recipe, so every image
+the ROM can enter gets the same machine and the ones that program the unit themselves overwrite it
+a moment later.
+
+**It is a bypass — [ledger #18](04-bypass-ledger.md) — because no instruction in this dump installs
+that window.** Two independent firmwares say the ROM leaves one anyway: `ipodloader2`'s
+`remap_memory()` **saves the eight words at `0xf000f000` and restores them** before handing on, and
+it programs windows **1 and 2** rather than 0. `--no-boot-handoff` is arm B and reproduces the storm
+on demand.
+
+Pinned identically in both arms — same NOR, same `PRISTINE` drive, `--battery=100
+--rtc=2026-09-06T12:00:00`, and `--rtc` exists because without it two runs of one recipe hours apart
+are two machines:
+
+| arm | before | after |
+|---|---|---|
+| `retail`, RetailOS cold boot, 900 M @`--clock=5` | 899 999 952 instr · irqs 341 349 / 166 817 · **766 ATA** | **identical** |
+| cold Rockbox, 200 M | 44 514 927 instr · irqs 1 227 / 265 · 2 070 ATA · 10 frame updates | **identical** |
+| `flsh` diag, direct entry, chord released | irqs 2 / 1 · 8 frame updates · **70 669 px** | **identical** |
+| the chord **held** | irqs 0 / 0 · 12 commands / 10 updates · **70 669 px** | **identical** |
+| the chord **released** | irqs **3 073 043 / 1** · 5 / 3 · **76 800 px** · `r15=0x40000018` | irqs **2 / 1** · **12 / 10** · **70 669 px** · `r15=0x1000376c` |
+| the chord released, then MENU · scroll · SELECT | irqs **10 885 543 / 1** · 5 / 3 · **76 800 px** | irqs **26 / 13** · 18 / 16 · **67 959 px** |
+
+The last row is the point. `70 669` is `diag`'s splash, `68 428` its manual-test menu and `67 959`
+the IO menu — the same three figures `ipod-film`'s diagnostics tour records on the direct-entry
+path, now reached **through Apple's own bootloader**, from the chord, after letting the buttons go:
+
+```text
+$ ipod-boot retail --clickwheel --wheel="@0ms:touch,@1ms:down=select,@2ms:down=left,\
+    @1500ms:up=select,@1500ms:up=left,@6s:down=menu,@6500ms:up=menu,\
+    +700ms:rotate=+8,+700ms:down=select,+500ms:up=select"
+Running 'diag' 0 from 0x10000000
+  irqs: 26 asserted, 13 taken
+  script: 17 of 17 steps fired
+  clickwheel: 16 frames posted (1 dropped unread), 28 word reads of DATA
+  bcm framebuffer -> io.ppm (320x240, 67959 non-black pixels)
+```
+
+**76 800 is 320 × 240** — every pixel lit. That is what the storm left on the panel, and it is worth
+naming: a framebuffer that is entirely non-black is not a drawn screen, it is a redraw that stopped
+half way. Reading a rising pixel count as progress would have got that backwards.
+
+**What this does not settle.** Where the window really comes from is still open, and #18 stays a
+bypass until it is answered. `--no-boot-handoff` is how the question stays askable.

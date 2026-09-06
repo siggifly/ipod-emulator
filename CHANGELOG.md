@@ -113,6 +113,15 @@ second window, and its numbers are unchanged.
 `vmcs` is the co-processor's firmware; running them looked like it worked, because an interpreter
 pointed at data does not fail — it decodes what is there and runs out of budget.
 
+**And it is now reached the way a person reaches it.** Hold Select+Rewind across the boot ROM's
+three click-wheel queries and *the ROM itself* chooses the diagnostics image, loads it and enters
+it — nothing placed by hand, no special memory map. Letting the buttons go used to freeze the
+machine dead, and the reason was that an image the boot ROM enters has its own exception vectors
+and they were not the ones in force: the first wheel interrupt went to Apple's bootloader instead
+of to the diagnostics, into a halt the ROM leaves in the interrupt slot, and stayed there. The
+chord now walks its menus with the wheel, three screens deep, matching the direct entry pixel for
+pixel.
+
 ### The drive is yours, and it is written to
 
 The emulator runs **on the drive image you gave it**, the way a real iPod writes to its own disk, so
