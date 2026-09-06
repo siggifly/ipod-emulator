@@ -130,6 +130,21 @@ can be published as "zero hits", and one was. **Run the tool against a positive 
 file** — a string known to be present — before believing an absence it reports. One command. It is
 the same discipline as R5, applied to the tool instead of to the machine.
 
+**R14 — `BUDGET` is a ceiling. `--until` is what decides what a run covers.** `7e30c1f` — *the clock
+stops inventing time*, 2026-08-18 21:59 — made a halted step cost one cycle exactly like a running
+one. Simulated time is now `steps / instr_per_usec` whatever the machine is doing, so **a fixed
+instruction budget buys roughly a fifth of the iPod it bought before**: at `--clock=5`, 600 M is
+120 s, 2.6 G is 520 s, 4 G is 800 s. **RetailOS does not answer its first button press until
+1 423.6 s on a cold boot.** Every budget, recipe and wheel anchor in this file calibrated before that
+commit therefore ends before the firmware replies, fires all of its steps, and reports nothing wrong
+— which is a starved run wearing the costume of a negative finding. Two anchors, two units, and they
+are not interchangeable: `--wheel=@1500M` counts **executed** instructions, which halted steps do not
+advance; `--wheel=@210s` counts the simulated clock, which they do. **State coverage in the firmware's
+clock** — `--until=2200s` — and let `BUDGET` be only the ceiling that stops a wedged run. The fix is
+correct and must not be reverted; what it invalidated is every number calibrated against the economy
+it replaced. The bisect, the known-good control and the run that settles it are in
+[research/12](research/12-how-retailos-draws.md) §RETRACTED and §RESOLVED.
+
 ---
 
 ## The baseline
@@ -173,6 +188,22 @@ halts — it is doing real filesystem work for the whole window, so any older nu
 idling before 600 M is wrong.
 
 **`BUDGET=4000000000`** — the full boot.
+
+> **⚠️ SUSPECT, and no device re-run will fix it: this block is the PRE-`7e30c1f` clock — 2026-09-06,
+> per R14.** It says so itself. `cpu sleep: 2535581 halts, 2531061 ms of simulated time skipped` is
+> the teleport that commit deleted, and the run report no longer carries the word *skipped* because
+> nothing is skipped any more. So this 4 G budget bought about **2 844 s** of iPod (2 531 s slept
+> plus 1 562 789 429 / 5 executed); the same 4 G today buys **800 s** and skips nothing.
+> `Idle after 1 562 789 429` is not a number this recipe can produce again.
+>
+> **What to re-run it as.** `--until=2450s BUDGET=14000000000` reproduces the coverage this block
+> meant — that is the shape research/12 §RESOLVED used, and it is the one that walks RetailOS down
+> its own menus. Until somebody does, treat every figure here as the machine of 2026-08-14 on a clock
+> that no longer exists.
+>
+> **The `BUDGET=600000000` block above is not suspect on this axis.** That boot never halts — the
+> block says so — and `7e30c1f` was A/B'd byte-identical across it against a binary built from the
+> stashed pre-change tree. A halt-clock change cannot move a run with no halts in it.
 
 ```
 -> Idle after 1562789429 instructions                38 220 code buckets
@@ -308,7 +339,27 @@ playback, which is one second of video per second of the machine's *simulated* t
 films' 72 M/s is the CPU's rate and makes a rally unwatchable, because at `--clock=5` the game runs
 14.4x fast against its own timer (§10.5).
 
-**Still open, and small:** `Parachute`, `Music Quiz` and `Solitaire` have never been launched.
+**Still open, and small:** ~~`Parachute`, `Music Quiz` and `Solitaire` have never been launched.~~
+**`Solitaire` has been** — dealt and drawn, 2026-09-03, as the final panel of a `957d990` build
+driving `to_brick()`'s own descent (research/12 §RETRACTED). `Parachute` and `Music Quiz` still have
+not.
+
+> **⚠️ SUSPECT on two counts — 2026-09-06, per R14.**
+>
+> **1. Everything above was measured 2026-08-14, on the pre-`7e30c1f` clock**, and the paddle rates
+> are quoted in *executed instructions* — `rotate=+2` every 400 k moves it 29 px per million, 200 k
+> apart moves it 150. Whether those survive I cannot tell from here and will not guess: Brick runs
+> busy rather than halted, which would preserve the instruction-to-time ratio, but nobody has
+> re-measured and §10.4a's own finding is that a rally script has to be re-read off its own run.
+> **Settled by** re-reading the rally off a run at HEAD.
+>
+> **2. `ipod-film asset gameplay` looks unrunnable today, and this is read off the source rather than
+> run.** `to_brick()` was re-based on simulated time on 2026-09-01 (`@80s:touch,+150ms:…`) while
+> `do_gameplay`'s own steps are still the 2026-08-18 instruction anchors (`@2502340000`, `+200k`),
+> and the two are concatenated into one `--wheel=`. `parse_wheel_script` **refuses** a script that
+> mixes units — deliberately, per item 4c. One command (`ipod-film asset gameplay`) confirms or
+> refutes it; I have not run it. The fix is to re-base the gameplay half on the clock too, which is
+> the same fix `to_brick()` already had.
 
 ## 0y — ~~Nothing draws on a synthetic NOR~~ · **FIXED 2026-08-20 — one pin, three cells**
 
@@ -620,6 +671,22 @@ measurement in [research/06](research/06-rockbox-as-oracle.md), and one of the n
 there for being read off the wrong instrument (see the ADC row in the table below — the correction
 **inverted** the finding: Rockbox issued no conversion at all).
 
+> **⚠️ Half of this item is confounded, and it is the half in the heading — 2026-09-06, per R14.**
+> The paragraph above was written 2026-08-18 at 20:02, **two hours before `7e30c1f` landed at
+> 21:59**, so it is a pre-fix measurement. On that clock idle was free and an untouched iPod powered
+> itself off in seconds *by construction* — the commit message says so in those words, and names
+> Rockbox's ten idle minutes arriving thirteen seconds after a person stopped touching the wheel. So
+> **"powers itself off" had a second sufficient cause that has since been deleted**, and the 315
+> `sys_poweroff` calls and the twenty-seven-iteration walk are counts taken over that clock.
+>
+> **What survives is the reading itself**, because it is a value with a control beside it and not a
+> count over a window: `0` cold against `0x2c0` warm, and one conversion tallied where two stores
+> ran. Those are the contradiction this item is actually about.
+>
+> **Re-run the cold boot with `--until=` before treating the shutdown as the question.** If Rockbox
+> now survives its own battery reading, what is left is the missing conversion and this item needs a
+> new heading.
+
 **What is left is one contradiction, and it names its own measurement.** The store at `0x000836ac`
 ran twice, and `adc-ipod-pcf.c` shows nothing between the `ADCC1` write and that store that could
 skip it — so two stores mean two conversions were *started*. The uncapped tally records **one**, and
@@ -669,6 +736,27 @@ ipod-boot retail --clock=5 --stop-when-idle=400000000 --bcm-registry            
   ... --clickwheel --wheel=@1500M:touch,+2M:press=select,+2M:release          -> the MAIN MENU
       BUDGET=3000000000 --bcm-dump=0xE0000:140:F0:menu.ppm
 ```
+
+> **⚠️ The second line will not reproduce today — 2026-09-06, per R14.** Three reasons, each
+> sufficient on its own. `BUDGET=3000000000` is **600 s** of iPod on this clock and RetailOS's first
+> redraw after a press lands at **1 423.6 s**. `@1500M` counts *executed* instructions, which halted
+> steps do not advance, so on a machine that idles it arrives somewhere nobody chose — or not at all.
+> And `press=` expands to a down/up pair `--wheel-click-instr` apart, which the instruments table
+> below says outright is shorter than the interval Apple's firmware polls at. Stated in the
+> firmware's own clock, with the pair held across a poll:
+>
+> ```
+> ipod-boot retail --clock=5 --bcm-registry --clickwheel --until=2200s \
+>   --wheel='@210s:touch,+2s:down=select,+300ms:up=select,+2s:release' \
+>   BUDGET=14000000000 --bcm-dump=0xE0000:140:F0:menu.ppm
+> ```
+>
+> — the shape research/12 §RESOLVED ran, which walks Language → main menu → Extras → … → Slideshow
+> Settings. **The picture this item describes is not in doubt**: it was taken 2026-08-14, when a 3 G
+> budget bought about five times the iPod it buys now. What is in doubt is anything measured with the
+> recipe as written *after* 2026-08-18. Note also that `--stop-when-idle` counts `steps()` since that
+> commit rather than executed instructions — so a halted machine can now reach idle, which it could
+> not before, and `400000000` is **80 s** of no-new-code at `--clock=5`.
 
 `iPod` / Music / Photos / Videos / Extras / Settings / Shuffle Songs, chevrons, battery in the
 corner. **The click wheel drives it** — the whole path from `0x7000c140` through the ISR, the event
@@ -725,9 +813,11 @@ messages) reach the event system in a run where the list widget at `0x001ae214` 
 them. One `--enterlog` on `0x00151a40`'s queue consumer answers it. Unchanged by any of the display
 work.
 
-> **A second agent is working RetailOS from the charging screen to the main menu as this is written,
-> and will touch `research/10` and possibly the PMU model. That question is open and nothing here
-> predicts its result.**
+> ~~**A second agent is working RetailOS from the charging screen to the main menu as this is
+> written, and will touch `research/10` and possibly the PMU model. That question is open and nothing
+> here predicts its result.**~~ **Answered 2026-09-05**, and not by that session: RetailOS goes
+> charging screen → language list → main menu → Extras → Games → a dealt game, and further, on wheel
+> input alone. research/12 §RESOLVED. An in-flight note left in a queue file outlives the flight.
 
 
 ## 2 — Retire bypass #6 · **narrowed again: it is now four assumptions, not a missing device**
@@ -746,6 +836,12 @@ Measured, both arms of the standard recipe today:
 | `0xE0000` | 2 922 non-black px | **76 607** |
 | Idle / buckets | 1 610 279 157 / 38 266 | 1 609 736 757 / 38 518 |
 | ata commands | 770 | 706 |
+
+> **The deltas in that table survive; its absolute numbers do not — 2026-09-06, per R14.** Both arms
+> are the same build on the same day, so the comparison — which is the whole argument — is unaffected
+> by anything about the clock. But `Idle / buckets 1 610 279 157 / 38 266` is a pre-`7e30c1f` figure,
+> for the same reason the 4 G baseline block at the top of this file is marked. Re-run both arms with
+> `--until=` before quoting an absolute out of here.
 
 **The flag stays OFF and stays out of every recipe**, because it moves 5 MB of DMA and 64 ATA
 commands: a run carrying it is not comparable to anything measured before it.
@@ -812,6 +908,13 @@ a reached control, on today's 4 G baseline:
 All four were recorded as *"still unreached at 2 371 809 167 instructions"* as recently as
 Addendum 11. So this is a **later** wall than every wall this file has ever carried, and by R4 it is
 a new question rather than a survivor of the old ones — do not assume any prior diagnosis applies.
+
+> **The comparison holds; the offsets do not transfer — 2026-09-06, per R14.** Both runs are on the
+> pre-`7e30c1f` clock, so "later than Addendum 11's" is one pre-fix run against another and survives
+> internally. The instruction offsets themselves (`@52 249 160` … `@1 069 131 064`, and the
+> 2 371 809 167 they are compared against) name points in a run this budget no longer buys. If this
+> is ever promoted back out of tombstone, re-take all four with `--until=` before comparing them to
+> anything measured today.
 
 **Still settled when** the object being waited on is named the way `0xd1` was named in Addendum 15 —
 the heap object, the RTXC id, and the producer that would post it — and the pend is counted at two
@@ -937,6 +1040,42 @@ not clear `RX_READY` — only the write-1-to-clear does — so once it stops, ev
 dropped and no further interrupt edge exists. **What stops the firmware acking after the thirteenth
 is the question**, and it is a different one from "who consumes the events".
 
+### 🔴 RETRACTED 2026-09-06 — the section above is an honest reading of a starved run
+
+**`BUDGET=2600000000` is 520 s of iPod on this clock, and RetailOS does not answer its first button
+press until 1 423.6 s.** The wheel *anchors* were right — `@250s` … `@269s` are the firmware's own
+clock and all four fell well inside a 520 s window, which is exactly why nothing looked wrong — but
+the run's **ceiling** was not, and the ceiling is what decides what a run covers. The window closed
+about nine hundred seconds before the firmware replied.
+
+The control is decisive and is in [research/12](research/12-how-retailos-draws.md) §RETRACTED. On
+`957d990` — the build from before `7e30c1f` — **the same ROM, the same drive, the same script** give
+109 frames posted / 0 dropped / **109** word reads against today's 109 / 103 / **5**, and that arm's
+final panel is Solitaire, dealt and drawn. Restated at HEAD in the firmware's own clock
+(`--until=2450s`), RetailOS walks Language → main menu → Extras → … → Slideshow Settings: **10
+distinct pictures against the no-input control's 5**, wheel input the only variable.
+
+**What dies is every negative and every count read as a ceiling:**
+
+1. *"distinct pictures on the panel: 4 — byte-identical to the no-input control"* and **"the chain is
+   connected end to end and the panel still does not change"** — it changes, five times, at
+   1 423.6 s · 1 491.2 s · 1 648.8 s · 1 790.4 s · 1 854.0 s.
+2. *"the firmware stops acking after the thirteenth"* — the thirteen is where the run ended, not
+   where the firmware stopped.
+3. *"what stops the firmware acking after the thirteenth is the question"* — there is no such
+   question.
+
+**What survives is every non-zero, and that is not a technicality.** A starved run cannot manufacture
+an arrival. `EventManager+0x58` reached x2 then x4, the widget at `0x001ae214` receiving **x6**, 12
+word reads of `DATA`, 9 arrivals at the decoder — all real, all still true, and they are what retire
+this file's older claim that the widget received none of the 19 events. The `--wheel-click-instr`
+divisor bug below is real and fixed. `ClickWheel::line_dropped_waiting` measuring **0** is still a
+true statement that the model does not withdraw the line under a waiting frame.
+
+**This is R4 with a unit attached.** `7e30c1f` is a correct fix that must not be reverted; it changed
+the machine's *time economy*, it said so in its own commit message, and nothing re-ran the wheel
+against it. R14 exists so that the next recipe states its coverage in a unit the firmware shares.
+
 **A note on why three attempts were wasted.** `parse_wheel_script` divided its click gap by the
 compile-time `CLOCK` rather than the run's own, so at `--clock=5` clicks landed 266 us apart instead
 of the 4 ms `--wheel-click-instr` documents — 16 of 29 frames dropped unread, and the instrument
@@ -979,6 +1118,23 @@ ipod-boot retail --bcm-registry --clickwheel \
   --wheel="@1800M:touch,+10M:down=play,+300M:up=play,+10M:release"
   -> 2 244 489 794 instructions, 933 ATA commands, the Language picker still on screen
 ```
+
+> **⚠️ SUSPECT — 2026-09-06, per R14.** Measured 2026-08-19, the day after `7e30c1f`, with an
+> instruction-anchored script under a fixed budget. 2 244 489 794 instructions is about **449 s** of
+> iPod at `--clock=5`; `@1800M` counts *executed* instructions and so lands later still; and **"the
+> Language picker still on screen" is the signature of a starved run, not of an ignored chord** —
+> research/12 §RESOLVED puts the first redraw after a press at 1 423.6 s. This negative does not show
+> that `PLAY` does nothing. It shows the run ended before RetailOS answered anything at all.
+>
+> Restated in the firmware's clock, with the key held across a poll interval:
+>
+> ```
+> BUDGET=14000000000 ipod-boot retail --clock=5 --bcm-registry --clickwheel --until=2200s \
+>   --wheel='@210s:touch,+2s:down=play,+8s:up=play,+2s:release'
+> ```
+>
+> — and better still **from the main menu**, which this item already says is the test that matters
+> and which `to_brick()`'s descent now reaches on its own.
 
 RetailOS is alive and did not sleep. **That is one negative on the first screen the firmware ever
 draws**, which is the screen least likely to handle a power chord, so it does not establish that the
@@ -1024,6 +1180,15 @@ the machine slept, which is what every calibrated recipe here depends on. Second
 user interface, which is what the firmware's own timers measure. A script must use one or the other
 throughout; mixing is refused rather than resolved by a rule nobody would remember.
 
+> **The last paragraph needs one qualification — 2026-09-06, per R14.** This item landed 2026-08-19,
+> the day after `7e30c1f`, and its first sentence is still exactly right: executed instructions are
+> unmoved by how much the machine slept, because that is what `executed` counts. The clause after it
+> is what did not survive. **The "calibrated recipes" it defends were calibrated against the clock
+> that commit replaced**, so a budget or an instruction anchor inherited from before 2026-08-18 names
+> a point in the run its author did not choose — and reports nothing wrong when it lands there.
+> `to_brick()` was re-based on the clock for precisely this on 2026-09-01. The budgets were not, and
+> that is the gap R14 closes.
+
 ## 5 — Standing, unblocked, small
 
 - **Is `0x70000030` bit 27 ever *not* ready?** Nothing in the ROM image ever finds it clear — its own
@@ -1056,6 +1221,9 @@ throughout; mixing is refused rather than resolved by a rule nobody would rememb
   WM8758's **52 does not move**, because all of its traffic happens before the log fills. A floor
   that turns out to be tight is still not a measurement until it is checked, which is the whole
   content of R6.
+  *(The **4 933** census is the 4 G baseline's window on the pre-`7e30c1f` clock — R14, and the
+  baseline block is marked for it. The WM8758's 52 is early-boot traffic and does not depend on how
+  far the run got, which is the reason given above; the census beside it does.)*
 - **`0x0000133c` / `IDE_BASE+0x410`** — a 0.6 s periodic poke from low-vector code that lands one
   byte outside the modelled DMA window and is never read. Unexplained.
 
@@ -1186,13 +1354,13 @@ for a measurement by someone reading in a hurry, which is what R6 was written ab
 | `i2c: N transfers` in the run report | which chips the firmware drives and which of their registers | **was a capped log length**: `i2c_log` stops at 4 096 and the 4 G baseline printed exactly that, so every histogram under it — by device, by register, by CTRL — was a picture of the first 4 096 transfers. `NEXT.md` §5 was about to fit a WM8758 model to a number out of it. **Fixed 2026-08-14**: the census is **4 933**, the tallies are kept on the bus, and the ordered log is labelled as the sample it is. At 600 M the log never fills (3 749), which is why the defect survived so long |
 | `pcf50605 ADC conversions by channel` in the run report | which ADC channels were converted, how often, and in what order | **two instruments printed as one, and only one of them is a census.** The by-channel table is `adc_by_channel` and is uncapped — trust it. The line under it, `order (first 12 of N kept)`, is the head of `adc_log`, which caps at **4 096**, so it shows the first twelve conversions of the **whole run** and never a later window. On a cold boot Apple's bootloader converts 9 237 times before Rockbox executes an instruction, so *nothing Rockbox does can appear in that ordering at all* — and research/06 read a `(2,704)` out of it as "Rockbox's own, right channel, right value" when it was the bootloader's. The correction inverted the finding: Rockbox issued **no** conversion on that boot. **The ordering answers "how did this run open", never "what did the second stack do"** |
 | `--writelog=…` | stores by region, with a DROPPED tag | `write_log_entries` caps at **8 192**; the per-region totals — including **DROPPED**, which is the whole question — are counted on the store and cannot. The "last 4" rows are the last 4 *kept*, which on a truncated log is not the last 4 that happened, and the report says so |
-| `--stop-when-idle=N` | ends a run once N instructions pass with no NEW code | a **novelty** test, not a halt test. ~~Use 40 000 000~~ — **40 M truncates the boot**: at 40 M this recipe stops at @308 909 460 with 29 279 buckets and 464 ATA commands, against @1 610 256 821 / 38 262 / 770 at 400 M. RetailOS's startup contains a bounded 226 M-instruction scan loop over already-seen code (`0x000ff2ec`) and 40 M stops inside it while the machine runs at full rate — that is how "`bl 0x001ebe9c` never returns" got published. **Use `400000000`.** Read the second line of the stop report: `0 CPU sleeps` in the trailing window means busy, and the tool now says `<- BUSY, not blocked` outright |
+| `--stop-when-idle=N` | ends a run once N instructions pass with no NEW code | a **novelty** test, not a halt test. ~~Use 40 000 000~~ — **40 M truncates the boot**: at 40 M this recipe stops at @308 909 460 with 29 279 buckets and 464 ATA commands, against @1 610 256 821 / 38 262 / 770 at 400 M. RetailOS's startup contains a bounded 226 M-instruction scan loop over already-seen code (`0x000ff2ec`) and 40 M stops inside it while the machine runs at full rate — that is how "`bl 0x001ebe9c` never returns" got published. **Use `400000000`.** Read the second line of the stop report: `0 CPU sleeps` in the trailing window means busy, and the tool now says `<- BUSY, not blocked` outright. **Its window became `steps()` at `7e30c1f`, not executed instructions — 2026-09-06.** A halted machine can now reach idle, which it could not before; and `400000000` is **80 s** of no-new-code at `--clock=5`, a much shorter simulated window than the same number named on the old clock. Right stop for a fingerprint, wrong one for anything waiting on the firmware's clock — use `--until` for that (R14) |
 | `--callers=ADDR` | every branch *in memory* that targets ADDR — static, so it finds paths a run did not take | reports `region.base + offset`, so an address is only right if the region is mapped where its base says — **IRAM code scatter-loaded out of NOR is not**. Counts both `bl` and plain `b` (a tail call is a caller: `0x4000b534` is reached only by `b`, and a BL-only scan calls it uncalled). Prints 24, then `… and N more` |
 | `--callgraph` | runtime edges, including plain `B` | — |
 | `--disasm=`, `dis` | reads the machine, not a model of it. Ghidra conflates by name and invents bodies | **`dis --fn=` does not stop at a tail `B`, and this firmware is full of them.** `--fn=0x002102a4` prints **229 instructions**; the real body is the first **six**, ending `b 0x000ff2ec`. A `--fn=` listing whose last instruction is `b` rather than a return is a thunk — follow the branch and re-run. Bisecting the wrong listing once measured zero arrivals at all 22 of its call sites and read like a block |
 | `--symbols` / the profile's labels | names recovered from the image | **the six boot tasks are mislabelled, one record late.** `extract_symbols`'s pattern A assumes *name then pointer*; that pool is *pointer then name*. In `OSOS_correct.bin` at file offset 867616: `t_power\0`, `0x002844e0`, `APPLEBOOT\0`, `0x00284ea0`, `t_graphicsManager\0` — so the profile calls `0x002844e0` "t_power" when it is **APPLEBOOT**, and `0x00284ea0` "APPLEBOOT" when it is **t_graphicsManager**. Pattern A cannot simply be reversed: in the device registry at `0x0025d63c` the word before each name is the *previous* entry's pointer, so a blind reversal renames `OptoTask` to `SerialOptoTask`. Read the creation code at `0x000d3b60` instead |
 | `ata commands: N` in the run report | how many ATA commands the boot issued | **was a capped log length** — `commands` stops recording at 256, and "256 ATA commands" served as this project's baseline fingerprint while being the cap; the true figure is 770. The count is now uncapped and the line prints `(log below shows the first 256 — SAMPLE, NOT A CENSUS)`. **That wording is now the shared one**: every capped instrument in the report speaks it. Any pre-2026-08-14 document saying 256 is saying "at least 256". One absence claim died with it: LBA 22169 *is* read, at command #342 |
-| `--wheel=SCRIPT` | inject click-wheel input — `@N:touch,+2M:rotate=+12,+2M:release,@100M:press=menu` | anchored in **instructions**, because simulated µs is dominated by idle sleeps and is not comparable across runs. The parser expands `rotate`/`press` and the run prints the expanded schedule, so a log reproduces itself. `--clickwheel` models the device with nothing injected; `--wheel-no-irq` ablates IRQ 40 — the control that separates "the firmware read a frame" from "the firmware was interrupted into reading one". **Snapshots do not carry the wheel**: `--restore` plus `--wheel` fires every step at once. **And `press=` is too short for firmware that polls**: it expands to a down/up pair `--wheel-click-instr` apart, 20 000 by default, which at the real clock is **0.27 ms**. Apple's `diag` reads its button byte once per **150 ms** — 11.25 M instructions — so every `press=` fell between two polls. The tell is that it does not look like a missed press: the interrupt handler records the button at `0x1001aa9c` and the next poll reads a *later* value, so `--storeaddr` shows the press arriving and the firmware shows no reaction. Use explicit `down=`/`up=` pairs held across the poll interval |
+| `--wheel=SCRIPT` | inject click-wheel input — `@N:touch,+2M:rotate=+12,+2M:release,@100M:press=menu` | anchored in **instructions**, because simulated µs is dominated by idle sleeps and is not comparable across runs. The parser expands `rotate`/`press` and the run prints the expanded schedule, so a log reproduces itself. `--clickwheel` models the device with nothing injected; `--wheel-no-irq` ablates IRQ 40 — the control that separates "the firmware read a frame" from "the firmware was interrupted into reading one". **Snapshots do not carry the wheel**: `--restore` plus `--wheel` fires every step at once. **And `press=` is too short for firmware that polls**: it expands to a down/up pair `--wheel-click-instr` apart, 20 000 by default, which at the real clock is **0.27 ms**. Apple's `diag` reads its button byte once per **150 ms** — 11.25 M instructions — so every `press=` fell between two polls. The tell is that it does not look like a missed press: the interrupt handler records the button at `0x1001aa9c` and the next poll reads a *later* value, so `--storeaddr` shows the press arriving and the firmware shows no reaction. Use explicit `down=`/`up=` pairs held across the poll interval. **And the rationale this row opens with is no longer the machine's — 2026-09-06.** `7e30c1f` made a halted step advance the clock at the running rate, so simulated µs *is* comparable across runs, and item 4c's `@12s` / `+250ms` form anchors in it. `@N` / `+N` still count **executed** instructions, which halted steps do not advance, so on an idling machine the two diverge in the direction that fires nothing. Anchor anything that drives a user interface in the clock, and state the run's own coverage with `--until` (R14) |
 | ~~`--force-vc-upload`, `--force-vc-retire`~~ | **DELETED 2026-08-19.** They faked the VideoCore transfer's two completion signals; `0x60009000` now moves all 201 216 bytes and the in-use ring drains without help, so both reproduced a run the machine can do unaided | `--force-sem=ID` survives as the general form — make any RTXC pend return. Still an ablation, still in no recipe |
 | `--nor` | a real AMD/JEDEC NOR — unlock, autoselect, CFI query, sector/chip erase, program | — |
 | `--no-cfg-ack` | ablates the IDE0_CFG acknowledgement, reproducing the historic interrupt storm on demand | — |
