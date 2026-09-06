@@ -127,7 +127,7 @@ export component IPod inherits Rectangle {
 
     // ── §8.1 item 7: the depressed controls, and the 1.6 s that is real ──
     //
-    // A press's *release* is held for `MIN_BUTTON_HOLD` ≈ 1.6 s of wall time at this window's
+    // A press's *release* is held for `MIN_BUTTON_HOLD_USEC` ≈ 1.6 s of wall time at this window's
     // instruction rate, so a drawn button depresses when your finger moves and stays depressed
     // until `Stats::buttons` clears. That is a fact about the emulator worth being able to watch,
     // and it is a **read** of the machine rather than a local animation — which is why these are
@@ -169,6 +169,19 @@ export component IPod inherits Rectangle {
     callback wheel-down(float, float);
     callback wheel-moved(float, float);
     callback wheel-up();
+    // **A mouse wheel or a trackpad over the ring, in logical pixels of `delta-y`.** §16.11.
+    //
+    // Not normalised, and that is the one asymmetry with the three above: a drag is measured
+    // against the drawing, so it has to be divided by the drawing's own radius; a scroll is
+    // measured against the pointing device, and 60 px is one notch of a mouse wheel whatever size
+    // this iPod is drawn at. Scaling it with `hero` would make the wheel turn further in
+    // fullscreen for the same movement of the same hand.
+    //
+    // `delta-x` is deliberately not carried: a menu is a vertical list, and on macOS a ⇧-scroll is
+    // delivered as horizontal delta, so honouring it would make a chord this program has not
+    // defined turn the emulated wheel. `wheel::Finger::scrolled` says the same thing from the
+    // other side.
+    callback wheel-scrolled(float);
     // The centre button. **Down and up rather than `clicked`**, because §7.4 wants the release
     // held: MENU held for a second is the main menu on a real 5G, and a `clicked` that reported
     // only the end of the press cannot say how long it was. `pressed-device` below is the *other*
@@ -306,10 +319,17 @@ export component IPod inherits Rectangle {
             // `has_hover` and forwards the event to whatever is underneath, so a control that
             // carries its own reason is unbuildable that way. The gate is a plain boolean inside
             // the handler.
+            //
+            // `cancel` is an `up` here too, and what it costs is not a stuck bit but a stuck
+            // sentence: `hold-released` is what clears §7.4's held refusal off the cradle label,
+            // so a contact torn down rather than lifted would leave *the hold switch works once
+            // the iPod runs* standing over the bench for ever.
             hold-touch := TouchArea {
                 pointer-event(ev) => {
                     if (ev.kind == PointerEventKind.down) { root.hold-pressed(); }
-                    if (ev.kind == PointerEventKind.up) { root.hold-released(); }
+                    if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                        root.hold-released();
+                    }
                 }
             }
 
@@ -347,6 +367,18 @@ export component IPod inherits Rectangle {
                 // owns both now: the stream goes out on every press and `machine::Life` decides
                 // whether it reaches `emu::Link::push` or the cradle label. §16.5's rule about a
                 // `TouchArea` never being disabled, one level up — the gate is not here either.
+                //
+                // **`cancel` lifts the finger, exactly like `up`, and that is not defensive
+                // tidiness.** `PointerEventKind` has four values and this handler read two; the
+                // two it read are the only two a mouse sends, and the third is how a *touch*
+                // usually ends when the system takes the gesture back. Slint raises it from
+                // `input_items.rs:87` and `:145` — a grab torn down rather than released — and a
+                // contact that ends that way sent `Touch` and would never send `Release`, so the
+                // machine keeps a finger on the wheel for the life of the window and, if the press
+                // landed on a printed label, that button held down with it. Measured: a press on
+                // MENU followed by `WindowEvent::PointerExited` queued `[Touch, Button(MENU,
+                // true)]` and then nothing, and the next press on the ring produced no `Touch` at
+                // all. §7.4's own rule is that a press with no release is a stuck finger.
                 pointer-event(ev) => {
                     if (!root.pressable) {
                         if (ev.kind == PointerEventKind.down) { root.clicked(); }
@@ -356,14 +388,48 @@ export component IPod inherits Rectangle {
                         root.wheel-down((self.mouse-x - self.width / 2) / (self.width / 2),
                                         (self.mouse-y - self.height / 2) / (self.height / 2));
                     }
-                    if (ev.kind == PointerEventKind.up) { root.wheel-up(); }
+                    if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                        root.wheel-up();
+                    }
                 }
                 // Fires only while the pointer is down, which is exactly the drag a rotation is.
+                //
+                // **This is also the whole of touch**, and it needed no second route: Slint turns a
+                // single finger into `Pressed` / `Moved` / `Released` on this same TouchArea
+                // (`i-slint-core-1.17.1/input.rs:2016-2024`, `:2064-2069`, `:2165-2172`), so a
+                // touch drag on the drawn ring is a pointer drag by the time it arrives here. §19.4
+                // and §16.11.
                 moved => {
                     if (root.pressable) {
                         root.wheel-moved((self.mouse-x - self.width / 2) / (self.width / 2),
                                          (self.mouse-y - self.height / 2) / (self.height / 2));
                     }
+                }
+                // §16.11: the wheel's own scroll, and the one place in this program a
+                // `PointerScrollEvent` means anything outside a drawer page's `Scroll`.
+                //
+                // **It cannot capture a scroll meant for the drawer**, and the reason is
+                // structural rather than a guard: this handler is only ever reached by an event
+                // hit-tested into the wheel's own disc, and nothing on the bench is inside a
+                // `Flickable` — so §16.11's `SCROLL_FILTER_DURATION`, which is a Flickable
+                // capturing from its own children, has nothing to do with this and is not
+                // disturbed by it.
+                //
+                // `accept` whatever the state of the device, for §7.4's reason: the drawing does
+                // not decide whether the wheel reaches anything, and there is nothing underneath
+                // it that wants this event.
+                //
+                // **`/ 1px` is the cast and not a scale factor.** `PointerScrollEvent::delta-y` is
+                // typed `length` in the markup, and Slint has no implicit `length` -> `float`; the
+                // compiler's own words are *"divide by 1px to convert to a plain number"*. What
+                // comes out is the count of **logical** pixels, which is the unit
+                // `wheel::PX_PER_CLICK` is stated in and the unit Slint's winit backend produces
+                // (`event_loop.rs:403-406` divides a `PixelDelta` by the scale factor before it
+                // gets here). It is not a geometry constant and must not become one — a hairline
+                // is 1px because a hairline is a length; this is a denominator.
+                scroll-event(ev) => {
+                    if (root.pressable) { root.wheel-scrolled(ev.delta-y / 1px); }
+                    return accept;
                 }
             }
 
@@ -453,10 +519,16 @@ export component IPod inherits Rectangle {
                 // needs a duration; `clicked` carries the half that must not fire when the pointer
                 // wanders off the button before it lifts, which is the whole difference between
                 // the two and the reason a machine's Select cannot be `clicked`.
+                //
+                // `cancel` is an `up` here for the reason it is one on the ring: Select held with
+                // no release is a stuck button on the machine, and the two handlers must not
+                // disagree about how a contact ends.
                 pointer-event(ev) => {
                     if (!root.pressable) { return; }
                     if (ev.kind == PointerEventKind.down) { root.centre-down(); }
-                    if (ev.kind == PointerEventKind.up) { root.centre-up(); }
+                    if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                        root.centre-up();
+                    }
                 }
                 clicked => {
                     if (!root.pressable) { root.clicked(); return; }

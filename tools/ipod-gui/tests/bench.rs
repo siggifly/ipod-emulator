@@ -896,26 +896,58 @@ fn the_cradle_ring_means_what_the_table_says_it_means() {
 ///
 /// The file's own comment says the keyboard route exists *"so the two cannot disagree about what
 /// pressing means"*, which is the sentence this makes true.
+///
+/// **Amended, because it was reading a fixed 40 lines from the `FocusScope`'s own declaration** —
+/// the same defect its other half already carries a paragraph about (*"a window sized by counting
+/// is a window that has to be re-counted"*), and it came due the moment that handler grew the two
+/// callbacks below. `block` reads to the matching brace and this file has had it all along.
+///
+/// **And the agreement it asserted was half of one.** A click on the drawn centre button raises
+/// three things — `centre-down`, `centre-up` and `pressed-centre` — and `machine::centre` answers a
+/// different one of them in each phase: Select over a running machine, `PowerOff` over a booting
+/// one, a start otherwise. The cradle raised the third alone, so `Return` and `Space` were dead
+/// keys over a running iPod while a click on the same button pressed Select — which is precisely
+/// the disagreement this test's name forbids, in the phase §7.4 gives every drawn control to the
+/// machine. All three, both routes.
 #[test]
 fn the_keyboard_and_the_pointer_agree_about_what_pressing_means() {
     let text = bench();
-    let lines = code(&text);
 
-    // The cradle's key handler, from `key-pressed` to its closing brace.
-    let from = lines
-        .iter()
-        .position(|l| l.starts_with("cradle-focus := FocusScope"))
-        .expect("ui/bench.slint declares the cradle's FocusScope");
-    let handler: String = lines[from..from + 40].join("\n");
+    // The cradle's whole `FocusScope`, to its matching brace.
+    let handler: String = block(&text, "cradle-focus := FocusScope").join("\n");
+    // **Per edge, and not per `FocusScope`.** Read across the whole element, `centre-down` is
+    // satisfied by the `accessible-action-default` beside it — which is a different route and was
+    // green while `Return` was a dead key. Each of the two key edges is read to its own closing
+    // brace, so the assertion is about the keystroke rather than about the file.
+    let edge = |head: &str| block(&handler, head).join("\n");
+    let down = edge("key-pressed(e) => {");
+    let up = edge("key-released(e) => {");
+    for c in ["centre-down", "pressed-centre"] {
+        assert!(
+            down.contains(&format!("root.{c}();")),
+            "the cradle's key press does not raise `{c}`, so the keyboard means something \
+             different by a press from what the drawn centre button means:\n{down}"
+        );
+    }
     assert!(
-        handler.contains("root.pressed-centre();"),
-        "the cradle's keyboard route no longer reaches `pressed-centre`, so Return does nothing \
-         on the Button the whole program is built around:\n{handler}"
+        up.contains("root.centre-up();"),
+        "the cradle's key release does not raise `centre-up`, so a key that pressed the machine's \
+         centre button never lets go of it — the stuck finger §7.4 forbids:\n{up}"
     );
     assert!(
         !handler.contains("if (root.startable) { root.pressed-centre(); }"),
         "the cradle's keyboard route is gated on `startable` and the drawn centre button's is not, \
          so Return is a dead key on exactly the device §20 item 12 exists for:\n{handler}"
+    );
+    // **One keystroke is one press.** Slint's winit backend delivers auto-repeat as a plain
+    // `KeyPressed`, so without the guard a held `Enter` starts a machine on one repeat and powers
+    // it off on the next. The behavioural half is
+    // `enter_and_space_are_the_centre_button_in_every_phase_and_repeat_is_one_press`; this is the
+    // half that names the mechanism, so deleting the boolean is red here as well as there.
+    assert!(
+        handler.contains("property <bool> held;") && handler.contains("if (!self.held) {"),
+        "the cradle's key handler has no repeat guard, so a held key is one press per repeat and \
+         the release is answered for presses this scope never took:\n{handler}"
     );
 
     // The pointer route, in the drawing, is ungated too — and it is the control.
