@@ -152,11 +152,51 @@ libc = "0.2"
 # the platform's own answer and Slint has none — a grep for `reduced.motion` across `i-slint-core`,
 # `i-slint-common` and `builtins.slint` returns nothing. It is a feature of a crate that is already
 # compiled, so it adds **no crates**: `cargo tree -p ipod-gui | wc -l` is the same before and after.
+#
+# ── §21.8's trackpad, and why it is nine more feature names and no more crates ───────────────────
+#
+# `NSEvent` + `NSTouch` are the absolute finger positions; `NSView` + `NSResponder` are the one
+# property that has to be set for any of them to arrive (`allowedTouchTypes`, which defaults to
+# `Direct` only); `NSWindow` is the title bar's subtitle and `isKeyWindow`; `NSHapticFeedback` is
+# the actuator. The feature is spelled **`NSHapticFeedback`** and not `NSHapticFeedbackManager` —
+# objc2-app-kit names its features after the *header*, and the manager is a class inside it.
+#
+# `block2` and `objc2-foundation` are the same "already in the tree" case the two lines above are.
+# **Measured, not assumed** — `cargo tree -p ipod-gui --target <t> --prefix none -e normal,build |
+# sed 's/ (\*)//' | sort -u | wc -l`, with this block reverted and applied:
+#
+#     aarch64-apple-darwin      353 -> 353   +0
+#     x86_64-unknown-linux-gnu  432 -> 432   +0
+#     x86_64-pc-windows-msvc            348  (nothing here compiles on it)
+#
+# Both arrive through `rfd` and `objc2-app-kit` already; declaring them adds no compilation and only
+# makes them importable, which a transitive dependency is not. The nine feature names are free for
+# the same reason a feature always is — they gate generated bindings inside a crate that is being
+# compiled either way.
+#
+# CoreGraphics is **not** a crate here. `CGAssociateMouseAndMouseCursorPosition` is four lines of
+# `extern "C"` behind a `#[link(name = "CoreGraphics", kind = "framework")]` in `trackpad/mac.rs`,
+# which is the whole of what §21.8 needs from that framework — a dependency for one symbol would be
+# a graph entry to justify at every audit.
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSScreen",
     "NSWorkspace",
+    "NSEvent",
+    "NSTouch",
+    "NSView",
+    "NSResponder",
+    "NSWindow",
+    "NSHapticFeedback",
+    "block2",
 ] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "NSString",
+    "NSSet",
+    "NSEnumerator",
+    "NSGeometry",
+] }
+block2 = "0.6"
 
 # 0.61, not 0.52: both are in the Windows tree (0.61 via muda and softbuffer, 0.52 via winit and
 # glutin) and 0.52 would be a third copy. `Win32_Foundation` and `Win32_UI_WindowsAndMessaging` are

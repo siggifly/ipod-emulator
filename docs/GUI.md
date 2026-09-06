@@ -5153,3 +5153,359 @@ In order, because each depends on the one before it.
 attribute an arrival to a core. Until it is answered, §12.8 draws one column.
 
 
+
+---
+
+### 21.8 The trackpad is a click wheel
+
+*(macOS. Built 2026-09-06. `tools/ipod-gui/src/trackpad.rs`, `src/trackpad/mac.rs`, and one new
+method on `wheel::Finger`.)*
+
+An iPod's click wheel is a capacitive surface reporting an **absolute angular position** — one
+`position` byte and one touched bit per frame, and firmware that only ever reads differences. A
+MacBook trackpad is a capacitive surface reporting absolute positions. They are the same part under
+different plastic, and everything below is the arithmetic between them plus the mode that decides
+when the pad belongs to the iPod rather than to the cursor.
+
+**Every number in this section was measured on this machine** (MacBook Air M4, macOS 27.0) before
+any of it was written, by a standalone spike that answered the two questions separately: *can a Rust
+program read absolute finger positions*, and *can it fire the trackpad's actuator per derived
+click*. Both yes:
+
+```
+touch events 891 · max simultaneous 1 · device size 342.99 x 209.76 pt
+clicks derived 278 · haptic ticks 246 · contact 7.16 s
+mean sample rate 124.4 Hz · min gap 2.15 ms -> 466 Hz peak · coalesced 32
+```
+
+#### The seam, and why it is drawn where it is
+
+The mode is **one core and two platform halves**, because the intent is every trackpad on every
+platform and the second implementation should cost a file rather than a rewrite.
+
+| | |
+|---|---|
+| `Source` | the touch half. `arm` (make contacts arrive at all), `grab` (take the pointer from the cursor, and give it back), `frontmost`, `announce`. One implementation per platform |
+| `Detents` | the feedback half. `detent`, `describe`, and `present` — **a stated capability, not silence** |
+| `Frame` | what an adapter pushes: the surface's size, and the one contact that owns the wheel |
+| `Mode` | the core. Engage, leave, the contact state machine, the rate limit, and the watch's *question* |
+
+**Neither trackpad file names a toolkit type, and that is §9 rather than taste.** *"`main.rs` is the
+only file that touches the toolkit; every other file in that crate is toolkit-free"* is what makes
+the window replaceable, and this module is exactly the kind of thing that erodes it: reaching a
+native view handle genuinely needs the windowing layer, and a mode that must notice the window
+losing the foreground genuinely needs a clock. Both of those sit in `main.rs`, and the seams are
+drawn so that they can:
+
+* **`main.rs` does the `slint::Window` → `WinitWindowAccessor` → `RawWindowHandle::AppKit` →
+  `NSView` translation** and hands the adapter an already-resolved view (`mac::View`, a closure
+  because the platform window does not exist at install time). `trackpad/mac.rs` then knows AppKit —
+  correct, it is the macOS adapter — and knows nothing about Slint.
+* **The watchdog is a `slint::Timer` in `main.rs`**, always on, calling `Handle::ticker`. The mode
+  owns the question and the window owns the clock. An input adapter has no business owning a timer.
+
+A second window implementation rewrites one function and one timer, and changes nothing in either
+trackpad file. That is the portability the rule exists for, made concrete rather than asserted —
+`grep -n 'slint' tools/ipod-gui/src/trackpad*` returns only prose in doc comments.
+
+**The core never sees a platform unit.** `Contact` is **millimetres from the centre of the surface,
+x right and y down**, and the conversion is the adapter's job — because the two conversions that
+matter are both platform facts and both are one character from being wrong:
+
+* **`normalizedPosition`'s origin is the lower-left, y up** — the opposite of every GUI toolkit and
+  of `wheel::position_at_angle`. Linux evdev and Windows are y-down. Getting it wrong runs the wheel
+  backwards and no compiler notices. The flip is in `mac::contact_of`, and its test is in `mac.rs`,
+  because it is a fact about macOS and not about wheels.
+* **The pad is not square** — 342.99 × 209.76 pt, aspect 1.635 — and an external Magic Trackpad
+  reports a different size, so it is read off `deviceSize` per touch and never assumed. Polar
+  arithmetic in the normalised 0…1 space puts the wheel on an **ellipse**: a sweep of 96 evenly
+  spaced angles visits 14 clicks twice and misses 14, which is clicks-per-degree as a function of
+  angle. `a_circle_on_the_surface_visits_every_click_exactly_once` states that property of the core
+  and `a_circle_traced_on_the_real_pad_visits_every_click_exactly_once` enforces it on the
+  conversion that could break it.
+
+**Millimetres are honest here rather than aspirational.** `NSTouch.deviceSize` is in points at 72 to
+the inch, so 342.99 × 209.76 pt is 121.0 × 74.0 mm — which is the pad you can put a ruler on. The
+adapter multiplies by `25.4 / 72` and the core works in a unit every other platform can also
+produce.
+
+`Geometry` is the last step and it is the core's: millimetres to **units of the wheel's own radius**,
+which is the space `ipod.slint` already sends and `main::unit_ring` already describes. Downstream of
+it there is no new input path at all — `wheel::Finger`, `to_the_machine`, `Link::push`.
+
+#### The wheel drawn on the pad
+
+Half the pad's **short** axis is the wheel's radius, so the ring is the largest circle its height
+allows. Inside it is the centre button and outside it is everything, and **both of those numbers
+were got wrong first and then measured.**
+
+The first version copied the drawn wheel's own ratios — 0.465 and 0.52 of the outer radius, the
+5G's 13 mm button in its 28 mm wheel — on the reasoning that the part's proportions should carry
+across. Replaying the spike's capture, 891 real contacts from the hand that confirmed this feels
+right, says they must not:
+
+```
+natural circling radius, 491 contacts: min 12.6 mm, median 18.7 mm, max 31.4 mm
+  centre 0.465 (17.2 mm): 226 of 491 still on the ring, 265 swallowed by the button
+  centre 0.340 (12.6 mm): 491 of 491 still on the ring
+```
+
+**The pad is 2.6 times the wheel**, so a proportional centre lands on the *median* of the circle a
+hand actually draws and more than half the gesture stops turning anything. A ratio is the right
+thing to copy between two objects of the same size and the wrong thing between two of different
+sizes; what has to be preserved is that the button sits well inside the band a finger sweeps. 0.34
+does, with the whole observed range to spare, and in absolute terms it is still a **25 mm target** —
+wider than the real device's own centre button.
+
+**And there is no moulding.** The drawn wheel has a narrow dead band between button and ring because
+on the real part that gap is the bezel. On a rectangle of glass there is nothing there to model, and
+a band that swallowed 69 of those 491 contacts would be a bezel invented for a surface that has
+none. `inner == select`, so the two zones meet with exactly nothing between them.
+
+**`outer` is the other one, and the reason is that a rectangle of glass has no case either.** On the
+drawing, past the outer edge is the iPod's case, and a press there is a press on the case. Left at
+1.0 the ring would be dead over most of a 1.635:1 pad — a finger near the left edge sits at r ≈ 1.6.
+So `outer` is the pad's half-diagonal (1.917 here, √2 on a square pad) and every corner is on the
+ring. `every_corner_of_the_surface_is_on_the_ring` is the test, and leaving `outer` at 1.0 is how to
+make it go red.
+
+**The pad's ring and the drawn wheel's ring are not the same ring, and the join between them is
+where the one real defect was.** `main.rs` hands what an `Act` carries straight to
+`Finger::touched(&unit_ring(), …)`, whose geometry runs 0.52 to 1.0 — so a contact in a corner of
+the pad, at r ≈ 1.6, was `Hit::None` there and was **dropped in silence**, while
+`every_corner_of_the_surface_is_on_the_ring` went on passing. Two geometries, each correct, and no
+test of either one could see it. What an `Act` carries now is the contact's **angle expressed as a
+point on the drawn ring** — the only thing that was ever supposed to survive, since `Finger::moved`
+reads nothing else and the radius a finger happens to be at is a fact about the pad rather than
+about the wheel. `every_contact_the_pad_accepts_lands_on_the_drawn_wheels_ring` sweeps a grid over
+the whole pad, corners included, and asserts both halves: the point lands on the drawn ring, and the
+angle is unchanged.
+
+Once a contact is on the ring **only the angle is read**, which is `Finger::moved`'s existing rule
+and its existing reason: a finger that has to stay inside a band to keep scrolling is a wheel that
+stops working when you press slightly too hard.
+
+#### Contact is not a press
+
+A mouse cannot rest on a wheel, so a pointer going down is the contact *and* the press, and
+`Finger::pressed` sends the label's `Button` along with the `Touch`. A capacitive surface says the
+two separately — and so does the part being emulated. A thumb sitting on MENU is a finger on the
+wheel; it is not MENU pressed.
+
+So the trackpad uses **`Finger::touched`**, which is that method with the button taken out, and the
+press comes from the **physical click**.
+
+**Which control the click presses is decided by where the finger is, and that is the hardware rather
+than an approximation.** A 5G's ring is not one button: **four dome switches** sit under it at the
+cardinal points — MENU at twelve, NEXT at three, PLAY at six, PREV at nine — with the centre button
+separate underneath. The finger selects the dome and the click presses it, which is mechanically
+what the part does. The click event itself carries no useful position, so the angle comes from the
+contact already being tracked.
+
+**And between two domes there is no switch, so a click there presses nothing.** They are four
+discrete domes rather than a continuous ring, so a press at 45° is not a button on real hardware and
+must not become one here. That is `wheel::quadrant`'s existing rule and not a new one: each label
+owns the 16 clicks centred on its quadrant — two thirds of the quarter, because the membrane under
+a label is one switch across most of it — leaving a dead band either side. **Nothing is invented**:
+no fifth position, and no nearest-dome rounding across the band.
+`all_four_domes_click_and_the_bands_between_them_do_not` is the test, and widening `quadrant`'s
+`<= 8` to `<= 12` — which is what "nearest dome" would mean — is how to make it go red.
+
+| on the pad | on the iPod |
+|---|---|
+| finger down on the ring | `Touch` at that position, and no button |
+| finger moves | one `Step` per detent, the short way round |
+| finger into the centre disc, or off the surface | `Release` |
+| **click** in the centre | the centre button — through `machine::centre`, so it is Select over a running machine. **Not the program's half**: the drawn disc also raises `pressed-centre`, which starts or stops the device, and that is a press on the *program* (§7.3's *press ● to stop*) rather than on the iPod. A pad standing in for a click wheel has no business being a power button. With nothing running it puts §14.1's sentence on the cradle rather than doing nothing quietly |
+| **click** on one of the four labels | that button, held until the click comes up |
+| **click** on bare ring | nothing. The dead band either side of each label is under no switch, on the real membrane and here |
+
+**The replay is worth naming as an instrument rather than as a one-off.** The spike's capture is 891
+contacts made by a hand that already knows what this should feel like, and running them back through
+the built code is the only thing available here that can be wrong in the way a *person* would notice.
+It found both of the faults above — a centre button that swallowed half a gesture, and corners that
+reached nothing — and neither was visible to any test of the parts. What it says now:
+
+```
+891 real contacts through the built pipeline
+  on the ring 491 · in the centre button 400
+  wheel position vs the spike's own independent derivation: 491 identical, 0 off by one
+```
+
+Before the two corrections it was 226 on the ring and two positions off by one; the off-by-ones went
+because projecting onto the drawn ring normalises the radius, which takes the f32 rounding away from
+the click boundary. **491 of 491 agreeing with code written separately, against the same hand's
+data, is the strongest statement available here that the arithmetic is right** — and it is still not
+a statement that it *feels* right, which only a finger can make.
+
+`resting_on_a_label_presses_nothing_and_clicking_on_it_does` is the test for the obvious wrong
+version — the one where putting a thumb down at twelve o'clock sends RetailOS to the main menu.
+
+**One finger, and that is the hardware.** Two touches on a 5G's wheel are not two positions. The
+adapter picks the primary and **prefers the one it is already tracking**, by the address of its
+`NSTouch.identity`, so a second finger arriving mid-gesture cannot take the wheel over. The spike
+measured a maximum of one simultaneous touch across 891 events with resting touches refused.
+
+#### Feedback: the sound is the faithful one
+
+**A real 5G clicks through a piezo — it makes a *sound*.** The linear actuator is what modders fit
+in its place. So an audible click is the faithful behaviour and haptics is the enhancement, and
+`Detents` is a list rather than a single implementation: adding the piezo's click is one `add_sink`,
+and nothing else here changes. That click should ultimately come from the emulated part at
+`0x7000A000` rather than from the window counting steps, which is why nothing in the window
+synthesises audio.
+
+The macOS sink is `NSHapticFeedbackManager`, and **it offers three canned patterns and nothing
+else** — `Generic`, `Alignment`, `LevelChange`. No amplitude, no duration, no envelope. `Alignment`
+is the detent-shaped one, and it is the one the operator confirmed feels right. There is nothing to
+tune, and no version of this that tunes it.
+
+**Force Touch hardware only** — MacBook Pro 2015 and later, Air 2018 and later, Magic Trackpad 2 and
+later. Older pads report touches perfectly and cannot actuate. There is no API that says which you
+have and none that reports a failed pulse, so `Detents::present` is a claim about the *build* and
+never about the hardware; a pad with no actuator is silent, and this document is the only place that
+says so. That is exactly the gap a second sink closes.
+
+#### The rate limit, and where the real ceiling is
+
+**The detent is asked for by `main.rs` after the machine has taken the steps**, not by the pad after
+the hand has moved. With no machine on the bench the wheel does not turn, and an actuator clicking
+against an empty bench is a lie told through somebody's fingertip.
+
+One pulse per sample at most, and never within **6 ms** of the last. Apple's own
+`NSAlignmentFeedbackFilter` withholds feedback when the thing being aligned moves too fast, which is
+the platform saying out loud that the actuator has a rate; there is no published figure, so 6 ms is
+the spike's. It sits above the ~39 detents a second an ordinary spin produced and *below* the pad's
+own 124 Hz mean, which is what makes it **never bite at any speed a hand reaches**: samples arrive
+about 8 ms apart, so two consecutive ones are never inside the floor, and the only thing ever
+coalesced is a second detent inside a single sample. 32 of 278 were.
+
+**The sampling ceiling is further away than an incremental encoder's, and this corrects the obvious
+worry.** A fast spin is about 4 rotations a second — 384 detents a second — which is three times the
+pad's mean sample rate, and on a mouse-wheel-shaped input that would mean detents were *lost*. Here
+they are not: the surface reports an absolute position and `shortest_delta` takes the short way
+round, so a sample 40 detents on from the last produces 40 `Step`s. What is lost is the *feeling* of
+the intermediate ones, which is what the coalescing counter counts. The position is wrong only when
+the finger travels more than **half a turn between two samples** — 48 detents at 124 Hz, which is
+about 62 rotations a second, and not a thing a hand does.
+
+The ceiling that bites first is `emu::MAX_QUEUE`: 96 queued `Step`s, one whole rotation, after which
+`Link::push` drops the surplus and counts it in `input_dropped` — the same ceiling §16.11 measures
+for a scroll, and the same reason it is not duplicated here.
+
+#### The mode: how it is entered, and how it cannot be lost
+
+**⌃⌘T engages it. `Esc` leaves it.** Both are read inside the local `NSEvent` monitor, *ahead of the
+responder chain*, and that is the point rather than an implementation detail: a person whose cursor
+has stopped moving needs one key to work and does not care which control believes it owns the
+keyboard. `Esc` here is the outermost ring of §16.8's *one definition, outwards, in order* — it
+leaves the trackpad wheel before it would leave fullscreen — and while the mode is off the monitor
+does not touch `Esc` at all.
+
+A chord and not a letter because the monitor reads keys before a focused `TextInput` does, so a bare
+letter would engage the mode in the middle of typing a device's name. It is `⌃⌘`-shaped to sit beside
+`⌃⌘F`, the one other chord in §16.8 that is a mode rather than an action, and `T` is a **virtual key
+code** so a non-US layout reaches the same physical key.
+
+`CGAssociateMouseAndMouseCursorPosition(false)` is what takes the pointer: public CoreGraphics, **no
+Accessibility grant**, no entitlement, and it works only while frontmost — which is the right fence
+rather than a limitation. Proven in the spike: 365 touch events flowed while the cursor moved zero
+pixels. The cursor stays *visible* where it was, which is the honest cue for where it will be when
+you leave.
+
+**Six ways out, and every one of them gives the cursor back:**
+
+| | |
+|---|---|
+| `Esc` | read in the monitor, so it works with any focus and anything open |
+| a **force click** | see below. Two ways out is not a problem; none is |
+| ⌃⌘T again | the same chord |
+| the window stops being frontmost | macOS re-associates the cursor on its own; a 200 ms watch is what makes the *window's* state agree, because nothing is delivered to an application that is not frontmost — the one state that must end the mode is the one that sends no events |
+| nothing ever touched the pad | see below |
+| the window goes | `Wiring` holds the handle and its `Drop` leaves the mode, so the window closing, a test's wiring going out of scope, and a panic unwinding through `main` all restore the pointer |
+
+The finger comes off the wheel **before** the cursor comes back, in every one of them, so the
+machine is never left with a contact or a button that nothing will lift.
+
+**The force click is the second escape, and it is an emulator control rather than an iPod one.**
+`NSEvent.stage` is 1 for an ordinary click and 2 for a force click on Force Touch hardware, and
+stage 2 is deliberately mapped to **nothing on the emulated device**. A click wheel has no second
+pressure stage; giving it one would be inventing input the part does not have, which is the rule
+§21.5 keeps when it refuses to let MENU+SELECT restart the machine. That refusal is exactly what
+qualifies it here: with the pointer taken, the way out has to be something the wheel can never mean,
+and it is labelled the way §21.6 labels suspend, kill and start.
+
+A force click passes through stage 1 on the way, so the ordinary click it began as has already
+pressed whatever was under the finger. Leaving takes that up first — the held press is released
+before the contact — so the cost is one brief button press on the way out, and never a button left
+down.
+
+**And a seventh that is not this program's.** Kill the process outright and no `Drop` runs — but the
+grab holds only while this application is frontmost, and a dead process is not frontmost. The fence
+that makes the mode work is the same one that makes force-quitting it safe, which is why it is worth
+having rather than merely tolerable.
+
+While the mode is on the monitor **swallows** the left mouse button, drags, pressure and scroll.
+Swallowing is why a monitor was chosen over a responder override — a responder cannot. Without it a
+click lands on whatever the frozen cursor is sitting over, and a two-finger scroll would turn the
+wheel a second time through `Finger::scrolled` while the pad is already turning it absolutely.
+
+**What is on screen while it is on** is the window's **subtitle**: *the trackpad is the click wheel —
+esc gives the cursor back*. The title bar rather than the client area, because the title is the
+markup's and the subtitle belongs to nobody, and because a mode that has taken the pointer has to
+say so somewhere that cannot be scrolled away. §21's own chrome is the better home for it and this
+is a seam rather than a decoration: `Handle::toggle` exists so a drawn control can be given the mode
+later without anything else changing.
+
+#### Where there is no trackpad, and where there is no macOS
+
+**Not macOS.** `support()` is a `const fn` of the target, so on every other build it is a
+compile-time `false`, nothing is installed, and the chord does nothing. Neither Windows nor X11 nor
+Wayland publishes per-finger absolute positions to an ordinary application: what arrives is a
+synthesised pointer and a scroll delta, which is the route `Finger::scrolled` already takes. The
+arithmetic, `Pad` and their tests still compile and still run there — which is the whole point of
+the seam.
+
+**macOS with no trackpad** — a mini, an iMac, a laptop closed under an external mouse — cannot be
+detected, because the only evidence that a trackpad exists is a touch arriving. So the mode has a
+**3 s grace**: engaged, and never in the life of the process having seen a single touch, it gives up
+and says which of the two it was. Once one touch has arrived the grace is over for good, because a
+person who engages the mode and then pauses to think is not a person without a trackpad. That is
+`AGENTS.md` §6 as a feature: *before believing a zero, run the control that makes the instrument
+produce a non-zero* — here the control cannot be run, so the zero is reported as a zero rather than
+as a wheel that does not work.
+
+**"Silent clicking" in System Settings may suppress the pulses.** Untested, and deliberately so:
+finding out means changing the operator's settings.
+
+#### What is built but not proven, and how to prove it
+
+**The click path has never been exercised by a hand.** The spike's capture contains **zero** click
+lines — nobody pressed the pad during it — so everything above about domes and the centre button is
+routing that is tested in isolation and has not been seen to fire from a real press. It is not an
+assumption that it will: `LeftMouseDown` reaching a local monitor is ordinary AppKit. But per
+`AGENTS.md` §7 it is unverified, and the honest thing is to say which half is which.
+
+`Mode::click` therefore logs **even when the click did nothing**, unlike a contact frame. A click on
+bare ring is correctly silent, so without that line *the click never arrived* and *the click arrived
+and pressed nothing* look identical — which is the shape §6 forbids. One run under
+`IPOD_TRACKPAD=1` with one press settles it.
+
+**Tap-to-click is the other thing to watch in that log, and for the same reason.** Many people have
+it on, and it produces clicks with no pressure; whether a sustained drag around the ring generates
+spurious taps cannot be found out here without changing somebody's system settings, which §3
+forbids. It would appear as `click down` lines nobody made, in the same log, at the same time. If it
+does happen, the fix is not a filter invented here — it is to say so and decide with the setting in
+front of us.
+
+`IPOD_TRACKPAD=1` is the instrument, and it prints **two lines per contact frame, one from each
+side of the seam** — which is deliberate, because a disagreement between them is the failure this
+design is most exposed to. The adapter's line carries the raw `normalizedPosition`, the device size
+and the millimetres it converted them to; the core's carries the whole `Frame`, whether the contact
+is on the ring, the wheel position it derived and the acts it produced. Around them go the mode's
+own transitions, and on leaving, how many detents were felt and how many were coalesced.
+
+It also prints the one thing no test can reach: on the **first event the monitor ever sees** — which
+is the only moment at which a monitor's being alive can be observed without a hand — it reports that
+it is live *and* whether the surface could be armed. Both halves of the zero, in one line, before
+anybody has pressed anything.
