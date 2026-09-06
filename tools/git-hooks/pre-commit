@@ -1,0 +1,43 @@
+#!/bin/bash
+# pre-commit: keep Apple's binaries (and any other large or unexpected binary) out of history.
+#
+# Enable with:   git config core.hooksPath tools/git-hooks
+# Bypass once:   git commit --no-verify        (only if you are certain)
+#
+# Rejects a staged file when any of these hold:
+#   1. its path contains a `resources/` component — that tree holds Apple's firmware, ROM dumps,
+#      disk images, and purchased games, and is never committed;
+#   2. it carries an iPod firmware signature — the Apple firmware-partition banner, its `!ATA`
+#      directory entries, the `portableiPod` marker, or an Apple copyright string — regardless
+#      of where it sits or what it is called;
+#   3. it is a binary (git cannot diff it as text) outside docs/media/ — screenshots and icons
+#      are the only binaries this repository keeps;
+#   4. it is larger than 4 MiB — nothing in this repository needs to be, and GitHub rejects
+#      100 MiB outright.
+set -u
+LIMIT=$((4 * 1024 * 1024))
+SIG='\{\{~~  /-----|portableiPod|!ATA(osos|soso|aupd|dpua|rsrc|crsr|hibe|ebih|logo|ogol)|Copyright ?\(c\) [0-9, -]*Apple|Apple Computer, Inc\.'
+bad=0
+say() { printf 'pre-commit: %s\n' "$*" >&2; bad=1; }
+
+while IFS= read -r -d '' f; do
+  case "/$f" in */resources/*) say "'$f' is under resources/ — Apple's material never goes in git";; esac
+  # The hooks themselves carry the signature patterns as text, so they are the one exemption.
+  case "$f" in tools/git-hooks/*) ;; *)
+    if git show ":$f" | LC_ALL=C grep -qaE "$SIG"; then
+      say "'$f' contains an iPod firmware / Apple signature"
+    fi
+  ;; esac
+  size=$(git cat-file -s ":$f")
+  if [ "$size" -gt "$LIMIT" ]; then
+    say "'$f' is $((size / 1048576)) MiB, over the $((LIMIT / 1048576)) MiB limit"
+  fi
+  if git diff --cached --numstat -- "$f" | grep -q '^-'; then
+    case "$f" in docs/media/*) ;; *) say "'$f' is a binary outside docs/media/";; esac
+  fi
+done < <(git diff --cached --name-only --diff-filter=AM -z)
+
+if [ "$bad" -ne 0 ]; then
+  printf 'pre-commit: commit refused. Unstage the file(s) above (git restore --staged <file>).\n' >&2
+  exit 1
+fi
