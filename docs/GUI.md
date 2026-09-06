@@ -4994,3 +4994,231 @@ In order, because each depends on the one before it.
 attribute an arrival to a core. Until it is answered, §12.8 draws one column.
 
 
+
+---
+
+## 21. The redesign — the iPod is the app
+
+**Status: proposed, 2026-09-06.** Nothing in §§1–20 is amended by this section yet. When it is
+accepted it replaces §12's information architecture and overturns the decisions listed in §21.9;
+until then §12 is what the window does and this is what it is going to do instead.
+
+The operator drove the shipped window for the first time and could not work out how to use the
+wheel, how to stop a machine, or where anything was. The verdict was *"it doesn't feel simple and
+intent based and intuitive, it feels rather like a crappy spreadsheet… simple and beautiful, like
+the iPod was, vs the developer debug tool it is now."*
+
+That is a fair reading of the pictures, and this section is what it costs to answer it.
+
+### 21.1 What the pictures showed
+
+`cargo test --release -p ipod-gui every_page_this_window_draws_can_be_shot_with_no_window` writes
+every page to `_out/gui/`. Read as a set rather than one at a time, they say something the page-by-
+page design did not.
+
+**The bench is good and is not the problem.** A drawn iPod, centred, with one caption beneath it and
+one control in the corner. It is the only page that looks like the thing this program is.
+
+**Everything behind the hamburger is an inventory.** The drawer opens on three nouns — `iPods`,
+`Games`, `Settings` — and behind them:
+
+| page | what it actually is |
+|---|---|
+| device | a key/value inspector. Six fact rows — `filed as A444, seed 6182160` · `Built from` · `Writes to` · `Modes` — and then, beneath them, the verbs. `Start` is **last**, below the destructive `Remove` |
+| parts | a bill of materials. `iPods` · `Apple firmware` · `Bootloaders` · `Software`, each with a `Fetch… / Provide…` pair, `nor-a146`, `SHA-256 verified when it arrived, used by 1` |
+
+Three failures, and they compound:
+
+1. **It is organised by what things are, not by what a person wants to do.** Firmware, bootloaders,
+   ROM dumps and seeds are the vocabulary of whoever *assembles* a machine. Nobody arrives at this
+   program wanting a bootloader.
+2. **Facts outrank actions.** The device page states six things before it offers one, and the single
+   verb anybody came for is at the bottom of the stack.
+3. **A device must be assembled before anything can happen.** Every intent is behind a build step,
+   and the build step is presented as the user's first task rather than as the program's.
+
+The third is the load-bearing one. The other two are arrangement; this one is the model leaking.
+
+### 21.2 The iPod is the app, and the bench retires
+
+The window is the device. It fills the client area — no grey field around it, no staging surface it
+stands on, no vocabulary of a workbench holding machines you have parked.
+
+**What "bench" bought and what replaces it.** The name described a place where several composed
+devices could be set down and swapped between. That is a builder's model; §7.2's "look at a second
+device" is served by the drawer's list instead, which is where a person would look anyway. The
+drawn chassis, the panel, the wheel geometry, the glass and the caption line all survive unchanged
+— this retires a *framing*, not a picture.
+
+**The drawer slides over the device rather than pushing it.** §3's pushed `hero` exists so the
+device is never occluded, and that argument was correct while the device shared the window with a
+field of nothing. When the device *is* the window there is nothing to push it into, and a device
+that shrinks every time the drawer opens is the window fidgeting. The drawer overlays; the device
+does not move. §16.1's binding-loop trap disappears with the push that caused it.
+
+### 21.3 The drawer is verbs
+
+One page. No drill-down for anything common. The operator's own list, in their order, is the
+information architecture:
+
+```
+  Apple's software                     ▸
+  Rockbox                              ▸
+  Doom                                 ▸    installs on first use
+  Diagnostics                          ▸    needs a real ROM
+  Games…                               ▸    0.6
+  ──────────────────────────────────────
+  Files on the drive…
+  This iPod          5.5G ▾  synthetic ▾
+  Settings
+```
+
+Rules for the list:
+
+- **Every row is a thing to do, phrased as one.** `Apple's software`, not `iPod software (Os)`.
+- **A row that cannot run says why, in place, and is never hidden.** §14.1 is already this
+  repository's rule and it survives intact — it is the one part of the current drawer that is
+  right. `Diagnostics` on a synthesised ROM keeps §12.5's exact sentence: *Diagnostics lives inside
+  the boot ROM's image directory, and a generated ROM has none.*
+- **`Parts` stops being a destination.** Firmware, bootloaders, ROM dumps and their hashes are not a
+  page a person visits; they are what the program shows *at the moment a fetch is needed*, in the
+  flow that needed it. The inventory remains reachable — see §21.9 — but nothing routes through it.
+- **The facts are demoted, not deleted.** The six-row table is honest and this project values that
+  over tidiness. It moves under `About this iPod`, below the verbs, and `seed 6182160` goes with it.
+
+### 21.4 The default iPod builds itself
+
+`Make me one` already exists on the devices page, captioned *downloads Apple's firmware and builds
+an 8 GB drive*. It stops being a button a person has to find and becomes **what happens when they
+press a verb and there is no iPod**: 5.5G, synthetic, fetched, built, booted, with progress shown
+where they are already looking.
+
+Defaults, and they are the operator's: **5.5G**, **synthetic**. Synthetic is the important half — it
+needs no ROM dump and no IPSW a person has to go and find, which is the single largest barrier the
+current first run puts in front of somebody who has just opened the program.
+
+`This iPod 5.5G ▾ synthetic ▾` in the drawer is where that default is *changed*, not where it is
+*chosen*. A person who never opens it still gets a working iPod.
+
+### 21.5 The chords, and which of them can be honest
+
+The operator asked for the hardware button combinations to work by emulation rather than by menu
+item — *"should technically work as designed if the emulator is accurate"*. That is exactly §4's
+rule pointed at the UI, and the answer is already measured. **It is different for the two chords,
+and the difference is the whole design.**
+
+**SELECT+REW → diagnostics, and SELECT+PLAY → disk mode: the chord works.** `research/07` measures
+Apple's boot ROM querying the wheel three times with `0x8000023a` before it loads anything; held
+across those queries, the ROM chooses and enters `diag` itself, with no image placed by hand and no
+entry address chosen by us. Held to the end it draws **70 669 non-black pixels — the same figure to
+the pixel** as a directly-entered one.
+
+The open bug is the *release*: letting the buttons up produces `irqs: 7 812 499 asserted, 1 taken`,
+where a directly-entered `diag` handles the same release at `8 asserted, 4 taken`. So it is the
+bootloader path, not `diag`. **`BootTarget::Nor("diag")` exists only as the workaround for that
+storm.** When the release is handled, the chord is the mechanism and the special case is deleted —
+which is the correct direction of travel: a measured bypass retired by the honest path, not a second
+route maintained beside it.
+
+**MENU+SELECT → restart: it cannot be honest, and it must not pretend.** `research/10` holds the
+pair for 400 M instructions: it *is* delivered — 8 arrivals at Apple's ISR decoder, 6 button events —
+and the machine does not reset, running on to 2.3 G instructions with the same menu on screen. The
+static search settles it: the SELECT|MENU mask `0x110000` appears **zero times across all 641 479
+disassembled instructions** of `OSOS_correct.bin`, with a working positive control on the same
+instrument. On real hardware the chord is caught **below the firmware**, in the wheel's PSoC or the
+PMU, and this project models neither.
+
+So the rule stands, and §12.5 already wrote it: *a control claiming to be the hardware combo while
+actually restarting the emulator would be the window lying.* Holding MENU+SELECT in this window
+delivers MENU and SELECT, is labelled as delivering them, and does not restart anything. Making it
+genuinely work means modelling the PSoC or PMU reset path — a machine project, not a UI change, and
+it is not in this section.
+
+**It is wanted, and it is not refused — it is unbuilt.** The operator's intent is that SELECT+MENU
+eventually restarts and SELECT+REW eventually enters diagnostics, both by the machine behaving
+correctly rather than by a menu item pretending to. SELECT+REW is close: it is one interrupt bug
+away, and that bug has a measurement and a number. SELECT+MENU is further, and the shape of the work
+is known — the chord is caught in the click wheel's PSoC or in the PMU, so a path has to exist from
+`ClickWheel::buttons` to something that can re-enter the reset vector, and today `ClickWheel` is a
+transceiver that posts frames and has no such path in it at all. Until it does, the window says what
+is true. When it does, the chord and the emulator control agree — and it is the emulator control
+that becomes the redundant one.
+
+### 21.6 Machine controls, named as emulator controls
+
+Suspend, kill and start are real and are wanted, and §21.5 is why they are named the way they are:
+they are things **this program** does to a machine, not things an iPod does. Naming them after
+hardware would be the same lie one band lower.
+
+| control | what it is | already exists? |
+|---|---|---|
+| Start | cold boot, from the reset vector | `Cmd::PowerOn`, §12.5 |
+| Suspend | park the machine and keep it | `Escape::Park`; the snapshot format carries the co-processor as of `IPODSNP8` |
+| Resume | re-enter a parked machine | snapshot restore |
+| Kill | drop the machine; power off is real, not restored-and-pretended | `Cmd::PowerOff`, §12.5 |
+| Restart | power cycle | `Cmd::PowerCycle`, §12.5 |
+
+**All five exist. None of them is discoverable.** `Esc` is the whole stop control today — §16.8
+gives it one definition outwards, and `nav.rs:295` returns `Escape::PowerOff` from `Booting` and
+`Escape::Park` from `Running` — and a person who has not read §16.8 has no way to learn it. They
+appear as a row in the drawer, on the device, and keep their keys.
+
+### 21.7 The panel, pulled out
+
+Two things, and they are not the same one:
+
+- **Fullscreen** is §12.6 and is already designed: `⌃⌘F` / `F11`, `K = floor(min(W_phys/320,
+  H_phys/240))`, centred, `image-rendering: pixelated`, no shader. Unchanged.
+- **Pop out** is new: the panel in **its own window**, which can then be fullscreened on a second
+  display while the drawer and the device stay on the first. §15 rules out *"a second window, tear-
+  off panels, multiple machines"* on the grounds that there is exactly one machine by design — and
+  that argument holds for a second *machine* and does not touch a second *view of the same panel*.
+  One machine, two windows onto its framebuffer.
+
+### 21.8 Input: everything reaches the wheel
+
+Keyboard, mouse, trackpad and touch all drive the same wheel. §16.8's table stands; what is missing
+is the pointing half.
+
+| gesture | state |
+|---|---|
+| `↑` `↓` `←` `→`, `M` `P` `N` `B`, `H` | built |
+| `Enter` / `Space` → centre | §16.8 specifies it; **being verified** — it is not in `fn keyed` |
+| click the centre | built |
+| click-and-drag around the ring | built — `wheel-moved(float, float)` |
+| **scroll wheel / two-finger trackpad over the ring** | **absent, and designed nowhere.** The most natural gesture available |
+| touch | to be confirmed against §19.4's `interactive: false` trade |
+| `Esc` → suspend / power off | built, undiscoverable — §21.6 |
+
+The scroll gap is the sharpest of these: a person's first instinct on seeing a wheel is to scroll
+it, and nothing happens. Its design is being written into §16.8 and §16.11 alongside the
+implementation, because the ratio question — a trackpad's continuous delta against a mouse's notched
+one, without a flick firing two hundred clicks — is a design decision and not an implementation
+detail.
+
+### 21.9 What this overturns
+
+Stated, because §18 requires it and because a redesign that does not name its casualties is hiding
+them.
+
+| overturned | was | why |
+|---|---|---|
+| §12's noun IA | `iPods · Games · Settings` → inventory pages | §21.1 |
+| the bench | a field the device stands on | §21.2 |
+| §3's pushed `hero` | the drawer narrows the well | nothing left to push into; §21.2 |
+| `Parts` as a destination | a top-level drawer page | §21.3. **Still reachable** — it is where a fetch or a missing part sends you, and `Provide…` has to live somewhere |
+| device page ordering | six facts, then verbs | §21.3 |
+| §15's "no second window" | ruled out entirely | narrowed: no second *machine*, but a second *view* of one panel — §21.7 |
+
+The device page's facts, §14.1's disable-with-a-reason, §12.5's refusal sentences, §12.6's
+fullscreen table, the 8-primitive discipline and the glyph rule are all **kept**.
+
+### 21.10 What is still 0.6
+
+`Games…` draws as a row and is disabled with its reason. §15 puts it in 0.6 because the framework
+work is not done and the keystore is in a private repository — that is a fact about the world, not a
+schedule, and it does not change because the front page did.
+
+Drawing it disabled rather than omitting it is §14.1, and it is also what makes the redesign
+truthful: the shape of the finished program is visible from the first run, and the arm lights up
+without the front page changing shape under anybody.
