@@ -5357,14 +5357,154 @@ synthesises audio.
 
 The macOS sink is `NSHapticFeedbackManager`, and **it offers three canned patterns and nothing
 else** — `Generic`, `Alignment`, `LevelChange`. No amplitude, no duration, no envelope. `Alignment`
-is the detent-shaped one, and it is the one the operator confirmed feels right. There is nothing to
-tune, and no version of this that tunes it.
+is the detent-shaped one, and it is the one the operator confirmed feels right. **It is not to be
+changed and there is no version of this that tunes it** — which leaves exactly **two** patterns for
+everything else this program might ever want to say through a fingertip. That is the entire budget
+the section below is spent out of.
 
 **Force Touch hardware only** — MacBook Pro 2015 and later, Air 2018 and later, Magic Trackpad 2 and
 later. Older pads report touches perfectly and cannot actuate. There is no API that says which you
 have and none that reports a failed pulse, so `Detents::present` is a claim about the *build* and
 never about the hardware; a pad with no actuator is silent, and this document is the only place that
 says so. That is exactly the gap a second sink closes.
+
+#### Feeling the geometry: the bezel, in software
+
+*(Built 2026-09-06, on top of the above. `Edge`, `Mark`, `Felt` and `Radial` in `trackpad.rs`.)*
+
+On a real 5G the hand is confined by the bezel and the centre button: **you feel where the ring is**,
+which is why a wheel can be worked without looking. A rectangle of glass has none of that, and the
+capture says exactly what it costs — with no physical guide the hand picks its own radius, and this
+one circles at a **median 18.7 mm** against a real wheel's 14 mm ring. The actuator is the only thing
+here that can put an edge back.
+
+**It is asked to put back one.** Three boundaries were candidates and the smallest set is the one
+that ships on:
+
+| edge | what it is | crossings in the 891-contact capture | default |
+|---|---|---|---|
+| **centre** | the ring meets the centre button, at `CENTRE` — 12.58 mm | **16** in 7.16 s — 2.2 a second | **on** |
+| **rim** | where a real wheel's outer edge would be, r = 1.0 — 37 mm | **0**. The hand's furthest reach was 31.4 mm | off |
+| **bands** | the eight edges of the four label bands, where `quadrant` starts and stops naming a button | **65**, against the 790 detents of the same gesture — 9 a second | off |
+
+**Why the centre edge and not the others**, in the order the reasons matter:
+
+* **It is the only one that changes what the wheel does.** Crossing it inward ends the contact, so
+  the wheel stops turning — and until now it did that in silence. The other two change nothing at
+  all: `outer` is the pad's half-diagonal so the rim is a line with the same wheel on both sides,
+  and a band edge only changes what a *click* would do.
+* **It is on an axis the detents leave free.** A detent is purely angular — `position_at_angle`
+  never reads a radius — so a **radial** mark cannot be mistaken for something the turning caused.
+  The band edges are angular, so they arrive *inside* a turn rather than beside one; that is the
+  same axis carrying two meanings, and it is why the rhythm idea came up at all.
+* **It is rare, and rare is the point.** A surface that ticks constantly conveys less than one that
+  ticks rarely. One full turn at the median circling radius crosses the centre edge **zero** times
+  and a band edge **eight** times, which
+  `an_ordinary_turn_says_nothing_on_the_edge_that_is_on_and_eight_things_on_the_one_that_is_not`
+  asserts as arithmetic rather than as an opinion.
+* **The rim was never reached.** 31.4 mm of the 37 needed, across 899 samples. It is also tangent to
+  the top and bottom edges of a 121 × 74 mm pad, so it can only be crossed sideways — two arcs
+  rather than a rim, which is not what a bezel feels like.
+
+**The pattern is `LevelChange`**, the documented *"you crossed into something"* one, and it is the
+one the detent does not use. Whether a hand can tell two canned patterns apart is not a question
+software can ask, so `IPOD_TRACKPAD_MARK` picks between `level`, `generic`, and `directional` —
+which spends both spare patterns on saying *which side you are now on*, the only way to express a
+direction through an API with no amplitude.
+
+**A rhythm was considered and is not built.** Two pulses need a gap, and the API has no delay: the
+only free clock is the surface's own frame stream, which would couple feedback to the input rate and
+add a second path that could contend with a detent. The confusion a double-tick exists to prevent
+does not arise for the edge that is on — it is radial where detents are angular, and it lands in a
+frame that carries no detent at all.
+
+#### Chatter, and the 1.5 mm that answers it
+
+The pad samples at ~124 Hz, so a hand resting near a line — or drifting across one — would cross it
+many times a second and turn the actuator into a machine gun. **This is the engineering risk in the
+whole feature.** `ARM_MM` is the answer and the capture bounds it from both sides:
+
+```
+from below   the stillest 265 ms in the capture — 33 consecutive frames each moving under
+             0.35 mm — drifted over a 1.10 mm band. At or under that, a resting finger
+             re-arms itself and chatters.
+from above   at 1.9 mm all 16 of the capture's real crossings survive; at 2.0 mm one is gone
+             and at 2.9 mm two are. Past ~1.9 mm the band starts eating crossings a hand made.
+```
+
+**How those two numbers were got**, so they can be rechecked rather than believed: the spike's
+`run-A.log` — the same 891-contact capture summarised at the top of this section — replayed with its
+`norm=(x,y)` converted to millimetres from the pad's centre (`(n - 0.5) x 121.0` and
+`-(n - 0.5) x 74.0`, y flipped). The still-finger figure is the **longest run of consecutive frames
+each moving under 0.35 mm** — 33 of them — and the spread of `hypot(x, y)` across it. The ceiling is
+a sweep of the arming band from 0 to 4 mm in 0.1 mm steps, counting how many of the 16 crossings
+survive at each. The capture itself is not in the repository, for the reason nothing in `resources/`
+is.
+
+**1.5 mm** is the middle of `1.10 … 1.9` — 35% of margin over the measured wander, 20% under the
+measured cost — and small against the 6.1 mm between the boundary and the radius a hand circles at.
+It is in **millimetres and not a fraction of the radius**, which is the argument `CENTRE` makes in
+reverse: this is a fact about *fingers*, so it must not scale when an external Magic Trackpad reports
+a different size.
+
+**It is an arming band, not a shifted threshold.** A Schmitt trigger would move the boundary by
+1.5 mm in each direction, and the boundary is not this feature's to move — crossing `CENTRE` is what
+takes the finger off the wheel. So the mark fires on the **true** crossing and is then mute until the
+finger is 1.5 mm clear of the line: one tick per crossing a hand meant, none for a wobble, and the
+wheel behaving exactly as it did before.
+`the_wheel_still_leaves_the_ring_at_the_line_and_not_at_the_arming_band` is what holds that.
+
+`a_finger_wobbling_on_the_centre_boundary_is_one_edge_and_not_forty` is the test, and **it carries
+its own control** — the same 40 frames through a detector with no arming band, which must produce
+40. A wobble that produced one mark and a detector that had silently stopped detecting look
+identical otherwise, which is §6's shape. Setting `ARM_MM` to 0.0 is how to make the first assertion
+go red.
+
+#### A dropped detent is worse than a missed edge
+
+One actuator now has two callers, and the two failures are not equally bad. A missed edge is a
+boundary you have to find by feel. **A dropped detent is a wheel that stopped turning**, which is the
+input not working at all. So the priority is structural rather than weighted, and it is enforced in
+the one place it can be:
+
+**`Ticks::due` reads `self.detent`, and no mark ever writes that field.** There is no sequence of
+marks — none, one, two hundred in the same microsecond — that can reach the state a detent's
+decision is made from, so none can delay, refuse or coalesce one.
+`a_flood_of_edge_marks_cannot_refuse_a_single_detent` is the test, and changing one word in `due`,
+`self.detent` for `self.any`, is how to make it go red. The yielding is all the other way: a **mark**
+waits on `any`, so it stands off for `TICK_FLOOR` after a pulse of either kind, because two pulses
+closer than that are one blur on a single actuator.
+
+And for the edge that is on by default the contention never arises in the first place, which is a
+property of the geometry rather than of the limiter: a detent comes from `Act::Moved`, and moving
+*across* `CENTRE` is exactly the frame in which the contact starts or ends — `Act::Down` or
+`Act::Up`. `the_centre_edge_never_shares_a_frame_with_a_detent` sweeps in and out at six angles and
+asserts it. `a_band_edge_does_share_its_frame_with_a_detent_which_is_why_it_is_not_on` asserts the
+contrast, which is the argument against that variant made mechanical.
+
+#### Trying the variants without a rebuild
+
+**Software cannot check that something feels right.** Only a hand can, and every round trip through a
+rebuild costs the operator a sitting — so the variants are chosen at launch, beside `IPOD_TRACKPAD=1`,
+and several can be compared in one go.
+
+| set this | what it should feel like |
+|---|---|
+| `IPOD_TRACKPAD_EDGES=off` | **the control.** Detents only — the behaviour before any of this |
+| *(unset)* or `=centre` | **the default.** One distinct tick as the finger drops into the centre disc, one as it comes back out. Silent through any ordinary turn |
+| `IPOD_TRACKPAD_EDGES=centre,rim` | as above, plus a tick out at 37 mm. On the measured hand this should be felt **never** — if it fires often, the hand is circling wider than the capture's did |
+| `IPOD_TRACKPAD_EDGES=centre,bands` | as the default, plus a tick each time the finger enters or leaves one of the four labels — about 3 a second during a turn, mixed into the detents. This is the one expected to be too much |
+| `IPOD_TRACKPAD_EDGES=all` | everything at once |
+| `IPOD_TRACKPAD_MARK=generic` | the same edges in the third pattern, if `LevelChange` reads as a detent on this pad |
+| `IPOD_TRACKPAD_MARK=directional` | `LevelChange` going in, `Generic` coming out — so the tick says which side you are now on |
+
+An unknown word in either keeps the default and says so in the log, because two arms of a comparison
+that differ only in a typo would read as different and behave the same.
+
+**With `IPOD_TRACKPAD=1` the `released` line now carries the edges too** — how many were felt, which
+ones were being felt, and how many gave way to a pulse already going out. `Pad` reports **every**
+crossing whether or not that edge is switched on, so the log shows the geometry the hand drew even
+in the `off` arm, and the comparison between arms is one number rather than a feeling.
 
 #### The rate limit, and where the real ceiling is
 
@@ -5479,6 +5619,14 @@ as a wheel that does not work.
 finding out means changing the operator's settings.
 
 #### What is built but not proven, and how to prove it
+
+**No hand has felt an edge yet, and nothing in this program can judge one.** The arithmetic above is
+checked hard — twelve tests, each of which was made to fail with its fix reverted, and a replay of
+891 real contacts behind every number — but *what a `LevelChange` feels like next to an `Alignment`*
+is not a thing software can ask. Whether the boundary reads as a boundary rather than as a stray
+detent, whether 1.5 mm of hysteresis feels like one crossing or like a delay, and whether `centre`
+alone is enough geometry to work the wheel without looking, are all open and all settled the same
+way: by running the variants above, in one sitting, against `IPOD_TRACKPAD_EDGES=off` as the control.
 
 **The click path has never been exercised by a hand.** The spike's capture contains **zero** click
 lines — nobody pressed the pad during it — so everything above about domes and the centre button is

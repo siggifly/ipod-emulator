@@ -2902,6 +2902,20 @@ fn wire(
                 trackpad::Act::Up => {
                     off_the_machine(&w, &live, |l| l.finger.borrow_mut().released());
                 }
+                // **A boundary went past, and the actuator is how a rectangle of glass has one.**
+                // On a real wheel the bezel and the centre button confine the finger, so you feel
+                // where the ring is; here nothing does, which is why the measured hand circles at a
+                // median 18.7 mm well outside a real 14 mm ring. `trackpad::mark` decides what
+                // reaches a fingertip and `Pad` decides what crossed — this is only the routing.
+                //
+                // **Gated on there being a machine, for the reason the detent is**: with an empty
+                // bench the wheel does not turn, and telling somebody's finger where the ring of a
+                // wheel that is not there is would be the same lie in a different place.
+                trackpad::Act::Mark(m) => {
+                    if machine::no_machine(&life(&live)).is_none() {
+                        trackpad::mark(m);
+                    }
+                }
                 // **The centre button, and only the iPod's half of it.** The drawn disc raises
                 // three callbacks: `centre-down` / `centre-up`, which `machine::centre` answers as
                 // Select over a running machine, and `pressed-centre`, which starts or stops the
