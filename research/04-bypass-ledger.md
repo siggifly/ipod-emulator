@@ -29,8 +29,14 @@ ROM and disk, so it inherits every flag) · `flash-update.sh` · `flsh.sh` · `w
 **Still faking something, on some path.** **One** is live on the retail path every number in
 `research/` is measured on — #6, the synthesised co-processor replies. #4 and #11 are retired on the
 cold path and survive only in the three warm-entry recipes, which by construction have no
-bootloader. **Two rows left this table on 2026-08-19**: #17, whose flags were deleted rather than
-switched off, and **#7, retired by running the second core and making it the default**.
+bootloader. **Two rows left this table**: #17 on 2026-08-19, whose flags were deleted rather than
+switched off, and **#7 — which left on 2026-08-19, came back on 2026-08-26 when the default was
+flipped away from two cores, and left again for good on 2026-09-05.** The difference is what each
+retirement rested on. The first rested on the two arms being *identical*, and expired the day they
+stopped being; the last rests on a **cause** — a word read of `CPU_QUEUE` took `read32`'s fast path
+and never reached the clear in `read8_inner`, so the second core could not run at all. A retirement
+that rests on "no difference measured" expires when a difference appears. One that names the defect
+does not.
 
 | # | Bypass | Live in (2026-08-14) | What it fakes | Why it exists | Status | Retiring it requires |
 |---|---|---|---|---|---|---|
