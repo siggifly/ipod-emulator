@@ -275,12 +275,29 @@ boot_doom() {                       # $1 nor  $2 gen  $3 label  $4 drive
   w="$w,+2s:down=select,+300ms:up=select"
   FLASH="$nor" DISK="$work" BUDGET=12000000000 "$BIN" rockbox --clock=5 --clickwheel \
     --wheel="$w" --bcm-film=0xE0000:140:F0:2000000:"$out" > "$out.log" 2>&1
-  local pics fired; pics=$(pictures "$out")
+  local pics fired last end
+  pics=$(pictures "$out")
   fired=$(grep -oE "script: [0-9]+ of [0-9]+" "$out.log" | head -1)
-  if [ "${pics:-0}" -ge 8 ]; then
-    row doom "$gen" "$label" "shortcut" PASS "$pics pictures, $fired -> $out"
-  else
+  # **A picture count cannot tell "it started" from "it is playing", and it said PASS for a game
+  # that had hung.** Doom's startup scrolls a console — R_InitPlanes, I_InitSound, "Starting
+  # Graphics engine" — and that alone is 29 distinct pictures, which sailed past `pics >= 8`.
+  # Measured on 5G-real: the last panel change was at **153 s** and the run continued to 2 400 s,
+  # so the game initialised and then drew nothing for another 2 247 seconds. The row said PASS.
+  #
+  # So the question is not how many pictures but **whether it was still drawing at the end**. A
+  # game being played changes the panel constantly; a hung one stops. `last` is the last frame's
+  # `first_usec` (column 5) and `end` is where the run got to, both from the film's own manifest
+  # and the run's `usec` line, so this cannot drift from what the recording says.
+  last=$(awk -F'\t' '/^[0-9]/{n=$5} END{print n+0}' "$out/frames.tsv" 2>/dev/null)
+  end=$(grep -oE "usec [0-9]+" "$out.log" | tail -1 | awk '{print $2}')
+  if [ "${pics:-0}" -lt 8 ]; then
     row doom "$gen" "$label" "shortcut" FAIL "$pics pictures, $fired"
+  elif [ -n "$end" ] && [ "${last:-0}" -lt $((${end:-0} / 2)) ]; then
+    row doom "$gen" "$label" "shortcut" FAIL \
+      "started but not playing: $pics pictures, last drew at $((${last:-0} / 1000000)) s of $((${end:-0} / 1000000)) s — the panel stopped"
+  else
+    row doom "$gen" "$label" "shortcut" PASS \
+      "$pics pictures, still drawing at $((${last:-0} / 1000000)) s, $fired -> $out"
   fi
 }
 
