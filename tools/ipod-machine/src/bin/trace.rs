@@ -16,6 +16,13 @@ use ipod_machine::{EApp, Machine, Stop, Stub};
 const RAM_BASE: u32 = 0x1100_0000;
 const RAM_SIZE: usize = 0x0080_0000; // 8 MB — the 5G has 32/64 MB, this is ample for a trace
 
+/// `COP_STATUS` — ledger #7's address. `ipod_machine::map_hardware` forces bit 31 (`COPSLEEPING`)
+/// here as a whole-word read override when there is no second core to report it honestly.
+const COP_STATUS: u32 = 0x6000_7004;
+/// `PLL_STATUS` — ledger #8's address. `map_hardware` ORs bit 31 (locked) into whatever the
+/// register holds; `--no-pll-lock` takes the mask back out again.
+const PLL_STATUS: u32 = 0x6000_603c;
+
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
@@ -364,32 +371,24 @@ fn main() {
     //   receiver never armed.** The oracle is the reason this is a fixed bug and not a shipped one.
     m.mem.second_core = !args.iter().any(|a| a == "--no-second-core");
 
-    // **Say which bypasses are live, every run, without being asked.**
+    // **The bypass banner used to be here, and being here is what was wrong with it.**
     //
-    // `research/04-bypass-ledger.md` names the failure mode exactly: "a reader who greps the
-    // recipe for 'which bypasses am I running' finds one of the four." Three of them are not
-    // in any recipe — they are defaults in code — so the recipe is not the answer and never
-    // was. A number measured under a bypass nobody knew was on is a number that will be
-    // trusted and should not be.
+    // It is printed by [`report_live_bypasses`] now, from the machine as built, at each of the
+    // three points where a run begins. A banner computed from the flags is a statement about
+    // *intent*, and this one was measurably not a statement about the machine:
     //
-    // Printed to stderr so it cannot corrupt a fingerprint being diffed on stdout.
-    {
-        let mut live: Vec<&str> = Vec::new();
-        if args.iter().any(|a| a == "--bcm") {
-            live.push("#6 BCM replies synthesised (--bcm)");
-        }
-        if !m.mem.cop_awake && !m.mem.second_core {
-            live.push("#7 COP forced asleep (--cop-awake turns it off)");
-        }
-        live.push("#8 PLL reported locked (no flag — an OR-mask in lib.rs)");
-        if !m.mem.ide_irq_latch_off {
-            live.push("#9 IDE0_CFG bit 3 latch (--no-ide-irq-latch turns it off)");
-        }
-        eprintln!("bypasses live: {}", live.len());
-        for b in &live {
-            eprintln!("  {b}");
-        }
-    }
+    // - `map_hardware` — which installs ledger #7 and #8 — is called from inside the `--boot-osos`
+    //   block and from inside `--native`, both of them several hundred lines *after* this point.
+    //   So both rows were forecasts of what those calls would do, and neither was ever checked.
+    // - On a run that is neither (a plain eApp image), `map_hardware` is never called at all, and
+    //   the banner still announced `#8 PLL reported locked` and `#9 IDE0_CFG bit 3 latch`.
+    //   Measured 2026-09-06: `trace 1000 --dump=0x6000603c:4` printed that banner over a machine
+    //   whose `0x6000603c` reads `00000000` and appears under `unmapped: 28 reads` — two bypasses
+    //   claimed on a machine that has neither the register nor an ATA device to bypass.
+    //
+    // The failure mode `research/04-bypass-ledger.md` names is "a reader who greps the recipe for
+    // 'which bypasses am I running' finds one of the four", and a banner that answers from the
+    // command line is grepping the recipe with extra steps.
     // --pp-dma-irq=N : which interrupt line the 0x60008000 DMA controller's completion drives.
     m.mem.pp_dma_irq = args
         .iter()
@@ -638,7 +637,7 @@ fn main() {
         }
         // RetailOS implementations touch the same memory the firmware's own boot does — its BSS,
         // SDRAM and peripheral windows. Without these they fault on their first global.
-        map_hardware(&mut m, args.iter().any(|a| a == "--cold-boot"));
+        map_hardware(&mut m, args.iter().any(|a| a == "--cold-boot"), &args);
         println!("binding imports to RetailOS implementations:");
         for (name, bound, total) in m.bind_native(&app, only) {
             let mark = if bound == total {
@@ -654,6 +653,13 @@ fn main() {
     // --call=Framework:index[:arg,arg,...] : invoke one RetailOS implementation directly and
     // report how it terminated. The minimal test of whether firmware functions can run at all
     // outside a booted OS — a whole game exercises hundreds at once and says nothing about which.
+    //
+    // Banner site 1 of 3. This path returns from `main` below, so it is the last chance to say
+    // what the call ran under; the condition keeps it from firing on the runs the other two sites
+    // own, which is why no "already printed" flag is needed.
+    if args.iter().any(|a| a.starts_with("--call=")) {
+        report_live_bypasses(&m);
+    }
     let mut called_directly = false;
     for spec in args.iter().filter_map(|a| a.strip_prefix("--call=")) {
         let mut parts = spec.split(':');
@@ -791,7 +797,7 @@ fn main() {
         // instant a button is pressed. So the test is whether the OS came off the **drive**, which
         // is exactly the distinction `is_os()` draws.
         let os_boot = args.iter().any(|a| a == "--cold-boot") || pending_osos.is_some();
-        map_hardware(&mut m, os_boot);
+        map_hardware(&mut m, os_boot, &args);
         if let Some((data, at)) = pending_osos.take() {
             ipod_machine::place_image(&mut m, at, &data);
             image_placed = true;
@@ -1295,6 +1301,20 @@ fn main() {
                 }
             }
         }
+        // **`--rdval` adds; it does not replace.** `research/04`'s "The A/B is a three-way, because
+        // `--rdval` has a side effect" describes a `trace.rs` in which #7 and #8 were pushed here,
+        // under `if read_overrides.is_empty()`, so that any `--rdval` suppressed both — which made
+        // "drop the recipe's two `--rdval`s" a four-change experiment wearing a two-change label.
+        //
+        // That is no longer the shape. The two models moved into `ipod_machine::map_hardware`,
+        // which runs ~500 lines above this loop, so the guard sees an empty list however many
+        // `--rdval`s follow and this loop only ever appends to it. Measured 2026-09-06 with
+        // `--dump=0x60007004:4 --dump=0x6000603c:4` on a 1 M cold boot: `--no-second-core` and
+        // `--no-second-core --rdval=0x12345678=0xdeadbeef` both read `0x80000000` at both
+        // addresses, and the per-run banner counts `4` in both arms.
+        //
+        // Ablating a built-in model is its own flag now — `--cop-awake` for #7, `--no-pll-lock`
+        // for #8 — and neither has anything to do with what is passed here.
         for spec in args.iter().filter_map(|a| a.strip_prefix("--rdval=")) {
             if let Some((a, v)) = spec.split_once('=') {
                 if let (Some(a), Some(v)) = (parse_addr(a), parse_addr(v)) {
@@ -1522,6 +1542,11 @@ fn main() {
         if m.mem.second_core {
             m.cop.regs[15] = entry;
         }
+        // Banner site 2 of 3, and the one that matters: every number in `research/` comes off this
+        // path. Here rather than 1 100 lines up because `map_hardware`, `--bcm`, `--disk=` and
+        // `--rdval` have all run by now, so the four rows describe the machine that is about to
+        // execute rather than the arguments that were typed at it.
+        report_live_bypasses(&m);
         println!(
             "booting {} at {entry:#010x} (budget {boot_budget}) …",
             if cold { "FLASH (cold)" } else { "OSOS" }
@@ -2765,7 +2790,7 @@ fn main() {
         }
         report_findptr(&args, &m);
         report_dumps(&args, &mut m);
-    report_profile(&m);
+        report_profile(&m);
         report_unmapped(&mut m);
         // This path returns from main, so the shared reporting at the bottom never runs. Without
         // this call --break, --watch and --dump are accepted, do fire, and print nothing — which
@@ -2774,6 +2799,13 @@ fn main() {
         report_ppm(&args, &m);
         return;
     }
+
+    // Banner site 3 of 3: everything the two `return`s above did not take — `--run-loader` and the
+    // plain eApp run. Without `--native` nothing here has called `map_hardware`, so the honest
+    // answer is `bypasses live: 0`, and printing that zero is the point: the banner this replaced
+    // announced #8 and #9 on such a run, over a machine with neither a `PLL_STATUS` register nor
+    // an ATA device. With `--native` the peripheral map *is* built, and then this says so.
+    report_live_bypasses(&m);
 
     if args.iter().any(|a| a == "--run-loader") {
         use arm7tdmi::Bus as _;
@@ -3929,12 +3961,83 @@ fn report_break_watch(m: &mut ipod_machine::Machine) {
     }
 }
 
+/// Say which ledger bypasses are live — **from the machine, not from the command line.**
+///
+/// Called at each of the three points where a run begins (`--call`, `--boot-osos`, and the eApp
+/// path), because those are the last moments at which the answer is still a fact rather than a
+/// forecast. `research/04-bypass-ledger.md` exists so that a number is never published without the
+/// bypasses it was measured under; a banner that reads the flags instead of the machine cannot
+/// serve that, and the version this replaced demonstrably did not — see the note where it stood.
+///
+/// Every row here is a **question asked of `m.mem`**, so it stays true through any reordering of
+/// the argument parsing. That is the property the old banner lacked, and what it cost is on the
+/// record: `research/04` §"The A/B is a three-way, because `--rdval` has a side effect" describes
+/// a build in which any `--rdval` suppressed #7 and #8, and the banner announced them anyway,
+/// because it announced them from the flags. Its A2 control arm — the pair restored by hand with
+/// `--rdval` — was in the same position from the other side: the bypasses were installed and the
+/// banner did not say so. Both arms print what they are now.
+///
+/// Printed to stderr so it cannot corrupt a fingerprint being diffed on stdout.
+fn report_live_bypasses(m: &ipod_machine::Machine) {
+    let mut live: Vec<String> = Vec::new();
+    // #6 asks whether the co-processor model exists, not whether `--bcm` was typed: `--restore=`
+    // brings one back from a snapshot without the flag, and that run is just as synthesised.
+    if m.mem.bcm.is_some() {
+        live.push("#6 BCM replies synthesised (--bcm)".into());
+    }
+    // #7 reports the override itself, wherever it came from — `map_hardware` installs it when the
+    // coprocessor is off, and `--rdval=0x60007004=…` installs the same thing by hand, which is
+    // exactly what `research/04`'s A2 control arm does. The bypass is live either way, and the
+    // banner's job is to say what the run carries, not who asked for it.
+    if let Some(&(_, v)) = m.mem.read_overrides.iter().find(|&&(at, _)| at == COP_STATUS) {
+        live.push(format!(
+            "#7 COP_STATUS {COP_STATUS:#010x} always reads {v:#010x} \
+             (the built-in one comes off with --cop-awake)"
+        ));
+    }
+    if let Some(&(_, mask)) = m.mem.read_or_masks.iter().find(|&&(at, _)| at == PLL_STATUS) {
+        live.push(format!(
+            "#8 PLL_STATUS {PLL_STATUS:#010x} reads with {mask:#010x} forced on \
+             (--no-pll-lock turns it off)"
+        ));
+    }
+    // #9 is ORed in by `Ata::read`, so it is live only where there is an ATA device to OR it into.
+    // A boot with no `--disk=` was claiming it.
+    if m.mem.ata.is_some() && !m.mem.ide_irq_latch_off {
+        live.push("#9 IDE0_CFG bit 3 latch (--no-ide-irq-latch turns it off)".into());
+    }
+    eprintln!("bypasses live: {}", live.len());
+    for b in &live {
+        eprintln!("  {b}");
+    }
+}
+
 /// Map the memory RetailOS code expects — see [`ipod_machine::map_hardware`], which is where it
 /// lives now.
 ///
 /// Moved out of this file when `tools/ipod-gui` became a second front end over the same machine.
 /// Kept as a delegate rather than replaced at the two call sites so that the diff which moved it
-/// proves itself: the body went to the library and nothing here changed but this line.
-fn map_hardware(m: &mut ipod_machine::Machine, cold_boot: bool) {
+/// proved itself: the body went to the library and nothing here changed but that line.
+///
+/// **It takes `args` now, and the reason is ledger #8's missing arm B.** #7 has one — `--cop-awake`
+/// leaves `COP_STATUS` alone and `map_hardware` says so out loud. #8 had none at all: the ledger
+/// row reads "no flag — an OR-mask in `lib.rs`", so the only way to run without it was to edit the
+/// library and rebuild, which is not an ablation anybody performs by accident and so is not one
+/// anybody performs. Removing the mask here rather than in `lib.rs` keeps `ipod-gui` on the model
+/// the part has; this is `trace`'s experiment switch, and `trace` is where the experiments are run.
+///
+/// The removal happens **after** the library has installed it, which is deliberate: the count of
+/// masks actually dropped is printed, so a `--no-pll-lock` that finds nothing to remove reports
+/// `0` instead of implying it ablated something.
+fn map_hardware(m: &mut ipod_machine::Machine, cold_boot: bool, args: &[String]) {
     ipod_machine::map_hardware(m, cold_boot);
+    if args.iter().any(|a| a == "--no-pll-lock") {
+        let before = m.mem.read_or_masks.len();
+        m.mem.read_or_masks.retain(|&(at, _)| at != PLL_STATUS);
+        let dropped = before - m.mem.read_or_masks.len();
+        eprintln!(
+            "ledger #8: PLL_STATUS OR-mask NOT installed (--no-pll-lock) — {dropped} mask(s) \
+             removed at {PLL_STATUS:#010x}"
+        );
+    }
 }
