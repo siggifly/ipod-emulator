@@ -41,6 +41,7 @@ pub use hw::wheel::{ClickWheel, WheelStep, WheelEvent};
 pub use hw::mailbox::{Xmb, Mbx};
 pub use hw::flash::{Nor, NorOp};
 pub use hw::pmu::{Pcf50605};
+pub use hw::wm8758::Wm8758;
 pub use hw::ata::{Ata, PpDmaCtl};
 pub use hw::cop::{Core};
 pub use hw::video::{Bcm, BcmOp};
@@ -685,6 +686,12 @@ pub struct Memory {
     pub i2c_last_reply: (u32, [u8; 4], usize),
     /// The PCF50605 itself, when modelled rather than answered with a fixed byte.
     pub pmu: Option<Pcf50605>,
+    /// The Wolfson WM8758 audio codec. Not an `Option`, unlike every device beside it, and the
+    /// reason is that it cannot change a run: the part answers no read on this bus — measured, see
+    /// [`Wm8758`] — so this model records and returns nothing. A flag would only be a way to
+    /// forget to pass it. It costs one struct on a run that never addresses `0x1a`, and its
+    /// `report()` is empty then.
+    pub wm8758: Wm8758,
     /// The external memory bus controller, when modelled rather than answered with `--rdval`.
     pub xmb: Option<Xmb>,
     /// The click wheel, when modelled rather than answered with zero.
@@ -3041,6 +3048,14 @@ impl Memory {
                 // transfers" was a floor that `NEXT.md` §5 was about to fit a model to.
                 *self.i2c_tally.entry((dev, val, d[0])).or_insert(0) += 1;
                 self.i2c_log.push((dev, val, d));
+                // The codec, ahead of the PMU because it is the shorter case: it consumes the
+                // transfer and produces nothing, so nothing below it has to know it ran. The bus's
+                // own `i2c_tally` keys on `d[0]`, which for this part is a register number and the
+                // ninth bit of a value welded together — it can say how busy `0x1a` is and cannot
+                // say which register. That is what this is for.
+                if dev >> 1 == Wm8758::ADDR {
+                    self.wm8758.transfer(val, d);
+                }
                 // Outside the log cap deliberately. The log is a sample; the device is not, and a
                 // chip that stops answering after 4096 transfers would be a bug that looks exactly
                 // like firmware hanging on real hardware.
@@ -4387,6 +4402,7 @@ impl Machine {
             i2c_reply_dropped: 0,
             i2c_last_reply: (0, [0; 4], 0),
             pmu: None,
+            wm8758: Wm8758::new(),
             xmb: None,
             clickwheel: None,
             nor: None,

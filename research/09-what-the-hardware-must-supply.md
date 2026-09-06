@@ -305,6 +305,36 @@ firmware is actively driving is exactly the kind of thing that has cost this pro
 > than the total: `reg 0x54 ×5 · reg 0x6f ×4 · reg 0x06 ×3 · reg 0x6b ×3`. That is a real register
 > map to check a codec model against, on a boot we already run.
 
+> **Second correction, 2026-09-06: those are not register numbers.** The line above, and `NEXT.md`
+> §5 which quotes it, read the bus tally's third column as a register. It is `d[0]` — the *first
+> byte of the transfer* — and that is a register number only for the PCF50605, where the first byte
+> genuinely is the register pointer. The WM8758 packs a 7-bit register address and a 9-bit value
+> into two bytes, and this repository has Apple's own code for it: [research/17](17-the-boot-matrix.md)
+> §"What it is retrying" disassembles the helper at `0x0015c1cc` as
+> `byte0 = (reg << 1) | ((value >> 8) & 1)`, `byte1 = value & 0xff`. So the four figures decode as
+> **`reg 0x2a ×5 · reg 0x37 ×4 · reg 0x03 ×3 · reg 0x35 ×3`** — and `0x54`, `0x6f` and `0x6b` are
+> not registers this part has at all; a 58-register device has nothing above `R57`.
+> `_debug/syn/hl.log` shows a fifth row the others cut, `0x6c ×3` → `reg 0x36`, bringing the visible
+> part to **18 of the 52**.
+>
+> The decode is checkable rather than asserted. Twelve distinct first bytes are *named* against
+> `dev 0x34` across the captured logs — a floor, not a census: each report shows only its top twelve
+> `(device, register)` pairs and the codec's quieter registers fall below the cut. Of those twelve,
+> the six with their low bit set decode onto `0x06 0x0c 0x34 0x35
+> 0x36 0x37` — and every one of those six is a register with a defined bit-8 function in the
+> Wolfson family map (`CLKSEL`, and the volume-update latch on the DAC and output-volume
+> registers), while the left/right pairs `0x0b`/`0x0c`, `0x34`/`0x35`, `0x36`/`0x37` appear together
+> with the latch on the right-hand write. Under the first-byte-is-the-register reading, seven of the
+> twelve fall off the end of the part.
+>
+> **And nothing on this bus ever reads the codec.** In `_debug/wheel40/clk5.log` the four read CTRL
+> values sum to 1 857, which is `dev 0x11` — the PMU's read address — exactly; the write CTRLs sum
+> to 1 916, which is `dev 0x10` plus `dev 0x34`. Every read went to the PMU. That is what makes a
+> codec model safe to attach unconditionally: it can record and it has nothing to answer, so it
+> cannot move a boot. Fifty captured runs report `dev 0x34  52 transfers`; 46 of them name three of
+> the first bytes, four name `0x6b` as well and two of those also name `0x6c`. That spread is the
+> top-twelve cut moving with the PMU's row counts, not the codec doing different work.
+
 ## ~~The delegate, measured properly~~ — WRONG, retracted 2026-08-13
 
 > **The measurement in this section is an instrument artefact and the conclusion drawn from it does

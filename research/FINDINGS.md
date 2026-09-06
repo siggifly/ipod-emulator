@@ -51,8 +51,8 @@ and nothing dated replaced it.
 | `03-rtxc-and-the-video-coprocessor.md` | The repacker conclusion above is WRONG — the disk i… | 1302 | 57.  The second core was stalled by a read th… `2026-09-05` |
 | `03-rtxc-and-the-video-coprocessor.md` | It renders — ❌ **RETRACTED, see §39** | 1690 | 57.  The second core was stalled by a read th… `2026-09-05` |
 | `09-what-the-hardware-must-supply.md` | What is *not* established — **NOT A MEASUREMENT. `-… | 227 | The delegate, measured properly — WRONG, retr… `2026-08-13` |
-| `09-what-the-hardware-must-supply.md` | The delegate, measured properly — WRONG, retracted… | 308 | A sibling with the field set — which turns ou… `2026-08-13` |
-| `09-what-the-hardware-must-supply.md` | A sibling with the field set — which turns out to b… | 494 | — |
+| `09-what-the-hardware-must-supply.md` | The delegate, measured properly — WRONG, retracted… | 338 | A sibling with the field set — which turns ou… `2026-08-13` |
+| `09-what-the-hardware-must-supply.md` | A sibling with the field set — which turns out to b… | 524 | — |
 | `10-the-resource-image.md` | 3. `APPLEBOOT` blocks once, at @51 764 626, and is… | 944 | 8b. The audit this fix owed, run 2026-08-13 `2026-08-13` |
 | `10-the-resource-image.md` | Addendum 8: posting `0xe0` is not enough — RetailOS… | 1134 | 8b. The audit this fix owed, run 2026-08-13 `2026-08-13` |
 | `10-the-resource-image.md` | 2. Where MP3ExampleTask actually stops, measured to… | 1647 | — |
@@ -154,8 +154,8 @@ and nothing dated replaced it.
 |---|---|---|---|
 | 155 | 2026-08-14 |  | GPIOL, and what it exposed — **RESOLVED 2026-08-14, and both halves below were our ow… |
 | 227 | — | RETRACTED | What is *not* established — **NOT A MEASUREMENT. `--pmu-adc` was a no-op.** |
-| 308 | 2026-08-13 | RETRACTED | The delegate, measured properly — WRONG, retracted 2026-08-13 |
-| 494 | 2026-08-13 | RETRACTED | A sibling with the field set — which turns out to be stale heap — WRONG, retracted 20… |
+| 338 | 2026-08-13 | RETRACTED | The delegate, measured properly — WRONG, retracted 2026-08-13 |
+| 524 | 2026-08-13 | RETRACTED | A sibling with the field set — which turns out to be stale heap — WRONG, retracted 20… |
 
 ### [`10-the-resource-image.md`](10-the-resource-image.md)
 
