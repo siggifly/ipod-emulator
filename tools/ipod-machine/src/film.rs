@@ -272,6 +272,24 @@ impl Film {
 }
 
 /// `2M` / `500k` / `250000`. Same shape as the wheel script's times, deliberately.
+/// The panel as it stands **right now** — its digest, its lit-pixel count, and PNG bytes.
+///
+/// [`Film`] records a run; this is for a caller that wants to look at one moment. The difference
+/// matters for an interactive driver: after a button press the only question is "did the screen
+/// change, and to what", and answering it by starting a film and finishing it would write a
+/// directory and a manifest to learn one number.
+///
+/// **Same reader and same digest as [`Film::sample`]**, deliberately — a still taken here and a
+/// film frame of the same moment must agree, or the two instruments would disagree about whether
+/// a panel changed and there would be no way to tell which was lying.
+pub fn shot(bcm: &crate::Bcm, base: u32, w: u32, h: u32) -> (u64, u32, Vec<u8>) {
+    let px = read_surface(bcm, base, w, h);
+    let digest = fnv1a(&px);
+    let nonblack = px.iter().filter(|v| **v != 0).count() as u32;
+    let rgb = to_rgb888(&px);
+    (digest, nonblack, crate::png::encode(&rgb, w as usize, h as usize))
+}
+
 pub fn parse_count(t: &str) -> Option<u64> {
     let t = t.replace('_', "");
     let (digits, mul) = match t.strip_suffix(['k', 'K']) {

@@ -1563,7 +1563,12 @@ fn main() {
         // measured arm of that claim is in `tools/ipod-film/README.md`: the same recipe filmed and
         // unfilmed reaches Idle at the same instruction, with the same buckets, ATA commands and
         // final frame digest.
-        let stop = match film.as_mut() {
+        // **`--drive` replaces the run with a command loop**, and it is the only mode here that is
+        // not batch. See `drive()` for why that is worth a flag.
+        let stop = if args.iter().any(|a| a == "--drive") {
+            drive(&mut m, entry, restored, boot_budget)
+        } else {
+        match film.as_mut() {
             None => {
                 if restored {
                     m.run(boot_budget)
@@ -1599,6 +1604,7 @@ fn main() {
                 }
                 stop
             }
+        }
         };
         if let Some(spec) = snap_spec {
             if let Some((_, path)) = spec.split_once(':') {
@@ -4040,4 +4046,206 @@ fn map_hardware(m: &mut ipod_machine::Machine, cold_boot: bool, args: &[String])
              removed at {PLL_STATUS:#010x}"
         );
     }
+}
+
+/// **Drive the machine from stdin instead of running it to a budget.**
+///
+/// Every other mode here is batch: you state the whole wheel script in advance, wait for the run,
+/// and read what happened. That is right for a measurement and wrong for finding anything out. The
+/// menu descent this project spent an afternoon on went guess -> 30-minute run -> read the film ->
+/// discover it landed on the wrong menu -> guess again, three times, because there was no way to
+/// press a button and look.
+///
+/// The command that makes it worth having is `until-change`: run until the panel is different, then
+/// stop. It turns "did that do anything?" from a batch run into an answer.
+///
+/// Input is delivered by **appending to the wheel script**, not by a second path into the device —
+/// `ClickWheel`'s firing loop takes the next step whenever it is due, so a step appended with a
+/// time just ahead of now is delivered exactly as a scripted one is. A driver with its own
+/// injection path would be a second way to press a button, and the two would drift.
+fn drive(m: &mut Machine, entry: u32, restored: bool, ceiling: usize) -> Stop {
+    use std::io::{BufRead, Write};
+    const BASE: u32 = 0x000e_0000;
+    const W: u32 = 320;
+    const H: u32 = 240;
+    /// One slice. Small enough that `until-change` reports promptly, large enough that the
+    /// per-call cache drop is noise.
+    const SLICE: usize = 500_000;
+
+    let mut entered = restored;
+    let mut left = ceiling;
+    let mut last = Stop::BudgetExhausted;
+
+    // Run one slice, entering the OS on the first if this is not a restored machine.
+    macro_rules! slice {
+        ($n:expr) => {{
+            let n = $n.min(left);
+            if n == 0 {
+                Stop::BudgetExhausted
+            } else {
+                let st = if entered {
+                    m.run(n)
+                } else {
+                    entered = true;
+                    m.call_with(entry, &[0, 0, 0, 0], n)
+                };
+                left -= n;
+                st
+            }
+        }};
+    }
+    // **Simulated microseconds, and the suffix is not optional.** The first version of this used
+    // `film::parse_count`, which knows `k`/`M` and not `s`/`ms` — so `wait 2s` parsed to zero,
+    // ran nothing, and printed a state identical to the one before it. It looked like a machine
+    // that would not advance. A bare number is refused rather than guessed at, because guessing
+    // is how `@1500M` came to mean two different things.
+    fn usecs(t: &str) -> Option<u64> {
+        let t = t.trim();
+        if let Some(d) = t.strip_suffix("ms") {
+            return d.parse::<u64>().ok().map(|v| v * 1_000);
+        }
+        if let Some(d) = t.strip_suffix("us") {
+            return d.parse::<u64>().ok();
+        }
+        if let Some(d) = t.strip_suffix('s') {
+            return d.parse::<u64>().ok().map(|v| v * 1_000_000);
+        }
+        None
+    }
+    let shot = |m: &Machine| -> Option<(u64, u32, Vec<u8>)> {
+        m.mem.bcm.as_ref().map(|b| ipod_machine::film::shot(b, BASE, W, H))
+    };
+    let say_state = |m: &Machine| {
+        let d = shot(m).map(|(d, n, _)| format!("digest {d:#018x} lit {n}")).unwrap_or_else(|| "no panel".into());
+        println!(
+            "state: usec {} ({:.1} s)  executed {}  pc {:#010x}  {d}",
+            m.mem.usec,
+            m.mem.usec as f64 / 1e6,
+            m.executed,
+            m.cpu.regs[15]
+        );
+    };
+
+    println!("drive: ready. commands: state · wait N[s|ms] · press BTN · rotate ±N · touch · release · until-change [Ns] · screen PATH · snapshot PATH · quit");
+    say_state(m);
+    let _ = std::io::stdout().flush();
+
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        let mut it = line.split_whitespace();
+        let Some(cmd) = it.next() else { continue };
+        let arg = it.next().unwrap_or("");
+        match cmd {
+            "quit" | "q" => break,
+            "state" => say_state(m),
+            // Input goes in as scripted steps a little ahead of now, in the same units the rest of
+            // the script uses, so the firing loop delivers them the way it delivers everything.
+            "press" | "touch" | "release" | "rotate" | "hold" => {
+                let at = m.mem.usec as u64;
+                let mut push = |ev: ipod_machine::WheelEvent, delay: u64| {
+                    if let Some(w) = m.mem.clickwheel.as_mut() {
+                        w.script.push(ipod_machine::WheelStep { at: at + delay, in_usec: true, event: ev });
+                    }
+                };
+                match cmd {
+                    "touch" => push(ipod_machine::WheelEvent::Touch, 1000),
+                    "release" => push(ipod_machine::WheelEvent::Release, 1000),
+                    "hold" => push(ipod_machine::WheelEvent::Hold(arg != "off"), 1000),
+                    "rotate" => {
+                        let n: i32 = arg.parse().unwrap_or(0);
+                        let dir: i8 = if n < 0 { -1 } else { 1 };
+                        push(ipod_machine::WheelEvent::Touch, 1000);
+                        for k in 0..n.unsigned_abs() as u64 {
+                            push(ipod_machine::WheelEvent::Step(dir), 20_000 + k * 20_000);
+                        }
+                        push(ipod_machine::WheelEvent::Release, 20_000 + (n.unsigned_abs() as u64 + 20) * 20_000);
+                    }
+                    _ => match ipod_machine::wheel_button(arg) {
+                        // A press is down, a gap, then up — a firmware that polls cannot see a
+                        // down and up delivered in the same instant.
+                        Some(mask) => {
+                            push(ipod_machine::WheelEvent::Touch, 1000);
+                            push(ipod_machine::WheelEvent::Button(mask, true), 150_000);
+                            push(ipod_machine::WheelEvent::Button(mask, false), 450_000);
+                            push(ipod_machine::WheelEvent::Release, 600_000);
+                        }
+                        None => println!("press: unknown button {arg:?}"),
+                    },
+                }
+                println!("ok: queued {cmd} {arg}");
+            }
+            "wait" => {
+                // `wait 5s` is five seconds of the IPOD's clock — the only clock a person means,
+                // and the one the firmware's own timers run on.
+                let Some(want) = usecs(arg) else {
+                    println!("wait: needs a time with a unit, like `wait 5s` / `wait 250ms`");
+                    continue;
+                };
+                let target = m.mem.usec as u64 + want;
+                while (m.mem.usec as u64) < target && left > 0 {
+                    last = slice!(SLICE);
+                    if !matches!(last, Stop::BudgetExhausted) {
+                        break;
+                    }
+                }
+                say_state(m);
+            }
+            "until-change" | "u" => {
+                let Some(cap) = usecs(if arg.is_empty() { "300s" } else { arg }) else {
+                    println!("until-change: needs a time with a unit, like `until-change 400s`");
+                    continue;
+                };
+                let start = shot(m).map(|(d, _, _)| d);
+                let deadline = m.mem.usec as u64 + cap;
+                let mut changed = false;
+                while left > 0 && (m.mem.usec as u64) < deadline {
+                    last = slice!(SLICE);
+                    if shot(m).map(|(d, _, _)| d) != start {
+                        changed = true;
+                        break;
+                    }
+                    if !matches!(last, Stop::BudgetExhausted) {
+                        break;
+                    }
+                }
+                // Says which of the three ways it stopped, because "no change" and "ran out" are
+                // different answers and a driver that conflated them would be the fifth instrument
+                // in this project to report an absence it could not observe.
+                println!(
+                    "{}",
+                    if changed {
+                        "changed"
+                    } else if left == 0 {
+                        "UNCHANGED — ceiling reached, the run is out of budget"
+                    } else {
+                        "UNCHANGED — deadline reached, the panel held"
+                    }
+                );
+                say_state(m);
+            }
+            "screen" => match shot(m) {
+                Some((_, _, png)) if !arg.is_empty() => match std::fs::write(arg, &png) {
+                    Ok(()) => println!("ok: wrote {arg} ({} bytes)", png.len()),
+                    Err(e) => println!("screen {arg}: {e}"),
+                },
+                Some(_) => println!("screen: needs a path"),
+                None => println!("screen: no co-processor — add --bcm"),
+            },
+            "snapshot" => {
+                let raw = m.snapshot();
+                let img = ipod_machine::pack::pack(&raw);
+                match std::fs::write(arg, &img) {
+                    Ok(()) => println!("ok: snapshot -> {arg} ({} bytes)", img.len()),
+                    Err(e) => println!("snapshot {arg}: {e}"),
+                }
+            }
+            other => println!("drive: unknown command {other:?}"),
+        }
+        let _ = std::io::stdout().flush();
+    }
+    last
 }
