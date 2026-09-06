@@ -2952,12 +2952,13 @@ fn wire(
             // window implementation replaces these four lines and changes nothing in either file.
             let weak = window.as_weak();
             let view: trackpad::View = Rc::new(move || ns_view(weak.upgrade()?.window()));
-            let _ = &can;
             can.available().then(|| trackpad::install(view, act)).flatten()
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = (&can, &act);
+            // `act` is the machine half and is built unconditionally, because everything above it
+            // is platform-free; on a build with no adapter to hand it to, this is what says so.
+            drop(act);
             None
         }
     };
