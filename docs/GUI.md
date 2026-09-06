@@ -3345,6 +3345,16 @@ their absence reads as a carve-out rather than an omission:
   thing this thesis must not become. The socket is additionally **absent by default on purpose**: *a
   socket that appears without being asked for is an interface nobody audited, on a program that reads
   a NOR dump and a drive image.*
+
+  **The socket has no drawn surface and it does have a flag**, and the distinction is the whole of
+  what this section carves out. `--control=PATH` binds it before the window opens and for as long as
+  the process lives; nothing about it is drawn, and none of the answers it gives — `peek`, `trace`,
+  `pmu`, `writes`, `bus` — has a row anywhere in this document. What it is *for* is the one thing the
+  window cannot otherwise do: a drawn canvas publishes no accessibility elements, so an agent, an
+  automated test or a film has no way at all to scroll the wheel or press a button from outside. Absent
+  by default and reachable when asked for are the same posture; absent by default and reachable by
+  nothing is not, and that is what shipped — `control.rs` held a working protocol whose `serve` had no
+  caller, under a `--control=` the command line refused as belonging to `trace`.
 - `put-zip` and `put-files`, because they modify the disk they are given, which is a different
   contract from everything else here. **And because they do**, a device whose image they touched
   between sessions has a broken snapshot pair — which §7.3 and §12.4 now say out loud rather than

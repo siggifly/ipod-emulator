@@ -50,15 +50,33 @@ use crate::{bundle, update};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Cli {
     /// Open the window — the only path that reaches the toolkit. Carries the four flags that
-    /// configure the machine it will start; all-`false` is a plain launch.
-    Window(Machine),
+    /// configure the machine it will start (all-`false` is a plain launch), and the one flag that
+    /// configures no machine at all: whether this launch can be reached from outside.
+    Window {
+        launch: Machine,
+        /// `--control=PATH`: bind a control socket there before the window opens.
+        ///
+        /// **Not a [`Machine`] field, and the reason is the test that struct's own doc applies.**
+        /// `--cold`, `--clock=`, `--second-core` and `--charger` each write onto an
+        /// `emu::Config`; this one writes onto nothing, because it is not a property of the
+        /// machine but of the *process* — a second way in, for whoever is not sitting in front of
+        /// the window. `None` is a launch nothing outside can reach, which stays the default.
+        control: Option<PathBuf>,
+    },
     /// Run N instructions with no window and print the fingerprint, then exit.
     ///
     /// **The self-check that this front end and `retail-boot.sh` are running the same machine.**
     /// The disagreement between the two is what `emu.rs`'s own header says this flag exists to make
     /// *"a number rather than an impression"*, and it was refused for as long as nothing called
     /// `emu::run`.
-    Headless { machine: Machine, budget: u64 },
+    Headless {
+        machine: Machine,
+        budget: u64,
+        /// `--control=PATH`, the same socket. A headless run is the only launch an automated
+        /// test can make with no display at all, so it is the one that most needs driving —
+        /// and a driven run's fingerprint is not a boot's, which [`run`] says out loud.
+        control: Option<PathBuf>,
+    },
     /// Print [`HELP`] and exit 0.
     Help,
     /// Ask GitHub for the latest release. Exit 0 whether or not the network answers.
@@ -169,8 +187,14 @@ enum Gone {
     /// *"These are terminal instruments for a person already holding a hypothesis, and putting them
     /// in a window would make it a debugger — which is the one thing this thesis must not become."*
     /// `trace` and `ipod-boot` take them, this binary does not, and that is a boundary rather than
-    /// a gap. The control socket is additionally absent by default on purpose: *a socket that
-    /// appears without being asked for is an interface nobody audited.*
+    /// a gap.
+    ///
+    /// **`--control=` was in here and is not any more.** Its sentence read *"a socket that appears
+    /// without being asked for is an interface nobody audited"*, which is an argument for the
+    /// socket being **opt-in** and was doing duty as an argument for it being **unreachable**:
+    /// `control.rs` shipped a working protocol that nothing could open, under a refusal saying it
+    /// belonged to `trace`. It does not — `trace --drive` drives `trace`'s own machine from stdin,
+    /// and cannot see the window's. Opt-in it stays; refused it no longer is.
     Instrument,
 }
 
@@ -213,6 +237,10 @@ pub const FLAGS: &[&str] = &[
     "--second-core",
     "--no-second-core",
     "--charger",
+    // **The sixth, and it configures no machine.** It says this launch may be driven by something
+    // that is not a person — which is a property of the process, so it rides beside [`Machine`]
+    // on both verbs that start one rather than inside it.
+    "--control=",
 ];
 
 /// The flags the window before this one took, and why each is absent.
@@ -221,9 +249,10 @@ pub const FLAGS: &[&str] = &[
 /// and what `config` and `main` actually read. The zenity and kdialog arguments that file also
 /// spelled with two dashes are not flags of this program and are not here.
 ///
-/// **It was thirty-nine and is thirty-four**, and the five that left are the ones whose stated
+/// **It was thirty-nine and is thirty-three**, and the six that left are the ones whose stated
 /// reason expired: `--headless=`, `--cold`, `--clock=`, `--second-core` and `--charger` were
-/// refused with *"this build starts no machine yet"*, and this build starts machines. The rest are
+/// refused with *"this build starts no machine yet"*, and this build starts machines; `--control=`
+/// was refused as an instrument belonging to `trace`, and `trace` has never had it. The rest are
 /// re-sorted onto [`Gone::Device`] and [`Gone::Instrument`] — two answers that are true of them
 /// rather than one that stopped being.
 const RETIRED: &[(&str, Gone)] = &[
@@ -231,7 +260,6 @@ const RETIRED: &[(&str, Gone)] = &[
     // §12.5's `Start into` rows, on the device's drawer page.
     ("--boot=", Gone::Device),
     ("--clock-v3", Gone::Instrument),
-    ("--control=", Gone::Instrument),
     ("--cop-awake", Gone::Instrument),
     // `Device::work_on_copy`. §11.2 writes it, §11.4 draws it, and `machine_config` reads it.
     ("--copy", Gone::Device),
@@ -312,6 +340,17 @@ And these open the window as usual, and configure the machine it starts:
   --charger               plug the mains in — the only configuration in which there is a
                           charging screen to return to
 
+And one that configures no machine at all:
+
+  --control=PATH          bind a control socket at PATH, before the window opens and for as
+                          long as the process lives. A drawn window publishes no accessibility
+                          elements, so this is the only way anything that is not a person can
+                          scroll the wheel, press a button, read a word of memory or take a
+                          screenshot. Absent unless asked for. Connect to the Unix socket, one
+                          command per line, and type `help` for the vocabulary. Legal beside
+                          --headless=N too, which is the one launch that needs no display —
+                          and a run somebody drove is a run whose fingerprint is not a boot's
+
 Every other flag the window before this one took either drove the window that was replaced,
 says something about a device (which the library holds, beside the device), or is a
 measurement instrument that belongs to trace and ipod-boot. Naming one says which and exits
@@ -343,6 +382,10 @@ pub fn parse(args: &[String]) -> Cli {
     // refused below for the same reason `--flash=` beside `--make-app` is.
     let mut machine = Machine::default();
     let mut asked_for_machine = false;
+    // The socket is neither a verb nor a machine flag: it rides on whichever of the two verbs that
+    // start a machine came out of the line, and beside anything else it would be a flag read by
+    // nothing — which is refused below, exactly as `--cold` beside `--check-update` is.
+    let mut control: Option<PathBuf> = None;
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
@@ -363,6 +406,7 @@ pub fn parse(args: &[String]) -> Cli {
                     Ok(budget) => Some(Cli::Headless {
                         machine: Machine::default(),
                         budget,
+                        control: None,
                     }),
                 }
             }
@@ -404,7 +448,25 @@ pub fn parse(args: &[String]) -> Cli {
             i += 1;
             continue;
         }
-        if let Some(p) = a.strip_prefix("--flash=") {
+        if let Some(p) = a.strip_prefix("--control=") {
+            // **Not a verb**: it opens nothing on its own and it does not decide what this launch
+            // is. It sits here with the operands and the machine flags because it is one — a
+            // modifier on whichever verb the rest of the line names.
+            //
+            // **An empty path is refused rather than bound.** `UnixListener::bind("")` fails with
+            // a message about a file nobody named, and a launch that typed `--control=` meaning
+            // `--control=/tmp/ipod.sock` would read that as the socket being unavailable rather
+            // than as the line being wrong.
+            if p.is_empty() {
+                return Cli::Refused(
+                    "--control=: where to bind the socket is not optional. \
+                     `--control=/tmp/ipod.sock`, and whatever is already at that path is replaced \
+                     — a stale socket is litter, not a lock."
+                        .into(),
+                );
+            }
+            control = Some(PathBuf::from(p));
+        } else if let Some(p) = a.strip_prefix("--flash=") {
             flash = Some(PathBuf::from(p));
         } else if let Some(p) = a.strip_prefix("--disk=") {
             disk = Some(PathBuf::from(p));
@@ -446,6 +508,19 @@ pub fn parse(args: &[String]) -> Cli {
     }
 
     match verb {
+        // **First, because the two arms below it would swallow it.** A socket asked for beside a
+        // verb that starts no machine would answer `state` with *nothing on the bench* for as long
+        // as the process lived, and `--check-images` lives for milliseconds: an interface that is
+        // technically there and can never be used. Same rule as the machine flags one arm down,
+        // and it has to be tested first because `--check-images` has an arm of its own that
+        // returns before any general guard could see it.
+        Some(ref v) if control.is_some() && !matches!(v, Cli::Headless { .. }) => {
+            Cli::Refused(format!(
+                "--control= opens a socket onto a running machine, and `{}` starts none. It goes \
+                 on a plain launch — the window — or beside --headless=N.",
+                name_of(v)
+            ))
+        }
         Some(Cli::CheckImages { .. }) if asked_for_machine => Cli::Refused(
             "--cold, --clock=, --second-core and --charger configure a machine, and \
              --check-images starts none: it parses two files and exits."
@@ -454,8 +529,10 @@ pub fn parse(args: &[String]) -> Cli {
         Some(Cli::CheckImages { .. }) => Cli::CheckImages { flash, disk },
         // The four ride on whichever verb starts a machine. `--headless=` is the only one that is
         // not the window, and it takes the same four for the same reason: a fingerprint taken at a
-        // different clock is a different number.
-        Some(Cli::Headless { budget, .. }) => Cli::Headless { machine, budget },
+        // different clock is a different number. `--control=` rides with them, for the reason its
+        // own field says: it is the process's, and both of these verbs make a process with a
+        // machine in it.
+        Some(Cli::Headless { budget, .. }) => Cli::Headless { machine, budget, control },
         // …and a machine flag beside a verb that starts nothing is an unread flag, which is the
         // whole defect this file exists to remove.
         Some(v) if asked_for_machine => Cli::Refused(format!(
@@ -476,14 +553,14 @@ pub fn parse(args: &[String]) -> Cli {
             }
         )),
         Some(v) => v,
-        None => Cli::Window(machine),
+        None => Cli::Window { launch: machine, control },
     }
 }
 
 /// The flag a verb was spelled with, for a message that has to name two of them.
 fn name_of(v: &Cli) -> &'static str {
     match v {
-        Cli::Window(_) => "(none)",
+        Cli::Window { .. } => "(none)",
         Cli::Headless { .. } => "--headless=",
         Cli::Help => "--help",
         Cli::CheckUpdate => "--check-update",
@@ -558,7 +635,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     match cli {
         // The one path that reaches the toolkit does not come through here at all — `main` matches
         // it off before calling this, so nothing in this file can open a window by accident.
-        Cli::Window(_) => 0,
+        Cli::Window { .. } => 0,
         // ── `--headless=N`: the self-check, and it is the reason this flag came back ────────────
         //
         // `emu.rs`'s own header: *"a GUI that runs the machine differently from the recipes is a
@@ -571,7 +648,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         // machine out of the same library. `--flash=` and `--disk=` deliberately do not reach it —
         // they are `--check-images`'s operands, and a second way to name a machine's parts is the
         // thing this file exists to stop.
-        Cli::Headless { machine, budget } => {
+        Cli::Headless { machine, budget, control } => {
             let saved = Settings::load();
             let Some(name) = saved.current.clone() else {
                 let _ = writeln!(
@@ -602,10 +679,45 @@ pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 cfg.clock,
                 if cfg.one_core { ", ONE core" } else { ", two cores" }
             );
+            // **The socket, if this launch asked to be driven.** It goes up before the machine
+            // runs and it is fatal if it cannot: a headless run that was asked for a socket and
+            // silently produced none would look, from the outside, exactly like a socket nobody
+            // could connect to — which is the defect this flag exists to close.
+            let link = crate::emu::Link::new();
+            if let Some(path) = control {
+                // **A driven run must not stop itself for being idle, and this line was measured
+                // rather than reasoned.** `emu::build` arms `stop_when_idle = 400_000_000` for
+                // every headless run, because the self-check has to be comparable to
+                // `retail-boot.sh --stop-when-idle=400000000`. A driver is idle by nature — it
+                // waits for a person or a script to decide the next command — so the first
+                // driven run ended itself with `Idle after 528079424 instructions` mid-session
+                // and took the socket with it: a connection dropped, from the outside, exactly
+                // like a socket that had never worked. Comparability is already forfeit here (the
+                // sentence below says so), so the heuristic buys nothing and costs the session.
+                cfg.no_idle_stop = true;
+                crate::control::attach(&link);
+                if let Err(why) = crate::control::serve(path) {
+                    let _ = writeln!(err, "--control: {why}");
+                    return 2;
+                }
+                let _ = writeln!(out, "{}", crate::control::listening(path));
+                // **Said out loud, because the number below stops being what it says it is.**
+                // `--headless=N` is the self-check whose fingerprint is compared against
+                // `retail-boot.sh` line for line; a wheel click delivered through the socket makes
+                // the machine execute code that a boot does not. A driven run may still be
+                // measured — it just cannot be compared to one nobody touched.
+                let _ = writeln!(
+                    out,
+                    "headless: this run can be driven from outside, so its fingerprint is \
+                     comparable only to another driven run — and it will not stop itself for \
+                     being idle, because a driver waiting for its next command is not a machine \
+                     that has finished."
+                );
+            }
             // The report goes to `println!` inside the run loop rather than into `out`, because it
             // is the same `report_headless` every other front end prints and reformatting it here
             // would make two spellings of one measurement.
-            crate::emu::run(cfg, crate::emu::Link::new());
+            crate::emu::run(cfg, link);
             0
         }
         Cli::Help => {
@@ -792,7 +904,14 @@ mod tests {
                 // **A machine flag's answer IS a window** — and it has to be one that carries the
                 // flag. A `Machine::default()` here means the word was accepted and dropped, which
                 // is the shape this whole file exists to delete: it looks exactly like working.
-                Cli::Window(m) if m == Machine::default() => {
+                //
+                // `control` is held to the same standard and by the same arm: `--control=x` parses
+                // to a window too, and a window with `control: None` is the flag having been read
+                // into nothing. That is precisely how `--control=` shipped — accepted by nobody,
+                // refused by `RETIRED`, and served by a `serve` with no caller.
+                Cli::Window { launch, control }
+                    if launch == Machine::default() && control.is_none() =>
+                {
                     refused.push(format!("`{line}` -> opened a window and dropped the flag"))
                 }
                 _ => {}
@@ -808,7 +927,10 @@ mod tests {
 
     #[test]
     fn no_arguments_opens_the_window() {
-        assert_eq!(parse(&[]), Cli::Window(Machine::default()));
+        assert_eq!(
+            parse(&[]),
+            Cli::Window { launch: Machine::default(), control: None }
+        );
     }
 
     /// **The four that configure a machine reach one, and each reaches exactly its own field.**
@@ -820,7 +942,7 @@ mod tests {
     #[test]
     fn the_four_machine_flags_each_reach_their_own_field_and_no_other() {
         let win = |line: &str| match parse(&argv(line)) {
-            Cli::Window(m) => m,
+            Cli::Window { launch, .. } => launch,
             other => panic!("`{line}` -> {other:?}"),
         };
         assert_eq!(win("--cold"), Machine { cold: true, ..Machine::default() });
@@ -893,7 +1015,11 @@ mod tests {
         }
         assert_eq!(
             parse(&argv("--headless=200000000")),
-            Cli::Headless { machine: Machine::default(), budget: 200_000_000 }
+            Cli::Headless {
+                machine: Machine::default(),
+                budget: 200_000_000,
+                control: None,
+            }
         );
         // The four ride on `--headless=` too: a fingerprint taken at a different clock is a
         // different number, and a self-check that silently used the default would be comparing two
@@ -903,8 +1029,92 @@ mod tests {
             Cli::Headless {
                 machine: Machine { clock: Some(5), cores: Some(true), ..Machine::default() },
                 budget: 200_000_000,
+                control: None,
             }
         );
+    }
+
+    /// **The socket reaches the two verbs that start a machine, and lands on neither's fields.**
+    ///
+    /// It is the one flag here that configures nothing: `Machine::apply` must not learn about it,
+    /// or the process's business would be written onto the machine's config — which is exactly the
+    /// boundary [`Machine`]'s own doc draws to decide what may be a flag at all.
+    #[test]
+    fn the_control_socket_rides_on_both_verbs_that_start_a_machine() {
+        assert_eq!(
+            parse(&argv("--control=/tmp/ipod.sock")),
+            Cli::Window {
+                launch: Machine::default(),
+                control: Some(PathBuf::from("/tmp/ipod.sock")),
+            }
+        );
+        // Beside the machine flags, which is the normal shape: a cold boot somebody wants to watch.
+        assert_eq!(
+            parse(&argv("--cold --clock=5 --control=/tmp/ipod.sock")),
+            Cli::Window {
+                launch: Machine { cold: true, clock: Some(5), ..Machine::default() },
+                control: Some(PathBuf::from("/tmp/ipod.sock")),
+            }
+        );
+        assert_eq!(
+            parse(&argv("--headless=200000000 --control=/tmp/ipod.sock")),
+            Cli::Headless {
+                machine: Machine::default(),
+                budget: 200_000_000,
+                control: Some(PathBuf::from("/tmp/ipod.sock")),
+            }
+        );
+        // And it reaches no field of the machine, which is the half a test can get wrong by
+        // agreeing with itself: `apply` writes four fields and a socket is not one of them.
+        let mut cfg = crate::emu::Config::default();
+        let before = (cfg.cold, cfg.one_core, cfg.charger, cfg.clock);
+        let Cli::Window { launch, .. } = parse(&argv("--control=/tmp/ipod.sock")) else {
+            panic!("a socket on its own is still a window")
+        };
+        launch.apply(&mut cfg);
+        assert_eq!((cfg.cold, cfg.one_core, cfg.charger, cfg.clock), before);
+    }
+
+    /// **`--control=` was refused as an instrument belonging to `trace`, and `trace` has never had
+    /// one.** The refusal is gone; the two spellings that are still wrong are still answered.
+    #[test]
+    fn the_socket_is_no_longer_refused_and_its_two_wrong_spellings_still_are() {
+        assert!(
+            !RETIRED.iter().any(|(f, _)| *f == "--control="),
+            "a flag cannot be live and retired"
+        );
+        // The empty path: bound, it would fail with a message about a file nobody named.
+        let r = parse(&argv("--control="));
+        assert!(
+            matches!(&r, Cli::Refused(w) if w.contains("/tmp/ipod.sock")),
+            "{r:?} should name the shape that works"
+        );
+        // Detached, it is the spelling correction every other `=` flag gets.
+        let r = parse(&argv("--control /tmp/ipod.sock"));
+        assert!(
+            matches!(&r, Cli::Refused(w) if w.contains("--control=FILE")),
+            "{r:?}"
+        );
+    }
+
+    /// **A socket beside a verb that starts no machine is refused rather than bound.**
+    ///
+    /// `--check-images` has its own arm in the tail match and returns before any general guard
+    /// could see it, so this is not the same assertion as the machine flags' one below — it is the
+    /// one that catches the socket being silently dropped by that early return.
+    #[test]
+    fn the_socket_refuses_beside_a_verb_that_runs_no_machine() {
+        for (line, verb) in [
+            ("--check-update --control=/tmp/s", "--check-update"),
+            ("--check-images --control=/tmp/s", "--check-images"),
+            ("--make-app dist --control=/tmp/s", "--make-app"),
+        ] {
+            let r = parse(&argv(line));
+            assert!(
+                matches!(&r, Cli::Refused(w) if w.contains("--control=") && w.contains(verb)),
+                "`{line}` -> {r:?}"
+            );
+        }
     }
 
     /// **A machine flag beside a verb that starts no machine is refused, not read into nothing.**
@@ -996,14 +1206,14 @@ mod tests {
     /// than ignored, and — the half that actually matters — none of them may reach
     /// [`Cli::Window`], because a window opening is how an ignored flag looks like a working one.
     ///
-    /// **The floor is 34 and was 39.** The five that left are `--headless=`, `--cold`, `--clock=`,
-    /// `--second-core` and `--charger`, which this build now honours: they moved to [`FLAGS`],
-    /// where `every_flag_in_the_table_is_one_the_parser_answers` holds them to the opposite
-    /// standard. A flag cannot be in both tables — `no_flag_is_both_live_and_retired` is what says
-    /// so — so the two floors together are the whole count.
+    /// **The floor is 33 and was 39.** The six that left are `--headless=`, `--cold`, `--clock=`,
+    /// `--second-core`, `--charger` and `--control=`, which this build now honours: they moved to
+    /// [`FLAGS`], where `every_flag_in_the_table_is_one_the_parser_answers` holds them to the
+    /// opposite standard. A flag cannot be in both tables — `a_flag_is_either_live_or_retired`
+    /// is what says so — so the two floors together are the whole count.
     #[test]
     fn every_flag_the_old_window_took_is_answered_rather_than_ignored() {
-        assert!(RETIRED.len() >= 34, "the table holds {}", RETIRED.len());
+        assert!(RETIRED.len() >= 33, "the table holds {}", RETIRED.len());
         let mut wrong: Vec<String> = Vec::new();
         for (flag, _) in RETIRED {
             let line = if flag.ends_with('=') {

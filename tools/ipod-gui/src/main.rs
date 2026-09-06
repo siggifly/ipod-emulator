@@ -30,11 +30,19 @@
 // `unsafe` call into a platform nobody can run is worse than a gap somebody can read about.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-// **This module is not dead. It is not yet reconnected.**
+// **`control` is off this list, and the note it carried was wrong about itself.**
 //
-// The view layer that called it went with `main.rs` when the old window was deleted, and it comes
-// back as its surface is rebuilt: `control` with the readout Rail (§12.8). Its own tests still run,
-// so this is unreferenced code and not unverified code.
+// It said the module was *"not yet reconnected"* and would come back *"with the readout Rail
+// (§12.8)"*. The Rail landed; the socket did not, because nothing in that surface was ever going
+// to call it — a control socket is not drawn. Meanwhile the blanket did what a blanket does:
+// `serve`, `session` and `command` sat under it unreferenced and unwarned, while `args.rs` refused
+// `--control=` as a flag belonging to `trace`, which has never had one. Removing the attribute
+// printed three `never used` warnings — which is what a retirement condition is supposed to make
+// visible, and what this one hid.
+//
+// It is wired now: `--control=PATH` binds the socket in `fn main` below, and `start_machine`,
+// `start_title` and `Live::drop` are the three lines that keep `control`'s bench saying what is
+// actually running.
 //
 // **`png` came off that list with §12.4.** `png::encode` writes the frame a parked device's glass
 // shows and the Readout's `Screenshot the panel` row, so the module is reached from the shipped
@@ -72,7 +80,6 @@
 // **`update` used to be a fifth and is not any more.** `--check-update` calls it, so the module
 // is reachable in the shipped binary and its allow came off; the one item still waiting for §17's
 // Reference page carries its own condition, beside itself, where it can be read.
-#[allow(dead_code)]
 mod control;
 mod emu;
 mod png;
@@ -306,10 +313,24 @@ fn main() -> Result<(), slint::PlatformError> {
     // `--cold`, `--clock=`, `--second-core` and `--charger` open the window as usual and configure
     // the machine it starts, and they reach `machine_config` by being handed to `wire`. A launch
     // flag read out of a global would be the one thing no test could see.
-    let args::Cli::Window(launch) = cli else {
+    let args::Cli::Window { launch, control } = cli else {
         let code = args::run(&cli, &mut std::io::stdout(), &mut std::io::stderr());
         std::process::exit(code);
     };
+
+    // **Before the window, and fatal if it cannot bind.** A drawn window publishes no
+    // accessibility elements, so this socket is the only route into this process for anything that
+    // is not a person — and a launch that asked for one, got a window, and got no socket would be
+    // indistinguishable from a socket nobody could reach. It goes up here rather than beside the
+    // first machine so that `state` can answer *nothing is running* to whoever is deciding whether
+    // to start something.
+    if let Some(path) = &control {
+        if let Err(why) = control::serve(path) {
+            eprintln!("--control: {why}");
+            std::process::exit(2);
+        }
+        eprintln!("{}", control::listening(path));
+    }
 
     opaque_window()?;
 
@@ -3372,6 +3393,11 @@ impl Drop for Live {
     /// (250 000 instructions, about a millisecond of wall time), and both of its parked states —
     /// `wait_for_power` and `wait_after_stop` — test it every 20 ms.
     fn drop(&mut self) {
+        // **The bench empties before the thread is joined**, so a `state` arriving during the join
+        // answers *nothing is running* rather than reading an `Out` from a machine that is
+        // stopping. There is one bench and whoever is leaving it is leaving it — a `Live` being
+        // dropped is never followed by that same `Live` running again.
+        control::detach();
         self.link.quit.store(true, std::sync::atomic::Ordering::Relaxed);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
@@ -3482,6 +3508,9 @@ fn start_title(
         ..emu::Config::default()
     };
     let link = emu::Link::new();
+    // The bench, for whatever is on the control socket. After the `None` above, which dropped the
+    // previous `Live` and with it called `control::detach`.
+    control::attach(&link);
     let thread = {
         let cfg = cfg.clone();
         let link = link.clone();
@@ -3572,6 +3601,10 @@ fn start_machine(
     launch.apply(&mut cfg);
 
     let link = emu::Link::new();
+    // What the control socket is looking at. Ordered after the `*live.borrow_mut() = None` at the
+    // top of this function, which is where the old machine's `Live::drop` clears the bench — the
+    // other order would attach the new machine and then have its predecessor's funeral unattach it.
+    control::attach(&link);
     let thread = {
         let cfg = cfg.clone();
         let link = link.clone();
@@ -9398,7 +9431,11 @@ pub(crate) mod tests {
         let mut out = Vec::new();
         let mut err = Vec::new();
         let code = args::run(
-            &args::Cli::Headless { machine: args::Machine::default(), budget: 1_000 },
+            &args::Cli::Headless {
+                machine: args::Machine::default(),
+                budget: 1_000,
+                control: None,
+            },
             &mut out,
             &mut err,
         );
@@ -10362,14 +10399,20 @@ pub(crate) mod tests {
     /// **A blanket has two spellings and this used to see one of them.** `#![allow(dead_code)]`
     /// written *inside* a module was the only shape it looked for, and this crate has never
     /// contained one: grep returns three hits and all three are this file's own test data. What it
-    /// actually ships is the **outer** form on the `mod` line — `#[allow(dead_code)]` above
-    /// `mod control;` (`main.rs:76`) — which covers exactly as much and was invisible to both halves of
+    /// shipped instead was the **outer** form on the `mod` line — the attribute on its own line
+    /// above `mod control;` — which covers exactly as much and was invisible to both halves of
     /// `no_dead_code_allow_sits_on_a_function_the_program_already_calls`: this half `continue`d
-    /// past every file, and the item half skips it because the item under the attribute is
-    /// `mod control;` rather than a `fn`. The verdict beside the call site said *"No module in this
-    /// crate carries one any more"* while `control.rs`'s whole surface sat under one. Deleting the
-    /// attribute and running `cargo check` is the control: it prints eight `never used` warnings,
-    /// so it is a module blanket in every sense but the spelling.
+    /// past every file, and the item half skips it because the item under the attribute is a
+    /// `mod` and not a `fn`. The verdict beside the call site said *"No module in this crate
+    /// carries one any more"* while `control.rs`'s whole surface sat under one.
+    ///
+    /// **That blanket is gone**, with the socket it was hiding: `--control=` binds `control::serve`
+    /// now, so the module is reached from the shipped binary and the attribute went with the
+    /// wiring. Deleting it and running `cargo check` printed three `never used` warnings —
+    /// `serve`, `session` and `command`, the whole of the protocol. Not eight, which is what this
+    /// paragraph used to say: the five sentinel constants beside them are read by `emu.rs`'s run
+    /// loop and were never dead. The two spellings both matter anyway, and the controls below
+    /// prove the sweep on each.
     ///
     /// So the blanketed set is built from **both**: a file holding the inner form, and a file whose
     /// stem another file declares with an outer allow on the `mod` line.
@@ -10575,12 +10618,13 @@ pub(crate) mod tests {
         // **The prose here said no module in this crate carries one, and that was false the whole
         // time.** It was written about the inner spelling, `#![allow(dead_code)]`, which this crate
         // has never contained — the three hits a grep returns are the three literals in this test.
-        // What ships is `#[allow(dead_code)]` above `mod control;` (`main.rs:76`), the outer form
-        // on the `mod` line, which blankets `control.rs` entire and which **neither** half of this test
-        // could see: [`redundant_blankets`] `continue`d past every file, and the item half above
-        // skips it because the item under the attribute is `mod control;` and not a `fn`. So the
-        // one module blanket in the program was covered by a sweep that read zero files and a
-        // comment that said there were none.
+        // What shipped was the outer form, the attribute on its own line above `mod control;`,
+        // which blanketed `control.rs` entire and which **neither** half of this test could see:
+        // [`redundant_blankets`] `continue`d past every file, and the item half above skips it
+        // because the item under the attribute is a `mod` and not a `fn`. So the one module
+        // blanket in the program was covered by a sweep that read zero files and a comment that
+        // said there were none. It is not there any more — the socket under it has a caller — but
+        // the sweep keeps both spellings, because the next blanket will pick one of them.
         //
         // The verdict is proved able to fire in **both** spellings before it is trusted, and the
         // controls name no real file so they keep their meaning whatever the crate does next.
