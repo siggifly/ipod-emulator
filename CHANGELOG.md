@@ -25,9 +25,9 @@ Until now this program needed **a dump of a real iPod's boot ROM** — a 1 MiB f
 off hardware you owned, with a soldering iron or a bootrom exploit. That was the wall in front of
 everyone who did not already have one.
 
-**There is a list of iPods now, and you choose from it.** 198 models, from the 2001 original to the
-last iPod classic, transcribed mechanically from libgpod's table rather than typed. Choose one and
-the emulator **synthesises its boot ROM**: the identity block a real iPod carries — serial number,
+**There is a list of iPods now, and you choose from it.** 197 rows, from the 2001 original onwards,
+transcribed mechanically from libgpod's table rather than typed. Choose one and the
+emulator **synthesises its boot ROM**: the identity block a real iPod carries — serial number,
 model number, hardware id and version, region — built to the same layout, with a serial that looks
 like the real thing because it is assembled the way Apple assembled them (factory code, year and
 week, a production code from the range that model actually shipped in).
@@ -198,8 +198,10 @@ built-in, which was not a bug in the emulator at all: the recipe pointed at a st
 no Rockbox on it, and a themeless install is an ordinary condition rather than an error, so nothing
 said so.
 
-**Cold-booted from disk it does not yet reach the menu** — it draws its splash and stops. RetailOS
-is unchanged to the digit across every one of these fixes.
+**And then it cold-booted too.** For a day it did not: warm-entered it reached the menu, cold-booted
+off the disk it drew its splash and stopped. That turned out to be the battery it read as 0 mV —
+see *The clock stopped inventing time* below, which is the change that fixed it. Cold and warm now
+reach the same menu, and RetailOS is unchanged to the digit across every one of these fixes.
 
 ### Install an operating system, and cold boot it
 
@@ -296,6 +298,38 @@ for a build somebody made.
 type `0x0B` and has no case for `0x0C`; every drive image taken off real hardware here is `0x0C`.
 That is an upstream limitation, and rewriting the partition type to suit it would make the loader
 happy and the disk a lie.
+
+### The iPod has two processors, and now so does the emulator
+
+**The PP5021C is a dual-core part, and this program ran one of them.** It runs both now;
+`--no-second-core` is the ablation rather than a setting.
+
+Turning the second core on used to stall the machine at Apple's logo, and the cause was not in the
+co-processor model at all. Rockbox's `pp5020.h` states the rule for the inter-core mailbox in as
+many words — *only a CPU read clears it* — and this emulator implemented exactly that, in the
+byte-wide read path. A **word** read of the queue took the fast path that answers from plain memory
+and never reached the clear, so the interrupt was never dropped: the processor was interrupted, read
+the queue, and was interrupted again, for as long as the budget lasted. The signature is that the
+two counts are *equal* — 2 953 894 reads of the queue, 2 953 894 interrupts taken, and **70 ATA
+commands in a cold boot** where one core managed 619.
+
+The repair is not a filter on one access width. The mailbox is now named in the list that decides
+which pages may be served from plain memory, which is the specification the fast path was violating,
+so every width in both directions reaches the device. A two-core cold boot now issues **620 ATA
+commands** and the second core does what Rockbox's own scheduler says it should: work, sleep, get
+woken, repeat, fifteen thousand times over.
+
+**It is also what the wheel wanted.** Of 31 wheel frames posted into a running RetailOS, one core
+reads five and drops the rest; two cores read **31 of 31**. Cold-booted Rockbox is identical in both
+arms, to the ATA command and the lit pixel, so the oracle is unmoved and every number measured on
+one core still stands.
+
+**Two things follow, and one of them is about sound.** The bypass that faked a sticky
+co-processor status register is retired **on cause** rather than on "no difference measured", which
+leaves exactly one shortcut live on the path every number in `research/` is taken on. And RetailOS's
+audio subsystem starts: the four-slot voice pool it keeps for sounds fills with four live pointers
+on two cores, against four zeros on one. There is still no codec, so there is still no sound — but
+the thing that looked like a missing audio layer was a missing processor.
 
 ### The clock stopped inventing time
 
@@ -477,6 +511,13 @@ and the run reported `1 word read of DATA, 11 frames dropped unread`, which read
 firmware that has stopped listening. The same script anchored at `@24s` on the same snapshot:
 **16 posted, 0 dropped, 16 read, 16 interrupts.** Nothing about the machine changed. `trace
 --restore=` prints the clock it resumed at; anchor past it.
+
+**And state the length of a run in that clock too — `--until=NNNs`, not a budget.** The anchors
+learned this and the budgets did not, which is the same mistake in the same units: *The clock
+stopped inventing time* changed what a fixed instruction count buys by about five, so every recipe
+written before it silently began measuring a shorter run than its author meant. `--until` is 200
+seconds of iPod at any `--clock`, on any machine, whatever changes underneath it; the budget is the
+ceiling that stops a wedged run.
 
 **`--restore` checks whether anything is mapped at the resumed program counter** and says so, rather
 than leaving a machine to execute zeros until it is declared lost. **`IPOD_LAYOUT=1`** makes the

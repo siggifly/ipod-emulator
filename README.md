@@ -6,8 +6,11 @@ game. So does Rockbox.
 
 ![cold boot through to a game](docs/media/ipod-12-device-boot.gif)
 
-> **Alpha.** It boots, it draws, it plays Brick — with one pair of images behind it. Expect rough
-> edges, and expect things that work here to fail on files nobody has tested.
+> **Alpha.** It boots, it draws, and the wheel moves it — that last one proven on 2026-09-05 against
+> a control that sat on the language picker for 2 250 s without input. **The Brick pictures on this
+> page were made on 2026-08-14**, and the one run since that reached Brick had a line of the machine
+> temporarily reverted, so on the build this program ships it is unverified rather than known. Expect
+> rough edges, and expect things that work here to fail on files nobody has tested.
 > **[Open an issue](https://github.com/siggifly/ipod-emulator/issues)** if something breaks; every
 > report so far has found a real bug.
 
@@ -20,7 +23,7 @@ game. So does Rockbox.
 2. **Press the button.** It synthesises a boot ROM and downloads Apple's firmware itself — then
    builds a drive from it and boots.
 
-That is the whole of it. The ROM is built from a table of **198 iPods** transcribed from libgpod, so
+That is the whole of it. The ROM is built from a table of **197 rows** transcribed from libgpod, so
 the machine carries a real model number, serial and GUID, generated from a seed so the same iPod
 comes back next launch. The firmware comes from **Apple's own servers** — 66 of the 71 releases are
 still served, every one verified against a recorded size and SHA-256, and nothing is renamed into
@@ -121,12 +124,17 @@ of cold-booting for seventy-five. **Work on a copy** in settings never touches y
 
 ## What it does not do
 
-- **No audio.** The Wolfson codec is unmodelled.
+- **No sound.** RetailOS's audio subsystem does start now — its four-slot voice pool fills, so the
+  iPod is asking for the click a wheel makes — but the Wolfson WM8758 codec answers no I²C and is
+  entirely unmodelled, so nothing comes out.
 - **No USB** — so no target disk mode and no restore.
-- **~24 % of real time** headless — about 17.4 M instructions/sec against a 72 MHz PP5021C,
-  simulating *both* of its cores. One core alone runs at 18.8 M, so the second costs 7 %: it used to
-  cost 24 %, because it was awake and spinning for entire boots (see CHANGELOG 0.5.0). Idle costs
-  about the same as busy, so the ratio holds whatever the iPod is doing.
+- **Roughly a quarter of real time** headless. The last measurement is 2026-08-20: 18.8 M
+  instructions/sec on one core, against a part that runs at about 75 MHz. **The two-core figure
+  taken that day is withdrawn rather than restated** — it was measured on a machine that stalled at
+  Apple's logo, because the mailbox read that stalled it was not found until 2026-09-05, and two
+  cores became the default with the fix. So the speed of the machine this program now boots is
+  unmeasured. Idle costs about the same as busy, so whatever that ratio turns out to be, it holds
+  whatever the iPod is doing.
 
 ## Where to look next
 

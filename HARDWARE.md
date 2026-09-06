@@ -34,9 +34,10 @@ at the click wheel.
 
 ## What actually helps, easiest first
 
-**A ROM dump.** Install Rockbox, open *System → Debug → Save ROM contents*, keep the file. Five
-minutes, no disassembly, no soldering. Sometimes a patched build is wanted to read an address
-the stock dumper does not — that patch is usually about five lines and we will supply it.
+**A ROM dump.** Install Rockbox, open *System → Debug (Keep Out!) → Dump ROM contents*, keep
+the file. Five minutes, no disassembly, no soldering. Sometimes a patched build is wanted to
+read an address the stock dumper does not — that patch is usually about five lines and we will
+supply it.
 
 **A `SysInfoExtended` capture** — what your iPod tells iTunes about itself when it connects.
 
@@ -67,7 +68,7 @@ A single line is enough:
 
 ```
 iPod 5.5G (A1136), 80 GB, firmware 1.3, Rockbox 4.0 stock build,
-Save ROM contents, 2026-08-30, dumped by <name or handle>
+Dump ROM contents, 2026-08-30, dumped by <name or handle>
 ```
 
 ## How to offer
