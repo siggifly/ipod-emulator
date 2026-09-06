@@ -448,6 +448,10 @@ export component MainWindow inherits Window {
     callback wheel-down(float, float);
     callback wheel-moved(float, float);
     callback wheel-up();
+    // §16.11's scroll over the ring. Logical pixels of `delta-y`, unnormalised — see
+    // `IPod::wheel-scrolled` for why this one is measured against the pointing device and the
+    // three above are measured against the drawing.
+    callback wheel-scrolled(float);
     callback centre-down();
     callback centre-up();
     callback hold-pressed();
@@ -924,6 +928,7 @@ export component MainWindow inherits Window {
                 wheel-down(dx, dy) => { root.wheel-down(dx, dy); }
                 wheel-moved(dx, dy) => { root.wheel-moved(dx, dy); }
                 wheel-up => { root.wheel-up(); }
+                wheel-scrolled(dy) => { root.wheel-scrolled(dy); }
                 centre-down => { root.centre-down(); }
                 centre-up => { root.centre-up(); }
                 hold-pressed => { root.hold-pressed(); }

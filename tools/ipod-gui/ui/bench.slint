@@ -372,6 +372,10 @@ export component Bench inherits Rectangle {
     callback wheel-down(float, float);
     callback wheel-moved(float, float);
     callback wheel-up();
+    // §16.11's scroll over the ring, in logical pixels of `delta-y` — the one member of this group
+    // that is NOT normalised, because it is measured against the pointing device rather than
+    // against the drawing. See `IPod::wheel-scrolled`.
+    callback wheel-scrolled(float);
     callback centre-down();
     callback centre-up();
     callback hold-pressed();
@@ -691,12 +695,63 @@ export component Bench inherits Rectangle {
                 // on the one device §20 item 12 exists for, while a click on the same device filed
                 // the refusal — the two disagreeing about what pressing means, in the file whose
                 // comment says they cannot.
+                //
+                // **And it raised only ONE of the pointer's two callbacks, which made it a dead key
+                // again** — this time over a *running* machine, and for two years of the design
+                // saying otherwise. §16.8's table promises `Enter` / `Space` are *the primary
+                // action — on the bench, the centre button*; a click on that button raises
+                // `centre-down` / `centre-up`, which is the half `machine::centre` answers
+                // `ToMachine` for, and `pressed-centre`, which is the half that starts or stops
+                // one. This raised the second only, and `on_start_device`'s `ToMachine` arm
+                // returns without sending anything — by design, because the drawn button under it
+                // was supposed to be doing the other half. So over a running iPod, `Enter` and
+                // `Space` queued **nothing at all**: measured, on a wired bench with a machine on
+                // it, `[]` for both. Both edges are raised now, in the pointer's own order.
+                //
+                // **`held` is §16.8's `down_keys` in one boolean, and it is not optional.** Slint's
+                // winit backend maps an auto-repeat to a plain `KeyPressed` — it reads
+                // `event.state` and drops winit's own `repeat` flag
+                // (`i-slint-backend-winit-1.17.1/event_loop.rs:340-344`) — so a held `Enter` is a
+                // stream of presses with no releases between them. Without the guard, holding it
+                // over an idle device starts the machine on the first repeat and sends
+                // `Cmd::PowerOff` on the second, because by then §7.3's `booting` row makes the
+                // same control *press ● to stop*. One keystroke is one press, and the release is
+                // honoured only for a press this scope took — which is the same rule, and the same
+                // sentence, as the root scope's.
+                property <bool> held;
                 key-pressed(e) => {
                     if (e.text == " " || e.text == Key.Return) {
-                        root.pressed-centre();
+                        if (!self.held) {
+                            self.held = true;
+                            root.centre-down();
+                            root.pressed-centre();
+                        }
                         return accept;
                     }
                     return reject;
+                }
+                key-released(e) => {
+                    if (e.text == " " || e.text == Key.Return) {
+                        if (self.held) {
+                            self.held = false;
+                            root.centre-up();
+                        }
+                        return accept;
+                    }
+                    return reject;
+                }
+                // **And the hole a boolean keyed on focus has that the root scope's `down_keys`
+                // does not: focus can leave while the key is still down.** `Tab` is not swallowed
+                // by the two arms above, so holding `Enter` and pressing `Tab` moves focus, the
+                // release goes to whoever has it now, and this scope's `held` would stay true with
+                // `Button(SELECT, true)` standing on the machine — the stuck finger, reached from
+                // the one direction the guard itself opens. Losing focus ends the press, which is
+                // also what a real thumb leaving a real button does.
+                focus-lost => {
+                    if (self.held) {
+                        self.held = false;
+                        root.centre-up();
+                    }
                 }
                 accessible-role: AccessibleRole.button;
                 accessible-label: root.device-name;
@@ -711,7 +766,15 @@ export component Bench inherits Rectangle {
                 // The announcement, not the gate: an assistive technology is told this device cannot
                 // be started, and pressing it still produces the sentence saying why.
                 accessible-enabled: root.startable;
+                // **All three, in the pointer's order**, for the reason the key handler above
+                // gives: a default action that raised `pressed-centre` alone did nothing whatever
+                // over a running machine, so an assistive technology was announcing a button that
+                // could not press Select. There is no duration to carry here and none is needed —
+                // `emu::schedule_at` pushes a button's release out to `MIN_BUTTON_HOLD_USEC`
+                // whatever the window says, so a synthesised tap is held long enough to be read.
                 accessible-action-default => {
+                    root.centre-down();
+                    root.centre-up();
                     root.pressed-centre();
                 }
             }
@@ -748,6 +811,7 @@ export component Bench inherits Rectangle {
                 wheel-down(dx, dy) => { root.wheel-down(dx, dy); }
                 wheel-moved(dx, dy) => { root.wheel-moved(dx, dy); }
                 wheel-up => { root.wheel-up(); }
+                wheel-scrolled(dy) => { root.wheel-scrolled(dy); }
                 centre-down => { root.centre-down(); }
                 centre-up => { root.centre-up(); }
                 hold-pressed => { root.hold-pressed(); }

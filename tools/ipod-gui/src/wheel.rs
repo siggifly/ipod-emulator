@@ -228,10 +228,63 @@ pub fn quadrant(pos: u8) -> Option<Button> {
 /// that begins on the MENU label is a button press *and* a touch at that position, which is what
 /// [`WheelRing::hit`] answers and what the real membrane does; the dead band either side of each
 /// label is what stops every drag being one.
+///
+/// **A scroll gesture is a contact too**, and it is the one whose *end* nobody sends: a pointer
+/// lifts and a key comes up, but `PointerScrollEvent` carries a delta and nothing else — Slint's
+/// markup type is `{ delta-x, delta-y, modifiers }` and winit's `phase` is dropped before it gets
+/// there (`i-slint-core-1.17.1/items/input_items.rs:196`). So the contact is closed by a timer
+/// instead, [`SCROLL_LIFT`] after the last delta, and [`Finger::scroll_lifted`] is the edge the
+/// window's own timer supplies. Nothing here reads a clock; the *gesture's* end is a fact about a
+/// hand and belongs to the window, and every event this produces is anchored in the machine's
+/// simulated time by `emu::drain` like every other one.
 #[derive(Default)]
 pub struct Finger {
     touch: Touch,
+    /// Scroll delta that has not yet added up to a whole click, in logical pixels, signed the same
+    /// way a `Step` is. Held here rather than inside [`Touch::Scroll`] so that enum stays `Eq` —
+    /// every other rule in this file is written as a comparison against a variant.
+    residue: f32,
 }
+
+/// **Logical pixels of scroll per detent. 60, and it is Slint's own figure rather than a taste.**
+///
+/// Slint's winit backend turns a notched wheel's `MouseScrollDelta::LineDelta(_, ±1)` into **±60
+/// logical pixels** (`i-slint-backend-winit-1.17.1/event_loop.rs:403`) and passes a trackpad's
+/// `PixelDelta` through in logical pixels unchanged (`:404-406`). Taking 60 as one detent therefore
+/// makes **one notch of a mouse wheel one click of this one** — the mapping a person can predict
+/// without being told it, and the true one for the part being drawn, where one detent is one item.
+///
+/// A trackpad has no notches, so [`Finger::residue`] carries what is left over between events: at
+/// 120 Hz a gentle drag delivers ten or twelve pixels a frame, and without the residue every one of
+/// them would round to nothing and the wheel would be dead to the device most people have.
+///
+/// **It is also what makes §7.4's "momentum scrolling is not viable and is not offered" a figure
+/// rather than a hope.** A whole rotation is 96 clicks, which is `emu::MAX_QUEUE` and about two
+/// seconds of the wheel's own drain — and at 60 px a click it costs **5 760 px** of scrolling to
+/// ask for one. Past that `Link::push` drops the surplus and counts it in `input_dropped`; there is
+/// deliberately no second cap here, because the queue is the physical statement and a cap invented
+/// beside it would be a second one to disagree with it.
+pub const PX_PER_CLICK: f32 = 60.0;
+
+/// **How long after the last delta the finger leaves the wheel. 300 ms.**
+///
+/// It has to be longer than the gap *inside* one gesture and shorter than a person minds. A
+/// trackpad's deltas arrive at the display's refresh rate — 8 to 17 ms apart — and a notched mouse
+/// turned deliberately, one click at a time, leaves a couple of hundred milliseconds between
+/// notches; shorter than that and one gesture becomes a string of separate contacts, which is a lie
+/// about a hand that never left the wheel and costs three events per click instead of one.
+///
+/// What it buys the other way is nothing at all: a finger resting on the wheel after you stop
+/// turning it is the state the real part spends most of its life in, and the frame says so with one
+/// bit. The number is the same 300 ms as `emu::MIN_BUTTON_HOLD_USEC`, and by coincidence rather
+/// than derivation — that one is bounded from below by Apple's 150 ms diagnostics poll, and this
+/// one by a hand.
+pub const SCROLL_LIFT: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// One whole rotation's worth of scrolling — 5 760 logical pixels, and the most a single event is
+/// allowed to mean. See [`Finger::scrolled`], which is the only place it is used and where the
+/// argument for it being a sanity bound rather than a cap lives.
+const ONE_TURN_PX: f32 = CLICKS as f32 * PX_PER_CLICK;
 
 /// What is on the wheel right now.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -244,6 +297,10 @@ enum Touch {
     /// A key. It has a direction and **no position**: §16.8's `↑` `↓` ask for one detent, not for
     /// somewhere to be.
     Key,
+    /// A scroll gesture, which has a direction and no position for the same reason a key does — a
+    /// wheel event says *how far*, never *where*. What is left over between two of them is
+    /// [`Finger::residue`].
+    Scroll,
 }
 
 impl Finger {
@@ -253,6 +310,11 @@ impl Finger {
     /// Answers nothing for a press the wheel does not own: the centre button is a control of its
     /// own with its own route, and the moulding between it and the ring is *"a press on neither —
     /// which is the honest answer, since on the hardware it is the moulding"*.
+    ///
+    /// **A pointer arriving on a contact somebody else started takes it over rather than opening a
+    /// second one**, which is what the `Touch::Off` test says and what one capacitive surface can
+    /// mean: put a finger down while a scroll is still settling and the wheel does not leave and
+    /// come back, it simply has a position now.
     pub fn pressed(&mut self, ring: &WheelRing, x: f32, y: f32) -> Vec<ipod_machine::WheelEvent> {
         let (at, button) = match ring.hit(x, y) {
             Hit::Ring(p) => (p, 0),
@@ -264,6 +326,7 @@ impl Finger {
             out.push(ipod_machine::WheelEvent::Touch);
         }
         self.touch = Touch::Pointer { at, button };
+        self.residue = 0.0;
         if button != 0 {
             out.push(ipod_machine::WheelEvent::Button(button, true));
         }
@@ -313,6 +376,12 @@ impl Finger {
     /// The first one touches the wheel and the key's release lifts it, so holding the key down is
     /// one contact with a stream of clicks in it — which is what a scroll is. Auto-repeat is the
     /// repeat rate, and it is the platform's rather than one this program invents.
+    ///
+    /// **A key arriving on a settling scroll takes the contact over**, the way a pointer does: the
+    /// state becomes `Key` whichever way the finger got here, so the key's own release is what
+    /// lifts it. Writing that assignment inside the `Touch::Off` arm — which is where it was, when
+    /// `Off` and `Pointer` were the only other states — would leave the wheel held by a scroll
+    /// timer that has already been disarmed, and nothing would ever send the `Release`.
     pub fn keyed(&mut self, by: i8) -> Vec<ipod_machine::WheelEvent> {
         if by == 0 || matches!(self.touch, Touch::Pointer { .. }) {
             return Vec::new();
@@ -320,8 +389,9 @@ impl Finger {
         let mut out = Vec::new();
         if self.touch == Touch::Off {
             out.push(ipod_machine::WheelEvent::Touch);
-            self.touch = Touch::Key;
         }
+        self.touch = Touch::Key;
+        self.residue = 0.0;
         out.push(ipod_machine::WheelEvent::Step(by.signum()));
         out
     }
@@ -333,6 +403,75 @@ impl Finger {
             return Vec::new();
         }
         self.touch = Touch::Off;
+        vec![ipod_machine::WheelEvent::Release]
+    }
+
+    /// **A mouse wheel or a trackpad, over the drawn ring** — [`PX_PER_CLICK`] logical pixels a
+    /// detent, with the remainder carried to the next event.
+    ///
+    /// **`delta_y` and not `delta_x`.** A menu is a vertical list, so the vertical axis is the one
+    /// a person means; and on macOS ⇧-scroll is delivered as horizontal delta, so honouring x would
+    /// make a chord this program has never defined turn the emulated wheel — which is the same rule
+    /// §16.8's modifier guard states for keys.
+    ///
+    /// **The sign is the platform's rather than a choice.** Slint adds `delta_y` to a `Flickable`'s
+    /// `viewport_y`, which runs from `0` at the top to a negative value at the bottom
+    /// (`i-slint-core-1.17.1/items/flickable.rs:480`, `ensure_in_bound`), so scrolling *down* a list
+    /// is a **negative** `delta_y`. Down a list is clockwise on this wheel, and clockwise is
+    /// `Step(+1)` — see this module's note on why that direction is derived and not chosen.
+    ///
+    /// Refused while a pointer or a key owns the wheel, for the reason the type's own note gives:
+    /// one capacitive surface, one finger, and two writers of one contact is how they come to
+    /// disagree about whether it is there.
+    pub fn scrolled(&mut self, delta_y: f32) -> Vec<ipod_machine::WheelEvent> {
+        if !delta_y.is_finite() || matches!(self.touch, Touch::Pointer { .. } | Touch::Key) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if self.touch == Touch::Off {
+            out.push(ipod_machine::WheelEvent::Touch);
+        }
+        self.touch = Touch::Scroll;
+        // **One event cannot mean more than one turn**, and this is a sanity bound on the number
+        // rather than a policy about the wheel. `moved` gets the same bound for free — a ring's
+        // shortest path is at most half a turn, so a drag can never ask for more than 48 clicks in
+        // one sample however wild the pointer is — and a scroll has no geometry to get it from. A
+        // delta of 10^9 px is not a gesture a hand made; without this it is a `Vec` of sixteen
+        // million events built before `Link::push` ever sees one.
+        //
+        // It is deliberately **not** a cap on how fast the wheel may be turned: at one turn a
+        // frame this is still an order of magnitude more than `emu::MAX_QUEUE` can take, so the
+        // surplus still reaches `push`, is still dropped there, and is still counted in
+        // `input_dropped` — which §7.4 wants, because *a refused step is a lie about what you did*
+        // and a step this function had quietly swallowed could never be refused out loud.
+        self.residue -= delta_y.clamp(-ONE_TURN_PX, ONE_TURN_PX);
+        let clicks = (self.residue / PX_PER_CLICK) as i32;
+        self.residue -= clicks as f32 * PX_PER_CLICK;
+        if clicks != 0 {
+            out.extend(std::iter::repeat_n(
+                ipod_machine::WheelEvent::Step(clicks.signum() as i8),
+                clicks.unsigned_abs() as usize,
+            ));
+        }
+        out
+    }
+
+    /// **The scroll gesture went quiet, so the finger leaves.** [`SCROLL_LIFT`] after the last
+    /// delta, timed by the window.
+    ///
+    /// It is the one edge this file cannot produce for itself: a pointer sends an up and a key
+    /// sends a release, and a wheel event sends neither. Nothing happens if some other contact has
+    /// taken the wheel over in the meantime, which is what makes a timer that has already been
+    /// overtaken harmless rather than something the window has to remember to cancel.
+    ///
+    /// The remainder goes with the contact. Half a click of a gesture that ended is not the first
+    /// half of the next one.
+    pub fn scroll_lifted(&mut self) -> Vec<ipod_machine::WheelEvent> {
+        if self.touch != Touch::Scroll {
+            return Vec::new();
+        }
+        self.touch = Touch::Off;
+        self.residue = 0.0;
         vec![ipod_machine::WheelEvent::Release]
     }
 }
@@ -609,5 +748,130 @@ mod tests {
             "the wheel was touched a second time without ever being released"
         );
         assert_eq!(f.released(), vec![Btn(WHEEL_MENU, false), Release]);
+    }
+
+    // ── The scroll ──────────────────────────────────────────────────────────────────────────────
+
+    /// **One notch of a mouse wheel is one detent**, which is the whole of [`PX_PER_CLICK`]'s
+    /// argument, and the sign is the platform's.
+    ///
+    /// 60 is not a number typed here: Slint's winit backend multiplies a `LineDelta` by exactly 60
+    /// to get logical pixels, so a notch arrives as ±60 and this asserts the round trip a person
+    /// makes when they turn a wheel one click.
+    #[test]
+    fn one_notch_of_a_mouse_wheel_is_one_click_of_this_one() {
+        let mut f = Finger::default();
+        // Down the list is a negative `delta_y` and clockwise on the ring.
+        assert_eq!(f.scrolled(-PX_PER_CLICK), vec![Touch, Step(1)]);
+        assert_eq!(f.scrolled(-PX_PER_CLICK), vec![Step(1)], "the second notch touched again");
+        assert_eq!(f.scrolled(PX_PER_CLICK * 3.0), vec![Step(-1); 3], "up the list is anticlockwise");
+        assert_eq!(f.scroll_lifted(), vec![Release]);
+        assert!(f.scroll_lifted().is_empty(), "the contact was lifted twice");
+    }
+
+    /// **A trackpad's remainder is carried rather than thrown away**, which is the difference
+    /// between a wheel that works with the device most people have and one that is dead to it.
+    ///
+    /// Twelve pixels a frame is a gentle two-finger drag at 120 Hz. Five of them make a click; the
+    /// four before it make nothing but must not be lost, and the sixth must not make a second one.
+    #[test]
+    fn a_trackpads_pixels_accumulate_into_whole_clicks_and_lose_nothing() {
+        let mut f = Finger::default();
+        assert_eq!(f.scrolled(-12.0), vec![Touch], "a first frame that is not yet a click");
+        for _ in 0..3 {
+            assert!(f.scrolled(-12.0).is_empty());
+        }
+        assert_eq!(f.scrolled(-12.0), vec![Step(1)], "five twelves are sixty and nothing arrived");
+        assert!(f.scrolled(-12.0).is_empty(), "the residue was not spent");
+
+        // …and the remainder does not survive the gesture that produced it: half a click of
+        // something that ended is not the first half of the next one.
+        f.scrolled(-30.0);
+        assert_eq!(f.scroll_lifted(), vec![Release]);
+        assert_eq!(f.scrolled(-30.0), vec![Touch], "half a click was carried across two contacts");
+    }
+
+    /// **A big delta is a whole run of clicks, in one event**, up to one turn — which is where the
+    /// number stops being a gesture. A momentum flick is not otherwise special-cased:
+    /// `emu::Link::push` is where a backlog stops and where a dropped step gets counted, and a
+    /// policy cap beside it would be a second answer to one question.
+    #[test]
+    fn one_large_delta_is_as_many_clicks_as_it_paid_for_up_to_one_turn() {
+        let mut f = Finger::default();
+        let out = f.scrolled(-PX_PER_CLICK * CLICKS as f32);
+        assert_eq!(out.len(), CLICKS as usize + 1, "a whole rotation is 96 clicks and one touch");
+        assert_eq!(out[0], Touch);
+        assert!(out[1..].iter().all(|e| *e == Step(1)));
+        f.scroll_lifted();
+
+        // Past a turn the number is not a hand's, and the bound is on the allocation rather than on
+        // the wheel. **Ten turns first and `f32::MAX` second, in that order deliberately**: this
+        // test has to be runnable with the clamp taken out, and unclamped the second line builds a
+        // `Vec` of two billion events. Ten turns is red and cheap; the line under it is the case
+        // the bound actually exists for and is only ever reached green.
+        let ten = f.scrolled(-PX_PER_CLICK * CLICKS as f32 * 10.0);
+        assert_eq!(ten.len(), CLICKS as usize + 1, "ten turns in one event was not bounded to one");
+        f.scroll_lifted();
+        let huge = f.scrolled(-f32::MAX);
+        assert_eq!(huge.len(), CLICKS as usize + 1, "an impossible delta was not bounded");
+        // …and the surplus is not banked either, or the next gesture would start owing it.
+        assert!(f.scrolled(0.0).is_empty(), "a clamped delta left a residue behind it");
+    }
+
+    /// One finger, and the scroll is not exempt from it. A pointer or a key holding the wheel owns
+    /// it, and a scroll that stepped it out from under a drag is two writers of one contact.
+    #[test]
+    fn a_scroll_is_refused_while_a_pointer_or_a_key_holds_the_wheel() {
+        let mut f = Finger::default();
+        let (x, y) = on_ring(12);
+        f.pressed(&unit(), x, y);
+        assert!(f.scrolled(-600.0).is_empty(), "a scroll turned the wheel during a drag");
+        assert!(f.scroll_lifted().is_empty(), "a scroll's lift ended a pointer's contact");
+        assert_eq!(f.released(), vec![Release]);
+
+        assert_eq!(f.keyed(1), vec![Touch, Step(1)]);
+        assert!(f.scrolled(-600.0).is_empty(), "a scroll turned the wheel under a held key");
+        assert!(f.scroll_lifted().is_empty(), "a scroll's lift ended a key's contact");
+        assert_eq!(f.key_released(), vec![Release]);
+    }
+
+    /// **A contact handed from a scroll to a pointer or a key is still one contact** — the finger
+    /// does not leave and come back, and whoever took it over is who lifts it.
+    ///
+    /// The second half is the one that would go wrong silently: with `Touch::Key` assigned only on
+    /// the `Off` arm, a key arriving on a settling scroll would step the wheel and leave the state
+    /// reading `Scroll`, so `key_released` would answer nothing and the `Release` would depend on a
+    /// timer the window had already disarmed.
+    #[test]
+    fn a_pointer_or_a_key_takes_over_a_scrolls_contact_and_is_what_lifts_it() {
+        let mut f = Finger::default();
+        assert_eq!(f.scrolled(-PX_PER_CLICK), vec![Touch, Step(1)]);
+        let (x, y) = on_ring(0);
+        assert_eq!(
+            f.pressed(&unit(), x, y),
+            vec![Btn(WHEEL_MENU, true)],
+            "the wheel was touched a second time without ever being released"
+        );
+        assert!(f.scroll_lifted().is_empty(), "a stale scroll timer released a live drag");
+        assert_eq!(f.released(), vec![Btn(WHEEL_MENU, false), Release]);
+
+        assert_eq!(f.scrolled(-PX_PER_CLICK), vec![Touch, Step(1)]);
+        assert_eq!(f.keyed(-1), vec![Step(-1)], "the key opened a second contact");
+        assert!(f.scroll_lifted().is_empty(), "a stale scroll timer released a held key");
+        assert_eq!(f.key_released(), vec![Release], "the key that took the wheel could not lift it");
+    }
+
+    /// A delta of zero is a scroll event a trackpad sends at the end of a gesture, and it must not
+    /// be a click. It still counts as contact, which is what the gesture is.
+    #[test]
+    fn a_zero_delta_touches_the_wheel_and_turns_nothing() {
+        let mut f = Finger::default();
+        assert_eq!(f.scrolled(0.0), vec![Touch]);
+        assert!(f.scrolled(0.0).is_empty());
+        assert_eq!(f.scroll_lifted(), vec![Release]);
+        // And a value that is not a number cannot become a click count.
+        assert!(f.scrolled(f32::NAN).is_empty());
+        assert!(f.scrolled(f32::INFINITY).is_empty());
+        assert!(f.scroll_lifted().is_empty(), "a refused delta still opened a contact");
     }
 }

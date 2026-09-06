@@ -1175,6 +1175,8 @@ they are never repurposed** — lying about a piece of hardware in a program who
 hardware is not a trade worth making.
 
 - **96 detents**, `wheel::WheelRing::hit(x, y)` across outer / inner / select radii.
+- **A scroll over the ring turns it**, at **60 logical pixels a detent** — see §16.11 for where that
+  figure comes from and why the ring cannot capture a scroll the drawer wanted.
 - **Five buttons** by quadrant, `wheel::quadrant(pos)`.
 - **The centre button's hit region is `WheelRing::select`, which is what `hit()` already uses.** The
   previous revision also said "12 px larger than its drawing on every side", and the two rules
@@ -1196,8 +1198,14 @@ hardware is not a trade worth making.
 **The two real latencies are visible rather than hidden**, because the machine runs at ~24 % of real
 time and pretending otherwise makes the drawing lie:
 
-- A press's **release** is held for `MIN_BUTTON_HOLD` = 22 500 000 instructions ≈ **1.6 s of wall
-  time** at the window's ~14 M instr/s. So the button depresses on pointer-down — a real button moves
+- A press's **release** is held for `MIN_BUTTON_HOLD_USEC` = 300 000 **simulated microseconds**,
+  which at the window's ~14 M instr/s against a 75 MHz clock is ≈ **1.6 s of wall
+  time**. *(Corrected here: this said `MIN_BUTTON_HOLD` = 22 500 000 **instructions**, which was the
+  anchor and the name until the wheel moved to simulated time — 22 500 000 ÷ 75 is the same 300 ms,
+  so the duration above was right and the unit under it was not. `emu::drain`'s own note carries the
+  measurement that forced the move: a thirty-six-click drag took 14.9 s of wall time to reach a
+  machine that was spending its budget halted, and 1.2 s after.)* So the button depresses on
+  pointer-down — a real button moves
   when your finger does — and, **when there is a machine**, stays depressed until `Stats::buttons`
   clears, which is when the machine actually saw the release. You can watch your click take a second
   and a half to reach Apple's firmware, which is a true and interesting fact about this emulator.
@@ -1259,6 +1267,54 @@ pixels apart. The cradle cannot simply fall silent there: `bench.slint` uses `cr
 drawn well's `accessible-description`, so an empty caption is a screen reader losing the iPod. It
 answers §7.3's own question instead, which while a machine runs is *the controls you can see are
 live*.
+
+#### The three ways in, and two of them did not exist *(added 2026-09-06)*
+
+The operator tried to drive the emulator and could not work out how to use the wheel. That is not a
+discoverability problem this section can write its way out of: **the two gestures a person reaches
+for first were not built**, and the design did not describe them either, which is why nothing had
+ever gone red about it.
+
+**A scroll over the ring is the obvious one and there was no handler for it anywhere.** A grep for
+`scroll-event` across the whole crate found only the drawer's `Flickable` machinery. Turning a
+drawn wheel with a scroll gesture is the most natural mapping this program has available and it did
+nothing at all — measured on a wired bench with a running machine, one 60 px delta over the drawn
+ring queued `[]`. It is §16.11's now, with the ratio and the reasoning there.
+
+**`Enter` and `Space` were dead keys over a running machine**, which §16.8's table has claimed
+otherwise for as long as it has existed. The cradle's `FocusScope` raised `pressed-centre` and
+nothing else, and `on_start_device`'s `Act::ToMachine` arm deliberately sends nothing — *"the press
+belongs to the machine and to nothing else, so the cradle sends nothing"* — on the understanding
+that the drawn centre button beneath it was carrying the other half. It was, for a pointer. Nothing
+carried it for the keyboard. So in the one phase this section gives every drawn control to the
+machine, the control the whole program is built around had no keyboard route: `Return -> []`,
+`Space -> []`. The cradle raises all three of the pointer's callbacks now, in the pointer's own
+order, and `accessible-action-default` does the same — an assistive technology was announcing a
+button that could not press Select.
+
+**And a contact that is *cancelled* rather than lifted left a finger on the wheel for ever.**
+`PointerEventKind` has four values; the drawn controls read two. The two they read are the only two
+a mouse sends. `cancel` is a grab torn down rather than released — and it is the ordinary way a
+**touch** ends when the system takes the gesture back, which is what makes this the touch item
+rather than a tidiness one. Measured through `WindowEvent::PointerExited`: a press on the drawn
+MENU label queued `[Touch, Button(MENU, true)]`, the cancel queued nothing, and the next press on
+the ring queued a button with **no `Touch`** — because the window still believed a finger was down.
+
+**The touch half recovers and the button half does not**, which is worth stating precisely rather
+than as *it breaks*: one more press and release on the ring puts the contact back (at the cost of a
+`Touch` the machine never saw), but the finger's held mask is **overwritten** by that next press, so
+nothing will ever send `Button(MENU, false)`. MENU stays set in `ClickWheel::buttons` for the life
+of the machine — which is a wrong bit in every streaming frame from then on, and, through
+`Stats::buttons`, the drawn MENU label depressed on screen for ever. This section's own
+rule is that a press with no release is a stuck finger; `cancel` is an `up` on all three controls
+now, and the hold switch is in that list because what its cancel strands is a *sentence* — it is
+`hold-released` that takes the held refusal off the cradle label.
+
+**What did not need building is touch itself.** Slint turns a single finger into `Pressed` / `Moved`
+/ `Released` on the same `TouchArea` a mouse uses (`i-slint-core-1.17.1/input.rs:2016-2024`,
+`:2064-2069`, `:2165-2172`), so a touch drag on the drawn ring has always been a pointer drag by the
+time it reaches this program, and the centre button's tap likewise. §19.4's `interactive: false`
+trade is not the wheel's — see there.
 
 ### 7.5 The shelf — 88 px, three rows, flush to the bottom, full width
 
@@ -3889,7 +3945,7 @@ Ctrl+, elsewhere; write the table with one column and use `Platform.os` only for
 |---|---|
 | `Tab` / `⇧Tab` | focus, in document order. Never a positive tabindex |
 | `Esc` | **one definition, outwards, in order**: leaves fullscreen · then closes an Expand · then **goes back one drawer level** · then closes the drawer · then, from `Running`, parks. **From `Booting` it powers off** |
-| `Enter` / `Space` | the primary action — on the bench, the centre button; on §9.5's bench, its primary row |
+| `Enter` / `Space` | the primary action — on the bench, the centre button **in whatever sense `machine::centre` says it is right now**; on §9.5's bench, its primary row |
 | `←` `→` | the wheel while there is a machine; previous / next device when there is not |
 | `↑` `↓` | the wheel, always |
 | `M` `P` `N` `B` | MENU, Play, Next, Prev — only while there is a machine |
@@ -3918,6 +3974,34 @@ Ctrl+, elsewhere; write the table with one column and use `Platform.os` only for
 - **Lower case only.** `m` is the key the table means; `⇧M` is a different keystroke and the table
   does not claim it. The `S` · `⇧S` row is the proof that the shift matters in this program, so
   answering both from one arm would be inventing a rule.
+
+**The `Enter` / `Space` row was three quarters true, and the missing quarter was the whole point of
+the wheel.** *(Corrected 2026-09-06.)* The drawn centre button is four controls sharing one disc —
+`machine::centre` answers Select over a running machine, `Cmd::PowerOff` over a booting one, a cold
+boot over a stopped or absent one, and a refusal with a reason over a device with a part missing —
+and a *click* raises three callbacks to cover them: `centre-down`, `centre-up` and `pressed-centre`.
+The cradle's key handler raised the third alone. Three of the four phases are that third one's, so
+the row read as true; the fourth is `ToMachine`, whose whole implementation is the first two, and
+in that phase both keys queued **nothing at all**. Measured, on a wired bench with a machine on it:
+`Return -> []`, `Space -> []`. Both edges are raised now, in the pointer's order, and §7.4 carries
+the rest of the argument.
+
+**Which needed §16.8's own auto-repeat rule extended to two keys it did not cover.** Slint's winit
+backend reads `event.state` and drops winit's `repeat` flag
+(`i-slint-backend-winit-1.17.1/event_loop.rs:340-344`), so a held key is a stream of presses with no
+releases in it — which is exactly why the machine table keeps `down_keys`. `Enter` and `Space` are
+not on that table; they are the focused control's, and the focused control had no such guard. Held
+over an idle device, `Enter` started the machine on one repeat and sent `Cmd::PowerOff` on the next,
+because by then §7.3 makes the same control *press ● to stop*. **One keystroke is one press**, and
+the release is honoured only for a press the scope took — the same rule and the same sentence as the
+root scope's, in one boolean on the cradle's `FocusScope`.
+
+**And a boolean kept per control has a hole `down_keys` does not, because focus can leave while the
+key is down.** `Tab` is not one of the two keys the cradle claims, so holding `Enter` and pressing
+`Tab` moves focus and the release goes to whoever holds it now — leaving Select standing on the
+machine with nothing that will ever let go. That is the stuck finger this section already forbids,
+reached from the one direction the repeat guard itself opens. **Losing focus ends the press**, which
+is also what a thumb leaving a real button does.
 
 **And a key that reaches the machine comes up as well.** A press with no release is a stuck finger,
 and the wheel's `Touch` needs a `Release` for the same reason — so the root `FocusScope` handles
@@ -4104,6 +4188,81 @@ before: drag short, then move to a taller display, and the warning has to stay u
 **Every drawer page's body is a `Flickable`**, between a fixed page header and any pinned footer row.
 The bench is not one; the shelf is not one; the well is not one. That is the whole of where Scroll
 is allowed, and §5 says why it had to exist at all.
+
+**And one place that is not a Scroll and consumes a scroll anyway: the drawn wheel.**
+*(Added 2026-09-06 — until then there was no `scroll-event` anywhere in the crate but the
+`Flickable` machinery below, and turning the drawn click wheel with a scroll gesture did nothing.)*
+A scroll over the ring turns it, and the three things that had to be decided are the ratio, the
+contact, and whether it can steal a scroll aimed somewhere else.
+
+**The ratio is 60 logical pixels a detent, and it is Slint's own number rather than a taste.** Slint's
+winit backend converts a notched wheel's `MouseScrollDelta::LineDelta(_, ±1)` into **±60 logical
+pixels** (`i-slint-backend-winit-1.17.1/event_loop.rs:403`) and passes a trackpad's `PixelDelta`
+through in logical pixels unchanged (`:404-406`). Taking 60 as one detent therefore makes **one
+notch of a mouse wheel one click of the emulated one** — the mapping a person can predict without
+being told it, and the true one for the part being drawn, where one detent is one item.
+
+| | |
+|---|---|
+| **a mouse notch** | 60 px → exactly 1 click |
+| **a trackpad frame** | ~10–15 px at 120 Hz → a click every fourth or fifth frame, because the remainder is **carried**. Without that, a gentle drag rounds to nothing every frame and the wheel is dead to the device most people have |
+| **a whole rotation** | 96 clicks = **5 760 px** of scrolling, which is `emu::MAX_QUEUE` and about two seconds of the wheel's own drain |
+
+That last row is what makes §7.4's *"momentum scrolling is therefore not viable and is not offered"*
+a figure instead of a hope. There is deliberately **no policy cap** on how many clicks one delta may
+produce: `emu::Link::push` already drops steps past `MAX_QUEUE` and **counts them in
+`input_dropped`**, that queue depth is the physical statement about how fast a thumb can go round,
+and a cap invented beside it would be a second answer to one question — the shape §14.1 and §11.3
+both indict. A step swallowed inside the window could never be refused out loud, and §7.4 wants a
+refused step to be sayable, because *a refused step is a lie about what you did*.
+
+**One bound is on the number rather than on the wheel: a single event may not mean more than one
+turn.** A drag gets that for free — a ring's shortest path is at most half a turn, so `moved` can
+never ask for more than 48 clicks from one sample however wild the pointer is — and a scroll has no
+geometry to get it from. A `delta-y` of 10⁹ px is not a gesture a hand made; unbounded, it builds a
+`Vec` of sixteen million events before anything downstream can refuse one of them. At one turn per
+frame this is still an order of magnitude more than the queue can take, so the surplus still reaches
+`push`, is still dropped there, and is still counted.
+
+**The sign is the platform's too.** Slint adds `delta_y` to a `Flickable`'s `viewport_y`, which runs
+from `0` at the top to a negative value at the bottom (`i-slint-core-1.17.1/items/flickable.rs:480`),
+so scrolling *down* a list is a **negative** `delta_y`; down a list is clockwise on this wheel, which
+is `Step(+1)`. `delta_x` is dropped on the floor: a menu is a vertical list, and on macOS a ⇧-scroll
+arrives as horizontal delta, so honouring it would let a chord this program has never defined turn
+the emulated wheel — §16.8's modifier guard, stated for a pointing device.
+
+**A scroll is a contact, and it is the one contact nobody sends the end of.** A pointer lifts and a
+key comes up; `PointerScrollEvent` is `{ delta-x, delta-y, modifiers }` and winit's `phase` is
+dropped before the markup sees it (`i-slint-core-1.17.1/items/input_items.rs:196`). So the finger
+goes down on the first delta and comes off **300 ms after the last**, on a single-shot timer
+restarted per event — the fourth timer in this window and the same shape as §16.4's drop settle, for
+the same reason: the platform has no event that says a gesture is over, so something has to come back
+and close what the program opened. 300 ms because it has to exceed the gap *inside* one gesture — a
+notched mouse turned deliberately leaves a couple of hundred milliseconds between clicks — and
+because what it costs the other way is nothing: a finger resting on the wheel is the state the real
+part spends most of its life in, and the frame says so with one bit. **Shorter and one gesture
+becomes a string of separate contacts**, which is a lie about a hand that never left the wheel and
+costs three events per click instead of one.
+
+**The delay is wall time and nothing it queues is** — which is the trap `AGENTS.md` §6 is about, in
+the direction that is easy to get backwards. *When a hand stopped moving* is a fact about a person
+and has no simulated clock to be anchored in; every `Touch`, `Step` and `Release` it produces is
+scheduled by `emu::drain` against the machine's own microseconds like every other event, so a
+machine spending its budget halted does not stretch the gesture out under it.
+
+**It cannot capture a scroll meant for the drawer, and that is structural rather than a guard.** The
+ring's `scroll-event` is only ever reached by an event hit-tested into the wheel's own disc, and
+nothing on the bench is inside a `Flickable` — so `SCROLL_FILTER_DURATION` below, which is a
+Flickable capturing from **its own children** for 800 ms, has nothing to do with the wheel and is
+not disturbed by it. The two places §16.11 records wheel events falling through are untouched.
+`a_scroll_over_the_drawn_ring_turns_the_machines_wheel` asserts both directions: a scroll on the
+empty well and a scroll over an open drawer page both reach the machine with nothing.
+
+**One finger, and the scroll is not exempt.** A scroll arriving while a pointer or a key holds the
+wheel is refused, for §7.4's reason — one capacitive surface, and two writers of one contact is how
+they come to disagree about whether it is there. The other order hands the contact over rather than
+opening a second one: put a finger down while a scroll is still settling and the wheel does not
+leave and come back, it simply has a position now.
 
 Three costs, all verified in `i-slint-core-1.17.1/items/flickable.rs`, all accepted with their
 numbers rather than discovered later:
@@ -4516,9 +4675,9 @@ because the failure was imagined.
 |---|---|
 | **1280 × 800 and 1366 × 768 cannot show the panel at 1:1, at any scale factor** | The body alone needs 656 physical pixels and neither display has 810 of usable window height. Drawing it smaller discards pixels the emulator produced, which principle 9 forbids. §9.5 is a designed state with a working action, not a failure — and fullscreen gives both displays 3× |
 | **`k` is not re-decided on a plain window resize** | Principle 1. A drawn iPod that changes size while you drag an edge is worse than one that takes the larger scale at the next launch. The shelf says which `k` is in force. §17.Q11 |
-| ~~**Every control inside a drawer page's Scroll is 100 ms late to a press**~~ **RETIRED 2026-08-21** | It was believed `Flickable` had no way to opt out of `FORWARD_DELAY`. `interactive: false` skips it entirely and the wheel still scrolls — see §16.11. The cost that replaces it is **no touch-drag-to-flick**, which matters on a touchscreen laptop and not on a trackpad |
+| ~~**Every control inside a drawer page's Scroll is 100 ms late to a press**~~ **RETIRED 2026-08-21** | It was believed `Flickable` had no way to opt out of `FORWARD_DELAY`. `interactive: false` skips it entirely and the wheel still scrolls — see §16.11. The cost that replaces it is **no touch-drag-to-flick**, which matters on a touchscreen laptop and not on a trackpad. **It is a cost of the DRAWER's pages and not of the drawn wheel** *(clarified 2026-09-06, because the sentence invited the opposite reading)*: `interactive` is a property of a `Flickable`, the bench is not one, and the drawn iPod is not inside one. Slint forwards a single finger to the same `TouchArea` a mouse uses (`i-slint-core-1.17.1/input.rs:2016-2024`, `:2064-2069`, `:2165-2172`), so touch-drag on the ring and touch-tap on the centre button work by construction and always have. What touch DID cost was the cancelled contact §7.4 records |
 | **"Centred on first launch" and the work-area read are two-platform** | Wayland has neither `set_outer_position` nor a work-area query. Mitigated by measuring the window we actually got rather than predicting it, so the *too-short* state is right on all three; only the initial placement is not |
-| **The 96-detent ring has no announced accessible equivalent** | Slint has `Slider` and a wheel is not one. `↑`/`↓` are the route and they are a fallback, not a peer. Said once rather than pretended |
+| **The 96-detent ring has no announced accessible equivalent** | Slint has `Slider` and a wheel is not one. `↑`/`↓` are the route and they are a fallback, not a peer. Said once rather than pretended. A scroll gesture joined them 2026-09-06 (§16.11) and changes nothing here — it is another *unannounced* route, and an assistive technology still has no `Slider` to read. What the same change did fix is the announced control beside it: the cradle's `accessible-action-default` raised `pressed-centre` alone, so a screen reader was offered a button that did nothing whatever over a running machine |
 | **`BuildFromIpsw` breaks the one-press `Fix` rule** | It is the only `Fix` shape that changes which resource a device points at, and a silent detachment of somebody's only image is the worse failure. The rule is stated rather than the exception hidden |
 
 ---

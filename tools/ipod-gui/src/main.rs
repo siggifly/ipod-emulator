@@ -989,6 +989,50 @@ fn wire(
             off_the_machine(&w, &live, |l| l.finger.borrow_mut().released());
         });
     }
+    // ── §16.11: a scroll over the drawn ring, and the timer that ends it ────────────────────────
+    //
+    // **The contact's end is the window's to supply**, and it is the only one of the three that is.
+    // A pointer sends an up, a key sends a release, and a wheel event sends a delta and nothing
+    // else — Slint's `PointerScrollEvent` is `{ delta-x, delta-y, modifiers }` and winit's own
+    // `phase` is dropped on the way (`i-slint-core-1.17.1/items/input_items.rs:196`). So the finger
+    // leaves `wheel::SCROLL_LIFT` after the last delta, single-shot and restarted per event, which
+    // is the same shape §16.4's drop settle is under and for the same reason: the platform has no
+    // event that says a gesture is over, so something has to come back and close it.
+    //
+    // **The delay is wall time and the events are not**, which is the distinction `AGENTS.md` §6
+    // is about. *When a hand stopped moving* is a fact about a person and has no simulated clock to
+    // be anchored in; everything this queues is scheduled by `emu::drain` against the machine's own
+    // microseconds like every other event, so a machine that spends its budget halted does not
+    // stretch the gesture.
+    let lift = Rc::new(slint::Timer::default());
+    // One lift, written once, because the timer runs it and a test drives it — and under
+    // `i-slint-backend-testing`'s no-event-loop init a `slint::Timer` never fires at all, so a
+    // release reachable only from the timer would be reachable from nothing.
+    let lifted: Rc<dyn Fn()> = {
+        let live = live.clone();
+        let weak = window.as_weak();
+        Rc::new(move || {
+            let Some(w) = weak.upgrade() else { return };
+            // `off_the_machine` and not `to_the_machine`: it clears §7.4's held sentence whether or
+            // not there is a machine, which is what stops a scroll over an empty bench leaving the
+            // refusal standing on the cradle label with nothing to take it down.
+            off_the_machine(&w, &live, |l| l.finger.borrow_mut().scroll_lifted());
+        })
+    };
+    {
+        let live = live.clone();
+        let weak = window.as_weak();
+        let lift = lift.clone();
+        let lifted = lifted.clone();
+        window.on_wheel_scrolled(move |dy| {
+            let Some(w) = weak.upgrade() else { return };
+            to_the_machine(&w, &live, machine::NO_MACHINE, |l| l.finger.borrow_mut().scrolled(dy));
+            let l = lifted.clone();
+            // One line, for the reason the drop settle's is: `the_work_timer_is_started_in_exactly_
+            // one_place_and_is_held` reads the receiver off the line `TimerMode::` is on.
+            lift.start(slint::TimerMode::SingleShot, wheel::SCROLL_LIFT, move || l());
+        });
+    }
     {
         let live = live.clone();
         let weak = window.as_weak();
@@ -2815,10 +2859,12 @@ fn wire(
         _tick: timer,
         _machine_timer: machine_timer,
         _settle: settle,
+        _lift: lift,
         live,
         machine_tick,
         work,
         tick,
+        lifted,
         files,
     }
 }
@@ -2865,6 +2911,11 @@ struct Wiring {
     /// back to close it. Single-shot and restarted per `DroppedFile`, so it costs nothing while
     /// nobody is dragging.
     _settle: Rc<slint::Timer>,
+    /// §16.11's scroll lift, and it is the fourth timer for the same first reason. A scroll gesture
+    /// has no end event — the platform sends deltas and stops — so the finger it put on the drawn
+    /// wheel is taken off `wheel::SCROLL_LIFT` after the last one. Dropped, it never fires, and the
+    /// machine keeps a finger on the wheel for the life of the window.
+    _lift: Rc<slint::Timer>,
     /// §12's machine, so that dropping this stops it — see the `Drop` impl below.
     live: Rc<RefCell<Option<Live>>>,
     /// **One tick of the machine, and it is the one the timer runs.**
@@ -2886,6 +2937,15 @@ struct Wiring {
     /// call this.
     #[allow(dead_code)]  // retired when: `main` needs to tick by hand — it does not, the timer does it
     tick: Rc<dyn Fn()>,
+    /// **The end of a scroll gesture, and it is the one edge no platform sends.** §16.11.
+    ///
+    /// Handed back for the same reason `tick` and `machine_tick` are: under
+    /// `i-slint-backend-testing`'s no-event-loop init a `slint::Timer` never fires, so the
+    /// `Release` that ends a scroll's contact would be reachable from nothing that can be driven
+    /// without a display — and a `Release` nothing can drive is exactly the stuck finger §7.4 says
+    /// a press must never become.
+    #[allow(dead_code)]  // retired when: `main` needs to lift the finger by hand — it does not, the timer does it
+    lifted: Rc<dyn Fn()>,
     /// **One of winit's three file events, handled** — §11.4 and §16.4.
     ///
     /// Handed back rather than registered on the window, because there is nowhere on a
@@ -3712,7 +3772,7 @@ where
 ///
 /// **Down and up rather than a click**, because §7.4 wants the duration: MENU held is the main menu
 /// on a real 5G and Select held is a different thing from Select tapped, and the emulator's own
-/// `MIN_BUTTON_HOLD` only bounds the release from below. It takes no window: there is nothing to
+/// `MIN_BUTTON_HOLD_USEC` only bounds the release from below. It takes no window: there is nothing to
 /// say when this does nothing, because the press it did nothing for is one the other route is
 /// already answering.
 fn centre_to_the_machine(live: &Rc<RefCell<Option<Live>>>, down: bool) {
@@ -3806,7 +3866,7 @@ fn machine_key_act(
         }
         // A button's down and up are the key's own, so `M` held is MENU held — which on a 5G is how
         // you get back to the main menu, and is the thing a synthesised tap could never say. The
-        // release is pushed out to `MIN_BUTTON_HOLD` by the emulator, not by anything here.
+        // release is pushed out to `MIN_BUTTON_HOLD_USEC` by the emulator, not by anything here.
         (Keyed::Press(b), _) => vec![ipod_machine::WheelEvent::Button(b.mask(), down)],
         (Keyed::Hold, true) => vec![ipod_machine::WheelEvent::Hold(!l.hold.get())],
         // §7.4 makes the hold switch a position rather than a press: there is no *up* to send.
@@ -3863,7 +3923,7 @@ fn hand_off(
 ///
 /// **`Stats` is where the last two come from and that is the point.** A drawn button depresses when
 /// your finger does and stays depressed until the machine has seen the release, which at
-/// `MIN_BUTTON_HOLD` is about 1.6 s of wall time — so what is on screen is the emulator's own
+/// `MIN_BUTTON_HOLD_USEC` is about 1.6 s of wall time — so what is on screen is the emulator's own
 /// answer about its own hardware rather than an animation this window plays over it. With no
 /// machine `Stats::buttons` is 0 and every one of them is false, which is the state a dead iPod's
 /// controls are in.
@@ -8793,6 +8853,21 @@ pub(crate) mod tests {
             .dispatch_event(WindowEvent::PointerReleased { position: at, button: PointerEventButton::Left });
     }
 
+    /// **A wheel or trackpad scroll of `dy` logical pixels, at a point.** §16.11.
+    ///
+    /// The `PointerMoved` first is not decoration: a `MouseEvent::Wheel` is hit-tested at its own
+    /// position, but `has_hover` and the item stack are what a scroll lands in, and dispatching one
+    /// at a point the window has never seen a pointer at is a gesture no pointing device makes.
+    ///
+    /// **Negative `dy` is down the list**, which is Slint's own convention rather than this
+    /// helper's — see `wheel::Finger::scrolled`.
+    fn scroll_at(w: &MainWindow, at: slint::LogicalPosition, dy: f32) {
+        use slint::platform::WindowEvent;
+        w.window().dispatch_event(WindowEvent::PointerMoved { position: at });
+        w.window()
+            .dispatch_event(WindowEvent::PointerScrolled { position: at, delta_x: 0.0, delta_y: dy });
+    }
+
     /// Everything queued for the machine, drained — so each assertion is about what THIS press did.
     fn drain_queue(wiring: &Wiring) -> Vec<ipod_machine::WheelEvent> {
         let held = wiring.live.borrow();
@@ -8917,6 +8992,291 @@ pub(crate) mod tests {
         drag_to(&w, on_the_drawn_ring(12));
         assert_eq!(drain_queue(&wiring), vec![ipod_machine::WheelEvent::Step(-1); 24]);
         lift_at(&w, on_the_drawn_ring(12));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A scroll over the drawn ring turns the machine's wheel**, `wheel::PX_PER_CLICK` logical
+    /// pixels a detent — and it is the route that did not exist. §16.11.
+    ///
+    /// There was no `scroll-event` anywhere on the bench before this, so a mouse wheel and a
+    /// trackpad over the drawn click wheel did **nothing at all**: measured on this very fixture,
+    /// one 60 px delta over the ring queued `[]`. Red again by deleting
+    /// `wheel-scrolled(dy) => { root.wheel-scrolled(dy); }` from either `bench.slint` or
+    /// `window.slint`, by dropping the `scroll-event` from `ipod.slint`'s `ring-touch`, or by
+    /// making `Finger::scrolled` return early.
+    ///
+    /// **The contact is one contact and the timer is what ends it**, which is the half a queue
+    /// assertion alone would not see: the finger goes down on the first delta, does not go down
+    /// again on the second, and comes up only when `Wiring::lifted` runs — driven here by hand,
+    /// because under `i-slint-backend-testing`'s no-event-loop init a `slint::Timer` never fires.
+    ///
+    /// **And two controls**, because a test that scrolled anywhere and found clicks would pass over
+    /// a window that turned the wheel for a scroll on the shelf: the empty well is one, and the
+    /// drawer's own page is the other — §16.11's *"a nested scroll would be unusable, so there are
+    /// none"* cuts both ways, and the wheel must not become the nested one.
+    #[test]
+    fn a_scroll_over_the_drawn_ring_turns_the_machines_wheel() {
+        let (w, wiring, dir) = a_wired_bench_with_a_machine("ring-scroll");
+
+        // One notch of a mouse wheel, down the list: 60 px, and Slint's winit backend is where
+        // that figure comes from. Down the list is clockwise, which is `Step(+1)`.
+        scroll_at(&w, on_the_drawn_ring(24), -wheel::PX_PER_CLICK);
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![ipod_machine::WheelEvent::Touch, ipod_machine::WheelEvent::Step(1)],
+            "a notch of the scroll wheel over the drawn ring did not reach the machine"
+        );
+        // The second notch is the same contact — a finger that left and came back between two
+        // notches of one gesture is a lie about a hand that never moved.
+        scroll_at(&w, on_the_drawn_ring(24), -wheel::PX_PER_CLICK);
+        assert_eq!(drain_queue(&wiring), vec![ipod_machine::WheelEvent::Step(1)]);
+        // …and the other way, which would catch a sign lost between the markup and the ring.
+        scroll_at(&w, on_the_drawn_ring(24), wheel::PX_PER_CLICK * 2.0);
+        assert_eq!(drain_queue(&wiring), vec![ipod_machine::WheelEvent::Step(-1); 2]);
+
+        // The end of the gesture, which is the window's own timer rather than anything the
+        // platform sends.
+        (wiring.lifted)();
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![ipod_machine::WheelEvent::Release],
+            "the scroll's contact was never lifted, so the machine has a finger on the wheel for \
+             the life of the window"
+        );
+        (wiring.lifted)();
+        assert!(drain_queue(&wiring).is_empty(), "the contact was lifted twice");
+
+        // The centre button is drawn over the ring and declares no `scroll-event` of its own, so a
+        // scroll there falls through to the ring — which is what a person aiming at the middle of a
+        // wheel means.
+        let (cx, cy) = drawn_wheel_centre();
+        scroll_at(&w, slint::LogicalPosition::new(cx, cy), -wheel::PX_PER_CLICK);
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![ipod_machine::WheelEvent::Touch, ipod_machine::WheelEvent::Step(1)],
+            "a scroll over the centre of the wheel did not reach the ring under it"
+        );
+        (wiring.lifted)();
+        drain_queue(&wiring);
+
+        // ── The two controls ──
+        //
+        // The empty well, top left: the bench, not the device.
+        scroll_at(&w, slint::LogicalPosition::new(24.0, 24.0), -wheel::PX_PER_CLICK * 4.0);
+        assert!(
+            drain_queue(&wiring).is_empty(),
+            "a scroll on the empty well turned the wheel, so every assertion above is about a \
+             window that turns it for a scroll anywhere on the bench"
+        );
+
+        // …and the drawer's own page, which is where §16.11 says a `Flickable` is allowed. The
+        // wheel must not swallow that one — a person scrolling a list of parts is not turning an
+        // iPod.
+        w.invoke_open_page(DrawerPage::Parts, 1);
+        let_the_drawer_settle();
+        let over_drawer = slint::LogicalPosition::new(
+            (geometry::PREF_WIDTH - geometry::DRAWER_W / 2.0) as f32,
+            (geometry::PREF_HEIGHT / 2.0) as f32,
+        );
+        scroll_at(&w, over_drawer, -wheel::PX_PER_CLICK * 4.0);
+        assert!(
+            drain_queue(&wiring).is_empty(),
+            "a scroll over the open drawer reached the machine's wheel — §16.11 gives the drawer \
+             pages the only Scroll in this program and the bench must not take theirs"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **§16.8's `Enter` / `Space` row, over each of the phases it claims** — *the primary action;
+    /// on the bench, the centre button*.
+    ///
+    /// **The half that was false**: over a *running* machine both keys queued nothing whatever.
+    /// The cradle's `FocusScope` raised `pressed-centre` alone, and `on_start_device`'s
+    /// `Act::ToMachine` arm deliberately sends nothing — *"the press belongs to the machine and to
+    /// nothing else, so the cradle sends nothing"*, on the understanding that the drawn button was
+    /// carrying the other half. It was, for the pointer. Nothing carried it for the keyboard, so
+    /// the one control the whole program is built around had no keyboard route at all in the one
+    /// phase §7.4 gives every drawn control to the machine. Measured before the fix on this
+    /// fixture: `Return -> []` and `Space -> []`.
+    ///
+    /// Red by deleting `root.centre-down();` from `bench.slint`'s cradle key handler.
+    ///
+    /// **The second half is auto-repeat**, and it is not a refinement. Slint's winit backend reads
+    /// `event.state` and drops winit's own `repeat` flag, so a held key is a stream of presses with
+    /// no releases in it; without the handler's `held` guard, holding `Enter` over an idle device
+    /// starts the machine on one repeat and powers it off on the next, because §7.3 makes the same
+    /// control *press ● to stop* the moment it is booting. Red by deleting the guard.
+    #[test]
+    fn enter_and_space_are_the_centre_button_in_every_phase_and_repeat_is_one_press() {
+        use slint::platform::Key;
+        let (w, wiring, dir) = a_wired_bench_with_a_machine("centre-keys");
+        let ret = String::from(char::from(Key::Return));
+
+        // ── Over a running machine: the machine's own Select, held for the key's duration ──
+        for key in [ret.as_str(), " "] {
+            w.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.into() });
+            assert_eq!(
+                drain_queue(&wiring),
+                vec![ipod_machine::WheelEvent::Button(ipod_machine::WHEEL_SELECT, true)],
+                "`{key}` over a running machine did not press the centre button"
+            );
+            w.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key.into() });
+            assert_eq!(
+                drain_queue(&wiring),
+                vec![ipod_machine::WheelEvent::Button(ipod_machine::WHEEL_SELECT, false)],
+                "`{key}` went down on the machine and never came up"
+            );
+        }
+
+        // ── Auto-repeat is one press ──
+        //
+        // Five presses with no releases between them, which is what the platform sends for a held
+        // key, and the machine must see one button go down once.
+        for _ in 0..5 {
+            w.window()
+                .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: ret.clone().into() });
+        }
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![ipod_machine::WheelEvent::Button(ipod_machine::WHEEL_SELECT, true)],
+            "a held key pressed the centre button once per repeat"
+        );
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: ret.clone().into() });
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![ipod_machine::WheelEvent::Button(ipod_machine::WHEEL_SELECT, false)]
+        );
+        // …and a release the scope never saw the press for is not answered, which is the other
+        // half of the same guard.
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: ret.clone().into() });
+        assert!(
+            drain_queue(&wiring).is_empty(),
+            "a second release sent a second `up` for a press that had already come up"
+        );
+
+        // ── Focus can leave while the key is down, which is the hole the guard itself opens ──
+        //
+        // `Tab` is not one of the two keys the cradle claims, so holding `Enter` and pressing it
+        // moves focus and the release goes to whoever has it now. Without `focus-lost` ending the
+        // press, the machine is left holding Select with nothing that will ever let go — the stuck
+        // finger, reached from the one direction the repeat guard makes possible.
+        // Red by deleting `focus-lost` from `bench.slint`'s cradle.
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: ret.clone().into() });
+        drain_queue(&wiring);
+        w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: char::from(Key::Tab).to_string().into(),
+        });
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![ipod_machine::WheelEvent::Button(ipod_machine::WHEEL_SELECT, false)],
+            "focus left while the key was down and the centre button stayed pressed on the machine"
+        );
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: ret.clone().into() });
+        assert!(
+            drain_queue(&wiring).is_empty(),
+            "the key's own release sent a second `up` after focus had already ended the press"
+        );
+        // Put focus back the way the program does — §7.2: a click on the body *is* `cradle-focus.
+        // focus()` and nothing else. Ten pixels above the wheel's outer edge is chassis: not the
+        // ring, not the glass, not the hold switch. Without this the arm below would be dispatching
+        // `Return` at whatever `Tab` moved to.
+        let (cx, cy) = drawn_wheel_centre();
+        let above = slint::LogicalPosition::new(
+            cx,
+            cy - (geometry::WHEEL_D * dressed_fit().hero_logical / 2.0) as f32 - 10.0,
+        );
+        press_at(&w, above);
+        lift_at(&w, above);
+        assert!(drain_queue(&wiring).is_empty(), "the click that refocused the cradle was on a control");
+
+        // ── And with no machine it is the OTHER half, unchanged: the press that starts one ──
+        //
+        // §7.3's own rule — the two routes must not disagree about what pressing means — and this
+        // is the arm that proves adding the machine's half did not take the program's away.
+        *wiring.live.borrow_mut() = None;
+        let started = Rc::new(std::cell::Cell::new(0));
+        {
+            let started = started.clone();
+            w.on_start_device(move |_| started.set(started.get() + 1));
+        }
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: ret.clone().into() });
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: ret.into() });
+        assert_eq!(
+            started.get(),
+            1,
+            "`Return` on a bench with no machine no longer presses the centre button that starts one"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **A contact that is cancelled rather than lifted takes the finger off the wheel.** §7.4.
+    ///
+    /// `PointerEventKind` has four values and the drawn controls read two of them. The two they
+    /// read are the only two a mouse sends; `cancel` is how a grab is torn down instead of released
+    /// (`i-slint-core-1.17.1/items/input_items.rs:87`, `:145`), and it is the ordinary way a
+    /// **touch** ends when the system takes the gesture back — a palm, an edge swipe, a call.
+    ///
+    /// Measured before the fix, through the public `WindowEvent::PointerExited` this test uses: a
+    /// press on the drawn MENU label queued `[Touch, Button(MENU, true)]`, the cancel queued
+    /// **nothing**, and the next press on the ring queued `[Button(NEXT, true)]` with **no
+    /// `Touch`** — because the window still believed a finger was on the wheel. So the machine was
+    /// left with MENU held down and a finger on the wheel for the life of the window, which is the
+    /// stuck finger §7.4 says a press must never become, and it took the whole wheel with it.
+    ///
+    /// Red by taking `|| ev.kind == PointerEventKind.cancel` back out of `ipod.slint`'s
+    /// `ring-touch`.
+    #[test]
+    fn a_cancelled_contact_lifts_the_finger_rather_than_leaving_it_on_the_wheel() {
+        let (w, wiring, dir) = a_wired_bench_with_a_machine("cancelled-contact");
+
+        press_at(&w, on_the_drawn_ring(0));
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![
+                ipod_machine::WheelEvent::Touch,
+                ipod_machine::WheelEvent::Button(ipod_machine::WHEEL_MENU, true),
+            ]
+        );
+        w.window().dispatch_event(slint::platform::WindowEvent::PointerExited);
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![
+                ipod_machine::WheelEvent::Button(ipod_machine::WHEEL_MENU, false),
+                ipod_machine::WheelEvent::Release,
+            ],
+            "a cancelled contact left MENU held down on the machine with no finger to lift it"
+        );
+
+        // …and the wheel is usable again, which is the half the queue assertion above cannot see:
+        // a finger the window still thinks is down sends no `Touch` on the next press.
+        press_at(&w, on_the_drawn_ring(24));
+        assert_eq!(
+            drain_queue(&wiring),
+            vec![
+                ipod_machine::WheelEvent::Touch,
+                ipod_machine::WheelEvent::Button(ipod_machine::WHEEL_RIGHT, true),
+            ],
+            "the next press sent no `Touch`, so the window still believes the cancelled finger is \
+             on the wheel"
+        );
+        lift_at(&w, on_the_drawn_ring(24));
+        drain_queue(&wiring);
+
+        // And the hold switch's own cancel, whose cost is a sentence rather than a bit: it is
+        // `hold-released` that takes §7.4's held refusal off the cradle label.
+        *wiring.live.borrow_mut() = None;
+        w.invoke_hold_pressed();
+        assert_eq!(w.get_held_sentence().to_string(), machine::NO_MACHINE_HOLD);
+        w.invoke_hold_released();
+        assert!(w.get_held_sentence().is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -9220,8 +9580,8 @@ pub(crate) mod tests {
                 .join("\n")
         };
         let (ipod, bench, window) = (read("ipod.slint"), read("bench.slint"), read("window.slint"));
-        for c in ["wheel-down", "wheel-moved", "wheel-up", "centre-down", "centre-up",
-                  "hold-pressed", "hold-released"] {
+        for c in ["wheel-down", "wheel-moved", "wheel-up", "wheel-scrolled", "centre-down",
+                  "centre-up", "hold-pressed", "hold-released"] {
             assert!(
                 ipod.contains(&format!("root.{c}(")),
                 "ui/ipod.slint declares `{c}` and no control raises it — the drawn control at the \
@@ -9767,14 +10127,15 @@ pub(crate) mod tests {
     /// call site silently replaces the first — the same class as
     /// `there_is_exactly_one_winit_event_filter_registration`, and there is no error there either.
     ///
-    /// **There are three timers now and the count is three, which is not the same as the rule
-    /// being relaxed.** §12 needs a 60 Hz tick, a download needs a 10 Hz one, and §16.4's drop
-    /// needs a single shot 150 ms after a file lands — because winit has no event that says a drop
-    /// is over, so something has to come back and close the window the program drew itself. One
-    /// constant for three rates is how a panel comes to run at the speed of a progress bar. What
-    /// the rule actually is — *each timer is started in exactly one place* — is what this asserts:
-    /// the starts are counted per timer by the name of the `Rc` each one is on, so a second start
-    /// on any of them is red however many timers exist.
+    /// **There are four timers now and the count is four, which is not the same as the rule
+    /// being relaxed.** §12 needs a 60 Hz tick, a download needs a 10 Hz one, §16.4's drop needs a
+    /// single shot 150 ms after a file lands, and §16.11's scroll needs one 300 ms after the last
+    /// delta — the last two for the same reason, which is that neither winit nor Slint has an event
+    /// that says a drop or a gesture is over, so something has to come back and close what the
+    /// program opened. One constant for four rates is how a panel comes to run at the speed of a
+    /// progress bar. What the rule actually is — *each timer is started in exactly one place* — is
+    /// what this asserts: the starts are counted per timer by the name of the `Rc` each one is on,
+    /// so a second start on any of them is red however many timers exist.
     ///
     /// **The receiver is read off the line `TimerMode::` is on**, which is a real constraint on how
     /// a start may be written and not an artefact: `settle.start(` split across lines recorded the
@@ -9802,7 +10163,7 @@ pub(crate) mod tests {
         }
         // The control: a sweep that read no starts, or that could not tell the two apart, both
         // look exactly like a sweep that found no second start on one timer.
-        assert_eq!(starts.len(), 3, "the timer sweep read {starts:?}, which is not this window");
+        assert_eq!(starts.len(), 4, "the timer sweep read {starts:?}, which is not this window");
         let mut owners: Vec<&String> = starts.iter().map(|(on, _)| on).collect();
         owners.sort();
         owners.dedup();
@@ -16880,12 +17241,13 @@ pub(crate) mod tests {
         // The five §16.8 / §7.4 input callbacks are pressed by a **dispatched event** rather than
         // by `invoke_`, which is the stronger route and the only one that proves the window's own
         // key and pointer handling. Each names the test that dispatches it.
-        const NOT_INVOKED: [(&str, &str); 4] = [
+        const NOT_INVOKED: [(&str, &str); 5] = [
             (
                 "machine-key",
                 "the_keys_that_are_the_machines_reach_it_and_the_arrows_keep_their_other_job",
             ),
             ("wheel-moved", "a_drag_on_the_drawn_ring_turns_the_machines_wheel"),
+            ("wheel-scrolled", "a_scroll_over_the_drawn_ring_turns_the_machines_wheel"),
             ("centre-down", "a_press_on_the_drawn_centre_button_reaches_the_machine"),
             ("centre-up", "a_press_on_the_drawn_centre_button_reaches_the_machine"),
         ];
@@ -17513,8 +17875,8 @@ pub(crate) mod tests {
     /// five `Made of` lines were undrawn and so was the one control §7.2 puts on this page.
     ///
     /// It also pins the four bindings that were reading the **bench's** two fields: `enabled` and
-    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:837` and
-    /// `:858` read for the drawn iPod, and `machine-rule` was a literal `true`.
+    /// `reason` came from `DeviceRow.startable` / `.cradle-label`, which `window.slint:841` and
+    /// `:874` read for the drawn iPod, and `machine-rule` was a literal `true`.
     #[test]
     fn the_devices_page_opens_a_row_and_reaches_its_start() {
         let dir = temp_dir("devices-wired");
