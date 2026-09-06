@@ -149,10 +149,11 @@ fn a_restored_machine_runs_the_same_instructions_as_the_one_it_came_from() {
 
 /// An image from an older format must be **refused**, not misread.
 ///
-/// The wheel block and now `mmap_regs` were both added without the reader being able to tell. A
-/// field appended in the middle shifts everything after it, so an old image parsed by a new reader
-/// produces a machine assembled out of the wrong words — which is worse than cold-booting, because
-/// it looks like it worked.
+/// The wheel block, `mmap_regs`, and now the **coprocessor** were each added without the reader
+/// being able to tell. A field appended in the middle shifts everything after it, so an old image
+/// parsed by a new reader produces a machine assembled out of the wrong words — which is worse than
+/// cold-booting, because it looks like it worked. The coprocessor block goes in immediately after
+/// the CPU's registers, so a v7 image read as v8 would take the executed count as a register file.
 #[test]
 fn a_snapshot_from_an_older_format_is_refused() {
     let mut a = machine_running_through_a_window();
@@ -160,15 +161,15 @@ fn a_snapshot_from_an_older_format_is_refused() {
     let mut image = a.snapshot();
     assert_eq!(
         &image[..8],
-        b"IPODSNP7",
+        b"IPODSNP8",
         "the format tag moved; update this test with it"
     );
 
-    image[7] = b'6';
+    image[7] = b'7';
     let mut b = fresh_machine();
     assert!(
         !b.restore(&image),
-        "a v6 image was accepted by the v7 reader"
+        "a v7 image was accepted by the v8 reader"
     );
 
     let mut truncated = a.snapshot();

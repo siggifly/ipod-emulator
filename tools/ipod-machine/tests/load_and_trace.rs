@@ -1595,17 +1595,23 @@ fn dropping_the_sleep_accumulator_moves_the_clock_backwards() {
 /// `mmap_regs`**, and that one was not hypothetical: without those sixteen words a restored machine
 /// has no address map, reads zeros at its own PC, and dies within a few hundred instructions while
 /// the panel still shows the last picture it drew. See `tests/snapshot_round_trip.rs`.
+///
+/// **v7 -> v8 added the coprocessor**, and that one was not hypothetical either. Two cores became
+/// the default on 2026-09-05, and the format carried only the first: a restored machine resumed
+/// its CPU mid-OS beside a second core still at reset. RetailOS acts on wheel input only with the
+/// coprocessor alive, so a restored machine reproduced the one-core failure exactly — 34 of 34
+/// injected wheel steps fired, all 34 frames were read, and the panel never moved.
 #[test]
 fn an_older_snapshot_is_refused() {
     let m = sleeping_machine();
     let mut img = m.snapshot();
     assert_eq!(
         &img[..8],
-        b"IPODSNP7",
-        "the format moved past v7; update this test"
+        b"IPODSNP8",
+        "the format moved past v8; update this test"
     );
 
-    for old in [b"IPODSNP3", b"IPODSNP4", b"IPODSNP5", b"IPODSNP6"] {
+    for old in [b"IPODSNP3", b"IPODSNP4", b"IPODSNP5", b"IPODSNP6", b"IPODSNP7"] {
         img[..8].copy_from_slice(old);
         let mut into = sleeping_machine();
         assert!(
@@ -1617,7 +1623,7 @@ fn an_older_snapshot_is_refused() {
 
     // Positive control: the same bytes with the current magic still restore, so what is refused is
     // the version and not the image.
-    img[..8].copy_from_slice(b"IPODSNP7");
+    img[..8].copy_from_slice(b"IPODSNP8");
     let mut into = sleeping_machine();
     assert!(
         into.restore(&img),

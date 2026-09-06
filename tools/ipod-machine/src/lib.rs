@@ -9931,12 +9931,32 @@ impl Machine {
         let w32 = |o: &mut Vec<u8>, v: u32| o.extend_from_slice(&v.to_le_bytes());
         let w64 = |o: &mut Vec<u8>, v: u64| o.extend_from_slice(&v.to_le_bytes());
 
-        o.extend_from_slice(b"IPODSNP7");
+        // **`8` because the coprocessor is in it now.** Version 7 carried the CPU, memory, timers,
+        // interrupt state and the BCM — and not the second core, because when the format was
+        // written there was not one running. Two cores became the default on 2026-09-05, and a
+        // restored machine got a coprocessor in reset state while the CPU resumed mid-OS.
+        //
+        // That is not a cosmetic gap. RetailOS acts on wheel input only with the coprocessor alive
+        // (research/03 §57/§58), so every restored machine behaved like the one-core failure it
+        // took a day to diagnose: **34 of 34 injected wheel steps fired, all 34 frames read, and
+        // the panel never moved** — on a snapshot of a machine that had been answering.
+        o.extend_from_slice(b"IPODSNP8");
         let cpu = self.cpu.save();
         w32(&mut o, cpu.len() as u32);
         for x in &cpu {
             w32(&mut o, *x);
         }
+        // **The second core, in the same shape as the first.** Written unconditionally, even for a
+        // one-core run, so the format does not change size with a flag — a reader that had to know
+        // how the machine was configured before it could parse the file would be a format that
+        // cannot be read without the command line that produced it.
+        let cop = self.cop.save();
+        w32(&mut o, cop.len() as u32);
+        for x in &cop {
+            w32(&mut o, *x);
+        }
+        w32(&mut o, u32::from(self.mem.second_core));
+        w32(&mut o, u32::from(self.mem.cop_asleep));
         w64(&mut o, self.executed as u64);
         w64(&mut o, self.instr_per_usec as u64);
         w32(&mut o, self.timer_next[0]);
@@ -10055,7 +10075,7 @@ impl Machine {
     /// Regions are replaced wholesale rather than merged: a partial restore would leave the machine
     /// in a state that never existed, which is worse than refusing.
     pub fn restore(&mut self, b: &[u8]) -> bool {
-        if b.len() < 8 || &b[..8] != b"IPODSNP7" {
+        if b.len() < 8 || &b[..8] != b"IPODSNP8" {
             return false;
         }
         let mut p = 8usize;
@@ -10085,6 +10105,15 @@ impl Machine {
         if !self.cpu.load(&cpu) {
             return false;
         }
+        // The coprocessor, in the order `snapshot` wrote it. A restored machine whose second core
+        // came back at reset is the defect this format version exists to fix.
+        let m = r32(&mut p) as usize;
+        let cop: Vec<u32> = (0..m).map(|_| r32(&mut p)).collect();
+        if !self.cop.load(&cop) {
+            return false;
+        }
+        self.mem.second_core = r32(&mut p) != 0;
+        self.mem.cop_asleep = r32(&mut p) != 0;
         let r64 = |p: &mut usize| -> u64 {
             if *p + 8 > b.len() {
                 short.set(true);
