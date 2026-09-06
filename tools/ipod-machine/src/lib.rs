@@ -45,6 +45,7 @@ pub use hw::wm8758::Wm8758;
 pub use hw::ata::{Ata, PpDmaCtl};
 pub use hw::cop::{Core};
 pub use hw::video::{Bcm, BcmOp};
+pub use hw::piezo::{Piezo, Fire};
 pub mod compose;
 pub mod doom;
 pub mod fat;
@@ -700,6 +701,13 @@ pub struct Memory {
     /// checks, so the driver takes its *error* path five times per poll and the emulator was
     /// reporting a broken transceiver rather than an idle one.
     pub clickwheel: Option<ClickWheel>,
+    /// `PWM0_CTRL` — the click. See [`Piezo`].
+    ///
+    /// **On unconditionally**, unlike the wheel, and it needs no flag: the device consumes nothing
+    /// and answers nothing, so the `mmio-7` backing store still serves every access exactly as it
+    /// did before. `--no-piezo` would offer a choice between two identical machines, one of which
+    /// cannot be measured.
+    pub piezo: Piezo,
     /// The panel's brightness, counted off the pulses the firmware sends. See [`Backlight`].
     pub backlight: Backlight,
     /// The NOR flash as a device rather than a read-only region, when modelled.
@@ -1839,6 +1847,17 @@ impl Memory {
             // line changes nothing today — which is exactly why it has to be here: without it the
             // device would be silently bypassed the first time the wheel is run without I²C.
             || self.clickwheel.as_ref().is_some_and(|w| hits(w.base + ClickWheel::CTRL, ClickWheel::WINDOW - ClickWheel::CTRL))
+            // `PWM0_CTRL`, the click. **Seventh time this list has been the bug**, and this one was
+            // written knowing that: the firmware drives the register with `str`, so every access is
+            // a word store that the hoist would copy into `mmio-7` and return from, and
+            // `Piezo::write8` would never run. The device is a recorder, so the symptom would not
+            // have been a wrong machine — it would have been a permanent, quiet zero, which is
+            // exactly the shape §6 of the working contract is about.
+            //
+            // The whole page, per the rule at the top. It costs nothing: the register is touched a
+            // few hundred times in a whole boot, against millions for the pages that have to stay
+            // fast.
+            || hits(Piezo::BASE, Piezo::WINDOW)
             || self.mmap_base.is_some_and(|b| hits(b, 0x40))
             || self.xmb.as_ref().is_some_and(|x| hits(x.base, 0x40))
             // The USB controller's clock/reset register at `+0x140` filters the bit the firmware
@@ -2790,6 +2809,14 @@ impl Memory {
                 }
             }
         }
+        // The PWM channel — counted, never answered. The region below returns the value, exactly as
+        // it did before this device existed. See [`Piezo`] for why it takes the weaker power.
+        {
+            let off = addr.wrapping_sub(self.piezo.base);
+            if off < Piezo::PAGE {
+                self.piezo.observe_read8(off);
+            }
+        }
         if let Some(base) = self.mmap_base {
             let off = addr.wrapping_sub(base);
             if off < 0x40 {
@@ -3107,6 +3134,15 @@ impl Memory {
             self.clickwheel = Some(w);
             if owned {
                 return;
+            }
+        }
+        // The PWM channel — the click. Counted on the way past and **not** consumed: the store goes
+        // on to the backing region, so the machine behaves exactly as it did before. See [`Piezo`].
+        {
+            let off = addr.wrapping_sub(self.piezo.base);
+            if off < Piezo::PAGE {
+                let (pc, n, t) = (self.pc, self.icount, self.usec);
+                self.piezo.write8(off, val, pc, n, t);
             }
         }
         if let Some(base) = self.mmap_base {
@@ -4493,6 +4529,7 @@ impl Machine {
             wm8758: Wm8758::new(),
             xmb: None,
             clickwheel: None,
+            piezo: Piezo::new(Piezo::BASE),
             nor: None,
             page_log: None,
             page_gran: 0x100,

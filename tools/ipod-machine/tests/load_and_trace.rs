@@ -2228,3 +2228,65 @@ fn a_time_anchored_rotate_is_spaced_by_the_runs_own_clock() {
         assert_eq!(s[1].at - s[0].at, gap_instr, "instructions were rescaled");
     }
 }
+
+/// **`PWM0_CTRL` must not be swallowed by the fast read/write path.**
+///
+/// The firmware drives the piezo with `str` — `0x000c7210` and `0x0011c758` are both word stores —
+/// and `0x7000a000` sits inside the `mmio-7` region, which is ordinary backing memory. So unless
+/// the page is named in `Memory::page_is_plain`, `write32`'s hoist copies the word straight into
+/// the region and returns, `Piezo::write8` never runs, and the device reports **zero clicks for
+/// ever** while the machine behaves exactly as before. That is not a hypothetical failure mode:
+/// the comment on that list records six devices it has already happened to.
+///
+/// A recorder cannot be checked by watching the guest, because a correct recorder changes nothing
+/// about the guest. This test is the substitute: it asserts the hook is *reached*.
+///
+/// **Delete the `hits(Piezo::BASE, Piezo::WINDOW)` line from `page_is_plain` and this fails** with
+/// `fires` at 0 — verified by doing it.
+#[test]
+fn a_word_store_to_pwm0_ctrl_reaches_the_device() {
+    use arm7tdmi::Bus as _;
+    use ipod_machine::Piezo;
+    let app = EApp::parse(synth_eapp()).expect("parse");
+    let mut m = Machine::new(&app, RAM_BASE, RAM_SIZE);
+    // The region as `map_hardware` really makes it: a megabyte of plain storage starting at
+    // 0x70000000. A smaller region would not cover the address, `fast_region` would decline, and
+    // the test would pass without proving anything — which is the shape of a test that tests
+    // nothing.
+    m.mem.regions.push(ipod_machine::Region {
+        name: "mmio-7",
+        base: 0x7000_0000,
+        data: vec![0; 0x10_0000],
+    });
+    assert_eq!(m.mem.piezo.fires, 0, "nothing has clicked yet");
+
+    // Apple's own pair, as words, in its own order.
+    m.mem.write32(Piezo::BASE, 0);
+    m.mem.write32(Piezo::BASE, 0x8080_012c);
+    assert_eq!(m.mem.piezo.fires, 1, "the store reached the device");
+    assert_eq!(m.mem.piezo.writes, 2);
+    assert_eq!(m.mem.piezo.wave(), 0x0080_012c);
+
+    // And the guest sees exactly what plain memory would have given it — because it IS plain
+    // memory: the device counts the store and does not consume it, so the region still answers.
+    // That is what makes attaching the device a no-op for every measurement taken before it
+    // existed, and what keeps `Machine::snapshot` — which serialises regions and not peripherals —
+    // correct without a format bump.
+    assert_eq!(m.mem.read32(Piezo::BASE), 0x8080_012c);
+    assert_eq!(
+        m.mem.region_named("mmio-7").map(|r| &r.data[0xa000..0xa004]),
+        Some(&0x8080_012cu32.to_le_bytes()[..]),
+        "the backing region holds the word, not the device alone"
+    );
+
+    m.mem.write32(Piezo::BASE, 0);
+    assert_eq!(m.mem.piezo.stops, 1);
+    assert_eq!(m.mem.read32(Piezo::BASE), 0);
+    assert_eq!(m.mem.piezo.fires, 1, "a stop is not a click");
+
+    // The rest of the page is disowned and still answers from the region, so taking the page off
+    // the fast path cost the neighbours nothing but a counter.
+    m.mem.write32(Piezo::BASE + 0x20, 0xdead_beef);
+    assert_eq!(m.mem.read32(Piezo::BASE + 0x20), 0xdead_beef);
+    assert_eq!(m.mem.piezo.neighbours[&0x20].1, 4, "four bytes counted");
+}

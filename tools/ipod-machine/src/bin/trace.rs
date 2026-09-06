@@ -2346,6 +2346,13 @@ fn main() {
                 x.gate_opens, x.gate_closes, x.ram_kicks
             );
         }
+        // The click. Prints nothing at all on a run that never touched `PWM0_CTRL`, which is the
+        // honest answer and was the state of every run in this repository before the device existed
+        // — `--watch-range` and `--input-regs` over the same address reported zero on a machine
+        // that could not navigate, and the zero was read as "the piezo is unused".
+        for line in m.mem.piezo.report() {
+            println!("{line}");
+        }
         // Every number here is checkable against something. `commands` should equal the transmits
         // RetailOS's `0x00283fa0` starts; `data reads` should equal the loads at `0x00281364` plus
         // `0x00283f04`; `frames dropped` says whether an injected sequence outran the driver; and
