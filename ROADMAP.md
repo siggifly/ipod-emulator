@@ -499,6 +499,35 @@ of Apple's firmware) and `ipod-drm` (how iTunes authorises a title) are private,
 is the public arm. **That split is by what can be published, not by subject** — so extraction and
 keystore work belongs there and arrives here as a decrypted file plus a specification.
 
+## M8b · Re-implementation, as the attainable path to a playable title
+
+**Proposed by cilantrolimewire, 2026-08-30, and accepted the same day** — recorded here because it
+was accepted in a chat channel and a decision that lives only in scrollback is not a decision.
+
+In their words: *"observing opaque behavior of the encrypted games and writing that logic from
+scratch, and then only lifting the assets — textures, sound files, etc. — from the encrypted source
+without necessarily needing to decrypt the runtime binary."* And their own caveat, kept because it
+is the honest half: *"I'm not a huge fan of that approach and obviously I would like to have
+recompilation work or accurate emulation, but it's a very attainable approach, and these games are
+relatively simple so I don't think secondhand re-implementation would drift logic too badly."*
+
+**Why it earns a place beside M8 rather than inside it.** M8 and this one are two routes to the same
+artifact and they fail in different places. M8 is blocked on a keystore nobody has — an *external*
+gate that no amount of work here opens. This is blocked on nothing: the assets are extractable
+without decrypting the runtime, and the logic is observable by watching a title run under this
+emulator. It can start today, and it produces a playable title without waiting for #6.
+
+**What it costs, stated because it is the reason it is not simply better:** the result is a
+reimplementation, not the game. It can drift, and nothing but play-testing catches drift. M8's
+output is provably the original; this one's is a good likeness. Both are worth having, and which
+matters depends on whether the goal is preservation or a thing to play.
+
+**Depends on:** the emulator being able to run a title and be watched while it does — which is what
+`--drive` and the control socket now make possible.
+
+**Settled by:** one title playable end to end, its assets lifted from the original and its logic
+written here, with a side-by-side against the same title under the emulator.
+
 ## M9 · USB, and target disk mode
 
 USB unlocks disk mode and restore — the two things a person actually does with a real iPod. **Target
