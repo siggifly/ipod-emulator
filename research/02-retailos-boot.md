@@ -503,6 +503,18 @@ TIMER1_CFG      (0x60005000) = 0xc00003fc    enable | repeat | period 1021 µs  
   `CPU_INT_EN_STAT`. Rather than intercept those stores in the byte-level `Bus`, they land in the
   MMIO region as ordinary writes and are consumed here — which keeps device knowledge out of the
   memory layer.
+
+  > **RETRACTED 2026-09-06 — the second sentence was wrong, and it cost Doom.** Deferring those
+  > stores to the next service tick throws away the one thing they carry: *which came last*. The
+  > consumer applied set before clear, so a disable followed by an enable of the same bit, both
+  > inside the 64 instructions between two ticks, came out **disabled**. Rockbox's `timer_register`
+  > is that exact pair — `timer_set` writes `CPU_INT_DIS = TIMER2_MASK`, `timer_start` writes
+  > `CPU_INT_EN = TIMER2_MASK` twenty-two instructions later — so IRQ 1 was masked for the rest of
+  > every run, `TIMER2()` never ran, and Doom's clock never advanced. RetailOS never noticed because
+  > it never writes that pair close together. The ports are applied at the store now
+  > (`Memory::int_ctl_port`); this routine only reads the state they leave. See
+  > `research/06` §"What Doom was waiting for" for the measurement.
+
 - **A PP timer interrupt is acknowledged at the timer**, by reading its `VAL` register; there is no
   central acknowledge. Clearing on delivery instead would be simpler and wrong — the handler reads
   `CPU_INT_STAT` to decide *which* source fired, so a bit already cleared dispatches to nothing.

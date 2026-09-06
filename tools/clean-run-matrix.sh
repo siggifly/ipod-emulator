@@ -281,8 +281,10 @@ boot_doom() {                       # $1 nor  $2 gen  $3 label  $4 drive
   # **A picture count cannot tell "it started" from "it is playing", and it said PASS for a game
   # that had hung.** Doom's startup scrolls a console — R_InitPlanes, I_InitSound, "Starting
   # Graphics engine" — and that alone is 29 distinct pictures, which sailed past `pics >= 8`.
-  # Measured on 5G-real: the last panel change was at **153 s** and the run continued to 2 400 s,
-  # so the game initialised and then drew nothing for another 2 247 seconds. The row said PASS.
+  # Measured on 5G-real while the interrupt controller was throwing away Doom's timer enable: the
+  # last panel change was at **153 s** and the run continued to 2 400 s, so the game initialised and
+  # then drew nothing for another 2 247 seconds. The row said PASS. That defect is fixed
+  # (KNOWN-BUGS, 2026-09-06) and this check is what would catch the next one of its shape.
   #
   # So the question is not how many pictures but **whether it was still drawing at the end**. A
   # game being played changes the panel constantly; a hung one stops. `last` is the last frame's

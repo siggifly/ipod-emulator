@@ -2475,7 +2475,13 @@ impl Bus for Memory {
             // line redundant: the page never reaches the fast path from either direction. It stays
             // because the two guards were added for different reasons and a reader who deletes one
             // on the strength of the other should have to read this sentence first.
-            .filter(|_| Mbx::strobe(a).is_none() && Mbx::queue(a).is_none())
+            // The interrupt controller's set/clear ports leave the fast path for the same reason
+            // the mailbox strobes do: a word store to one of them has its effect on a DIFFERENT
+            // address, and the hoist copies into the region and returns. Only the six ports per
+            // bank are named, so `CPU_INT_STAT` and the rest of the page stay fast.
+            .filter(|_| {
+                Mbx::strobe(a).is_none() && Mbx::queue(a).is_none() && int_ctl_port(a).is_none()
+            })
         {
             // `watch_range` and `input_probe` were missing from this hoist, and `count` is the only
             // thing that feeds them — so `--watch-range` saw *byte* writes (write8_inner calls
@@ -2863,6 +2869,30 @@ impl Memory {
     fn write8_inner(&mut self, addr: u32, val: u8) {
         self.note_store_pc(addr, val as u32);
         self.count(addr, true, val);
+        // The interrupt controller's set/clear ports, applied AT THE STORE — see [`int_ctl_port`]
+        // for why the deferred version could not be right. Ahead of every device below it because
+        // none of them answer in either of the two windows it claims, and the test is an AND and a
+        // compare before anything else runs.
+        if let Some((stat, set)) = int_ctl_port(addr) {
+            // `--writelog` has to keep seeing these, or taking them off the fast path makes an
+            // instrument go quiet about the one page this change is about.
+            if self.write_log.is_some() {
+                let idx = self.locate_idx(addr);
+                self.note_write(addr, val as u32, idx);
+            }
+            let at = stat + (addr & 3);
+            let was = self.peek(at);
+            let now = if set { was | val } else { was & !val };
+            if let Some((buf, i)) = self.locate_write(at) {
+                buf[i] = now;
+            }
+            // The port itself reads back zero, which is what it did when these were consumed a
+            // tick later and is the only claim this model has ever made about reading one.
+            if let Some((buf, i)) = self.locate_write(addr) {
+                buf[i] = 0;
+            }
+            return;
+        }
         if let Some(b) = &mut self.bcm {
             if let Some(off) = b.window(addr) {
                 b.write8(off, val);
@@ -6837,9 +6867,9 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
     /// in microseconds (`TIMER_FREQ` is 1 MHz on PortalPlayer).
     ///
     /// `CPU_INT_EN` and `CPU_INT_DIS` are write-to-set and write-to-clear, with the real state in
-    /// `CPU_INT_EN_STAT`. Rather than intercept those writes in the bus, the writes land in the
-    /// MMIO region as ordinary stores and are consumed here — which keeps the byte-level `Bus`
-    /// free of device knowledge.
+    /// `CPU_INT_EN_STAT`. Those stores take effect where they are made — see [`int_ctl_port`],
+    /// which also records what the deferred version cost. All this routine does with them is read
+    /// the state they leave.
     /// `pub` so a test can drive exactly one tick. Everything this touches — the DMA engines, the
     /// forced-interrupt latches, the timers — is edge-sensitive to how often it runs, and a test
     /// that had to reach it through `run` would be measuring the scheduler instead of the device.
@@ -6949,66 +6979,27 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
         const CPU_INT_STAT: u32 = 0x6000_4000;
         const INT_STAT: u32 = 0x6000_4010;
         const CPU_INT_EN_STAT: u32 = 0x6000_4020;
-        const CPU_INT_EN: u32 = 0x6000_4024;
-        const CPU_INT_DIS: u32 = 0x6000_4028;
         // The second bank, IRQs 32..63. Same layout, 0x100 higher. RetailOS's kernel init clears
         // both banks in six consecutive stores at 0x1604..0x1618, which is what identifies these
         // as real registers rather than a guess from the header file.
         const CPU_HI_INT_STAT: u32 = 0x6000_4100;
         const HI_INT_STAT: u32 = 0x6000_4110;
         const CPU_HI_INT_EN_STAT: u32 = 0x6000_4120;
-        const CPU_HI_INT_EN: u32 = 0x6000_4124;
-        const CPU_HI_INT_DIS: u32 = 0x6000_4128;
         // Software-raised interrupts. Rockbox names all six registers and uses none of them;
         // RetailOS uses them as its deferred-work mechanism, which is why they matter here. Its
         // DMA ISR finishes by writing `INT_FORCED_SET = 1 << 13` at 0x001fc840 — the completion
         // callback runs at task level on line 13, not in the ISR.
         const INT_FORCED_STAT: u32 = 0x6000_4014;
-        const INT_FORCED_SET: u32 = 0x6000_4018;
-        const INT_FORCED_CLR: u32 = 0x6000_401c;
         const HI_INT_FORCED_STAT: u32 = 0x6000_4114;
-        const HI_INT_FORCED_SET: u32 = 0x6000_4118;
-        const HI_INT_FORCED_CLR: u32 = 0x6000_411c;
         const TIMER_CFG: [u32; 2] = [0x6000_5000, 0x6000_5008];
 
-        // Write-to-set / write-to-clear, with the real state in EN_STAT — see the doc comment.
-        let consume = |m: &mut Memory, en_stat: u32, en: u32, dis: u32| {
-            let mut v = m.read32(en_stat);
-            let set = m.read32(en);
-            if set != 0 {
-                v |= set;
-                m.write32(en, 0);
-            }
-            let clr = m.read32(dis);
-            if clr != 0 {
-                v &= !clr;
-                m.write32(dis, 0);
-            }
-            m.write32(en_stat, v);
-            v
-        };
-        let enabled = consume(&mut self.mem, CPU_INT_EN_STAT, CPU_INT_EN, CPU_INT_DIS);
-        let enabled_hi = consume(
-            &mut self.mem,
-            CPU_HI_INT_EN_STAT,
-            CPU_HI_INT_EN,
-            CPU_HI_INT_DIS,
-        );
-        // Identical set/clear/state shape to the enable trio, so the same consumer serves. The
-        // kernel's own init writes `0xffffffff` to both CLR registers at 0x1618 and 0x160c, which
-        // is what says these are write-to-clear rather than plain words.
-        let forced = consume(
-            &mut self.mem,
-            INT_FORCED_STAT,
-            INT_FORCED_SET,
-            INT_FORCED_CLR,
-        );
-        let forced_hi = consume(
-            &mut self.mem,
-            HI_INT_FORCED_STAT,
-            HI_INT_FORCED_SET,
-            HI_INT_FORCED_CLR,
-        );
+        // The enable state and the forced state, both of them already up to date: their set/clear
+        // ports are applied by [`int_ctl_port`] at the store that makes them, so there is nothing
+        // to consume here. Reading them a tick late was the bug — see that function.
+        let enabled = self.mem.read32(CPU_INT_EN_STAT);
+        let enabled_hi = self.mem.read32(CPU_HI_INT_EN_STAT);
+        let forced = self.mem.read32(INT_FORCED_STAT);
+        let forced_hi = self.mem.read32(HI_INT_FORCED_STAT);
 
         self.service_pp_dma();
         // Before the `pending_hi` snapshot below, or a packet posted this tick would not reach
@@ -7063,9 +7054,9 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
         // of a second core: Rockbox arms the timer on the COP and the drive on the CPU, and a
         // shared mask would deliver each to both.
         if self.mem.second_core {
-            let (stat, en_stat, en, dis) = Core::Cop.int_regs();
-            let cop_enabled = consume(&mut self.mem, en_stat, en, dis);
-            let cop_enabled_hi = consume(&mut self.mem, en_stat + 0x100, en + 0x100, dis + 0x100);
+            let (stat, en_stat, _, _) = Core::Cop.int_regs();
+            let cop_enabled = self.mem.read32(en_stat);
+            let cop_enabled_hi = self.mem.read32(en_stat + 0x100);
             let hi_agg = if pending_hi & cop_enabled_hi != 0 {
                 1 << 30
             } else {
@@ -9760,6 +9751,50 @@ pub const PROC_ID: u32 = 0x6000_0000;
 
 pub const CPU_CTRL: u32 = 0x6000_7000;
 
+/// Which interrupt-controller state register a store to `addr` edits, and whether it sets or
+/// clears — `None` for every other address in the machine.
+///
+/// The controller has no writable state registers. `CPU_INT_EN_STAT`, `COP_INT_EN_STAT` and
+/// `INT_FORCED_STAT` are *edited* through a pair of ports either side of them: a 1 written to the
+/// `EN`/`SET` port raises that bit, a 1 written to the `DIS`/`CLR` port drops it, and a 0 written
+/// to either does nothing. `pp5020.h` lays all three trios out the same way and mirrors the whole
+/// file 0x100 higher for IRQs 32..63, so one decode serves twelve ports.
+///
+/// **These take effect at the store, and that is the whole point of this function.** They used to
+/// land in the MMIO region as ordinary words and be consumed by `service_interrupts_inner` on its
+/// next tick — set applied first, then clear — which silently reordered any set/clear pair the
+/// firmware issued inside one 64-instruction service window. Rockbox's `timer_register` issues
+/// exactly that pair: `timer_set` writes `CPU_INT_DIS = TIMER2_MASK` and `timer_start` writes
+/// `CPU_INT_EN = TIMER2_MASK` about twenty instructions later, so the enable was cancelled by the
+/// disable that preceded it and IRQ 1 stayed masked for the rest of the run. Doom is the firmware
+/// that noticed: its clock is that timer, `I_GetTime` never advanced, and `TryRunTics` spun.
+///
+/// Byte granularity is exact rather than approximate here: set and clear are bitwise, so applying
+/// a store byte by byte gives the same state as applying the word, and a single `str` cannot have
+/// another store interleaved between its bytes.
+pub fn int_ctl_port(addr: u32) -> Option<(u32, bool)> {
+    // **Both windows onto the controller, because iPodLinux drives it through the other one.**
+    // `map_hardware` aliases the whole device page at `0x64000000` — the uncached view, found from
+    // the ZeroSlackr kernel's 8.3 M reads of `0x64004000`/`0x64004100`. Clearing bit 26 folds that
+    // window onto the canonical one, and nothing else in the machine lands in either range. It is
+    // one AND rather than a walk of the alias list because `Bus::write32` consults this on every
+    // store it makes.
+    let off = (addr & !(3 | 0x0400_0000)).wrapping_sub(0x6000_4000);
+    if off >= 0x200 {
+        return None;
+    }
+    // Bit 8 of the offset selects the bank; the trios sit at the same offsets within each.
+    let bank = off & 0x100;
+    match off & !0x100 {
+        0x18 => Some((0x6000_4014 + bank, true)),  // INT_FORCED_SET  -> INT_FORCED_STAT
+        0x1c => Some((0x6000_4014 + bank, false)), // INT_FORCED_CLR  -> INT_FORCED_STAT
+        0x24 => Some((0x6000_4020 + bank, true)),  // CPU_INT_EN      -> CPU_INT_EN_STAT
+        0x28 => Some((0x6000_4020 + bank, false)), // CPU_INT_DIS     -> CPU_INT_EN_STAT
+        0x34 => Some((0x6000_4030 + bank, true)),  // COP_INT_EN      -> COP_INT_EN_STAT
+        0x38 => Some((0x6000_4030 + bank, false)), // COP_INT_DIS     -> COP_INT_EN_STAT
+        _ => None,
+    }
+}
 
 /// `irq: 26` is Rockbox's `DMA_IRQ`, whose handler demuxes on `DMA_MASTER_STATUS` bits 24..27 —
 /// so the line is per *controller*, not per channel. `irq: 27` for the 0x60008000 controller is
@@ -11584,6 +11619,80 @@ mod peek_tests {
         assert!(
             !m.mem.cpu_sleep,
             "a pending, enabled IRQ 40 must wake the core — it is what an interrupt is for"
+        );
+    }
+
+    /// **An enable written after a disable of the same line stays enabled.**
+    ///
+    /// `CPU_INT_EN` and `CPU_INT_DIS` are two ports onto one state register, so the order the
+    /// firmware writes them in is the whole of their meaning. They used to land in the MMIO region
+    /// as ordinary words and be consumed by `service_interrupts_inner` on its next tick — set
+    /// applied first, then clear — which reordered any pair issued inside the 64 instructions
+    /// between two ticks. A disable followed by an enable came out DISABLED.
+    ///
+    /// Rockbox's `timer_register` is exactly that pair. `timer-pp.c`'s `timer_set(cycles, true)`
+    /// writes `CPU_INT_DIS = TIMER2_MASK` and `timer_start` writes `CPU_INT_EN = TIMER2_MASK`
+    /// about twenty instructions later, so IRQ 1 was masked for the rest of the run. Doom is the
+    /// firmware that noticed: `i_system.c` makes that timer its clock, `I_GetTime` never advanced,
+    /// and `TryRunTics` spun, with the panel last drawn at 153 s of a 600-second run.
+    ///
+    /// The second half is the property that actually broke, and the register alone does not test
+    /// it: an armed TIMER2 has to reach the interrupt controller.
+    ///
+    /// **How to make it go red**: make [`int_ctl_port`] return `None`, which is what puts these
+    /// stores back in the region for a later tick to consume.
+    #[test]
+    fn an_enable_is_not_undone_by_the_disable_that_preceded_it() {
+        const CPU_INT_EN_STAT: u32 = 0x6000_4020;
+        const CPU_INT_EN: u32 = 0x6000_4024;
+        const CPU_INT_DIS: u32 = 0x6000_4028;
+        const TIMER2_CFG: u32 = 0x6000_5008;
+        const TIMER2_MASK: u32 = 1 << 1;
+
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        map_hardware(&mut m, false);
+        m.instr_per_usec = 5;
+
+        // `timer_set(cycles, true)` then `timer_start(CPU)`, with nothing between them — which is
+        // the arrangement the old code could not represent.
+        m.mem.write32(CPU_INT_DIS, TIMER2_MASK);
+        m.mem.write32(CPU_INT_EN, TIMER2_MASK);
+        assert_eq!(
+            m.mem.read32(CPU_INT_EN_STAT) & TIMER2_MASK,
+            TIMER2_MASK,
+            "the enable is the later store, so it is the one that stands"
+        );
+
+        // Bit 31 enable, bit 30 repeat, low bits a period in microseconds — `timer-pp.c` again.
+        m.mem.write32(TIMER2_CFG, 0xc000_0000 | (100 - 1));
+        let before = m.irqs_asserted;
+        // 100 µs at 5 instructions each is 500 steps; run well past several periods.
+        m.run(4_000);
+        assert!(
+            m.irqs_asserted > before,
+            "an armed, unmasked TIMER2 has to assert — {before} asserted before, {} after",
+            m.irqs_asserted
+        );
+        assert_eq!(
+            m.mem.int_pending & TIMER2_MASK,
+            TIMER2_MASK,
+            "and hold its line until the handler reads TIMER2_VAL"
+        );
+
+        // The same registers through the uncached window the device page is aliased into — the one
+        // iPodLinux's kernel reads `CPU_INT_STAT` from. A port reached that way has to edit the
+        // same state, or a guest that uses it masks nothing and unmasks nothing.
+        m.mem.write32(0x6400_4028, TIMER2_MASK);
+        assert_eq!(
+            m.mem.read32(CPU_INT_EN_STAT) & TIMER2_MASK,
+            0,
+            "a disable through the uncached window is still a disable"
+        );
+        m.mem.write32(0x6400_4024, TIMER2_MASK);
+        assert_eq!(
+            m.mem.read32(CPU_INT_EN_STAT) & TIMER2_MASK,
+            TIMER2_MASK,
+            "and the enable after it still stands"
         );
     }
 

@@ -15,6 +15,45 @@ belongs here.
 ---
 
 
+## ✅ ~~An interrupt enable written just after a disable was cancelled by it~~ — FIXED 2026-09-06
+
+`CPU_INT_EN` and `CPU_INT_DIS` are two write-one-to-set / write-one-to-clear ports onto one state
+register, `CPU_INT_EN_STAT`. This emulator let those stores land in the MMIO region as ordinary words
+and consumed them in `service_interrupts_inner` — which runs every 64 instructions and applied **set
+first, then clear**. A disable and an enable of the same bit inside one service window therefore came
+out **disabled**, whichever order the firmware wrote them in. Same for `COP_INT_EN`/`DIS`, both high
+banks, and the `INT_FORCED_SET`/`CLR` pair.
+
+Rockbox's `timer_register` is exactly that pair. `timer-pp.c`'s `timer_set(cycles, true)` writes
+`CPU_INT_DIS = TIMER2_MASK`; `timer_start` writes `CPU_INT_EN = TIMER2_MASK` **twenty-two
+instructions later** (measured with `--storelog` on `0x0007e6c8` and `0x0007e728`, the two PCs
+`rockbox.map` puts inside those functions). So IRQ 1 was masked for the rest of every run:
+`CPU_INT_EN_STAT` ended at `0x40000001` with `TIMER2_CFG` armed at `0xc0006f9a`, and `TIMER2_VAL` —
+the ISR's acknowledge — was read **zero times in 600 s of simulated uptime**.
+
+Doom is what noticed. On a colour target its clock is that timer (`i_system.c:111`), `I_GetTime()`
+returns a counter only its callback increments, and `TryRunTics` waits on it: the run's last
+instructions sat in `TryRunTics` and `D_BuildNewTiccmds`, the panel's last change was at 153 s of a
+600 s run, and 29 of the 29 pictures it drew were its startup console.
+
+RetailOS never hit it — its bulk `CPU_INT_DIS = -1` at kernel init is millions of instructions from
+any enable, and a retail boot's `CPU_INT_EN_STAT` is byte-identical across the fix.
+
+**Fixed** by applying those ports at the store (`Memory::int_ctl_port`), for both banks, both cores,
+the forced trio, and the uncached `0x64004000` window iPodLinux drives the controller through;
+`service_interrupts_inner` now only reads the state they leave. The control, same drive and ROM and
+wheel script and `BUDGET=3000000000 --clock=5`: `TIMER2_VAL` reads **0 → 17 589**, distinct pictures
+**29 → 575**, last picture first drawn **153.2 s → 600.0 s** — the final sample of the run. The
+console now clears, the Freedoom title screen appears at 157.2 s, and 545 further distinct pictures
+from 235.6 s onward are the 3D view with a status bar, changing every half second. **That is Doom's
+attract loop, not somebody playing it**: the wheel script's last event is at 92.76 s, while the
+console is still scrolling in both arms. Whether wheel input reaches the game is untested. See
+[research/06](research/06-rockbox-as-oracle.md) §*"What Doom was waiting for"*.
+
+**Not yet fixed by it, but next in line:** `pcm-pp.c`'s `dma_tx_lock`/`dma_tx_unlock` are the same
+pair around a critical section, so audio DMA would have been masked the same way.
+
+
 ## ~~A drive built from a 5.5G IPSW never boots~~ — FIXED 2026-08-27
 
 Reported by the operator, twice, and chased through three wrong framings before the answer:

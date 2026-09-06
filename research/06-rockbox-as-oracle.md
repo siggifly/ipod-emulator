@@ -1943,3 +1943,132 @@ second core it is not harmless, it is total.
 **What Doom is waiting for is therefore still unmeasured**, and the honest next step is to find out
 where it stops with the COP asleep rather than to keep toggling the flag: `--enterlog` on the
 core-lock spin this file already names at `0x00086300`, against a run that reaches `Loading…`.
+
+
+### What Doom was waiting for: an interrupt enable this machine threw away (2026-09-06)
+
+The section above ends *"What Doom is waiting for is therefore still unmeasured."* It is measured
+now. **The defect is ours, it is in the interrupt controller, and it is not about Doom.**
+
+#### Doom's clock is TIMER2, and TIMER2's interrupt never arrived
+
+On a colour target Doom does not use Rockbox's kernel tick. `i_system.c:111` registers its own:
+
+```c
+rb->timer_register(1, NULL, TIMER_FREQ/TICRATE, doomtime IF_COP(, CPU));
+```
+
+`I_GetTime()` returns `doomtimer`, that callback is the only thing that increments it, and
+`TryRunTics` waits for it to advance. It never did. The last instructions of a pre-fix
+1 170 542 840-instruction run are
+
+```
+03f81f54  ldr  r4, [r6, #0x4]      D_BuildNewTiccmds   (doom.map: 0x03f81f48)
+03f81ff4  bl   0x03fbc5e4          TryRunTics          (doom.map: 0x03f81fdc)
+03f82008  ldr  r3, [r6, #0x0]
+```
+
+— `TryRunTics`'s `while (1)` and the `D_BuildNewTiccmds()` it calls first, spinning. Both are built
+on `I_GetTime()`: `newtics = I_GetTime() - lastmadetic` is zero for ever, so `runtics` is zero for
+ever, and the loop has no other exit. The commented-out `rb->sleep(ms_to_next_tick)` beside it is
+why it spins rather than idles.
+
+#### Rockbox armed the timer. The machine masked it.
+
+Everything on Rockbox's side happened. `--dump=0x60005000:16` at the end of that run:
+
+```
+60005000  0f 27 00 c0 00 00 00 00 9a 6f 00 c0 00 00 00 00
+          TIMER1_CFG=0xc000270f          TIMER2_CFG=0xc0006f9a
+```
+
+`0xc0006f9a` is enable | repeat | period 28 571 µs, which is `TIMER_FREQ/TICRATE` for `TICRATE 35`
+exactly. And `--storelog` on the two stores `timer-pp.c` makes — PCs named by `rockbox.map`, where
+`timer_set` is `0x0007e680` and `timer_start` is `0x0007e718` — shows both of them:
+
+| pc | store | icount |
+|---|---|---|
+| `0x03e91720` (`tick_start` +0x2c) | `CPU_INT_EN = 1` — the kernel tick | 541 400 |
+| `0x0007e6c8` (`timer_set` +0x48) | `CPU_INT_DIS = 2` | 64 387 316 |
+| `0x0007e728` (`timer_start` +0x10) | `CPU_INT_EN = 2` | **64 387 338** |
+
+**Twenty-two instructions apart.** And `--dump=0x60004020:16` on the same run:
+
+```
+60004020  01 00 00 40    CPU_INT_EN_STAT = 0x40000001
+```
+
+Bit 0 (TIMER1) and bit 30 (HI_IRQ) enabled; **bit 1 — TIMER2 — clear**, after a store that set it.
+
+#### Why: the ports were deferred, and a deferred set/clear pair loses its order
+
+`CPU_INT_EN` and `CPU_INT_DIS` are two write-one-to-set/write-one-to-clear ports onto one state
+register. This emulator let those stores land in the MMIO region as ordinary words and consumed them
+in `service_interrupts_inner`, which runs every 64 instructions — **applying set first, then clear**.
+Any pair the firmware issued inside one service window therefore came out cleared, whatever order it
+was written in. `timer_register` is that pair: `timer_set(cycles, true)` drops the mask, `timer_start`
+lifts it, and the lift was cancelled by the drop that preceded it. IRQ 1 stayed masked for the rest of
+every run.
+
+RetailOS never noticed because it never writes that pair close together — its bulk
+`CPU_INT_DIS = -1` at kernel init is millions of instructions from any enable. `research/02` §5f
+carried the deferral as a *"detail worth keeping"*; it is retracted there.
+
+The ports are applied at the store now (`Memory::int_ctl_port`), for both banks, both cores, the
+software-forced trio, and the uncached `0x64004000` window iPodLinux drives the controller through.
+
+#### The control
+
+Same drive, same ROM, same wheel script, same `BUDGET=3000000000 --clock=5` (600 s), one variable:
+
+| | before | after |
+|---|---|---|
+| `CPU_INT_EN_STAT` at end | `0x40000001` | **`0x40000003`** |
+| reads of `TIMER2_VAL` (the ISR's ACK) | **0** | **17 589**, all from `0x0007e624` — inside `TIMER2` |
+| reads of `TIMER1_VAL` | 59 931 | 59 931 |
+| distinct pictures | 29 | **575** |
+| last picture first drawn at | 153.2 s, then held 447.2 s | **600.0 s — the last sample of the run** |
+| irqs asserted / taken | 103 969 / 59 961 | 130 837 / 77 550 |
+| ATA commands | 7 298 | 8 246 |
+| instructions of the 3 G steps | 2 970 542 160 | 2 679 702 715 |
+
+The last row is the shape of the fix rather than a cost: 320 M of the budget is now spent **halted**
+against 29 M before, because a game with a clock sleeps between tics instead of spinning on one.
+
+**What the frames are, stated precisely.** The first 29 are the same run in both arms — boot, menus,
+and Doom's startup console scrolling to `Starting Graphics engine` at 153.2 s. Frames 0-1 and 12-28
+are digest-identical between the arms; frames 2-11 differ, and **that difference is not the fix**:
+the PMU's RTC is seeded from the host clock, the two films were started 24 minutes apart, and a
+control run of each binary started at the *same* moment gives byte-identical digests for every frame
+(`0x1100fdb97cd50325`, `0x1cff0024ac6afea8`, `0x141a381901f4d60c`, `0xd5d7f19ab46e1886`) where the
+older film has `0xa3b3d334d3052ad8` at frame 2. A film compared against one taken at another time of
+day disagrees with itself; pin the two arms to the same minute, or compare the frames after boot. In the pre-fix arm that is where it ends. In the post-fix arm the console clears, and at
+**157.2 s frame 29 is the Freedoom Phase 2 title screen**, held 78.4 s. From **235.6 s to 600.0 s**
+there are **545 further distinct pictures** — the 3D view with a status bar, changing every 0.4 to
+0.8 s: MAP01's shotgun ledge with `GOT THE PUMP-ACTION SHOTGUN!` and `8` / `100%` / `0%`; a corridor
+with two monsters and `PICKED UP SOME BULLETS`; a cave at `7` / `19%`. Health falls and rises, the
+weapon animates, the view moves.
+
+**It is Doom's attract loop, not somebody playing.** The wheel script's last event is at 92.76 s,
+which in both arms lands while the console is still scrolling — it was written against the pre-fix
+timing and there was no title screen to press anything at. So everything from 157.2 s on is Doom
+driving itself, which is exactly what `TryRunTics` needs a clock for and exactly what it could not do
+before. **What is not shown here is a player**: whether wheel input reaches the game is untested by
+this recipe, and a script re-timed for a Doom that now takes 157 s to reach its title is the obvious
+next measurement.
+
+#### The next consumer of the same fix is audio
+
+`timer-pp.c` is not the only place Rockbox writes that pair close together. `pcm-pp.c`'s
+`dma_tx_lock()` / `dma_tx_unlock()` are `CPU_INT_DIS = DMA_MASK` and `CPU_INT_EN = DMA_MASK` around
+a critical section — so every unlock that fell inside one service window would have left the audio
+DMA line masked. Nothing measured that yet, because no run here has played a sample.
+
+Two things this did **not** turn out to be, both of which look like the same defect in a report:
+
+- **`ide irq: raised N times, DELIVERED 0 times, enabled=0`.** Correct. Rockbox's PP ATA driver is
+  polled: nothing in `firmware/` writes `CPU_INT_EN = IDE_MASK` on this target, and
+  `system-pp502x.c`'s `irq_handler` has no IDE arm at all. `ata-pp5020.c:60`'s `CPU_INT_DIS` is
+  inside `#ifdef SAMSUNG_YH920`. The line is meant to be masked.
+- **Both PP DMA controllers reading `enabled=0 pending=0`.** Also correct here: `dma_tx_init` runs
+  when playback starts, and this run has no sound.
