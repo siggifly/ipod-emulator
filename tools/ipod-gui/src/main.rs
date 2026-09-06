@@ -2951,7 +2951,7 @@ fn wire(
             // is an `NSView`, which is AppKit and is the macOS adapter's proper business. A second
             // window implementation replaces these four lines and changes nothing in either file.
             let weak = window.as_weak();
-            let view: trackpad::View = Rc::new(move || ns_view(&weak.upgrade()?.window()));
+            let view: trackpad::View = Rc::new(move || ns_view(weak.upgrade()?.window()));
             let _ = &can;
             can.available().then(|| trackpad::install(view, act)).flatten()
         }
