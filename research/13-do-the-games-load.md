@@ -752,3 +752,142 @@ is written, and a hash that says when we have got it wrong.
 — no RTTI, no symbols, strings by ordinal. The cheap way to name it is a dynamic diff of the two
 runs in §"do the games load" (stop at the Games list vs. launch Brick); that run recorded
 `last new code @2448612522` without printing the address.
+
+---
+
+## The community patch, characterised — and what it actually defeats (2026-09-06)
+
+The DRM-patched firmware that circulates for the 5G and 5.5G was diffed against stock, byte for
+byte, whole-file. **It is six instructions**, and the interesting part is not the patch but which
+half of §8's finding it lands on.
+
+### The six sites
+
+Both files are **iPod Software 1.2.1**, not 1.3 — `rsrc` checksum `0x171b5edf` and `aupd`
+`0x0b1998f5` match `Firmware-13/20.6.2.1` and `Firmware-25.6.2.1` exactly, and the `osos` bodies are
+bit-identical to 1.2.1 outside the patch. Offsets are into `osos`:
+
+| site | stock | patched | stock instruction |
+|---|---|---|---|
+| `0x0012F634` | `1a000096` | `e1a00000` | `bne 0x12f894` |
+| `0x0012F644` | `1a000092` | `e1a00000` | `bne 0x12f894` |
+| `0x0012F65C` | `0a00008c` | `e1a00000` | `beq 0x12f894` |
+| `0x0012F854` | `1a00000e` | `e1a00000` | `bne 0x12f894` |
+| `0x0012F860` | `0a00000b` | `e1a00000` | `beq 0x12f894` |
+| `0x0012F88C` | `1a000000` | `e1a00000` | `bne 0x12f894` |
+
+The function is `0x12F590`–`0x12F8C4`. It returns `r8`, and the only instruction setting `r8 = 1` is
+`0x12F890`, immediately before the exit at `0x12F894`. Seven branches target that exit; each of the
+six **conditional** ones is NOP'd, and every one of them skipped the `mov r8, #1`.
+
+**The seventh was deliberately left alone**, and this is the detail that says the author understood
+the code rather than pattern-matching it: `0x12F810` is an unconditional `b 0x12f894`, and NOPping it
+would fall through into a second close of a handle the failure path had already closed (`bl
+0x21cd88` at both `0x12F80C` and `0x12F818`). Two nearby conditionals that branch to the *success*
+side are likewise untouched. The patch is exactly "every conditional branch to the failure exit, and
+only those".
+
+The checksum was re-summed, and provably on purpose: `0x2bfd9ec4` → `0x2bfda581` is **+1725**, and
+the byte-sum delta of the six replacements is `209+213+235+345+364+359` = **1725**.
+
+### It is the same function as §8, reached independently
+
+§8 named `FUN_00131874` in the 1.3 image from a dynamic diff. This work found `0x12F590` in 1.2.1
+statically, from the `mov r0,#1` / `strb r0,[r4,#76]` pair at the exit, without reading that line
+first. `0x131874` is this function's `push` in 1.3. **Two methods, one function.**
+
+### So the patch does not defeat the signature — §8 already measured the signature passing
+
+This is the load-bearing consequence, and it reframes what the patch is for. §8 established that
+inside this function, on a purchased title bound to other hardware:
+
+> the manifest's PKCS#7 signature **verifies**, every file in the manifest **verifies**, the
+> executable and its `.sinf` are **read**, and then the **content-key unwrap returns non-zero**
+
+The signature was never the thing that failed. What failed was the content-key unwrap, which binds
+to the 8-byte **FireWire GUID** in the `sysinfo_t` block. Forcing the function to return 1 makes the
+caller stop throwing — it does **not** produce a content key.
+
+Two consequences follow, and they point in opposite directions:
+
+- **For a purchased, encrypted title this patch cannot be sufficient.** The payload is AES-128-CBC
+  and the key comes from the unwrap that just failed. A validator forced to say yes hands the loader
+  no key. **A patched firmware does not make somebody's bought games work**, and any claim that it
+  does should be treated as untested.
+- **For homebrew it is exactly the right patch**, because an unsigned, *unencrypted* `.bin` has
+  nothing to unwrap. This is why the homebrew lane and the retail-decryption lane are genuinely
+  separate problems rather than one problem at two depths.
+
+**Open, and the next question worth asking:** does the loader attempt decryption unconditionally? If
+it does, an unencrypted payload would be turned into noise regardless of the validator's answer. The
+manifest key table read out of this image is `GUID, BuildID, PlatformID, HeapSize, ExecutablePath,
+LaunchingArtwork, **DRMLevel**, PlatformVersion, BuildIdentifier, Files, LocalizedNames, Platforms,
+Verify, Manifest.plist.p7b, .sinf` — and `DRMLevel` is the obvious candidate for a switch that a
+homebrew manifest could set. **This is inference, not measurement.** It is settled by loading one
+unsigned eApp, which is the experiment the whole lane is waiting on.
+
+### The third-party address was a transcription slip
+
+The circulating claim is that the patch "NOPs the DRM function at `00136B84` in 1.3 5.5-Enhanced
+firmware". Corrected:
+
+| firmware | failure exit | the six sites |
+|---|---|---|
+| 1.2.1 (5G and 5.5G) | `0x0012F894` | `12F634, 12F644, 12F65C, 12F854, 12F860, 12F88C` |
+| 1.2.3 (5.5G) | `0x0013041C` | `1301B0, 1301C0, 1301D8, 1303DC, 1303E8, 130414` |
+| 1.3 (5G and 5.5G) | **`0x00131B84`** | `131918, 131928, 131940, 131B44, 131B50, 131B7C` |
+
+`00136B84` against `00131B84` differs in one hex digit. The claim is right about the version and the
+generation — the 1.3 `osos` is byte-identical between the 5G and 5.5G bundles — and wrong about the
+address. It is also imprecise in kind: that address is the failure **exit label**, not a function,
+and what gets patched is the six branches into it. In stock 1.3, `0x00136B84` is `ldr r6, [r4, #32]`,
+mid-function inside a big-endian field parse — neither a function start nor a gate.
+
+And the files that circulate are **1.2.1**, so they are not the artifact the claim describes.
+
+### Minting our own — verified, not specified on paper
+
+A patch was minted onto stock `Firmware-20.6.2.1` from first principles and **reproduces the
+community's 5G file exactly** in the six code words and the checksum. After both go through
+`make-disk`, the two drives' firmware partitions differ in 40 bytes — all ten `loadAddr` fields, a
+field nothing in the boot path reads.
+
+The algorithm hardcodes no offsets, because they move with every version:
+
+1. Read the `!ATA` directory at partition `+0x4200`; record 0 is `osos` (`devOffset +0x0c`,
+   `len +0x10`, `entryOffset +0x18`, `checksum +0x1c`).
+2. Find the header by trying `0x200, 0x800, 0, 0x400, 0x1000` and keeping the one where the byte sum
+   over `[header+devOffset, +len)` equals the recorded checksum. 5G bundles use `0x200`, 5.5G `0x800`.
+3. Find the unique address `X` with `w[X] == 0xe3a00001` (`mov r0,#1`) **and**
+   `w[X+4] == 0xe5c4004c` (`strb r0,[r4,#76]`).
+4. Scan `[X-0x400, X)` for B-class instructions (bits 27:25 == `0b101`, bit 24 clear) whose target is
+   `X`. Replace each whose condition field is **not** `0xE` with `0xe1a00000`.
+5. Recompute the byte sum over the modified body; write it to `+0x4200+0x1c`.
+
+**Step 3's anchor is unique.** Across 1.2.1 5G, 1.2.1 5.5G, 1.2.3 5.5G, 1.3 5G and 1.3 5.5G there is
+exactly one match per 7.5 MB `osos`, always with exactly 6 conditional and 1 unconditional branches
+into it. Verified: 1.2.1 `+1725`, 1.2.3 `+1716`, 1.3 `+1716`.
+
+So **we do not need the circulating files.** The same patch can be minted onto any stock IPSW we
+already hold — including 1.3, which nobody has published.
+
+### The 5.5G file carries a second, unrelated modification
+
+53 292 bytes appended to `osos` at `0x727800` — exactly the end of the stock 1.2.1 `osos` — with
+`entryOffset` redirected `0` → `0x727800`. The blob is **ipodloader2**, banner `iPL Loader 2.5d6
+SVN-1409`, identified from its own strings. `rsrc` and `aupd` bodies are byte-identical to stock in
+both files, so there are no other modifications hiding anywhere: this was checked whole-file rather
+than at the expected site.
+
+### What the boot arms did and did not show
+
+Five arms were run and all five were killed by machine oversubscription before writing their
+manifests, so **no instruction count, ATA census or `script: N of M steps fired` line exists for
+any of them**. What survives is the incrementally-written film. The patched 5G is **pixel-identical
+to its stock control across all five panels**, ending on a drawn screen (75 267 non-black of 76 800,
+259 colours) — the same screen the stock 5.5G control independently reaches. The 5.5G loader arm
+draws a 7-colour menu and redraws between frames.
+
+**Identical-to-stock is the expected result even if the patch works**, because the validator is only
+called when launching an eApp and never during boot. These runs show the patch **breaks nothing**.
+They do not show it **does** anything. That needs a title launch.
