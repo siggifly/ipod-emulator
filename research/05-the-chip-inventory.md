@@ -295,6 +295,262 @@ and no instruction in either image compares anything against the opcode. So the 
 three shapes and only one of them is a question. See
 [research/10 Addendum 21](10-the-resource-image.md#addendum-21-0x8001052a-is-a-write-and-the-answer-is-silence--the-wheel-reaches-the-event-queue).
 
+### The click — `PWM0_CTRL` at `0x7000A000`, and it is a PWM channel, not a piezo — 2026-09-06
+
+**The address in §3's list is right and the name beside it is not.** The reverse-engineered
+PortalPlayer502x map calls `0x7000A000` *"piezo"*, which is what the iPod does with it rather than
+what it is. Rockbox's
+[`pp5020.h`](https://git.rockbox.org/cgit/rockbox.git/tree/firmware/export/pp5020.h) defines it as
+
+```c
+#define PWM0_CTRL (*(volatile unsigned long*)(0x7000a000))
+```
+
+and the driver that writes it is
+[`piezo.c`](https://git.rockbox.org/cgit/rockbox.git/tree/firmware/target/arm/ipod/piezo.c). (Only
+those two files were read; no claim is made here about what else in that tree might touch it.) The
+distinction earns its place: it is **why there is one register here and not a block of them**, and
+it predicts — correctly, see below — that nothing else in the page is ever addressed. §3's line is
+left as it stands because it accurately quotes its source; this section is the refinement.
+
+**One register, and two independent firmwares write it the same way.**
+
+```text
++0x00  PWM0_CTRL   bit 31 enable · bits 30..0 the wave · a write of plain 0 stops it
+```
+
+Apple's side, out of `OSOS_correct.bin`. `dis --wordref=0x7000a000` finds the address in **four**
+literal pools and nowhere else (control: `--wordref=0x7000c000`, the click wheel, finds 16). Two of
+the four are the whole driver:
+
+```text
+0011c750  ldr  r1, =0x7000a000     ; --- stop ---
+0011c754  mov  r0, #0x0
+0011c758  str  r0, [r1, #0x0]      ; PWM0_CTRL = 0
+0011c75c  ldr  r0, =0x60005000
+0011c760  ldr  r1, [r0, #0x8]
+0011c764  bic  r1, r1, #0x80000000
+0011c768  str  r1, [r0, #0x8]      ; ...and TIMER2_CFG loses its enable
+
+000c7204  ldr  r1, =0x7000a000     ; --- start ---
+000c7208  orr  r0, r6, #0x80000000 ; the queued wave...
+000c720c  orr  r0, r0, #0x800000   ; ...with bit 23, always
+000c7210  str  r0, [r1, #0x0]
+```
+
+Rockbox's side is two lines against the same register — `PWM0_CTRL = 0x80000000 | form_and_period`
+to start, `PWM0_CTRL = 0` to stop — and the same header puts `TIMER2_CFG` and `TIMER2_VAL` at
+`0x60005008`/`0x6000500C`, which is the pair Apple's code reaches for in the same two functions.
+Neither source was consulted for code; both were read for register semantics.
+
+**`AsyncPiezo` is a sequencer over a 16-entry ring, not a beeper.** Task 35 in
+[research/10](10-the-resource-image.md)'s table — entry `0x00285060`, blocked on semaphore `0x95` —
+initialises by disabling `TIMER2_CFG`, enabling interrupt `0x15` through `0x60004024`, clearing bits
+3..2 of `0x70000010`, and setting **bit 17 of `0x6000600C`**, the device-enable gate. Its loop pends
+on the semaphore, takes a message, and writes two of its fields into parallel rings at `0x10882314`
+(the wave) and `0x10882354` (the duration). The step at `0x000C719C` then stops the register, writes
+the next wave to it, and programs that entry's duration into `TIMER2_CFG`. So **one tone is two
+writes to this register** — a zero and a start — and the *duration* lives in the timer, never here.
+
+The API beneath it is `0x000CD430(wave, duration)`: it builds a message with `op = 0` at `+0x10`,
+the wave at `+0x14` and the duration at `+0x18`, takes resource `0x12C`, and sends to queue `0x15`.
+Sixteen call sites. `op = 1` is a flush — `head = tail`, playback off.
+
+**The tone vocabulary, read off those call sites.** Durations are microseconds; `TIMER2_CFG` takes
+the low 29 bits.
+
+| site | wave | duration | what it sounds like |
+|---|---|---|---|
+| `0x001B91FC` | `0x55` | `0xBB8` — 3 ms | one short tick, **behind a settings bit** (`[r4+0x3E] & 1`) |
+| `0x00091438` | `0xB4` / `0x90` ×4 | 200 ms / 400 ms | an eight-tone alternating melody — `AlarmTask` also calls the API directly |
+| `0x001DFF10` | `0x70`, `0`, `0x70` | 80 / 150 / 80 ms | beep–silence–beep |
+| `0x0011E4CC` | caller's | `r4 × 1000` | a generic beep of N ms |
+
+Run through Rockbox's own independently-derived frequency relation — `piezo.c` returns `91225/hz` —
+those waves are **1073 Hz, 507 Hz, 633 Hz and 815 Hz**. Four constants from Apple's image landing in
+the audible beeper band under a formula from a different codebase is a coincidence worth recording;
+it is not proof, and no run has yet confirmed a frequency.
+
+There is a **`"Clicker"`** string in this image (five copies), so the settings bit at `0x001B91FC`
+having a user-facing switch is consistent — but nothing here has traced the bit to that menu.
+
+**One disagreement, recorded rather than resolved.** Rockbox's `pp5020.h` defines
+`DEV_PIEZO 0x00010000` — bit 16 — and gives `DEV_OPTO` the *identical* value. Apple sets **bit 17**
+of the same register. One of the two labels is wrong, and **the run shows both bits set**: the
+RetailOS descent ends with `DEV_EN 0x408318C0`, which has bit 16 (the wheel's `DEV_OPTO`, and
+Rockbox's `DEV_PIEZO` too) *and* bit 17 — so the two are genuinely different gates and Rockbox's
+`DEV_PIEZO` is the suspect name. Nothing rests on it here: the model gates nothing on the
+device-enable bit, so a wrong guess cannot silently suppress a click.
+
+#### It is modelled, and the fast path was the whole difficulty
+
+`tools/ipod-machine/src/hw/piezo.rs`. The device answers reads with the bytes last written, so it is
+byte-for-byte what the plain `mmio-7` backing store did — **attaching it cannot change what the
+firmware sees**, which is what makes it a recorder and lets it be on by default.
+
+The one thing that had to be got right is that `0x7000A000` sits *inside* the `mmio-7` region and
+the firmware drives it with `str`. Without the page named in `Memory::page_is_plain`, `write32`'s
+hoist copies the word straight into the region and returns, and the device is never reached. That
+list has now been the bug **seven** times. The failure mode here is the quiet one: a correct
+recorder changes nothing observable, so a bypassed one reports zero for ever and reads as an answer.
+`load_and_trace.rs::a_word_store_to_pwm0_ctrl_reaches_the_device_and_not_the_region` is the guard,
+and it was checked in both directions — with the line removed it fails with `fires: 0`.
+
+#### Measured: Rockbox drives it, and the two instruments agree
+
+Rockbox is the oracle here, and it is a **positive control the earlier zero never had**.
+
+```sh
+trace 6000000000 --osos=resources/vendor/rockbox/bin/rb-main.raw --boot-osos --until=170s \
+  --flash=resources/roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin \
+  --disk=<writable clone of ipod8g-rockbox.img> --disk-writable \
+  --sysinfo --bcm --pmu --clock=5 --storeaddr=0x7000a000 \
+  --wheel='@60s:touch,+500ms:rotate=+1 ×8,+3s:release,@80s:touch,+60ms:rotate=+1 ×8,+3s:release,
+           @100s:touch,+1s:down=select,+200ms:up=select,+2s:release, …menu@110s, play@120s,
+           next@130s, prev@140s'
+```
+
+| arm | clicks | word writes | `--storeaddr` stores |
+|---|---|---|---|
+| stock volume, no `config.cfg` | **0** — no piezo section printed at all | 0 | — |
+| `hardware keyclick: on` in `/.rockbox/config.cfg` | **8** | 16 | **16** |
+
+The second arm is *configuration*, not modification: `hardware keyclick` is a stock Rockbox setting
+and `/.rockbox/config.cfg` is where Rockbox itself writes it. The binary is untouched, and the file
+was written onto a copy-on-write clone. Rockbox's hardware click is gated by
+`global_settings.keyclick_hardware` in `apps/misc.c`, so the first arm's zero is a setting being off
+and **not** a disagreement about the register.
+
+Two things this settles. **The device's count and `--storeaddr`'s agree exactly** — 16 and 16 — and
+`--storeaddr` records at the top of `write32`, ahead of the fast path, so it cannot share the
+device's blind spot. And every Rockbox write is `0x8080005B` to start and `0x00000000` to stop, from
+`0x0007DEB8` and `0x0007DEFC`, separated by a constant ~20 000 instructions:
+
+```text
+0x0007deb8 -> [0x7000a000] = 0x8080005b   @113940218
+0x0007defc -> [0x7000a000] = 0x00000000   @113960217
+```
+
+**Rockbox sets bit 23 too.** Its `form_and_period` is `0x0080005B`; Apple's constant half is
+`0x800000`. Two firmwares that share no authorship both set bit 31 as the enable, both set bit 23,
+both stop with a plain zero, and pick low bytes of `0x5B` and `0x55` — 1002 Hz and 1073 Hz under the
+`91225/hz` relation. That agreement is the reason this is a model and not a hypothesis.
+
+**When Rockbox clicks**, from the fire log (simulated seconds):
+
+| gesture | clicks |
+|---|---|
+| 8 detents 500 ms apart (60.0–63.5 s) | **2** — at 62.072 s and 64.072 s |
+| 8 detents 60 ms apart (80.0–80.4 s) | **2** — at 80.312 s and 80.551 s |
+| SELECT · MENU · PLAY · PREV | **1 each** — 101.026 · 111.036 · 121.025 · 141.078 s |
+| NEXT | **0** |
+| touch and release alone | **0** |
+
+So in Rockbox: **one click per four detents, at both speeds** — the count follows scroll *events*,
+not elapsed time, and there is **no acceleration in the click policy**. Buttons click on the press.
+The single NEXT that did not click is unexplained and is left that way; each press navigates, so the
+five presses were not made in the same UI context, and `keyclick_click` in `apps/misc.c` is reached
+from the action layer rather than from the button driver.
+
+**A methodological trap that cost a run.** `--wheel='…press=select…'` releases the button one
+`click_instr` after pressing it — under 4 ms of simulated time at `--clock=5`. Rockbox never saw
+four of five such presses. Written as `down=select,+200ms:up=select` the same script clicks on four
+of them. **Any button measurement must state the press duration in simulated time.**
+
+#### Measured: RetailOS clicks, and it clicks on the buttons
+
+Same instrument, Apple's own firmware, on a machine that navigates. **`--disk-writable` against a
+clone of a mode-444 image is the trap here**: `cp -c` inherits the mode, the open fails with one
+`Permission denied` line in the header, and the run goes on to report 12.25 G instructions, a
+plausible `usec`, and `54 of 54 steps fired` while stuck in Apple's bootloader with **0 interrupts
+taken**. `chmod u+w` on the clone is the whole fix. The healthy run is the one with
+`57 frames posted, 0 dropped unread, 57 word reads of DATA, 57 acknowledged`.
+
+```sh
+trace 14000000000 --boot-osos --cold-boot --until=2450s \
+  --flash=resources/roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin \
+  --disk=<writable clone of ipod8g-retail.PRISTINE.img> --disk-writable \
+  --bcm --pmu --nor --clock=5 --storeaddr=0x7000a000 \
+  --wheel='@210s:touch,+500ms:rotate=+1 ×8,+3s:release,
+           @260s:touch,+60ms:rotate=+1 ×8,+3s:release,
+           @300s:touch,+1s:down=select,+200ms:up=select,+2s:release,   … menu@330s, play@360s,
+           next@390s, prev@420s,  @1500s: eight more detents,  @1600s: select again'
+```
+
+**9 clicks, 27 word writes, 9 stops, 0 reads.** Every start is `0x80800055`, every one from
+`0x000C7210` — `AsyncPiezo`'s sequencer step, exactly as the static reading predicted — and
+`--storeaddr` independently reports **27** stores against the model's 27.
+
+The 27 are 9 groups of three, and the shape is the sequencer's:
+
+```text
+0x0011c758 -> [0x7000a000] = 0x00000000   @1057648543     stop before start
+0x000c7210 -> [0x7000a000] = 0x80800055   @1057652230     the tone
+0x0011c758 -> [0x7000a000] = 0x00000000   @1057678171     the queue drained
+```
+
+A tone runs about **26 000 instructions — 5.2 ms of simulated time**, against the 3 ms that
+`0x001B91FC` programs into `TIMER2_CFG`; the remainder is the task's wake-up. **The wave is `0x55`,
+which is that call site's constant and no other's.** So the click RetailOS plays is the 3 ms tick
+behind the settings bit, and the static identification and the run agree.
+
+**When it clicks.** Nine fires against the script, in simulated seconds:
+
+| fire | at | scripted event | delay |
+|---|---|---|---|
+| 1 | 214.096 s | the last of eight detents, 214.0 s | +0.10 s |
+| 2 | 301.171 s | **`down=select`** 301.0 s | +0.17 s |
+| 3 | 324.836 s | *nothing within 5 s* | — |
+| 4 | 331.137 s | `down=menu` 331.0 s | +0.14 s |
+| 5 | 361.119 s | `down=play` 361.0 s | +0.12 s |
+| 6 | 391.124 s | `down=next` 391.0 s | +0.12 s |
+| 7 | 421.120 s | `down=prev` 421.0 s | +0.12 s |
+| 8 | 1601.119 s | **`down=select`** 1601.0 s | +0.12 s |
+| 9 | 1765.890 s | *nothing within 100 s* | — |
+
+**SELECT clicks.** That was asked directly and had been guessed at rather than measured; it is
+settled, twice, 1 300 s apart, at +0.17 s and +0.12 s. **MENU, PLAY, NEXT and PREV click too** — one
+each, every one inside 0.14 s of the press. Six of the nine fires are a button going down, and the
+delay is so nearly constant that the attribution needs no argument.
+
+**Scrolling is the unsettled half, and the number is small.** Eight detents at 210–214 s produced
+**one** click; eight more at ~257 s and eight more at 1500–1504 s produced **none**. Two things stop
+that from being an answer about a real iPod:
+
+- **The "slow" scroll was not uniformly slow.** The frame log shows detents 0–2 arriving 500 ms
+  apart as written and detents 3–8 bunching to 70–130 ms. A halted machine advances `usec` in jumps,
+  so several time-anchored steps come due at once and fire together. Any statement about *rate* here
+  needs a pacing method that survives an idle machine.
+- **Nothing yet confirms the list moved per detent.** The panel redrew 27 times over the run, so the
+  descent navigated, but no measurement here ties one detent to one row of movement. Until it does,
+  "one click per eight detents" is a statement about our wheel as much as about Apple's click policy.
+
+So: **on buttons, RetailOS's click policy is measured and clean. On scrolling it is not, and the
+honest answer is that this run cannot separate the firmware's policy from our wheel's delivery.**
+Rockbox, on the same machine and the same day, clicked once per four detents at both speeds and
+showed no acceleration — which is a datum about Rockbox and a hypothesis about the hardware, nothing
+more.
+
+**Two fires are unattributed to a particular gesture** — 324.836 s and 1765.890 s, both the same
+wave from the same site, neither within reach of a scripted one. They are left that way rather than
+assigned to the nearest press.
+
+**The control says every one of the nine is input.** Same machine, same drive, same
+`--until=2450s`, the wheel device still modelled — only the injected script removed:
+
+| | with the script | control, no input |
+|---|---|---|
+| piezo report | 9 clicks, 27 word writes | **printed nothing at all** |
+| `--storeaddr=0x7000a000` | 27 stores | **no stores section** |
+| wheel frames posted / read | 57 / 57 | 3 / 3 — the boot's own queries |
+| panel frame updates | 27 | 80 |
+
+Two instruments, both silent, on a machine that booted RetailOS and redrew the panel eighty times.
+So **RetailOS never clicks on its own**, the nine fires are all consequences of the wheel, and the
+two unattributed ones are late effects of a gesture rather than housekeeping. It also retires the
+last worry about the model: a recorder that printed nine clicks and could not print zero would be
+telling you nothing, and this is the run where it prints zero.
+
 ### TV-out is behind the BCM too
 
 Unlike the Photo/Color, which used a separate Analog Devices ADV7179 encoder, the 5G's TV-out hangs

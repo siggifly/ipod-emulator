@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-875 headings across 17 documents — 44 dated, 17 settled, 15 retracted, 5 corrected.
+879 headings across 17 documents — 45 dated, 17 settled, 15 retracted, 5 corrected.
 
 ## Where each document stands today
 
@@ -21,7 +21,7 @@ above it in the same document may have been superseded.
 | [`02-retailos-boot.md`](02-retailos-boot.md) | *nothing in it is dated* | — | |
 | [`03-rtxc-and-the-video-coprocessor.md`](03-rtxc-and-the-video-coprocessor.md) | 58.  The audio subsystem does start — it needs the coprocessor, 2026-09-05 | `2026-09-05` | settled |
 | [`04-bypass-ledger.md`](04-bypass-ledger.md) | Caveat on the interrupt-wake fix (2026-08-31) — it stops the machine idli… | `2026-08-31` |  |
-| [`05-the-chip-inventory.md`](05-the-chip-inventory.md) | *nothing in it is dated* | — | |
+| [`05-the-chip-inventory.md`](05-the-chip-inventory.md) | The click — `PWM0_CTRL` at `0x7000A000`, and it is a PWM channel, not a p… | `2026-09-06` |  |
 | [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md) | Doom is played: input reaches the game, and the press has to land inside… | `2026-09-06` |  |
 | [`07-the-flash-images.md`](07-the-flash-images.md) | *nothing in it is dated* | — | |
 | [`08-differential-register-map.md`](08-differential-register-map.md) | *nothing in it is dated* | — | |
@@ -120,7 +120,11 @@ and nothing dated replaced it.
 
 ### [`05-the-chip-inventory.md`](05-the-chip-inventory.md)
 
-11 headings, none of them marked or dated.
+15 headings, 1 of them marked or dated:
+
+| line | when | state | heading |
+|---|---|---|---|
+| 298 | 2026-09-06 |  | The click — `PWM0_CTRL` at `0x7000A000`, and it is a PWM channel, not a piezo — 2026-… |
 
 ### [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md)
 

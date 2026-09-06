@@ -27,3 +27,4 @@ pub mod wm8758;
 pub mod ata;
 pub mod cop;
 pub mod video;
+pub mod piezo;

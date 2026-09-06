@@ -1249,6 +1249,18 @@ IPSW-built volumes is responsible.
 the adjacent I²C block at `0x7000C000` reports **14 056** writes as a control. The piezo is
 unmodelled *and* unused, so modelling it would add a device nothing talks to.
 
+> **Half of that last sentence is wrong, corrected 2026-09-06.** The register was mapped and
+> `Rockbox drives it` — 8 clicks in a 170 s run, `0x8080005B` to start and `0x00000000` to stop,
+> with `--storeaddr=0x7000a000` agreeing at 16 stores against the device model's 16. So it is **not**
+> a device nothing talks to, and "modelling it would add nothing" was a prediction rather than a
+> measurement.
+>
+> The zero itself stands for the run it was taken on, and the I²C control was the right control for
+> the *instrument*. What it could not control for was the **machine**: that run was one-core and
+> crashed at the language picker on the first actionable wheel event, which is the failure the entry
+> above this one fixes. A firmware that is about to die on a null store is not evidence about when a
+> healthy one clicks. `research/05` §"The click" has the register, both drivers, and the recipes.
+
 **It is not the byte at `0x68`.** `is_busy(NULL)` reads absolute `0x68`, which holds `0x3032` — the
 `"20"` of the boot ROM's `2003.10.30` build string — so every empty slot reports *busy*. Making it
 read zero would not help: the free-slot path ends at `ldr r5,[r4,r7,lsl #2]`, which is null whichever
@@ -1283,6 +1295,11 @@ the entry) and then blocks. `--watch-range` and `--input-regs` over `0x7000A000:
 at all** — the piezo registers are never touched in a whole run. The piezo is unmodelled *and*
 unused, so it is not what the click is being routed to, and modelling it would not by itself fill
 the voice pool.
+
+> **"Unmodelled" stopped being true on 2026-09-06** — it is `hw/piezo.rs` now — and "unused" was
+> only ever true of that run. See the correction above and `research/05` §"The click". The last
+> clause survives: filling the voice pool is a separate question and the register has nothing to do
+> with it.
 
 **And the capability layer does not wake up on its own.** `setCurrent` — `0x0018cac8`, which stores
 the object at `[owner+0x18]` and then dispatches its vtable slot `+0x8` — is `NEVER REACHED`, and so
