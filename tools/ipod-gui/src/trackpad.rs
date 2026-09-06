@@ -149,6 +149,180 @@ pub trait Detents {
     /// Fire one. Already rate-limited by [`Feedback`]; this is called at most once per contact
     /// frame and never within [`TICK_FLOOR`] of the last.
     fn detent(&self);
+
+    /// **Say that a line drawn on the surface went past.**
+    ///
+    /// Not a detent and it must not feel like one: a detent says *the wheel turned a step*, and
+    /// this says *the finger crossed a boundary*. Rate-limited by [`Feedback`] on the same
+    /// actuator, and always **behind** the detent — see [`Ticks`] for why that ordering is the
+    /// whole safety argument.
+    fn mark(&self, m: Mark);
+}
+
+// ── The geometry a finger cannot see ────────────────────────────────────────────────────────────
+
+/// **A line on the surface that is worth feeling.**
+///
+/// On a real 5G the hand is confined by the bezel and the centre button: **you feel where the ring
+/// is**, and that is why a wheel can be worked without looking. On a rectangle of glass there is no
+/// bezel, so the hand picks its own radius — 891 real contacts circle at a **median 18.7 mm**, well
+/// outside a real wheel's 14 mm ring. The actuator is the only thing here that can put an edge back,
+/// and this is the closed set of edges it is asked to.
+///
+/// **Only [`Edge::Centre`] is felt by default, and the argument is measured rather than aesthetic.**
+/// See [`Felt`] for the numbers and `docs/GUI.md` §21.8.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Edge {
+    /// **The ring meets the centre button**, at [`CENTRE`] — 12.58 mm on this machine's pad.
+    ///
+    /// The one boundary on the surface that **changes what the wheel does**: crossing it inward
+    /// ends the contact, so the wheel stops turning, and today it does that in silence. It is also
+    /// the only one on an axis the detents do not already use — a detent is *purely angular*
+    /// (`wheel::position_at_angle` never reads a radius), so a **radial** mark cannot be mistaken
+    /// for one having been caused by turning.
+    Centre,
+    /// **Where a real wheel's outer edge would be**, at r = 1.0 — 37 mm here.
+    ///
+    /// It changes nothing: [`Geometry`] puts `outer` at the pad's half-diagonal so that every
+    /// corner is still the wheel, and this is a line drawn where the *drawn* device's case begins.
+    /// Off by default, and the capture is why: across 899 samples the hand reached a **maximum
+    /// radius of 31.4 mm** and so never crossed it once. It is also tangent to the top and bottom
+    /// edges of a 121 × 74 mm pad, so it can only be crossed sideways — two arcs rather than a rim.
+    Rim,
+    /// **The eight edges of the four label bands**, where `wheel::quadrant` starts and stops naming
+    /// a button — so a click at that spot starts and stops pressing a dome.
+    ///
+    /// Off by default, and the capture is why: **65 crossings against 790 detents** in the same
+    /// 7.16 s, which is a pulse every 110 ms *on the same angular axis the detents are already
+    /// using*. Eight boundaries a rotation is four times the centre edge's rate, and mixed into a
+    /// detent stream rather than beside it.
+    Band,
+}
+
+impl Edge {
+    /// The name the diagnostic line and [`Felt::parse`] both use. No full stop.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Edge::Centre => "centre",
+            Edge::Rim => "rim",
+            Edge::Band => "bands",
+        }
+    }
+}
+
+/// **One crossing**, and which way it went.
+///
+/// `entering` is *towards the region the edge is named for*: into the centre button for
+/// [`Edge::Centre`], out past the rim for [`Edge::Rim`], into a label's band for [`Edge::Band`].
+/// The actuator may or may not use it — with three canned patterns and one of them spoken for
+/// there is exactly one spare, so a direction costs the only remaining degree of freedom. It is in
+/// the type because the log wants it either way.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Mark {
+    pub edge: Edge,
+    pub entering: bool,
+}
+
+/// **Which edges are felt.** `IPOD_TRACKPAD_EDGES`, and the default is [`Edge::Centre`] alone.
+///
+/// A set rather than a switch because **software cannot check that something feels right** — only a
+/// hand can, and every round trip through a rebuild costs the operator a sitting. So the variants
+/// are chosen at launch, next to `IPOD_TRACKPAD=1`, and several can be compared in one go:
+///
+/// ```text
+/// IPOD_TRACKPAD_EDGES=off            nothing but detents — the control, and today's behaviour
+/// IPOD_TRACKPAD_EDGES=centre         the default: the ring/centre boundary and nothing else
+/// IPOD_TRACKPAD_EDGES=centre,rim     ... and where a real wheel's outer edge would be
+/// IPOD_TRACKPAD_EDGES=centre,bands   ... and the eight label-band edges
+/// IPOD_TRACKPAD_EDGES=all            every line this file knows how to draw
+/// ```
+///
+/// **The default is one edge and the argument for it is arithmetic**, from the same 891-contact
+/// capture [`CENTRE`] was measured from — 7.16 s of contact, replayed through this file's own
+/// detector:
+///
+/// ```text
+/// centre  16 crossings   2.2 a second, radial, in frames that carry no detent at all
+/// rim      0 crossings   never reached: the hand's maximum radius was 31.4 mm of the 37 needed
+/// bands   65 crossings   9 a second, angular, mixed into the 790 detents of the same gesture
+/// ```
+///
+/// A surface that ticks constantly conveys less than one that ticks rarely, so the set that is on
+/// by default is the smallest one that makes the geometry legible: **the boundary that changes
+/// what the wheel does, on the axis the detents leave free.**
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Felt {
+    centre: bool,
+    rim: bool,
+    band: bool,
+}
+
+impl Default for Felt {
+    fn default() -> Self {
+        Felt { centre: true, rim: false, band: false }
+    }
+}
+
+impl Felt {
+    /// **A comma-separated set, and an unknown word is refused rather than ignored.** A typo that
+    /// silently selected the default would make the two arms of a comparison identical while
+    /// reading as different, which is the shape `AGENTS.md` §6 is about — so it says so and keeps
+    /// the default, which is the one behaviour that cannot mislead.
+    pub fn parse(s: &str) -> Felt {
+        let mut f = Felt { centre: false, rim: false, band: false };
+        let s = s.trim();
+        if s.is_empty() {
+            return Felt::default();
+        }
+        for word in s.split(',').map(str::trim).filter(|w| !w.is_empty()) {
+            match word {
+                "off" | "none" => return Felt { centre: false, rim: false, band: false },
+                "all" => return Felt { centre: true, rim: true, band: true },
+                "centre" | "center" => f.centre = true,
+                "rim" => f.rim = true,
+                "band" | "bands" => f.band = true,
+                other => {
+                    // **Not behind `verbose()`, unlike everything else this file prints.** A
+                    // misconfiguration is not a diagnostic: somebody comparing two variants by
+                    // hand may well not have the log on, and a typo that silently kept the default
+                    // would make two arms of their comparison behave identically while reading as
+                    // different — which is the one outcome that would waste the sitting.
+                    eprintln!("[trackpad] IPOD_TRACKPAD_EDGES: no edge is called {other:?} — using the default, {}", Felt::default().describe());
+                    return Felt::default();
+                }
+            }
+        }
+        f
+    }
+
+    pub fn has(self, e: Edge) -> bool {
+        match e {
+            Edge::Centre => self.centre,
+            Edge::Rim => self.rim,
+            Edge::Band => self.band,
+        }
+    }
+
+    /// What is felt, for the diagnostic line. `"no edges"` rather than an empty string.
+    pub fn describe(self) -> String {
+        let on: Vec<&str> =
+            [Edge::Centre, Edge::Rim, Edge::Band].iter().copied().filter(|&e| self.has(e)).map(Edge::describe).collect();
+        if on.is_empty() {
+            "no edges".to_string()
+        } else {
+            on.join(" + ")
+        }
+    }
+
+    /// Read once, because the answer cannot change while the process runs and a per-pulse `var_os`
+    /// on the actuator's path would be a system call inside a haptic.
+    pub fn from_env() -> Felt {
+        static CACHE: std::sync::OnceLock<Felt> = std::sync::OnceLock::new();
+        *CACHE.get_or_init(|| match std::env::var("IPOD_TRACKPAD_EDGES") {
+            Ok(v) => Felt::parse(&v),
+            Err(_) => Felt::default(),
+        })
+    }
 }
 
 // ── What this build can do ──────────────────────────────────────────────────────────────────────
@@ -329,20 +503,47 @@ pub const TICK_FLOOR: Duration = Duration::from_millis(6);
 /// the clock does not advance, so the floor above already refuses the second. Saying so here is
 /// cheaper than a loop that can only ever run once, and it is what the spike measured rather than
 /// what its code implied.
+///
+/// # A dropped detent is worse than a missed edge, and this is where that is enforced
+///
+/// One actuator now has two callers, so they can contend — and the two failures are not equally
+/// bad. A missed edge is a boundary you have to find by feel; **a dropped detent is a wheel that
+/// stopped turning**, which is the input not working. So the priority is absolute rather than
+/// weighted, and it is structural rather than a rule someone has to remember:
+///
+/// **[`Ticks::due`] reads `detent` and nothing else.** No field a [`Ticks::mark_due`] can write is
+/// on its path, so no sequence of marks — none, one, a thousand in the same microsecond — can
+/// change its answer for any input. A mark cannot delay, refuse or coalesce a detent because it
+/// cannot reach the state the detent's decision is made from. `a_flood_of_edge_marks_cannot_refuse_a_single_detent`
+/// is the test, and deleting one word — `self.detent` for `self.any` in `due` — is how to make it
+/// go red.
+///
+/// The yielding is all in the other direction: a **mark** waits on `any`, so it stands off for
+/// [`TICK_FLOOR`] after a pulse of *either* kind. Two pulses closer than the floor are one blur on
+/// a single actuator, and it is the edge rather than the wheel that gives way.
 #[derive(Default)]
 pub struct Ticks {
-    last: Option<Instant>,
+    /// The last **detent**. The only clock [`Ticks::due`] consults, and no mark ever writes it.
+    detent: Option<Instant>,
+    /// The last pulse of either kind. Only a mark consults it, because only a mark yields.
+    any: Option<Instant>,
     fired: u64,
     coalesced: u64,
+    marks: u64,
+    marks_lost: u64,
 }
 
 impl Ticks {
     /// Whether to actuate, for a frame that produced `clicks` detents.
+    ///
+    /// **Reads `self.detent` and nothing else** — see the type's note. That is not an optimisation
+    /// and the extra field is not redundant: it is the whole of the guarantee that geometry
+    /// feedback cannot starve the wheel.
     pub fn due(&mut self, now: Instant, clicks: u32) -> bool {
         if clicks == 0 {
             return false;
         }
-        let ready = match self.last {
+        let ready = match self.detent {
             Some(t) => now.saturating_duration_since(t) >= TICK_FLOOR,
             None => true,
         };
@@ -350,9 +551,26 @@ impl Ticks {
             self.coalesced += u64::from(clicks);
             return false;
         }
-        self.last = Some(now);
+        self.detent = Some(now);
+        self.any = Some(now);
         self.fired += 1;
         self.coalesced += u64::from(clicks - 1);
+        true
+    }
+
+    /// Whether to actuate for an edge crossing. Yields to any pulse inside [`TICK_FLOOR`], and
+    /// **never writes the clock a detent is judged against.**
+    pub fn mark_due(&mut self, now: Instant) -> bool {
+        let ready = match self.any {
+            Some(t) => now.saturating_duration_since(t) >= TICK_FLOOR,
+            None => true,
+        };
+        if !ready {
+            self.marks_lost += 1;
+            return false;
+        }
+        self.any = Some(now);
+        self.marks += 1;
         true
     }
 
@@ -360,18 +578,38 @@ impl Ticks {
     pub fn counts(&self) -> (u64, u64) {
         (self.fired, self.coalesced)
     }
+
+    /// Edges felt, and edges that gave way to a pulse already going out.
+    pub fn mark_counts(&self) -> (u64, u64) {
+        (self.marks, self.marks_lost)
+    }
 }
 
 /// **Every sink, behind the one rate limit.** Adding the piezo's audible click is `add`.
-#[derive(Default)]
 pub struct Feedback {
     ticks: Ticks,
     sinks: Vec<Box<dyn Detents>>,
+    /// Which edges reach the sinks at all. Read from the environment once, so that a comparison
+    /// between two variants is a relaunch rather than a rebuild.
+    felt: Felt,
+}
+
+impl Default for Feedback {
+    fn default() -> Self {
+        Feedback { ticks: Ticks::default(), sinks: Vec::new(), felt: Felt::from_env() }
+    }
 }
 
 impl Feedback {
     pub fn add(&mut self, sink: Box<dyn Detents>) {
         self.sinks.push(sink);
+    }
+
+    /// Choose the edges by hand rather than from the environment. The tests', and a drawn control's
+    /// if §21 ever grows one.
+    #[allow(dead_code)] // retired when: a drawn control in §21 chooses the edges — `Handle::toggle` is the seam it would arrive through, and until then the environment is the only caller outside the tests
+    pub fn feel(&mut self, felt: Felt) {
+        self.felt = felt;
     }
 
     /// One detent for a frame the machine took `clicks` steps from. Rate-limited once, for all of
@@ -383,6 +621,25 @@ impl Feedback {
         for s in &self.sinks {
             if s.present() {
                 s.detent();
+            }
+        }
+    }
+
+    /// One edge crossing, if that edge is one of the ones being felt.
+    ///
+    /// **Behind the detent by construction** — see [`Ticks`]. A crossing that arrives while the
+    /// actuator is mid-pulse is dropped and counted rather than queued: a queued mark would arrive
+    /// after the finger had moved on, which is a boundary reported in the wrong place.
+    pub fn mark(&mut self, m: Mark) {
+        if !self.felt.has(m.edge) {
+            return;
+        }
+        if !self.ticks.mark_due(Instant::now()) {
+            return;
+        }
+        for s in &self.sinks {
+            if s.present() {
+                s.mark(m);
             }
         }
     }
@@ -400,6 +657,14 @@ impl Feedback {
 
     pub fn counts(&self) -> (u64, u64) {
         self.ticks.counts()
+    }
+
+    pub fn mark_counts(&self) -> (u64, u64) {
+        self.ticks.mark_counts()
+    }
+
+    pub fn felt(&self) -> Felt {
+        self.felt
     }
 }
 
@@ -427,12 +692,27 @@ pub fn detent(clicks: u32) {
     FEEDBACK.with(|f| f.borrow_mut().fire(clicks));
 }
 
+/// Ask for an edge crossing to be felt. Refused silently when that edge is not one of the ones
+/// being felt, which is the ordinary case for two of the three.
+pub fn mark(m: Mark) {
+    FEEDBACK.with(|f| f.borrow_mut().mark(m));
+}
+
 /// What a detent will be felt or heard as, and how many have been.
 pub fn feedback_state() -> (String, u64, u64) {
     FEEDBACK.with(|f| {
         let f = f.borrow();
         let (fired, coalesced) = f.counts();
         (f.describe(), fired, coalesced)
+    })
+}
+
+/// Which edges are being felt, how many were, and how many gave way to a pulse already going out.
+pub fn mark_state() -> (String, u64, u64) {
+    FEEDBACK.with(|f| {
+        let f = f.borrow();
+        let (marks, lost) = f.mark_counts();
+        (f.felt().describe(), marks, lost)
     })
 }
 
@@ -458,6 +738,183 @@ pub enum Act {
     Press(Hit),
     /// The click came up, on whatever it went down on.
     Release(Hit),
+    /// **A line drawn on the surface went past.** Reported for every [`Edge`] whether or not it is
+    /// one of the ones being felt, because the diagnostic line wants the geometry either way and
+    /// [`Feedback::mark`] is the one place that should decide what reaches a fingertip.
+    Mark(Mark),
+}
+
+/// **How far past a boundary the finger must travel before that boundary can speak again. 1.5 mm.**
+///
+/// The engineering risk in the whole of this is **chatter**: the pad samples at ~124 Hz, so a hand
+/// resting near a line, or drifting across one, would cross it many times a second and turn the
+/// actuator into a machine gun. Hysteresis is the answer, and this is the distance — chosen from
+/// the same 891-contact capture [`CENTRE`] was measured from, which bounds it from **both** sides:
+///
+/// ```text
+/// from below   a hand trying to hold still wanders radially. The stillest 265 ms in the capture
+///              — 33 consecutive frames moving under 0.35 mm each — drifted over a 1.10 mm band.
+///              Anything at or under that lets a resting finger re-arm itself and chatter.
+/// from above   at 1.9 mm the capture's 16 real crossings are all still there; at 2.0 mm one is
+///              gone and at 2.9 mm two are. So the band may not exceed ~1.9 mm without starting to
+///              swallow crossings a hand actually made.
+/// ```
+///
+/// 1.5 mm is the middle of `1.10 … 1.9`, with ~35% of margin over the measured wander and ~20%
+/// under the measured cost. It is also small against the 6.1 mm between the boundary and the
+/// **median radius a hand circles at**, so it narrows nothing anyone is aiming for.
+///
+/// **Millimetres rather than a fraction of the radius**, and that is the same argument [`CENTRE`]
+/// makes in reverse: this is a fact about *fingers* — how still a hand can hold — and not about
+/// pads, so it must not scale when an external Magic Trackpad reports a different size.
+///
+/// **It is an arming band and not a shifted threshold**, which matters: a Schmitt trigger would
+/// move the boundary, and the boundary is not this feature's to move — crossing [`CENTRE`] is what
+/// takes the finger off the wheel. So the mark fires on the *true* crossing and is then mute until
+/// the finger is this far clear of the line. One tick per crossing a hand meant, none for a wobble,
+/// and the wheel behaves exactly as it did before.
+pub const ARM_MM: f32 = 1.5;
+
+/// **The same idea on the angular axis, for [`Edge::Band`]. 2 clicks — 7.5°.**
+///
+/// Less carefully derived than [`ARM_MM`] and deliberately so: bands are off by default, and the
+/// capture cannot pin this one the way it pins the radial band. Angular position is *intrinsically*
+/// noisy near the middle of the pad — at 10 mm out one click is 0.68 mm of arc, so the same hand
+/// wander that is 1.1 mm radially is worth a click and a half — which is one more reason this edge
+/// is the weaker idea rather than a reason to tune it.
+pub const ARM_CLICKS: f32 = 2.0;
+
+/// **One boundary at a fixed radius, and the crossings of it worth feeling.**
+///
+/// Everything is in units of the wheel's own radius except the arming band, which arrives already
+/// converted — see [`ARM_MM`] for why that one is millimetres.
+#[derive(Clone, Copy, Debug)]
+struct Radial {
+    /// Which side the finger was on last. `None` before the first frame of a contact, because **a
+    /// finger arriving is not a crossing** — it has no previous side to have come from.
+    outside: Option<bool>,
+    armed: bool,
+}
+
+impl Default for Radial {
+    fn default() -> Self {
+        Radial { outside: None, armed: true }
+    }
+}
+
+impl Radial {
+    /// `Some(entering)` when this frame crossed `at` and the crossing is one to report.
+    fn crossed(&mut self, r: f32, at: f32, arm: f32) -> Option<bool> {
+        let outside = r >= at;
+        let out = match self.outside.replace(outside) {
+            Some(was) if was != outside && self.armed => {
+                self.armed = false;
+                Some(!outside)
+            }
+            _ => None,
+        };
+        // Re-arm on the way through, and **after** the test rather than before: a frame that
+        // crosses the line from well outside the band to well outside it on the other side is one
+        // crossing that fires and then immediately re-arms for the next, which is right.
+        if (r - at).abs() > arm {
+            self.armed = true;
+        }
+        out
+    }
+}
+
+/// **The eight edges of the four label bands**, on the angular axis.
+///
+/// A single `bool` is enough because the bands do not touch: `wheel::quadrant` gives each label the
+/// 16 clicks centred on its quadrant, so there is a dead band either side and a finger can never go
+/// from one label straight into another without passing through nothing.
+#[derive(Clone, Copy, Debug)]
+struct Angular {
+    inside: Option<bool>,
+    armed: bool,
+}
+
+/// **Armed to begin with, exactly as [`Radial`] is**, and written out rather than derived: a
+/// derived `Default` gives `false`, which would swallow the first crossing of a contact that
+/// happened to land within [`ARM_CLICKS`] of a band edge. That is a real difference in behaviour
+/// and it should be a decision rather than a consequence of which trait was derived.
+impl Default for Angular {
+    fn default() -> Self {
+        Angular { inside: None, armed: true }
+    }
+}
+
+impl Angular {
+    /// `Some(entering)` when this frame crossed into or out of a label's band.
+    fn crossed(&mut self, pos: u8) -> Option<bool> {
+        let inside = crate::wheel::quadrant(pos).is_some();
+        let out = match self.inside.replace(inside) {
+            Some(was) if was != inside && self.armed => {
+                self.armed = false;
+                Some(inside)
+            }
+            _ => None,
+        };
+        // How far this position is from the nearest band edge, which sits at 8.5 clicks from a
+        // label's centre — `quadrant` takes `<= 8`, so the line is between click 8 and click 9.
+        let nearest = crate::wheel::Button::ALL
+            .iter()
+            .filter_map(|b| b.centre_click())
+            .map(|c| crate::wheel::shortest_delta(pos, c as u8).abs())
+            .min()
+            .unwrap_or(0);
+        if (nearest as f32 - 8.5).abs() > ARM_CLICKS {
+            self.armed = true;
+        }
+        out
+    }
+
+    fn forget(&mut self) {
+        *self = Angular::default();
+    }
+}
+
+/// **Every boundary the surface has, and what the finger has done to them.**
+///
+/// Held by [`Pad`] and reset whenever the surface empties: a finger that lifts inside the centre
+/// button and lands again on the ring has not crossed anything, and reporting that as a crossing
+/// would put an edge where the hand felt none.
+#[derive(Clone, Copy, Debug, Default)]
+struct Edges {
+    centre: Radial,
+    rim: Radial,
+    band: Angular,
+}
+
+impl Edges {
+    /// The crossings in one frame, for a contact at `(x, y)` in units of the wheel's radius.
+    /// `mm_per_unit` is [`Geometry`]'s scale, and the only thing the arming band needs it for.
+    fn crossed(&mut self, x: f32, y: f32, mm_per_unit: f32, on_ring: bool) -> Vec<Act> {
+        let mut out = Vec::new();
+        let r = (x * x + y * y).sqrt();
+        // The band in millimetres, in the space the radii are actually in. `Geometry::of` refuses
+        // a surface that is not finite and positive, and the radius is half its short axis, so
+        // this divisor cannot be zero and there is no branch here for a case that cannot arise.
+        let arm = ARM_MM / mm_per_unit;
+        if let Some(entering) = self.centre.crossed(r, CENTRE, arm) {
+            out.push(Act::Mark(Mark { edge: Edge::Centre, entering }));
+        }
+        // The rim is named for what is *outside* it, so entering it is going out.
+        if let Some(inward) = self.rim.crossed(r, 1.0, arm) {
+            out.push(Act::Mark(Mark { edge: Edge::Rim, entering: !inward }));
+        }
+        // **Angles only mean anything on the ring.** Near the middle of the pad `atan2` swings
+        // wildly for a millimetre of movement, so a band edge there would be noise rather than
+        // geometry — and a label's band is a thing on the ring in the first place.
+        if on_ring {
+            if let Some(entering) = self.band.crossed(crate::wheel::position_at_angle(x, y)) {
+                out.push(Act::Mark(Mark { edge: Edge::Band, entering }));
+            }
+        } else {
+            self.band.forget();
+        }
+        out
+    }
 }
 
 /// **The one finger this surface has**, and what a click on it is holding.
@@ -481,6 +938,8 @@ pub struct Pad {
     /// What the click put down, so the release takes the same thing up. A release for a press that
     /// was never sent is `GUI.md` §7.4's stuck finger, in the other direction.
     held: Option<Hit>,
+    /// The boundaries, and which side of each the finger is on. See [`Edges`].
+    edges: Edges,
 }
 
 impl Pad {
@@ -504,7 +963,8 @@ impl Pad {
         // `at` has to stay in that space; everything downstream of an `Act` is the drawn wheel's,
         // so that is what goes out. See [`on_drawn_ring`] for the defect this separation fixes.
         let was = self.at.replace((x, y));
-        match g.ring().hit(x, y) {
+        let hit = g.ring().hit(x, y);
+        let mut out = match hit {
             Hit::Ring(_) | Hit::RingButton(_, _) => {
                 let (dx, dy) = on_drawn_ring(x, y);
                 if self.on_ring {
@@ -523,7 +983,12 @@ impl Pad {
             // The centre is not the ring, so the wheel's contact ends there — and the position is
             // still remembered, because that is where a click lands.
             Hit::Select | Hit::None => self.leave_ring(),
-        }
+        };
+        // **After what the wheel did, because it reports on it.** The order also puts the machine's
+        // act first in the frame that crosses [`CENTRE`], which is the frame the hand most needs to
+        // be told about: the contact ends and *then* the edge says why.
+        out.extend(self.edges.crossed(x, y, g.radius, self.on_ring));
+        out
     }
 
     /// Nothing is on the surface. Ends the click first and the contact second, which is the
@@ -536,6 +1001,11 @@ impl Pad {
         }
         out.extend(self.leave_ring());
         self.at = None;
+        // **A lift forgets every boundary.** A finger that goes up inside the centre button and
+        // comes down on the ring has crossed nothing — the line is between two places on the
+        // surface, not between two contacts — and reporting that as a crossing would put an edge
+        // where the hand felt none.
+        self.edges = Edges::default();
         out
     }
 
@@ -709,7 +1179,12 @@ impl Mode {
         self.engaged.set(true);
         self.engaged_at.set(Some(Instant::now()));
         self.source.announce(ANNOUNCE);
-        note(&format!("engaged — {}, detents: {}", self.source.describe(), feedback_state().0));
+        note(&format!(
+            "engaged — {}, detents: {}, edges felt: {}",
+            self.source.describe(),
+            feedback_state().0,
+            mark_state().0
+        ));
     }
 
     /// **The way out, and every way out runs through here.**
@@ -729,8 +1204,10 @@ impl Mode {
         self.source.grab(false);
         self.source.announce("");
         let (_, fired, coalesced) = feedback_state();
+        let (edges, marks, lost) = mark_state();
         note(&format!(
-            "released ({}) — {} frames, {fired} detents felt, {coalesced} coalesced",
+            "released ({}) — {} frames, {fired} detents felt, {coalesced} coalesced, \
+             {marks} edges felt ({edges}), {lost} gave way",
             why.describe(),
             self.frames.get()
         ));
@@ -748,9 +1225,10 @@ impl Mode {
     pub fn probe(&self) -> bool {
         let armed = self.source.arm();
         note(&format!(
-            "{}, armed: {armed}, detents: {}",
+            "{}, armed: {armed}, detents: {}, edges felt: {}",
             self.source.describe(),
-            feedback_state().0
+            feedback_state().0,
+            mark_state().0
         ));
         armed
     }
@@ -886,6 +1364,29 @@ mod tests {
 
     fn frame(c: Contact) -> Frame {
         Frame { surface: PAD, contact: Some(c) }
+    }
+
+    /// Half the pad's short axis — one unit of the wheel's radius, in millimetres. 37.0 here.
+    const RADIUS_MM: f32 = PAD.h / 2.0;
+
+    /// **The centre boundary in the unit a ruler measures.** 12.58 mm on this pad.
+    const BOUNDARY_MM: f32 = CENTRE * RADIUS_MM;
+
+    /// A contact at a wheel position and a radius **in millimetres**, which is the unit every
+    /// number about a finger is in.
+    fn at_mm(click: f64, mm: f32) -> Contact {
+        at(click, mm / RADIUS_MM)
+    }
+
+    fn marks_of(acts: &[Act], edge: Edge) -> usize {
+        acts.iter().filter(|a| matches!(a, Act::Mark(m) if m.edge == edge)).count()
+    }
+
+    /// **The half of a frame the machine sees.** A geometry mark goes to a fingertip and never to
+    /// the emulated part, so the tests that are about *what the wheel did* assert on this and stay
+    /// exactly as strong as they were before edges existed.
+    fn wheel_acts(acts: Vec<Act>) -> Vec<Act> {
+        acts.into_iter().filter(|a| !matches!(a, Act::Mark(_))).collect()
     }
 
     fn unit(c: Contact) -> (f32, f32) {
@@ -1063,7 +1564,9 @@ mod tests {
         for c in 1..=24 {
             let p = at(f64::from(c), 0.8);
             let u = drawn(p);
-            assert_eq!(pad.frame(frame(p)), vec![Act::Moved(u.0, u.1)]);
+            // `wheel_acts` because a quarter turn also crosses two label-band edges, which are a
+            // fact about a fingertip rather than about the wheel — see `Edge::Band`.
+            assert_eq!(wheel_acts(pad.frame(frame(p))), vec![Act::Moved(u.0, u.1)]);
             turned += detents(prev, u);
             prev = u;
         }
@@ -1100,9 +1603,20 @@ mod tests {
         let middle = Contact { x: 0.0, y: 0.0, phase: Phase::Moved };
 
         assert_eq!(pad.frame(frame(edge)).len(), 1);
-        assert_eq!(pad.frame(frame(middle)), vec![Act::Up]);
+        // **And the finger is told.** The frame that takes the contact off the wheel is the frame
+        // that crosses `CENTRE`, which is the whole of why that edge is the one felt by default.
+        assert_eq!(
+            pad.frame(frame(middle)),
+            vec![Act::Up, Act::Mark(Mark { edge: Edge::Centre, entering: true })]
+        );
         assert_eq!(pad.frame(frame(middle)), Vec::new(), "already off");
-        assert_eq!(pad.frame(frame(edge)), vec![Act::Down(drawn(edge).0, drawn(edge).1)]);
+        assert_eq!(
+            pad.frame(frame(edge)),
+            vec![
+                Act::Down(drawn(edge).0, drawn(edge).1),
+                Act::Mark(Mark { edge: Edge::Centre, entering: false }),
+            ]
+        );
     }
 
     /// **The click is the press, and resting is not.** A finger sitting on the MENU label sends no
@@ -1219,6 +1733,54 @@ mod tests {
         assert_eq!(t.counts(), (2, 3), "two fired; two from the triple and the one refused");
     }
 
+    /// **A dropped detent is worse than a missed edge, and this is the proof that it cannot
+    /// happen.**
+    ///
+    /// One actuator now has two callers. A missed edge is a boundary you have to find by feel; a
+    /// dropped detent is *the wheel not turning*, which is the input being broken. So the priority
+    /// is structural rather than weighted: [`Ticks::due`] reads `self.detent`, which no mark ever
+    /// writes, so no number of marks at any instant can reach the state its decision is made from.
+    ///
+    /// Two hundred of them in the same microsecond — far past anything a hand could cause — and the
+    /// detent that follows in that same instant still fires.
+    ///
+    /// **How to make it go red:** have `Ticks::due` test `self.any` instead of `self.detent`. The
+    /// first mark takes the slot and the detent is refused, which on a real pad is a wheel that
+    /// stops turning when a finger wanders near a line.
+    #[test]
+    fn a_flood_of_edge_marks_cannot_refuse_a_single_detent() {
+        let mut t = Ticks::default();
+        let t0 = Instant::now();
+        for _ in 0..200 {
+            t.mark_due(t0);
+        }
+        assert!(t.due(t0, 1), "a detent was refused after a burst of edge marks");
+        // And at every speed a hand reaches, not just the first one.
+        for i in 1..20 {
+            let now = t0 + Duration::from_micros(8060 * i);
+            for _ in 0..8 {
+                t.mark_due(now);
+            }
+            assert!(t.due(now, 1), "a detent was refused at frame {i}");
+        }
+        assert_eq!(t.counts().0, 20, "every frame's detent was felt");
+    }
+
+    /// The yielding, in the direction it is supposed to go: an **edge** stands off for
+    /// [`TICK_FLOOR`] after a pulse of either kind, because two pulses closer than that are one
+    /// blur on a single actuator and it is the edge rather than the wheel that gives way.
+    #[test]
+    fn an_edge_gives_way_to_a_pulse_already_going_out() {
+        let mut t = Ticks::default();
+        let t0 = Instant::now();
+        assert!(t.due(t0, 1), "the detent");
+        assert!(!t.mark_due(t0 + Duration::from_millis(1)), "an edge cut in on a detent");
+        assert!(t.mark_due(t0 + TICK_FLOOR), "and one floor later it is allowed");
+        // A second edge inside the floor of the first gives way too — one actuator, one rate.
+        assert!(!t.mark_due(t0 + TICK_FLOOR + Duration::from_millis(1)));
+        assert_eq!(t.mark_counts(), (1, 2), "one edge felt, two that gave way");
+    }
+
     #[test]
     fn nothing_is_asked_of_the_actuator_for_a_frame_that_turned_nothing() {
         let mut t = Ticks::default();
@@ -1243,6 +1805,9 @@ mod tests {
                 self.1
             }
             fn detent(&self) {
+                self.2.fetch_add(1, Ordering::Relaxed);
+            }
+            fn mark(&self, _: Mark) {
                 self.2.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -1298,6 +1863,266 @@ mod tests {
         let pad = Geometry::of(PAD).expect("a surface");
         let mm = pad.ring().select * pad.radius;
         assert!((mm - 12.6).abs() < 0.1, "the centre button is {mm:.1} mm, not 12.6");
+    }
+
+    // ── The geometry a finger cannot see ────────────────────────────────────────────────────────
+
+    /// **Chatter is the engineering risk in the whole of this, and [`ARM_MM`] is the answer.**
+    ///
+    /// The pad samples at ~124 Hz, so a hand resting near the centre boundary — or drifting across
+    /// it — crosses it many times a second, and without hysteresis that is a machine gun rather
+    /// than a boundary. Here the finger oscillates ±0.5 mm about the line for 40 frames, which is a
+    /// third of a second and **larger than anything a still hand does**: the stillest 265 ms in the
+    /// 891-contact capture wandered over a 1.10 mm band, and one frame of it moved 0.3 mm.
+    ///
+    /// **The control is the second half and is not decoration.** A wobble that produced one mark
+    /// looks identical to a wobble the detector never saw, so the same 40 frames are run through a
+    /// bare [`Radial`] with **no** arming band, where they must produce 40. That is the instrument
+    /// making a non-zero before its zero is believed, and it is what would have caught a detector
+    /// that had silently stopped detecting.
+    ///
+    /// **How to make it go red:** set [`ARM_MM`] to 0.0. The first assertion gets 40.
+    #[test]
+    fn a_finger_wobbling_on_the_centre_boundary_is_one_edge_and_not_forty() {
+        let wobble: Vec<f32> =
+            (0..40).map(|i| BOUNDARY_MM + if i % 2 == 0 { -0.5 } else { 0.5 }).collect();
+
+        let mut pad = Pad::default();
+        // Start clear of the band, so the detector is armed and knows which side it began on.
+        pad.frame(frame(at_mm(0.0, BOUNDARY_MM + 5.0)));
+        let felt: usize =
+            wobble.iter().map(|&r| marks_of(&pad.frame(frame(at_mm(0.0, r))), Edge::Centre)).sum();
+        assert_eq!(felt, 1, "a 1 mm wobble on the line was felt {felt} times");
+
+        // The control: the same 40 crossings with no arming band at all, primed from the same
+        // place so that the two arms differ in exactly one thing.
+        let mut bare = Radial::default();
+        bare.crossed((BOUNDARY_MM + 5.0) / RADIUS_MM, CENTRE, 0.0);
+        let n = wobble.iter().filter(|&&r| bare.crossed(r / RADIUS_MM, CENTRE, 0.0).is_some()).count();
+        assert_eq!(n, 40, "the control never fired, so the first assertion measured nothing");
+    }
+
+    /// **The arming band is a gate on the mark and never a move of the boundary.**
+    ///
+    /// Crossing [`CENTRE`] is what takes the finger off the wheel, and that behaviour is not this
+    /// feature's to change — a Schmitt trigger would have shifted it by [`ARM_MM`] in each
+    /// direction. So both halves must land on the line: `Act::Up` at 12.58 mm and **the mark in the
+    /// same frame**, rather than 1.5 mm further in once the band was cleared. A boundary announced
+    /// late is a boundary reported in the wrong place.
+    ///
+    /// **How to make it go red:** make [`Radial`] a Schmitt trigger — test `r >= at + arm` going out
+    /// and `r < at - arm` coming in, instead of arming on the way through. The `Act::Up` still
+    /// arrives at the line and the mark no longer does.
+    #[test]
+    fn the_wheel_and_the_mark_both_land_on_the_line_and_not_on_the_arming_band() {
+        let mut pad = Pad::default();
+        pad.frame(frame(at_mm(0.0, BOUNDARY_MM + 5.0)));
+        assert!(pad.on_ring());
+        // One hundredth of a millimetre inside the line is inside the button, arming band or no —
+        // and it is a hundred and fifty times finer than the band, so nothing here is a rounding.
+        let acts = pad.frame(frame(at_mm(0.0, BOUNDARY_MM - 0.01)));
+        assert!(acts.contains(&Act::Up), "the contact did not end at the line: {acts:?}");
+        assert_eq!(marks_of(&acts, Edge::Centre), 1, "the mark did not land on the line: {acts:?}");
+        assert!(!pad.on_ring());
+    }
+
+    /// **Why the centre edge can never starve a detent, said at the level where it is a property of
+    /// the geometry rather than of the rate limiter.**
+    ///
+    /// A detent comes from `Act::Moved`, and moving *across* [`CENTRE`] is precisely the frame in
+    /// which the contact starts or ends — `Act::Down` or `Act::Up`, never `Act::Moved`. So the two
+    /// do not merely take turns: **they cannot occur in the same frame at all**, which is what
+    /// makes this the edge that is on by default. A radial line is invisible to
+    /// `wheel::position_at_angle`, which never reads a radius.
+    ///
+    /// **How to make it go red:** have `Pad::frame` emit `Act::Moved` for a contact in the centre
+    /// as well as on the ring.
+    #[test]
+    fn the_centre_edge_never_shares_a_frame_with_a_detent() {
+        let mut crossings = 0;
+        for click in [0.0, 7.0, 24.0, 41.0, 60.0, 84.0] {
+            let mut pad = Pad::default();
+            // In from well outside the band to well inside it, and back out, a third of a
+            // millimetre at a time — finer than the pad's own resolution at any speed.
+            let sweep = (0..200).map(|i| 30.0 - f32::from(i as u16) * 0.3);
+            for r in sweep.chain((0..200).map(|i| f32::from(i as u16).mul_add(0.3, 0.6))) {
+                let acts = pad.frame(frame(at_mm(click, r.max(0.6))));
+                let m = marks_of(&acts, Edge::Centre);
+                crossings += m;
+                assert!(
+                    m == 0 || !acts.iter().any(|a| matches!(a, Act::Moved(_, _))),
+                    "a centre edge and a detent in one frame at {click}: {acts:?}"
+                );
+            }
+        }
+        // The control: a sweep that crossed nothing proves nothing about frames that do.
+        assert_eq!(crossings, 12, "six sweeps in and out is twelve crossings, not {crossings}");
+    }
+
+    /// **A band edge does share its frame with a detent, and that is the argument against it stated
+    /// as a test rather than as an opinion.**
+    ///
+    /// `Edge::Band` is angular, which is the axis the detents already use, so a crossing arrives
+    /// *inside* a turn rather than beside one. That is why it is off by default and why
+    /// [`Ticks`]'s priority rule has to be structural: on this edge the contention is real.
+    #[test]
+    fn a_band_edge_does_share_its_frame_with_a_detent_which_is_why_it_is_not_on() {
+        let mut pad = Pad::default();
+        pad.frame(frame(at_mm(0.0, 25.0)));
+        let mut shared = 0;
+        for click in 1..=30 {
+            let acts = pad.frame(frame(at_mm(f64::from(click), 25.0)));
+            if marks_of(&acts, Edge::Band) > 0 && acts.iter().any(|a| matches!(a, Act::Moved(_, _))) {
+                shared += 1;
+            }
+        }
+        assert!(shared > 0, "the band edge never met a detent, so this test measured nothing");
+        // Leaving MENU's band at 8/9 and entering Next's at 16/17 — two crossings in a quarter turn.
+        assert_eq!(shared, 2, "a quarter turn crosses two band edges, not {shared}");
+    }
+
+    /// **A contact that begins right on a boundary still gets its first crossing.**
+    ///
+    /// Both detectors start *armed*, and for [`Angular`] that had to be written out — a derived
+    /// `Default` gives `false`, which silently swallows the first crossing whenever a finger
+    /// happens to land within [`ARM_CLICKS`] of a band edge. Click 8 is exactly that: the last
+    /// click `wheel::quadrant` still calls MENU, half a click from where it stops.
+    ///
+    /// **How to make it go red:** derive `Default` for `Angular` instead of writing it.
+    #[test]
+    fn a_contact_that_begins_on_a_boundary_still_reports_leaving_it() {
+        let mut pad = Pad::default();
+        pad.frame(frame(at_mm(8.0, 25.0)));
+        let acts = pad.frame(frame(at_mm(12.0, 25.0)));
+        assert_eq!(marks_of(&acts, Edge::Band), 1, "the first crossing was swallowed: {acts:?}");
+    }
+
+    /// A finger that lifts inside the centre button and comes down on the ring has crossed nothing:
+    /// the line is between two places on the surface, not between two contacts. Without the reset a
+    /// new gesture would open with an edge the hand never felt.
+    #[test]
+    fn a_lift_and_a_landing_on_the_other_side_is_not_a_crossing() {
+        let mut pad = Pad::default();
+        pad.frame(frame(at_mm(0.0, 5.0)));
+        assert_eq!(marks_of(&pad.frame(Frame { surface: PAD, contact: None }), Edge::Centre), 0);
+        let acts = pad.frame(frame(at_mm(0.0, 25.0)));
+        assert_eq!(marks_of(&acts, Edge::Centre), 0, "a new contact was reported as a crossing");
+        // And the contact is a real one, so this is not a test of a pad that emitted nothing.
+        assert!(matches!(acts.first(), Some(Act::Down(_, _))), "{acts:?}");
+    }
+
+    /// **The hand a wheel is worked with is never told about the default edge — and would be told
+    /// about the other one eight times a turn.** This is the whole argument for the smallest set,
+    /// as arithmetic rather than as an opinion.
+    ///
+    /// One full turn at the **median radius a hand actually circles at**, 18.7 mm, which is 6.1 mm
+    /// clear of the 12.58 mm line. The boundary that is on says nothing at all; the boundary that
+    /// is off would speak on 8 of those frames, in the middle of the detent stream, on the same
+    /// angular axis the detents are already using. **Over-buzzing is the likely failure of a
+    /// feature like this, and a surface that ticks constantly conveys less than one that ticks
+    /// rarely.**
+    #[test]
+    fn an_ordinary_turn_says_nothing_on_the_edge_that_is_on_and_eight_things_on_the_one_that_is_not()
+    {
+        let mut pad = Pad::default();
+        let (mut on, mut off, mut turned) = (0, 0, 0);
+        for i in 0..=96 {
+            let acts = pad.frame(frame(at_mm(f64::from(i), 18.7)));
+            on += marks_of(&acts, Edge::Centre) + marks_of(&acts, Edge::Rim);
+            off += marks_of(&acts, Edge::Band);
+            turned += acts.iter().filter(|a| matches!(a, Act::Moved(_, _))).count();
+        }
+        assert!(turned > 90, "the wheel barely turned, so this measured nothing: {turned}");
+        assert_eq!(on, 0, "a turn at the median circling radius crossed {on} of the felt edges");
+        assert_eq!(off, 8, "and eight label-band edges, which is why they are not felt");
+    }
+
+    /// **The rim was never reached by the hand this was measured from**, which is the argument for
+    /// it being off. 31.4 mm was the furthest of 899 samples and the line is at 37.0.
+    #[test]
+    fn the_rim_sits_outside_the_radius_the_hand_was_measured_to_reach() {
+        let g = Geometry::of(PAD).expect("a surface");
+        assert!((g.radius - 37.0).abs() < 0.01, "the rim is at {} mm", g.radius);
+        let mut pad = Pad::default();
+        pad.frame(frame(at_mm(0.0, 20.0)));
+        // The furthest the capture's hand went.
+        assert_eq!(marks_of(&pad.frame(frame(at_mm(24.0, 31.4))), Edge::Rim), 0);
+        // And it is a real boundary when a finger does go out there — into the corner of the pad.
+        assert_eq!(marks_of(&pad.frame(frame(at_mm(24.0, 45.0))), Edge::Rim), 1);
+    }
+
+    /// **Which edges are felt is a launch-time choice**, because software cannot check that
+    /// something feels right and every round trip through a rebuild costs the operator a sitting.
+    /// An unknown word keeps the default rather than silently selecting nothing — two arms of a
+    /// comparison that differ only in a typo would read as different and behave the same.
+    #[test]
+    fn the_edges_being_felt_are_a_set_and_an_unknown_word_keeps_the_default() {
+        assert!(Felt::default().has(Edge::Centre), "the default is the centre boundary");
+        assert!(!Felt::default().has(Edge::Rim));
+        assert!(!Felt::default().has(Edge::Band));
+        assert_eq!(Felt::parse("off"), Felt { centre: false, rim: false, band: false });
+        assert_eq!(Felt::parse("all"), Felt { centre: true, rim: true, band: true });
+        assert_eq!(Felt::parse("centre,bands"), Felt { centre: true, rim: false, band: true });
+        assert_eq!(Felt::parse(" rim , center "), Felt { centre: true, rim: true, band: false });
+        assert_eq!(Felt::parse("wheel"), Felt::default(), "an unknown word kept the default");
+        assert_eq!(Felt::parse(""), Felt::default());
+        assert_eq!(Felt::default().describe(), "centre");
+        assert_eq!(Felt::parse("all").describe(), "centre + rim + bands");
+        assert_eq!(Felt::parse("off").describe(), "no edges");
+    }
+
+    /// **An edge that is not being felt does not reach a fingertip**, which is what makes `off` a
+    /// real control arm rather than a differently-worded default. The `Pad` reports every crossing
+    /// either way, because the diagnostic line wants the geometry whether or not the actuator does.
+    #[test]
+    fn only_the_edges_being_felt_reach_the_sinks() {
+        struct Counter(&'static AtomicU32);
+        impl Detents for Counter {
+            fn describe(&self) -> &'static str {
+                "a counter"
+            }
+            fn present(&self) -> bool {
+                true
+            }
+            fn detent(&self) {}
+            fn mark(&self, _: Mark) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        static SEEN: AtomicU32 = AtomicU32::new(0);
+
+        let mut f = Feedback::default();
+        f.add(Box::new(Counter(&SEEN)));
+        f.feel(Felt::default());
+        f.mark(Mark { edge: Edge::Rim, entering: true });
+        f.mark(Mark { edge: Edge::Band, entering: true });
+        assert_eq!(SEEN.load(Ordering::Relaxed), 0, "an edge nobody asked for was felt");
+        f.mark(Mark { edge: Edge::Centre, entering: true });
+        assert_eq!(SEEN.load(Ordering::Relaxed), 1, "the edge that is on was not");
+        // And `off` reaches nothing at all.
+        f.feel(Felt::parse("off"));
+        f.mark(Mark { edge: Edge::Centre, entering: false });
+        assert_eq!(SEEN.load(Ordering::Relaxed), 1);
+    }
+
+    /// Which way the line was crossed, since the one spare pattern can be spent on saying so.
+    /// `entering` is *towards the region the edge is named for* — into the button, out past the rim.
+    #[test]
+    fn a_crossing_says_which_way_it_went() {
+        let mut pad = Pad::default();
+        pad.frame(frame(at_mm(0.0, 25.0)));
+        let inward = pad.frame(frame(at_mm(0.0, 5.0)));
+        assert!(inward.contains(&Act::Mark(Mark { edge: Edge::Centre, entering: true })), "{inward:?}");
+        let outward = pad.frame(frame(at_mm(0.0, 25.0)));
+        assert!(
+            outward.contains(&Act::Mark(Mark { edge: Edge::Centre, entering: false })),
+            "{outward:?}"
+        );
+        // The rim is named for what is outside it, so going out is going in.
+        let mut pad = Pad::default();
+        pad.frame(frame(at_mm(0.0, 25.0)));
+        let out = pad.frame(frame(at_mm(0.0, 45.0)));
+        assert!(out.contains(&Act::Mark(Mark { edge: Edge::Rim, entering: true })), "{out:?}");
     }
 
     /// This build's answer to *can the trackpad be the wheel*, and it is a fact about the target

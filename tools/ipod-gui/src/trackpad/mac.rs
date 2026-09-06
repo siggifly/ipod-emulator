@@ -23,7 +23,9 @@
 //!
 //! And one that decided the shape of the feedback: **the haptic API offers three canned patterns
 //! and nothing else** — `Generic`, `Alignment`, `LevelChange`. No amplitude, no duration, no
-//! envelope. `Alignment` is the detent-shaped one. There is nothing to tune.
+//! envelope. `Alignment` is the detent-shaped one and is spoken for. That leaves **two** for
+//! everything else this file might ever want to say through a fingertip, which is the entire budget
+//! the geometry marks are spent out of — see [`Shape`].
 
 use std::cell::{Cell, RefCell};
 use std::ptr::NonNull;
@@ -41,7 +43,7 @@ use objc2_app_kit::{
 use objc2_foundation::NSString;
 
 use super::{
-    add_sink, note, verbose, Act, Contact, Detents, Frame, Left, Mode, Phase, Source, Surface,
+    add_sink, note, verbose, Act, Contact, Detents, Frame, Left, Mark, Mode, Phase, Source, Surface,
 };
 
 /// **The chord that makes the trackpad the wheel: ⌃⌘T.**
@@ -160,7 +162,7 @@ struct Actuator;
 
 impl Detents for Actuator {
     fn describe(&self) -> &'static str {
-        "the trackpad's actuator (NSHapticFeedbackPattern::Alignment)"
+        "the trackpad's actuator (Alignment for a detent, LevelChange for an edge)"
     }
 
     /// **A claim about the build and never about the hardware.** Force Touch pads only — MacBook
@@ -177,6 +179,66 @@ impl Detents for Actuator {
             NSHapticFeedbackPattern::Alignment,
             NSHapticFeedbackPerformanceTime::Now,
         );
+    }
+
+    /// **An edge, in the one pattern the detent does not use.**
+    ///
+    /// The whole design space is three canned patterns — no amplitude, no duration, no envelope —
+    /// and `Alignment` is spoken for: it is the detent, and the operator has confirmed it feels
+    /// right, so it is not available and not to be changed. That leaves `LevelChange` and
+    /// `Generic`, and `LevelChange` is the documented *"you crossed into something"* one, which is
+    /// exactly what a boundary is.
+    ///
+    /// **Which of the two, and whether direction is spent on it, is the operator's to judge and
+    /// not mine**: nothing in this program can tell whether two canned patterns are distinguishable
+    /// through a fingertip. So the choice is a launch-time variant rather than a decision taken
+    /// here — see [`Shape`].
+    fn mark(&self, m: Mark) {
+        NSHapticFeedbackManager::defaultPerformer()
+            .performFeedbackPattern_performanceTime(Shape::from_env().pattern(m), NSHapticFeedbackPerformanceTime::Now);
+    }
+}
+
+/// **What an edge feels like.** `IPOD_TRACKPAD_MARK`, and the default is `level`.
+///
+/// A variant rather than a constant because the question it answers — *can a hand tell these two
+/// apart* — is not one software can ask. Three canned patterns exist, `Alignment` is the detent's,
+/// and everything here is an arrangement of the other two.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Shape {
+    /// `LevelChange` whichever way the line was crossed. The default, and the least to learn.
+    Level,
+    /// `Generic` instead — the third pattern, in case `LevelChange` reads as a detent on this pad.
+    Generic,
+    /// **The two spare patterns spent on direction**: `LevelChange` going in, `Generic` coming out.
+    /// The only way to say *which side you are now on* with an API that has no amplitude — and it
+    /// costs the last degree of freedom there is, which is why it is not the default.
+    Directional,
+}
+
+impl Shape {
+    fn from_env() -> Shape {
+        static CACHE: std::sync::OnceLock<Shape> = std::sync::OnceLock::new();
+        *CACHE.get_or_init(|| match std::env::var("IPOD_TRACKPAD_MARK").as_deref() {
+            Ok("generic") => Shape::Generic,
+            Ok("directional") => Shape::Directional,
+            Ok("level") | Err(_) => Shape::Level,
+            Ok(other) => {
+                // Unconditional for the reason `Felt::parse`'s is — a typo must not make two arms
+                // of a comparison behave the same while reading as different.
+                eprintln!("[trackpad] IPOD_TRACKPAD_MARK: no shape is called {other:?} — using level");
+                Shape::Level
+            }
+        })
+    }
+
+    fn pattern(self, m: Mark) -> NSHapticFeedbackPattern {
+        match self {
+            Shape::Level => NSHapticFeedbackPattern::LevelChange,
+            Shape::Generic => NSHapticFeedbackPattern::Generic,
+            Shape::Directional if m.entering => NSHapticFeedbackPattern::LevelChange,
+            Shape::Directional => NSHapticFeedbackPattern::Generic,
+        }
     }
 }
 
