@@ -303,6 +303,112 @@ boot_doom() {                       # $1 nor  $2 gen  $3 label  $4 drive
   fi
 }
 
+# ── 0.6 goals: rows that are expected not to pass yet ──────────────────────────────────────────
+
+# Brick — RetailOS's own built-in, and a 0.5 requirement. **Not implemented, deliberately.**
+#
+# It was demonstrated playable, and the recipe that did it was never written down: no file in
+# research/, no recipe in tools/, and grep finds neither the digest nor a descent. Guessing a
+# descent here would produce a confident FAIL about a thing that works, which is the exact shape
+# AGENTS.md §6 is about — so this row states the gap instead of inventing a number.
+#
+# **And it cannot be written like the rows above even once the descent is known.** Every other row
+# runs at `--clock=5`, the accelerant, because at the faithful 75 these budgets do not finish
+# booting — harmless for *does it draw*, since research/04 records a 6 G A/B at 5 and 75 landing on
+# the same 933 ATA commands and 75 267 non-black pixels. A PLAYABILITY row is the exception: at
+# clock 5 the operator reports *"the balls just shoot immediately super fast, nearly unplayable"*.
+# Brick needs --clock=75 and a budget sized for real time.
+boot_brick() {                      # $1 nor  $2 gen  $3 label  $4 drive
+  row brick "$2" "$3" - BLOCKED "the descent was never recorded — issue #24. Needs --clock=75, not 5"
+}
+#
+# **They report GOAL, never FAIL, and the distinction is the whole point.** A matrix with three
+# permanently-red rows is a matrix people stop reading, and the failure it is meant to catch —
+# a 0.5 target regressing — arrives in the same colour as the three things that were never
+# expected to work. So a goal row says *how far it got*, a number that is meaningful to compare
+# against itself run to run, and shouts only when it does better than expected.
+#
+# Each records the measurement that was true when it was written, so a change is visible without
+# reading anything else.
+goal() {                            # $1 target  $2 gen  $3 label  $4 route  $5 got  $6 expected
+  if [ "${5%% *}" = "MET" ]; then
+    row "$1" "$2" "$3" "$4" "GOAL-MET" "${5#MET }  (expected: $6)"
+  else
+    row "$1" "$2" "$3" "$4" GOAL "$5  (expected: $6)"
+  fi
+}
+
+# ipodloader2 — the third bootloader. research/16: it builds, installs, and Apple's bootloader
+# enters it. Two bugs blocked it and BOTH WERE UPSTREAM'S, fixed by tools/patches/ipodloader2-vfs
+# .patch: `vfs.c:193` tests the firmware magic with `mlc_strncmp`, which returns 0 on a match, so
+# the partition was accepted only when `]ih[` did NOT match; and there is no case for FAT32-LBA
+# (`0x0C`), which is what iTunes on Windows produces and what this project's own make-disk writes.
+#
+# **It needs `--rdval=0x70000000=0x3232432D`, and that is an ABLATION, not a fake.** Apple's
+# bootloader reads bits 16..23 and wants 0x36; ipodloader2 reads the same bits and wants 0x32.
+# Two drivers want different answers from one register. Seeding it truthfully with `PP5022C-` took
+# the retail boot from 599 ATA commands to 0 — measured, and the reason this is not simply fixed.
+boot_loader2() {                    # $1 nor  $2 gen  $3 label  $4 drive
+  local nor="$1" gen="$2" label="$3" drive="$4"
+  local out="$SCRATCH/ldr-$gen-$label" work="$SCRATCH/ldr-$gen-$label.img"
+  [ -f "$RES/vendor/ipodloader2/bin/loader.bin" ] || {
+    row loader2 "$gen" "$label" - BLOCKED "resources/vendor/ipodloader2/bin/loader.bin is not here"; return; }
+  [ -n "$drive" ] || { row loader2 "$gen" "$label" - BLOCKED "no drive built for this generation"; return; }
+  mkdir -p "$out"; clone_disk "$drive" "$work"
+  FLASH="$nor" DISK="$work" BUDGET=2000000000 "$BIN" retail --clock=5 \
+    --rdval=0x70000000=0x3232432D --clickwheel \
+    --bcm-film=0xE0000:140:F0:25000000:"$out" > "$out.log" 2>&1
+  local pics nb; pics=$(pictures "$out"); nb=$(last_nonblack "$out")
+  # It draws its own menu — text on a background, so a few thousand lit pixels, not a full screen.
+  if [ "${nb:-0}" -gt 1000 ]; then
+    goal loader2 "$gen" "$label" "chain" "MET $pics pictures, $nb non-black — it drew" \
+      "97 frame updates, 74 419 non-black (research/16, 2026-08-19)"
+  else
+    goal loader2 "$gen" "$label" "chain" "$pics pictures, $nb non-black" \
+      "97 frame updates, 74 419 non-black (research/16, 2026-08-19)"
+  fi
+}
+
+# iPodLinux — further than "boots": the kernel EXECUTES. research/16 measured it ending inside
+# `ldmia sp, {r0-pc}^`, an ARM exception return restoring user-mode registers, having taken
+# interrupts — a Linux kernel servicing its own traps — and reaching ZeroLauncher's splash.
+#
+# **Where it stops is named, and it is one page.** It polls `0x64004000..0x64004103`, 8 385 336
+# reads from two PCs a few instructions apart inside the interrupt path. That address appears in
+# NO register map available to this project — not Rockbox's pp5020.h, not ipodloader2's own
+# headers. Modelling it is the 0.6 work, and it is a much better question than the one that
+# started that note.
+#
+# ⚠️ docs/GUI.md §15 names a DIFFERENT stopping point — ZeroLauncher stalling at "Finishing Up…"
+# after a 101 MB download. At most one of those is current. Reconciling them is part of this row.
+boot_ipodlinux() {                  # $1 nor  $2 gen  $3 label  $4 drive
+  local nor="$1" gen="$2" label="$3" drive="$4"
+  local out="$SCRATCH/ipl-$gen-$label" work="$SCRATCH/ipl-$gen-$label.img"
+  [ -f "$RES/vendor/ipodlinux/boot/vmlinux" ] || {
+    row ipodlinux "$gen" "$label" - BLOCKED "resources/vendor/ipodlinux/boot/vmlinux is not here"; return; }
+  [ -n "$drive" ] || { row ipodlinux "$gen" "$label" - BLOCKED "no drive built for this generation"; return; }
+  mkdir -p "$out"; clone_disk "$drive" "$work"
+  FLASH="$nor" DISK="$work" BUDGET=6000000000 "$BIN" retail --clock=5 \
+    --rdval=0x70000000=0x3232432D --clickwheel \
+    --bcm-film=0xE0000:140:F0:25000000:"$out" > "$out.log" 2>&1
+  local pics nb ata; pics=$(pictures "$out"); nb=$(last_nonblack "$out")
+  ata=$(grep -c 'ata ' "$out.log" 2>/dev/null || echo 0)
+  goal ipodlinux "$gen" "$label" "loader" "$pics pictures, $nb non-black" \
+    "kernel executes, stops polling 0x64004000 (research/16)"
+}
+
+# Triple boot — RetailOS, Rockbox and iPodLinux, chosen from one loader menu. This is the row that
+# names the real blocker, and it is a single register.
+#
+# `0x70000000` bits 16..23: Apple's bootloader wants 0x36, ipodloader2 wants 0x32. There is no
+# value that satisfies both, so the chain currently runs on the ablation above. **Until that is
+# resolved honestly, triple boot cannot be a truthful row** — it would be measuring a machine we
+# broke to make it pass. It is listed so the goal is visible and so the blocker has somewhere to
+# be written down, not because a number is expected.
+boot_triple() {                     # $1 nor  $2 gen  $3 label  $4 drive
+  goal triple "$2" "$3" "-" "blocked on one register" \
+    "0x70000000 bits 16..23: Apple wants 0x36, ipodloader2 wants 0x32 — no value serves both"
+}
 # ── one generation: build its drive, mint its ROM, run every target on both NOR sources ────────
 generation() {                      # $1 label  $2 model  $3 families  $4 seed  $5.. real dumps
   local gen="$1" model="$2" fams="$3" seed="$4"; shift 4
@@ -322,6 +428,10 @@ generation() {                      # $1 label  $2 model  $3 families  $4 seed  
     boot_diag     "$n" "$gen" real "$drive"
     boot_rockbox  "$n" "$gen" real "$drive"
     boot_doom     "$n" "$gen" real "$drive"
+    boot_brick    "$n" "$gen" real "$drive"
+    boot_loader2  "$n" "$gen" real "$drive"
+    boot_ipodlinux "$n" "$gen" real "$drive"
+    boot_triple   "$n" "$gen" real "$drive"
   done
   [ ${#} -eq 0 ] && row retailos "$gen" real - ABSENT "no real dump of this generation on this machine"
   if [ -n "$syn" ]; then
@@ -329,6 +439,9 @@ generation() {                      # $1 label  $2 model  $3 families  $4 seed  
     boot_diag     "$syn" "$gen" synthetic "$drive"
     boot_rockbox  "$syn" "$gen" synthetic "$drive"
     boot_doom     "$syn" "$gen" synthetic "$drive"
+    boot_brick    "$syn" "$gen" synthetic "$drive"
+    boot_loader2  "$syn" "$gen" synthetic "$drive"
+    boot_ipodlinux "$syn" "$gen" synthetic "$drive"
   fi
   echo
 }
