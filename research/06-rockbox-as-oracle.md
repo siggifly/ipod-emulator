@@ -2057,6 +2057,10 @@ before. **What is not shown here is a player**: whether wheel input reaches the 
 this recipe, and a script re-timed for a Doom that now takes 157 s to reach its title is the obvious
 next measurement.
 
+> **Answered 2026-09-06, in §"Doom is played" below: input reaches the game and drives the player.**
+> The re-timing was necessary but not sufficient — the press also has to land inside a window in
+> which Doom polls, and there is a 66-second one in which it does not.
+
 #### The next consumer of the same fix is audio
 
 `timer-pp.c` is not the only place Rockbox writes that pair close together. `pcm-pp.c`'s
@@ -2072,3 +2076,177 @@ Two things this did **not** turn out to be, both of which look like the same def
   inside `#ifdef SAMSUNG_YH920`. The line is meant to be masked.
 - **Both PP DMA controllers reading `enabled=0 pending=0`.** Also correct here: `dma_tx_init` runs
   when playback starts, and this run has no sound.
+
+## Doom is played: input reaches the game, and the press has to land inside a poll window (2026-09-06)
+
+The section above ends *"whether wheel input reaches the game is untested by this recipe."* It is
+tested now. **Wheel and button input reach Doom's game loop and drive the player** — the Doom menu
+opens, `New Game` starts MAP01, and the view turns, the fist swings and the player walks. The
+frames are below.
+
+Getting there needed two things the previous recipe had neither of, and the second one is the
+finding: the input has to arrive after the game is up, **and it has to be held across one of Doom's
+button polls**, which are not evenly spaced.
+
+### Doom's controls on this target, read out of the plugin rather than guessed
+
+`firmware/export/config/ipodvideo.h:65` is `#define CONFIG_KEYPAD IPOD_4G_PAD`, and
+`apps/plugins/doom/i_video.c:158` maps that pad. The hardware bits are
+`firmware/target/arm/ipod/button-target.h:33-41` and the decode is `button-clickwheel.c:123-132`,
+so `wheel_button()`'s five names land on exactly these:
+
+| wheel | Rockbox button | events `getkey()` posts | Doom |
+|---|---|---|---|
+| centre | `BUTTON_SELECT` | `KEY_ENTER` **and** `'w'` | menu: confirm · game: change weapon |
+| Menu | `BUTTON_MENU` | `KEY_UPARROW` **and** `' '` | menu: move up · game: forward + use |
+| Left | `BUTTON_LEFT` | `KEY_LEFTARROW` | turn left |
+| Right | `BUTTON_RIGHT` | `KEY_RIGHTARROW` | turn right |
+| Play/Pause | `BUTTON_PLAY` | `KEY_RCTRL` | fire |
+| wheel rotation | `BUTTON_SCROLL_FWD`/`BACK` | `ev_scroll` ±1 → `scrollmag` | turning, in game only |
+| **Hold switch, off→on** | — (`button_hold()`, GPIOA) | `KEY_ESCAPE` | **bring the menu up** |
+
+Two consequences that decide what a script can do:
+
+- **There is no `DOOMBUTTON_DOWN` and no `DOOMBUTTON_ESC` on this pad.** Menu navigation is
+  UP-only, wrapping; the wheel does *not* move a Doom menu, because `M_Responder` reads only
+  `ev_keydown` and `ev_scroll` never becomes one.
+- **The Hold switch is the only way to open the menu once a demo is playing.** `G_Responder`'s
+  demo branch (`g_game.c:709-731`) pops the menu on any keydown **only when
+  `gamestate == GS_DEMOSCREEN`** — the title page. During demo *playback* `gamestate` is
+  `GS_LEVEL`, so the branch returns false and the key is discarded. Measured: a 10 s centre hold at
+  185 s reaches `D_PostEvent` ×4, `M_Responder` ×4, `G_Responder` ×4 and changes nothing on screen.
+  `M_Responder`'s `!menuactive` arm answers only `key_menu_escape`, which on this pad is the Hold
+  switch. Only off→on transitions fire it, so **leave Hold on across a poll**; toggling it between
+  two polls is invisible, because `holdbutton` is updated inside `getkey()` itself.
+
+### The 66 seconds in which Doom is not listening
+
+`--stop-at=0x00077324:N` on `button_status` — the function `rb->button_status()` is, `rockbox.map`
+`0x77324`, and `getkey()` is its only caller here (`lr=0x03fbcf2c`, inside `I_StartTic`):
+
+| poll | simulated time |
+|---|---|
+| 1 | **102.24 s** |
+| 426 | **114.39 s** |
+| 427 | **180.81 s** |
+| 732 | 199.57 s |
+
+**Nothing is polled between 114.4 s and 180.8 s** — which is the whole of the Freedoom title
+screen, the obvious place to press something. Doom's loop is not merely slow there, it is stopped:
+armed with `--enterlog` and stopped at four times, with the descent script and nothing else,
+
+| `--until` | `doomtime` (TIMER2 ISR) | `D_BuildNewTiccmds` | `I_StartTic` | `G_Ticker` | `D_PageTicker` |
+|---|---|---|---|---|---|
+| 118 s | 789 | 111 | 426 | 387 | 386 |
+| 140 s | 1 559 | 111 | 426 | 387 | 386 |
+| 175 s | 2 783 | 111 | 426 | 387 | 386 |
+| 200 s | 3 658 | 179 | 732 | 630 | 386 |
+
+The clock keeps its 35 Hz through the window (789 → 2 783 over 57 s) and **not one tic runs**. So
+this is not the TIMER2 defect returning; `I_GetTime()` is fine and the loop is blocked below it.
+`--profile-window=470000000:800000000` says where: `corelock_lock` / `corelock_unlock` (`0x84580`,
+`0x845e0`), `__aeabi_uidivmod`, `mutex_lock`, `dc_cache_probe`, `switch_thread` — flat, 2.4 % a
+bucket, which is a spin. That is the same core-lock this file already names at `0x00086300` in
+§"Doom stops in the same place", so the second core remains the suspect and **the cause is not
+established here**. What is established is that it is a window in which input cannot be delivered,
+and that the window ends by itself.
+
+### The recipe, verbatim
+
+The drive is `resources/drives/ipod8g-rockbox.img` cloned, then `ipod-boot doom-assets` on the
+clone (`rockdoom.wad`, Freedoom's `doom2.wad`, `shortcuts.txt`). Both arms are the same binary, the
+same `DISK=`, a fresh `WORKDISK=` clone each, the same budget, and **launched in the same second** —
+the PMU RTC is seeded from the host clock, so two arms started minutes apart disagree about their
+own early frames. Both printed `pcf50605 battery 100%, clock 2026-09-06 19:17:10`.
+
+```sh
+D='@20000ms:touch,@20020ms:rotate=-6,@20700ms:release,\
+@23000ms:touch,@23150ms:down=select,@23450ms:up=select,@23600ms:release,\
+@26000ms:touch,@26150ms:down=select,@26450ms:up=select,@26600ms:release,\
+@34000ms:touch,@34020ms:rotate=-6,@34700ms:release,\
+@36000ms:touch,@36020ms:rotate=-6,@36700ms:release,\
+@38000ms:touch,@38150ms:down=select,@38450ms:up=select,@38600ms:release'
+
+I='@185000ms:hold,@190000ms:unhold,\
+@193000ms:touch,@193200ms:down=select,@198000ms:up=select,@198200ms:release,\
+@202000ms:touch,@202200ms:down=select,@207000ms:up=select,@207200ms:release,\
+@215000ms:touch,@215200ms:down=menu,@222000ms:up=menu,@222200ms:release,\
+@226000ms:touch,@226200ms:down=right,@233000ms:up=right,@233200ms:release,\
+@237000ms:touch,@237200ms:down=play,@244000ms:up=play,@244200ms:release,\
+@248000ms:touch,@248200ms:down=menu,@258000ms:up=menu,@258200ms:release,\
+@262000ms:touch,@262200ms:down=left,@269000ms:up=left,@269200ms:release,\
+@273000ms:touch,@273200ms:down=play,@282000ms:up=play,@282200ms:release'
+
+# control arm — descent only
+DISK=doom.img WORKDISK=wA.img BUDGET=6000000000 ipod-boot rockbox \
+  --clock=5 --until=300s --wheel-click-instr=100000 --wheel="$D" \
+  --bcm-film=0xE0000:140:F0:2M:filmA &
+# input arm — descent + a player
+DISK=doom.img WORKDISK=wB.img BUDGET=6000000000 ipod-boot rockbox \
+  --clock=5 --until=300s --wheel-click-instr=100000 --wheel="$D,$I" \
+  --bcm-film=0xE0000:140:F0:2M:filmB &
+wait
+```
+
+`$D` is the shortcut descent from §"Doom runs", re-anchored: Rockbox's menu is up by 20 s, one
+backward step wraps `Files` onto `Shortcuts`, two selects launch `doom.rock`, the plugin's own menu
+is up by 34.1 s, two more backward steps reach `Play Game`, and the select at 38 s starts the load.
+`--wheel-click-instr=100000` is 20 ms a click at `--clock=5`; the default 20000 is 4 ms and is a
+scroll no thumb produces. **On this drive the Freedoom Phase 2 title lands at 118 s**, not the
+157.2 s of the previous section — a different base image, so re-read the timeline off your own run
+rather than inheriting either number.
+
+`press=BTN` is unusable for this: it expands to a down/up one click apart. Every press above is an
+explicit `down=`/`up=` pair held for seconds.
+
+### The two arms
+
+`script: 36 of 36` and `70 of 70` steps fired; both runs `TimeReached(300000000)`, 1 394 208 620
+and 1 393 915 695 instructions.
+
+| | control | input |
+|---|---|---|
+| `D_PostEvent` (`0x03fbaf08`) | **NEVER REACHED** | **25** |
+| `M_Responder` (`0x03f8823c`) | NEVER REACHED | 25 |
+| `G_Responder` (`0x03f8310c`) | NEVER REACHED | 22 — three eaten by the menu |
+| `button_status` polls | 2 315 | 2 595 |
+| frames | 752 samples → 243 pictures | 752 samples → 168 pictures |
+
+**The first 38 frames are digest-identical across the arms**, up to and including 185.6 s. From
+186 s the two films share **zero** digests — 204 distinct pictures on one side, 129 on the other,
+not one in common. The divergence begins at the Hold at 185.0 s and never closes.
+
+What is on the screen, which is the part a count cannot tell you:
+
+- **186.4 s, control** — the attract loop: a corridor, `GOT THE PUMP-ACTION SHOTGUN!`, `8 / 100% / 0%`.
+- **187.6 s, input** — the same corridor with **Doom's main menu over it**: the FREEDOOM banner and
+  `NEW GAME · OPTIONS · LOAD GAME · SAVE GAME · QUIT GAME`, skull cursor on `NEW GAME`. That is the
+  Hold switch's `KEY_ESCAPE`, 2.6 s after it was thrown.
+- **195.6 s, input** — `NEW GAME / CHOOSE SKILL LEVEL` with Freedoom's five skill names. The centre
+  press held 193.2 → 198.0 s took it.
+- **202.8 s, input** — the skill menu, then **held for 46 consecutive samples, 18.4 s**: the second
+  centre press chose a skill and `P_SetupLevel` is loading MAP01.
+- **226.8 s, input** — MAP01 from the player's own spawn: `100%` health, `0%` armor, **fists**, the
+  standard marine face. The demo's HUD was a shotgun and 80 %; this is a new game.
+- **230.8 s, input** — the view has swung onto the `AGM` wall with armour bonuses on the floor. That
+  is `down=right` held 226.2 → 233.0 s. **Control at 230.8 s is still the demo**, facing a monster
+  with 10 shells and 80 % health.
+- **242.4 s, input** — the fist is up mid-punch. `down=play` held 237.2 → 244.0 s.
+- **255.6 s, input** — a brick wall filling the frame: the player walked into it. `down=menu` held
+  248.2 → 258.0 s is forward.
+
+### Two instruments that lied on the way, both worth writing down
+
+- **`--enterlog=0x03f888f4` reported `M_StartControlPanel` NEVER REACHED in the run whose film
+  shows the menu on screen.** The symbol is in `doom.map` and the compiler inlined the call into
+  `M_Responder`, so the address is never entered and the counter is true and useless. A
+  `NEVER REACHED` on a small function is not evidence that it did not run — check a caller that
+  survived, or a picture. `D_PostEvent`, `M_Responder` and `G_Responder` are real calls and are the
+  ones to arm.
+- **`zsh` does not word-split an unquoted `$VAR`.** Five flags collected in a shell variable
+  reached `trace` as *one* argument, so `--clock=`, `--until=`, `--wheel-click-instr=` and
+  `--enterlog=` were all silently inert — the run went to 80 s at clock 75 instead of 300 s at
+  clock 5, fired 36 of 70 steps, printed no enterlog section, and reported
+  `script: 36 of 36 steps fired` on the control arm, which reads as a clean run. `ipod-boot --print`
+  shows the composed argv and would have said so in one command. Use it before believing a
+  comparison.

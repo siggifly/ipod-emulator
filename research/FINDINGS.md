@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-869 headings across 17 documents — 43 dated, 17 settled, 15 retracted, 5 corrected.
+875 headings across 17 documents — 44 dated, 17 settled, 15 retracted, 5 corrected.
 
 ## Where each document stands today
 
@@ -22,7 +22,7 @@ above it in the same document may have been superseded.
 | [`03-rtxc-and-the-video-coprocessor.md`](03-rtxc-and-the-video-coprocessor.md) | 58.  The audio subsystem does start — it needs the coprocessor, 2026-09-05 | `2026-09-05` | settled |
 | [`04-bypass-ledger.md`](04-bypass-ledger.md) | Caveat on the interrupt-wake fix (2026-08-31) — it stops the machine idli… | `2026-08-31` |  |
 | [`05-the-chip-inventory.md`](05-the-chip-inventory.md) | *nothing in it is dated* | — | |
-| [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md) | What Doom was waiting for: an interrupt enable this machine threw away (2… | `2026-09-06` |  |
+| [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md) | Doom is played: input reaches the game, and the press has to land inside… | `2026-09-06` |  |
 | [`07-the-flash-images.md`](07-the-flash-images.md) | *nothing in it is dated* | — | |
 | [`08-differential-register-map.md`](08-differential-register-map.md) | *nothing in it is dated* | — | |
 | [`09-what-the-hardware-must-supply.md`](09-what-the-hardware-must-supply.md) | GPIOL, and what it exposed — **RESOLVED 2026-08-14, and both halves below… | `2026-08-14` |  |
@@ -124,7 +124,7 @@ and nothing dated replaced it.
 
 ### [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md)
 
-72 headings, 10 of them marked or dated:
+78 headings, 11 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
@@ -138,6 +138,7 @@ and nothing dated replaced it.
 | 1499 | 2026-08-18 |  | 2026-08-18, later still: the cold boot stops powering off, and starts stalling |
 | 1908 | 2026-09-01 |  | `--cop-awake` does not unblock Doom — it stops the machine entirely (2026-09-01) |
 | 1948 | 2026-09-06 |  | What Doom was waiting for: an interrupt enable this machine threw away (2026-09-06) |
+| 2080 | 2026-09-06 |  | Doom is played: input reaches the game, and the press has to land inside a poll windo… |
 
 ### [`07-the-flash-images.md`](07-the-flash-images.md)
 
