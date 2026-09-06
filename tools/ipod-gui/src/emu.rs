@@ -9,18 +9,22 @@
 //! # How input reaches the wheel, and why it is scheduled rather than poked
 //!
 //! [`ipod_machine::ClickWheel`] posts a frame only from its script — `service_clickwheel` walks
-//! `script[next..]` and fires every step whose instruction count has arrived. Writing `w.position`
-//! directly would move the device's state and report nothing, which is precisely the failure this
-//! project keeps calling "an instrument that lies". So the GUI *appends steps*, at the current
-//! instruction count, and the model's own path posts the frames.
+//! `script[next..]` and fires every step whose moment has arrived. Writing `w.position` directly
+//! would move the device's state and report nothing, which is precisely the failure this project
+//! keeps calling "an instrument that lies". So the GUI *appends steps*, at the current moment, and
+//! the model's own path posts the frames.
 //!
 //! Appending also has to be **spaced**. A frame posted while the previous one is still unread is a
 //! real overrun (`frames_dropped`), and that is what a whole rotation delivered in one tick would
 //! be: research/10 Addendum 21's arm D posted 39 frames and had 35 of them overwritten unread. So
-//! events drain one per `click_gap` instructions — default 300 000, the same figure
-//! `--wheel-click-instr` uses, which at the default `--clock=75` is 4 ms per click. Both numbers
-//! moved together when the clock went from the research accelerant to the real part; what the
-//! firmware's wheel poll sees is the *simulated* interval, and that is unchanged.
+//! events drain one per `click_gap` instructions' worth of time — default 300 000, the same figure
+//! `--wheel-click-instr` uses, which at the default `--clock=75` is 4 ms per click.
+//!
+//! **In simulated microseconds, and this is the half that was wrong.** A `WheelStep` can be
+//! anchored in executed instructions or in the machine's own clock, and the window anchored in
+//! instructions — on a machine that, once booted, is halted about 99 % of the time. See [`drain`]
+//! for the measurement: a drag a person makes in a second and a half took 14.9 s to reach the
+//! wheel, which is what "the wheel does nothing" looks like from the outside.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -151,6 +155,13 @@ pub struct Config {
     pub work_on_copy: bool,
     /// Ignore any existing snapshot and boot from the reset vector.
     pub cold: bool,
+    /// The space between two appended wheel steps, as **instructions' worth of simulated time** —
+    /// `--wheel-click-instr`'s unit, so the window and the recipes quote one number.
+    ///
+    /// [`drain`] divides it by the machine's own `instr_per_usec` and anchors the script in
+    /// microseconds. It is not a count of instructions the machine must execute: a booted iPod is
+    /// halted almost all the time, and metering a person's drag by a sleeping core's duty cycle is
+    /// the defect `drain` documents.
     pub click_gap: u64,
     /// Run N instructions with no window and print the fingerprint. The self-check that says this
     /// front end and `retail-boot.sh` are running the same machine.
@@ -625,6 +636,12 @@ impl Quiet {
         } else {
             self.mark = Some((executed, idle_steps));
         }
+        self.settled
+    }
+
+    /// The answer so far, without feeding it anything. `None` means *this machine has not been
+    /// observed to finish starting*, which is what [`report_headless`] needs to say out loud.
+    pub fn settled(&self) -> Option<u64> {
         self.settled
     }
 }
@@ -1391,6 +1408,47 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
             bcm.mem.insert(FB_FRONT + (i as u32) * 2, *v);
         }
     }
+    // **A high-level boot has to be handed the channel directory, because nothing will write the
+    // trigger that publishes it** — and until 2026-09-06 this window did not, while `trace` did.
+    //
+    // `publish_registry` runs from `on_write(0x10000400)`, the last write of the bootstrap
+    // sequence, which is Apple's bootloader bringing the co-processor up. A boot entered at
+    // `0x10000000` starts after that, so the trigger never fires, the directory at internal `0x1f0`
+    // is never published, and RetailOS never sends a display RPC. `trace.rs` synthesises the three
+    // things that write does whenever `--boot-osos` is given without `--cold-boot` — which is
+    // exactly `ipod-boot warm`, and exactly the boot this branch is.
+    //
+    // **Same condition, spelled the same way**: this is a warm entry precisely when the machine is
+    // being placed at `0x10000000` for the OS rather than fetching out of reset, which is
+    // `synthetic && cfg.boot.is_os()`. A NOR image (`BootTarget::Nor`/`Image`) is *also* entered at
+    // `0x10000000`, and is deliberately NOT bootstrapped here: `ipod-boot flsh` passes
+    // `--boot-flash=` rather than `--boot-osos`, so `trace` does not bootstrap it either, and every
+    // measurement of `diag` was taken on the machine without it.
+    //
+    // **This does not make the warm path draw**, and that is said here rather than left to be
+    // rediscovered. Measured 2026-09-06 across this line, same synthesised NOR, same drive, two
+    // cores, `--headless=900000000`: **480 703 193 instructions both ways**, and `0 kicked, 0 frame
+    // updates, 0 halfwords written, 0 read, 0 gencmd requests` both ways. The warm boot stops for a
+    // different reason, upstream of anything the panel could do — it reaches no new code after
+    // ~90 M and spins.
+    //
+    // An identical instruction count is normally the signature of a change that did not run, which
+    // is why the line below **prints**: the log says the bootstrap happened, so "no difference" is
+    // a result and not a silence.
+    //
+    // What this does fix is the two front ends building different machines out of the same device,
+    // which is the fault this file's header exists to prevent.
+    if synthetic && cfg.boot.is_os() {
+        bcm.bootstrap_for_warm_entry();
+        println!(
+            "  bcm bootstrap synthesised for a high-level boot: COMMAND+STATUS acknowledged{}",
+            if bcm.registry {
+                ", channel directory published"
+            } else {
+                ""
+            }
+        );
+    }
     m.mem.bcm = Some(bcm);
 
     let mut w = ClickWheel::new(0x7000_c000);
@@ -1552,17 +1610,11 @@ pub fn read_framebuffer(bcm: &Bcm, addr: u32, out: &mut [u8]) -> u32 {
 
 // ---------------------------------------------------------------- the thread
 
-/// Drain queued events onto the wheel's script, one per `gap` instructions.
+/// The shortest a button may be held, in **simulated microseconds** — a duration in the machine's
+/// own time rather than in the operator's, and not in the CPU's duty cycle either.
 ///
-/// `next_at` is carried across calls: it is the instruction count at which the next appended step
-/// is allowed to fire. Steps are appended with non-decreasing `at`, which is what keeps the script
-/// sorted — `service_clickwheel` walks it in order and would otherwise fire them out of sequence.
-/// The shortest a button may be held, in **instructions**, which is what makes it a duration in
-/// the machine's own time rather than in the operator's.
-///
-/// A click of a mouse lasts about a tenth of a second of *your* time. This emulator runs at about
-/// a third of the real part, so that tenth is thirty milliseconds to the firmware — and firmware
-/// that reads its buttons on a timer can miss it entirely. **Apple's `diag` polls once per 150 ms**
+/// A click of a mouse lasts about a tenth of a second of *your* time, and firmware that reads its
+/// buttons on a timer can miss it entirely. **Apple's `diag` polls once per 150 ms**
 /// (`0x10009e7c`: read the button byte, sleep `0x249f0` microseconds, repeat), so every press the
 /// window sent it landed between two polls and diagnostics looked like it ignored the wheel. It
 /// did not: the interrupt handler recorded each press perfectly and the poll read the release that
@@ -1572,28 +1624,13 @@ pub fn read_framebuffer(bcm: &Bcm, addr: u32, out: &mut [u8]) -> u32 {
 /// It bounds only the *release*: the press is delivered immediately, so nothing feels slower, and
 /// RetailOS — which polls fast enough that this never mattered — sees the same press it always
 /// did, held a little longer.
-///
-/// **The unit is instructions**, and `CLOCK` is instructions per simulated *microsecond*, so a
-/// duration in milliseconds is `ms * 1_000 * CLOCK`. The first version of this divided by 1 000
-/// instead of multiplying and produced a 0.3 ms hold — and the test beside it computed `diag`'s
-/// poll rate with the same mistake, so the two agreed and the assertion passed. Hence
-/// [`instructions_for_ms`], which both now use, and which is checked against a figure worked out
-/// by hand.
-const MIN_BUTTON_HOLD: u64 = instructions_for_ms(300);
-
-/// Instructions in `ms` milliseconds of simulated time.
-///
-/// `CLOCK` is instructions per simulated microsecond — the definition of `--clock` — so this is
-/// `ms * 1_000 * CLOCK`. At the real part's 75 that is 75 000 instructions per millisecond.
-pub const fn instructions_for_ms(ms: u64) -> u64 {
-    ms * 1_000 * ipod_machine::CLOCK as u64
-}
+const MIN_BUTTON_HOLD_USEC: u64 = 300 * 1_000;
 
 /// When an event may fire, given what is already scheduled and the earliest slot free.
 ///
 /// Everything fires at `earliest` except a button's **release**, which waits until the button has
-/// been held for [`MIN_BUTTON_HOLD`]. The hold is measured from the button's own down event in the
-/// script, so the two cannot disagree the way a separate ledger could.
+/// been held for [`MIN_BUTTON_HOLD_USEC`]. The hold is measured from the button's own down event in
+/// the script, so the two cannot disagree the way a separate ledger could.
 fn schedule_at(script: &[WheelStep], ev: ipod_machine::WheelEvent, earliest: u64) -> u64 {
     let ipod_machine::WheelEvent::Button(mask, false) = ev else {
         return earliest;
@@ -1603,16 +1640,67 @@ fn schedule_at(script: &[WheelStep], ev: ipod_machine::WheelEvent, earliest: u64
         .rev()
         .find(|s| matches!(s.event, ipod_machine::WheelEvent::Button(m2, true) if m2 == mask))
     {
-        Some(down) => earliest.max(down.at + MIN_BUTTON_HOLD),
+        Some(down) => earliest.max(down.at + MIN_BUTTON_HOLD_USEC),
         None => earliest,
     }
 }
 
+/// Drain queued events onto the wheel's script, one per `gap` instructions' worth of **simulated
+/// time**.
+///
+/// `next_at` is carried across calls: it is the simulated microsecond at which the next appended
+/// step is allowed to fire. Steps are appended with non-decreasing `at`, which is what keeps the
+/// script sorted — `service_clickwheel` walks it in order and would otherwise fire them out of
+/// sequence.
+///
+/// # The unit, which was instructions and was wrong
+///
+/// `WheelStep` carries both anchors and `hw/wheel.rs` says which to use: *"a machine sitting at a
+/// menu spends most of its budget halted … driving a user interface wants the unit a person means
+/// and the firmware's own timers use: `@20s`, not `@1500M`."* The window used instructions
+/// regardless, and a booted 5G is halted about 99 % of the time — so `gap` executed instructions is
+/// not `gap / CLOCK` microseconds of iPod time, it is however long the host takes to reach `gap`
+/// instructions on a core that is asleep.
+///
+/// **Measured, 2026-09-06**, on the reference ROM and `ipod8g-retail.PRISTINE.img`, by
+/// `a_wheel_gesture_moves_the_selection_and_this_needs_resources`: a thirty-six-click drag — one
+/// second and a half of a person's time — took **14.9 s of wall time and 3 163 ms of the iPod's
+/// own** to reach the wheel. Every event arrived, RetailOS decoded every one, and the selection did
+/// move; a person turning the wheel and getting the first click a second later concludes it is
+/// inert, which is what issue #14 reports.
+///
+/// Across this change, same test, same drive, same boot: **1.2 s of wall time and 120 ms of the
+/// iPod's own**, with the arrivals unmoved — 38 decoder, 38 edge, 38 scroll, 5 wheel events, 41
+/// frames posted, **0 dropped and 0 suppressed** — and the same resulting panel digest. The
+/// machine sees the same gesture; it now sees it at the speed it was made.
+///
+/// So `gap` keeps its meaning — *the instructions' worth of time between two appended steps*, the
+/// figure `machine_config` sets and `research/` quotes — and is converted here, once, against the
+/// machine's own clock rather than against the `CLOCK` constant, so `--clock=5` scales it too.
+///
+/// # The clock wraps and this is what happens when it does
+///
+/// `Memory::usec` is a `u32`, so it wraps every ~71 minutes of simulated time and `WheelStep::due`
+/// compares against it. `next_at` is re-anchored when it ends up further ahead than this function
+/// could ever have scheduled — otherwise the queue would be held against a slot 71 minutes away and
+/// the wheel would go permanently dead, which is far worse than the residual: the handful of steps
+/// already on the script that straddle the wrap never come due. That is at most `HORIZON`
+/// microseconds of input, once per wrap, and a button whose release is among them stays down until
+/// the next press of it clears the bit.
 fn drain(m: &mut Machine, inbox: &Mutex<Inbox>, next_at: &mut u64, gap: u64) {
-    let now = m.executed as u64;
+    let now = u64::from(m.mem.usec);
+    // The same interval, in the unit the script is now anchored in. Read off the machine, not off
+    // `ipod_machine::CLOCK`: those are the same number only while nothing has changed the clock.
+    let gap = (gap / m.instr_per_usec.max(1) as u64).max(1);
+    // How far ahead of the clock this function is willing to schedule. A held button's release is
+    // deliberately beyond it, so it is part of the horizon rather than an exception to it.
+    let horizon = MIN_BUTTON_HOLD_USEC + gap * 8;
     let Some(w) = m.mem.clickwheel.as_mut() else {
         return;
     };
+    if *next_at > now + horizon {
+        *next_at = now;
+    }
     let mut inbox = inbox.lock().unwrap();
     while let Some(&ev) = inbox.events.front() {
         let at = schedule_at(&w.script, ev, (*next_at).max(now));
@@ -1626,9 +1714,7 @@ fn drain(m: &mut Machine, inbox: &Mutex<Inbox>, next_at: &mut u64, gap: u64) {
             break;
         }
         inbox.events.pop_front();
-        // The window always anchors in instructions: `next_at` and `MIN_BUTTON_HOLD` are both
-        // instruction counts, and mixing a clock in here would make the hold mean two things.
-        w.script.push(WheelStep::instr(at, ev));
+        w.script.push(WheelStep::usec(at, ev));
         *next_at = at.max(*next_at) + gap;
     }
 }
@@ -2175,7 +2261,9 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
     // one place that can see it, and a regression here would look exactly like a machine behaving
     // oddly for reasons nobody could name. `--clock-v3` reproduces the old behaviour on purpose.
     let mut base: Option<(u64, u32)> = None;
-    let mut next_at = m.executed as u64;
+    // Simulated microseconds, which is the unit `drain` anchors the wheel's script in — and a
+    // restored machine starts at whatever its snapshot's clock said, not at zero.
+    let mut next_at = u64::from(m.mem.usec);
     let mut last_fb = Instant::now();
     let mut fb = vec![0u8; FB_W * FB_H * 3];
     let mut fb_seq = 0u64;
@@ -2276,7 +2364,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
         }
         if let Some(limit) = cfg.headless {
             if executed >= limit || stop != Stop::BudgetExhausted {
-                report_headless(&m, stop, started, cfg.save_region.as_ref());
+                report_headless(&m, stop, started, cfg.save_region.as_ref(), &quiet);
                 link.quit.store(true, Ordering::Relaxed);
                 break;
             }
@@ -3155,9 +3243,45 @@ impl Probing {
 
 /// The self-check. Prints the three numbers `retail-boot.sh` prints, so "the GUI runs the same
 /// machine as the recipe" is a comparison rather than a claim.
-fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(String, PathBuf)>) {
+fn report_headless(
+    m: &Machine,
+    stop: Stop,
+    started: Instant,
+    save: Option<&(String, PathBuf)>,
+    quiet: &Quiet,
+) {
     let secs = started.elapsed().as_secs_f64();
     println!("headless: {stop:?} after {} instructions", m.executed);
+    // **Whether this machine ever stopped starting, which is the one thing the window decides
+    // everything else on and the one thing this fingerprint could not say.**
+    //
+    // `Quiet` is what moves the window from `Phase::Booting` to `Phase::Running`, and the phase is
+    // not cosmetic: `machine::centre` makes the centre button *Select* over a running machine and
+    // *stop this machine* over a booting one, and §12.3's progress bar divides by what this
+    // measured. A boot that never goes quiet reads, from the outside, as "the window ignores the
+    // wheel" — which is issue #14 — and there was no way to ask about it without a window.
+    //
+    // Two numbers, because the verdict alone hides the reason: `Quiet` wants an 8 M-step window
+    // that is 95 % halted *with the drive answered*, and a machine at 0 % halted is spinning while
+    // one at 90 % is merely below the bar. A booted 5G sitting on its menu holds 99 %.
+    {
+        let steps = m.executed as u64 + m.idle_steps;
+        let halted = m.idle_steps as f64 * 100.0 / steps.max(1) as f64;
+        println!(
+            "  halted: {} idle steps of {steps} ({halted:.1}% of the run)",
+            m.idle_steps
+        );
+        match quiet.settled() {
+            Some(at) => println!(
+                "  went quiet at {at} instructions — the window leaves `Booting` here, and the \
+                 centre button becomes Select"
+            ),
+            None => println!(
+                "  NEVER went quiet — the window stays in `Booting` until the {SNAP_AT}-instruction \
+                 fallback, and until then its centre button is stop-this-machine, not Select"
+            ),
+        }
+    }
     // `commands.seen()`, never `commands.sample().len()`: the log is a `Capped<T>` and its length
     // is a cap wearing a census's clothes. That conflation is research/12's whole subject, and this
     // line was written as `d.command_count` against a field that no longer exists — which is how it
@@ -3456,10 +3580,26 @@ fn report_headless(m: &Machine, stop: Stop, started: Instant, save: Option<&(Str
     if let Some(b) = &m.mem.bcm {
         let mut buf = vec![0u8; FB_W * FB_H * 3];
         let n = read_framebuffer(b, FB_FRONT, &mut buf);
+        // Four numbers and not two, so this line can be read against the census `trace` prints for
+        // the same machine: *"N halfwords written, M read"* and *"K requests answered, J dropped"*.
+        // Those are what separate **the panel was never driven** from **it was driven and drew
+        // nothing** — the distinction issue #13 turns on, and the one the window could not make.
+        //
+        // Deliberately not `b.mem.len()`, which `trace` prints as *internal words held*: on a
+        // synthesised NOR this window pre-loads the boot screen into that same map, so the count
+        // starts at 76 800 here and at 0 there. A number that means two things in two front ends
+        // is the thing this file exists to stop.
         println!(
-            "  bcm: {} kicked, {} frame updates",
+            "  bcm: {} kicked, {} frame updates, {} halfwords written, {} read",
             b.commands.len(),
-            b.frames
+            b.frames,
+            b.halfwords_written,
+            b.halfwords_read
+        );
+        println!(
+            "  bcm gencmd: {} requests answered, {} dropped",
+            b.gencmd.len(),
+            b.gencmd_dropped
         );
         println!(
             "  framebuffer 0x000e0000: {n} non-black pixels of {}",
@@ -3616,37 +3756,29 @@ mod tests {
 
     #[test]
     fn a_button_is_held_long_enough_for_a_polling_reader() {
-        // Worked out by hand, so that the conversion is checked against something other than
-        // itself: 75 instructions per simulated microsecond is 75 000 per millisecond.
-        assert_eq!(
-            instructions_for_ms(1),
-            75_000,
-            "CLOCK is {} — has the part changed?",
-            ipod_machine::CLOCK
-        );
-        assert_eq!(
-            MIN_BUTTON_HOLD, 22_500_000,
-            "300 ms at 75 000 instructions per ms"
-        );
+        // Worked out by hand, so that the number is checked against something other than itself:
+        // 300 milliseconds is 300 000 microseconds, and the clock the script is anchored in counts
+        // microseconds.
+        assert_eq!(MIN_BUTTON_HOLD_USEC, 300_000, "300 ms in microseconds");
         // Apple's diagnostics polls at 150 ms; the hold has to clear that with room. Asserted in a
         // `const` block so it is the *compiler* that refuses, not this test: both sides are
         // constants, so a regression here should not be able to wait for someone to run the suite.
-        const DIAG_POLL: u64 = instructions_for_ms(150);
+        const DIAG_POLL_USEC: u64 = 150 * 1_000;
         const {
             assert!(
-                MIN_BUTTON_HOLD > DIAG_POLL,
+                MIN_BUTTON_HOLD_USEC > DIAG_POLL_USEC,
                 "a button hold shorter than Apple's 150 ms diag poll cannot be seen at all"
             )
         };
 
-        let down = WheelStep::instr(1_000, WheelEvent::Button(ipod_machine::WHEEL_MENU, true));
+        let down = WheelStep::usec(1_000, WheelEvent::Button(ipod_machine::WHEEL_MENU, true));
         let script = vec![down];
         let up = WheelEvent::Button(ipod_machine::WHEEL_MENU, false);
 
         // The release is pushed back to the end of the hold, however soon it was asked for.
-        assert_eq!(schedule_at(&script, up, 1_300), 1_000 + MIN_BUTTON_HOLD);
+        assert_eq!(schedule_at(&script, up, 1_300), 1_000 + MIN_BUTTON_HOLD_USEC);
         // And never pulled forward: a release asked for later than that happens later.
-        let late = 1_000 + MIN_BUTTON_HOLD * 3;
+        let late = 1_000 + MIN_BUTTON_HOLD_USEC * 3;
         assert_eq!(schedule_at(&script, up, late), late);
 
         // Only the release. A press, a rotation and a touch all fire when asked.
@@ -3666,7 +3798,7 @@ mod tests {
         // A release with no press in the script is not delayed either — there is nothing to hold.
         assert_eq!(schedule_at(&[], up, 1_300), 1_300);
         // And it is *this* button's press that counts, not any press.
-        let other = vec![WheelStep::instr(
+        let other = vec![WheelStep::usec(
             1_000,
             WheelEvent::Button(ipod_machine::WHEEL_PLAY, true),
         )];
@@ -4470,4 +4602,277 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A cheap content digest of a published frame. FNV, and it only has to tell *the same picture*
+    /// from *a different picture* — the same digest [`SelfTest::sample`] uses, for the same reason.
+    fn digest(fb: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for x in fb {
+            h ^= *x as u64;
+            h = h.wrapping_mul(0x100_0000_01b3);
+        }
+        h
+    }
+
+    /// **A wheel drag moves RetailOS's Language selection, and the control that makes that a
+    /// measurement rather than a coincidence is in the same run.**
+    ///
+    /// `#[ignore]`, and the name says which kind: it needs `resources/`, which is not in git. Run it
+    /// by name from a release build:
+    ///
+    /// ```text
+    /// cargo test --release -p ipod-gui --bin ipod-emulator \
+    ///     a_wheel_gesture_moves_the_selection_and_this_needs_resources -- --ignored --nocapture
+    /// ```
+    ///
+    /// **What it is for.** Issue #14 reported the wheel, the scroll and the hold switch as inert in
+    /// the window, and every instrument that existed answered a *different* question: `--headless`
+    /// says what a boot with nobody touching it reaches, and `trace --wheel=` drives a script into
+    /// the machine model **below** `Link`, so neither can see the inbox, the gap-spaced drain or the
+    /// appended script. `SelfTest` was written for exactly this and cannot answer it either — it
+    /// fires when the wheel's `0x052a` reporting gate opens, and on a cold boot that is the **boot
+    /// ROM's** command at 2.2 M instructions, 400 M before there is a menu to move. So it pressed
+    /// into the bootloader and reported what the bootloader did with it.
+    ///
+    /// This waits for the thing that actually means *the iPod has finished starting* — the same
+    /// [`Quiet`] observation the window moves from `Phase::Booting` to `Phase::Running` on — and
+    /// pushes through [`Link::push`], which is the call `to_the_machine` makes for a mouse drag and
+    /// `machine_key` makes for an arrow key.
+    ///
+    /// **The control is the first half of the same run, not a second boot.** Two boots would compare
+    /// two machines as well as two inputs. Here the panel is watched over a no-input window first,
+    /// and that window is at least as long as the driven one: if the picture moves on its own,
+    /// *this test* says so and fails, rather than a later reader assuming it did not.
+    ///
+    /// **How to make it go red**: `break` out of `drain`'s loop before `w.script.push(…)`. The boot
+    /// is unaffected, the control still holds, and the driven window then holds too — which is
+    /// precisely the report.
+    #[test]
+    #[ignore = "needs resources/: Apple's ROM dump and a real drive image, neither of which is in git"]
+    fn a_wheel_gesture_moves_the_selection_and_this_needs_resources() {
+        let res = ipod_machine::settings::repo_root().join("resources");
+        let rom = res.join("roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin");
+        let pristine = res.join("drives/ipod8g-retail.PRISTINE.img");
+        assert!(
+            rom.is_file() && pristine.is_file(),
+            "this test was asked for by name and {} / {} are not both on this machine. See \
+             tools/ipod-boot/DISK-IMAGES.md.",
+            rom.display(),
+            pristine.display()
+        );
+
+        let dir = std::env::temp_dir().join(format!("ipod-wheel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Never the source: the reference image is `chmod 444` on purpose and RetailOS writes to
+        // its volume during boot. `cp -c` carries the mode across, so the clone is made writable.
+        let work = dir.join("work.img");
+        clone_disk(&pristine, &work).expect("a writable clone of the reference drive");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&work, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        // The window's own config for a device, minus the restore point: `snapshot: None` is what
+        // makes this a cold boot, and `machine_config` is otherwise reproduced field for field.
+        let cfg = Config {
+            nor: ipod_machine::nor::Source::File(rom),
+            disk: work.clone(),
+            workdisk: work.clone(),
+            frozen: dir.join("m.frozen"),
+            snapshot: None,
+            clock: ipod_machine::CLOCK,
+            click_gap: 300_000,
+            snap_at: SNAP_AT,
+            boot: BootTarget::Os,
+            ..Default::default()
+        };
+
+        let link = Link::new();
+        let thread = {
+            let (cfg, link) = (cfg.clone(), link.clone());
+            std::thread::Builder::new()
+                .name("ipod-wheel-test".into())
+                .spawn(move || run(cfg, link))
+                .expect("the machine thread starts")
+        };
+        // Whatever happens below, the thread is told to stop. A `panic!` before this would leave a
+        // machine running for the rest of the test binary's life.
+        struct Stopper(Arc<Link>);
+        impl Drop for Stopper {
+            fn drop(&mut self) {
+                self.0.quit.store(true, Ordering::Relaxed);
+            }
+        }
+        let _stop = Stopper(link.clone());
+
+        /// One reading of what the emulator thread has published.
+        ///
+        /// **The surface the window is not showing is read too.** `Out::fb_other_moved` exists as
+        /// *"the cheapest honest signal that the picture is being drawn somewhere the window is not
+        /// looking"*, and a panel that does not change is exactly when that question has to be
+        /// asked: the 5G's co-processor has two surfaces, and a redraw that lands on the other one
+        /// is invisible to a reader who only digests the shown one.
+        fn look(link: &Arc<Link>) -> (Phase, u64, u32, bool, Stats) {
+            let out = link.out.lock().unwrap();
+            (
+                out.phase.clone(),
+                digest(&out.fb),
+                out.fb_nonzero,
+                out.fb_other_moved,
+                out.stats,
+            )
+        }
+
+        // ── the boot ────────────────────────────────────────────────────────────────────────────
+        //
+        // Waited for by phase, not by an instruction count and not by a sleep: a booted 5G halts,
+        // so its instruction count barely moves and an anchor in instructions never arrives. Ten
+        // minutes is a bound on a hang, not an expectation — the reference boot is about 872 M
+        // instructions and lands well inside two.
+        let deadline = Instant::now() + std::time::Duration::from_secs(600);
+        loop {
+            let (phase, _, _, _, s) = look(&link);
+            match phase {
+                Phase::Running => break,
+                Phase::Stopped(why) => panic!("the machine died before it booted: {why}"),
+                _ => {}
+            }
+            assert!(
+                Instant::now() < deadline,
+                "ten minutes and the machine had not left `Booting`: {} instructions, {} ata, \
+                 {} idle steps",
+                s.executed,
+                s.ata_commands,
+                s.idle_steps
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let (_, booted_digest, booted_lit, _, booted) = look(&link);
+        println!(
+            "  booted: {} instructions, {} ata, {booted_lit} lit pixels, digest {booted_digest:016x}",
+            booted.executed, booted.ata_commands
+        );
+        assert!(
+            booted_lit > 1000,
+            "the panel is {booted_lit} pixels short of a picture, so there is no selection to move \
+             and nothing below would mean anything. On a mismatched ROM-and-drive pair RetailOS \
+             draws `Connect to your computer` instead of a menu — check `ipod-boot facts` on both."
+        );
+
+        // ── the control: the same panel, untouched ──────────────────────────────────────────────
+        const WATCH: std::time::Duration = std::time::Duration::from_secs(20);
+        let until = Instant::now() + WATCH;
+        let mut control_moved = None;
+        while Instant::now() < until {
+            let (_, d, _, _, _) = look(&link);
+            if d != booted_digest {
+                control_moved = Some(d);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let (_, before, _, other_before, quiescent) = look(&link);
+        println!(
+            "  control: {WATCH:?} with nothing touched — digest {before:016x}, \
+             {} frames posted, decoder arrivals {}, other surface moved {other_before}",
+            quiescent.frames_posted, quiescent.enters[0]
+        );
+        assert!(
+            control_moved.is_none(),
+            "the panel changed on its own during the control window, so `the panel changed` cannot \
+             be evidence that the wheel did anything. Digest went {booted_digest:016x} -> {:016x}.",
+            control_moved.unwrap()
+        );
+
+        // ── the gesture, through the window's own call ──────────────────────────────────────────
+        //
+        // One touch, thirty-six clicks clockwise, one release — research/10 Addendum 21 arm B's
+        // script, so the counts here are directly comparable to the ones it published.
+        let gesture_at = Instant::now();
+        let sim_at = quiescent.sim_usec;
+        link.push(WheelEvent::Touch);
+        for _ in 0..36 {
+            link.push(WheelEvent::Step(1));
+        }
+        link.push(WheelEvent::Release);
+
+        // **How long the drag takes to arrive is a measurement, not a detail.** A person's
+        // thirty-six clicks are about a second and a half of their time; if the emulator takes
+        // twenty to deliver them, the wheel is not inert but it is indistinguishable from inert to
+        // whoever is turning it — which is what issue #14 reports. `drain` is what decides this.
+        let until = Instant::now() + WATCH;
+        let mut after = before;
+        let mut delivered: Option<(f64, u32)> = None;
+        while Instant::now() < until {
+            let (_, d, _, _, s) = look(&link);
+            if delivered.is_none() && link.inbox.lock().unwrap().events.is_empty() {
+                delivered = Some((
+                    gesture_at.elapsed().as_secs_f64(),
+                    s.sim_usec.wrapping_sub(sim_at),
+                ));
+            }
+            if d != before {
+                after = d;
+                if delivered.is_some() {
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        match delivered {
+            Some((wall, sim)) => println!(
+                "  the 38-event drag reached the wheel in {wall:.1} s of wall time and {} ms of \
+                 the iPod's own",
+                sim / 1000
+            ),
+            None => println!(
+                "  the 38-event drag had NOT finished reaching the wheel after {WATCH:?}: {} still \
+                 queued",
+                link.inbox.lock().unwrap().events.len()
+            ),
+        }
+        let (_, _, lit, other_after, driven) = look(&link);
+        println!(
+            "  driven: digest {after:016x}, {lit} lit pixels, {} frames posted ({} dropped, {} \
+             suppressed), {} left in the inbox, other surface moved {other_after}",
+            driven.frames_posted,
+            driven.frames_dropped,
+            driven.frames_suppressed,
+            link.inbox.lock().unwrap().events.len()
+        );
+        for (i, (_, name)) in WATCHED.iter().enumerate() {
+            println!("    {name:<24} {}", driven.enters[i]);
+        }
+
+        // The chain, hop by hop, so a failure names the link that did not carry rather than the
+        // symptom. Each of these was a live hypothesis in issue #14.
+        assert!(
+            driven.frames_posted > quiescent.frames_posted,
+            "no frame reached the click wheel: {} posted before the gesture and {} after, {} \
+             dropped, {} still in the inbox. The events never left `drain`.",
+            quiescent.frames_posted,
+            driven.frames_posted,
+            driven.frames_dropped,
+            link.inbox.lock().unwrap().events.len()
+        );
+        assert!(
+            driven.enters[0] > quiescent.enters[0],
+            "frames were posted ({}) and Apple's ISR frame decoder was never entered: the wheel \
+             holds them and RetailOS is not being interrupted into reading them",
+            driven.frames_posted
+        );
+        assert_ne!(
+            after, before,
+            "the wheel was driven, {} frames were posted and RetailOS's decoder was entered {} \
+             times, and the panel did not change in {WATCH:?}. The input arrives and the selection \
+             does not move. The surface the window is NOT showing moved: {other_after} — if that \
+             is true, the picture is being drawn and the window is looking at the wrong buffer.",
+            driven.frames_posted, driven.enters[0]
+        );
+
+        link.quit.store(true, Ordering::Relaxed);
+        let _ = thread.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
