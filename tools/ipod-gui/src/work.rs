@@ -1047,12 +1047,45 @@ fn build(
             }))
         }
     };
+    // What this step does to Apple's bytes, in the order `ipod-boot make-disk` does it. Both notes
+    // land on **one** `Detail`, because `Rail::detail` REPLACES a row's sub-line rather than
+    // appending to it — two sends would leave the first one unread by anybody.
+    let mut did: Vec<String> = Vec::new();
+
     // One byte, and it is the difference between a drive that boots and one that sits in Apple's
     // flash updater waiting for a power cycle nothing here performs.
     if ipsw::mark_aupd_applied(&mut bytes) {
+        did.push("Apple's updater marked applied, so the first boot runs the OS".into());
+    }
+
+    // **The drive RetailOS reads has to be in the layout RetailOS reads**, which is the other half
+    // of the recipe and was missing here. See [`ipsw::normalise_image_headers`]: Apple's 25.1.3
+    // bundle puts `osos`'s content `0x800` past the offset its own directory declares and `rsrc`'s
+    // `0xe00` past, where the OS looks `0x200` in — so the resource volume never mounts, the font
+    // is never found, and RetailOS resets in a loop. A no-op on a 5G bundle, whose headers already
+    // are `0x200`.
+    //
+    // **The one caller was `ipod-boot make-disk`, and this is the path a first run takes.**
+    // `compose::FIRST_RUN_FAMILY` is 25, so the same `.ipsw` produced a drive that booted from the
+    // command line and one that did not from the window — measured on `iPod_25.1.3.ipsw` as `osos`
+    // at `0x4800` instead of `0x4e00` and `rsrc` at `0x73b000` instead of `0x73bc00`. Booted, that
+    // drive posts **0** of RetailOS's frame updates and issues 290 ATA commands where a corrected
+    // one posts 4 and issues 532.
+    let moved = ipsw::normalise_image_headers(&mut bytes);
+    if !moved.is_empty() {
+        did.push(format!(
+            "image offsets corrected ({}) so the OS finds its own images where it looks for them",
+            moved
+                .iter()
+                .map(|(tag, _, shift)| format!("{tag} +{shift:#x}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !did.is_empty() {
         let _ = tx.send(Report::Detail {
             i,
-            sub: "Apple's updater marked applied, so the first boot runs the OS".into(),
+            sub: did.join("; "),
         });
     }
 
@@ -4072,6 +4105,29 @@ mod tests {
         assert!(st.has_os, "there is no `osos` in it: {:?}", st.tags);
         assert!(!st.aupd_armed, "the first boot would run Apple's flash updater");
 
+        // ---- and every image is where the OS looks for it, **on Apple's own bytes**.
+        //
+        // `compose::FIRST_RUN_FAMILY` is 25, so this is a 5.5G bundle, and Apple ships one with
+        // `osos`'s content `0x800` past the offset its own directory declares and `rsrc`'s
+        // `0xe00` past — where the OS reads `0x200` in. `build` corrects that; the offline
+        // `a_first_run_puts_apples_5_5g_images_where_the_os_looks_for_them` is the same property
+        // over a fixture, and this is it over the real thing.
+        let fw = super::offline_worker_tests::partition_of(&img);
+        for i in ipsw::images(&fw) {
+            let Some(h) = super::offline_worker_tests::content_begins(&fw, &i) else {
+                continue;
+            };
+            assert_eq!(
+                h,
+                0x200,
+                "`{}` declares devOffset {:#x} and its content begins {:#x} in — this drive \
+                 cannot boot",
+                i.tag,
+                i.offset,
+                h
+            );
+        }
+
         // ---- nothing partial is left anywhere.
         for dir in [&drives, &cache] {
             for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
@@ -4244,9 +4300,6 @@ mod offline_worker_tests {
 
     /// A firmware partition a 5G/5.5G would accept: `osos` at the load address, `rsrc`, and an
     /// **armed** `aupd`, so `mark_aupd_applied` has something to do.
-    ///
-    /// The layout is `images()`'s, read backwards: `!ATA`, the four tag characters stored in
-    /// reverse, then `dev`, `devOffset`, `len`, `addr`, `entry` as little-endian words.
     fn firmware_partition() -> Vec<u8> {
         // Small: 512 sectors is 256 KiB, which is enough to hold the directory and the images and
         // nothing like Apple's 13.9 MB. What is being exercised is the layout, not the size.
@@ -4256,15 +4309,24 @@ mod offline_worker_tests {
         let body = 0x8000usize;
         fw[body + 3] = 0xEA;
         fw[body + 7] = 0xEA;
-        for (i, (tag, dev, off, len, addr)) in [
-            ("osos", 0u32, body as u32, 0x4000u32, LOAD_ADDR_5G),
-            ("rsrc", 0, 0xC000, 0x1000, LOAD_ADDR_5G),
-            // `dev: 0` is *armed*: Apple's flash updater has not run. `mark_aupd_applied` writes 1.
-            ("aupd", 0, 0xE000, 0x1000, LOAD_ADDR_5G),
-        ]
-        .iter()
-        .enumerate()
-        {
+        directory(
+            &mut fw,
+            &[
+                ("osos", 0, body as u32, 0x4000, LOAD_ADDR_5G),
+                ("rsrc", 0, 0xC000, 0x1000, LOAD_ADDR_5G),
+                // `dev: 0` is *armed*: Apple's flash updater has not run. `mark_aupd_applied`
+                // writes 1.
+                ("aupd", 0, 0xE000, 0x1000, LOAD_ADDR_5G),
+            ],
+        );
+        fw
+    }
+
+    /// The `!ATA` directory, written the way [`ipsw::images`] reads it: `!ATA`, the four tag
+    /// characters stored in reverse, then `dev`, `devOffset`, `len`, `addr`, `entry` as
+    /// little-endian words.
+    fn directory(fw: &mut [u8], entries: &[(&str, u32, u32, u32, u32)]) {
+        for (i, (tag, dev, off, len, addr)) in entries.iter().enumerate() {
             let at = DIRECTORY_AT + i * 40;
             fw[at..at + 4].copy_from_slice(b"!ATA");
             let t: Vec<u8> = tag.bytes().rev().collect();
@@ -4274,6 +4336,81 @@ mod offline_worker_tests {
             fw[at + 0x10..at + 0x14].copy_from_slice(&len.to_le_bytes());
             fw[at + 0x14..at + 0x18].copy_from_slice(&addr.to_le_bytes());
         }
+    }
+
+    /// **Apple's 5.5G layout**, which is the one the fixture above is not: `osos`'s vector table
+    /// sits `0x800` past the `devOffset` its own directory entry declares and `rsrc`'s FAT boot
+    /// sector `0xe00` past, where the OS looks `0x200` in.
+    ///
+    /// Measured on `iPod_25.1.3.ipsw` and reproduced here in miniature — `osos` at `0x4800` with
+    /// its branches at `0x5000`, `rsrc` at `0x73b000` with `eb ?? 90 … 55 aa` at `0x73be00`.
+    /// `aupd` is left with nothing findable inside it, which is also true of Apple's: neither
+    /// signature sees into it on either bundle.
+    fn apples_5_5g_firmware_partition() -> Vec<u8> {
+        let mut fw = vec![0u8; 512 * 512];
+
+        // `osos`: the directory says 0x8000; the exception vectors are at 0x8800.
+        let osos_body = 0x8000usize + 0x800;
+        fw[osos_body + 3] = 0xEA;
+        fw[osos_body + 7] = 0xEA;
+
+        // `rsrc`: the directory says 0xC000; the FAT boot sector is at 0xCE00. Both halves of the
+        // signature, because a lone `eb ?? 90` occurs by chance in five megabytes of resources.
+        let rsrc_body = 0xC000usize + 0xE00;
+        fw[rsrc_body] = 0xEB;
+        fw[rsrc_body + 2] = 0x90;
+        fw[rsrc_body + 0x1FE] = 0x55;
+        fw[rsrc_body + 0x1FF] = 0xAA;
+
+        directory(
+            &mut fw,
+            &[
+                ("osos", 0, 0x8000, 0x4000, LOAD_ADDR_5G),
+                // 0x2000, not 0x1000: `fat_header` scans `0..len.min(0x2000) - 0x200`, so a
+                // 0x1000-long image would stop one step short of the sector at 0xE00 and this
+                // fixture would quietly be a 5G one.
+                ("rsrc", 0, 0xC000, 0x2000, LOAD_ADDR_5G),
+                ("aupd", 0, 0xE000, 0x1000, LOAD_ADDR_5G),
+            ],
+        );
+        fw
+    }
+
+    /// Where an image's content really begins, relative to the `devOffset` its directory declares
+    /// — `None` when neither shape is found, which is what `aupd` is on every bundle.
+    ///
+    /// **Written out rather than reached for**, deliberately: [`ipsw::image_header`] is half of
+    /// the code under test, and a test that finds a header with the same function that placed it
+    /// cannot catch a finder that is wrong.
+    ///
+    /// `pub(super)` for `tests`, which asks the same question of a drive built from Apple's real
+    /// bundle. One question, one answer to it.
+    pub(super) fn content_begins(fw: &[u8], img: &ipsw::Image) -> Option<usize> {
+        let at = img.offset as usize;
+        let w = fw.get(at..at + (img.len as usize).min(0x2000))?;
+        (0..w.len().saturating_sub(8))
+            .step_by(4)
+            .find(|&o| w[o + 3] == 0xEA && w[o + 7] == 0xEA)
+            .or_else(|| {
+                (0..w.len().saturating_sub(0x200)).step_by(0x200).find(|&o| {
+                    w[o] == 0xEB && w[o + 2] == 0x90 && w[o + 0x1FE] == 0x55 && w[o + 0x1FF] == 0xAA
+                })
+            })
+    }
+
+    /// The firmware partition as it was written onto a drive, read back off LBA 63.
+    ///
+    /// Everything up to the data partition, which is the extent the firmware partition can ever
+    /// occupy — `build_volume` refuses a partition that would run past `DATA_LBA`. Reading the
+    /// whole extent rather than a recorded length means this needs to be told nothing about the
+    /// bundle it is looking at.
+    pub(super) fn partition_of(drive: &Path) -> Vec<u8> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut f = std::fs::File::open(drive).expect("the drive");
+        f.seek(SeekFrom::Start(ipsw::FIRMWARE_LBA as u64 * 512))
+            .expect("LBA 63");
+        let mut fw = vec![0u8; (ipsw::DATA_LBA - ipsw::FIRMWARE_LBA) as usize * 512];
+        f.read_exact(&mut fw).expect("the firmware partition");
         fw
     }
 
@@ -4328,7 +4465,13 @@ mod offline_worker_tests {
     /// `cargo test` may do to somebody's machine. `build_volume` refuses anything at or under
     /// `DATA_LBA + 65_536` sectors, so this is the smallest drive this program can make.
     fn a_plan(dir: &Path) -> Plan {
-        let bundle = zip_of("Firmware-25.1.3.MnOpQr.ipsw", &firmware_partition());
+        a_plan_of(dir, &firmware_partition())
+    }
+
+    /// The same, over a firmware partition the caller chose — which is how the 5.5G layout gets
+    /// through the worker without every other test in here changing shape.
+    fn a_plan_of(dir: &Path, fw: &[u8]) -> Plan {
+        let bundle = zip_of("Firmware-25.1.3.MnOpQr.ipsw", fw);
         let cache = dir.join("firmware");
         let drives = dir.join("drives");
         std::fs::create_dir_all(&cache).expect("a cache");
@@ -4393,6 +4536,107 @@ mod offline_worker_tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         panic!("the worker did not finish inside two minutes; it said {all:?}");
+    }
+
+    // ── the layout the drive comes out in ───────────────────────────────────────────────────────
+
+    /// **A first run's drive has to be in the layout the OS reads, and it was not.**
+    ///
+    /// `ipsw::normalise_image_headers` is the fix behind KNOWN-BUGS' *"a drive built from a 5.5G
+    /// IPSW never boots"*, and it had **one** caller in the tree: `ipod-boot make-disk`. The
+    /// window's own path — `inspect` → `mark_aupd_applied` → `build_volume` →
+    /// `write_firmware_partition` — never called it. `compose::FIRST_RUN_FAMILY` is 25, so the
+    /// button the README sends every new user to press built a drive carrying Apple's uncorrected
+    /// offsets, and the same `.ipsw` produced a drive that boots from the command line and one
+    /// that does not from the window.
+    ///
+    /// **The fixture is deliberately not already in the state the fix produces**, which is the
+    /// trap this whole test exists inside: the first assertion is the control that says the input
+    /// is Apple's layout and not the corrected one. Measured on the real bundle, this is
+    /// what the two builders wrote from `iPod_25.1.3.ipsw` before the fix:
+    ///
+    /// ```text
+    ///                  make-disk    the window
+    ///   osos           0x4e00       0x4800
+    ///   rsrc           0x73bc00     0x73b000
+    ///   frame updates  4            0
+    /// ```
+    #[test]
+    fn a_first_run_puts_apples_5_5g_images_where_the_os_looks_for_them() {
+        let data = DataDir::new("5-5g-layout");
+        let apples = apples_5_5g_firmware_partition();
+
+        // ---- the control: this fixture is Apple's layout, not the one the fix produces.
+        let before = ipsw::images(&apples);
+        let seen: Vec<(String, Option<usize>)> = before
+            .iter()
+            .map(|i| (i.tag.clone(), content_begins(&apples, i)))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                ("osos".to_string(), Some(0x800)),
+                ("rsrc".to_string(), Some(0xE00)),
+                ("aupd".to_string(), None),
+            ],
+            "the fixture is not Apple's 5.5G layout, so passing this test would prove nothing"
+        );
+
+        let fixture = a_plan_of(&data.at, &apples);
+        let drives = data.at.join("drives");
+        let mut settings = Settings::default();
+        let mut rail = Rail::new();
+        let mut q = Queue::fetching(drives.clone(), data.at.join("firmware"), fixture.release);
+        match q.press(&mut settings, &mut rail, true) {
+            Press::Running { .. } => {}
+            other => panic!("the first run would not start: {other:?}"),
+        }
+        drain_to_a_stop(&mut q, &mut settings, &mut rail);
+        assert_eq!(rail.failures(), 0, "the run failed: {}", rail.announce());
+
+        // ---- the drive that was written, read off the filesystem rather than out of the library.
+        let built = std::fs::read_dir(&drives)
+            .expect("the drives directory")
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "img"))
+            .expect("the run left no drive behind");
+        let fw = partition_of(&built);
+
+        // ---- **the property**: every image the OS can find begins exactly 0x200 past the offset
+        // its own directory entry declares. That is the layout, stated as the thing it is.
+        for img in ipsw::images(&fw) {
+            let Some(h) = content_begins(&fw, &img) else {
+                continue;
+            };
+            assert_eq!(
+                h,
+                0x200,
+                "`{}` declares devOffset {:#x} and its content begins {:#x} in, so the OS reads \
+                 {:#x} bytes of the wrong thing",
+                img.tag,
+                img.offset,
+                h,
+                h.abs_diff(0x200)
+            );
+        }
+
+        // ---- and the numbers, so a regression says which image moved and by how much.
+        let moved: Vec<(String, u32, u32)> = ipsw::images(&fw)
+            .iter()
+            .map(|i| (i.tag.clone(), i.offset, i.len))
+            .collect();
+        assert_eq!(
+            moved,
+            vec![
+                ("osos".to_string(), 0x8600, 0x3A00),
+                ("rsrc".to_string(), 0xCC00, 0x1400),
+                // Untouched, and that is symmetric with the real bundle: neither signature finds
+                // `aupd`'s content on a 5G or a 5.5G, so nothing here knows where it begins.
+                ("aupd".to_string(), 0xE000, 0x1000),
+            ],
+            "the directory the drive carries is not the one the OS reads"
+        );
     }
 
     // ── what a first run attaches ───────────────────────────────────────────────────────────────
