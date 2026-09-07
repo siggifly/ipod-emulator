@@ -1879,6 +1879,17 @@ pub struct Queue {
     /// can stand in for the real one — which put `press`'s whole resume path behind a server being
     /// up. A release is data, and naming which one is a parameter.
     release: Option<&'static Release>,
+    /// §22.2: **this run hands its device over to be started when it finishes.**
+    ///
+    /// [`Run::First`] and [`Run::Doom`] hand over by construction — making an iPod and installing a
+    /// game are both things you press in order to *run* something. [`Run::Install`] does not, and
+    /// that is right for the Devices page's `Install…`, which is an edit to a library: installing
+    /// an operating system is not choosing to run it.
+    ///
+    /// It is wrong for §21.3's `Rockbox` row, which is a thing to run, and that difference is what
+    /// this flag carries. Set by [`Queue::install`]'s caller rather than derived from `Run`,
+    /// because one run shape now serves two intents and a queue cannot see which row was pressed.
+    then_start: bool,
 }
 
 impl Default for Queue {
@@ -1914,6 +1925,7 @@ impl Queue {
             installing: None,
             source_installed: None,
             release: release(),
+            then_start: false,
         }
     }
 
@@ -1988,6 +2000,7 @@ impl Queue {
         // beside it. `Rail::plan` collapses only *finished* entries, so five `Planned` rows plus
         // five more `Planned` rows is ten rows and no way back.
         self.run = Run::First;
+        self.then_start = false;
         self.steps = steps.to_vec();
         self.done = vec![false; steps.len()];
         self.ids = rail.plan(steps);
@@ -2022,6 +2035,7 @@ impl Queue {
             self.done.clear();
         }
         self.run = Run::First;
+        self.then_start = false;
         if self.ids.is_empty() {
             self.show(rail, &plan(Holes::Sparse));
         }
@@ -2231,6 +2245,8 @@ impl Queue {
         device: &str,
         what: Software,
         can_download: bool,
+        // §22.2: whether this press was *a thing to run*. See [`Queue::then_start`].
+        then_start: bool,
     ) -> Press {
         if self.busy() {
             rail.note(&self.already_running());
@@ -2279,26 +2295,44 @@ impl Queue {
         // So this refuses with the remedy rather than letting `install_os` fail forty seconds and
         // two downloads later with *no room: moving the later images by 50688 bytes needs 13954560
         // of a 13905920-byte partition*, which is true and tells nobody what to do about it.
-        // **`tags`, not `aupd_armed`, and the difference is what the first draft got wrong.**
-        // `aupd_armed` means the updater will RUN on the next boot — present and unmarked. What
-        // blocks an install is the updater being THERE at all: a marked-applied `aupd` no longer
-        // runs and still occupies its megabyte. The first draft asked the narrower question,
-        // returned false on a drive whose updater was already marked, and let the install go on to
-        // fail two downloads later with the arithmetic instead of the remedy.
-        if ipsw::firmware_state(&src)
-            .map(|f| f.tags.iter().any(|t| t == "aupd"))
-            .unwrap_or(false)
-        {
-            return Press::Refused(Failure::saying(
-                Class::Missing,
-                "installing on an iPod",
-                format!(
-                    "{device} still carries Apple's flash updater, and the room {} needs is where \
-                     the updater is. Start it once — the first boot runs the updater rather than \
-                     the OS, which is what a real iPod does too — and then this will fit.",
-                    what.label()
-                ),
-            ));
+        // **`tags`, not `aupd_armed`, decides whether to refuse — and `aupd_armed` decides what to
+        // SAY, which is the half that was missing.** Being THERE at all is what blocks the
+        // install: a marked-applied `aupd` no longer runs and still occupies its megabyte. But the
+        // remedy printed below is only reachable from the armed state, and a drive this program
+        // built is never in it — `mark_aupd_applied` runs during the build so that the first boot
+        // runs the OS rather than the updater. So `Make me one` produced drives that were refused
+        // here and told to do a thing that could not work. `devices::install_row` carries the same
+        // two arms and the full argument; this is the queue's own copy of the decision, kept
+        // because the press must not depend on the row having been drawn.
+        match ipsw::firmware_state(&src) {
+            Ok(f) if f.aupd_armed => {
+                return Press::Refused(Failure::saying(
+                    Class::Missing,
+                    "installing on an iPod",
+                    format!(
+                        "{device} still carries Apple's flash updater, and the room {} needs is \
+                         where the updater is. Start it once — the first boot runs the updater \
+                         rather than the OS, which is what a real iPod does too — and then this \
+                         will fit.",
+                        what.label()
+                    ),
+                ));
+            }
+            Ok(f) if f.tags.iter().any(|t| t == "aupd") => {
+                return Press::Refused(Failure::saying(
+                    Class::Missing,
+                    "installing on an iPod",
+                    format!(
+                        "{device} carries Apple's flash updater marked already applied, and the \
+                         room {} needs is where the updater is. Nothing removes it: the mark is \
+                         what stops the boot ROM running it, and only running it frees the room. A \
+                         drive imported from a real iPod that has been restored carries no updater \
+                         and installs.",
+                        what.label()
+                    ),
+                ));
+            }
+            _ => {}
         }
         // **Whether this drive is ours to replace**, which is what decides where the install
         // lands. `built_from` is `Some` for a drive built from an IPSW and `None` for one the
@@ -2325,6 +2359,7 @@ impl Queue {
         });
 
         self.run = Run::Install;
+        self.then_start = then_start;
         self.device = Some(device.to_string());
         self.installing = Some(what);
         self.ids = rail.plan(&steps);
@@ -2408,6 +2443,7 @@ impl Queue {
         });
 
         self.run = Run::Doom;
+        self.then_start = false;
         self.device = Some(device.to_string());
         self.installing = None;
         self.ids = rail.plan(&steps);
@@ -2442,6 +2478,7 @@ impl Queue {
         // three notes and one plan rather than nine step rows.
         let steps: Vec<Step> = wants.iter().map(|w| w.step()).collect();
         self.run = Run::Fetch;
+        self.then_start = false;
         self.device = None;
         self.ids = rail.plan(&steps);
         self.done = vec![false; steps.len()];
@@ -2596,7 +2633,18 @@ impl Queue {
             && !self.done.is_empty()
             && self.done.iter().all(|d| *d)
             && rail.failures() == 0;
-        if !self.busy() && (all_but_the_boot || doom_done) {
+        // **§22.2's stop-install-start, and this is the *start*.** An install has no boot step
+        // either — its plan is two fetches and two writes — so it is finished when every step is
+        // ticked, which is `doom_done`'s shape and not `all_but_the_boot`'s. What gates it is
+        // [`Queue::then_start`] rather than the run, because one run shape now serves the Devices
+        // page's `Install…` (an edit, which must not start anything) and §21.3's `Rockbox` row (a
+        // thing to run, which must).
+        let install_done = self.run == Run::Install
+            && self.then_start
+            && !self.done.is_empty()
+            && self.done.iter().all(|d| *d)
+            && rail.failures() == 0;
+        if !self.busy() && (all_but_the_boot || doom_done || install_done) {
             t.ready = self.device.clone();
             // Reported once. The handle also goes here, which is what releases the thread.
             self.worker = None;
@@ -3507,7 +3555,7 @@ mod tests {
         // has its firmware partition sized to Apple's firmware exactly, as a real iPod's is, and
         // the room a bootloader needs is the room the updater occupies. So installing onto a
         // never-started iPod cannot work, and the honest answer is to say what would make it work.
-        match q.install(&mut settings, &mut rail, &device, Software::Rockbox, true) {
+        match q.install(&mut settings, &mut rail, &device, Software::Rockbox, true, false) {
             Press::Refused(f) => {
                 assert!(
                     f.said.contains("flash updater") && f.said.contains("Start it once"),
@@ -3585,13 +3633,13 @@ mod tests {
         let mut q = Queue::at(data.at.join("drives"), data.at.join("firmware"));
 
         // 1. No curl.
-        match q.install(&mut settings, &mut rail, "anything", Software::Rockbox, false) {
+        match q.install(&mut settings, &mut rail, "anything", Software::Rockbox, false, false) {
             Press::Refused(f) => assert_eq!(f.class, Class::ToolMissing(Tool::Curl)),
             other => panic!("a build with no curl started an install anyway: {other:?}"),
         }
 
         // 2. No such iPod.
-        match q.install(&mut settings, &mut rail, "not here", Software::Rockbox, true) {
+        match q.install(&mut settings, &mut rail, "not here", Software::Rockbox, true, false) {
             Press::Refused(f) => assert!(
                 f.said.contains("not here"),
                 "the refusal does not name the iPod it could not find: {}",
@@ -3606,7 +3654,7 @@ mod tests {
             firmware: "rom".into(),
             ..Device::default()
         });
-        match q.install(&mut settings, &mut rail, "Driveless", Software::Rockbox, true) {
+        match q.install(&mut settings, &mut rail, "Driveless", Software::Rockbox, true, false) {
             Press::Refused(f) => {
                 let said = f.said;
                 assert!(said.contains("Driveless"), "the refusal does not name it: {said}");
@@ -4827,6 +4875,156 @@ mod offline_worker_tests {
                 ("aupd".to_string(), 0xE000, 0x1000),
             ],
             "the directory the drive carries is not the one the OS reads"
+        );
+    }
+
+    /// **The remedy the install refused with could not fire, and this is the measurement.**
+    ///
+    /// §22.2 asks for every surviving refusal to name a fact no action of ours can change. This one
+    /// named an action — *"Start `X` once — Apple's updater is using the room"* — and on the drives
+    /// this program builds, that action does nothing at all.
+    ///
+    /// The chain, and every link is in this repository:
+    ///
+    ///  1. `build_volume` sizes the firmware partition to Apple's firmware exactly, because that is
+    ///     what a real iPod has, so a bootloader needs the room `aupd` is in.
+    ///  2. The build calls `ipsw::mark_aupd_applied` — *"so the first boot runs the OS"* — which
+    ///     sets the directory's `dev` field to 1.
+    ///  3. `dev == 1` is Apple's already-applied mark, and it is what stops the boot ROM running
+    ///     the updater (`inspect.rs`'s own note is keyed on `dev == 0`).
+    ///  4. Only the updater running removes the updater. It will never run.
+    ///
+    /// So the drive is refused, the sentence says to do a thing, and the thing cannot happen —
+    /// AGENTS.md §4's *a lie with a comment on it*, in a refusal rather than in a bypass.
+    ///
+    /// **The control is the second assertion.** If the build ever stopped marking the updater, this
+    /// test would go red on `aupd_armed` rather than passing quietly — and the old sentence would
+    /// have been right all along. It is measuring the exact fact the wording turns on.
+    ///
+    /// **What this test does NOT do is fix it.** The fix is to finish what `mark_aupd_applied`
+    /// half-does and drop the `aupd` entry from the directory, which is the shape a real
+    /// post-restore iPod carries (`ipsw.rs`: *"a post-update iPod has no `aupd` — the reference
+    /// drive carries only `osos` and `rsrc`"*). That changes the bytes of every drive this program
+    /// builds and can only be believed after booting one, which is not a thing this suite does.
+    #[test]
+    fn an_ipod_this_program_built_is_refused_a_remedy_it_can_act_on() {
+        let data = DataDir::new("aupd-remedy");
+        let fixture = a_plan_of(&data.at, &apples_5_5g_firmware_partition());
+        let drives = data.at.join("drives");
+        let mut settings = Settings::default();
+        let mut rail = Rail::new();
+        let mut q = Queue::fetching(drives.clone(), data.at.join("firmware"), fixture.release);
+        match q.press(&mut settings, &mut rail, true) {
+            Press::Running { .. } => {}
+            other => panic!("the first run would not start: {other:?}"),
+        }
+        drain_to_a_stop(&mut q, &mut settings, &mut rail);
+        assert_eq!(rail.failures(), 0, "the run failed: {}", rail.announce());
+
+        let built = std::fs::read_dir(&drives)
+            .expect("the drives directory")
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "img"))
+            .expect("the run left no drive behind");
+        let state = ipsw::firmware_state(&built).expect("the built drive has a firmware partition");
+
+        // (1) The updater is there, which is what blocks the install.
+        assert!(
+            state.tags.iter().any(|t| t == "aupd"),
+            "the built drive carries {:?} and no updater, so this test is measuring a state the \
+             program no longer produces and proves nothing about the refusal",
+            state.tags
+        );
+        // (2) …and it is NOT armed, which is what makes the old remedy impossible. This is the
+        // control: armed, starting it once would work and the sentence would be true.
+        assert!(
+            !state.aupd_armed,
+            "the built drive's updater is armed, so `Start it once` WOULD free the room — the \
+             refusal this test is about does not exist and its wording should go back"
+        );
+
+        // (3) And the press says the true thing. `Queue::install` is asked rather than
+        // `devices::install_row`, because a press must not depend on a row having been drawn.
+        let device = settings.devices.first().expect("the run filed no iPod").name.clone();
+        match q.install(&mut settings, &mut rail, &device, Software::Rockbox, true, false) {
+            Press::Refused(f) => {
+                assert!(
+                    f.said.contains("marked already applied"),
+                    "the refusal does not say the updater is already marked, so it is still \
+                     naming a remedy that cannot fire: {}",
+                    f.said
+                );
+                assert!(
+                    !f.said.contains("Start it once"),
+                    "the refusal still tells a person to start the iPod once, and on this drive \
+                     that boot runs the OS and leaves the updater exactly where it is: {}",
+                    f.said
+                );
+            }
+            other => panic!(
+                "the install did not refuse over a drive that still carries Apple's updater: \
+                 {other:?}"
+            ),
+        }
+    }
+
+    /// **§22.2's stop-install-start, at the seam where the *start* is decided.**
+    ///
+    /// A `Run::Install` used to hand nothing over, ever, and that was right for the one press that
+    /// existed: the Devices page's `Install…` is an edit to a library, and installing an operating
+    /// system is not choosing to run it. §21.3's `Rockbox` row is a thing to *run*, so the same run
+    /// shape now has to end in a boot — and `Queue::then_start` is the whole of the difference.
+    ///
+    /// **Both arms, because the flag is only meaningful as a difference.** The `false` arm is this
+    /// test's control in the strict sense AGENTS.md §6 asks for: it is the behaviour before the
+    /// change, so if `then_start` were ignored the `true` arm would fail, and if it were inverted
+    /// the `false` arm would.
+    ///
+    /// **A finished worker rather than a real install.** What is under test is `pump`'s decision,
+    /// not two downloads: an empty fetch spawns a thread that does nothing and exits, which is the
+    /// state `pump` reads — `busy()` false, every step ticked, no failures.
+    #[test]
+    fn an_install_hands_the_ipod_over_to_be_started_only_when_the_press_asked_for_a_boot() {
+        let handed_over = |then_start: bool| -> Option<String> {
+            let data = DataDir::new(if then_start { "then-start" } else { "then-stop" });
+            let cache = data.at.join("firmware");
+            std::fs::create_dir_all(&cache).expect("a cache");
+            let mut q = Queue::at(data.at.join("drives"), cache.clone());
+            let cancel = Cancel::new();
+            q.worker = Some(
+                Worker::spawn_fetch(Vec::new(), cache, Arc::clone(&cancel))
+                    .expect("a worker with nothing to do"),
+            );
+            // The state a finished install leaves: four ticked steps and a device to hand back.
+            q.run = Run::Install;
+            q.then_start = then_start;
+            q.device = Some("My 5.5G".to_string());
+            q.done = vec![true; 4];
+            let mut settings = Settings::default();
+            let mut rail = Rail::new();
+            // The thread has nothing to do, but `pump` reads `is_finished` — so wait for it rather
+            // than racing it, which is the difference between measuring the decision and measuring
+            // the scheduler.
+            let started = std::time::Instant::now();
+            while q.busy() && started.elapsed() < std::time::Duration::from_secs(10) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(!q.busy(), "the empty fetch worker never finished");
+            q.pump(&mut settings, &mut rail).ready
+        };
+
+        assert_eq!(
+            handed_over(true).as_deref(),
+            Some("My 5.5G"),
+            "an install pressed from a row that promised to start the iPod again did not hand it \
+             over, so the press stops after the write and the row's sentence is false"
+        );
+        assert_eq!(
+            handed_over(false),
+            None,
+            "the Devices page's `Install…` started a machine nobody asked it to — installing an \
+             operating system is not choosing to run it"
         );
     }
 

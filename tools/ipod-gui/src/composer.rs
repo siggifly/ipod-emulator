@@ -2368,7 +2368,7 @@ impl Composer {
     /// `Field` has one (`primitives.slint:46`), `Pressable` does not — so a `Lock::Dump` sentence
     /// parked in `note` left the locked Model and Colour rows reserving §5's 34 px and saying
     /// nothing at all, two rows above a `Field` drawing that same sentence correctly. That is
-    /// `primitives.slint:526`'s own rule — *non-empty whenever `!enabled`* — broken on the page
+    /// `primitives.slint:531`'s own rule — *non-empty whenever `!enabled`* — broken on the page
     /// §9.4 was written for. A refusal is a reason; a shared iPod is a consequence; `locked()` is
     /// exactly that distinction and already knew the answer.
     fn pick(&self, field: Field, value: String, lock: Lock) -> Pick {

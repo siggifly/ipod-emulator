@@ -6836,6 +6836,64 @@ first is a form rejecting your input.
 **A refusal is now evidence of a design failure until proven otherwise.** Every remaining one must
 name a fact about the hardware or the library that no action of ours can change.
 
+**Built, 2026-09-07, and the audit found one refusal that was worse than unnecessary.**
+
+Three acts replaced three refusals, and each one already existed in this program:
+
+| was | is | the act |
+|---|---|---|
+| `Apple's software` / `Rockbox` / `Diagnostics`, over the iPod they name | *restarts it — power off and straight back on* | `emu::Cmd::Boot(target)`. §12.5 makes it a power cycle in **every** phase, which is why `machine::permits` answers true for it in every one, alone among the four commands. `invoke_start_device` cannot serve this: over a live machine `machine::centre` answers `Act::ToMachine` and gives the press to the wheel |
+| `Rockbox`, not installed, over a running machine | *stops this iPod, downloads 9 MB, and starts it again on Rockbox — a cold boot* | `main::stop_dead` drops the `Live`, whose `Drop` **joins** the interpreter's thread, so nothing is executing when `install_os` opens the image; `work::Queue::then_start` makes `pump` hand the device back to be started, the way a first run does |
+| `Doom`, over a running machine | *stops this iPod, downloads 24 MB, and starts it again* | the same stop. `Run::Doom` already handed over |
+
+**The cost is a cold boot and every row says so.** The stop does not park: the install writes a new
+drive and points the device at it, and `Config::pair_is_whole` stamps the drive's size and mtime, so
+a restore point taken on the way out could never be honoured against the drive that replaces it — it
+would be 149 MB written in order to be found broken.
+
+**The Devices page's `Install…` still refuses over a running machine, deliberately.** It sits beside
+`Edit` and `Remove`, which are edits to a library; the drawer's row is a thing to *run*. The one
+argument `devices::install_row` now takes decides which — `now.machine` from one caller, `None` from
+the other — and `work::Queue::then_start` carries the same split into the run, so the Devices page
+cannot start a machine nobody asked it to.
+
+**The refusals that survive, and the fact behind each:**
+
+| refusal | the fact no action of ours changes |
+|---|---|
+| `Diagnostics` on a generated ROM | Apple shipped Diagnostics and Disk Mode **inside the part**. A synthesised ROM has no image directory to carry them, and nothing downloadable supplies one |
+| `Apple's software` / `Rockbox` under the wrong bootloader | `compose::Loader`'s matrix. Rockbox's bootloader starts Rockbox; `ipodloader2` starts whatever `loader.cfg` names. Changing it is an install the person did not ask for, onto a drive they chose |
+| any row, over an iPod whose boot ROM or drive is not on disk | the bytes are not there to run. `crate::blocked_label`'s own sentence, fetched rather than re-worded |
+| `Doom`, with Rockbox not installed | mechanically chainable and deliberately not chained: the chain is *install Rockbox, then fetch Freedoom, then boot*, 33 MB behind a row whose sub-line promised 24. §10.1 is that a person agrees to the whole plan before any of it runs |
+| `Rockbox` / `Doom` with no iPod at all | the chain's middle link is refused by the drive the first link builds — see the updater below. Until that is cleared, a live row here would promise Rockbox and deliver Apple's software |
+| `Files on the drive…` | §9.4's second kind — a project state, not a limit. Nothing in this window reads a FAT32 volume yet, and the row carries `ipod-boot fat DISK.img tree` |
+| `Panel in its own window`, with the glass dark | a window onto a dark rectangle is a control offered and answered in the same breath (§21.7) |
+
+**And one refusal was naming a remedy that cannot fire.** `Install Rockbox` answered *"Start `X`
+once — Apple's updater is using the room"* on **every drive this program builds**, and on those
+drives starting it once does nothing at all:
+
+1. `ipsw::build_volume` sizes the firmware partition to Apple's firmware exactly, because that is
+   what a real iPod has — so the room a bootloader needs is the room `aupd` is in.
+2. The build calls `ipsw::mark_aupd_applied`, *"so the first boot runs the OS"*, which writes 1 to
+   the directory's `dev` field.
+3. `dev == 1` is Apple's already-applied mark, and it is what stops the boot ROM running the
+   updater.
+4. Only the updater running removes the updater. It will never run.
+
+`an_ipod_this_program_built_is_refused_a_remedy_it_can_act_on` measures all four, and the second
+assertion is its control: if the build ever stopped marking the updater, the test goes red rather
+than passing quietly, and the old sentence would have been right. Both arms are now worded
+separately — armed keeps the remedy, marked says there is none — so the row is true either way.
+
+**What would clear it is not a window change and is not made here.** Apple's updater's last act on
+real hardware removes its own image: `ipsw.rs` records that a post-update iPod carries `osos` and
+`rsrc` and no `aupd` at all. Finishing what `mark_aupd_applied` half-does — dropping the `aupd`
+entry from the directory — would free the megabyte and make a built drive match the reference drive
+more closely, not less. It also changes the bytes of every drive this program writes, and the only
+instrument that can say whether RetailOS still boots off one is a boot. That is a machine
+measurement (§4), not a window one.
+
 ### 22.3 Two intents, asked once
 
 A person arriving wants one of two things, and the window should ask that and nothing else:
@@ -6866,6 +6924,60 @@ drawn device. So the menu carries **one** control, and it is a switch rather tha
 is what makes a second start cost 0.15 s. They stop being **five rows**. Restart is the switch
 twice; Suspend and Resume are what the switch does when a restore point is whole, which is a fact
 the program already knows and does not need to ask about.
+
+**Built, 2026-09-07.** `verbs::Verb::Power` is one row of fourteen, `verbs::power_row` is the whole
+of what it says, and every act §21.6 drew a row for is still reachable:
+
+| §21.6 | where it went |
+|---|---|
+| `Start` | the switch, thrown on, over a machine with no restore point |
+| `Resume` | the switch, thrown on, over one with a whole pair — `Restore::of` decides, not the person |
+| `Suspend` | the switch, thrown off, while `Running` — `nav::Escape::Park` |
+| `Kill` | the switch, thrown off, while `Booting` — `nav::Escape::PowerOff`, because §12.4 refuses to park a boot |
+| `Restart` | the switch twice |
+
+**What a person sees, by phase**, and the sub-line is what tells two identical labels apart:
+
+```
+   Booting    Turn off              Esc  ●———○
+              stops the boot. Nothing is written, so the next start is cold.
+
+   Running    Turn off              Esc  ●———○
+              writes the restore point and stops — 149 MB, and the next start reads it back
+
+   Off        Turn on     centre button  ○———●
+              puts the machine back where it was — 66 MB to read      (a whole pair)
+              cold boot — the restore point no longer matches this drive   (a broken one)
+              cold boot, from the reset vector                            (no pair)
+
+   Stopped    Turn on     centre button  ○———●
+              cold boot, from the reset vector
+```
+
+**`Stopped` says cold whatever is on disk, and that is `machine::centre`'s rule rather than a second
+one**: its `Stopped` arm answers `Launch::Cold` even over a good pair, because pressing after a
+`Lost(0xe19b0000)` starts again rather than restoring the state that died.
+
+**The keys.** §16.8 gives `Esc` one definition outwards and `nav::Stack::escape` ends it in `Park`
+from `Running` and `PowerOff` from `Booting` — which is exactly this row's off position in its two
+live phases, so **one row now carries the key that used to be printed on two**, and the sentence
+under it says which of the two acts it will be. `main::power_off` is what both `Esc` and the switch
+perform; the two `Escape` arms are one arm now, because two copies of *park from Running, drop from
+Booting* is how one of them comes to park a boot. The on position names the drawn centre button
+(§7.3) rather than a keystroke, and it is `centre button` rather than `the centre button` because
+the switch takes 40 px of a 140 px column and the article was the first thing over the edge.
+
+**Two refusals went with the four rows, and neither was about the machine.** `Resume` said *"This
+machine has been built and powered off … Close the window and start it again to resume"* — a form
+telling a person to restart the program. It was also unnecessary: `Launch::Resume` has no `Cmd`, so
+the press falls through `on_start_device` to `start_machine`, which drops the `Live` and builds a
+new thread, and a new thread is `Config::may_restore`'s `first`. And the four `There is no iPod yet.`
+rows on the first screen anybody sees are now one switch that costs the first run in `work::cost`'s
+own numbers.
+
+**It is announced as a switch.** `SwitchRow` inherits `Row` and adds `AccessibleRole.switch` plus
+the checked state — a derived component rather than a bound property, because Slint requires
+`accessible-role` to be a constant expression and refuses `root.is-switch ? … : …` at compile time.
 
 ### 22.5 Graphical, and what that means here
 

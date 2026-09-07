@@ -594,18 +594,41 @@ pub(crate) fn install_row(s: &Settings, d: &Device, caps: Caps, machine: Option<
     let Some(Ok(disk)) = s.disk_of(d) else {
         return refuse(format!("{} has no drive to install onto.", d.name), true);
     };
-    // **The one that surprises people, and it is not a defect.** A drive straight out of
-    // `Make me one` still carries Apple's updater, and the room a bootloader needs is the room the
-    // updater is in — `ipsw::build_volume` sizes the firmware partition to Apple's firmware
-    // exactly, because that is what a real iPod has. Starting it once consumes the updater.
-    if ipod_machine::ipsw::firmware_state(&disk)
-        .map(|f| f.tags.iter().any(|t| t == "aupd"))
-        .unwrap_or(false)
-    {
-        return refuse(
-            format!("Start {} once — Apple's updater is using the room.", d.name),
-            true,
-        );
+    // ── Apple's flash updater, and the two states it can be in ─────────────────────────────────
+    //
+    // The room a bootloader needs is the room the updater is in: `ipsw::build_volume` sizes the
+    // firmware partition to Apple's firmware exactly, because that is what a real iPod has, and on
+    // real hardware the updater's own last act frees it — a post-restore iPod carries `osos` and
+    // `rsrc` and no `aupd` at all.
+    //
+    // **This used to say `Start X once` for both states, and for one of them that is impossible.**
+    // The remedy is only true while the updater is ARMED — present with `dev == 0`, so Apple's boot
+    // ROM runs it instead of the OS. A drive this program built is not in that state: the build
+    // calls `ipsw::mark_aupd_applied` (`work.rs`, *"so the first boot runs the OS"*), which sets
+    // `dev` to 1 and marks the updater done without removing its megabyte. So on every drive
+    // `Make me one` produces, the updater will never run again, starting it once cannot free
+    // anything, and the row was naming a remedy that could not fire — the shape AGENTS.md §4 calls
+    // a lie with a comment on it. `an_ipod_this_program_built_is_refused_a_remedy_it_can_act_on`
+    // is the measurement.
+    //
+    // Both arms are still refusals, and the second one is this window's largest surviving §22.2
+    // debt: what would clear it is completing what `mark_aupd_applied` half-does — dropping the
+    // `aupd` entry from the directory, which is what the reference drive shows Apple's updater
+    // leaving behind — and that is a change to the bytes of a drive, measurable only by booting
+    // one.
+    if let Ok(f) = ipod_machine::ipsw::firmware_state(&disk) {
+        if f.aupd_armed {
+            return refuse(
+                format!("Start {} once — its first boot runs Apple's updater, which frees the room.", d.name),
+                true,
+            );
+        }
+        if f.tags.iter().any(|t| t == "aupd") {
+            return refuse(
+                format!("Apple's updater sits where a bootloader goes on {}, marked done.", d.name),
+                true,
+            );
+        }
     }
     if !caps.download {
         return refuse("this build has no `curl` to download Rockbox with".into(), true);
@@ -804,7 +827,7 @@ fn removal_consequence(s: &Settings, d: &Device) -> String {
 ///
 /// 3. **And `reason` is empty when the control is live**, which `blocked_label` is not — every one
 ///    of its arms is a refusal, and `Pressable.reason` is the
-///    refusal slot: `primitives.slint:703` is `text: root.enabled ? root.consequence : root.reason`,
+///    refusal slot: `primitives.slint:708` is `text: root.enabled ? root.consequence : root.reason`,
 ///    so a live control draws its consequence there and its reason nowhere. (Not `:606`, which this
 ///    used to cite — that is `tells`, and it reserves the slot for **three** reasons: disabled, two
 ///    presses, or a consequence. The reservation is not the binding.) Handing a live control a

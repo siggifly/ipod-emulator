@@ -2319,22 +2319,12 @@ fn wire(
             if action == parts::RowAction::InstallRockbox {
                 let name = settings.borrow().devices.get(index as usize).map(|d| d.name.clone());
                 let Some(name) = name else { return };
-                let press = {
-                    let mut s = settings.borrow_mut();
-                    let mut r = rail.borrow_mut();
-                    work.borrow_mut()
-                        .install(&mut s, &mut r, &name, work::Software::Rockbox, caps.download)
-                };
-                match press {
-                    work::Press::Refused(f) => {
-                        rail.borrow_mut().failed("install", "Rockbox", f);
-                    }
-                    // `Busy` has already said so on the Rail — `install` notes it itself.
-                    work::Press::Busy => {}
-                    _ => ticking(),
-                }
-                save(&settings.borrow(), &mut rail.borrow_mut());
-                sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
+                // **`then_start` is false here and true from the drawer**, which is the whole of
+                // the difference between the two presses: this row is an edit to a library and
+                // that one is a thing to run. See [`press_install_rockbox`].
+                press_install_rockbox(
+                    &w, &settings, &rail, &rows, &work, &live, &ticking, caps, &name, false,
+                );
                 repaint_all();
                 return;
             }
@@ -2419,6 +2409,9 @@ fn wire(
         let next_boot = next_boot.clone();
         let panel = panel.clone();
         let ticking_machine = ticking_machine.clone();
+        // §22.2's `Rockbox` press runs a plan on the queue, so this closure needs the build tick as
+        // well as the machine one — `press_install_rockbox` is what starts it.
+        let ticking = ticking.clone();
         let repaint_all = repaint_all.clone();
         let weak = window.as_weak();
         window.on_verb_act(move |ordinal| {
@@ -2452,87 +2445,77 @@ fn wire(
                 // power-cycling *because that is how the hardware reaches it* — so it is written
                 // into the one-shot cell the start path reads and cleared as it is taken. A cell
                 // that stayed set would make the next centre-button press boot diagnostics.
+                //
+                // **§22.2: a machine already running this iPod is power-cycled rather than
+                // refused.** These rows used to carry `devices::running_rule` — *"My 5.5G is
+                // running. Stop it first."* — which is a form telling a person to go and do
+                // something the form could do. `emu::Cmd::Boot` IS that act and it already
+                // existed: §12.5 makes it a power cycle in every phase, *"that is how the hardware
+                // reaches them"*, which is why `machine::permits` answers true for it everywhere.
+                // `invoke_start_device` cannot serve this: over a live machine `machine::centre`
+                // answers `Act::ToMachine` and gives the press to the wheel.
                 verbs::Verb::Apple | verbs::Verb::Diagnostics => {
-                    if verb == verbs::Verb::Diagnostics {
-                        *next_boot.borrow_mut() = emu::BootTarget::Nor("diag".into());
+                    let target = if verb == verbs::Verb::Diagnostics {
+                        emu::BootTarget::Nor("diag".into())
+                    } else {
+                        emu::BootTarget::Os
+                    };
+                    if !boot_running_machine(&live, &settings, w.get_selected(), &target) {
+                        *next_boot.borrow_mut() = target;
+                        w.invoke_start_device(w.get_selected());
                     }
-                    w.invoke_start_device(w.get_selected());
+                    ticking_machine();
                 }
-                // Installed, this is a start; not installed, it is the install the Devices page
-                // already offers, on the queue that owns the plan. `verbs::rockbox_row` decides
-                // which the row IS, and this asks the same question rather than a second one.
+                // Installed, this is a start; not installed, it is the install — and either way it
+                // ends with Rockbox running, which is §22.2's rule for a row that names a thing to
+                // run. `verbs::rockbox_row` decides which the row IS, and this asks the same
+                // question rather than a second one.
                 verbs::Verb::Rockbox => {
-                    let installed = {
+                    let named = {
                         let s = settings.borrow();
                         let index = usize::try_from(w.get_selected()).unwrap_or(0);
-                        s.devices
-                            .get(index)
-                            .is_some_and(|d| s.recipe_of(d).oses.contains(&compose::Os::Rockbox))
+                        s.devices.get(index).map(|d| {
+                            (d.name.clone(), s.recipe_of(d).oses.contains(&compose::Os::Rockbox))
+                        })
                     };
-                    if installed {
-                        w.invoke_start_device(w.get_selected());
-                    } else {
-                        w.invoke_device_row_action(
-                            parts::RowAction::InstallRockbox.as_i32(),
-                            w.get_selected(),
-                        );
+                    match named {
+                        // Rockbox is on the drive: this is a boot, and a machine already running
+                        // is power-cycled into it exactly as `Apple's software` is.
+                        Some((_, true)) => {
+                            let os = emu::BootTarget::Os;
+                            if !boot_running_machine(&live, &settings, w.get_selected(), &os) {
+                                w.invoke_start_device(w.get_selected());
+                            }
+                            ticking_machine();
+                        }
+                        // **Stop, install, start** — the operator's own sentence, mechanised. The
+                        // stop is inside `press_install_rockbox`; the start is `Queue::then_start`,
+                        // which makes `pump` hand the device over the way a first run does.
+                        Some((name, false)) => press_install_rockbox(
+                            &w, &settings, &rail, &rows, &work, &live, &ticking, caps, &name, true,
+                        ),
+                        // No device is a refusal the row already draws; a press with none is the
+                        // same no-op an unknown ordinal gets.
+                        None => {}
                     }
                 }
 
-                // ── §21.6's five, and every one of them already existed ──
+                // ── §22.4's one switch, where §21.6 had five controls ─────────────────────
                 //
-                // `Start` and `Resume` are one press for the reason §12.4 states: `Cmd::PowerOn` is
-                // a cold boot by construction and the only code that restores is `emu::run`'s
-                // entry, so what tells the two apart is whether a whole pair is on disk — which
-                // `machine::Launch` already decides and `on_start_device` already asks.
-                verbs::Verb::Start | verbs::Verb::Resume => {
-                    w.invoke_start_device(w.get_selected());
-                }
-                verbs::Verb::Suspend => {
-                    // The same act `Esc` performs from `Running`, reached from a labelled row —
-                    // which is the whole of §21.6: *all five exist, none of them is discoverable*.
-                    let room = {
-                        let held = live.borrow();
-                        held.as_ref().map(Live::ask_to_park)
-                    };
-                    if let Some(room) = room {
-                        if room.short() {
-                            rail.borrow_mut().failed(
-                                "parking",
-                                "the machine",
-                                rail::Failure::saying(
-                                    rail::Class::SpacePreflight,
-                                    "writing the restore point",
-                                    format!(
-                                        "there is not room for it — {}. The machine stopped \
-                                         without parking, so the next start is a cold boot.",
-                                        room.sentence()
-                                    ),
-                                ),
-                            );
-                            sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
-                        }
-                        ticking_machine();
-                    }
-                }
-                verbs::Verb::Kill | verbs::Verb::Restart => {
-                    let cmd = if verb == verbs::Verb::Kill {
-                        emu::Cmd::PowerOff
+                // **The press is a toggle and the phase is the position.** Off, it is
+                // `invoke_start_device` — §7.3's own centre button, so `Start` and `Resume` stay
+                // one press and `machine::Launch` goes on deciding which, which is §12.4's rule
+                // rather than a question for the person. On, it is [`power_off`], which is
+                // §16.8's `Esc` performed rather than re-implemented: park from `Running`, drop
+                // from `Booting`.
+                //
+                // `Restart` is this row pressed twice, which is what §22.4 says it is.
+                verbs::Verb::Power => {
+                    if life(&live).alive() {
+                        power_off(Some(&w), &live, &rail, &rows, &work, caps);
                     } else {
-                        emu::Cmd::PowerCycle
-                    };
-                    let held = live.borrow();
-                    if let Some(l) = held.as_ref() {
-                        // §12.5: every refusal in `permits` is a physical statement rather than a
-                        // policy — you cannot power off a machine that is off — so it is asked on
-                        // the press as well as on the row, because the row was drawn at the last
-                        // push and the machine may have stopped since.
-                        let life = l.life();
-                        if machine::permits(&life, &cmd) {
-                            l.link.command(cmd);
-                        }
+                        w.invoke_start_device(w.get_selected());
                     }
-                    drop(held);
                     ticking_machine();
                 }
 
@@ -2561,6 +2544,13 @@ fn wire(
                     // No device is a refusal the row already draws; a press with none is the same
                     // no-op an unknown ordinal gets.
                     if let Some(name) = name {
+                        // **§22.2, and the stop is what makes the refusal unnecessary.** `Doom`
+                        // used to carry `devices::running_rule`, because `doom::write_files` opens
+                        // the FAT32 volume of the drive the interpreter may be executing from.
+                        // `stop_dead` joins that thread before a byte is written, and `Run::Doom`
+                        // already hands the device back to be started — so the press is stop,
+                        // write, start, and the row's sub-line says so.
+                        stop_dead(&live, &name);
                         let press = {
                             let mut s = settings.borrow_mut();
                             let mut r = rail.borrow_mut();
@@ -2745,57 +2735,19 @@ fn wire(
                 // rule, and this is the route that *can* say so: there is a window here, so §9.3's
                 // `space` class lands on the Rail with the two figures in it. The window-close
                 // route has no such surface, which is the difference §12.4 is written about.
-                nav::Escape::Park => {
-                    let room = {
-                        let held = live.borrow();
-                        held.as_ref().map(Live::ask_to_park)
-                    };
-                    if let Some(room) = room {
-                        if room.short() {
-                            rail.borrow_mut().failed(
-                                "parking",
-                                "the machine",
-                                rail::Failure::saying(
-                                    // Pre-flight, not mid-write: §12.4's whole point is that the
-                                    // check happens before a byte is written, so the class that
-                                    // says *nothing was written* is the true one.
-                                    rail::Class::SpacePreflight,
-                                    "writing the restore point",
-                                    format!(
-                                        "there is not room for it — {}. The machine stopped \
-                                         without parking, so the next start is a cold boot.",
-                                        room.sentence()
-                                    ),
-                                ),
-                            );
-                            // **Pushed here rather than left to `repaint_all` below**, which walks
-                            // the page registry and does not touch the Rail: every other handler
-                            // that files a failure calls this on the spot, and one that did not
-                            // would file a refusal nothing on screen carried until the next tick.
-                            if let Some(w) = weak.upgrade() {
-                                sync_rail(&w, &rows, &rail.borrow(), caps, work.borrow().shape());
-                            }
-                        }
+                // **Both arms are one act, and §22.4 is why they can be.** `Stack::escape` still
+                // distinguishes them — the two endings of §16.8's one outward `Esc` — and what
+                // performs them is [`power_off`], which is also what the drawer's switch presses.
+                // Two copies of *park from Running, drop from Booting* is how one of them comes to
+                // park a boot.
+                nav::Escape::Park | nav::Escape::PowerOff => {
+                    let w = weak.upgrade();
+                    if power_off(w.as_ref(), &live, &rail, &rows, &work, caps) {
                         // The park runs on the emulator thread; the cradle says `parking` while it
                         // does and `pump_machine` is what notices it finish. So the timer has to be
                         // running even though nothing on the panel is moving any more.
                         ticking_machine();
                     }
-                }
-                // §12.5, and §12.4's reason for not parking here: *parking a boot is a 1.6 GB write
-                // of a state nobody wants*. `machine::permits` is asked because every refusal in it
-                // is a physical statement — you cannot power off a machine that is off — and this
-                // arm is only ever reached from `Booting`, which is alive.
-                nav::Escape::PowerOff => {
-                    let held = live.borrow();
-                    if let Some(l) = held.as_ref() {
-                        let life = l.life();
-                        if machine::permits(&life, &emu::Cmd::PowerOff) {
-                            l.link.command(emu::Cmd::PowerOff);
-                        }
-                    }
-                    drop(held);
-                    ticking_machine();
                 }
                 // **The Stack holds an id; the page holds the row.** `escape` clears the id, and
                 // until now nothing cleared the cursor underneath it — so `Esc` on an open Expand
@@ -4551,6 +4503,209 @@ fn machine_key_act(
 /// **It goes through `Settings::run_device`**, which is the resolution step and whose `false` is the
 /// refusal: a device the plan has just made resolves, and one whose parts went missing while it ran
 /// is refused in the model's own words rather than started with a substituted ROM.
+/// **§22.2: power-cycle the machine that is in the way, instead of refusing over it.**
+///
+/// `Apple's software`, `Rockbox` and `Diagnostics` all used to answer `devices::running_rule` —
+/// *"My 5.5G is running. Stop it first."* — when the iPod they name was the one already executing.
+/// Three rows greyed, each telling a person to go and perform an act this window can perform, and
+/// §22.2 calls that a form rejecting your input.
+///
+/// **`emu::Cmd::Boot` is that act and nothing had to be built for it.** §12.5 makes it a power
+/// cycle in every phase — *"the real device reaches diagnostics by a key chord held at power-on, so
+/// this is a power cycle and not a mode switch"* — which is exactly why `machine::permits` answers
+/// true for it in every one, alone among the four commands.
+///
+/// **Why not `invoke_start_device`.** Over a live machine `machine::centre` answers
+/// `Act::ToMachine`: §7.4 gives the press to the wheel, because a press on a running iPod belongs
+/// to the iPod. That is right for the drawn centre button and wrong for a menu row that names a
+/// boot target, so this is the one route that reaches a running machine with a command.
+///
+/// `false` when there is no machine on this device, so the caller falls through to the start path
+/// that knows about first runs, half-made devices and composed ones.
+fn boot_running_machine(
+    live: &Rc<RefCell<Option<Live>>>,
+    settings: &Rc<RefCell<Settings>>,
+    index: i32,
+    target: &emu::BootTarget,
+) -> bool {
+    let name = {
+        let s = settings.borrow();
+        let i = usize::try_from(index).unwrap_or(0);
+        s.devices.get(i).map(|d| d.name.clone())
+    };
+    let held = live.borrow();
+    let Some(l) = held.as_ref() else { return false };
+    // **The device is asked for by name and not by index**, because the two cursors are written by
+    // different surfaces: `Live::index` was the row pressed when the machine was built, and the
+    // library may have had a device removed from under it since.
+    if name.as_deref() != Some(l.device.name.as_str()) {
+        return false;
+    }
+    let life = l.life();
+    // Nothing to cycle. `Off` and `Stopped` fall through to the start path, which can restore, can
+    // finish a half-made device, and can run the first run — none of which a command reaches.
+    if !life.alive() {
+        return false;
+    }
+    let cmd = emu::Cmd::Boot(target.clone());
+    // Asked at the press as well as at the row, because the row was drawn at the last push and the
+    // machine may have stopped since — `machine::permits`'s own rule.
+    if !machine::permits(&life, &cmd) {
+        return false;
+    }
+    l.link.command(cmd);
+    true
+}
+
+/// §22.4's switch, thrown **off** — which is §16.8's `Esc` and nothing else.
+///
+/// **One definition, and the phase picks the act rather than the person.** §21.6 drew `Suspend`
+/// and `Kill` as two rows, four-fifths of them greyed at any moment, and the operator looking for
+/// a way to turn the iPod off found neither. What the two rows meant is one rule the program
+/// already holds: from `Running`, park — the restore point is what makes the next start cost a
+/// second rather than a boot; from `Booting`, drop it, because §12.4 refuses to park a boot, *a
+/// 1.6 GB write of a state nobody wants*. `nav::Stack::escape` ends in exactly those two acts, so
+/// this function is what both `Esc` and the switch perform and there is one of it.
+///
+/// **`machine::permits` is asked at the press and not trusted from the row**, because the row was
+/// drawn at the last push and the machine may have stopped since — and every refusal in `permits`
+/// is a physical statement rather than a policy.
+///
+/// It returns whether anything was asked of the machine, so a caller can start the 60 Hz clock:
+/// a park runs on the emulator thread and `pump_machine` is what notices it finish, so the timer
+/// has to be running even though nothing on the panel moves again.
+fn power_off(
+    window: Option<&MainWindow>,
+    live: &Rc<RefCell<Option<Live>>>,
+    rail: &Rc<RefCell<rail::Rail>>,
+    rows: &Rc<VecModel<RailRow>>,
+    work: &Rc<RefCell<work::Queue>>,
+    caps: rail::Caps,
+) -> bool {
+    // The phase, read once and released — a `Ref` held across the `ask_to_park` below would be a
+    // borrow held across code that takes the same `RefCell`. §20 item 12's shape.
+    let life = life(live);
+    match life {
+        // §12.4: park. `ask_to_park` checks the room BEFORE arming `save_on_quit`, because a park
+        // that fails for want of space fails at the write, where there is nothing left to report
+        // it to — so short of room the machine stops without parking and hands back the reason.
+        machine::Life::Running { .. } => {
+            let room = {
+                let held = live.borrow();
+                held.as_ref().map(Live::ask_to_park)
+            };
+            let Some(room) = room else { return false };
+            if room.short() {
+                rail.borrow_mut().failed(
+                    "parking",
+                    "the machine",
+                    rail::Failure::saying(
+                        // Pre-flight, not mid-write: §12.4's whole point is that the check happens
+                        // before a byte is written, so the class that says *nothing was written* is
+                        // the true one.
+                        rail::Class::SpacePreflight,
+                        "writing the restore point",
+                        format!(
+                            "there is not room for it — {}. The machine stopped without parking, \
+                             so the next start is a cold boot.",
+                            room.sentence()
+                        ),
+                    ),
+                );
+                // **Pushed here rather than left to a repaint**, which walks the page registry and
+                // does not touch the Rail: a failure nothing on screen carried until the next tick
+                // is a refusal filed into silence.
+                if let Some(w) = window {
+                    sync_rail(w, rows, &rail.borrow(), caps, work.borrow().shape());
+                }
+            }
+            true
+        }
+        machine::Life::Booting { .. } => {
+            let held = live.borrow();
+            let Some(l) = held.as_ref() else { return false };
+            if !machine::permits(&life, &emu::Cmd::PowerOff) {
+                return false;
+            }
+            l.link.command(emu::Cmd::PowerOff);
+            true
+        }
+        // Nothing to turn off. `Stopped` is included deliberately: §12.5 says power off *"is real
+        // — the machine is dropped and re-entered at the reset vector"*, so a stopped machine is
+        // one nothing is executing on and there is nothing left to stop.
+        machine::Life::Off | machine::Life::Stopped { .. } => false,
+    }
+}
+
+/// **The machine, stopped dead, because something is about to write to its drive.**
+///
+/// §22.2's stop-install-start needs a stop that has *finished* rather than one that has been asked
+/// for, and `Live::drop` is the only one there is: it sets `link.quit` and **joins** the thread, so
+/// when this returns the interpreter is not executing and the drive is closed. `emu::build` opens
+/// that image with write access, and two interpreters writing one image is the one failure in this
+/// program that damages something the user cannot rebuild.
+///
+/// **It does not park, and that is not an omission.** The install writes a new drive and points the
+/// device at it; `Config::pair_is_whole` stamps the drive's size and mtime, so a restore point
+/// taken here could never be honoured against the drive that replaces it — it would be 149 MB
+/// written in order to be found broken. The rows that reach this say `a cold boot` for that reason.
+///
+/// `false` when there was nothing running on that device, so the caller need not ask twice.
+fn stop_dead(live: &Rc<RefCell<Option<Live>>>, device: &str) -> bool {
+    if running_machine(live.borrow().as_ref()).as_deref() != Some(device) {
+        return false;
+    }
+    // The `Live` is taken out and dropped with no borrow held: `Drop` joins a thread, and a
+    // `RefMut` alive across a join is a borrow held across arbitrary other code.
+    let held = live.borrow_mut().take();
+    drop(held);
+    true
+}
+
+/// §11.4's `Install…` and §21.3's `Rockbox` — **one act, pressed from two places.**
+///
+/// The two differ in exactly one thing and it is the argument: the Devices page's row is an edit to
+/// a library, so it installs and stops; the drawer's row is a thing to *run*, so it installs and
+/// starts. `work::Queue::then_start` is what carries that difference into the run, and the rest —
+/// the refusals, the plan, the Rail — is one path rather than two spellings of one.
+#[allow(clippy::too_many_arguments)] // each is a distinct thing the window owns; see `pump_once`
+fn press_install_rockbox(
+    window: &MainWindow,
+    settings: &Rc<RefCell<Settings>>,
+    rail: &Rc<RefCell<rail::Rail>>,
+    rows: &Rc<VecModel<RailRow>>,
+    work: &Rc<RefCell<work::Queue>>,
+    live: &Rc<RefCell<Option<Live>>>,
+    ticking: &Rc<dyn Fn()>,
+    caps: rail::Caps,
+    name: &str,
+    then_start: bool,
+) {
+    // **The stop comes first and only on the route that promised one.** The Devices page's row
+    // still refuses over a running machine — `devices::install_row` is handed the machine there and
+    // `None` from the drawer — so this cannot silently stop a machine under a row that did not say
+    // it would.
+    if then_start {
+        stop_dead(live, name);
+    }
+    let press = {
+        let mut s = settings.borrow_mut();
+        let mut r = rail.borrow_mut();
+        work.borrow_mut()
+            .install(&mut s, &mut r, name, work::Software::Rockbox, caps.download, then_start)
+    };
+    match press {
+        work::Press::Refused(f) => {
+            rail.borrow_mut().failed("install", "Rockbox", f);
+        }
+        // `Busy` has already said so on the Rail — `install` notes it itself.
+        work::Press::Busy => {}
+        _ => ticking(),
+    }
+    save(&settings.borrow(), &mut rail.borrow_mut());
+    sync_rail(window, rows, &rail.borrow(), caps, work.borrow().shape());
+}
+
 fn hand_off(
     live: &Rc<RefCell<Option<Live>>>,
     settings: &Rc<RefCell<Settings>>,
@@ -7805,11 +7960,10 @@ fn push_verbs(
         settings,
         life: &life,
         machine: machine.as_deref(),
-        // §21.6's `Suspend` says what a park costs, and this is the machine's own answer rather
-        // than a figure typed out of §12.4 — `emu::run` publishes it before a park can be asked
-        // for. `None` with no machine, and the row then makes no claim.
+        // §22.4's switch says what turning it off costs, and this is the machine's own answer
+        // rather than a figure typed out of §12.4 — `emu::run` publishes it before a park can be
+        // asked for. `None` with no machine, and the row then makes no claim.
         park_bytes: live.map(|l| l.link.snapshot_bytes.load(std::sync::atomic::Ordering::Relaxed)),
-        thread: live.is_some(),
         titles: window.get_titles().row_count(),
         games_gone: window.get_games_folder_gone(),
         developer: settings.developer,
@@ -7851,6 +8005,8 @@ fn to_verb(r: &verbs::Row) -> VerbRow {
         escape_hatch: r.escape.clone().into(),
         chevron: r.chevron,
         rule_above: r.rule_above,
+        switch: r.switch,
+        on: r.on,
     }
 }
 
@@ -8501,7 +8657,6 @@ pub(crate) mod tests {
                     life: &off,
                     machine: None,
                     park_bytes: None,
-                    thread: false,
                     titles: 0,
                     games_gone: false,
                     developer: false,
@@ -8576,10 +8731,13 @@ pub(crate) mod tests {
              runs a plan and boots a machine"
         );
 
-        // ── The machine rule outranks all of it ────────────────────────────────────────────────
+        // ── …and a machine in the way is stopped rather than refused over (§22.2) ─────────────
         //
-        // Writing 28 MB onto the volume of a drive a machine is reading is the one thing that
-        // cannot be allowed whatever else is true.
+        // Writing 24 MB onto the volume of a drive a machine is reading is the one thing that
+        // cannot be allowed whatever else is true — and it is `main::stop_dead` that makes it not
+        // happen, by joining the interpreter's thread before `Queue::doom` opens the volume.
+        // §21.3's answer was `devices::running_rule`, *"Stop it first."*, which is a form telling a
+        // person to perform an act the form performs.
         let mut seen = ipod_machine::settings::Presence::new();
         let running = verbs::view(
             &s,
@@ -8591,7 +8749,6 @@ pub(crate) mod tests {
                 life: &off,
                 machine: Some(&name),
                 park_bytes: None,
-                thread: true,
                 titles: 0,
                 games_gone: false,
                 developer: false,
@@ -8599,13 +8756,304 @@ pub(crate) mod tests {
         );
         let busy = doom(&running);
         assert!(
-            !busy.enabled,
-            "`Doom` would write 28 MB onto the volume of a drive the machine is reading"
+            busy.enabled,
+            "`Doom` is refused over a running machine: {:?}. §22.2: an act that would unblock a \
+             row is the act the row takes",
+            busy.reason
+        );
+        // **And the row says what that costs, because the person is watching the machine it
+        // stops.** A press that silently dropped a boot somebody was two minutes into would be the
+        // refusal's hazard traded for a worse one.
+        assert!(
+            busy.sub.contains("stops this iPod") && busy.sub.contains("starts it again"),
+            "`Doom` over a running machine does not say that it stops and restarts it: {:?}",
+            busy.sub
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **§22.2, on the three rows that named a machine as a reason not to work.**
+    ///
+    /// `Apple's software`, `Rockbox` and `Diagnostics` answered `devices::running_rule` — *"My 5.5G
+    /// is running. Stop it first."* — whenever the iPod they name was the one already executing.
+    /// Three rows greyed, each telling a person to go and perform an act this window performs:
+    /// `emu::Cmd::Boot` is a power cycle in every phase (§12.5), which is why `machine::permits`
+    /// answers true for it in every one.
+    ///
+    /// **The row has to say what that costs**, because the person is watching a boot. A press that
+    /// silently dropped one would have traded the refusal's hazard for a worse one, so the
+    /// sub-line is asserted as well as the absence of the refusal.
+    ///
+    /// **How to make it go red:** put `Row::no(verb, devices::running_rule(…), true)` back at the
+    /// top of `verbs::boot_row`. Measured — it fails on the first assertion of the loop.
+    #[test]
+    fn a_running_ipod_is_restarted_rather_than_refused_over() {
+        let dir = temp_dir("running-restart");
+        let (mut s, d) = a_composed_device(&dir);
+        let name = d.name.clone();
+        s.devices.push(d);
+        // Written the way an install records it, so `Rockbox` is a boot row here rather than an
+        // install row — the two arms of that verb are different questions.
+        let disk = s.disk_of(s.devices.first().unwrap()).unwrap().unwrap();
+        if let Some(k) = s.disks.iter_mut().find(|k| k.path == disk) {
+            k.installed.push(compose::Os::Rockbox.label().to_string());
+        }
+
+        // `Life::Off` with `machine: Some(name)` is the state a machine that has been powered off
+        // but not dropped is in; what these rows read is `now.machine`, which is
+        // `crate::running_machine`'s answer and is `Some` for the whole life of the `Live`.
+        let off = machine::Life::Off;
+        let mut seen = ipod_machine::settings::Presence::new();
+        let rows = verbs::view(
+            &s,
+            s.devices.first(),
+            &mut seen,
+            rail::Caps { download: true, ..rail::Caps::default() },
+            verbs::Now {
+                settings: &s,
+                life: &off,
+                machine: Some(&name),
+                park_bytes: None,
+                titles: 0,
+                games_gone: false,
+                developer: false,
+            },
+        );
+        let row = |v: verbs::Verb| {
+            rows.iter().find(|r| r.verb == v).expect("the row is drawn").clone()
+        };
+
+        for v in [verbs::Verb::Apple, verbs::Verb::Rockbox] {
+            let r = row(v);
+            assert!(
+                r.enabled,
+                "`{}` is refused because the iPod it names is running: {:?}. §22.2: if an action \
+                 would unblock a row, the row takes that action — and `Cmd::Boot` is a power cycle \
+                 in every phase",
+                v.label(),
+                r.reason
+            );
+            assert!(
+                r.sub.contains("restart"),
+                "`{}` does not say that pressing it restarts the machine somebody is watching: \
+                 {:?}",
+                v.label(),
+                r.sub
+            );
+            assert!(
+                !r.reason.contains("Stop it first"),
+                "`{}` still tells a person to stop the machine themselves",
+                v.label()
+            );
+        }
+
+        // ── …and §22.2's third row is the one that does NOT move ─────────────────────────────
+        //
+        // **This is the half that makes the rule a rule rather than a policy of never refusing.**
+        // `a_composed_device` builds a synthetic ROM, and Diagnostics lives inside a boot ROM's
+        // image directory: no power cycle, no download and no act of this program puts one there.
+        // So it stays greyed with its reason, and the reason is about the part rather than about
+        // the machine in the way — which is where §14.1 earns its keep.
+        let diag = row(verbs::Verb::Diagnostics);
+        assert!(!diag.enabled, "Diagnostics is offered on a ROM that carries no diagnostics image");
+        assert!(
+            diag.reason.contains("generated boot ROM"),
+            "Diagnostics is refused for a reason other than the one thing that cannot be \
+             unblocked: {:?}",
+            diag.reason
         );
         assert!(
-            busy.reason.contains(&name),
-            "the refusal does not name the machine in the way: {:?}",
-            busy.reason
+            !diag.reason.contains("Stop it first"),
+            "Diagnostics blames the running machine rather than the ROM: {:?}",
+            diag.reason
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The operator's own sentence, as an assertion**: *"i dont want to turn off the ipod to
+    /// install rockbox etc."*
+    ///
+    /// The refusal was real and its hazard was real — `install::install_os` reads a drive an ARM7
+    /// may be executing from, and two writers on one image is the one failure here that damages
+    /// something a person cannot rebuild. What §22.2 says is that a hazard an action removes is not
+    /// a reason to refuse: `main::stop_dead` drops the `Live`, whose `Drop` **joins** the
+    /// interpreter's thread, so by the time `Queue::install` opens the image nothing is executing.
+    ///
+    /// **Three assertions, and the third is the one that keeps this honest.** Live is not enough —
+    /// a row that quietly stops a boot somebody is two minutes into would be worse than the
+    /// refusal. So it has to say that it stops the iPod, that it starts it again, and that what
+    /// comes back is a cold boot: `Config::pair_is_whole` stamps the drive's size and mtime, and
+    /// the install replaces the drive, so no restore point taken here could be honoured.
+    ///
+    /// **How to make it go red:** hand `devices::install_row` `now.machine` again instead of
+    /// `None`. Measured — it fails on the first assertion.
+    #[test]
+    fn installing_rockbox_does_not_ask_a_person_to_stop_the_ipod_first() {
+        let dir = temp_dir("rockbox-while-running");
+        let (mut s, d) = a_composed_device(&dir);
+        let name = d.name.clone();
+        s.devices.push(d);
+
+        let off = machine::Life::Off;
+        let mut seen = ipod_machine::settings::Presence::new();
+        let rows = verbs::view(
+            &s,
+            s.devices.first(),
+            &mut seen,
+            rail::Caps { download: true, ..rail::Caps::default() },
+            verbs::Now {
+                settings: &s,
+                life: &off,
+                machine: Some(&name),
+                park_bytes: None,
+                titles: 0,
+                games_gone: false,
+                developer: false,
+            },
+        );
+        let r = rows
+            .iter()
+            .find(|r| r.verb == verbs::Verb::Rockbox)
+            .expect("the Rockbox row is drawn");
+
+        assert!(
+            r.enabled,
+            "`Rockbox` is refused because the iPod is running: {:?}. The operator: *i dont want to \
+             turn off the ipod to install rockbox etc*",
+            r.reason
+        );
+        assert!(
+            !r.reason.contains("Stop it first"),
+            "the row still tells a person to stop the machine themselves: {:?}",
+            r.reason
+        );
+        for said in ["stops this iPod", "starts it", "cold boot"] {
+            assert!(
+                r.sub.contains(said),
+                "`Rockbox` over a running machine does not say {said:?}, so the press stops a boot \
+                 somebody is watching without having said it would: {:?}",
+                r.sub
+            );
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **§22.4: one switch, and its position is the machine's phase.**
+    ///
+    /// §21.6 drew five rows — `Start · Suspend · Resume · Kill · Restart` — four of them greyed at
+    /// any moment, and the operator looking for a way to turn the iPod off found `Suspend` and
+    /// `Kill` and concluded there was not one. This asserts the replacement: one row, two labels,
+    /// and no question put to the person that the program can answer itself.
+    ///
+    /// Four phases, and each of them is a different sentence rather than a different control:
+    ///
+    /// | phase | label | key | what the sub-line has to say |
+    /// |---|---|---|---|
+    /// | `Booting` | `Turn off` | `Esc` | nothing is written — §12.4 refuses to park a boot |
+    /// | `Running` | `Turn off` | `Esc` | the restore point and its size, off `Link::snapshot_bytes` |
+    /// | `Off` | `Turn on` | the centre button | cold, or a resume, as `Restore::of` decides |
+    /// | `Stopped` | `Turn on` | the centre button | cold — `machine::centre`'s own rule |
+    ///
+    /// **`Stopped` is the one worth having a test for.** A stopped machine has a snapshot on disk
+    /// and starts cold anyway, because `machine::centre`'s `Stopped` arm answers `Launch::Cold`
+    /// even over a good pair: pressing after a `Lost(0xe19b0000)` starts again rather than
+    /// restoring the state that died. A switch that promised a resume there would be the window
+    /// quietly doing something else — §12.4's own defect, one band along.
+    ///
+    /// **How to make it go red:** have `verbs::power_row`'s empty-library arm answer
+    /// `switch(true, TURN_OFF, …)`. Measured — it fails on the `Off` row's label.
+    #[test]
+    fn the_machine_is_one_switch_and_the_phase_is_which_way_it_is_thrown() {
+        let dir = temp_dir("one-switch");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d);
+
+        let power = |life: &machine::Life, park: Option<u64>| -> verbs::Row {
+            let mut seen = ipod_machine::settings::Presence::new();
+            verbs::view(
+                &s,
+                s.devices.first(),
+                &mut seen,
+                rail::Caps { download: true, ..rail::Caps::default() },
+                verbs::Now {
+                    settings: &s,
+                    life,
+                    machine: None,
+                    park_bytes: park,
+                    titles: 0,
+                    games_gone: false,
+                    developer: false,
+                },
+            )
+            .into_iter()
+            .find(|r| r.verb == verbs::Verb::Power)
+            .expect("§22.4's switch is drawn")
+        };
+
+        let running = machine::Life::Running {
+            pace: machine::Pace::default(),
+            stalled_secs: 0.0,
+        };
+        let on = power(&running, Some(149_000_000));
+        assert!(on.switch, "the power control is not drawn as a switch");
+        assert!(on.on, "the switch is drawn OFF over a machine that is running");
+        assert_eq!(on.label, "Turn off", "the switch on a running machine offers {:?}", on.label);
+        assert_eq!(on.value, "Esc", "§16.8's key is not on the row it now belongs to");
+        assert!(
+            on.sub.contains("restore point") && on.sub.contains("149 MB"),
+            "the switch does not say what turning it off writes, off the machine's own \
+             `Link::snapshot_bytes`: {:?}",
+            on.sub
+        );
+        assert!(on.enabled, "the switch cannot be thrown on a running machine: {:?}", on.reason);
+
+        // `Booting`: the same label and the same key, and the sentence is what tells them apart —
+        // which is §21.6's own note about `Esc` being printed on two rows, now true of one.
+        let booting = machine::Life::Booting {
+            target: emu::BootTarget::Os,
+            progress: machine::Progress::read(0, None),
+            pace: machine::Pace::default(),
+            reached: machine::Reached::read(false, 0),
+        };
+        let mid = power(&booting, Some(149_000_000));
+        assert_eq!(mid.label, "Turn off", "the switch mid-boot offers {:?}", mid.label);
+        assert_eq!(mid.value, "Esc");
+        assert!(
+            mid.sub.contains("Nothing is written"),
+            "the switch mid-boot claims something is kept; §12.4 refuses to park a boot: {:?}",
+            mid.sub
+        );
+
+        // Off, and stopped: both are `Turn on`, and neither is a refusal.
+        for life in [machine::Life::Off, machine::Life::Stopped {
+            reason: machine::Reason::new("Lost(0xe19b0000)"),
+            pace: machine::Pace::default(),
+        }] {
+            let r = power(&life, None);
+            assert_eq!(r.label, "Turn on", "the switch over {life:?} offers {:?}", r.label);
+            assert!(!r.on, "the switch is drawn ON over {life:?}");
+            assert_eq!(
+                r.value, "centre button",
+                "§7.3's own start affordance is not named on the row that is a second way to reach \
+                 it"
+            );
+        }
+        // …and a stopped machine says cold, whatever is on disk — `machine::centre`'s rule.
+        let stopped = power(
+            &machine::Life::Stopped {
+                reason: machine::Reason::new("Lost(0xe19b0000)"),
+                pace: machine::Pace::default(),
+            },
+            None,
+        );
+        assert!(
+            stopped.sub.contains("cold boot"),
+            "the switch promises something other than a cold boot over a stopped machine, which \
+             `Cmd::PowerOn` cannot deliver: {:?}",
+            stopped.sub
         );
 
         std::fs::remove_dir_all(&dir).ok();
@@ -8642,7 +9090,6 @@ pub(crate) mod tests {
                 life: &off,
                 machine: None,
                 park_bytes: None,
-                thread: false,
                 titles: 0,
                 games_gone: false,
                 developer: false,
@@ -8654,40 +9101,37 @@ pub(crate) mod tests {
                 .unwrap_or_else(|| panic!("{} is not drawn", v.label()))
         };
 
-        // **`Start` is live and costs the first run**, in the plan's own numbers rather than in a
-        // sentence typed here — this compares against `work::cost`, so a change to the plan moves
-        // both or neither.
-        let start = row(verbs::Verb::Start);
+        // **The switch is live and costs the first run**, in the plan's own numbers rather than in
+        // a sentence typed here — this compares against `work::cost`, so a change to the plan
+        // moves both or neither.
+        let start = row(verbs::Verb::Power);
         assert!(start.enabled, "the one press §21.4 promises is refused: {}", start.reason);
         let cost = work::cost(compose::Holes::Sparse);
         assert!(
             start.sub.contains(&ipod_machine::si(cost.down))
                 && start.sub.contains(&ipod_machine::si(cost.disk)),
-            "`Start` does not cost the first run it will actually run: {}",
+            "the switch does not cost the first run it will actually run: {}",
             start.sub
         );
         assert!(
             !start.sub.contains("reset vector"),
-            "`Start` promises a cold boot on a library with nothing to boot: {}",
+            "the switch promises a cold boot on a library with nothing to boot: {}",
             start.sub
         );
 
-        // **And no row claims anything about an iPod that is not there.**
-        for v in [
-            verbs::Verb::Suspend,
-            verbs::Verb::Resume,
-            verbs::Verb::Kill,
-            verbs::Verb::Restart,
-        ] {
-            let r = row(v);
-            assert!(!r.enabled, "{} is offered with no iPod", v.label());
-            assert_eq!(
-                r.reason,
-                "There is no iPod yet.",
-                "{}'s refusal is about an iPod that does not exist",
-                v.label()
-            );
-        }
+        // **§22.4: it is ONE row, not five.** The four that said *this iPod is not running* in
+        // four phrasings, on the first screen anybody sees, are the switch's off position — and
+        // the way that stays true is that there is nothing else for them to be.
+        assert!(
+            !start.switch || !start.on,
+            "the switch is drawn ON over a library with no iPod in it"
+        );
+        assert!(start.switch, "§22.4's power control is not drawn as a switch");
+        assert_eq!(
+            rows.iter().filter(|r| r.switch).count(),
+            1,
+            "§22.4 asks for one switch and this page draws a different number of them"
+        );
         assert!(
             !rows.iter().any(|r| r.reason.contains("this iPod")),
             "a row still says `this iPod` where there is not one"
@@ -14409,7 +14853,29 @@ pub(crate) mod tests {
     }
 
     fn drawer_rows(w: &MainWindow) -> Vec<i_slint_backend_testing::ElementHandle> {
-        elements_by_role(w, i_slint_backend_testing::AccessibleRole::ListItem)
+        // **Two roles, because §22.4's power row is a `Switch` and the rest are `ListItem`s.**
+        // Asking for `ListItem` alone answered nine for a ten-row page and the caller's count
+        // assertion reported it as a *missing row* — which it is not: the row is there, drawn,
+        // focusable and announced, under the role that says what it is. A sweep that walks one role
+        // over a page that draws two is the shape AGENTS.md §6 is about.
+        //
+        // **And the second role is narrowed to this page's own labels, because it is not the only
+        // switch in the window.** §21.8's drawn hold switch is a `Switch` too, it is on the bench
+        // *behind* the drawer, and the drawer overlays rather than replaces — so an unfiltered
+        // sweep added `hold` to the rows of every page, including Parts, which asserts its top rows
+        // in order. The filter is the model the page is pushing rather than a position or a name
+        // typed here.
+        let mut out = elements_by_role(w, i_slint_backend_testing::AccessibleRole::ListItem);
+        let pushed: Vec<String> = w.get_verbs().iter().map(|r| r.label.to_string()).collect();
+        out.extend(
+            elements_by_role(w, i_slint_backend_testing::AccessibleRole::Switch)
+                .into_iter()
+                .filter(|e| {
+                    e.accessible_label()
+                        .is_some_and(|l| pushed.iter().any(|v| v == l.as_str()))
+                }),
+        );
+        out
     }
 
     /// Every **visible** element in the window reporting `role`, deduplicated by position.
@@ -20614,9 +21080,16 @@ pub(crate) mod tests {
         w.invoke_open_page(DrawerPage::None, 0);
 
         let rows: Vec<VerbRow> = w.get_verbs().iter().collect();
-        assert!(
-            rows.len() >= 13,
-            "§21.3's list is thirteen rows before the developer switch and the page pushed {}",
+        // **Ten, and it was thirteen.** §22.4 collapses §21.6's five machine controls into one
+        // switch, which is three rows of the four §22.1 counts as *one control wearing five hats*.
+        // Written as an equality rather than a floor, because a floor is what let this stand at
+        // *at least thirteen* while the page grew past it unnoticed — and the number this section
+        // is about is the number of rows, so it is the thing to assert.
+        assert_eq!(
+            rows.len(),
+            10,
+            "§21.3's list plus §22.4's one switch is ten rows before the developer switch, and the \
+             page pushed {}",
             rows.len()
         );
 
@@ -20627,13 +21100,29 @@ pub(crate) mod tests {
             rows[0].label
         );
 
-        // (2) The machine controls are on the page and above the facts. §21.6: *all five exist,
-        // none of them is discoverable* — this is the half that makes them discoverable.
+        // (2) **The machine is on the page and above the facts, as one switch.** §21.6 made five
+        // controls discoverable by drawing five rows, and §22.1 is the correction: four of them
+        // were greyed at any moment, `Kill` is what a process manager does, and the operator
+        // looking for a way to turn the iPod off concluded there was not one. So the assertion is
+        // that there is exactly one, that it is a switch, and that none of the five old words is
+        // still a row — the last clause is the half that would rot if this only counted.
+        let switches: Vec<&VerbRow> = rows.iter().filter(|r| r.switch).collect();
+        assert_eq!(
+            switches.len(),
+            1,
+            "§22.4 asks for one switch on this page and it draws {}",
+            switches.len()
+        );
+        assert!(
+            ["Turn on", "Turn off"].contains(&switches[0].label.as_str()),
+            "the switch is labelled {:?}, which is neither of its two positions",
+            switches[0].label
+        );
         for name in ["Start", "Suspend", "Resume", "Kill", "Restart"] {
             assert!(
-                rows.iter().any(|r| r.label == name),
-                "§21.6's `{name}` is not a row, so the only way to reach it is a key nobody has \
-                 been told about"
+                !rows.iter().any(|r| r.label == name),
+                "`{name}` is still a row of its own, so §22.4's one control is still wearing five \
+                 hats"
             );
         }
         assert!(
@@ -20768,6 +21257,72 @@ pub(crate) mod tests {
             "§21.3's `This iPod` is where the default is changed, and it opened {:?}",
             w.get_drawer_page()
         );
+    }
+
+    /// **§22.4's switch is wired to something**, which is the one defect collapsing five rows into
+    /// one can introduce and the one a row model cannot catch.
+    ///
+    /// `the_machine_is_one_switch_and_the_phase_is_which_way_it_is_thrown` proves the row says the
+    /// right thing in each phase; every assertion in it would still pass over a handler whose body
+    /// had been deleted. §20 item 12's lesson is exactly that — a closure registered inside `wire`
+    /// is reachable from nothing unless a test presses it — and §21.7 paid for it once already,
+    /// where the mechanism was sound and the *binding* did nothing at all.
+    ///
+    /// **What it presses, and why that device.** The switch's off position is `invoke_start_device`,
+    /// and the one outcome of that which is both synchronous and observable with no machine and no
+    /// network is its refusal: `resolve_for_start` files the model's own sentence on the Rail. So
+    /// the fixture is `why_puts_the_refusal_it_was_pressed_for_on_the_rail`'s — a composed device
+    /// whose drive has been deleted — and what is asserted is that the press reached the start
+    /// path at all. A press on a live library would start a first run, which downloads from Apple:
+    /// AGENTS.md §8 keeps that out of a plain run.
+    ///
+    /// **The control is the line above the press**, an empty Rail — so the row that appears is
+    /// this press's doing and not the window's furniture.
+    ///
+    /// **How to make it go red:** empty the `verbs::Verb::Power` arm of `on_verb_act`. Measured —
+    /// it fails on the row count, with the Rail still empty.
+    #[test]
+    fn pressing_the_switch_reaches_the_start_path() {
+        let dir = temp_dir("switch-press");
+        let (mut s, d) = a_composed_device(&dir);
+        s.devices.push(d);
+        // The drive is gone, so the press has somewhere to fail and something to say — which is
+        // the only synchronous, offline evidence that it arrived.
+        std::fs::remove_file(dir.join("x.img")).expect("the fixture drive");
+        let settings = Rc::new(RefCell::new(s));
+
+        let w = a_window();
+        let _wiring =
+            wire(&w, settings.clone(), args::Machine::default(), Rc::new(drops::Shell::Native));
+        w.invoke_open_page(DrawerPage::None, 0);
+
+        let switch = w
+            .get_verbs()
+            .iter()
+            .find(|r: &VerbRow| r.switch)
+            .expect("§22.4's switch is on the page");
+        assert_eq!(
+            switch.label, "Turn on",
+            "a machine that is off drew the switch as {:?}",
+            switch.label
+        );
+        assert_eq!(w.get_rail().row_count(), 0, "something has already happened");
+
+        w.invoke_verb_act(switch.verb);
+
+        assert!(
+            w.get_rail().row_count() > 0,
+            "pressing §22.4's switch did nothing at all — the row draws, announces itself as a \
+             switch and reaches no code"
+        );
+        let row = w.get_rail().row_data(0).expect("the refusal");
+        assert!(
+            row.happened.contains("x.img"),
+            "the switch reached something other than the start path: {:?}",
+            row.happened
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// **§21.7's second view opens a real window and the machine's frame reaches it** — issue #37.
@@ -21664,7 +22219,7 @@ pub(crate) mod tests {
     /// `Action::unwired` is asked of all six verbs whether or not a group offers them.
     ///
     /// **`consequence` is in it now, and it is the half that was missing.**
-    /// `primitives.slint:703` is `text: root.enabled ? root.consequence : root.reason` — one slot,
+    /// `primitives.slint:708` is `text: root.enabled ? root.consequence : root.reason` — one slot,
     /// two producers — and only one of them was ever measured. So `removal_consequence` shipped at
     /// **880 px** in a 324 px slot and `devices.png` drew *The entry goes. Its iPod A446, seed
     /// 6182160 and its drive …*, cut off before the clause that says nothing is deleted, which is
@@ -21957,7 +22512,6 @@ pub(crate) mod tests {
                             // is the arm the row draws whenever it is refused, and it is refused
                             // whenever there is nothing to put down.
                             park_bytes: None,
-                            thread: false,
                             titles: 0,
                             games_gone: false,
                             // On, so the four rows the switch reveals are swept too.

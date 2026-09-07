@@ -24,7 +24,7 @@
 // `no_geometry_literal_survives_in_the_markup` is what stops that becoming a typed 24.
 import { Ink } from "tokens.slint";
 import { Geometry } from "@geometry";
-import { DetailRow, DrawerHeader, Row, Scroll, VerbRow } from "primitives.slint";
+import { DetailRow, DrawerHeader, Row, Scroll, SwitchRow, VerbRow } from "primitives.slint";
 import { MadeOfLine } from "devices.slint";
 
 export component VerbsPage inherits Rectangle {
@@ -85,13 +85,42 @@ export component VerbsPage inherits Rectangle {
                         background: Ink.line;
                     }
 
-                    Row {
+                    // **Two arms, one row, and the branch is a role rather than a drawing.**
+                    // §22.4's power row is drawn by `Row` exactly as the other thirteen are — the
+                    // pill lives in the value column's trailing gutter, beside the chevron's — and
+                    // what `SwitchRow` adds is the accessible role, which Slint requires to be a
+                    // constant expression and so cannot be bound from `r.switch`.
+                    //
+                    // `if` rather than `visible` because only one of the two may be in the
+                    // accessible tree at a time, and because neither holds state to throw away:
+                    // every property on both comes from `r`, and the focus a `Scroll` cares about
+                    // is re-established by `gained-focus` either way.
+                    if !r.switch: Row {
                         index: i;
                         count: root.rows.length;
                         label: r.label;
                         value: r.value;
                         sub: r.sub;
                         chevron: r.chevron;
+                        enabled: r.enabled;
+                        reason: r.reason;
+                        machine-rule: r.machine-rule;
+                        escape-hatch: r.escape-hatch;
+                        activated => {
+                            root.act(r.verb);
+                        }
+                        gained-focus => {
+                            scroll.ensure-visible(self.absolute-position.y, self.height);
+                        }
+                    }
+
+                    if r.switch: SwitchRow {
+                        index: i;
+                        count: root.rows.length;
+                        label: r.label;
+                        value: r.value;
+                        sub: r.sub;
+                        on: r.on;
                         enabled: r.enabled;
                         reason: r.reason;
                         machine-rule: r.machine-rule;

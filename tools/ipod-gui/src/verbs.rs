@@ -39,6 +39,23 @@ use crate::work;
 /// **There is one thing wrong on that screen and it is not four things.**
 const NO_IPOD_YET: &str = "There is no iPod yet.";
 
+/// §22.4's two labels and the key that reaches the on position.
+///
+/// **Named rather than typed at four sites**, because they are one control's two states and a
+/// fifth spelling is how a switch comes to say `Turn Off` in one phase and `Turn off` in another.
+/// `Esc` is not among them: it is on the row in both live phases and is written where it is read,
+/// beside the sentence that says which of `Park` and `PowerOff` it will be.
+const TURN_OFF: &str = "Turn off";
+const TURN_ON: &str = "Turn on";
+/// §7.3 makes the drawn centre button the start affordance, so the on position names it rather
+/// than a keystroke — this row is a second way to reach that press, not a different act.
+///
+/// **Two words and not three.** §21.6 wrote `the centre button` into a 124 px column; §22.4's
+/// switch takes 40 px of that column, and the article was the first thing to go over the edge —
+/// `_out/gui/menu.png` drew `the centre …`. A value that elides is a key nobody can read, which is
+/// the whole of what *keep their keys* was for.
+const CENTRE: &str = "centre button";
+
 /// What §21.4's first run will cost, in the plan's own numbers.
 ///
 /// **`work::cost` and never a literal**, which is the same call `main::empty_shelf` makes for the
@@ -73,12 +90,8 @@ pub enum Verb {
     Doom,
     Diagnostics,
     Games,
-    // ── §21.6: the machine, named as emulator controls ──
-    Start,
-    Suspend,
-    Resume,
-    Kill,
-    Restart,
+    // ── §22.4: the machine, as one switch ──
+    Power,
     // ── §21.3: the rest of the list ──
     Files,
     Panel,
@@ -94,17 +107,13 @@ pub enum Verb {
 impl Verb {
     /// Every verb, in the order the page draws them. A sweep that walked a subset and believed it
     /// had walked the set is the shape this exists to prevent.
-    pub const ALL: [Verb; 18] = [
+    pub const ALL: [Verb; 14] = [
         Verb::Apple,
         Verb::Rockbox,
         Verb::Doom,
         Verb::Diagnostics,
         Verb::Games,
-        Verb::Start,
-        Verb::Suspend,
-        Verb::Resume,
-        Verb::Kill,
-        Verb::Restart,
+        Verb::Power,
         Verb::Files,
         Verb::Panel,
         Verb::ThisIpod,
@@ -141,11 +150,10 @@ impl Verb {
             Verb::Doom => "Doom",
             Verb::Diagnostics => "Diagnostics",
             Verb::Games => "Games…",
-            Verb::Start => "Start",
-            Verb::Suspend => "Suspend",
-            Verb::Resume => "Resume",
-            Verb::Kill => "Kill",
-            Verb::Restart => "Restart",
+            // **The label is the act, and the act depends on which way the switch is
+            // thrown** — so [`power_row`] overwrites it. This is the off position's, because a
+            // window that has not yet been told about a machine has not got one.
+            Verb::Power => "Turn on",
             Verb::Files => "Files on the drive…",
             Verb::Panel => "Panel in its own window",
             Verb::ThisIpod => "This iPod",
@@ -162,7 +170,7 @@ impl Verb {
     fn group(self) -> i32 {
         match self {
             Verb::Apple | Verb::Rockbox | Verb::Doom | Verb::Diagnostics | Verb::Games => 0,
-            Verb::Start | Verb::Suspend | Verb::Resume | Verb::Kill | Verb::Restart => 1,
+            Verb::Power => 1,
             Verb::Files | Verb::Panel | Verb::ThisIpod | Verb::Settings => 2,
             Verb::Parts | Verb::Readout | Verb::Work | Verb::Reference => 3,
         }
@@ -216,6 +224,14 @@ pub struct Row {
     pub chevron: bool,
     /// A 1 px rule above this row, because the group changed.
     pub rule_above: bool,
+    /// §22.4: this row is a **switch**, so it is drawn with a switch's affordance and announced as
+    /// one. Exactly one row is, and [`power_row`] is the only thing that sets it.
+    pub switch: bool,
+    /// Which way that switch is thrown. Meaningless on every row where `switch` is false, and it
+    /// is a plain `bool` beside a plain `bool` rather than an `Option` for that reason: the markup
+    /// reads it only under `switch`, and an `Option<bool>` in a Slint struct is a second nullable
+    /// field for a distinction one boolean already makes.
+    pub on: bool,
 }
 
 impl Row {
@@ -232,6 +248,8 @@ impl Row {
             // A chevron is a claim about where a press goes, and the verb is what knows.
             chevron: verb.opens_a_page(),
             rule_above: false,
+            switch: false,
+            on: false,
         }
     }
 
@@ -276,10 +294,6 @@ pub struct Now<'a> {
     /// true of one machine at one clock and goes on being printed. A figure without the thing that
     /// produced it cannot be rechecked and goes stale silently (AGENTS.md §5).
     pub park_bytes: Option<u64>,
-    /// Whether a machine thread exists at all, running or not. `Resume` needs the difference:
-    /// §12.4 says a restore happens only as a thread is *built*, so a window that already has one
-    /// cannot get back to a snapshot and the row has to say so instead of cold-booting.
-    pub thread: bool,
     /// How many titles are on the shelf, and whether the shelf itself has gone.
     pub titles: usize,
     pub games_gone: bool,
@@ -304,9 +318,7 @@ pub fn view(s: &Settings, d: Option<&Device>, seen: &mut Presence, caps: Caps, n
             Verb::Doom => doom_row(s, d, caps, now),
             Verb::Diagnostics => diagnostics_row(s, d, seen, now),
             Verb::Games => games_row(now),
-            Verb::Start | Verb::Suspend | Verb::Resume | Verb::Kill | Verb::Restart => {
-                control_row(verb, d, now)
-            }
+            Verb::Power => power_row(d, now),
             Verb::Files => files_row(d),
             Verb::Panel => panel_row(now),
             Verb::ThisIpod => this_ipod_row(s, d),
@@ -344,14 +356,25 @@ fn boot_row(s: &Settings, d: Option<&Device>, seen: &mut Presence, now: Now, ver
     let Some(d) = d else {
         return Row::go(verb, "downloads Apple's firmware and builds an 8 GB drive");
     };
-    if let Some(m) = now.machine.filter(|m| *m == d.name) {
-        return Row::no(verb, devices::running_rule(m), true);
-    }
     let absent = s.missing_with(d, seen);
     let mismatch = s.generation_mismatch(d);
     if let Some(b) = machine::Blocked::of(Some(d), &absent, mismatch.as_deref()) {
         // The bench's own words for this device, so one iPod is not described two ways.
         return Row::no(verb, crate::blocked_label(crate::Press::Centre, d, &absent, b, mismatch.as_deref()), b.machine_rule());
+    }
+    // **§22.2: a machine in the way is not a reason to refuse a boot — it is the thing to power
+    // cycle.** This arm used to be `devices::running_rule` — *"My 5.5G is running. Stop it
+    // first."* — and it was the largest single source of grey on the page: four rows telling a
+    // person to go and perform an act the row itself could perform. `emu::Cmd::Boot` is that act
+    // and it already existed: §12.5 makes it a power cycle in every phase, *"that is how the
+    // hardware reaches them"*, and `machine::permits` answers true for it everywhere for exactly
+    // that reason.
+    //
+    // **It costs a cold boot and the row says so**, which is the whole of what the person needs to
+    // know before pressing: the machine is dropped and re-entered at the reset vector, nothing is
+    // written, and this device's own last measured boot is what it will take again.
+    if now.machine.is_some_and(|m| m == d.name) {
+        return Row::go(verb, "restarts it — power off and straight back on, from the reset vector");
     }
     Row::go(verb, "")
 }
@@ -415,14 +438,34 @@ fn rockbox_row(s: &Settings, d: Option<&Device>, seen: &mut Presence, caps: Caps
     };
     let installed = s.recipe_of(d).oses.contains(&Os::Rockbox);
     if !installed {
-        let fix = devices::install_row(s, d, caps, now.machine);
+        // **§22.2: the machine in the way is not asked about.** `install_row` is handed `None`
+        // where it used to be handed `now.machine`, and that one argument is the operator's own
+        // sentence — *"i dont want to turn off the ipod to install rockbox"* — made mechanical.
+        // The refusal existed because writing a drive an ARM7 is executing from is the one failure
+        // here that damages something a person cannot rebuild; stopping the machine first removes
+        // that, and stopping it is an act this program performs rather than an errand it sets.
+        //
+        // **The Devices page still asks**, and that is not an inconsistency: its `Install…` sits
+        // inside a row about a device's parts, beside `Edit` and `Remove`, which are edits to a
+        // library rather than a thing to run. This row is a thing to run, and §22.2 is about rows
+        // that are.
+        let fix = devices::install_row(s, d, caps, None);
         return Row {
             enabled: fix.enabled,
             reason: fix.reason,
             machine_rule: fix.machine_rule,
+            escape: fix.escape,
             ..Row::go(
                 Verb::Rockbox,
-                "downloads 9 MB and writes a new drive beside this one",
+                match now.machine.filter(|m| *m == d.name) {
+                    // What it costs, and every clause of it is true: the machine is dropped
+                    // without a park (the drive is about to be replaced, so a restore point
+                    // stamped against the old one could not be honoured — `Config::pair_is_whole`
+                    // reads the drive's size and mtime), 9 MB is fetched, a new drive is written
+                    // beside the old one, and the machine comes back at the reset vector.
+                    Some(_) => "stops this iPod, downloads 9 MB, and starts it again on Rockbox — a cold boot",
+                    None => "downloads 9 MB, writes a new drive beside this one, and starts it",
+                },
             )
         };
     }
@@ -473,12 +516,16 @@ fn doom_row(s: &Settings, d: Option<&Device>, caps: Caps, now: Now) -> Row {
             true,
         );
     };
-    if let Some(m) = now.machine.filter(|m| *m == d.name) {
-        return Row::no(Verb::Doom, devices::running_rule(m), true);
-    }
     // **Rockbox first, and the sentence names the row that installs it.** `doom.rock` ships inside
     // the Rockbox release, so without Rockbox there is no plugin for the WADs to feed — and the
     // row above is one press from having one.
+    //
+    // **§22.2 does not reach this one, and the reason is the 24 MB rather than the principle.**
+    // Chaining it is mechanically available — `work::Then` already carries one run into the next —
+    // but the chain would be *install Rockbox, then fetch Freedoom, then boot*, which is 33 MB and
+    // two writes behind a row whose sub-line promised 24. §10.1's rule is that a person agrees to
+    // the whole plan before any of it runs, and a press that quietly grew by a third of its bill
+    // is that rule broken from the inside. The row above states the same act, priced correctly.
     if !s.recipe_of(d).oses.contains(&Os::Rockbox) {
         return Row::no(
             Verb::Doom,
@@ -507,9 +554,22 @@ fn doom_row(s: &Settings, d: Option<&Device>, caps: Caps, now: Now) -> Row {
         )
         .escape("ipod-boot doom-assets DISK.img");
     }
+    // **§22.2, and the running machine is the reason the sentence changes rather than the row.**
+    // Writing 24 MB onto the volume an ARM7 is executing from is the hazard `devices::running_rule`
+    // was refusing over; stopping the machine first removes the hazard, so the press stops it,
+    // writes, and starts it again. What the person is owed is the cost of that, which is the boot
+    // they were watching.
     Row::go(
         Verb::Doom,
-        "downloads 24 MB, then boots Rockbox — Doom is in Shortcuts",
+        // **Short because §9.4's slot is 372 px and this one measured 411**, which is
+        // `every_reason_this_window_draws_fits_the_slot_it_is_drawn_in` doing its job: the first
+        // draft ended `— Doom is in Shortcuts` and would have been cut off mid-clause. Where Doom
+        // is is on the other arm, which has the room; what this arm has to say is what happens to
+        // the machine somebody is watching.
+        match now.machine.filter(|m| *m == d.name) {
+            Some(_) => "stops this iPod, downloads 24 MB, and starts it again",
+            None => "downloads 24 MB, then boots Rockbox — Doom is in Shortcuts",
+        },
     )
 }
 
@@ -611,141 +671,129 @@ fn games_row(now: Now) -> Row {
     }
 }
 
-/// §21.6's five, **named as emulator controls and not after hardware**.
+/// §22.4's **one switch**, where §21.6 had five controls.
 ///
-/// §21.5 is the measured reason and it is not a preference: MENU + SELECT is delivered to the
-/// machine, arrives at Apple's ISR decoder, and does not reset it — the mask `0x110000` appears
-/// zero times in 641 479 disassembled instructions of `OSOS_correct.bin`. On real hardware the
-/// chord is caught below the firmware, in the wheel's PSoC or the PMU, and this project models
-/// neither. So these are things **this program** does to a machine and they say so.
+/// `Start · Suspend · Resume · Kill · Restart` was one control wearing five hats, four of them
+/// greyed at any moment — and the operator, looking for a way to turn the iPod off, found
+/// `Suspend` and `Kill` and concluded there was not one. `Kill` is what a process manager does. A
+/// person's model of an iPod is **off** and **on**, and the drawn centre button already expresses
+/// both, so the menu carries one row and it is a switch.
 ///
-/// **Every refusal is a physical statement**, which is `machine::permits`'s own rule: you cannot
-/// power off a machine that is off, you cannot start one that is running. The exception is
-/// `Resume`, whose refusal is a fact about this window rather than about the machine — see below.
-fn control_row(verb: Verb, d: Option<&Device>, now: Now) -> Row {
-    let alive = now.life.alive();
-    // **`this iPod` is a phrase about an iPod, and with an empty library there is not one.** These
-    // four rows read *this iPod is not running* / *this iPod has no restore point* on the first
-    // screen anybody sees, directly under a row that says `No iPod yet`. There is one thing wrong
-    // on that screen and it is not four things — which is the empty case `files_row` two functions
-    // down already words for itself, and this borrows its sentence rather than inventing a fifth.
-    let named = d.map(|d| d.name.as_str());
-    let no_ipod = || NO_IPOD_YET.to_string();
-    // **The key is on the row whether or not the row can be pressed**, and that is §21.6's *keep
-    // their keys* taken literally: the operator could not work out how to stop a machine, and a
-    // person who reads `Suspend · Esc` on a machine that is off has learnt the key for the moment
-    // there is one. A key that appeared only in the state where it works would be discoverable
-    // exactly when it was no longer needed.
-    let key = match verb {
-        // Not a keystroke: §7.3 makes the drawn button the start affordance, and this row is a
-        // second way to reach it rather than a different act.
-        Verb::Start | Verb::Resume => "the centre button",
-        // §16.8 gives `Esc` ONE definition, outwards — and at the end of it, `Park` from `Running`
-        // and `PowerOff` from `Booting`. Two rows, one key, and the sentences under them are what
-        // tell the two apart.
-        Verb::Suspend | Verb::Kill => "Esc",
-        _ => "",
+/// **Nothing is deleted but the rows.** Every act is still here and still reachable:
+///
+/// | §21.6 | where it went |
+/// |---|---|
+/// | `Start` | the switch, thrown on, over a machine with no restore point |
+/// | `Resume` | the switch, thrown on, over one with a whole pair — `Restore::of` decides, not the person |
+/// | `Suspend` | the switch, thrown off, while `Running` — `nav::Escape::Park` |
+/// | `Kill` | the switch, thrown off, while `Booting` — `nav::Escape::PowerOff`, because parking a boot is a 1.6 GB write of a state nobody wants |
+/// | `Restart` | the switch twice |
+///
+/// **The two keys keep their meanings and their column.** §16.8 gives `Esc` one definition
+/// outwards and `nav::Stack::escape` ends it in `Park` from `Running` and `PowerOff` from
+/// `Booting` — which is exactly this row's off position in its two live phases, so one row now
+/// carries the key that used to be printed on two. The on position's is the drawn centre button,
+/// as §7.3 has always had it.
+///
+/// **What the person is not asked.** Whether to suspend or to kill, and whether to start cold or
+/// to resume, are both answered by facts the program already holds — the phase, and
+/// `Config::pair_is_whole` by way of [`Restore::of`] — so the switch does the cheaper one and the
+/// sub-line says which. That is §22.2's rule pointed at a control rather than at a refusal: a
+/// question with a knowable answer is not a choice, it is a form.
+///
+/// **The one refusal left is `crate::blocked_label`'s**, and it is about files rather than about
+/// the machine: an iPod whose boot ROM or drive is not on disk cannot be turned on by any act of
+/// this program, because the bytes are not there to run.
+fn power_row(d: Option<&Device>, now: Now) -> Row {
+    let switch = |on: bool, label: &str, value: &str, sub: &str| Row {
+        label: label.to_string(),
+        value: value.to_string(),
+        switch: true,
+        on,
+        ..Row::go(Verb::Power, sub)
     };
-    let row = |sub: &str| Row {
-        value: key.into(),
-        ..Row::go(verb, sub)
-    };
-    let no = |why: String| Row {
-        value: key.into(),
-        ..Row::no(verb, why, true)
-    };
-    match verb {
-        // The centre button is the same press, which is why the key column names it rather than a
-        // keystroke: §7.3 makes the drawn button the start affordance and this row is the second
-        // way to reach it, not a different act.
-        Verb::Start if alive => no(format!("{} is already running.", named.unwrap_or("It"))),
-        // **With no iPod this press is §21.4's first run, and the row has to cost it as one.** It
-        // read *cold boot, from the reset vector*, which is what `Cmd::PowerOn` does and not what
-        // this press does: `press_is_first_run` routes an empty library into `work::Queue::press`,
-        // which downloads Apple's firmware and builds an 8 GB drive before anything boots. The
-        // bench's own cradle two inches away has said so all along — `Press the centre button to
-        // make an iPod`, with the bill under it — and this row promised a reset vector.
-        //
-        // **The numbers are `work::cost`'s**, the same call the empty bench's shelf and the ledger
-        // make, so three surfaces cannot print three bills for one press.
-        Verb::Start if d.is_none() => row(&first_run_cost()),
-        Verb::Start => row("cold boot, from the reset vector"),
+    // ── on ──────────────────────────────────────────────────────────────────────────────────────
+    //
+    // **`Esc`, in both live phases, because that is what `Esc` already does.** The sub-line is what
+    // tells the two apart, which is what §21.6 said about printing the key on two rows and is now
+    // true of one.
+    match now.life {
+        Life::Booting { .. } => {
+            return switch(
+                true,
+                TURN_OFF,
+                "Esc",
+                "stops the boot. Nothing is written, so the next start is cold.",
+            )
+        }
+        Life::Running { .. } => {
+            // The size is the machine's own — `Link::snapshot_bytes`, published by the run loop
+            // before anything can ask for a park — and never §12.4's measured literal, which was
+            // true of one machine at one clock.
+            let sub = match now.park_bytes.filter(|n| *n > 0) {
+                Some(n) => format!(
+                    "writes the restore point and stops — {}, and the next start reads it back",
+                    ipod_machine::si(n)
+                ),
+                None => "writes the restore point and stops".into(),
+            };
+            return switch(true, TURN_OFF, "Esc", &sub);
+        }
+        Life::Off | Life::Stopped { .. } => {}
+    }
 
-        // §12.4. `Esc` from `Running` sets `Link::save_on_quit`, and `nav::Stack::escape` is the
-        // one definition of that key — this row is the same act with a label on it, which is the
-        // whole of what §21.6 asks for: *none of them is discoverable*.
-        Verb::Suspend if !alive => no(match named {
-            Some(n) => format!("{n} is not running, so there is nothing to put down."),
-            None => no_ipod(),
-        }),
-        Verb::Suspend => row(&match now.park_bytes.filter(|n| *n > 0) {
-            Some(n) => format!("writes the restore point and stops — {}", ipod_machine::si(n)),
-            None => "writes the restore point and stops".into(),
-        }),
-
-        // **The one refusal here that is about the window rather than the machine**, and §12.4
-        // states it: `Cmd::PowerOn`'s own doc is *"always a cold boot, never a restore"*, and the
-        // only code that restores is `emu::run`'s entry, gated on `Config::may_restore(first)`
-        // with `first` false for every power cycle inside a session. So a resume is reachable only
-        // by *building* the machine thread, and a window that has already built one has no route
-        // back to the snapshot. Saying so is better than sending `PowerOn` under a label that
-        // promised three seconds.
-        Verb::Resume if alive => no(format!("{} is running.", named.unwrap_or("It"))),
-        Verb::Resume => match d.map(|d| Restore::of(&crate::resting_config(now.settings, d))) {
-            // **`about 3 s` was the second literal of the pair, and the file a resume will read
-            // replaces it.** Its twin on §7.3's cradle went the same way, for §21.6's own stated
-            // reason: a figure true of one machine on one host goes on being printed long after
-            // everything that made it true has moved. The restore point's size is a fact about
-            // *this* device, it costs one `stat` of a file `Restore::of` has just established the
-            // existence of, and it is the currency `Suspend` two rows up already reports in.
-            Some(Restore::Whole) if !now.thread => row(&match d
-                .and_then(|d| crate::resting_config(now.settings, d).snapshot)
-                .and_then(|p| std::fs::metadata(p).ok())
-                .map(|m| m.len())
-            {
+    // ── off ─────────────────────────────────────────────────────────────────────────────────────
+    //
+    // §21.4: with no iPod, throwing the switch on is the first run, and it costs what `work::cost`
+    // says rather than what a sentence here says — the same call the bench's shelf and the ledger
+    // make, so three surfaces cannot print three bills for one press.
+    let Some(d) = d else {
+        return switch(false, TURN_ON, CENTRE, &first_run_cost());
+    };
+    // The bench's own words for a device whose parts are not on disk, fetched rather than
+    // re-worded, so one iPod is not described two ways.
+    let absent = now.settings.missing_with(d, &mut Presence::new());
+    let mismatch = now.settings.generation_mismatch(d);
+    if let Some(b) = machine::Blocked::of(Some(d), &absent, mismatch.as_deref()) {
+        return Row {
+            value: CENTRE.into(),
+            switch: true,
+            on: false,
+            ..Row::no(
+                Verb::Power,
+                crate::blocked_label(crate::Press::Centre, d, &absent, b, mismatch.as_deref()),
+                b.machine_rule(),
+            )
+        };
+    }
+    // **A stopped machine starts cold, and that is `machine::centre`'s rule rather than a second
+    // one here**: its `Stopped` arm answers `Launch::Cold` even over a perfectly good snapshot,
+    // because pressing after a `Lost(0xe19b0000)` starts again rather than restoring the state
+    // that died. `Life::Off` is the other half — the thread is parked at `wait_for_power`, the
+    // press falls through `on_start_device` to `start_machine`, and a machine built afresh is
+    // `Config::may_restore`'s `first`.
+    let cfg = crate::resting_config(now.settings, d);
+    let sub = match (now.life, Restore::of(&cfg)) {
+        (Life::Stopped { .. }, _) => "cold boot, from the reset vector".into(),
+        (_, Restore::Whole) => {
+            // The file a resume will read, `stat`ed — the currency the on position reports in, and
+            // never §7.3's retired `about 3 s`, which was a figure about one host at one clock.
+            match cfg.snapshot.and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len()) {
                 Some(n) => format!(
                     "puts the machine back where it was — {} to read",
                     ipod_machine::si(n)
                 ),
                 None => "puts the machine back where it was".into(),
-            }),
-            Some(Restore::Whole) => no(
-                "This machine has been built and powered off, and a restore happens only as the \
-                 thread is built. Close the window and start it again to resume."
-                    .into(),
-            ),
-            // Reachable only with a device, since `Restore::of` was asked about one — so the name
-            // is always there, and `It` is the total-match answer rather than a case that happens.
-            Some(Restore::Broken) => no(format!(
-                "{}'s restore point no longer matches its drive, so resuming it would pair a \
-                 restored memory with a drive that moved.",
-                named.unwrap_or("It")
-            )),
-            _ => no(match named {
-                Some(n) => format!("{n} has no restore point."),
-                None => no_ipod(),
-            }),
-        },
-
-        // §12.5: power off is real — the machine is dropped and re-entered at the reset vector,
-        // not restored and pretended. `Esc` from `Booting` is this, because §12.4 refuses to park
-        // a boot: a 1.6 GB write of a state nobody wants.
-        Verb::Kill if !alive => no(match named {
-            Some(n) => format!("{n} is not running."),
-            None => no_ipod(),
-        }),
-        Verb::Kill => row("drops the machine. Nothing is written; the next start is cold."),
-
-        Verb::Restart if !alive => no(match named {
-            Some(n) => format!("{n} is not running, so there is nothing to cycle."),
-            None => no_ipod(),
-        }),
-        Verb::Restart => row("power off and straight back on, from the reset vector"),
-
-        // Not reachable: the caller matches on the same five. Total rather than `unreachable!`,
-        // because a panic here would take the window down over a row.
-        _ => no("This is not a machine control.".into()),
-    }
+            }
+        }
+        // **A broken pair is a cold boot and says so, rather than refusing.** §7.3's own reading of
+        // the same fact: the snapshot is on disk and no longer describes this drive, so it is not
+        // used. Nothing about that stops the iPod turning on, which is why it is a sub-line and not
+        // a reason.
+        (_, Restore::Broken) => "cold boot — the restore point no longer matches this drive".into(),
+        (_, Restore::Never) => "cold boot, from the reset vector".into(),
+    };
+    switch(false, TURN_ON, CENTRE, &sub)
 }
 
 /// §12.9's `fat` browsing — *what does earn a surface*, and it does not have one yet.

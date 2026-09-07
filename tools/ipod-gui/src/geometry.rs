@@ -2984,15 +2984,18 @@ mod tests {
              bottom rows are outside the drawer's clip, which is not a Flickable, so they are out \
              of the tab order and out of the accessible tree with no indicator that they exist"
         );
-        // **Two, and not one per row.** The rows are a repeater, so one `ensure-visible` inside it
-        // covers every verb; the second is `MadeOfLine`'s `reveal`, which is how §21.3's demoted
-        // fact table brings itself into view. `Tab` is the only keyboard scroll route this program
-        // has (§16.11), so a page with none of these is a page whose tail cannot be reached.
+        // **Three, and not one per row.** The rows are a repeater, so one `ensure-visible` inside
+        // it covers every verb — and §22.4's switch is the repeater's second arm, drawn by
+        // `SwitchRow` for the accessible role Slint will not let `Row` bind conditionally, so it
+        // needs its own. The third is `MadeOfLine`'s `reveal`, which is how §21.3's demoted fact
+        // table brings itself into view. `Tab` is the only keyboard scroll route this program has
+        // (§16.11), so a page missing one of these is a page whose tail cannot be reached — and
+        // the one that would go missing is the switch's, because it is the arm nobody re-reads.
         assert_eq!(
             text.matches("ensure-visible").count(),
-            2,
-            "the verb repeater and the fact table each bring themselves into view when the \
-             keyboard reaches them, and that is two call sites"
+            3,
+            "the verb repeater's two arms and the fact table each bring themselves into view when \
+             the keyboard reaches them, and that is three call sites"
         );
     }
 
