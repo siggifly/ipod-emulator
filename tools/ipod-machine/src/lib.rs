@@ -4324,7 +4324,31 @@ pub struct Machine {
     /// polls with timeouts: the bootloader spends billions of instructions in delay loops, and
     /// those collapse when the clock advances quicker. Timing-sensitive code can notice, so it is a
     /// knob rather than a new default.
+    ///
+    /// **Move it with [`Machine::set_clock`] and never by assignment.** The clock identity below is
+    /// maintained every step, and changing the divisor under a machine that has already executed a
+    /// billion instructions moves `usec` by minutes in one of them — forward or backward, in `u32`
+    /// arithmetic firmware reads as ordinary elapsed time.
     pub instr_per_usec: usize,
+    /// What the clock owes to a divisor that moved mid-run, which is what makes moving one
+    /// continuous.
+    ///
+    /// `usec` is not stored state: it is recomputed every step as
+    /// `executed / instr_per_usec + slept_usec + usec_offset`. The first two terms are the whole of
+    /// it while this is zero, which is every machine that never moves its clock — so a run that
+    /// pins `--clock=` executes bit-for-bit what it did before this field existed, and every figure
+    /// in `research/` is unaffected by its existence.
+    ///
+    /// [`Machine::set_clock`] is the only writer, and what it writes is the number that makes the
+    /// identity answer what it answered an instant earlier. The arithmetic is `u32` wrapping, which
+    /// is what the microsecond clock already is: the counter firmware reads wraps every 71 minutes,
+    /// and RetailOS's own timeouts are differences taken across that wrap.
+    ///
+    /// **A snapshot does not carry it and does not need to.** `snapshot` writes `usec` itself and
+    /// `restore` re-derives this from the three numbers it read back, which reproduces the saved
+    /// clock exactly — including for images written before this field existed, where it derives to
+    /// zero because it was.
+    pub usec_offset: u32,
     /// `--until=` — stop when the simulated clock reaches this microsecond. `None` runs the
     /// instruction budget and nothing else.
     ///
@@ -4747,6 +4771,7 @@ impl Machine {
             call_at: 0,
             call_log_on: false,
             instr_per_usec: CLOCK,
+            usec_offset: 0,
             until_usec: None,
             idle_steps: 0,
             idle_frac: 0,
@@ -7212,6 +7237,60 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
         self.executed as u64 + self.idle_steps
     }
 
+    /// **The clock identity, in one place.** `executed / instr_per_usec + slept_usec + usec_offset`,
+    /// which the run loop asserts every step from both of its arms — the executing one and the
+    /// halted one. It was the same expression written twice, and a third caller was about to make
+    /// it three.
+    ///
+    /// `ipu` is passed rather than read because both callers already hold it clamped, and this is
+    /// per-instruction code.
+    ///
+    /// Wrapping, deliberately. `usec` is the 32-bit microsecond counter the hardware exposes; it
+    /// wraps every 71 minutes on a real iPod too, and firmware measures intervals as unsigned
+    /// differences across that wrap. That is also what lets [`Self::set_clock`] carry a *negative*
+    /// correction in a `u32`.
+    #[inline]
+    pub fn usec_now(&self, ipu: usize) -> u32 {
+        ((self.executed / ipu) as u32)
+            .wrapping_add(self.mem.slept_usec)
+            .wrapping_add(self.usec_offset)
+    }
+
+    /// **Move the clock without moving the time.**
+    ///
+    /// The divisor may not simply be assigned: `usec` is recomputed from `executed` every step, so
+    /// halving `instr_per_usec` under a machine a billion instructions in doubles its sense of
+    /// elapsed time in the space of one instruction. Firmware reads that as minutes passing at
+    /// once, and every timeout it is holding expires together — which is the failure
+    /// [`Machine::snapshot`]'s own doc was written to describe, from the day a snapshot restored
+    /// one half of this pair without the other.
+    ///
+    /// So the new divisor arrives with the correction that cancels it. The clock reads the same
+    /// microsecond after the change as before it, and goes on advancing — at the new rate, which is
+    /// the entire point. Nothing else about the machine moves.
+    ///
+    /// `idle_frac` is dropped for the reason `restore` drops it: it is a remainder of the *old*
+    /// divisor, worth less than one microsecond, and carrying it into a new one would credit a tick
+    /// that was not earned.
+    ///
+    /// `mem.usec` is deliberately *not* written. When the microsecond timer is armed the identity
+    /// is what `mem.usec` already holds, so writing it is a no-op; when it is not armed, nothing
+    /// maintains `mem.usec` and writing the identity into it would be inventing a clock the machine
+    /// is not keeping.
+    ///
+    /// **How to make `the_clock_may_be_moved_mid_run_without_moving_the_time` go red:** assign
+    /// `instr_per_usec` here and delete the correction under it.
+    pub fn set_clock(&mut self, ipu: usize) {
+        let ipu = ipu.max(1);
+        let was = self.usec_now(self.instr_per_usec.max(1));
+        self.instr_per_usec = ipu;
+        self.idle_frac = 0;
+        // What the identity answers at the new divisor, against what it has to answer instead.
+        self.usec_offset = self
+            .usec_offset
+            .wrapping_add(was.wrapping_sub(self.usec_now(ipu)));
+    }
+
     /// How many instructions each core runs before the other gets a turn.
     ///
     /// **Fixed, because determinism is the whole contract.** Every number in `research/` has to
@@ -7402,12 +7481,12 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
                         self.mem.slept_usec = self.mem.slept_usec.wrapping_add(1);
                     }
                     // Every step, not only the ones that tick a microsecond over. The clock is
-                    // defined as `executed / instr_per_usec + slept_usec` and it has to hold at
-                    // every instant, or a reader of `usec` between two ticks sees a stale value —
-                    // and anything that edits `slept_usec` from outside, as a restore does, would
-                    // not take effect until the remainder happened to wrap.
+                    // defined as `executed / instr_per_usec + slept_usec + usec_offset` and it has
+                    // to hold at every instant, or a reader of `usec` between two ticks sees a
+                    // stale value — and anything that edits `slept_usec` from outside, as a restore
+                    // does, would not take effect until the remainder happened to wrap.
                     if self.mem.usec_timer.is_some() {
-                        self.mem.usec = (self.executed / ipu) as u32 + self.mem.slept_usec;
+                        self.mem.usec = self.usec_now(ipu);
                     }
                     // A halted machine has to be able to reach "idle", or `--stop-when-idle` waits
                     // for an instruction that is never going to run.
@@ -9080,8 +9159,7 @@ pub fn install_game_stubs(&mut self, exe_stem: &str, o: GameStubs) -> bool {
             // has to be plausible: firmware compares elapsed against its own timeouts, so what
             // matters is that time moves forward at a sane rate, not that it matches real silicon.
             if self.mem.usec_timer.is_some() {
-                self.mem.usec =
-                    (self.executed / self.instr_per_usec.max(1)) as u32 + self.mem.slept_usec;
+                self.mem.usec = self.usec_now(self.instr_per_usec.max(1));
             }
             // Sampling profiler. A run that ends in "BudgetExhausted" says nothing about where the
             // time went, and the 16-entry tail of `last instructions` only ever shows the innermost
@@ -10049,8 +10127,8 @@ fn ring_used(lo: u32, hi: u32, rd: u32, wr: u32) -> u32 {
 /// # The clock is two numbers, and saving one of them was a 44-minute jump backwards
 ///
 /// `usec` is not stored state — it is *recomputed* every instruction as
-/// `executed / instr_per_usec + slept_usec`. Version 3 of this format saved `usec` and not
-/// `slept_usec`, so a restored machine kept the right clock for exactly zero instructions: the first
+/// `executed / instr_per_usec + slept_usec + usec_offset`. Version 3 of this format saved `usec` and
+/// not `slept_usec`, so a restored machine kept the right clock for exactly zero instructions: the first
 /// one recomputed it against a `slept_usec` of 0 and the clock fell back to whatever the instruction
 /// count alone implied. On the standard idle snapshot that was **2 940 704 453 µs → 321 777 002 µs,
 /// a backwards jump of 44 minutes of simulated time**, and firmware that measures an interval as
@@ -10120,9 +10198,13 @@ impl Machine {
         w64(&mut o, self.instr_per_usec as u64);
         w32(&mut o, self.timer_next[0]);
         w32(&mut o, self.timer_next[1]);
+        // **The clock, and it is load-bearing rather than a courtesy to whoever reads the file.**
+        // `usec` is derived from the three terms of the identity, and one of those terms —
+        // `usec_offset`, what a mid-run clock change owes — is not written anywhere in this format.
+        // `restore` re-derives it by closing the identity against this number, which is what lets
+        // the format stay at version 8 and go on reading every image already written.
         w32(&mut o, self.mem.usec);
-        // The other half of the clock. `usec` above is a derived value and is written for the
-        // reader's benefit; this is the one the machine cannot recompute.
+        // The other half a machine that has never moved its clock cannot recompute.
         w32(&mut o, self.mem.slept_usec);
         w32(&mut o, self.mem.int_pending);
         w32(&mut o, self.mem.int_pending_hi);
@@ -10295,6 +10377,17 @@ impl Machine {
         self.timer_next[1] = r32(&mut p);
         self.mem.usec = r32(&mut p);
         self.mem.slept_usec = r32(&mut p);
+        // **The third term of the clock, derived rather than stored.** The identity is
+        // `executed / instr_per_usec + slept_usec + usec_offset`, and the file has just supplied
+        // every part of it but the last — including `usec` itself, which the writer emits. So the
+        // offset that reproduces the saved clock exactly is the one that closes the identity, and
+        // the format does not have to carry a field to say so. An image taken from a machine that
+        // never moved its clock derives zero here, which is what it had.
+        self.usec_offset = self
+            .mem
+            .usec
+            .wrapping_sub((self.executed / self.instr_per_usec.max(1)) as u32)
+            .wrapping_sub(self.mem.slept_usec);
         self.mem.int_pending = r32(&mut p);
         self.mem.int_pending_hi = r32(&mut p);
         let due = r32(&mut p);
@@ -11935,6 +12028,88 @@ mod peek_tests {
             }
             other => panic!("expected TimeReached, got {other:?}"),
         }
+    }
+
+    /// **The clock may be moved under a running machine without moving the time.**
+    ///
+    /// This is what [`Machine::set_clock`] exists for, and the failure it stops is the one
+    /// [`Machine::snapshot`]'s doc describes at length: `usec` is recomputed from `executed` every
+    /// step, so swapping the divisor by assignment moves the machine's whole sense of elapsed time
+    /// in a single instruction, and firmware reads that as every timeout it holds expiring at once.
+    ///
+    /// Two halves, because either alone passes with the feature broken. **The clock does not jump**
+    /// — which a `set_clock` that changed nothing would also satisfy — and **it then runs at the
+    /// new rate**, which is the entire reason for changing it.
+    ///
+    /// **How to make it go red**: replace the body of `set_clock` with
+    /// `self.instr_per_usec = ipu.max(1);`. The first assertion then fails by about 6 400 µs.
+    #[test]
+    fn the_clock_may_be_moved_mid_run_without_moving_the_time() {
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        map_hardware(&mut m, false);
+        m.set_clock(75);
+        // Far enough in that a bare assignment moves the clock by a visible amount: 200 000
+        // instructions is 2 666 µs at 75 and 9 090 µs at 22, so the jump under test is six and a
+        // half milliseconds of the iPod's time arriving between two instructions.
+        assert_eq!(m.run(200_000), Stop::BudgetExhausted);
+        let before = m.mem.usec;
+        assert!(before > 0, "the clock never moved, so nothing below is a measurement");
+
+        m.set_clock(22);
+        assert_eq!(m.run(1), Stop::BudgetExhausted);
+        assert!(
+            m.mem.usec.wrapping_sub(before) < 2,
+            "the clock jumped to {} µs from {before} µs across a change of divisor",
+            m.mem.usec
+        );
+
+        // …and the point of having changed it. 22 000 instructions is 1 000 µs at the new clock and
+        // would be 293 µs at the old one, so a `set_clock` that quietly kept the old divisor fails
+        // here even though it passed above.
+        let at = m.mem.usec;
+        assert_eq!(m.run(22_000), Stop::BudgetExhausted);
+        let advanced = m.mem.usec.wrapping_sub(at);
+        assert!(
+            (995..=1_005).contains(&advanced),
+            "22 000 instructions at clock 22 advanced the clock by {advanced} µs, not ~1 000"
+        );
+    }
+
+    /// **A snapshot taken after a clock change comes back at the same microsecond.**
+    ///
+    /// The offset that makes a mid-run clock change continuous is not a field in the format. It is
+    /// re-derived on restore by closing the identity against the `usec` the writer emitted, and
+    /// this is the test that says so — because the alternative failure is silent and enormous: a
+    /// machine that resumes 6 000 µs from where it was saved, which is research/10 Addendum 31's
+    /// 44-minute jump in miniature.
+    ///
+    /// **How to make it go red**: delete the `usec_offset` derivation from `Machine::restore`.
+    #[test]
+    fn a_snapshot_taken_after_a_clock_change_restores_to_the_same_microsecond() {
+        let mut m = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        map_hardware(&mut m, false);
+        m.set_clock(75);
+        assert_eq!(m.run(200_000), Stop::BudgetExhausted);
+        m.set_clock(22);
+        assert_eq!(m.run(200_000), Stop::BudgetExhausted);
+        let saved_usec = m.mem.usec;
+        assert_ne!(m.usec_offset, 0, "no offset was carried, so this proves nothing about carrying one");
+        let image = m.snapshot();
+
+        let mut back = Machine::new(&EApp::none(), 0x1100_0000, 0x0100_0000);
+        map_hardware(&mut back, false);
+        assert!(back.restore(&image), "the snapshot did not load");
+        assert_eq!(back.mem.usec, saved_usec, "the restored clock is not the saved one");
+        // **The next step, and this is the assertion that matters** — the version-3 bug was not
+        // that the file was wrong, it was that the first recomputation threw the file away. So the
+        // behaviour is checked before the mechanism.
+        assert_eq!(back.run(1), Stop::BudgetExhausted);
+        assert!(
+            back.mem.usec.wrapping_sub(saved_usec) < 2,
+            "one step after the restore the clock was {} µs, saved at {saved_usec} µs",
+            back.mem.usec
+        );
+        assert_eq!(back.usec_offset, m.usec_offset, "the offset was not re-derived");
     }
 
     /// **A store into the exception-vector page is always recorded, with no flag to arm.**

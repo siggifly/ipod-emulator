@@ -978,21 +978,15 @@ fn wire(
                 if let Some(b) = learned.boot {
                     s.record_boot(b);
                 }
-                // **Once per installation, and said when it happens.** The next launch builds its
-                // machine at this clock; this one goes on running at whatever it started at,
-                // because changing `instr_per_usec` under a machine that has already executed a
-                // billion instructions moves its own clock by minutes in one instruction. See
-                // `Machine::snapshot`, which is where that failure is written up.
+                // **Once per installation, and silent, because it has already been said.** This
+                // writes down the clock the run is running at so the next launch begins there
+                // rather than at 75 — but the run itself moved to that clock a second in, and
+                // `emu::session` announced it at the moment a person could feel it. Announcing it
+                // again here, a minute later, at the end of a boot that has been at the right
+                // speed the whole time, would be the program telling somebody about a change that
+                // happened before the sentence would have been true.
                 if let Some(c) = learned.sustained {
-                    if s.record_sustained_clock(c) {
-                        println!(
-                            "clock: this computer sustains about {c} interpreter steps per \
-                             microsecond, so the next start runs the iPod at {c} rather than \
-                             {}. An underclocked iPod in real time is a thing hardware does; a \
-                             correctly clocked one in slow motion is not.",
-                            ipod_machine::CLOCK
-                        );
-                    }
+                    s.record_sustained_clock(c);
                 }
                 if let Some((name, at)) = &learned.parked {
                     // *When*, never *whether* (§3.3): whether there is anything to resume is a
@@ -4102,6 +4096,13 @@ fn machine_config(s: &Settings, name: &str) -> Option<emu::Config> {
         // `trace`, `ipod-boot` and `ipod-film` pin their own, which is what keeps every figure in
         // `research/` comparable. See `ipod_machine::pace`.
         clock: s.clock(),
+        // **And this run may move it, rather than only the next one.** `Settings::clock` is what
+        // some earlier launch measured; on a fresh profile there is no such launch, so it is 75
+        // against a host that may deliver a fifth of that — the slowest this program ever runs,
+        // on the one run a person forms their opinion during. `emu::session` closes a speed window
+        // a second in and moves the machine to what it measured. `--clock=` and `--headless` both
+        // turn this back off; see `emu::Config::retune`.
+        retune: true,
         // The gap between two appended wheel steps, **derived from that clock and not a literal**.
         // It is 4 ms of the iPod's own time, because what it is calibrated against is the
         // firmware's wheel poll, which sees the simulated interval; a hard 300 000 is 4 ms at
@@ -4258,7 +4259,7 @@ fn start_machine(
     // **The command line, over the library, and in that order.** `machine_config` builds the
     // machine the *device* describes; these four say what this *launch* is doing to it. Written
     // second so a `--clock=5` beats `ipod_machine::CLOCK` rather than the other way round, and
-    // narrow by construction: `Machine::apply` writes four fields and nothing else can reach the
+    // narrow by construction: `Machine::apply` writes five fields and nothing else can reach the
     // config from a command line at all.
     launch.apply(&mut cfg);
     // …and §12.5's target over both, because it is the only one of the three that a press just
@@ -4925,15 +4926,18 @@ fn pump_machine(
             });
             // ── And what the same boot says about this COMPUTER ─────────────────────────────────
             //
-            // Steps and not instructions: a halted cycle advances the simulated clock at exactly
-            // the rate an executed one does, so the sum is what buys the iPod its time. Over the
-            // whole boot, which is the longest continuous stretch of real work this program ever
-            // does and therefore the steadiest thing to measure — and it is measured once, because
-            // `Settings::record_sustained_clock` refuses to overwrite an answer.
-            learned.sustained = life
-                .pace()
-                .and_then(|p| ipod_machine::pace::sustainable(p.steps, p.wall_secs))
-                .map(|c| c as u32);
+            // **What the run settled on, not a second measurement of the same host.** `emu::session`
+            // measures a second of wall time and moves the machine to the clock it names; this is
+            // that number, read back off the machine that is running at it. Taking a fresh average
+            // over the whole boot here instead would name something a microsecond either side of
+            // it — and the restore point the boot has just written carries the machine's clock, so
+            // a settings file that disagreed by one would refuse to resume it and cost a cold boot
+            // on every second launch, for ever. `Config::resumable_at` is where that is decided.
+            //
+            // **`retune` only.** A launch that pinned `--clock=` was told what to run at, and a
+            // number somebody typed for one experiment must not become this installation's
+            // permanent calibration.
+            learned.sustained = l.cfg.retune.then(|| life.pace().map(|p| p.clock)).flatten();
         }
     }
     // §12.4's parked frame, asked for **only when nothing is executing**, which is the one state
@@ -12423,7 +12427,7 @@ pub(crate) mod tests {
         assert_eq!(cfg.clock, 5, "--clock= did not reach the machine");
         assert!(!cfg.one_core, "--second-core did not reach the machine");
         assert!(cfg.charger, "--charger did not reach the machine");
-        // …and the library's own answers are still under them. `apply` writes four fields; the
+        // …and the library's own answers are still under them. `apply` writes five fields; the
         // fifth is the one that says a flag reached past its boundary.
         assert!(
             cfg.snapshot.as_ref().is_some_and(|p| p.ends_with("ipod-1.snap")),

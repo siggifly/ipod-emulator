@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-922 headings across 18 documents — 51 dated, 19 settled, 15 retracted, 6 corrected.
+929 headings across 18 documents — 51 dated, 19 settled, 15 retracted, 6 corrected.
 
 ## Where each document stands today
 
@@ -172,7 +172,7 @@ and nothing dated replaced it.
 
 ### [`10-the-resource-image.md`](10-the-resource-image.md)
 
-259 headings, 7 of them marked or dated:
+266 headings, 7 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|

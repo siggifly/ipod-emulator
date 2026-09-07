@@ -3564,9 +3564,12 @@ comes off both.
   watching the screen measures. `Pace::real_time` draws it, warned below 0.5x.
 
   It matters because it is no longer decorative. `speed` also names the clock now, when the clock
-  is not the part's: the window runs at whatever `Settings::sustained_clock` was measured to be, so
-  an iPod on this bench may be a 15 MHz one running its seconds in real seconds rather than a
-  75 MHz one running at a fifth of life. See issue #34 and `ipod_machine::pace`.
+  is not the part's: the window runs at the clock this host was measured to sustain — taken at the
+  end of the cold boot that measured it, in that same run, and remembered as
+  `Settings::sustained_clock` for the next launch to start at. So an iPod on this bench may be a
+  15 MHz one running its seconds in real seconds rather than a 75 MHz one running at a fifth of
+  life, and it may become one while somebody is watching, which is why the move is announced. See
+  issues #34 and #39, and `ipod_machine::pace`.
 - **§7.3 wanted `queued` on the cradle and this section refused it a row.** That table specified the
   running line as `running` — *or* `running · wheel 41 queued`, and `Stats::queued` is the field that
   would have filled it. Two sections of one document asking opposite things of one number is the

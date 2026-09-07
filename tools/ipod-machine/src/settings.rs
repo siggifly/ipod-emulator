@@ -2075,18 +2075,24 @@ impl Settings {
         }
     }
 
-    /// **The clock a machine started from this library should run at**, and the only reader of
+    /// **The clock a machine started from this library begins at**, and the only reader of
     /// [`Settings::sustained_clock`].
     ///
     /// [`crate::CLOCK`] — the real part — when nothing has been measured, so a fresh installation
     /// and every recipe agree on the same machine.
+    ///
+    /// *Begins*, because a window moves off it: a cold boot measures this host and the machine
+    /// takes the measured clock at the boot's end, in that same run. This is where the *next* one
+    /// starts, which on a profile that has booted once is the same number.
     pub fn clock(&self) -> usize {
         self.sustained_clock.map_or(crate::CLOCK, |c| c as usize)
     }
 
     /// Record what this host was measured to sustain, **and only if nothing was recorded before.**
     ///
-    /// Returns whether it wrote, so a caller can say so once rather than every boot.
+    /// Returns whether it wrote. The window does not speak on it — `emu::session` has already
+    /// said the clock moved, at the instant it moved, which is the moment worth telling somebody
+    /// about.
     ///
     /// **This is what "calibrate once and hold it" is**, and the guard is the whole of it: the
     /// window measures a speed every second and would otherwise re-derive the clock from whatever
