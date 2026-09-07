@@ -1959,7 +1959,7 @@ mod tests {
         "1.0", // on, and the identity every ternary above returns to
         "0.55", // §7.4's four held wheel marks (`ipod.slint:343-373`)
         "0.82", // the held centre button (`ipod.slint:396`)
-        "0.86", // §5's `Pressable` press state (`primitives.slint:453`)
+        "0.86", // §5's `Pressable` press state (`primitives.slint:649`)
     ];
 
     /// **T-20. The ghost's 45 % cannot be typed into the markup.**

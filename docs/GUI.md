@@ -3000,6 +3000,42 @@ the core is halted waiting for an interrupt with no deadline armed.* One session
 2 791 999 952 instructions and was only noticed because two `state` replies happened to be compared
 by hand.
 
+#### 12.2.1 The handoff starts the machine **and the window's clock** — issue #35
+
+*(Corrected 2026-09-07.)*
+
+The operator, on a genuinely empty profile: *"i had to press two times or three times for it to start
+retailos, should run through the whole thing on one click."* Issue #17's stated goal was one press,
+and the plan really did fetch, build and install on one — measured end to end against Apple's own
+servers, `synthesise` at 11 ms, `fetch` at 2.5 s, `build`, `install`, and §12.2's handoff firing on
+the tick after. **The machine started. Nothing was looking at it.**
+
+There are two clocks in this window (§12's own note above the timers): the build tick at 10 Hz, and
+§12's machine tick at 60 Hz. The second is what reads `Out`, puts the frame on the glass, moves
+§12.3's bar, and — the half a person acts on — tells the drawn wheel, the buttons and the centre
+button that they are the machine's, through `machine_controls`. `ticking_machine` starts it, and
+**every route that starts a machine called it except the one inside the tick**: the press's
+`Route::Existing`, the press's `Press::HandOff` arm and `start_title` each had their own copy, and
+`pump_once` — which is where the first run actually hands over — did not even take the argument.
+
+So the first press built a perfect drive, started a booting iPod, and left the panel dark, the
+caption reading `Press the centre button`, and `machine-takes-input` **false**. A person presses
+again. That press finds a device that now names a drive, routes to `Route::Existing`, and starts the
+machine **over** — this time with the clock, so it draws. Two presses to reach RetailOS, and a third
+if they pressed once more while the second boot was also invisible. Exactly what was reported.
+
+**The fix is that `hand_off` takes the clock as a parameter and starts it**, so the two acts are one
+and the second cannot be forgotten at a call site — which is the argument `hand_off`'s own doc
+already made for existing at all (*"two copies is how one of them comes to file a note while the
+other starts something"*), applied to the half that was still duplicated.
+
+**What the gate was measuring.** `a_real_first_run_from_the_registered_centre_button` drives the whole
+thing through the registered handler, and every assertion in it was about **the drive**: the five Rail
+rows, the 8 GiB image, `has_os`, `aupd_armed`, no `.part` left behind. It would have passed over a run
+that built a perfect image and then sat there. It now asserts that the press ends with a machine that
+is `alive()` **and** that §12's timer is running — and that second assertion is the one that goes red
+on this fault, with the boot itself untouched.
+
 ### 12.3 Progress, honestly — and what happens when the recipe changes
 
 The denominator is `Device::cold_boot_instructions` — **this device's own last completed cold boot**,
@@ -3671,6 +3707,17 @@ inherits Pressable`, so a child at a use site lands in the layout, where `x` is 
 the two fixed columns already sum to the page's inner width — a third element overflowed the drawer
 and the cover was drawn half outside it. `Row` gained a `thumb` property instead, and the value
 column's `Text` subtracts its width so a row that set both could not draw them over each other.
+
+**No path under the title either — corrected 2026-09-07, from the same session as #35 to #38.** Each
+row carried `TitleRow::path` as its `sub` line in `mono`, so the list drew an absolute filesystem
+path under every game. That is developer information in a player's list, and it is not even
+information: this section's own reading of the twenty manifests is why the *name* comes from `Name`
+rather than the directory — *"the directory is often an opaque id — 50513, 88888, 1500C"* — so what
+was drawn under `Tetris` was the shelf's own path with a number on the end of it, repeated once per
+row. Where the titles are is said **once**, on the `Titles are in` row above, which is also the row
+that can change it. `TitleRow::path` stays on the row because `on_games_play` turns it back into a
+`PathBuf` and asks `title_exe` for the executable inside it; it is the mechanism, and it is not
+something to look at.
 
 ### 13.2 The readiness matrix is `bind_native`'s return value, drawn
 
@@ -4350,6 +4397,14 @@ applies on Apple platforms, so on Windows and Linux that same binding is **Win+C
 the Windows shell and by most Linux compositors, so the keystroke never reaches the program. It is
 platform-selected in `main.rs`: `⌃⌘F` on macOS, `F11` elsewhere, which is each platform's own
 convention rather than a compromise between them.
+
+> **This paragraph was right and the code was not, for as long as the chord existed.** Corrected
+> 2026-09-07 with issue #37: `panel.slint` shipped `@keys(Control + "f")` and `window.slint` shipped
+> `@keys(Control + "p")` — one modifier each, which the swap above makes **⌘F** and **⌘P**. `⌃⌘`
+> carries `{control, meta}` and `Keys::matches` ends `key_event.modifiers == expected_modifiers`, so
+> neither documented chord fired anything, while `⌘F` did something the program never meant to offer.
+> A specification that is correct and unimplemented reads exactly like one that is implemented; what
+> told the two apart was the operator pressing the key. Both bindings are `Control + Meta` now.
 
 **The menu bar.** Slint 1.17 has a real `MenuBar` / `Menu` / `MenuItem`, and `muda 0.19.3` is already
 in the tree (`i-slint-backend-winit` depends on it for `macos` and `windows`). Slint's own
@@ -5812,12 +5867,35 @@ two windows cannot come to be showing different frames.
 leave fullscreen first, and only close the window once there is no fullscreen to leave. A key that
 did both at once would take somebody from a television to nothing.
 
-**What is not proved by a test, and it is worth saying.** Slint's testing backend runs one window per
-thread, so this suite cannot stand up two real windows: what
-`the_popped_out_panel_is_a_view_of_the_one_panel_and_not_a_second_front_end` proves is the shape, and
+**What is not proved by a test, and it is worth saying.**
+`the_popped_out_panel_is_a_view_of_the_one_panel_and_not_a_second_front_end` proves the shape and
 `the_panel_scale_is_the_largest_whole_multiple_that_fits` proves the arithmetic it draws at. Dragging
 it to a second display and making it fullscreen there — this section's own *done when* — is checked
 by hand.
+
+> **This paragraph used to begin *"Slint's testing backend runs one window per thread, so this suite
+> cannot stand up two real windows"*, and that is false.** Corrected 2026-09-07 while fixing issue
+> #37. `i-slint-backend-testing-1.17.1`'s `create_window_adapter` makes a new `TestingWindow` per
+> call and keeps them all in one `ALL_TESTING_WINDOWS` list; two windows stand up in one thread and
+> both rasterize. `the_popped_out_panel_is_a_second_window_and_the_frame_reaches_it` opens the second
+> one through the registered handler, snapshots it, and asserts the machine's frame is on it —
+> which is the assertion this sentence had explained away as impossible.
+>
+> It is worth keeping as written rather than deleting, because of what it cost. **The untested half
+> was the half that failed**, and it did not fail where this predicted: the mechanism was sound in
+> every respect, and what was broken was the *binding* — `@keys(Control + "p")`, which the swap
+> below makes ⌘P, against the `⌃⌘P` this section, `verbs::panel_row`'s value column and §16.8 all
+> print. `Keys::matches` ends `key_event.modifiers == expected_modifiers`
+> (`i-slint-core-1.17.1/input.rs:780`) — **exact equality** — so a chord carrying two modifiers never
+> fired a binding declaring one, and pressing the documented key did nothing at all. §16.8 already
+> stated the remedy for `⌃⌘F` in so many words (*"needs both modifiers, so on Apple platforms it is
+> `@keys(Control + Meta + "F")`"*); `panel.slint` had the one-modifier form too, so **both** of this
+> section's chords were unreachable. Both are `Control + Meta` now.
+>
+> `the_chord_the_row_prints_is_the_chord_that_pops_the_panel_out` is the gate: it reads the chord off
+> the drawn row, dispatches those two modifier characters and the key as real events, and asks
+> whether a window opened. No amount of pressing the *verb* could have found this, which is why the
+> test that presses the verb is not the test that covers the key.
 
 ### 21.8 Input: everything reaches the wheel
 
@@ -6604,8 +6682,8 @@ lifted — and counts changed pixels. The pointer never moves, so only the conta
 compared whole windows, and `focus-visible` — which starts `true` and is put out by `wheel-down` —
 broke it in two different ways at once. The visible one is that the final control asked the window
 to *come back*, which focus modality deliberately forbids: a ring a pointer put out stays out. The
-quiet one matters more. Measured on the merged tree, a press changes **8963** pixels, of which
-**2870** are the mark and **6093** are the cradle's focus ring going out — a 421 × 687 outline
+quiet one matters more. Measured 2026-09-07, a press changes **9708** pixels, of which
+**3615** are the mark and **6093** are the cradle's focus ring going out — a 421 × 687 outline
 around body-plus-cradle-band. So `changed > 200` had stopped measuring the mark and would have
 passed with it drawing nothing, which is checked rather than argued: with the fill made transparent
 *and* the count widened back to the whole window, the assertion answers 6093 and goes green.
@@ -6614,6 +6692,64 @@ What the three assertions say now is one thing each, and nothing outside the dis
 them: the press changes wheel pixels; the lift changes exactly those and nothing off the wheel; and
 the wheel is the picture it was, to the pixel. The scoping is what makes the count mean the mark —
 it is stricter than what it replaced, not looser.
+
+##### The band is the ring as it is DRAWN, and it was the hit test's — issue #38
+
+**A count and a bounding box say nothing about a shape.** Those three assertions are about *how
+many* pixels and *where they are not*; every one of them is equally true of a wedge, a dot and a
+smear, and they were all true of a mark that stopped a third of the way short of the centre button.
+The operator's words were *"the visible indicator doesn't show fully the angle, it partially fills
+out the angle, it's missing some closer to the center"*, and no assertion in this program could see
+it.
+
+The cause is that `ghost_path` took its radii from `WheelRing`, which is the **hit test**. Its
+`inner` is 0.52 of the wheel's radius because a real 5G's touch membrane runs from 7.3 mm to 14 mm,
+and its `select` is 0.465 because the real button is 13 mm on a 27 mm wheel. Those are facts about
+the part. The **drawing** is §6.6's ratios, and in those the centre button is `CENTRE_D / WHEEL_D` =
+**0.334** of the wheel's radius. So the mark began 0.21 of the radius outside the drawn button, over
+ring surface that is drawn, unbroken, and plainly part of the wheel: measured on the shipped drawing
+at hero, an 80 px band with 50 px of mark on it and all 30 px of the gap on the inside.
+
+**A mark is a drawing, so it takes the drawing's radii.** `wheel::DRAWN_BUTTON` is the quotient, the
+band is `DRAWN_BUTTON x R + INSET` to `R - INSET`, and the hit test is untouched — what a press
+*means* is still `WheelRing::hit`'s to say. `INSET` is 1.5 of the 100-unit viewbox at each end, and
+its own comment (*"clear of the wheel's outer edge and of the centre button's"*) describes what it
+now does rather than what it meant to.
+
+**The gate is `the_mark_on_the_wheel_covers_the_ring_it_is_drawn_on`**, and it measures the
+rasterized mark in **polar coordinates about the drawn wheel's centre**, which is the space the claim
+is in — a bounding box cannot tell any of these shapes apart, and that is how this shipped. Two
+properties, failing independently and each with its own injected fault:
+
+- **reach** — the innermost lit pixel sits `INSET` outside the drawn button and the outermost `INSET`
+  inside the rim. Putting `ring.inner + INSET` back measures **0.544** against the **0.364** it
+  belongs at, which is the operator's gap to three figures.
+- **squareness** — the angular span at the inner end equals the span at the outer end, and both are
+  34°. Giving the inner arc the mid angle at both ends makes a wedge: **34.3°** at the rim and
+  **10.7°** at the button.
+
+##### Two fingers, and which one the wheel follows
+
+The operator's own trackpad log reads **`n=2`** throughout — a second finger resting near the first
+is an ordinary way to hold a laptop — while `Frame::contact` is one contact. So a choice is being
+made, and §21.8.1 had never written it down. It is `mac::owner`, and the rule is: **the finger
+already being followed keeps the wheel for as long as it is down; when it goes, the lowest identity
+takes over.**
+
+The first half is the whole point. A rule that picked afresh each frame would hand the wheel back and
+forth between two resting fingers, and both the mark and the wheel would jump — a contact's angle is
+absolute, so a swap is a jump to wherever the other finger is. The tie-break is `min` rather than
+*first* because `allTouches` is an `NSSet` and a set has no order: `first()` would be a fresh coin
+toss every frame, which is exactly what the first half exists to prevent, while `NSTouch.identity` is
+one object for the life of a touch and so the smallest of them is arbitrary **and the same every
+frame**.
+
+`two_fingers_on_the_pad_and_the_wheel_follows_the_same_one_every_frame` is the assertion, over plain
+integers because what is being tested is the rule and not AppKit — an `NSTouch` cannot be
+constructed in a test, and a rule that needed one in order to be checked is a rule nothing would ever
+check. The verbose line gained an `owner=` tag beside its `n=` for the same reason: a log that says
+how many fingers are down and not which one is being followed cannot tell a steady contact from a
+mark alternating between two.
 
 ### 21.9 What this overturns
 

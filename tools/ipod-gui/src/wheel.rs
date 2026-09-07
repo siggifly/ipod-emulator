@@ -586,7 +586,7 @@ impl Grip {
 /// A viewbox and not pixels, for the reason the whole of `ipod.slint` is ratios of `body-height`:
 /// one number takes the device from a thumbnail to a hero, and a ghost computed in pixels would be
 /// the one part of it that did not scale.
-const VIEW: f32 = 100.0;
+pub const VIEW: f32 = 100.0;
 
 /// **How much of the ring a fingertip covers, in degrees.** 34.
 ///
@@ -599,7 +599,7 @@ const VIEW: f32 = 100.0;
 /// says only *somewhere on the left*. 34° is nine detents: wide enough to read as a fingertip
 /// rather than a cursor, narrow enough to point at a position. It is the one number here that is a
 /// judgement rather than a measurement, and it is the one to change if it reads wrong.
-const PATCH_DEG: f32 = 34.0;
+pub const PATCH_DEG: f32 = 34.0;
 
 /// One detent, in degrees — 360 / 96 = 3.75. What a **key** press asks for, and therefore all a key
 /// press may draw.
@@ -607,10 +607,33 @@ const DETENT_DEG: f32 = 360.0 / CLICKS as f32;
 
 /// How far the mark is held off the ring's own two edges, in viewbox units.
 ///
-/// The band is 26 to 50 here, so 1.5 leaves the mark clear of the wheel's outer edge and of the
-/// centre button's — a mark that touched either would read as part of the moulding rather than as
-/// something on top of it.
-const INSET: f32 = 1.5;
+/// 1.5 leaves the mark clear of the wheel's outer edge and of the centre button's — a mark that
+/// touched either would read as part of the moulding rather than as something on top of it.
+pub const INSET: f32 = 1.5;
+
+/// **The inner edge of the ring as it is DRAWN**, as a fraction of the drawn wheel's radius.
+///
+/// `CENTRE_D` and `WHEEL_D` are both fractions of body height, so their quotient is the centre
+/// button's radius over the wheel's — 0.334, which is where the drawn moulding stops and the
+/// drawn ring surface starts.
+///
+/// # Why this is not `WheelRing::inner`, which is what it used to be — issue #38
+///
+/// `WheelRing` is the **hit test**: `inner` is 0.52 because the real 5G's touch membrane runs from
+/// 7.3 mm to 14 mm, and `select` is 0.465 because the real select button is 13 mm on a 27 mm wheel.
+/// Those are facts about the part. The **drawing** is a different set of numbers — §6.6's ratios,
+/// measured off Rockbox's scale drawing — and in it the centre button stops at 0.334.
+///
+/// So a mark built from the hit test's radii began 0.216 of the wheel's radius outside the drawn
+/// button, over ring surface that is drawn, unbroken and plainly part of the wheel. Measured on the
+/// drawn device at hero: an 80 px band with the mark covering 50 px of it, all of the 30 px missing
+/// on the inside. The operator's words were *"it partially fills out the angle, it's missing some
+/// closer to the center"*, and that gap is what they are.
+///
+/// **The mark is a drawing, so it takes the drawing's radii.** The hit test is unchanged and must
+/// stay unchanged: what a press *means* is still `WheelRing::hit`'s to say, and this decides only
+/// what a finger already on the ring looks like.
+pub const DRAWN_BUTTON: f32 = (crate::geometry::CENTRE_D / crate::geometry::WHEEL_D) as f32;
 
 /// **Where the wheel is being touched, as an SVG path over a 100 × 100 viewbox.** Issue #28.
 ///
@@ -643,7 +666,8 @@ pub fn ghost_path(g: Grip) -> String {
     } / 2.0;
     let mid = f32::from(g.at()) / CLICKS as f32 * 360.0;
     let ring = WheelRing::new(VIEW / 2.0, VIEW / 2.0, VIEW / 2.0);
-    let (ri, ro) = (ring.inner + INSET, ring.outer - INSET);
+    // **The drawn band, not the hit test's** — see [`DRAWN_BUTTON`], which is issue #38.
+    let (ri, ro) = (ring.outer * DRAWN_BUTTON + INSET, ring.outer - INSET);
     // `at` reads the same convention `point_at` does: twelve o'clock is zero and the value grows
     // clockwise, in a y-DOWN space. So SVG's sweep flag is 1 for increasing angle and 0 coming
     // back, and the large-arc flag is 0 either way because no span here approaches 180°.
@@ -1252,6 +1276,11 @@ mod tests {
     ///
     /// **How to make it go red:** swap `sin` and `cos` in `ghost_path`'s `at`, which is the classic
     /// error and puts every mark a quarter turn out. Position 0 lands at 90° instead of 0°.
+    ///
+    /// **The two radii are the DRAWN band's** — issue #38. 18.21 is the centre button's own edge
+    /// (`DRAWN_BUTTON` × 50 = 16.71) plus `INSET`, and 48.5 is the wheel's edge less the same. The
+    /// inner one read 27.5 — `WheelRing::inner + INSET`, which is the hit test's radius and not the
+    /// drawing's — and that 9.3 of viewbox is the uncovered ring the operator reported.
     #[test]
     fn the_mark_sits_on_the_ring_at_the_wheels_own_position() {
         for pos in [0u8, 1, 12, 24, 47, 48, 72, 95] {
@@ -1259,7 +1288,7 @@ mod tests {
             let want = f32::from(pos) / CLICKS as f32 * 360.0;
             for (i, p) in c.iter().enumerate() {
                 let r = radius(*p);
-                let on = if i < 2 { 48.5 } else { 27.5 };
+                let on = if i < 2 { 48.5 } else { 18.21 };
                 assert!((r - on).abs() < 0.05, "corner {i} of {pos} is at radius {r}, not {on}");
             }
             // The sector's midpoint is the position. Compared as a shortest angular difference, so

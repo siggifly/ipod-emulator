@@ -609,6 +609,30 @@ impl Glass {
     /// A real 5G draws its own logo from ROM into the framebuffer, so on a retail dump the two
     /// pictures agree and this changes nothing. On a synthesised ROM there is no such draw, and the
     /// substitute is the only thing standing between the operator and what the machine is doing.
+    ///
+    /// # *"No logo visible when booting up"* — issue #36, and which of the three it was
+    ///
+    /// The issue lists three candidates and asks which. Measured 2026-09-07:
+    ///
+    /// - **Not the window.** A boot screen in the co-processor's surface reaches the glass, through
+    ///   this function and `main::glass` — `a_booting_ipod_shows_the_boot_screen_its_rom_carries`
+    ///   drives it with `nor::boot_screen`'s own pixels and the control beside it (a black frame)
+    ///   draws a uniformly black panel, so the assertion is one that can fail.
+    /// - **Not #26's boot indicator.** It is a 4 px rule below the body and a countdown on the
+    ///   cradle label; neither is over the panel. `_out/gui/bench-booting.png` is the picture.
+    /// - **It is the route, and the answer differs by ROM.** A **synthesised** iPod does not skip
+    ///   it: `emu::build` seeds `Source::boot_screen` into the surface before the first
+    ///   instruction, so the mark is up immediately — but what a generated ROM shows is *this
+    ///   project's click wheel*, never Apple's logo, because a generated ROM carrying Apple's
+    ///   artwork would be redistributing it. A **dumped** iPod is seeded with nothing and Apple's
+    ///   own bootloader blits its own logo — research/14 §5 measures the placed tile at 2 916
+    ///   pixels — but not until it reaches that code, which research/14 §9 puts past 150 M
+    ///   instructions at the default `--clock=75`. That is seconds of dark panel on this host, and
+    ///   it is the clock rather than the drawing.
+    ///
+    /// **Seeding a dump's own `logo` early would close that gap and is deliberately not done**:
+    /// on a dump the boot ROM really does execute and really does draw, so painting the logo before
+    /// it got there would be the window disagreeing with the hardware — `AGENTS.md` §4.
     pub fn of(life: &Life, parked: Option<&Path>, drawn: bool) -> Glass {
         match life {
             Life::Off => match parked {

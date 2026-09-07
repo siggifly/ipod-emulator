@@ -125,12 +125,18 @@ export component GamesPage inherits Rectangle {
                 // a title's own page with the art at the top, and that page is the binding matrix,
                 // which is 0.6. What the list needs is the thing a person recognises, at the size a
                 // list row is — and the row is `ROW_H` tall, so the cover is drawn to that.
+                // **No path under the title, and that is issue #29's own complaint.** Every row
+                // carried its absolute path in `mono`, which is developer information in a
+                // player's list — and it is not even information: `TitleRow::name`'s own note is
+                // that *"the directory is often an opaque id — 50513, 88888, 1500C"*, so what was
+                // drawn under `Tetris` was the shelf's path with a number on the end of it. Where
+                // the titles are is said **once**, on the row above, which is the place a person
+                // can act on it. `TitleRow::path` is still on the row — `on_games_play` finds the
+                // executable from it — it is simply not something to look at.
                 for t[i] in root.titles: Row {
                     index: i + 1;
                     count: root.titles.length + 1;
                     label: t.name;
-                    sub: t.path;
-                    sub-mono: true;
                     // A title that cannot run says why, in place, and is never hidden — §14.1.
                     // `PlatformID` answers it before anything is loaded.
                     enabled: t.runs;
