@@ -10275,6 +10275,37 @@ pub(crate) mod tests {
     /// which of the two moved. The pointer is left exactly where it is for all three; only the
     /// contact comes and goes.
     ///
+    /// # Every count here is scoped to the wheel's own disc, and that is not a weakening
+    ///
+    /// The first version of this compared **whole windows**: `changed > 200` over every pixel, and
+    /// a final `shot(&w) == hovered`. §21.11's `focus-visible` broke the second and, much more
+    /// quietly, hollowed out the first.
+    ///
+    /// `Bench::focus-visible` starts **`true`** — *"a window nobody has touched yet has had no
+    /// pointer input to hide it for"* — and `wheel-down` sets it `false`, which is the rule working
+    /// exactly as designed. So the press does two things at once, and measured on this tree they
+    /// are:
+    ///
+    /// ```text
+    /// pressed vs hovered   8963 px   2870 inside the wheel disc
+    ///                                6093 outside it — the cradle's focus ring going out,
+    ///                                a 421 x 687 outline around body-plus-cradle-band
+    /// after   vs pressed   2870 px   ALL of them inside the disc — the ghost, exactly
+    /// after   vs hovered   6093 px   NONE of them inside the disc
+    /// ```
+    ///
+    /// Two things follow, and the second is the one that matters. The final control was never sound
+    /// once modality is tracked: focus is deliberately sticky, so lifting a pointer cannot restore
+    /// a ring that a pointer put out, and *"the window came back"* asks for something the design
+    /// forbids. **And `changed > 200` had stopped measuring the ghost** — 6093 of those 8963 pixels
+    /// were the focus ring, so it would have passed with the ghost drawing nothing at all. An
+    /// assertion that cannot fail for the reason it names is `AGENTS.md` §6's shape, and it is a
+    /// worse defect than the red one above it.
+    ///
+    /// So the claim is about the wheel and the measurement is now about the wheel. What is left is
+    /// **stronger** than what it replaces, because each of the three says one thing and nothing
+    /// outside the disc can satisfy any of them.
+    ///
     /// **How to make it go red**, each on a different half:
     ///
     /// - break the path — `"M 0 0 Z Q"` out of `ghost_path` — and the pressed shot matches the
@@ -10283,22 +10314,60 @@ pub(crate) mod tests {
     ///   the chain apart one component short of the drawing, and the same assertion fails.
     /// - bind `fill` to `transparent` in `ipod.slint` and the shape draws nothing visible, which is
     ///   the failure a test asserting on the property alone could not see.
+    /// - scope the first count back to the whole window — measured, with the fill also made
+    ///   transparent: it answers **6093** and **passes**, over a ghost that drew nothing at all.
+    ///   That is the control for the scoping itself, and it is the one that says why this is not a
+    ///   weakening.
+    ///
+    /// **The third assertion is the one without a control of its own, and that is stated rather
+    /// than glossed.** Every fault that could be injected on this tree — an invisible fill, a cut
+    /// property chain, a broken path — trips the *second* assertion first, because the mark is
+    /// currently the only thing that draws inside the disc, which makes *"the string is empty"* and
+    /// *"the wheel is identical"* the same statement. It is kept because it is the only one that
+    /// ties the final picture back to the first, and because it stops depending on that coincidence
+    /// the day anything else draws on the wheel.
     #[test]
     fn where_the_wheel_is_being_touched_is_drawn_on_it() {
         let (w, wiring, dir) = a_wired_bench_with_a_machine("wheel-ghost");
         // Bare ring at half past one — clear of all four labels, so nothing about a printed mark
         // can be what moved.
         let on = on_the_drawn_ring(12);
+        // The snapshot's width goes with it: without it an index cannot be turned back into a
+        // position, and every count below is about position.
         let shot = |w: &MainWindow| {
             let px = w.window().take_snapshot().expect(
                 "the testing backend was built with a rasterizer; see this crate's Cargo.toml",
             );
-            px.as_slice().iter().map(|p| [p.r, p.g, p.b]).collect::<Vec<_>>()
+            let wide = px.width() as usize;
+            (px.as_slice().iter().map(|p| [p.r, p.g, p.b]).collect::<Vec<_>>(), wide)
+        };
+
+        // **The wheel's own disc, in the snapshot's pixels.** `take_snapshot` is physical and the
+        // geometry is logical, so the scale factor is divided out rather than assumed to be 1 — it
+        // is 1 under the testing backend today, and a test that silently depended on that would be
+        // a test that broke on a machine nobody was holding.
+        let (cx, cy) = drawn_wheel_centre();
+        let radius = geometry::WHEEL_D as f32 * dressed_fit().hero_logical as f32 / 2.0;
+        let scale = w.window().scale_factor();
+        let split = |a: &[[u8; 3]], b: &[[u8; 3]], wide: usize| -> (usize, usize) {
+            let (mut inside, mut outside) = (0, 0);
+            for (i, (p, q)) in a.iter().zip(b.iter()).enumerate() {
+                if p == q {
+                    continue;
+                }
+                let (x, y) = ((i % wide) as f32 / scale, (i / wide) as f32 / scale);
+                if ((x - cx).powi(2) + (y - cy).powi(2)).sqrt() <= radius {
+                    inside += 1;
+                } else {
+                    outside += 1;
+                }
+            }
+            (inside, outside)
         };
 
         drag_to(&w, on);
         (wiring.machine_tick)();
-        let hovered = shot(&w);
+        let (hovered, wide) = shot(&w);
         assert!(
             w.get_wheel_ghost().is_empty(),
             "a pointer that is only hovering has already put a finger on the wheel"
@@ -10307,23 +10376,42 @@ pub(crate) mod tests {
         press_at(&w, on);
         (wiring.machine_tick)();
         assert!(!w.get_wheel_ghost().is_empty(), "a press on the ring drew no ghost at all");
-        let pressed = shot(&w);
+        let (pressed, _) = shot(&w);
 
-        let changed = hovered.iter().zip(&pressed).filter(|(a, b)| a != b).count();
+        // 1. The press drew something, **on the wheel**.
+        let (drew, _) = split(&hovered, &pressed, wide);
         assert!(
-            changed > 200,
-            "only {changed} pixels changed when a finger went down on the ring, so the path Slint \
-             was handed drew nothing — which no assertion about the string could have seen"
+            drew > 200,
+            "only {drew} pixels changed INSIDE THE WHEEL when a finger went down on it, so the \
+             path Slint was handed drew nothing — which no assertion about the string could have \
+             seen. (Counting the whole window instead answers 8963 here, of which 6093 are the \
+             focus ring going out, so it would pass over a ghost that drew nothing.)"
         );
 
-        // ── The control: it goes away, and what is left is what was there before ──
+        // ── The control: the thing that came and went is the ghost, and the wheel comes back ──
         lift_at(&w, on);
         (wiring.machine_tick)();
         assert!(w.get_wheel_ghost().is_empty(), "the finger lifted and the mark stayed");
-        assert!(
-            shot(&w) == hovered,
-            "the window did not come back to the picture it had before the press, so the pixels \
-             counted above were something other than the ghost"
+        let (after, _) = shot(&w);
+
+        // 2. Everything the lift changed is on the wheel — so the mark does not smear anywhere
+        //    else, and the count above was about the same pixels this one is.
+        let (went, elsewhere) = split(&pressed, &after, wide);
+        assert_eq!(
+            (went, elsewhere),
+            (drew, 0),
+            "lifting the finger changed {went} pixels on the wheel and {elsewhere} off it, against \
+             the {drew} the press drew — so what came and went was not exactly the mark"
+        );
+
+        // 3. And the wheel is the picture it was before the press, to the pixel. **Only the
+        //    wheel**: `focus-visible` is deliberately sticky, so a ring a pointer put out stays
+        //    out, and asking the whole window to come back asks for what §21.11 forbids.
+        let (left, _) = split(&hovered, &after, wide);
+        assert_eq!(
+            left, 0,
+            "{left} pixels of the wheel did not come back after the finger lifted, so the mark \
+             left something behind"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

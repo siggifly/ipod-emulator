@@ -6395,8 +6395,22 @@ was on.
 **Every geometric assertion about that string would pass over a path Slint refused to parse**, which
 is a shape this document keeps naming. So
 `where_the_wheel_is_being_touched_is_drawn_on_it` renders the bench three times — hovering, pressed,
-lifted — and counts changed pixels. The third shot is the control: the pointer never moves, so a
-difference between the first two that survived the lift would have been hover and not the ghost.
+lifted — and counts changed pixels. The pointer never moves, so only the contact comes and goes.
+
+**Every count in it is scoped to the wheel's own disc, and §21.11 is why.** The first version
+compared whole windows, and `focus-visible` — which starts `true` and is put out by `wheel-down` —
+broke it in two different ways at once. The visible one is that the final control asked the window
+to *come back*, which focus modality deliberately forbids: a ring a pointer put out stays out. The
+quiet one matters more. Measured on the merged tree, a press changes **8963** pixels, of which
+**2870** are the mark and **6093** are the cradle's focus ring going out — a 421 × 687 outline
+around body-plus-cradle-band. So `changed > 200` had stopped measuring the mark and would have
+passed with it drawing nothing, which is checked rather than argued: with the fill made transparent
+*and* the count widened back to the whole window, the assertion answers 6093 and goes green.
+
+What the three assertions say now is one thing each, and nothing outside the disc can satisfy any of
+them: the press changes wheel pixels; the lift changes exactly those and nothing off the wheel; and
+the wheel is the picture it was, to the pixel. The scoping is what makes the count mean the mark —
+it is stricter than what it replaced, not looser.
 
 ### 21.9 What this overturns
 
