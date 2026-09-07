@@ -6203,3 +6203,140 @@ that machine and not about a booted RetailOS. `KNOWN-BUGS.md` carries it.
   no fraction until its next real boot, which is that field's documented `None` state. Nothing
   else would have reached them: `Settings::set_boot_shape` only runs when a recipe is committed, and
   a device nobody edits is never committed.
+
+## Addendum 33: the wheel was not being ignored, it was being outrun — and the detents the operator counted are RetailOS's own accumulator
+
+*2026-09-07. Everything below was run on this machine, in one session, against
+`resources/roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin` and
+`resources/drives/ipod8g-retail.PRISTINE.img` — the same NOR dump and the same drive in every arm,
+through `ipod-gui`'s own `Link::push`, which is the call a mouse drag and an arrow key both make.
+The two arms are minutes apart on one laptop and differ in `Config::clock` and nothing else.*
+
+### 1. The report, and the two halves of it that are different questions
+
+Issue #34, from the operator's first real run:
+
+> when retailos shows the click wheel is nearly not usable its so slow to react in retailos … i get
+> no piazo feel only feel when i go out and in to the wheel
+
+with his own session log:
+
+```text
+released — 4736 frames, 6 detents felt, 61 edges felt (centre)
+```
+
+The reading filed with the issue was that **both halves are one cause** — that the wheel had barely
+moved because everything in RetailOS runs at a fifth of life. Half of that is right and half of it
+is not, and the half that is not is the one the six is evidence for.
+
+### 2. The arithmetic held: the window runs at a fifth to a seventh of real time
+
+`emu.rs`'s harness — `a_scroll_at_a_human_rate_is_timed_end_to_end_and_this_needs_resources` — boots
+the machine, measures three regimes, then pushes sixty detents one every 16 ms of **wall** time,
+which is about a second of somebody's thumb and exactly what `control.rs`'s `wheel N` sends.
+
+At `--clock=75`, which is what the window shipped:
+
+```text
+the cold boot     896 749 952 steps in  99.12 s =  9.0 M steps/s -> 0.12x real time
+at rest           112 750 000 steps in  10.01 s = 11.3 M steps/s -> 0.15x
+while scrolling    16 250 000 steps in   4.76 s =  3.4 M steps/s -> 0.07x
+```
+
+**Steps, not instructions**, and that is the half of the measurement that had never been taken: a
+halted cycle advances `Memory::usec` at exactly the rate an executed instruction does, and a booted
+iPod is halted about 99.7 % of the time, so an instruction rate describes a machine nobody is
+running. A second run twenty minutes earlier on a quieter laptop gave 16.1 M steps/s for the boot
+and 22.7 at rest — the figures move with what else is on the machine, which is the whole reason the
+calibration is taken once and held rather than chased.
+
+### 3. Where the seconds actually went — and it is `drain`, not the firmware
+
+The hop-by-hop chain, at clock 75, for those sixty detents:
+
+```text
+decoder      0x00281350    +54
+edge         0x000c953c    +53
+scroll       0x000dd018    +53
+button event 0x000ada4c     +0
+wheel event  0x000cd6a0     +5
+wheel position 0 -> 53          (seven never arrived inside the window)
+reached the wheel after 4.76 s  (the finger was on it for 1.00 s)
+```
+
+**Nothing is dropped and nothing is refused** — `frames_dropped` 0, `input_dropped` 0. The sixty
+steps are delivered late, and the lateness is `emu::drain`'s: it spaces appended steps by
+`click_gap` of the **machine's** time, 4 ms, which at 0.07x of life is 57 ms of the person's. Sixty
+of those is 3.4 s, plus the second the thumb took, which is the 4.76 s measured. A drag made in one
+second arrives over five.
+
+That is the operator's *"so slow to react"*, and it is the half the clock fixes.
+
+### 4. The six detents are RetailOS's scroll accumulator, and they are correct
+
+`wheel event 0x000cd6a0` fires **5** times for 53 raw positions, and fires 5 times for 60 at the
+other clock too. RetailOS folds about eleven wheel positions into one posted event — which is what
+`0x000dd018`'s accumulator, wrapping at `0x60`, is for, and is why a full 96-position rotation moves
+a list by eight or nine items rather than by ninety-six.
+
+So **six detents across a long drag is the part behaving correctly**, not evidence that the wheel
+barely moved. `Piezo::fires` is faithful; RetailOS clicked six times because it emitted six scroll
+events, and it emitted six because that is what its accumulator does with the positions it was
+given. The count is the same at both clocks, and it must be: the clock does not touch it.
+
+**What was wrong in the issue, stated plainly:** *"the wheel genuinely barely moved"* — it did not.
+It moved 53 of 60 positions at clock 75 and 60 of 60 at clock 16. What was slow was the arrival.
+
+### 5. The clock the host can sustain, measured and held
+
+`ipod_machine::pace::sustainable(steps, wall_secs)` is `steps / wall / 1e6`, clamped to `[5, 75]`,
+and that is the whole of it: one step buys `1 / instr_per_usec` microseconds of the iPod's time
+whatever the machine is doing, so setting the clock to the step rate makes a simulated second cost a
+wall second. **The clock in force cancels out**, which is what makes the number a fixed point — a
+machine already at its sustainable clock measures the same clock again — and is why it can be
+measured once and held instead of chased.
+
+Whole boot at clock 75 named **16**. Re-run at 16:
+
+```text
+the cold boot    1 552 749 952 steps in 160.31 s =  9.7 M steps/s -> 0.62x real time
+at rest            162 000 000 steps in  10.01 s = 16.2 M steps/s -> 1.00x
+while scrolling     25 250 000 steps in   3.11 s =  8.1 M steps/s -> 0.50x
+reached the wheel after 1.11 s   (the finger was on it for 1.00 s)
+wheel position 0 -> 60           (all sixty)
+wheel event 0x000cd6a0 +5        (unchanged, and correctly so)
+```
+
+**A one-second drag arrives in 1.11 s instead of 4.76 s**, and a resting machine is at 1.00x of
+life. The delivery lag went from 3.76 s to 0.11 s — the wheel answers a thumb.
+
+### 6. What did NOT improve, and is not this addendum's
+
+The panel digest did not change during the scroll in either arm — same screen, 75 267 lit pixels
+before and after, at both clocks, with pictures written to
+`$TMPDIR/ipod-scroll-{75,16}-{booted,scrolled}.png`. One earlier clock-75 run did see it move, so
+it is intermittent rather than absent. Five wheel events reaching RetailOS's event system and no
+pixel changing is Addenda 20–25's territory — Wall A, the output stage — and it is untouched by
+anything here. **The clock is not that bug and moving it does not fix it.**
+
+### 7. What moved, mechanically
+
+- `ipod_machine::pace` is new and is the only place that turns a measured speed into a clock, and
+  the only place that owns the 4 ms wheel rule (`4000 × clock`). `trace`'s `wheel_click_gap`, the
+  window's `machine_config` and `args::Machine::apply` all call it; there is no second copy left for
+  the pair to disagree in, which they did in silence from 2026-08-17 to 2026-09-07.
+- `Stats` publishes `steps_here`, `clock` and a rolling `sustained`; the Readout draws `of real
+  time` — the ratio §12.8 of `docs/GUI.md` refused for want of a divisor — warned outside 0.5–1.5x,
+  because a clock measured on a busy laptop and held on a quiet one runs the iPod *fast*, which is
+  the older failure (`Config::clock`: *"Brick's ball is unplayable"*).
+- `Settings::sustained_clock` holds the measurement; `record_sustained_clock` refuses to overwrite
+  one, which is the difference between calibrating and chasing.
+- **A snapshot carries `instr_per_usec` and `Machine::restore` writes it back**, so a restore was
+  the one path that could change the clock under a running config, silently. `Config::resumable_at`
+  refuses that pair and cold-boots instead — re-asserting the clock would move `usec` by minutes in
+  one instruction, which is `Machine::snapshot`'s own 44-minute-jump paragraph with the sign
+  flipped.
+- **Nothing in `trace`, `ipod-boot`, `ipod-film` or `tools/clean-run-matrix.sh` reads any of it.**
+  Every recipe pins its own `--clock=`. The four pinned oracles are identical before and after,
+  down to a byte-for-byte comparison of their framebuffer dumps.
+

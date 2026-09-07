@@ -1007,10 +1007,26 @@ fn wire(
             // Written here rather than inside the tick, so the function that draws sixty times a
             // second never holds the library — see [`Learned`]. Both are latched at source, so
             // this branch is taken once per machine and not once per frame.
-            if learned.boot.is_some() || learned.parked.is_some() {
+            if learned.boot.is_some() || learned.parked.is_some() || learned.sustained.is_some() {
                 let mut s = settings.borrow_mut();
                 if let Some(b) = learned.boot {
                     s.record_boot(b);
+                }
+                // **Once per installation, and said when it happens.** The next launch builds its
+                // machine at this clock; this one goes on running at whatever it started at,
+                // because changing `instr_per_usec` under a machine that has already executed a
+                // billion instructions moves its own clock by minutes in one instruction. See
+                // `Machine::snapshot`, which is where that failure is written up.
+                if let Some(c) = learned.sustained {
+                    if s.record_sustained_clock(c) {
+                        println!(
+                            "clock: this computer sustains about {c} interpreter steps per \
+                             microsecond, so the next start runs the iPod at {c} rather than \
+                             {}. An underclocked iPod in real time is a thing hardware does; a \
+                             correctly clocked one in slow motion is not.",
+                            ipod_machine::CLOCK
+                        );
+                    }
                 }
                 if let Some((name, at)) = &learned.parked {
                     // *When*, never *whether* (§3.3): whether there is anything to resume is a
@@ -4085,9 +4101,18 @@ fn machine_config(s: &Settings, name: &str) -> Option<emu::Config> {
         // Instructions per simulated microsecond. **Not `Config::default()`'s zero**, which
         // `emu::build` clamps to 1 — a machine running at one seventy-fifth of the part, reported
         // as though it were the part.
-        clock: ipod_machine::CLOCK,
-        // The gap between two appended wheel steps. `emu.rs`'s own default, named there.
-        click_gap: 300_000,
+        //
+        // **`Settings::clock` and not `ipod_machine::CLOCK`, and only here.** 75 is the part; this
+        // is what the host was measured to sustain, which is the same number on a machine fast
+        // enough and a lower one everywhere else. The window is the only front end that adapts —
+        // `trace`, `ipod-boot` and `ipod-film` pin their own, which is what keeps every figure in
+        // `research/` comparable. See `ipod_machine::pace`.
+        clock: s.clock(),
+        // The gap between two appended wheel steps, **derived from that clock and not a literal**.
+        // It is 4 ms of the iPod's own time, because what it is calibrated against is the
+        // firmware's wheel poll, which sees the simulated interval; a hard 300 000 is 4 ms at
+        // exactly one clock and an input flood at every lower one.
+        click_gap: ipod_machine::pace::wheel_click_gap(s.clock()),
         // **Two things, and only one of them is this window's.** It is the instruction count a
         // copy-mode machine writes its restore point at — and it is the **fallback that ends
         // `Phase::Booting`** when RetailOS never asks for wheel frames. §12.4's park is at the
@@ -4695,6 +4720,17 @@ fn pump_machine(
                     clock: l.cfg.clock as u32,
                 }
             });
+            // ── And what the same boot says about this COMPUTER ─────────────────────────────────
+            //
+            // Steps and not instructions: a halted cycle advances the simulated clock at exactly
+            // the rate an executed one does, so the sum is what buys the iPod its time. Over the
+            // whole boot, which is the longest continuous stretch of real work this program ever
+            // does and therefore the steadiest thing to measure — and it is measured once, because
+            // `Settings::record_sustained_clock` refuses to overwrite an answer.
+            learned.sustained = life
+                .pace()
+                .and_then(|p| ipod_machine::pace::sustainable(p.steps, p.wall_secs))
+                .map(|c| c as u32);
         }
     }
     // §12.4's parked frame, asked for **only when nothing is executing**, which is the one state
@@ -4778,6 +4814,16 @@ struct Learned {
     boot: Option<ipod_machine::settings::ColdBoot>,
     /// §12.4: the device that has just been parked, and when. The `Live` is already gone.
     parked: Option<(String, u64)>,
+    /// **The clock this host was measured to sustain**, over the whole of the cold boot that just
+    /// ended — see `ipod_machine::pace`. Latched on the same tick and by the same gate as `boot`,
+    /// because it is the same experiment read a second way: that one is *what this iPod's boot
+    /// cost*, this one is *what this computer can do*.
+    ///
+    /// A whole boot rather than the last second of one, deliberately. The rolling figure the window
+    /// draws is what the machine is doing **now**, which is the honest thing to show and the wrong
+    /// thing to calibrate from — a second sampled while another program starts would pick a clock
+    /// the iPod then keeps for the rest of its life.
+    sustained: Option<u32>,
 }
 
 /// §12.2's four phases, as the window sees them. **`Off` is genuinely one of them.**
@@ -9070,6 +9116,59 @@ pub(crate) mod tests {
         assert!(line.contains("Rockbox"), "and what is on it: {line}");
         assert_ne!(line.trim(), d.name, "a caption that repeats the heading teaches nothing");
         assert!(!line.contains("missing"), "nothing is missing: {line}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **The window runs the clock this computer was measured to sustain, and the wheel's spacing
+    /// moves with it.**
+    ///
+    /// Issue #34: at the part's own 75 a host that retires ~15 M steps a second spends five wall
+    /// seconds on one of the iPod's, so a scroll arrives five times slower than the thumb making
+    /// it — the operator felt six detents across a long drag and concluded the wheel was dead. The
+    /// answer available now is to say the part is slower, which is a thing hardware does, rather
+    /// than that time is, which is a thing no iPod has ever done.
+    ///
+    /// **Both halves, because either alone is wrong.** A clock of 15 with the old literal
+    /// `click_gap: 300_000` would deliver one detent per 20 ms of the iPod's own time — five times
+    /// slower than a thumb, in a machine that is now running at life speed, which is the original
+    /// complaint moved one layer down.
+    ///
+    /// **`--clock=` still wins**, because `Machine::apply` is written over this config afterwards
+    /// and that ordering is what lets a measurement be repeated at a stated clock.
+    ///
+    /// **How to make it go red:** put `clock: ipod_machine::CLOCK` or `click_gap: 300_000` back.
+    #[test]
+    fn the_window_runs_the_clock_this_computer_was_measured_to_sustain() {
+        // `machine_config` asks the model where this device's restore point lives, which is under
+        // the data directory — so the redirect is taken before anything is built, or the test
+        // creates a `snapshots/` in the operator's own library.
+        let _held = use_a_scratch_data_dir();
+        let dir = temp_dir("sustained-clock");
+        let (mut s, d) = a_composed_device(&dir);
+        // The live drive, which `machine_config` returns `None` without. `a_composed_device` fills
+        // the *library*; resolving a device into the live fields is `run_device`'s job on the real
+        // path and is one line here.
+        s.disk = Some(dir.join("x.img"));
+
+        // Nothing measured: the real part, and the gap that is 4 ms at the real part.
+        let stock = machine_config(&s, &d.name).expect("the fixture resolves a drive");
+        assert_eq!(stock.clock, ipod_machine::CLOCK);
+        assert_eq!(stock.click_gap, 300_000);
+
+        // Measured at 15, which is what this program's own hosts have been measured at.
+        s.sustained_clock = Some(15);
+        let cfg = machine_config(&s, &d.name).expect("the fixture resolves a drive");
+        assert_eq!(cfg.clock, 15, "the window did not read the measurement");
+        assert_eq!(
+            cfg.click_gap, 60_000,
+            "the wheel's spacing did not move with the clock, so a detent now arrives every 20 ms \
+             of the iPod's own time instead of every 4"
+        );
+        assert_eq!(
+            cfg.click_gap / cfg.clock as u64,
+            4_000,
+            "and the rule behind both numbers is 4 ms of the MACHINE's time, at every clock"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

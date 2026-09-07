@@ -55,6 +55,7 @@ pub mod ghidra;
 pub mod identity;
 pub mod models;
 pub mod nor;
+pub mod pace;
 pub mod pack;
 pub mod png;
 pub mod rsrc;
@@ -3946,6 +3947,11 @@ pub enum Stub {
 ///
 /// It is a constant rather than a literal in each place because it had drifted into three: the
 /// library's default, the window's argument default, and two test fixtures still carrying the old 5.
+///
+/// **This is the part's rate and not a promise about the host's.** Whether a given machine can
+/// retire 75 million interpreter steps a second is a separate, measurable question, and
+/// [`pace`] is where it is asked: a window that cannot keep up runs an *underclocked* iPod in real
+/// time rather than a correctly clocked one in slow motion. Every recipe still pins this one.
 pub const CLOCK: usize = 75;
 
 pub struct Machine {

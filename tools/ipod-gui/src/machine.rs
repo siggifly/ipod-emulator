@@ -30,13 +30,19 @@
 //! - **§12.4's `parking · 0.7 of 1.6 GB` has no numerator and no denominator.** `Link::saving` is an
 //!   `AtomicBool`; nothing anywhere publishes bytes written or bytes to write. [`Cradle`] says
 //!   `parking` and stops, which is the whole of what is known.
-//! - **§12.2's `24 % of real` has no stated divisor, and §12.8's own worked example matches
-//!   neither candidate.** `Config::clock`'s doc says *5 is what every recipe uses; 75 is real*, so
-//!   `14.2 M instr/s` against a real 5G is 18.9 %. `Stats::sim_usec` against `Stats::wall_secs` on
-//!   §12.8's own numbers — 21.5 s simulated, 34.8 s wall — is 61.8 %. Neither is 24.1 %, and
-//!   `487 220 016` instructions in `21.5 s` simulated is 22.7 instructions per simulated
-//!   microsecond, which is neither 5 nor 75. [`Pace`] therefore publishes the speed it can measure
-//!   and no ratio at all.
+//! - **§12.2's `24 % of real` had no stated divisor, and §12.8's own worked example matched none of
+//!   the three candidates.** `14.2 M instr/s` against a real 5G's 75 M is 18.9 %.
+//!   `Stats::sim_usec` against `Stats::wall_secs` on §12.8's own numbers — 21.5 s simulated, 34.8 s
+//!   wall — is 61.8 %. Neither is 24.1 %, and `487 220 016` instructions in `21.5 s` simulated is
+//!   22.7 instructions per simulated microsecond, which is neither 5 nor 75. So [`Pace`] published
+//!   the speed it could measure and no ratio at all.
+//!
+//!   **It draws one now, and the reason all three of those were wrong is that instructions are not
+//!   what the simulated clock is made of.** A halted cycle advances `usec` at exactly the rate an
+//!   executed instruction does, and a booted iPod is halted about 99.7 % of the time — so an
+//!   instruction rate against 75 M describes a machine nobody is running. [`Pace::real_time`] is
+//!   simulated seconds per wall second, off `Stats::steps_here` against the clock in force, which
+//!   is the thing a person watching the screen is actually measuring. See `ipod_machine::pace`.
 //! - **§7.3's `running · wheel 41 queued` names `Stats::queued`, which §12.8 decides does not earn a
 //!   row** — *"a refused step is a lie about what you did and a deep queue is only ever the reason
 //!   for one"*. Two sections of one document want opposite things from one field. Nothing here
@@ -354,11 +360,30 @@ pub struct Pace {
     pub sim_usec: u32,
     /// Wall seconds since the machine started running in this process.
     pub wall_secs: f64,
+    /// **Everything that moved the simulated clock in this process** — executed plus halted, off
+    /// [`Stats::steps_here`]. The numerator of the *sustainable clock*, which is a different
+    /// question from [`Pace::speed`]: a resting iPod executes almost nothing and its clock advances
+    /// at full rate anyway, so a calibration taken off `here` alone would be fifty times low.
+    pub steps: u64,
+    /// The clock this machine is running at, in instructions per simulated microsecond. 75 is the
+    /// real part; less is an underclocked iPod whose seconds are real seconds.
+    pub clock: u32,
+    /// **What the last second of wall time says this host could sustain**, or `None` while nothing
+    /// has been measured. Straight off [`Stats::sustained`]; nothing here re-derives it.
+    pub sustained: Option<u32>,
 }
 
 impl Pace {
     pub fn of(s: &Stats) -> Pace {
-        Pace { executed: s.executed, here: s.executed_here, sim_usec: s.sim_usec, wall_secs: s.wall_secs }
+        Pace {
+            executed: s.executed,
+            here: s.executed_here,
+            sim_usec: s.sim_usec,
+            wall_secs: s.wall_secs,
+            steps: s.steps_here,
+            clock: s.clock,
+            sustained: s.sustained,
+        }
     }
 
     /// Instructions per second, or `None` while no wall time has passed.
@@ -366,9 +391,32 @@ impl Pace {
         (self.wall_secs > 0.0).then(|| self.here as f64 / self.wall_secs)
     }
 
+    /// **How fast this iPod is running against a real one**, or `None` while nothing is measured.
+    ///
+    /// §12.8 worked this three ways, found its own diagram matched none of them, and drew no ratio
+    /// at all — correctly, because the divisor it wanted was `75 M instr/s` and instructions are
+    /// not what the clock is made of. This is simulated seconds per wall second, which is what a
+    /// person watching the screen measures: the clock this host sustains over the clock in force.
+    pub fn real_time(&self) -> Option<f64> {
+        let s = self.sustained?;
+        (self.clock > 0)
+            .then(|| ipod_machine::pace::real_time_fraction(self.clock as usize, s as usize))
+    }
+
     /// §12.2's `14.2 M instr/s`, or `None` when there is nothing measured to say.
+    ///
+    /// **And the rate it is running at, when that is not the part's.** An underclocked iPod that
+    /// said nothing about it is the whole of issue #34: the machine was faithful, the *rate* was a
+    /// fifth of life, and no surface in the program named the number.
     pub fn caption(&self) -> Option<String> {
-        self.speed().map(|s| format!("{}/s", instructions(s as u64)))
+        let speed = self.speed()?;
+        let base = format!("{}/s", instructions(speed as u64));
+        // Silent at the part's own rate, and at zero — which is a `Pace` nothing has filled in
+        // rather than a machine stopped dead, and must not be reported as a clock.
+        if self.clock == 0 || self.clock as usize == ipod_machine::CLOCK {
+            return Some(base);
+        }
+        Some(format!("{base}, clock {}", self.clock))
     }
 }
 
@@ -390,7 +438,7 @@ impl Pace {
 /// - `Stopped` cannot exist without a [`Reason`], and a `Reason` is never empty.
 ///
 /// **`Phase::Booting { target }` is deliberately not read for the denominator.** Its `target` is
-/// `cfg.snap_at`, the instruction count the *snapshot* will be taken at — `emu.rs:2277` is where it
+/// `cfg.snap_at`, the instruction count the *snapshot* will be taken at — `emu.rs:2394` is where it
 /// becomes the phase, and the run loop compares the phase against that same value again to decide
 /// the boot has ended. §12.3 is explicit that the progress denominator is a different number,
 /// `Device::cold_boot_instructions`, *"this device's own last completed cold boot"*. Two numbers for two
@@ -448,6 +496,20 @@ impl Life {
             Life::Off => 0.0,
             Life::Booting { pace, .. } | Life::Running { pace, .. } | Life::Stopped { pace, .. } => {
                 pace.wall_secs
+            }
+        }
+    }
+
+    /// The [`Pace`] this phase carries, or `None` for [`Life::Off`] — which carries nothing, and
+    /// that is structural rather than an omission: a bench with no machine on it has no speed.
+    ///
+    /// [`Life::wall_secs`] answers `0.0` for `Off` because *how long has this been running* has a
+    /// true answer there. *How fast is it going* does not.
+    pub fn pace(&self) -> Option<&Pace> {
+        match self {
+            Life::Off => None,
+            Life::Booting { pace, .. } | Life::Running { pace, .. } | Life::Stopped { pace, .. } => {
+                Some(pace)
             }
         }
     }

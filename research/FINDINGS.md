@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-907 headings across 18 documents — 50 dated, 19 settled, 15 retracted, 6 corrected.
+915 headings across 18 documents — 50 dated, 19 settled, 15 retracted, 6 corrected.
 
 ## Where each document stands today
 
@@ -116,9 +116,9 @@ and nothing dated replaced it.
 
 | line | when | state | heading |
 |---|---|---|---|
-| 574 | — | settled | snapshot / restore —  faithful; the control that condemned it was wrong |
-| 849 | 2026-08-13 |  | Independent corroboration from `daniel5151/clicky` (2026-08-13) |
-| 951 | 2026-08-31 |  | Caveat on the interrupt-wake fix (2026-08-31) — it stops the machine idling |
+| 583 | — | settled | snapshot / restore —  faithful; the control that condemned it was wrong |
+| 858 | 2026-08-13 |  | Independent corroboration from `daniel5151/clicky` (2026-08-13) |
+| 960 | 2026-08-31 |  | Caveat on the interrupt-wake fix (2026-08-31) — it stops the machine idling |
 
 ### [`05-the-chip-inventory.md`](05-the-chip-inventory.md)
 
@@ -171,7 +171,7 @@ and nothing dated replaced it.
 
 ### [`10-the-resource-image.md`](10-the-resource-image.md)
 
-251 headings, 7 of them marked or dated:
+259 headings, 7 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|

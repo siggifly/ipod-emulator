@@ -337,11 +337,14 @@ commands in 500 M instructions**, because RetailOS sends that enable on power-st
 an idle bare machine has none. A restored window is deaf until something changes its power state.
 Forcing the flag on at restore would be one line, and would hide the whole of that paragraph.
 
-**Rotation is delivered one click per 20 000 instructions** (`--wheel-click-instr=`, the same figure
-and default the `--wheel` scripts use; at `--clock=5` that is 4 ms per click). Delivering a whole
-drag in one tick is not faster, it is `frames_dropped` — Addendum 21's arm D posted 39 frames and had
-35 overwritten unread. A drag that outruns the drain queues up to 96 clicks and then **drops**, and
-the drop is on screen as `queued / dropped`.
+**Rotation is delivered one click per 4 ms of the iPod's own time** — `4000 × clock` instructions,
+which is 20 000 at `--clock=5` and 300 000 at 75. It is the same figure and the same default the
+`--wheel` scripts use (`--wheel-click-instr=`), out of one function
+(`ipod_machine::pace::wheel_click_gap`) so the window and the recipes cannot come to disagree; they
+did, silently, from 2026-08-17 to 2026-09-07, when the clock's default moved and the constant beside
+it did not. Delivering a whole drag in one tick is not faster, it is `frames_dropped` — Addendum 21's
+arm D posted 39 frames and had 35 overwritten unread. A drag that outruns the drain queues up to 96
+clicks and then **drops**, and the drop is on screen as `queued / dropped`.
 
 **The finger indicator on the ring is drawn from the emulator's `position`, not from the pointer.**
 If a click did not reach the machine, the dot does not move. That is deliberate: a UI that drew its

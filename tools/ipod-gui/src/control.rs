@@ -428,11 +428,24 @@ fn command(line: &str, link: Option<&Arc<Link>>) -> String {
             let out = link.out.lock().unwrap();
             let s = &out.stats;
             format!(
-                "ok phase={:?} executed={} fb={:#010x} nonblack={} seq={} backlight={}/32 up={} \
+                "ok phase={:?} executed={} clock={} sustains={} realtime={} clicks={} \
+                 fb={:#010x} nonblack={} seq={} backlight={}/32 up={} \
                  down={} wheel=pos{} touched={} buttons={:#04x} hold={} posted={} dropped={} \
                  refused={}",
                 out.phase,
                 s.executed,
+                // **The rate this iPod is running at, and the rate this computer could sustain.**
+                // A driver that pushed `wheel 5` and timed it had no way to tell *the iPod is slow*
+                // from *the wheel is not listening*, which is exactly the pair issue #34 was filed
+                // as. `unmeasured` and not `0`: nothing has looked yet is not a speed.
+                s.clock,
+                s.sustained.map_or("unmeasured".to_string(), |c| c.to_string()),
+                match s.real_time() {
+                    Some(r) => format!("{r:.2}x"),
+                    None => "unmeasured".to_string(),
+                },
+                // The guest's own click — `Piezo::fires`. The census behind *detents felt*.
+                s.piezo_clicks,
                 out.fb_addr,
                 out.fb_nonzero,
                 out.fb_seq,

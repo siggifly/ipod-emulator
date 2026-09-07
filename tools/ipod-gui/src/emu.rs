@@ -17,8 +17,11 @@
 //! Appending also has to be **spaced**. A frame posted while the previous one is still unread is a
 //! real overrun (`frames_dropped`), and that is what a whole rotation delivered in one tick would
 //! be: research/10 Addendum 21's arm D posted 39 frames and had 35 of them overwritten unread. So
-//! events drain one per `click_gap` instructions' worth of time — default 300 000, the same figure
-//! `--wheel-click-instr` uses, which at the default `--clock=75` is 4 ms per click.
+//! events drain one per `click_gap` instructions' worth of time — `4000 × clock`, which is 300 000
+//! at the part's own 75 and 4 ms per click at **every** clock. It is the same figure
+//! `--wheel-click-instr` defaults to, out of the same function
+//! ([`ipod_machine::pace::wheel_click_gap`]), because the window and the recipes carried two copies
+//! of it and one of them was fifteen times wrong for three weeks.
 //!
 //! **In simulated microseconds, and this is the half that was wrong.** A `WheelStep` can be
 //! anchored in executed instructions or in the machine's own clock, and the window anchored in
@@ -693,6 +696,33 @@ pub struct Stats {
     /// is the number, beside the wall clock it would be divided by; the **ratio** is not, because
     /// §12.8 could not state a divisor its own worked example agreed with. See `readout.rs`.
     pub sim_usec_here: u64,
+    /// **Everything that moved the simulated clock in this process** — instructions executed plus
+    /// cycles spent halted, which is `Machine::steps` measured from this session's origin.
+    ///
+    /// Distinct from `executed_here` and the distinction is the whole of the calibration: a booted
+    /// iPod is halted about 99.7 % of the time, and a halt advances `usec` at exactly the rate an
+    /// instruction does. A speed computed from `executed_here` alone would say a resting machine
+    /// had nearly stopped, and would choose a clock fifty times too low from it.
+    pub steps_here: u64,
+    /// **The clock in force**, in interpreter instructions per simulated microsecond.
+    ///
+    /// Published rather than assumed, because as of the calibration it is no longer
+    /// `ipod_machine::CLOCK` on every machine — and a window drawing a speed against a clock it has
+    /// guessed is the shape of instrument this file keeps deleting.
+    pub clock: u32,
+    /// **The clock this host could have sustained over the last window**, from
+    /// `ipod_machine::pace::sustainable` — or `None` while nothing has been measured.
+    ///
+    /// A *rolling* reading and deliberately not a since-start one: `sim_usec_here` is a `u32`
+    /// difference that wraps after 71 minutes of simulated time, and a speed that silently becomes
+    /// nonsense an hour in is worse than one that is absent. See the run loop, which keeps the
+    /// window.
+    ///
+    /// **Nothing acts on this while a machine is running.** It is what the window says and what the
+    /// library learns once; the clock a machine runs at is settled before it is built and held for
+    /// its life, because a clock that chased the host would make the iPod speed up and slow down as
+    /// the laptop got busy.
+    pub sustained: Option<u32>,
     /// **Loop iterations the core spent HALTED**, straight off `Machine::idle_steps`.
     ///
     /// The counter a booting machine barely moves and a booted one moves almost exclusively: a core
@@ -792,6 +822,20 @@ pub struct Stats {
     /// in the UI rather than left to read as "RetailOS has never drawn".
     pub bcm_frames: u64,
     pub bcm_commands: usize,
+}
+
+impl Stats {
+    /// **How fast this iPod is going against a real one**, or `None` while nothing is measured.
+    ///
+    /// Simulated seconds per wall second: the clock this host was seen to sustain over the clock in
+    /// force. Not instructions against 75 M — a booted iPod is halted nearly all the time and a
+    /// halted cycle buys exactly as much of the machine's clock as an executed one, so an
+    /// instruction rate names a fraction of real time that is wrong by however idle the machine is.
+    pub fn real_time(&self) -> Option<f64> {
+        let s = self.sustained?;
+        (self.clock > 0)
+            .then(|| ipod_machine::pace::real_time_fraction(self.clock as usize, s as usize))
+    }
 }
 
 /// UI -> emulator: the physical events, in the order the pointer caused them, and the power
@@ -968,6 +1012,31 @@ impl Config {
             && first
             && self.pair_is_whole()
             && self.snapshot.as_ref().is_some_and(|p| p.exists())
+    }
+
+    /// **May a machine that unpacked a snapshot go on running it, given the clock the snapshot
+    /// turned out to have been taken at?**
+    ///
+    /// A snapshot carries `instr_per_usec` and `Machine::restore` writes it back, so a restore is
+    /// the one path in this program that can change the clock out from under a `Config`. Letting it
+    /// would be silent: the machine would run at a rate nothing in this process chose, and the only
+    /// symptom would be an iPod that is inexplicably slow or inexplicably fast.
+    ///
+    /// **Re-asserting the wanted clock instead would be worse, and this is why it is a refusal.**
+    /// `usec` is `executed / instr_per_usec + slept_usec`, an identity the run loop maintains every
+    /// instruction. Change the divisor under a machine that has already executed a billion
+    /// instructions and the next instruction recomputes its clock somewhere minutes away — forward
+    /// or backward, in `u32` arithmetic that firmware reads as ordinary elapsed time. That is the
+    /// failure `Machine::snapshot`'s own doc was written to describe, and it took weeks to find
+    /// once.
+    ///
+    /// So the pair is incoherent and the answer is a cold boot: it costs one, once, on the launch
+    /// after the clock changes, and that boot leaves a restore point at the new clock which every
+    /// launch after it resumes from.
+    ///
+    /// **How to make the caller's test go red:** answer `true` unconditionally.
+    pub fn resumable_at(&self, snapshot_clock: usize) -> bool {
+        snapshot_clock == self.clock.max(1)
     }
 
     /// Where the drive stamp lives: beside the snapshot, under the same stem.
@@ -1524,6 +1593,23 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
         m.mem.pc_hist = Some(vec![0u64; (8 << 20) >> 6]);
     }
     m.instr_per_usec = cfg.clock.max(1);
+    // **Say it, and say it when it is not the part.** A window running an underclocked iPod that
+    // looked exactly like one running a correctly clocked one is how "everything is slow" became a
+    // bug report about the click wheel: the machine was faithful and the *rate* was not, and
+    // nothing on any surface said so. The silent case is deliberate — at the part's own rate there
+    // is nothing to disclose.
+    if m.instr_per_usec != ipod_machine::CLOCK {
+        println!(
+            "clock: {} instructions per simulated microsecond — this iPod is underclocked to \
+             about {:.0} % of a 5G's {} MHz, so that its seconds are real seconds. \
+             `--clock={}` runs the part's own rate and takes {:.1}x longer than life.",
+            m.instr_per_usec,
+            100.0 * ipod_machine::pace::real_time_fraction(ipod_machine::CLOCK, m.instr_per_usec),
+            ipod_machine::CLOCK,
+            ipod_machine::CLOCK,
+            ipod_machine::CLOCK as f64 / m.instr_per_usec as f64,
+        );
+    }
 
     // The five addresses whose arrival counts are the measurement this GUI exists to make.
     for (pc, _) in WATCHED {
@@ -1750,7 +1836,10 @@ fn drain(m: &mut Machine, inbox: &Mutex<Inbox>, next_at: &mut u64, gap: u64) {
     }
 }
 
-fn collect(m: &Machine, started: Instant, base: (u64, u32)) -> Stats {
+/// `base` is where this session's own figures are measured from: instructions executed, the
+/// simulated clock, and halted cycles — all three, because [`Stats::steps_here`] is the sum of the
+/// first and the third and a sum with one origin missing is not a measurement of this session.
+fn collect(m: &Machine, started: Instant, base: (u64, u32, u64)) -> Stats {
     let w = m.mem.clickwheel.as_ref();
     let mut s = Stats {
         executed: m.executed as u64,
@@ -1758,6 +1847,8 @@ fn collect(m: &Machine, started: Instant, base: (u64, u32)) -> Stats {
         wall_secs: started.elapsed().as_secs_f64(),
         executed_here: m.executed as u64 - base.0,
         sim_usec_here: m.mem.usec.wrapping_sub(base.1) as u64,
+        steps_here: (m.executed as u64 - base.0) + m.idle_steps.saturating_sub(base.2),
+        clock: m.instr_per_usec as u32,
         idle_steps: m.idle_steps,
         ..Stats::default()
     };
@@ -2190,11 +2281,37 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
     if cfg.may_restore(first) {
         if let Some(path) = &cfg.snapshot {
             if let Ok(b) = std::fs::read(path) {
-                // An unreadable *or* unpackable file lands in the same place, and that is the
-                // point: a restore point written by an older build is refused rather than
-                // migrated, because regenerating one costs a boot and carrying two readers
-                // costs forever. The else-branch below is already right for both.
-                if ipod_machine::pack::unpack(&b).is_some_and(|raw| m.restore(&raw)) {
+                // An unreadable file, an unpackable one, *and one taken at another clock* all land
+                // in the same place, and that is the point: a restore point this build cannot
+                // resume into is refused rather than migrated, because regenerating one costs a
+                // boot and carrying two readers costs forever. The else-branch below is already
+                // right for all three.
+                //
+                // **The clock is part of what a snapshot is, and `restore` carries it.** A machine
+                // resumed from a snapshot taken at another clock is not slightly off — it is a
+                // machine running at a rate nothing in this process chose, silently, because
+                // `Machine::restore` writes `instr_per_usec` back out of the file and wins over the
+                // value `build` just set. Re-asserting it here instead would be worse: `usec` is
+                // `executed / instr_per_usec + slept_usec`, so changing the divisor under a
+                // half-run machine moves its clock by minutes in one instruction — the exact
+                // failure `Machine::snapshot`'s own doc exists to describe.
+                //
+                // So a mismatch is not a restorable snapshot. It costs one cold boot, once, on the
+                // launch after the clock changes, and the boot writes a new restore point at the
+                // new clock which every launch after that resumes from.
+                let unpacked = ipod_machine::pack::unpack(&b).is_some_and(|raw| m.restore(&raw));
+                let resumable = unpacked && cfg.resumable_at(m.instr_per_usec);
+                if unpacked && !resumable {
+                    eprintln!(
+                        "{}: taken at {} instructions per simulated microsecond and this machine \
+                         runs at {} — cold-booting, and the boot will leave a restore point at \
+                         this clock.",
+                        path.display(),
+                        m.instr_per_usec,
+                        cfg.clock.max(1)
+                    );
+                }
+                if resumable {
                     restored = true;
                 } else {
                     // Two things are wrong at once here, and patching either alone leaves the
@@ -2295,7 +2412,17 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
     // kept, and kept *loud*, because the failure was silent for as long as it existed: this is the
     // one place that can see it, and a regression here would look exactly like a machine behaving
     // oddly for reasons nobody could name. `--clock-v3` reproduces the old behaviour on purpose.
-    let mut base: Option<(u64, u32)> = None;
+    let mut base: Option<(u64, u32, u64)> = None;
+    // ── The rolling speed window, which is what a calibration is measured from ──────────────────
+    //
+    // **A window and not a running total**, for two reasons that both bite. `sim_usec_here` is a
+    // `u32` difference and wraps after 71 minutes of the iPod's own time, so a since-start speed
+    // silently becomes nonsense on a machine somebody left open; and a boot's speed is not a
+    // resting machine's, so an average over both is a number that describes neither. Held at a
+    // whole second so a slice that happens to be slow cannot move it.
+    let mut window_at = Instant::now();
+    let mut window_steps = 0u64;
+    let mut sustained: Option<u32> = None;
     // Simulated microseconds, which is the unit `drain` anchors the wheel's script in — and a
     // restored machine starts at whatever its snapshot's clock said, not at zero.
     let mut next_at = u64::from(m.mem.usec);
@@ -2534,7 +2661,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
         }
 
         if base.is_none() {
-            base = Some((executed, m.mem.usec));
+            base = Some((executed, m.mem.usec, m.idle_steps));
             // What one slice actually did to the clock, which is a different number from the
             // identity checked at restore: 250 000 instructions at the idle point advance it by a
             // second or two of simulated time through the idle task's sleeps.
@@ -2545,7 +2672,26 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
                 );
             }
         }
-        let stats = collect(&m, started, base.unwrap());
+        let mut stats = collect(&m, started, base.unwrap());
+        // ── Close the speed window, if a whole second of wall time has gone by ──────────────────
+        //
+        // `steps_here` and not `executed_here`: a booted iPod is halted about 99.7 % of the time
+        // and a halted cycle advances the simulated clock exactly as fast as an executed one, so a
+        // speed taken off instructions alone would call a resting machine fifty times slower than
+        // it is and calibrate a clock to match.
+        {
+            let elapsed = window_at.elapsed().as_secs_f64();
+            if elapsed >= 1.0 {
+                sustained = ipod_machine::pace::sustainable(
+                    stats.steps_here.saturating_sub(window_steps),
+                    elapsed,
+                )
+                .map(|c| c as u32);
+                window_at = Instant::now();
+                window_steps = stats.steps_here;
+            }
+        }
+        stats.sustained = sustained;
         let refresh = last_fb.elapsed().as_secs_f32() > 1.0 / 60.0;
         let addr = link.out.lock().unwrap().fb_addr;
         let other = if addr == FB_FRONT { FB_BACK } else { FB_FRONT };
@@ -3003,7 +3149,7 @@ fn report_selftest(
     gate_at: u64,
     panel: &[(&'static str, u64, u32, u64)],
 ) {
-    let s = collect(m, started, (gate_at, 0));
+    let s = collect(m, started, (gate_at, 0, 0));
     println!(
         "selftest: {} instructions after the gate opened",
         m.executed as u64 - gate_at
@@ -3252,7 +3398,7 @@ impl Probing {
     }
 
     fn report(&self, m: &Machine, link: &Arc<Link>) {
-        let s = collect(m, Instant::now(), (self.act_at, 0));
+        let s = collect(m, Instant::now(), (self.act_at, 0, 0));
         println!(
             "probe [{}]: {} instructions after acting",
             self.arm,
@@ -3782,6 +3928,71 @@ mod tests {
             machine,
             "a fresh machine's panel is allocated at full size"
         );
+    }
+
+    /// **A restore point taken at another clock is not a restore point for this machine.**
+    ///
+    /// `Machine::restore` writes `instr_per_usec` out of the snapshot, so this is the one path that
+    /// can change the clock under a running `Config` — silently, because a machine going five times
+    /// too slow looks exactly like a machine going the right speed to everything except a stopwatch.
+    ///
+    /// **How to make it go red:** have [`Config::resumable_at`] answer `true` unconditionally.
+    #[test]
+    fn a_snapshot_taken_at_another_clock_is_not_resumable() {
+        let cfg = Config { clock: 15, ..Config::default() };
+        assert!(cfg.resumable_at(15), "the clock it was taken at");
+        assert!(!cfg.resumable_at(75), "the part's rate, under a machine running at 15");
+        assert!(!cfg.resumable_at(5), "and the accelerant, under the same");
+        // `Config::default()`'s zero is what `build` clamps to 1, and a snapshot taken by a machine
+        // that had been clamped the same way must still pair with it — or a config nobody filled in
+        // could never resume anything and the reason would be invisible.
+        let unset = Config::default();
+        assert_eq!(unset.clock, 0);
+        assert!(unset.resumable_at(1), "the clamped clock `build` would actually have used");
+        assert!(!unset.resumable_at(0), "and not the unclamped zero, which no machine ever runs at");
+    }
+
+    /// **The click gap is 4 ms of the iPod's own time at whatever clock the machine is running**,
+    /// and `Stats::steps_here` counts halted cycles.
+    ///
+    /// Two halves of one rule. The first is `--wheel-click-instr`'s, which was a hard 20 000 while
+    /// the clock default moved from 5 to 75 under it and so became 266 µs — a scroll no thumb can
+    /// produce — for three weeks. The window carried the same figure as a literal `300_000`, right
+    /// at exactly one clock, which is the same defect with a different spelling.
+    ///
+    /// The second is what makes a *speed* measurable at all: a booted iPod is halted about 99.7 %
+    /// of the time and a halted cycle advances the simulated clock exactly as fast as an executed
+    /// one, so a machine measured on instructions alone reads as fifty times slower than it is.
+    ///
+    /// **How to make it go red:** put the literal `300_000` back in `machine_config`, or write
+    /// `steps_here: m.executed as u64 - base.0` in `collect`.
+    #[test]
+    fn everything_keyed_to_the_clock_moves_with_it() {
+        for clock in [5usize, 15, ipod_machine::CLOCK] {
+            let gap = ipod_machine::pace::wheel_click_gap(clock);
+            assert_eq!(
+                gap / clock as u64,
+                4_000,
+                "clock {clock}: {gap} instructions is not 4 ms of the machine's own time"
+            );
+        }
+
+        // And `collect`'s own sum, over a machine that has executed a little and halted a lot —
+        // which is the shape of every booted iPod in this program.
+        let mut m = Machine::new(&placeholder_app(), RAM_BASE, RAM_SIZE);
+        m.instr_per_usec = 15;
+        m.executed = 1_000;
+        m.idle_steps = 999_000;
+        let s = collect(&m, Instant::now(), (0, 0, 0));
+        assert_eq!(s.executed_here, 1_000);
+        assert_eq!(
+            s.steps_here, 1_000_000,
+            "a resting machine's clock is advanced by its halted cycles, and a speed that counted \
+             only the 1 000 instructions would name a host fifty times slower than this one"
+        );
+        assert_eq!(s.clock, 15, "the clock in force is published, not assumed");
+        // One second of that is a 1 M-steps-per-second host, which is under the floor and clamped.
+        assert_eq!(ipod_machine::pace::sustainable(s.steps_here, 1.0), Some(ipod_machine::pace::FLOOR));
     }
 
     #[test]
@@ -5215,6 +5426,266 @@ mod tests {
              is true, the picture is being drawn and the window is looking at the wrong buffer.",
             driven.frames_posted, driven.enters[0]
         );
+
+        link.quit.store(true, Ordering::Relaxed);
+        let _ = thread.join();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Issue #34, reproduced as a number: how long a scroll takes, and how much of it the iPod
+    /// felt.**
+    ///
+    /// The operator's own session log is the baseline this exists to reproduce —
+    /// `released — 4736 frames, 6 detents felt, 61 edges felt (centre)`. Six detents across a long
+    /// drag, with the haptics faithful: `Piezo::fires` is the guest driving `PWM0_CTRL`, so
+    /// RetailOS clicked six times because the selection moved six times. The wheel was not ignored;
+    /// it was outrun.
+    ///
+    /// `#[ignore]`, and the name says which kind: it needs `resources/`. Run it by name from a
+    /// release build, and pick the clock:
+    ///
+    /// ```text
+    /// IPOD_SCROLL_CLOCK=75 cargo test --release -p ipod-gui --bin ipod-emulator \
+    ///     a_scroll_at_a_human_rate_is_timed_end_to_end_and_this_needs_resources \
+    ///     -- --ignored --nocapture
+    /// ```
+    ///
+    /// **It is a measurement and not a gate, which is why it asserts almost nothing.** What it does
+    /// assert is the pair that would make every printed figure meaningless otherwise: that the
+    /// machine booted far enough to have a menu, and the control — the panel is watched for ten
+    /// seconds with nothing touched, so *the picture moved* can be evidence about the wheel rather
+    /// than about time passing. That is the same control
+    /// [`a_wheel_gesture_moves_the_selection_and_this_needs_resources`] takes, for the same reason.
+    ///
+    /// **The gesture is a finger and not a script.** Sixty detents, one every 16 ms of **wall**
+    /// time, which is about a second of somebody's hand and exactly what `control.rs`'s `wheel N`
+    /// verb sends. That is the half that matters: the window drains its inbox one step per
+    /// `click_gap` of the *machine's* time, so a finger at 60 Hz against an iPod running at a fifth
+    /// of life arrives faster than it can be delivered, the 96-deep queue starts refusing, and the
+    /// refusals are `Stats::input_dropped`. That is the shape of the six.
+    #[test]
+    #[ignore = "needs resources/: Apple's ROM dump and a real drive image, neither of which is in git"]
+    fn a_scroll_at_a_human_rate_is_timed_end_to_end_and_this_needs_resources() {
+        let clock: usize = std::env::var("IPOD_SCROLL_CLOCK")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ipod_machine::CLOCK);
+        let detents: usize = std::env::var("IPOD_SCROLL_DETENTS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60);
+
+        let res = ipod_machine::settings::repo_root().join("resources");
+        let rom = res.join("roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin");
+        let pristine = res.join("drives/ipod8g-retail.PRISTINE.img");
+        assert!(
+            rom.is_file() && pristine.is_file(),
+            "this test was asked for by name and {} / {} are not both on this machine.",
+            rom.display(),
+            pristine.display()
+        );
+
+        let dir = std::env::temp_dir().join(format!("ipod-scroll-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let work = dir.join("work.img");
+        clone_disk(&pristine, &work).expect("a writable clone of the reference drive");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&work, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        // `machine_config`'s own shape, minus the restore point — a cold boot, so the boot itself
+        // is one of the three regimes measured. `click_gap` comes off the clock through the same
+        // function the window uses, which is what that function exists for.
+        let cfg = Config {
+            nor: ipod_machine::nor::Source::File(rom),
+            disk: work.clone(),
+            workdisk: work.clone(),
+            frozen: dir.join("m.frozen"),
+            snapshot: None,
+            clock,
+            click_gap: ipod_machine::pace::wheel_click_gap(clock),
+            snap_at: SNAP_AT,
+            boot: BootTarget::Os,
+            ..Default::default()
+        };
+        println!(
+            "\n  clock {clock} instructions per simulated microsecond, click gap {} instructions \
+             ({} ms of the iPod's own time)",
+            cfg.click_gap,
+            cfg.click_gap / clock as u64 / 1000
+        );
+
+        let link = Link::new();
+        let thread = {
+            let (cfg, link) = (cfg.clone(), link.clone());
+            std::thread::Builder::new()
+                .name("ipod-scroll-test".into())
+                .spawn(move || run(cfg, link))
+                .expect("the machine thread starts")
+        };
+        struct Stopper(Arc<Link>);
+        impl Drop for Stopper {
+            fn drop(&mut self) {
+                self.0.quit.store(true, Ordering::Relaxed);
+            }
+        }
+        let _stop = Stopper(link.clone());
+
+        fn look(link: &Arc<Link>) -> (Phase, u64, u32, Stats) {
+            let out = link.out.lock().unwrap();
+            (out.phase.clone(), digest(&out.fb), out.fb_nonzero, out.stats)
+        }
+        // **A picture, because a digest cannot tell you which screen it is.** Two arms that both
+        // report *the panel did not move* are indistinguishable from the outside when one is on a
+        // menu and the other on a sleeping backlight, and that difference decides whether a scroll
+        // had anything to scroll.
+        let shot = |link: &Arc<Link>, name: &str| {
+            let out = link.out.lock().unwrap();
+            let png = ipod_machine::png::encode(&out.fb, FB_W, FB_H);
+            let at = dir.join(format!("{name}.png"));
+            let _ = std::fs::write(&at, &png);
+            // Out of the scratch directory the test deletes, into one that survives it.
+            let keep = std::env::temp_dir().join(format!("ipod-scroll-{clock}-{name}.png"));
+            let _ = std::fs::write(&keep, &png);
+            println!("    panel -> {} ({} lit)", keep.display(), out.fb_nonzero);
+        };
+
+        // ── the boot, which is also the first of the three speed measurements ───────────────────
+        let deadline = Instant::now() + std::time::Duration::from_secs(900);
+        loop {
+            let (phase, _, _, s) = look(&link);
+            match phase {
+                Phase::Running => break,
+                Phase::Stopped(why) => panic!("the machine died before it booted: {why}"),
+                _ => {}
+            }
+            assert!(
+                Instant::now() < deadline,
+                "fifteen minutes and the machine had not left `Booting`: {} instructions",
+                s.executed
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let (_, booted_digest, booted_lit, booted) = look(&link);
+        // **Steps, and the clock they would have sustained.** Printed for each regime separately,
+        // because a booting machine and a resting one do very different work and an average over
+        // both would describe neither — which is the question the calibration has to get right.
+        let show = |what: &str, steps: u64, wall: f64| {
+            let sustained = ipod_machine::pace::sustainable(steps, wall);
+            println!(
+                "  {what:<18} {steps:>12} steps in {wall:6.2} s = {:5.1} M steps/s -> sustains \
+                 clock {:?}, so clock {clock} is {:.2}x real time",
+                steps as f64 / wall / 1e6,
+                sustained,
+                sustained.map_or(0.0, |c| ipod_machine::pace::real_time_fraction(clock, c)),
+            );
+        };
+        show("the cold boot", booted.steps_here, booted.wall_secs);
+        println!(
+            "    {} instructions executed, {} halted cycles, {} ata commands, {booted_lit} lit",
+            booted.executed_here, booted.idle_steps, booted.ata_commands
+        );
+        shot(&link, "booted");
+        assert!(
+            booted_lit != 0,
+            "the panel is black, so there is no selection to move and nothing below means anything"
+        );
+
+        // ── the control: at rest, nothing touched ───────────────────────────────────────────────
+        const REST: std::time::Duration = std::time::Duration::from_secs(10);
+        let (_, _, _, at_rest_start) = look(&link);
+        let rest_at = Instant::now();
+        std::thread::sleep(REST);
+        let (_, before, _, resting) = look(&link);
+        show(
+            "at rest",
+            resting.steps_here - at_rest_start.steps_here,
+            rest_at.elapsed().as_secs_f64(),
+        );
+        assert_eq!(
+            before, booted_digest,
+            "the panel changed on its own while nothing was touched, so `the panel changed` cannot \
+             be evidence that the wheel did anything"
+        );
+
+        // ── the gesture: a finger, at 60 Hz ─────────────────────────────────────────────────────
+        let (_, _, _, at_scroll_start) = look(&link);
+        let scroll_at = Instant::now();
+        link.push(WheelEvent::Touch);
+        for _ in 0..detents {
+            link.push(WheelEvent::Step(1));
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+        let finger_off = scroll_at.elapsed().as_secs_f64();
+        link.push(WheelEvent::Release);
+
+        // Two endings, and the gap between them is the lag a person feels as *it is still catching
+        // up after I stopped*: when the last step has reached the wheel, and when the iPod has
+        // stopped answering.
+        let mut delivered: Option<f64> = None;
+        let mut settled: Option<f64> = None;
+        let mut last_click_at = Instant::now();
+        let mut last_clicks = at_scroll_start.piezo_clicks;
+        let until = Instant::now() + std::time::Duration::from_secs(120);
+        while Instant::now() < until {
+            let (_, _, _, s) = look(&link);
+            if delivered.is_none() && link.inbox.lock().unwrap().events.is_empty() {
+                delivered = Some(scroll_at.elapsed().as_secs_f64());
+            }
+            if s.piezo_clicks != last_clicks {
+                last_clicks = s.piezo_clicks;
+                last_click_at = Instant::now();
+            }
+            if delivered.is_some() && last_click_at.elapsed().as_secs_f64() > 2.0 {
+                settled = Some(scroll_at.elapsed().as_secs_f64() - 2.0);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let (_, after, after_lit, driven) = look(&link);
+        show(
+            "while scrolling",
+            driven.steps_here - at_scroll_start.steps_here,
+            scroll_at.elapsed().as_secs_f64(),
+        );
+        println!(
+            "\n  ── the scroll ─────────────────────────────────────────────────────────────────\n\
+             \x20 {detents} detents, one every 16 ms — the finger was on the wheel for {finger_off:.2} s\n\
+             \x20 reached the wheel after       {}\n\
+             \x20 the iPod stopped moving after {}\n\
+             \x20 DETENTS FELT                  {} of {detents}   (`Piezo::fires` — the guest's own click)\n\
+             \x20 refused, the queue was full   {}\n\
+             \x20 frames posted {} ({} dropped unread, {} suppressed)\n\
+             \x20 wheel position {} -> {}\n\
+             \x20 the panel {} ({} lit -> {after_lit})\n",
+            delivered.map_or("NEVER (120 s)".to_string(), |d| format!("{d:.2} s")),
+            settled.map_or("NEVER (120 s)".to_string(), |d| format!("{d:.2} s")),
+            driven.piezo_clicks - at_scroll_start.piezo_clicks,
+            driven.input_dropped - at_scroll_start.input_dropped,
+            driven.frames_posted - at_scroll_start.frames_posted,
+            driven.frames_dropped - at_scroll_start.frames_dropped,
+            driven.frames_suppressed - at_scroll_start.frames_suppressed,
+            at_scroll_start.position,
+            driven.position,
+            if after == before { "DID NOT MOVE" } else { "moved" },
+            booted_lit,
+        );
+        // **All five, in order, and this is the hop-by-hop chain.** `AGENTS.md` §6's first shape is
+        // an instrument reporting an absence it could not have observed: *frames were posted* says
+        // nothing about whether RetailOS's event system ever saw one, and the two are four hops
+        // apart. A run where the decoder is entered and the wheel-event poster is not is a
+        // different bug from one where neither is.
+        for (i, (_, name)) in WATCHED.iter().enumerate() {
+            println!(
+                "  {name:<24} {:>8}   (+{} during the scroll)",
+                driven.enters[i],
+                driven.enters[i] - at_scroll_start.enters[i]
+            );
+        }
+        shot(&link, "scrolled");
 
         link.quit.store(true, Ordering::Relaxed);
         let _ = thread.join();
