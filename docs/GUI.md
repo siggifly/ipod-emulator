@@ -6785,13 +6785,20 @@ fullscreen table, the 8-primitive discipline and the glyph rule are all **kept**
 
 ### 21.10 What is still 0.6
 
-`Games…` draws as a row and is disabled with its reason. §15 puts it in 0.6 because the framework
-work is not done and the keystore is in a private repository — that is a fact about the world, not a
-schedule, and it does not change because the front page did.
+⚠️ **This paragraph was wrong when it was written and the correction is in §21.0** — recorded here
+too, because a superseded claim that reads as current is exactly what `AGENTS.md` §5 warns a document
+that grows by addendum will do to itself.
 
-Drawing it disabled rather than omitting it is §14.1, and it is also what makes the redesign
-truthful: the shape of the finished program is visible from the first run, and the arm lights up
-without the front page changing shape under anybody.
+`Games…` **is live and opens the page that exists.** `GamesPage` was already built, composed into the
+drawer, and starting a title on the bench when §21 was drafted; §21.10 asked for it to be disabled on
+the strength of §15, and §15's premise is that the *framework* work is not done — which is about
+binding a `.ipg` title's imports, not about the shelf of titles, which shipped ahead of it.
+**Disabling a working page to match a note written from a screenshot is deleting function**, and it
+is the exact defect `every_drawer_row_that_names_a_page_can_open_it` exists to catch. That gate had
+already caught `Games` shipped disabled over a working page once.
+
+What §15 still correctly withholds is a title actually *running* its imports. That remains 0.6, it is
+a fact about the world rather than a schedule, and it does not change because the front page did.
 
 ---
 
