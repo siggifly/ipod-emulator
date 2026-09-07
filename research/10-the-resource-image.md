@@ -6340,3 +6340,148 @@ anything here. **The clock is not that bug and moving it does not fix it.**
   Every recipe pins its own `--clock=`. The four pinned oracles are identical before and after,
   down to a byte-for-byte comparison of their framebuffer dumps.
 
+
+## Addendum 34: the calibration now applies to the run that measures it — and the second core costs 0.9 % while carrying the wheel
+
+*2026-09-07. Issues #39 and #40. Everything below was run on this laptop in one session against
+`resources/roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin` and
+`resources/drives/ipod8g-retail.PRISTINE.img`, through `ipod-gui`'s own
+`a_scroll_at_a_human_rate_is_timed_end_to_end_and_this_needs_resources` — the same harness Addendum
+33 used, now with an `auto` arm and a `IPOD_SCROLL_CORES=1` arm.*
+
+```sh
+IPOD_SCROLL_CLOCK=auto IPOD_SCROLL_CORES=2 cargo test --release -p ipod-gui --bin ipod-emulator \
+    a_scroll_at_a_human_rate_is_timed_end_to_end_and_this_needs_resources -- --ignored --nocapture
+```
+
+### 1. Wall seconds are not a measurement on a shared laptop; steps are
+
+**The first two arms of this session were taken while another process was compiling, and every wall
+figure in them is wrong by a third.** The same pinned `--clock=75` boot measured **68.19 s** at load
+18 and **46.73 s** at load 7 — and **896 749 952 steps against 896 999 952**, which is the same boot
+to a quarter of one slice. The load-18 arm also read the wheel as taking 3.18 s to deliver a gesture
+that took 1.26 s on the quiet arm, and the whole of the difference is the other program.
+
+So: **a comparison of two clocks is a comparison of step counts.** Wall time is reported here beside
+them, and is only meaningful between arms taken minutes apart under the same load.
+
+### 2. Issue #39: the measurement was spent on the wrong run
+
+`Settings::sustained_clock` was measured at the end of a cold boot and stored for the *next* launch,
+so a fresh profile ran its entire first session at `CLOCK` — 75 against a host that delivers 18-26.
+The fix is not a new measurement. It is spending the existing one **at the end of the boot that took
+it**, in the same run.
+
+| arm | steps to a menu | at rest | of real time, at rest |
+|---|---|---|---|
+| `--clock=75` pinned — what a fresh profile did | **896 999 952** | 26.1 M steps/s | **0.35x** |
+| retune at the boot's end — what it does now | **896 999 952** | 26.0 M steps/s | **1.44x** at clock 18 |
+
+**The boot costs exactly the same**, to the step, and the instruction counts agree to one part in a
+hundred thousand (870 824 341 against 870 833 128). Everything after it changes.
+
+### 3. The one-second window was built, measured, and rejected
+
+The issue suggests a shorter window than the cold boot. It was implemented first, and it is worse,
+because **a second of wall time is a sample of whatever the firmware was doing during it**. The
+forty one-second windows of one pinned-75 cold boot:
+
+```text
+15.4 16.0 10.6 15.0 13.5 13.7 14.7 13.9  9.2  2.3   <- the disk-heavy middle begins
+ 9.9 10.5  5.6  5.7  5.7  5.2  3.2  2.7  3.2  2.9
+ 3.7  4.2  4.9  5.0  4.8  4.5  4.9  4.7  5.6  5.3
+ 5.2  5.1  4.9  9.4 11.3 11.4 11.7 11.6 11.4 11.0   M steps a second
+```
+
+Seven-fold, within one boot. Deciding on the first of those measured **11**, and:
+
+| when the clock was decided | steps to a menu |
+|---|---|
+| at the boot's end (18) | **896 999 952** |
+| at one second (11) | **2 208 749 952** |
+| pinned at 11 from the reset vector | **11 868 249 952** — 663 s, thirteen times the work |
+
+**A low clock makes a cold boot enormously more expensive**, and nobody is waiting on a wheel during
+one. Deciding late costs nothing a person feels and deciding early costs the boot; so the boot — the
+longest continuous stretch of real work this program does — stays the window, and only *when the
+answer is used* changed.
+
+**What is still open**, and is measured rather than guessed: the boot sample and the resting sample
+are different numbers. Over the boot this host sustains 18; sitting on the menu it sustains 26. So a
+clock calibrated on the boot runs the menu at **1.44x** of life rather than 1.00x. That is inside
+`Pace::real_time`'s 0.5–1.5x warning band and it is the pre-existing choice of sample, not a
+regression — but a calibration taken *after* the boot would sit closer to 1.00x for the regime a
+person actually touches. Nobody has measured what it would do to the regimes they do not.
+
+### 4. Moving a clock under a running machine is legitimate now, and was not
+
+`usec` is recomputed every step as `executed / instr_per_usec + slept_usec`, so assigning a new
+divisor to a machine a billion instructions in moves its whole sense of elapsed time in one
+instruction — Addendum 31's 44-minute jump, on demand. `Machine::set_clock` carries the correction
+that cancels it, in a third term (`usec_offset`) that is zero on every machine that never moves its
+clock. Measured: at clock 75, 200 000 instructions is 2 666 µs, and at 22 it is 9 090; a bare
+assignment jumps the clock by **6 424 µs** and `set_clock` moves it by **0**.
+
+The snapshot format did not change. `snapshot` already wrote `usec`, so `restore` closes the
+identity against it and re-derives the offset — which comes out zero for every image written before
+the field existed.
+
+### 5. Issue #40: the idle co-processor costs 0.9 %, and it is carrying the wheel
+
+`Stats::steps_here` counts executed **and halted** cycles and a booted iPod is halted ~99.7 % of the
+time, so a per-core step count reports a parked co-processor as busy. `Stats::cop_executed` is
+instructions, which a parked core does not run.
+
+Ten seconds at rest on the language picker, the machine retuned to its own clock:
+
+| | co-processor instructions | the CPU's | share |
+|---|---|---|---|
+| two cores | **117 113** | 12 716 654 | **0.9 %** |
+| one core (`--no-second-core`) | 0 | 55 076 786 | — |
+
+Against a host retiring 26 M steps a second, 117 113 instructions over ten seconds is **0.045 % of
+the machine's throughput**. **The second core is not why the window feels slow.** The clock was.
+
+The same question asked where the co-processor is *working* rather than parked — `ipod-boot retail`,
+whose `BUDGET` bounds the **CPU's** instructions, so both arms spend exactly 899 999 952 of them and
+the difference is the whole of what the second core costs:
+
+```sh
+FLASH=<the retail 5G dump> DISK=<…ipod8g-retail.PRISTINE.img> BUDGET=900000000 \
+  ipod-boot retail --clock=5 --battery=100 --rtc=2026-09-06T12:00:00 [--no-second-core]
+```
+
+| | wall, pass 1 | wall, pass 2 | co-processor instructions |
+|---|---|---|---|
+| two cores | 78.24 s | 63.59 s | **1 401 001**, parked and rewoken 15 056 times |
+| one core | 75.46 s | 80.06 s | — |
+
+**The core count is below this laptop's noise floor.** One arm of *two* cores is the fastest run of
+the four and the other is the second slowest; the spread within the two-core arm alone is 23 %,
+which is another program compiling. So the wall figures answer nothing, and the deterministic one
+does: **1 401 001 against 899 999 952 is 0.156 %** of the work, over the boot — the regime where the
+co-processor is busiest.
+
+Two cores is not the cost. This does leave the per-instruction quantum check
+(`executed.is_multiple_of(quantum)` in `Machine::run`) unmeasured in isolation; it is inside the
+0.156 % above, and it is where #33 should look if it wants the last few percent.
+
+**And one core is not an option, which is the other half of the answer.** The same gesture, sixty
+detents at 16 ms:
+
+| | frames posted | dropped unread | decoder entered | detents felt | panel |
+|---|---|---|---|---|---|
+| two cores | 62 | **0** | **62** | 1 of 60 | moved |
+| one core | 62 | **52** | **9** | **0 of 60** | did not move |
+
+RetailOS reads 9 of 62 wheel frames with the co-processor absent and drops 52 unread. The resting
+machine also stops resting: 55 M instructions in ten seconds against 12.7 M, **32 % of steps
+executing rather than 4.9 %** — it is spinning on a mailbox nothing will answer. That is
+research/03 §57/§58's dependency, reproduced from the input side.
+
+### 6. What did not move
+
+`trace`, `ipod-boot`, `ipod-film` and `tools/clean-run-matrix.sh` pin their own `--clock=` and read
+none of this; `--headless=` pins for the same reason, so its fingerprint stays comparable to
+`retail-boot.sh`; and `ipod-gui --clock=N` now turns the retune off, because a launch that asked for
+a number and watched it change could not run the experiment it typed the flag for.

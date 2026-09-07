@@ -141,7 +141,7 @@ pub struct Machine {
 }
 
 impl Machine {
-    /// Write these four onto a config the window has already built from the library.
+    /// Write these onto a config the window has already built from the library.
     ///
     /// **One place, and it only ever writes what was asked for.** `clock` is an `Option` precisely
     /// so that *not saying* leaves `machine_config`'s measured clock standing rather than
@@ -153,6 +153,12 @@ impl Machine {
     /// one and left the other is the defect `--wheel-click-instr` shipped with for three weeks,
     /// arriving through a different door. `ipod_machine::pace::wheel_click_gap` is the rule, in one
     /// place, and this is the third caller of it.
+    ///
+    /// **And `--clock=` pins.** A window ordinarily moves its own clock to the one it measures the
+    /// host can sustain, a second into the run ([`crate::emu::Config::retune`]). A launch that
+    /// asked for a specific number and then watched it change would have no way of running the
+    /// experiment it typed the flag for, so saying it turns the retune off — which is also what
+    /// keeps `--clock=` meaning here exactly what it means to `trace` and `ipod-boot`.
     pub fn apply(&self, cfg: &mut crate::emu::Config) {
         cfg.cold |= self.cold;
         if let Some(two) = self.cores {
@@ -162,6 +168,7 @@ impl Machine {
         if let Some(n) = self.clock {
             cfg.clock = n;
             cfg.click_gap = ipod_machine::pace::wheel_click_gap(n);
+            cfg.retune = false;
         }
     }
 }
@@ -679,6 +686,11 @@ pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             // resume a machine at 1.6 G instructions and print a fingerprint of the *restore* —
             // a number that looks like a boot's and is not comparable to `retail-boot.sh`'s.
             cfg.snapshot = None;
+            // **And it runs at one clock from end to end.** The whole point of this mode is a
+            // fingerprint comparable to `retail-boot.sh`'s, and a run that retuned itself a second
+            // in would produce an instruction count that depends on how busy the laptop was — a
+            // number nobody could compare with anything, including a second run of itself.
+            cfg.retune = false;
             machine.apply(&mut cfg);
             let _ = writeln!(
                 out,
@@ -968,18 +980,24 @@ mod tests {
         );
 
         // **On the config, and nothing else on it moves.** `apply` writes four axes; a fifth would
-        // be the command line reaching past the boundary this struct is. The clock's axis is two
+        // be the command line reaching past the boundary this struct is. The clock's axis is three
         // fields, because the wheel's click spacing is a duration in the machine's own time and
-        // therefore a function of the clock rather than a second knob.
+        // therefore a function of the clock rather than a second knob — and because a clock
+        // somebody asked for has to survive the window's own calibration.
+        //
+        // Built as `machine_config` builds it, `retune` and all: a fixture that started with the
+        // field already false would let the assertion below pass with the line deleted.
         let mut cfg = crate::emu::Config {
             clock: ipod_machine::CLOCK,
             click_gap: ipod_machine::pace::wheel_click_gap(ipod_machine::CLOCK),
             snapshot: Some(PathBuf::from("/somewhere/m.snap")),
+            retune: true,
             ..Default::default()
         };
         Machine::default().apply(&mut cfg);
         assert_eq!(cfg.clock, ipod_machine::CLOCK, "a flag nobody typed overwrote the default");
         assert_eq!(cfg.click_gap, 300_000, "nor the gap that goes with it");
+        assert!(cfg.retune, "a flag nobody typed turned the window's calibration off");
         // Two cores is the default, so "nothing asked for" is `!one_core`.
         assert!(!cfg.cold && !cfg.one_core && !cfg.charger);
         win("--cold --clock=5 --second-core --charger").apply(&mut cfg);
@@ -992,6 +1010,13 @@ mod tests {
         // **How to make it go red:** drop the `click_gap` line from `Machine::apply`.
         assert_eq!(cfg.click_gap, 20_000, "--clock= moved the clock and left the wheel behind");
         assert_eq!(cfg.click_gap / cfg.clock as u64, 4_000, "4 ms of the machine's own time");
+        // **The third thing `--clock=` has to move, and it moves in the other direction.** A window
+        // retunes itself to the clock it measures the host can sustain, a second into the run. A
+        // launch that asked for 5 and got 22 back could not run the experiment it typed the flag
+        // for, and `research/`'s figures would stop being reproducible through this front end.
+        //
+        // **How to make it go red:** drop the `retune` line from `Machine::apply`.
+        assert!(!cfg.retune, "--clock=5 left the window free to overrule it");
         // **The cores axis needs the flag that can move it.** Two cores is the default, so
         // `--second-core` sets `one_core` to the value it already had and an assertion about it
         // would hold with `apply` deleted. `--no-second-core` is the only input that changes the
@@ -1083,14 +1108,14 @@ mod tests {
             }
         );
         // And it reaches no field of the machine, which is the half a test can get wrong by
-        // agreeing with itself: `apply` writes four fields and a socket is not one of them.
-        let mut cfg = crate::emu::Config::default();
-        let before = (cfg.cold, cfg.one_core, cfg.charger, cfg.clock);
+        // agreeing with itself: `apply` writes five fields and a socket is not one of them.
+        let mut cfg = crate::emu::Config { retune: true, ..Default::default() };
+        let before = (cfg.cold, cfg.one_core, cfg.charger, cfg.clock, cfg.retune);
         let Cli::Window { launch, .. } = parse(&argv("--control=/tmp/ipod.sock")) else {
             panic!("a socket on its own is still a window")
         };
         launch.apply(&mut cfg);
-        assert_eq!((cfg.cold, cfg.one_core, cfg.charger, cfg.clock), before);
+        assert_eq!((cfg.cold, cfg.one_core, cfg.charger, cfg.clock, cfg.retune), before);
     }
 
     /// **`--control=` was refused as an instrument belonging to `trace`, and `trace` has never had

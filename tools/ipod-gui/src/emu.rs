@@ -140,7 +140,26 @@ pub struct Config {
     /// an emulator that intermittently boots to a screen nobody can explain.
     pub frozen: PathBuf,
     /// Interpreter instructions per simulated microsecond. 5 is what every recipe uses; 75 is real.
+    ///
+    /// Where [`Config::retune`] is set, this is only where the machine *starts*.
     pub clock: usize,
+    /// **May this run move its own clock to the one it turns out the host can sustain?**
+    ///
+    /// Off by default, so a `Config` built anywhere else — every recipe, every test, `--headless`'s
+    /// fingerprint — runs at exactly the clock it was given and nothing about this exists for it.
+    /// The window turns it on, because the window is the only front end that adapts.
+    ///
+    /// **The measurement is worth nothing to the run that pays for it otherwise.** `Settings`
+    /// remembers a sustained clock and the *next* launch starts there, which leaves the first run
+    /// on a fresh profile at `ipod_machine::CLOCK` against a host that cannot deliver it — the
+    /// slowest this program ever is, on the one run a person forms their opinion during.
+    ///
+    /// What makes moving it mid-run legitimate rather than a fudge is that
+    /// [`ipod_machine::pace::sustainable`] is a **fixed point**: the clock in force cancels out of
+    /// steps-per-wall-second, so a machine already at its sustainable clock measures the same clock
+    /// again and the switch cannot invalidate the sample that asked for it. See [`session`], which
+    /// is where the one switch a run is allowed happens.
+    pub retune: bool,
     /// Where the idle snapshot lives. Restored if present, written after the cold boot if not.
     pub snapshot: Option<PathBuf>,
     /// Instruction count the snapshot is taken at.
@@ -718,10 +737,10 @@ pub struct Stats {
     /// nonsense an hour in is worse than one that is absent. See the run loop, which keeps the
     /// window.
     ///
-    /// **Nothing acts on this while a machine is running.** It is what the window says and what the
-    /// library learns once; the clock a machine runs at is settled before it is built and held for
-    /// its life, because a clock that chased the host would make the iPod speed up and slow down as
-    /// the laptop got busy.
+    /// **One thing acts on this, once.** [`Retune`] takes the first reading a session produces and
+    /// moves the machine to it; every reading after that is only what the window says and what the
+    /// library learns. A clock that went on chasing this would make the iPod speed up and slow down
+    /// as the laptop got busy, which is a worse machine than one that is steadily a little slow.
     pub sustained: Option<u32>,
     /// **Loop iterations the core spent HALTED**, straight off `Machine::idle_steps`.
     ///
@@ -733,6 +752,14 @@ pub struct Stats {
     /// `last_novel_sleeps` is where this was first written down: *"a machine that is genuinely
     /// waiting asks the core to sleep, so a window with zero sleeps in it is a busy machine"*.
     pub idle_steps: u64,
+    /// **Instructions the CO-PROCESSOR executed**, off `Machine::cop_executed`.
+    ///
+    /// Separate from `executed` and from `idle_steps`, and it has to be, because it is the only
+    /// honest way to ask what the second core costs. `steps_here` counts the CPU's executed *and
+    /// halted* cycles, and a booted iPod is halted about 99.7 % of the time — so a per-core step
+    /// count reports a co-processor that is doing nothing as busy. A parked core executes nothing,
+    /// and this is the counter that says so.
+    pub cop_executed: u64,
     pub hold: bool,
     pub touched: bool,
     pub position: u8,
@@ -1022,17 +1049,18 @@ impl Config {
     /// would be silent: the machine would run at a rate nothing in this process chose, and the only
     /// symptom would be an iPod that is inexplicably slow or inexplicably fast.
     ///
-    /// **Re-asserting the wanted clock instead would be worse, and this is why it is a refusal.**
-    /// `usec` is `executed / instr_per_usec + slept_usec`, an identity the run loop maintains every
-    /// instruction. Change the divisor under a machine that has already executed a billion
-    /// instructions and the next instruction recomputes its clock somewhere minutes away — forward
-    /// or backward, in `u32` arithmetic that firmware reads as ordinary elapsed time. That is the
-    /// failure `Machine::snapshot`'s own doc was written to describe, and it took weeks to find
-    /// once.
+    /// **Re-asserting the wanted clock is now mechanically possible and is still not the answer.**
+    /// `Machine::set_clock` moves the divisor and carries the correction that keeps `usec`
+    /// continuous, so the minutes-in-one-instruction jump that used to make this unthinkable is no
+    /// longer the objection. The objection left is that at the moment of restore this process has
+    /// measured nothing: `Config::clock` is a number some earlier launch wrote down, and the clock
+    /// this run will settle at is a second of wall time away. Resuming into it would mean adopting
+    /// a rate on a guess and then moving off it again, under a machine already mid-firmware.
     ///
-    /// So the pair is incoherent and the answer is a cold boot: it costs one, once, on the launch
-    /// after the clock changes, and that boot leaves a restore point at the new clock which every
-    /// launch after it resumes from.
+    /// So the pair is incoherent and the answer is a cold boot. It costs one, once, on the launch
+    /// after the recorded clock changes — and that boot leaves a restore point at the clock it
+    /// settled on, which every launch after it resumes from. The two agree by construction because
+    /// what gets recorded is what the machine ran at, not a second measurement of the same host.
     ///
     /// **How to make the caller's test go red:** answer `true` unconditionally.
     pub fn resumable_at(&self, snapshot_clock: usize) -> bool {
@@ -1592,7 +1620,11 @@ pub fn build(cfg: &Config, first: bool) -> Result<Machine, String> {
     if cfg.profile {
         m.mem.pc_hist = Some(vec![0u64; (8 << 20) >> 6]);
     }
-    m.instr_per_usec = cfg.clock.max(1);
+    // Through `set_clock` even here, where the machine has executed nothing and a bare assignment
+    // would do: one way to move the divisor is a rule that can be checked, and two is a rule
+    // nobody remembers which half of. On a machine at instruction zero the correction it computes
+    // is zero, which is why `research/`'s figures are untouched by its existence.
+    m.set_clock(cfg.clock);
     // **Say it, and say it when it is not the part.** A window running an underclocked iPod that
     // looked exactly like one running a correctly clocked one is how "everything is slow" became a
     // bug report about the click wheel: the machine was faithful and the *rate* was not, and
@@ -1836,9 +1868,61 @@ fn drain(m: &mut Machine, inbox: &Mutex<Inbox>, next_at: &mut u64, gap: u64) {
     }
 }
 
+/// **The one clock decision a session is allowed to take.**
+///
+/// A session measures what the host can sustain every second of wall time, for the window's speed
+/// readout, and could in principle act on any of those. It acts once, when the boot ends, and every
+/// part of that is deliberate:
+///
+/// - **Not never.** Storing the measurement for the *next* launch leaves the run that paid for it
+///   at whatever the last one wrote down — which on a fresh profile is `ipod_machine::CLOCK`
+///   against a host that may deliver a fifth of it. Every first impression of this program was the
+///   slowest it would ever be.
+/// - **Not repeatedly.** An iPod whose speed shifts under somebody's thumb each time a background
+///   task loads the laptop is worse than one that is steadily a little slow. And it would buy
+///   nothing: [`ipod_machine::pace::sustainable`] is a fixed point, so a machine already at its
+///   sustainable clock measures that same clock again.
+/// - **Not on a one-second window**, which was built and measured before this shape was: see the
+///   retune site in [`session`] for the six figures a boot's seconds actually produce and what
+///   deciding on one of them cost.
+///
+/// It settles on the *measurement*, not on a *change* — deciding that the clock in force is already
+/// right is a decision taken, not one deferred, and a later reading must not reopen it.
+struct Retune {
+    /// Whether a decision is still to be taken. `false` from the start where the launch pinned a
+    /// clock, which is what makes `--clock=` mean the same thing here as it does to `trace`.
+    open: bool,
+}
+
+impl Retune {
+    fn allowed(yes: bool) -> Retune {
+        Retune { open: yes }
+    }
+
+    /// The clock to move to, at most once in the life of a session.
+    ///
+    /// `None` for: a run that may not retune, a window that has not closed yet (`sustained` is
+    /// `None`, which is *nobody has looked* and never a speed of zero), a decision already taken,
+    /// and a measurement that names the clock already in force.
+    ///
+    /// **How to make `the_clock_is_moved_once_and_then_held` go red**: drop the `self.open = false`
+    /// line, and it retunes on every window for ever.
+    fn decide(&mut self, sustained: Option<u32>, in_force: usize) -> Option<usize> {
+        if !self.open {
+            return None;
+        }
+        let c = sustained? as usize;
+        self.open = false;
+        (c != in_force).then_some(c)
+    }
+}
+
 /// `base` is where this session's own figures are measured from: instructions executed, the
 /// simulated clock, and halted cycles — all three, because [`Stats::steps_here`] is the sum of the
 /// first and the third and a sum with one origin missing is not a measurement of this session.
+///
+/// [`Stats::cop_executed`] takes no origin: `Machine::cop_executed` is not carried across a
+/// restore and a session builds its own machine, so it counts this process already.
 fn collect(m: &Machine, started: Instant, base: (u64, u32, u64)) -> Stats {
     let w = m.mem.clickwheel.as_ref();
     let mut s = Stats {
@@ -1850,6 +1934,7 @@ fn collect(m: &Machine, started: Instant, base: (u64, u32, u64)) -> Stats {
         steps_here: (m.executed as u64 - base.0) + m.idle_steps.saturating_sub(base.2),
         clock: m.instr_per_usec as u32,
         idle_steps: m.idle_steps,
+        cop_executed: m.cop_executed,
         ..Stats::default()
     };
     if let Some(w) = w {
@@ -2291,10 +2376,9 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
                 // resumed from a snapshot taken at another clock is not slightly off — it is a
                 // machine running at a rate nothing in this process chose, silently, because
                 // `Machine::restore` writes `instr_per_usec` back out of the file and wins over the
-                // value `build` just set. Re-asserting it here instead would be worse: `usec` is
-                // `executed / instr_per_usec + slept_usec`, so changing the divisor under a
-                // half-run machine moves its clock by minutes in one instruction — the exact
-                // failure `Machine::snapshot`'s own doc exists to describe.
+                // value `build` just set. Re-asserting it here instead means adopting a clock this
+                // process has not measured yet and then moving off it a second later, mid-firmware;
+                // see `Config::resumable_at`, which is where that whole argument lives.
                 //
                 // So a mismatch is not a restorable snapshot. It costs one cold boot, once, on the
                 // launch after the clock changes, and the boot writes a new restore point at the
@@ -2423,6 +2507,19 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
     let mut window_at = Instant::now();
     let mut window_steps = 0u64;
     let mut sustained: Option<u32> = None;
+    // **One decision per session, and a power cycle is a new session**, so the machine `run` builds
+    // next starts from `Config::clock` again rather than from what this one settled on. That is
+    // deliberate and not an oversight: a cold boot is *cheaper* at the part's own rate. Pinned
+    // `--battery=100 --rtc=2026-09-06T12:00:00`, the same NOR and the same PRISTINE drive, this
+    // window's own path — a boot at clock 75 costs **896 749 952 steps** and one that had already
+    // dropped to 11 costs **2 208 749 952**, two and a half times the work for the same screen.
+    // Steps rather than seconds on purpose: another program on the laptop moves wall time and
+    // cannot move this.
+    let mut retune = Retune::allowed(cfg.retune);
+    // `cfg.click_gap` is the launch's, and 4 ms of the iPod's time is a different number of
+    // instructions at a different clock. It moves with the divisor or a retuned machine meters a
+    // person's thumb against the clock it used to have. See `ipod_machine::pace::wheel_click_gap`.
+    let mut click_gap = cfg.click_gap;
     // Simulated microseconds, which is the unit `drain` anchors the wheel's script in — and a
     // restored machine starts at whatever its snapshot's clock said, not at zero.
     let mut next_at = u64::from(m.mem.usec);
@@ -2477,7 +2574,7 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
                 Cmd::PowerOn => {}
             }
         }
-        drain(&mut m, &link.inbox, &mut next_at, cfg.click_gap);
+        drain(&mut m, &link.inbox, &mut next_at, click_gap);
 
         // A cold boot enters at 0, where the CPU fetches out of reset, with `r0`-`r3` zeroed and
         // `lr` at the sentinel — exactly `trace.rs`'s `call_with(entry, &[0,0,0,0], …)`. A restored
@@ -2749,6 +2846,8 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
         // Set under the lock below, acted on after it is released: `write_restore_point` is a
         // ~150 MB write and the window reads `Out` sixty times a second.
         let mut booted_now = false;
+        // Said after the lock is released, for the reason the retune below carries.
+        let mut moved_clock: Option<(usize, usize)> = None;
         let mut out = link.out.lock().unwrap();
         let dropped = out.stats.input_dropped;
         out.stats = Stats {
@@ -2821,6 +2920,59 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
                 // an iPod that could not be cold-booted again. A machine that was never seen to
                 // finish starting has nothing worth restoring to.
                 booted_now = measured.is_some();
+                // ── …and this is where the clock stops being a guess ────────────────────────────
+                //
+                // **The boot is the sample, and this run is what it is spent on.** The measurement
+                // was always taken here; what it was spent on was the *next* launch, which left the
+                // first run on a fresh profile at `ipod_machine::CLOCK` against a host that may
+                // deliver a fifth of it — the slowest this program ever runs, on the one run a
+                // person forms their opinion during.
+                //
+                // **Why here and not a second in, which was built, measured, and is worse.** A
+                // second of wall time samples whichever thing the firmware happened to be doing:
+                // the forty one-second windows of one cold boot run 16.0 M steps a second at the
+                // start, down to 2.3 through the disk-heavy middle, and back to 11.0 at the end —
+                // a clock picked off one of them is picked off a coin. Measured, this window's own
+                // path, pinned `--battery=100 --rtc=2026-09-06T12:00:00` against the retail NOR
+                // and the PRISTINE drive: deciding at one second measured 11, and the cold boot
+                // went from **896 999 952 steps to 2 208 749 952** — two and a half times the work
+                // for the same screen. Pinning 11 for the whole boot costs **11 868 249 952**.
+                // Steps and not seconds, because another program on the laptop moves wall time and
+                // cannot move these.
+                //
+                // Deciding here costs the boot nothing at all: the same run measured
+                // **896 999 952 steps** with this switch in it and **896 999 952** with the clock
+                // pinned at 75, the instruction counts agreeing to one part in a hundred thousand.
+                // What changes is everything after. Over the boot's own regime 0.25x of real time
+                // became 1.00x; sitting on the menu, 0.35x became 1.44x — the two differ because
+                // this host retires 18 M steps a second while booting and 26 M while resting, which
+                // is research/10 Addendum 34 §3's open question and not this change's doing.
+                //
+                // **Nobody is waiting on the wheel during a boot**, which is what makes deciding
+                // late nearly free: the interaction issue #34 is about starts the instant this
+                // fires, and so does the right clock.
+                //
+                // The switch cannot spoil the sample that asked for it — `pace::sustainable` is a
+                // fixed point, so a machine already at its sustainable clock measures the same
+                // clock again. That property has its own test, and it is what makes this a
+                // measurement applied rather than a fudge.
+                //
+                // **Under the same lock that publishes `booted_at`, and `out.stats.clock` with
+                // it.** The window's 60 Hz tick reads that pair to decide what to write into
+                // `settings.txt`; a tick that caught the boot's end beside the clock it *started*
+                // at would record 75 permanently. The sentence is printed after the lock, because
+                // a `println!` held under a mutex the UI polls sixty times a second is a stall
+                // waiting for a slow terminal.
+                if let Some(c) = retune.decide(
+                    ipod_machine::pace::sustainable(stats.steps_here, stats.wall_secs)
+                        .map(|c| c as u32),
+                    m.instr_per_usec,
+                ) {
+                    moved_clock = Some((m.instr_per_usec, c));
+                    m.set_clock(c);
+                    click_gap = ipod_machine::pace::wheel_click_gap(c);
+                    out.stats.clock = c as u32;
+                }
             }
         }
         if stop != Stop::BudgetExhausted && stop != Stop::Idle {
@@ -2837,6 +2989,19 @@ fn session(cfg: &Config, link: &Arc<Link>, first: bool, deaths: &mut Deaths) -> 
             return wait_after_stop(link);
         }
         drop(out);
+        // **Said once, because a machine that changes speed under somebody should say so.** The
+        // window's own `of real time` gauge shows the consequence continuously from here on; this
+        // line is the event, and it is the only one — `pump_machine` writes the same number into
+        // `settings.txt` a tick later without a word, because by then it would be describing a
+        // change that had already happened.
+        if let Some((was, now)) = moved_clock {
+            println!(
+                "clock: this computer sustains about {now} interpreter steps per microsecond, so \
+                 this iPod has just moved from {was} to {now} and is running in real time from \
+                 here. An underclocked iPod is a thing hardware does; a correctly clocked one in \
+                 slow motion is not."
+            );
+        }
 
         // ── The boot's end is where the restore point is taken, in BOTH modes ──────────────────
         //
@@ -3497,6 +3662,25 @@ fn report_headless(
             ),
         }
     }
+    // **The other core, in the one unit that can describe it**, and the same line `trace` prints so
+    // that the two fingerprints go on being comparable now that both machines have two cores.
+    //
+    // Instructions and never steps: the halted figure above is the *CPU's*, and a co-processor that
+    // has parked itself executes nothing at all — so a run where this is a few thousand against the
+    // CPU's hundreds of millions is a second core that cost nothing, and one where it is a
+    // comparable number is a second core that is spinning. There was no way to tell those apart
+    // from this fingerprint before, and issue #40 is the question.
+    if m.mem.second_core {
+        let s = collect(m, started, (0, 0, 0));
+        println!(
+            "  second core: {} instructions ({:.1}% of the CPU's), {} — slept {}x, woken {}x",
+            s.cop_executed,
+            100.0 * s.cop_executed as f64 / (m.executed as u64).max(1) as f64,
+            if m.mem.cop_asleep { "asleep" } else { "awake" },
+            m.mem.cop_sleeps,
+            m.mem.cop_wakes
+        );
+    }
     // `commands.seen()`, never `commands.sample().len()`: the log is a `Capped<T>` and its length
     // is a cap wearing a census's clothes. That conflation is research/12's whole subject, and this
     // line was written as `d.command_count` against a field that no longer exists — which is how it
@@ -3950,6 +4134,39 @@ mod tests {
         assert_eq!(unset.clock, 0);
         assert!(unset.resumable_at(1), "the clamped clock `build` would actually have used");
         assert!(!unset.resumable_at(0), "and not the unclamped zero, which no machine ever runs at");
+    }
+
+    /// **The clock is moved once, on the first measurement, and then held for the session.**
+    ///
+    /// Three properties, and each one is a way this has been got wrong. It must fire in the run
+    /// that took the measurement, because that run is the one a person judges the program by. It
+    /// must fire only once, or an iPod's speed shifts under a thumb every time the laptop gets
+    /// busy. And it must not fire at all for a launch that pinned its clock, which is what keeps
+    /// `--clock=` meaning here what it means to `trace` and `ipod-boot` — and with them every
+    /// number in `research/`.
+    ///
+    /// **How to make it go red**: delete `self.open = false` from [`Retune::decide`] (the second
+    /// assertion), or have [`Retune::allowed`] ignore its argument (the last block).
+    #[test]
+    fn the_clock_is_moved_once_and_then_held() {
+        let mut r = Retune::allowed(true);
+        // Nothing measured yet is *nobody has looked*, and it must not decide anything — including
+        // not consuming the one decision the session has.
+        assert_eq!(r.decide(None, 75), None, "an unmeasured window chose a clock");
+        assert_eq!(r.decide(Some(22), 75), Some(22), "the first measurement did not move the clock");
+        assert_eq!(r.decide(Some(12), 22), None, "the clock moved a second time");
+        assert_eq!(r.decide(Some(75), 22), None, "and a third");
+
+        // A measurement that names the clock already in force is a decision taken, not deferred:
+        // the host turned out to be fast enough, and a later window must not get another go.
+        let mut fast = Retune::allowed(true);
+        assert_eq!(fast.decide(Some(75), 75), None, "there was nothing to change");
+        assert_eq!(fast.decide(Some(20), 75), None, "so it went on watching, which it must not");
+
+        // And the pinned launch, which never decides at all.
+        let mut pinned = Retune::allowed(false);
+        assert_eq!(pinned.decide(Some(22), 5), None, "--clock=5 was overruled by a measurement");
+        assert_eq!(pinned.decide(Some(22), 5), None);
     }
 
     /// **The click gap is 4 ms of the iPod's own time at whatever clock the machine is running**,
@@ -5442,13 +5659,23 @@ mod tests {
     /// it was outrun.
     ///
     /// `#[ignore]`, and the name says which kind: it needs `resources/`. Run it by name from a
-    /// release build, and pick the clock:
+    /// release build, and pick the machine:
     ///
     /// ```text
-    /// IPOD_SCROLL_CLOCK=75 cargo test --release -p ipod-gui --bin ipod-emulator \
+    /// IPOD_SCROLL_CLOCK=auto|N  IPOD_SCROLL_CORES=1|2  IPOD_SCROLL_DETENTS=N \
+    ///   cargo test --release -p ipod-gui --bin ipod-emulator \
     ///     a_scroll_at_a_human_rate_is_timed_end_to_end_and_this_needs_resources \
     ///     -- --ignored --nocapture
     /// ```
+    ///
+    /// `auto` is the window's own shape — start at [`ipod_machine::CLOCK`] and move to whatever
+    /// this host is measured to sustain, at the boot's end — and is the only arm that answers *what
+    /// does somebody actually get*. A number pins instead, which is the arm every figure in
+    /// `research/` was taken on. `IPOD_SCROLL_CORES=1` is `--no-second-core`.
+    ///
+    /// **Compare step counts across arms, not wall seconds.** Another program compiling on the same
+    /// laptop moved this test's cold boot from 46.73 s to 68.19 s while the step count stayed at
+    /// 897 M — see research/10 Addendum 34 §1, where two arms were nearly read as a clock result.
     ///
     /// **It is a measurement and not a gate, which is why it asserts almost nothing.** What it does
     /// assert is the pair that would make every printed figure meaningless otherwise: that the
@@ -5466,14 +5693,21 @@ mod tests {
     #[test]
     #[ignore = "needs resources/: Apple's ROM dump and a real drive image, neither of which is in git"]
     fn a_scroll_at_a_human_rate_is_timed_end_to_end_and_this_needs_resources() {
-        let clock: usize = std::env::var("IPOD_SCROLL_CLOCK")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(ipod_machine::CLOCK);
+        // `auto` is the window's own shape and the only arm that answers *what does a person get*:
+        // start at the part's rate and move to whatever this host turns out to sustain, exactly as
+        // a launch on an empty profile does. A number pins the clock instead, which is the arm the
+        // pinned figures in `research/` were taken on.
+        let want = std::env::var("IPOD_SCROLL_CLOCK").unwrap_or_default();
+        let auto = want == "auto";
+        let clock: usize = want.parse().unwrap_or(ipod_machine::CLOCK);
         let detents: usize = std::env::var("IPOD_SCROLL_DETENTS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(60);
+        // **The co-processor ablation, on the same recipe.** `--no-second-core` through the window's
+        // own config, so the matched pair differs in one field. What breaks with one core is half
+        // of what the second one is worth.
+        let one_core = std::env::var("IPOD_SCROLL_CORES").ok().as_deref() == Some("1");
 
         let res = ipod_machine::settings::repo_root().join("resources");
         let rom = res.join("roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin");
@@ -5507,15 +5741,19 @@ mod tests {
             snapshot: None,
             clock,
             click_gap: ipod_machine::pace::wheel_click_gap(clock),
+            retune: auto,
+            one_core,
             snap_at: SNAP_AT,
             boot: BootTarget::Os,
             ..Default::default()
         };
         println!(
-            "\n  clock {clock} instructions per simulated microsecond, click gap {} instructions \
-             ({} ms of the iPod's own time)",
+            "\n  clock {clock} instructions per simulated microsecond{}, click gap {} instructions \
+             ({} ms of the iPod's own time), {}",
+            if auto { " to start with, then whatever this host sustains" } else { ", pinned" },
             cfg.click_gap,
-            cfg.click_gap / clock as u64 / 1000
+            cfg.click_gap / clock as u64 / 1000,
+            if one_core { "ONE core" } else { "two cores" },
         );
 
         let link = Link::new();
@@ -5573,20 +5811,35 @@ mod tests {
         // **Steps, and the clock they would have sustained.** Printed for each regime separately,
         // because a booting machine and a resting one do very different work and an average over
         // both would describe neither — which is the question the calibration has to get right.
-        let show = |what: &str, steps: u64, wall: f64| {
+        //
+        // **The clock in force is read off the machine, not off the launch.** An `auto` arm moves
+        // it a second in, so a line that divided by the number this test was started with would
+        // report the ratio of a machine nobody is running — which is exactly the shape of
+        // instrument `AGENTS.md` §6 is about.
+        let show = |what: &str, steps: u64, wall: f64, in_force: u32| {
             let sustained = ipod_machine::pace::sustainable(steps, wall);
             println!(
                 "  {what:<18} {steps:>12} steps in {wall:6.2} s = {:5.1} M steps/s -> sustains \
-                 clock {:?}, so clock {clock} is {:.2}x real time",
+                 clock {:?}, so clock {in_force} is {:.2}x real time",
                 steps as f64 / wall / 1e6,
                 sustained,
-                sustained.map_or(0.0, |c| ipod_machine::pace::real_time_fraction(clock, c)),
+                sustained
+                    .map_or(0.0, |c| ipod_machine::pace::real_time_fraction(in_force as usize, c)),
             );
         };
-        show("the cold boot", booted.steps_here, booted.wall_secs);
+        show("the cold boot", booted.steps_here, booted.wall_secs, booted.clock);
         println!(
             "    {} instructions executed, {} halted cycles, {} ata commands, {booted_lit} lit",
             booted.executed_here, booted.idle_steps, booted.ata_commands
+        );
+        // **The second core's own work, which no step count can report.** `steps_here` counts the
+        // CPU's halted cycles at the same price as executed ones, so a co-processor that has parked
+        // itself is invisible in it either way round. This is instructions the other core actually
+        // ran.
+        println!(
+            "    co-processor {} instructions ({:.1} % of the CPU's)",
+            booted.cop_executed,
+            100.0 * booted.cop_executed as f64 / booted.executed_here.max(1) as f64
         );
         shot(&link, "booted");
         assert!(
@@ -5600,10 +5853,23 @@ mod tests {
         let rest_at = Instant::now();
         std::thread::sleep(REST);
         let (_, before, _, resting) = look(&link);
+        let rest_wall = rest_at.elapsed().as_secs_f64();
         show(
             "at rest",
             resting.steps_here - at_rest_start.steps_here,
-            rest_at.elapsed().as_secs_f64(),
+            rest_wall,
+            resting.clock,
+        );
+        // **Issue #40's number.** RetailOS uses the co-processor for video decode; sitting on a menu
+        // it should be parked, and a parked core executes nothing. Reported against the CPU's own
+        // instructions over the same ten seconds, because a percentage of *steps* would be a
+        // percentage of a machine that is 99.7 % halted and would flatter anything.
+        let rest_cop = resting.cop_executed - at_rest_start.cop_executed;
+        let rest_cpu = resting.executed_here - at_rest_start.executed_here;
+        println!(
+            "    co-processor {rest_cop} instructions in {rest_wall:.2} s at rest, against the \
+             CPU's {rest_cpu} — {:.1} %",
+            100.0 * rest_cop as f64 / rest_cpu.max(1) as f64
         );
         assert_eq!(
             before, booted_digest,
@@ -5650,6 +5916,7 @@ mod tests {
             "while scrolling",
             driven.steps_here - at_scroll_start.steps_here,
             scroll_at.elapsed().as_secs_f64(),
+            driven.clock,
         );
         println!(
             "\n  ── the scroll ─────────────────────────────────────────────────────────────────\n\
