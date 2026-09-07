@@ -551,6 +551,230 @@ two unattributed ones are late effects of a gesture rather than housekeeping. It
 last worry about the model: a recorder that printed nine clicks and could not print zero would be
 telling you nothing, and this is the run where it prints zero.
 
+#### Scrolling settled: there is no acceleration, and the fold is ours — 2026-09-07
+
+The section above left one thing open — *"on scrolling it is not [settled], and the honest answer is
+that this run cannot separate the firmware's policy from our wheel's delivery"* — and the operator
+asked the same question from the other end: a real iPod clicks constantly as a list moves, ours
+clicks about five times.
+
+**It separates.** Every arm below is `ipod-boot retail` on
+`roms/retail_5g_MA146_HwVr000B0005_internal_rom_000000-0FFFFF.bin` and `drives/ipod8g-retail.img`,
+at the part's own clock, with the PMU clock pinned so the arms are comparable to the instruction:
+
+```sh
+BUDGET=20000000000 ipod-boot retail --clock=75 --until=32s --rtc=2026-09-07T12:00:00 \
+  --wheel='@20s:touch,+1s:rotate=+60,+3s:release' --wheel-click-instr=1950000 \
+  --enterlog=0x000dd018,0x000cd6a0,0x001181f8,0x000cd430
+```
+
+**`--wheel-click-instr` is the knob, and the obvious one is not.** `+26ms:rotate=+60` sets when the
+rotate *starts*; the spacing between its sixty steps is `click_instr` and nothing else. Three arms
+written that way came back byte-identical — 6 events, 2 clicks, three times — which reads as *the
+rate does not matter* and is instead an instrument that was never varied. In a time-anchored script
+the flag is instructions and `parse_wheel_script` divides by the clock, so 26 ms at clock 75 is
+`--wheel-click-instr=1950000`.
+
+##### RetailOS's wheel path has no acceleration in it. It has a threshold, and a queue of one
+
+Read out of the image, and then watched running.
+
+`0x000dd018`, the scroll accumulator, works on `r5 = 0x1081d998`:
+
+```text
+000dd028  tst r4, #0x40000000     ; touched now?
+000dd02c  sub r0, r4, r1          ; delta against [+0x1c], the previous frame
+000dd03c  cmp r0, #0x48           ; ...wrapped into +-72 by +-0x60
+000dd050  ldr r1, [r5, #0x4]      ; T, the threshold
+000dd058  cmp r0, r1              ;   |delta| >= T -> emit; else accumulate into [+0xc]
+000dd084  ldr r1, [r5, #0x10]     ; emit: the running TOTAL...
+000dd088  add r0, r1, r0          ;   ...gains the delta, every time, 1:1
+000dd098  ldrb r0, [r5, #0x0]     ; and the event is posted ONLY if none is pending
+000dd0a0  bleq 0x000cd6a0
+000dd0a4  ldr r0, [r5, #0xc]      ; once the accumulator passes +-3...
+000dd0b0  strcs r6, [r5, #0x4]    ;   ...T := 0, and every later detent takes the emit path
+```
+
+So **T is a dead zone that opens after four detents and never comes back while the finger is down**,
+and past it the firmware is 1:1. `--storeaddr=0x1081d99c` watches T do exactly that: written **3** by
+`0x00084394` during the boot, dropped to **0** by `0x000dd0b0` four detents into the gesture. Nothing
+in this file multiplies, divides or squares a delta. There is no acceleration to find.
+
+What folds is the **post**, not the motion. `0x000cd6a0` is four instructions — `strb #1,
+[0x1081d998]` then `b 0x000adb54`, which posts a `'Weel'` (`0x5765656c`) event — and `0x001181f8` is
+the consumer: it returns `[+0x10] - [+0x14]`, the whole accumulated delta, and clears that byte. One
+event may be outstanding at a time. Every arm below has `0x000cd6a0` and `0x001181f8` at **exactly
+equal counts**, which is that queue of one, seen from both ends.
+
+**The click is requested once per view transition.** `--enterlog=0x000cd430` — RetailOS's piezo API —
+puts **every** fire of every scroll arm at `lr = 0x001b9200` — the call at `0x001b91fc`, with
+`r0 = 0x55` and `r1 = 0xbb8` (3 ms), inside the screen-transition function that begins at
+`0x001b9168` and clicks when `[r4+0x3e] & 1`. **The scroll path itself never clicks**: `0x000adb54`,
+where `0x000cd6a0` tail-branches to post the event, reaches nothing that calls `0x000cd430`. The
+redraw the event causes is what clicks.
+
+*(The button path reaches the same API by a different road — `0x000ada4c` tails into `0x000a69dc`,
+which reads the Clicker setting at `0x1081d9c4` and then either clicks directly or delegates to
+`0x001b9168`. No arm here pressed a button, so nothing above is evidence about buttons; the button
+measurement is the 2026-09-06 section and stands unchanged.)*
+
+##### Measured: the same gesture, three speeds
+
+62 steps every time — one touch, sixty detents, one release. Only the spacing changes.
+
+| detent spacing | detents/s | `'Weel'` events | clicks | panel frames | rows the list moved |
+|---|---|---|---|---|---|
+| **4 ms** — what `ipod-gui` sends | 250 | 6 | **2** | 8 | 2 *(inferred)* |
+| 26 ms — a thumb | 38 | 8 | **4** | 10 | 4 — English → Deutsch |
+| 100 ms | 10 | 14 | **10** | 16 | 10 — English → Nederlands |
+
+The two named rows are read off `--bcm-dump=e0000:140:f0:` at the end of those runs: the machine is
+on the first-run **Language** picker, which is long, so nothing here is a list running out. **Clicks
+equal panel frames minus the boot's own six in all three arms**, and equal the rows actually
+photographed in the two that were photographed — so the 4 ms row count is that identity carried one
+step, not a picture anybody looked at.
+
+**The ceiling is not the wheel.** The fires are **555 ms apart in every arm** — 548, 554, 558 ms at
+26 ms spacing; 531 … 616 ms at 100 ms; 555 ms at 4 ms — and in *instructions* they are 41.6 M apart
+in all three. That is a fixed amount of work per list move, not a timer and not a rate we set. The
+count of clicks is simply how many 555 ms redraws fit inside the gesture, which is why spreading the
+same sixty detents over six seconds instead of a quarter of one buys five times the clicks **and five
+times the scrolling**.
+
+`--profile --profile-window=` over one such interval puts **58.6%** of it in the four-instruction
+zero-fill loop at `0x0007cce8`, entered at `0x0007ccd0`; `--enterlog=0x0007ccd0` counts **387 076**
+calls across the run, with small lengths (5, 0x30, 0x200, 0x1e …). So it is very many small fills
+rather than one large one, with `ImagePresentationEngine` next at 6.3%. **Read the profiler's split
+between `0x0007cce0` and `0x0007ccf0` — 56.7% against 1.9% — as one number and not two**: the sampler
+fires every 64th instruction and the loop is four long, so it lands on the same phase of the loop
+every time and the bucket boundary falls inside it. Their sum is the measurement; their ratio is an
+artefact of a systematic sampler aliasing against a short loop.
+
+##### The oracle: Rockbox does not fold, and it is the control for the machine
+
+`hardware keyclick` is off in stock Rockbox, so the first arm is a **zero that had to be made
+non-zero before it meant anything** — `/.rockbox/config.cfg` with `hardware keyclick: on` written
+onto a writable clone of `drives/ipod8g-rockbox.img`. That is configuration, not modification: the
+name is `settings_list.c:2275`'s own, the binary is untouched.
+
+| arm, same 62 detents | clicks | panel frames |
+|---|---|---|
+| stock, no `config.cfg` | **0** — no piezo section printed at all | — |
+| keyclick on, 4 ms spacing | **8** | 65 |
+| keyclick on, 26 ms spacing | **8** | 69 |
+
+Two things fall out. **Rockbox is rate-independent where RetailOS is not** — 8 either way — which is
+`button-clickwheel.c` posting one event per frame with a non-zero delta, gated by
+`button_queue_empty()`: the same queue-of-one shape as Apple's, against a consumer that keeps up.
+
+And the like-for-like number, which is the interval and not the total: **Rockbox's eight fires are
+104 ms apart** (21.083 · 21.187 · 21.291 · 21.395 · 21.499 · 21.603 · 21.707 · 21.811 s — a
+metronome) against RetailOS's 555 ms, on the same emulated machine, in the same session, through the
+same `--wheel` script. So the 555 ms is RetailOS's own cost and not our model refusing to go faster.
+*(The panel-frame totals in that table are for the whole 32 s run and are not comparable across the
+two firmwares — Rockbox boots in a fraction of the time and sits at its menu redrawing a clock. The
+interval is the comparison; the totals are context.)* Whether a real 5G pays 41.6 M instructions for
+a list row is a different question and is **not** answered here.
+
+##### `Pad::on_ring`'s missing hysteresis is implicated, and it is the sharpest of the three
+
+The operator's words were *"i only get haptics when i go over the edge on the trackpad"*, and this is
+why. The decoder at `0x00281350` does this on **every frame with the touch bit clear**:
+
+```text
+00281390  moveq r0, #0x3
+00281394  streq r0, [r3, #0x4]    ; T := 3      -- the dead zone is re-armed
+002813a8  streq r2, [r3, #0xc]    ; accumulator := 0
+```
+
+and `0x000dd018`'s release arm posts a `'Weel'` event of its own. So a lift is not neutral: it costs
+the four detents needed to reopen the gate, and it rings the bell on the way out.
+
+`ipod-gui`'s `Pad::on_ring` had no hysteresis — a contact was on the wheel iff `WheelRing::hit` said
+so, per frame, on a pad that samples at ~124 Hz. A finger circling near `CENTRE` therefore lifted and
+landed repeatedly. Scripted, with a release-and-touch pair inserted into the same 26 ms gesture:
+
+| chatter | `'Weel'` events | clicks | panel frames |
+|---|---|---|---|
+| none — one unbroken contact | 8 | **4** | 10 |
+| a pair every 5 detents | 13 | **3** | 9 |
+| a pair after **every** detent | 60 | **0** | **6** — the boot's own |
+
+The last row is the whole finding: sixty detents, every one delivered and decoded, and the list
+**does not move at all** and RetailOS **never clicks**. The gate never opens, so no detent ever
+reaches the total. More events, less motion.
+
+Fixed in `tools/ipod-gui/src/trackpad.rs`: the contact is now held across `ARM_MM` (1.5 mm — the band
+already measured for the edge marks) before it leaves the wheel. The *mark* still fires on the true
+line, because a boundary announced late is reported in the wrong place; only the contact is
+hysteretic. **This overturns a decision that was recorded rather than assumed** — `ARM_MM`'s note
+used to end *"a Schmitt trigger would move the boundary, and the boundary is not this feature's to
+move … and the wheel behaves exactly as it did before"* — and it is overturned by a fact its author
+did not have, which is that an untouched frame reaches into Apple's firmware and re-arms a dead zone.
+One geometric guarantee is genuinely lost with it: a centre mark and a detent could not previously
+occur in the same frame, and now can. What that was protecting is untouched, because it never rested
+on the geometry — `Ticks::due` reads `self.click` and no field a mark can write, so marks still
+cannot starve a click.
+
+**The chatter is the trackpad's and not the part's.** A 5G has a moulded bezel between the ring and
+the centre button; a rectangle of glass has nothing there to feel. Holding the contact is the adapter
+compensating for a physical edge the input device lacks, and it stops at the adapter — nothing in
+`ipod-machine` moved.
+
+##### What is left, stated as ours
+
+- **The 4 ms delivery floor is a real hazard that is not currently firing, and the difference is the
+  clock.** `emu::drain` spaces appended steps by `click_gap` — 4 ms of the iPod's own time, 250
+  detents/s — and that figure is `--wheel-click-instr`'s default, whose own comment calls it *"a
+  brisk but human scroll"*. It was chosen for **scripts**, where it is the spacing you asked for, and
+  nothing ever checked it against hardware. Used as the delivery rate for **live** input it would be
+  a category error, because live input already has a rate: the hand's — and `Inbox` is a
+  `VecDeque<WheelEvent>` with no arrival time on it, so `drain` has nothing to pace against and falls
+  back to the floor **whenever a backlog exists**.
+
+  A backlog exists whenever the machine is slower than life, which is what `drain`'s own note
+  records from clock 75: *"1.2 s of wall time and 120 ms of the iPod's own"*, a tenfold compression.
+  The table above prices that at half the clicks and half the scrolling.
+
+  **But at the clock the window actually ships, there is no backlog.** Measured this session, same
+  host, `a_scroll_at_a_human_rate_is_timed_end_to_end_and_this_needs_resources` at clock 16 — sixty
+  detents pushed one every 16 ms of wall time:
+
+  ```text
+  60 detents, one every 16 ms — the finger was on the wheel for 1.30 s
+  reached the wheel after       1.31 s
+  frames posted 62 (0 dropped unread, 0 suppressed)
+  ```
+
+  Ten milliseconds of lag across a 1.3 s drag: the queue never fills, so the floor never becomes the
+  rate. **The clock calibration of 2026-09-07 already closed this**, and a change to `drain` today
+  would buy nothing on the machine it ships on. It is recorded here because the hazard is still in
+  the code and returns the moment the machine falls behind — `--clock=75` is exactly that machine,
+  and the compression is fully present there. The fix, if it is ever wanted, is an arrival `Instant`
+  on the queued event, not a different constant.
+- **The 555 ms redraw is the dominant term and is not this section's.** It is Addenda 20–25's
+  output-stage wall. Nothing about the wheel can raise a click rate that RetailOS caps at 1.8 Hz.
+
+##### The operator's six, arithmetic rather than impression
+
+His log was `released — 4736 frames, 6 detents felt, 61 edges felt (centre)`, on a machine the clock
+calibration had settled at **16**. 41.6 M instructions is 555 ms of the iPod's time at clock 75 and
+**2.6 s at clock 16** — and clock 16 is chosen precisely so that a simulated second costs a wall
+second, so it is 2.6 s of *his* time per list row. 4736 frames at the pad's ~124 Hz is about 38 s of
+contact, which has room for roughly **fifteen** rows. He got six, and the 61 edge crossings are where
+the other nine went: each one re-armed the four-detent gate.
+
+So none of the three terms is a mystery and only one of them is large. **Six was the machine
+answering correctly**, and the pulse he is missing is a pulse RetailOS did not ask for — which is why
+the window must not manufacture it, and why the way to the sound he remembers runs through the
+redraw.
+
+**So `Piezo::fires` is faithful and the window must not invent a pulse.** Five or six clicks across a
+long drag is the guest asking five or six times, because the guest moved the list five or six rows.
+The way to more clicks is more rows — deliver the gesture at the rate it was made, keep the contact
+whole, and make the redraw cheaper — and every one of those is a change to the emulator rather than
+to the actuator.
+
 ### TV-out is behind the BCM too
 
 Unlike the Photo/Color, which used a separate Analog Devices ADV7179 encoder, the 5G's TV-out hangs

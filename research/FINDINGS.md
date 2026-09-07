@@ -8,7 +8,7 @@ that. What it adds is a way to tell a live answer from a dead one **without read
 whole file** — because a document that grows by addendum puts its current answer at the
 bottom, and nothing on the page says so.
 
-915 headings across 18 documents — 50 dated, 19 settled, 15 retracted, 6 corrected.
+922 headings across 18 documents — 51 dated, 19 settled, 15 retracted, 6 corrected.
 
 ## Where each document stands today
 
@@ -21,7 +21,7 @@ above it in the same document may have been superseded.
 | [`02-retailos-boot.md`](02-retailos-boot.md) | *nothing in it is dated* | — | |
 | [`03-rtxc-and-the-video-coprocessor.md`](03-rtxc-and-the-video-coprocessor.md) | 58.  The audio subsystem does start — it needs the coprocessor, 2026-09-05 | `2026-09-05` | settled |
 | [`04-bypass-ledger.md`](04-bypass-ledger.md) | Caveat on the interrupt-wake fix (2026-08-31) — it stops the machine idli… | `2026-08-31` |  |
-| [`05-the-chip-inventory.md`](05-the-chip-inventory.md) | The click — `PWM0_CTRL` at `0x7000A000`, and it is a PWM channel, not a p… | `2026-09-06` |  |
+| [`05-the-chip-inventory.md`](05-the-chip-inventory.md) | Scrolling settled: there is no acceleration, and the fold is ours — 2026-… | `2026-09-07` |  |
 | [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md) | Doom is played: input reaches the game, and the press has to land inside… | `2026-09-06` |  |
 | [`07-the-flash-images.md`](07-the-flash-images.md) | The storm was the vector table, and the chord now takes input — 2026-09-06 | `2026-09-06` | settled |
 | [`08-differential-register-map.md`](08-differential-register-map.md) | *nothing in it is dated* | — | |
@@ -122,11 +122,12 @@ and nothing dated replaced it.
 
 ### [`05-the-chip-inventory.md`](05-the-chip-inventory.md)
 
-15 headings, 1 of them marked or dated:
+22 headings, 2 of them marked or dated:
 
 | line | when | state | heading |
 |---|---|---|---|
 | 298 | 2026-09-06 |  | The click — `PWM0_CTRL` at `0x7000A000`, and it is a PWM channel, not a piezo — 2026-… |
+| 554 | 2026-09-07 |  | Scrolling settled: there is no acceleration, and the fold is ours — 2026-09-07 |
 
 ### [`06-rockbox-as-oracle.md`](06-rockbox-as-oracle.md)
 
