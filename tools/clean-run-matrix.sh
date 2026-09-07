@@ -338,34 +338,121 @@ goal() {                            # $1 target  $2 gen  $3 label  $4 route  $5 
   fi
 }
 
-# ipodloader2 — the third bootloader. research/16: it builds, installs, and Apple's bootloader
-# enters it. Two bugs blocked it and BOTH WERE UPSTREAM'S, fixed by tools/patches/ipodloader2-vfs
-# .patch: `vfs.c:193` tests the firmware magic with `mlc_strncmp`, which returns 0 on a match, so
-# the partition was accepted only when `]ih[` did NOT match; and there is no case for FAT32-LBA
-# (`0x0C`), which is what iTunes on Windows produces and what this project's own make-disk writes.
+# ── the two rows that need a drive nobody has, and the one command that would build it ─────────
 #
-# **It needs `--rdval=0x70000000=0x3232432D`, and that is an ABLATION, not a fake.** Apple's
-# bootloader reads bits 16..23 and wants 0x36; ipodloader2 reads the same bits and wants 0x32.
-# Two drivers want different answers from one register. Seeding it truthfully with `PP5022C-` took
-# the retail boot from 599 ATA commands to 0 — measured, and the reason this is not simply fixed.
+# `ipodloader2` and iPodLinux are not entered from the NOR and are not raw images handed to the
+# machine. They live on a drive that has to be BUILT: the bootloader written into the firmware
+# partition where Apple's own bootloader looks for an OS, and ZeroSlackr's five directories written
+# onto the FAT32 volume beside it. `ipod-boot install-linux` is that command, and both rows below
+# stand or fall on it, so it runs once per generation and both rows read the same answer.
+#
+# **Neither vendor artefact is missing, and the paths this used to gate on never existed.** The
+# rows read `resources/vendor/ipodloader2/bin/loader.bin is not here` and
+# `resources/vendor/ipodlinux/boot/vmlinux is not here`; there is no `bin/` under `ipodloader2/`
+# and no `ipodlinux/` under `vendor/` at all. Both files are on this machine, verified 2026-09-06:
+#
+#   resources/vendor/ipodloader2/loader.bin          57 676 B  iPL 2.9.0d, built from upstream
+#                                                              master at a41ec49 — rebuilt into a
+#                                                              scratch tree and compared, byte for
+#                                                              byte identical, so it is that source
+#   resources/vendor/zeroslackr/tree/boot/vmlinux  1 531 200 B  sha256 9c7b66e2…, the kernel
+#                                                              research/16 recorded, hash checked
+#
+# **`install-linux` reaches for neither of them, deliberately.** `ipodlinux::resolve_loader` does
+# not consult `resources/vendor/` even as a fallback — it is gitignored, so preferring it made the
+# command work only inside this checkout — and fetches the v2.8.1 RELEASE instead (56 912 B, SHA-256
+# on record, already in the cache here and verified). It takes the ZeroSlackr tree from
+# `resources/vendor/zeroslackr/tree` when that is unpacked, and fetches the 101 MB archive when it
+# is not; unpacking shells out to `7z`/`7za`/`7zz` and says so plainly when none is on PATH. This
+# script's whole question is the path a NEW user walks, so these rows set no IPOD_LOADER and get the
+# release like anybody else. That also means they do not measure the 2.9.0d numbers in research/17,
+# which nobody has yet re-measured against 2.8.1.
+#
+# **There is no patch, and the row must not imply one.** This comment used to cite
+# `tools/patches/ipodloader2-vfs.patch` for two upstream bugs. That file is deleted and the claim
+# was retired in research/16 §"The patch was compensating for our test disk": the FAT32-LBA `0x0C`
+# case was our own fixture rather than upstream's defect — `make-disk` writes `0x0B`, which upstream
+# handles — and the inverted `mlc_strncmp` firmware-magic test is real but COSMETIC, because the
+# loader boots from the FAT32 volume and never needed partition 0. Nothing in this project patches
+# an operating system it runs.
+#
+# **`--rdval=0x70000000=0x3232432D` is gone too**, and the runs below must not pass it. research/16
+# §"RESOLVED: the part is a PP5022" measured the cause on 2026-08-20: what was missing was a USB
+# clock, not a register value. `0x70000000` now reports `PP5022C-` truthfully to every guest with
+# nothing supplied and no per-operating-system flag, and retail is unchanged at 599 ATA commands.
+#
+# Sets LINUX_DRIVE to a drive that boots iPodLinux, or leaves it empty and puts the reason in
+# LINUX_BLOCKED. Memoised per generation — including the failure, so a refusal is reported once per
+# row rather than re-attempted per row.
+LINUX_DRIVE=""; LINUX_BLOCKED=""
+build_linux_drive() {               # $1 gen  $2 source drive
+  local gen="$1" src="$2"
+  local img="$SCRATCH/linux-$gen.img" err="$SCRATCH/linux-$gen.err" part="$SCRATCH/linux-$gen.part"
+  LINUX_DRIVE=""; LINUX_BLOCKED=""
+  [ -n "$src" ] || { LINUX_BLOCKED="no drive built for this generation"; return; }
+  # **A refused `install-linux` still leaves its 8 GB output file behind**, because it copies the
+  # source drive into place and only then discovers it cannot fit the bootloader. So the existence
+  # of the output is NOT evidence that the install worked, and the first version of this function
+  # tested `-f $img` before the error marker: `loader2` reported BLOCKED correctly, and then
+  # `ipodlinux` and `triple` picked up the leftover copy — a plain RetailOS drive with no
+  # bootloader on it — booted it through the `loader` recipe and reported a verdict for it.
+  # Observed, on the run that was supposed to check this change. That is AGENTS.md §6 exactly: an
+  # instrument reporting a number it could not have measured.
+  #
+  # Building to `.part` and renaming only on success removes the ambiguity instead of ordering
+  # around it, which is the same "nothing renamed into place until it verifies" rule the firmware
+  # fetcher follows. The error marker is still consulted first, so a generation that cannot build
+  # is reported once per row rather than re-attempted per row.
+  [ -f "$err" ] && { LINUX_BLOCKED="$(cat "$err")"; return; }
+  [ -f "$img" ] && { LINUX_DRIVE="$img"; return; }
+  rm -f "$part"
+  if "$BIN" install-linux "$src" "$part" > "$SCRATCH/il-$gen.log" 2>&1 && [ -f "$part" ]; then
+    mv "$part" "$img"; LINUX_DRIVE="$img"; return
+  fi
+  rm -f "$part"
+  # Its own refusal, verbatim. The line above it in the log names which loader was resolved, which
+  # is not the failure and must not be reported as one. A row that invents its own wording for
+  # somebody else's error is a row that goes stale the moment the error changes.
+  LINUX_BLOCKED="$(sed -n 's/^ipod-boot install-linux: //p' "$SCRATCH/il-$gen.log" | head -1)"
+  [ -n "$LINUX_BLOCKED" ] || LINUX_BLOCKED="ipod-boot install-linux failed; see $SCRATCH/il-$gen.log"
+  printf '%s\n' "$LINUX_BLOCKED" > "$err"
+}
+
+# ipodloader2 — the third bootloader. research/16: Apple's bootloader finds it in the firmware
+# partition and enters it exactly as it enters RetailOS and the Rockbox bootloader, and it then
+# prints its own console, walks the FAT32 volume and loads `/boot/vmlinux`.
+#
+# **The recipe is `ipod-boot loader`, not `retail`, and that is not a preference.** research/17
+# §"Reproducing the rows is two steps" is explicit: `loader` is `--osos-from-disk`, which enters the
+# bootloader sitting in the drive's own firmware partition. `retail` runs Apple's bootloader from
+# the ROM, which on a drive built by `install-linux` would boot RetailOS sitting in front of the
+# loader — and this row would then report RetailOS's pixels as ipodloader2's, which is the exact
+# shape of AGENTS.md §6. The recipe also supplies `--sysinfo`, without which the loader dereferences
+# the wrong sysinfo pointer, leaves hw_rev 0 and addresses a 1G iPod's registers forever.
 boot_loader2() {                    # $1 nor  $2 gen  $3 label  $4 drive
   local nor="$1" gen="$2" label="$3" drive="$4"
   local out="$SCRATCH/ldr-$gen-$label" work="$SCRATCH/ldr-$gen-$label.img"
-  [ -f "$RES/vendor/ipodloader2/bin/loader.bin" ] || {
-    row loader2 "$gen" "$label" - BLOCKED "resources/vendor/ipodloader2/bin/loader.bin is not here"; return; }
-  [ -n "$drive" ] || { row loader2 "$gen" "$label" - BLOCKED "no drive built for this generation"; return; }
-  mkdir -p "$out"; clone_disk "$drive" "$work"
-  FLASH="$nor" DISK="$work" BUDGET=2000000000 "$BIN" retail --clock=5 \
-    --rdval=0x70000000=0x3232432D --clickwheel \
+  build_linux_drive "$gen" "$drive"
+  [ -n "$LINUX_DRIVE" ] || { row loader2 "$gen" "$label" - BLOCKED "$LINUX_BLOCKED"; return; }
+  mkdir -p "$out"; clone_disk "$LINUX_DRIVE" "$work"
+  FLASH="$nor" DISK="$work" BUDGET=2000000000 "$BIN" loader --clock=5 --clickwheel \
     --bcm-film=0xE0000:140:F0:25000000:"$out" > "$out.log" 2>&1
-  local pics nb; pics=$(pictures "$out"); nb=$(last_nonblack "$out")
-  # It draws its own menu — text on a background, so a few thousand lit pixels, not a full screen.
+  local pics nb ata; pics=$(pictures "$out"); nb=$(last_nonblack "$out")
+  # **ATA commands are the evidence, and the pixels are the corroboration.** research/17 records
+  # 3 196 ATA commands and no unmapped accesses, identical on all three ROMs — the loader reads the
+  # drive, walks the volume and jumps, and does not care which ROM it came through. `trace` prints
+  # `ata commands: N` once, at the end; the old row grepped for `ata ` and counted log lines.
+  # **The count only, because the line carries prose after it.** `trace` prints
+  # `ata commands: 3870  (log below shows the first 256 — SAMPLE, NOT A CENSUS)`, and taking
+  # everything after the colon put that parenthesis in the middle of the evidence column. The
+  # caution is about the per-command LISTING below it, not about the total, which is a census.
+  ata=$(sed -n 's/^ata commands: \([0-9][0-9]*\).*/\1/p' "$out.log" | tail -1)
   if [ "${nb:-0}" -gt 1000 ]; then
-    goal loader2 "$gen" "$label" "chain" "MET $pics pictures, $nb non-black — it drew" \
-      "97 frame updates, 74 419 non-black (research/16, 2026-08-19)"
+    goal loader2 "$gen" "$label" "chain" "MET ${ata:-0} ATA, $pics pictures, $nb non-black — it drew" \
+      "3 196 ATA commands, no unmapped (research/17, 2026-08-20, on 2.9.0d)"
   else
-    goal loader2 "$gen" "$label" "chain" "$pics pictures, $nb non-black" \
-      "97 frame updates, 74 419 non-black (research/16, 2026-08-19)"
+    goal loader2 "$gen" "$label" "chain" "${ata:-0} ATA, $pics pictures, $nb non-black" \
+      "3 196 ATA commands, no unmapped (research/17, 2026-08-20, on 2.9.0d)"
   fi
 }
 
@@ -373,47 +460,61 @@ boot_loader2() {                    # $1 nor  $2 gen  $3 label  $4 drive
 # `ldmia sp, {r0-pc}^`, an ARM exception return restoring user-mode registers, having taken
 # interrupts — a Linux kernel servicing its own traps — and reaching ZeroLauncher's splash.
 #
-# **Where it stops is named, and it is one page.** It polls `0x64004000..0x64004103`, 8 385 336
-# reads from two PCs a few instructions apart inside the interrupt path. That address appears in
-# NO register map available to this project — not Rockbox's pp5020.h, not ipodloader2's own
-# headers. Modelling it is the 0.6 work, and it is a much better question than the one that
-# started that note.
+# **Where it stops is named, and it is no longer an unmapped page.** This comment used to say the
+# kernel polls `0x64004000..0x64004103` 8 385 336 times from two PCs inside the interrupt path, and
+# that modelling that address was the work. It was, and it was done: research/16 §"The kernel boots,
+# and it says so" records that with the mirror in place a 12 G run reports the unmapped set EMPTY.
+# The kernel now ends at `00024cb8  b 0x00024cb8`, which is not a hang on hardware — the three
+# instructions before it are `mrs r3, cpsr` / `bic r3, r3, #0x80` / `msr cpsr_c, r3` and the string
+# loaded just above is `"<0>In idle task - not syncing"`. That is the tail of Linux's `panic()`,
+# and `--enterlog` on `printk` turns its 163 calls into a readable console.
 #
-# docs/GUI.md §15 names the same stall from the other end — "iPodLinux boots ... and then
-# ZeroLauncher stalls at 'Finishing Up…'". That is the SYMPTOM; the `0x64004000` poll is a
-# MECHANISM measured in a comparable run. They are consistent, not rival: one is what a person
-# sees, the other is what the machine does. (An earlier version of this comment called them
-# contradictory and said at most one could be current. That was wrong.) Whether they are the
-# same stall is not established — GUI.md's runs come from `ipod-boot install-linux` drives and
-# research/16's from the ipodloader2 chain — and establishing it is worth more than it sounds,
-# because it would turn a stalled splash screen into one unmapped page.
+# So the open question moved from a register to a filesystem: `root=/dev/hda3` is the compiled-in
+# default command line at `0x12efa`, and this drive has two partitions. A working iPodLinux drive
+# also needs an `hda3` to mount, which `install-linux` does not create.
+#
+# docs/GUI.md §15 names a stall from the other end — "iPodLinux boots ... and then ZeroLauncher
+# stalls at 'Finishing Up…'". Whether that is this panic is NOT established; GUI.md's runs come
+# from `ipod-boot install-linux` drives and research/16's from the ipodloader2 chain.
 boot_ipodlinux() {                  # $1 nor  $2 gen  $3 label  $4 drive
   local nor="$1" gen="$2" label="$3" drive="$4"
   local out="$SCRATCH/ipl-$gen-$label" work="$SCRATCH/ipl-$gen-$label.img"
-  [ -f "$RES/vendor/ipodlinux/boot/vmlinux" ] || {
-    row ipodlinux "$gen" "$label" - BLOCKED "resources/vendor/ipodlinux/boot/vmlinux is not here"; return; }
-  [ -n "$drive" ] || { row ipodlinux "$gen" "$label" - BLOCKED "no drive built for this generation"; return; }
-  mkdir -p "$out"; clone_disk "$drive" "$work"
-  FLASH="$nor" DISK="$work" BUDGET=6000000000 "$BIN" retail --clock=5 \
-    --rdval=0x70000000=0x3232432D --clickwheel \
+  build_linux_drive "$gen" "$drive"
+  [ -n "$LINUX_DRIVE" ] || { row ipodlinux "$gen" "$label" - BLOCKED "$LINUX_BLOCKED"; return; }
+  mkdir -p "$out"; clone_disk "$LINUX_DRIVE" "$work"
+  FLASH="$nor" DISK="$work" BUDGET=6000000000 "$BIN" loader --clock=5 --clickwheel \
     --bcm-film=0xE0000:140:F0:25000000:"$out" > "$out.log" 2>&1
   local pics nb ata; pics=$(pictures "$out"); nb=$(last_nonblack "$out")
-  ata=$(grep -c 'ata ' "$out.log" 2>/dev/null || echo 0)
-  goal ipodlinux "$gen" "$label" "loader" "$pics pictures, $nb non-black" \
-    "kernel executes, stops polling 0x64004000 (research/16)"
+  # **The count only, because the line carries prose after it.** `trace` prints
+  # `ata commands: 3870  (log below shows the first 256 — SAMPLE, NOT A CENSUS)`, and taking
+  # everything after the colon put that parenthesis in the middle of the evidence column. The
+  # caution is about the per-command LISTING below it, not about the total, which is a census.
+  ata=$(sed -n 's/^ata commands: \([0-9][0-9]*\).*/\1/p' "$out.log" | tail -1)
+  goal ipodlinux "$gen" "$label" "loader" "${ata:-0} ATA, $pics pictures, $nb non-black" \
+    "kernel executes, then panics in idle (research/16)"
 }
 
-# Triple boot — RetailOS, Rockbox and iPodLinux, chosen from one loader menu. This is the row that
-# names the real blocker, and it is a single register.
+# Triple boot — RetailOS, Rockbox and iPodLinux, chosen from one loader menu.
 #
-# `0x70000000` bits 16..23: Apple's bootloader wants 0x36, ipodloader2 wants 0x32. There is no
-# value that satisfies both, so the chain currently runs on the ablation above. **Until that is
-# resolved honestly, triple boot cannot be a truthful row** — it would be measuring a machine we
-# broke to make it pass. It is listed so the goal is visible and so the blocker has somewhere to
-# be written down, not because a number is expected.
+# **The register blocker this row used to name is RESOLVED and the wording was false.** It said
+# `0x70000000` bits 16..23 admit no value serving both Apple's bootloader and ipodloader2. They do:
+# research/16 §"RESOLVED: the part is a PP5022" measured on 2026-08-20 that the missing piece was a
+# USB clock — map `USB_BASE` (`0xc5000000`, Rockbox pp5020.h:580), treat bit 1 of `+0x140` as a
+# self-clearing reset, and raise the clock-ready bit from that write instead of from `DEV_INIT2`.
+# With those three, the register reports `PP5022C-` truthfully to everybody and retail is unchanged
+# at 599 ATA commands. Leaving the old text here would have kept a solved problem on the board.
+#
+# What actually blocks the row now is upstream of it: the same `install-linux` refusal the two rows
+# above report, because a triple-boot drive is that drive plus a Rockbox image. No number is
+# expected until a loader drive can be built at all.
 boot_triple() {                     # $1 nor  $2 gen  $3 label  $4 drive
-  goal triple "$2" "$3" "-" "blocked on one register" \
-    "0x70000000 bits 16..23: Apple wants 0x36, ipodloader2 wants 0x32 — no value serves both"
+  build_linux_drive "$2" "$4"
+  if [ -z "$LINUX_DRIVE" ]; then
+    row triple "$2" "$3" - BLOCKED "$LINUX_BLOCKED"
+  else
+    goal triple "$2" "$3" "-" "drive builds; the menu is not driven yet" \
+      "RetailOS, Rockbox and iPodLinux chosen from one loader menu"
+  fi
 }
 # ── one generation: build its drive, mint its ROM, run every target on both NOR sources ────────
 generation() {                      # $1 label  $2 model  $3 families  $4 seed  $5.. real dumps
